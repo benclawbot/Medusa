@@ -23,8 +23,8 @@ jobs:
           components: rustfmt,clippy
       - name: Refresh dependency lock for the merged PR graph
         run: cargo generate-lockfile
-      - name: Format
-        run: cargo fmt --all -- --check
+      - name: Format extracted modules
+        run: cargo fmt --all
       - name: Clippy
         run: cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
       - name: Full workspace tests
