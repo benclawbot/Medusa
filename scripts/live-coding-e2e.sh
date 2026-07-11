@@ -10,6 +10,9 @@ fi
 cargo build --release --locked --bin medusa
 MEDUSA="$(pwd)/target/release/medusa"
 ROOT="$(mktemp -d)"
+ARTIFACTS="$(pwd)/live-e2e-artifacts"
+rm -rf "$ARTIFACTS"
+mkdir -p "$ARTIFACTS"
 trap 'rm -rf "$ROOT"' EXIT
 
 init_repo() {
@@ -26,16 +29,22 @@ run_case() {
   local repo="$ROOT/$name"
   shift 2
   echo "::group::live coding test: $name"
-  "$MEDUSA" --repo "$repo" run "$objective"
-  (cd "$repo" && ./verify.sh)
+  "$MEDUSA" --repo "$repo" run "$objective" 2>&1 | tee "$ARTIFACTS/$name.log"
+  (cd "$repo" && ./verify.sh) | tee -a "$ARTIFACTS/$name.log"
   for assertion in "$@"; do
     test -e "$repo/$assertion"
   done
+  mkdir -p "$ARTIFACTS/$name"
+  git -C "$repo" diff --binary > "$ARTIFACTS/$name/change.patch"
+  git -C "$repo" status --short > "$ARTIFACTS/$name/status.txt"
+  if [[ -d "$repo/.medusa/sessions" ]]; then
+    cp -R "$repo/.medusa/sessions" "$ARTIFACTS/$name/sessions"
+  fi
+  printf '%s\n' "name=$name" "objective=$objective" "result=passed" > "$ARTIFACTS/$name/result.txt"
   echo "live-coding-test-ok:$name"
   echo "::endgroup::"
 }
 
-# Test 1: inspect and correct an off-by-one defect.
 repo="$ROOT/rust-value-fix"
 init_repo "$repo"
 cat > "$repo/value.txt" <<'EOF'
@@ -54,7 +63,6 @@ run_case rust-value-fix \
   "Inspect this repository, fix the failing off-by-one value, run the repository verification, and stop only when it passes." \
   value.txt
 
-# Test 2: implement a missing Python function with edge-case behavior.
 repo="$ROOT/python-slugify"
 init_repo "$repo"
 mkdir -p "$repo/src"
@@ -81,7 +89,6 @@ run_case python-slugify \
   "Implement the missing slugify function robustly, preserving the existing public API. Run verify.sh and iterate until every assertion passes." \
   src/slugify.py
 
-# Test 3: repair a JavaScript state transition without changing the test contract.
 repo="$ROOT/javascript-counter"
 init_repo "$repo"
 mkdir -p "$repo/src"
@@ -116,4 +123,5 @@ run_case javascript-counter \
   "Diagnose and repair the counter state transitions without changing the test contract. Run verify.sh and finish only after it passes." \
   src/counter.js
 
+printf '{"passed":3,"total":3,"provider":"minimax","credential_persisted":false}\n' > "$ARTIFACTS/summary.json"
 echo "live-coding-e2e-ok:3/3"
