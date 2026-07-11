@@ -11,6 +11,7 @@ members = [
   "crates/medusa-daemon",
   "crates/medusa-tui",
   "crates/medusa-workers",
+  "crates/medusa-memory",
   "crates/medusa-cli",
 ]
 
