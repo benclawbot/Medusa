@@ -11,107 +11,37 @@ cargo build --release --locked --bin medusa
 MEDUSA="$(pwd)/target/release/medusa"
 ROOT="$(mktemp -d)"
 ARTIFACTS="$(pwd)/live-e2e-artifacts"
+REPO="$ROOT/multi-language-repair"
 rm -rf "$ARTIFACTS"
-mkdir -p "$ARTIFACTS"
+mkdir -p "$ARTIFACTS" "$REPO/src"
 trap 'rm -rf "$ROOT"' EXIT
 
-init_repo() {
-  local repo="$1"
-  mkdir -p "$repo"
-  git -C "$repo" init -q -b main
-  git -C "$repo" config user.name "Medusa Live E2E"
-  git -C "$repo" config user.email "medusa-e2e@example.invalid"
-}
+git -C "$REPO" init -q -b main
+git -C "$REPO" config user.name "Medusa Live E2E"
+git -C "$REPO" config user.email "medusa-e2e@example.invalid"
 
-run_case() {
-  local name="$1"
-  local objective="$2"
-  local repo="$ROOT/$name"
-  local verifier_before
-  local verifier_after
-  shift 2
-  verifier_before="$(sha256sum "$repo/verify.sh" | awk '{print $1}')"
-  echo "::group::live coding test: $name"
-  "$MEDUSA" --repo "$repo" run "$objective" 2>&1 | tee "$ARTIFACTS/$name.log"
-  verifier_after="$(sha256sum "$repo/verify.sh" | awk '{print $1}')"
-  if [[ "$verifier_before" != "$verifier_after" ]]; then
-    echo "verification contract was modified by the agent" | tee -a "$ARTIFACTS/$name.log" >&2
-    exit 1
-  fi
-  test -x "$repo/verify.sh"
-  (cd "$repo" && ./verify.sh) | tee -a "$ARTIFACTS/$name.log"
-  for assertion in "$@"; do
-    test -e "$repo/$assertion"
-  done
-  mkdir -p "$ARTIFACTS/$name"
-  git -C "$repo" diff --binary > "$ARTIFACTS/$name/change.patch"
-  git -C "$repo" status --short > "$ARTIFACTS/$name/status.txt"
-  if [[ -d "$repo/.medusa/sessions" ]]; then
-    cp -R "$repo/.medusa/sessions" "$ARTIFACTS/$name/sessions"
-  fi
-  printf '%s\n' "name=$name" "objective=$objective" "result=passed" > "$ARTIFACTS/$name/result.txt"
-  echo "live-coding-test-ok:$name"
-  echo "::endgroup::"
-}
-
-repo="$ROOT/rust-value-fix"
-init_repo "$repo"
-cat > "$repo/value.txt" <<'EOF'
+cat > "$REPO/value.txt" <<'EOF'
 41
 EOF
-cat > "$repo/verify.sh" <<'EOF'
-#!/usr/bin/env bash
-set -euo pipefail
-test "$(tr -d '\n' < value.txt)" = "42"
-echo verified-rust-value-fix
-EOF
-chmod +x "$repo/verify.sh"
-git -C "$repo" add -A
-git -C "$repo" commit -q -m baseline
-run_case rust-value-fix \
-  "Inspect this repository, fix the failing off-by-one value without modifying tests or verify.sh, run the repository verification, and stop only when it passes." \
-  value.txt
 
-repo="$ROOT/python-slugify"
-init_repo "$repo"
-mkdir -p "$repo/src"
-cat > "$repo/src/slugify.py" <<'EOF'
+cat > "$REPO/src/slugify.py" <<'EOF'
 def slugify(value: str) -> str:
     raise NotImplementedError("implement me")
 EOF
-cat > "$repo/verify.sh" <<'EOF'
-#!/usr/bin/env bash
-set -euo pipefail
-python3 - <<'PY'
-from src.slugify import slugify
-assert slugify("Hello, World!") == "hello-world"
-assert slugify("  Multiple   spaces  ") == "multiple-spaces"
-assert slugify("Already-Slugged") == "already-slugged"
-assert slugify("Crème brûlée") == "creme-brulee"
-print("verified-python-slugify")
-PY
-EOF
-chmod +x "$repo/verify.sh"
-git -C "$repo" add -A
-git -C "$repo" commit -q -m baseline
-run_case python-slugify \
-  "Implement the missing slugify function robustly, preserving the existing public API and without modifying tests or verify.sh. Run verify.sh and iterate until every assertion passes." \
-  src/slugify.py
 
-repo="$ROOT/javascript-counter"
-init_repo "$repo"
-mkdir -p "$repo/src"
-cat > "$repo/src/counter.js" <<'EOF'
+cat > "$REPO/src/counter.js" <<'EOF'
 export function applyCounter(state, action) {
   if (action.type === 'increment') return { count: state.count - 1 };
   if (action.type === 'decrement') return { count: state.count + 1 };
   return state;
 }
 EOF
-cat > "$repo/package.json" <<'EOF'
+
+cat > "$REPO/package.json" <<'EOF'
 {"type":"module","scripts":{"test":"node test.mjs"}}
 EOF
-cat > "$repo/test.mjs" <<'EOF'
+
+cat > "$REPO/test.mjs" <<'EOF'
 import assert from 'node:assert/strict';
 import { applyCounter } from './src/counter.js';
 assert.deepEqual(applyCounter({count: 2}, {type: 'increment'}), {count: 3});
@@ -120,17 +50,66 @@ const original = {count: 2};
 assert.equal(applyCounter(original, {type: 'noop'}), original);
 console.log('verified-javascript-counter');
 EOF
-cat > "$repo/verify.sh" <<'EOF'
+
+cat > "$REPO/verify.sh" <<'EOF'
 #!/usr/bin/env bash
 set -euo pipefail
+
+test "$(tr -d '\n' < value.txt)" = "42"
+echo verified-rust-value-fix
+
+python3 - <<'PY'
+from src.slugify import slugify
+assert slugify("Hello, World!") == "hello-world"
+assert slugify("  Multiple   spaces  ") == "multiple-spaces"
+assert slugify("Already-Slugged") == "already-slugged"
+assert slugify("Crème brûlée") == "creme-brulee"
+print("verified-python-slugify")
+PY
+
 npm test
 EOF
-chmod +x "$repo/verify.sh"
-git -C "$repo" add -A
-git -C "$repo" commit -q -m baseline
-run_case javascript-counter \
-  "Diagnose and repair the counter state transitions without changing the test contract, tests, or verify.sh. Run verify.sh and finish only after it passes." \
-  src/counter.js
+chmod +x "$REPO/verify.sh"
 
-printf '{"passed":3,"total":3,"provider":"minimax","credential_persisted":false}\n' > "$ARTIFACTS/summary.json"
-echo "live-coding-e2e-ok:3/3"
+git -C "$REPO" add -A
+git -C "$REPO" commit -q -m baseline
+
+VERIFIER_BEFORE="$(sha256sum "$REPO/verify.sh" | awk '{print $1}')"
+TEST_BEFORE="$(sha256sum "$REPO/test.mjs" | awk '{print $1}')"
+PACKAGE_BEFORE="$(sha256sum "$REPO/package.json" | awk '{print $1}')"
+
+OBJECTIVE="Inspect this repository and repair all three product defects without modifying verify.sh, test.mjs, package.json, fixtures, or expected outputs. Correct value.txt to the verified value, robustly implement src/slugify.py while preserving its public API, and repair the counter transitions in src/counter.js. Run ./verify.sh, iterate until every check passes, and stop only after all three independent validations succeed."
+
+echo "::group::live coding test: multi-language-repair"
+"$MEDUSA" --repo "$REPO" run "$OBJECTIVE" 2>&1 | tee "$ARTIFACTS/multi-language-repair.log"
+echo "::endgroup::"
+
+VERIFIER_AFTER="$(sha256sum "$REPO/verify.sh" | awk '{print $1}')"
+TEST_AFTER="$(sha256sum "$REPO/test.mjs" | awk '{print $1}')"
+PACKAGE_AFTER="$(sha256sum "$REPO/package.json" | awk '{print $1}')"
+
+test "$VERIFIER_BEFORE" = "$VERIFIER_AFTER"
+test "$TEST_BEFORE" = "$TEST_AFTER"
+test "$PACKAGE_BEFORE" = "$PACKAGE_AFTER"
+test -x "$REPO/verify.sh"
+
+(cd "$REPO" && ./verify.sh) | tee -a "$ARTIFACTS/multi-language-repair.log"
+test "$(tr -d '\n' < "$REPO/value.txt")" = "42"
+test -s "$REPO/src/slugify.py"
+test -s "$REPO/src/counter.js"
+
+mkdir -p "$ARTIFACTS/multi-language-repair"
+git -C "$REPO" diff --binary > "$ARTIFACTS/multi-language-repair/change.patch"
+git -C "$REPO" status --short > "$ARTIFACTS/multi-language-repair/status.txt"
+if [[ -d "$REPO/.medusa/sessions" ]]; then
+  cp -R "$REPO/.medusa/sessions" "$ARTIFACTS/multi-language-repair/sessions"
+fi
+printf '%s\n' \
+  "name=multi-language-repair" \
+  "objective=$OBJECTIVE" \
+  "result=passed" \
+  "independent_assertions=3" \
+  > "$ARTIFACTS/multi-language-repair/result.txt"
+
+printf '{"passed":3,"total":3,"sessions":1,"provider":"minimax","credential_persisted":false,"verification_contract_unchanged":true}\n' > "$ARTIFACTS/summary.json"
+echo "live-coding-e2e-ok:3/3-in-one-session"
