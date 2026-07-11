@@ -1,4 +1,8 @@
-use std::{fs, path::{Component, Path, PathBuf}, process::{Command, Output}};
+use std::{
+    fs,
+    path::{Component, Path, PathBuf},
+    process::{Command, Output},
+};
 
 use medusa_core::{ErrorCategory, ErrorCode, MedusaError, MedusaResult};
 
@@ -7,17 +11,24 @@ pub(crate) fn safe_path(repo: &Path, relative: &str) -> MedusaResult<PathBuf> {
     if path.as_os_str().is_empty()
         || path.is_absolute()
         || path.components().any(|component| {
-            matches!(component, Component::ParentDir | Component::RootDir | Component::Prefix(_))
+            matches!(
+                component,
+                Component::ParentDir | Component::RootDir | Component::Prefix(_)
+            )
         })
     {
-        return Err(policy_denied(format!("path escapes repository: {relative}")));
+        return Err(policy_denied(format!(
+            "path escapes repository: {relative}"
+        )));
     }
 
     let root = repo.canonicalize()?;
     let mut resolved = root.clone();
     for component in path.components() {
         let Component::Normal(name) = component else {
-            return Err(policy_denied(format!("invalid repository path: {relative}")));
+            return Err(policy_denied(format!(
+                "invalid repository path: {relative}"
+            )));
         };
         resolved.push(name);
         if resolved.exists() {
@@ -29,13 +40,17 @@ pub(crate) fn safe_path(repo: &Path, relative: &str) -> MedusaResult<PathBuf> {
             }
             let canonical = resolved.canonicalize()?;
             if !canonical.starts_with(&root) {
-                return Err(policy_denied(format!("path escapes repository: {relative}")));
+                return Err(policy_denied(format!(
+                    "path escapes repository: {relative}"
+                )));
             }
             resolved = canonical;
         }
     }
     if !resolved.starts_with(&root) {
-        return Err(policy_denied(format!("path escapes repository: {relative}")));
+        return Err(policy_denied(format!(
+            "path escapes repository: {relative}"
+        )));
     }
     Ok(resolved)
 }
@@ -47,11 +62,49 @@ pub fn validate_shell_command(program: &str, args: &[String]) -> MedusaResult<()
         .unwrap_or(program)
         .to_ascii_lowercase();
     const DENIED_PROGRAMS: &[&str] = &[
-        "rm", "sudo", "doas", "shutdown", "reboot", "halt", "poweroff", "mkfs", "dd",
-        "mount", "umount", "chown", "chmod", "kill", "pkill", "killall", "systemctl",
-        "launchctl", "reg", "reg.exe", "sc", "sc.exe", "netsh", "curl", "wget", "nc",
-        "ncat", "socat", "ssh", "scp", "sftp", "rsync", "env", "printenv", "set",
-        "bash", "sh", "zsh", "fish", "cmd", "cmd.exe", "powershell", "pwsh",
+        "rm",
+        "sudo",
+        "doas",
+        "shutdown",
+        "reboot",
+        "halt",
+        "poweroff",
+        "mkfs",
+        "dd",
+        "mount",
+        "umount",
+        "chown",
+        "chmod",
+        "kill",
+        "pkill",
+        "killall",
+        "systemctl",
+        "launchctl",
+        "reg",
+        "reg.exe",
+        "sc",
+        "sc.exe",
+        "netsh",
+        "curl",
+        "wget",
+        "nc",
+        "ncat",
+        "socat",
+        "ssh",
+        "scp",
+        "sftp",
+        "rsync",
+        "env",
+        "printenv",
+        "set",
+        "bash",
+        "sh",
+        "zsh",
+        "fish",
+        "cmd",
+        "cmd.exe",
+        "powershell",
+        "pwsh",
     ];
     if DENIED_PROGRAMS.contains(&basename.as_str()) {
         return Err(policy_denied(format!("hard-denied command: {program}")));
@@ -59,10 +112,27 @@ pub fn validate_shell_command(program: &str, args: &[String]) -> MedusaResult<()
 
     let normalized = args.join(" ").to_ascii_lowercase();
     const DENIED_FRAGMENTS: &[&str] = &[
-        "curl | sh", "curl|sh", "wget | sh", "wget|sh", "/etc/shadow", "/etc/passwd",
-        ".ssh/", "id_rsa", "id_ed25519", "authorization:", "api_key", "api-key",
-        "secret_access_key", "disable-defender", "set-mppreference", "tamper protection",
-        "endpoint protection", "--no-verify", "--force-with-lease", "--force", " -f ",
+        "curl | sh",
+        "curl|sh",
+        "wget | sh",
+        "wget|sh",
+        "/etc/shadow",
+        "/etc/passwd",
+        ".ssh/",
+        "id_rsa",
+        "id_ed25519",
+        "authorization:",
+        "api_key",
+        "api-key",
+        "secret_access_key",
+        "disable-defender",
+        "set-mppreference",
+        "tamper protection",
+        "endpoint protection",
+        "--no-verify",
+        "--force-with-lease",
+        "--force",
+        " -f ",
     ];
     if DENIED_FRAGMENTS
         .iter()

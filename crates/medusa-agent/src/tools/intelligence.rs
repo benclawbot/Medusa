@@ -4,7 +4,10 @@ use medusa_core::MedusaResult;
 use medusa_intelligence::{CodeIndex, PatchTransaction, TextEdit, format_changed, select_tests};
 use serde_json::{Value, json};
 
-use crate::{policy::safe_path, tools::{input_string, input_usize}};
+use crate::{
+    policy::safe_path,
+    tools::{input_string, input_usize},
+};
 
 pub(crate) fn code_index(repo: &Path, input: &Value) -> MedusaResult<String> {
     let index = CodeIndex::build(repo)?;

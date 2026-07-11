@@ -13,50 +13,82 @@ const MAX_TOOL_OUTPUT_BYTES: usize = 1_000_000;
 
 pub(crate) fn built_in_tools() -> Vec<ToolDefinition> {
     vec![
-        tool("fs_read", "Read a UTF-8 file inside the repository.", json!({
-            "type": "object", "properties": {"path": {"type": "string"}},
-            "required": ["path"], "additionalProperties": false
-        })),
-        tool("fs_write", "Atomically write a UTF-8 file inside the repository.", json!({
-            "type": "object", "properties": {
-                "path": {"type": "string"}, "content": {"type": "string"}
-            }, "required": ["path", "content"], "additionalProperties": false
-        })),
-        tool("search_text", "Search UTF-8 repository files for an exact text fragment.", json!({
-            "type": "object", "properties": {"query": {"type": "string"}},
-            "required": ["query"], "additionalProperties": false
-        })),
-        tool("code_index", "Build the Tree-sitter Rust symbol/reference index and optionally query one identifier.", json!({
-            "type": "object", "properties": {"name": {"type": "string"}},
-            "additionalProperties": false
-        })),
-        tool("patch_apply", "Apply a guarded atomic multi-file byte-range patch transaction.", json!({
-            "type": "object", "properties": {"edits": {"type": "array", "items": {
+        tool(
+            "fs_read",
+            "Read a UTF-8 file inside the repository.",
+            json!({
+                "type": "object", "properties": {"path": {"type": "string"}},
+                "required": ["path"], "additionalProperties": false
+            }),
+        ),
+        tool(
+            "fs_write",
+            "Atomically write a UTF-8 file inside the repository.",
+            json!({
                 "type": "object", "properties": {
-                    "path": {"type": "string"},
-                    "start_byte": {"type": "integer", "minimum": 0},
-                    "end_byte": {"type": "integer", "minimum": 0},
-                    "expected": {"type": "string"},
-                    "replacement": {"type": "string"}
-                }, "required": ["path", "start_byte", "end_byte", "expected", "replacement"],
+                    "path": {"type": "string"}, "content": {"type": "string"}
+                }, "required": ["path", "content"], "additionalProperties": false
+            }),
+        ),
+        tool(
+            "search_text",
+            "Search UTF-8 repository files for an exact text fragment.",
+            json!({
+                "type": "object", "properties": {"query": {"type": "string"}},
+                "required": ["query"], "additionalProperties": false
+            }),
+        ),
+        tool(
+            "code_index",
+            "Build the Tree-sitter Rust symbol/reference index and optionally query one identifier.",
+            json!({
+                "type": "object", "properties": {"name": {"type": "string"}},
                 "additionalProperties": false
-            }}}, "required": ["edits"], "additionalProperties": false
-        })),
-        tool("symbol_rename", "Rename one Rust identifier across indexed definitions and references using a guarded transaction.", json!({
-            "type": "object", "properties": {
-                "old_name": {"type": "string"}, "new_name": {"type": "string"}
-            }, "required": ["old_name", "new_name"], "additionalProperties": false
-        })),
-        tool("shell_run", "Run a non-destructive command in the repository and capture output.", json!({
-            "type": "object", "properties": {
-                "program": {"type": "string"},
-                "args": {"type": "array", "items": {"type": "string"}}
-            }, "required": ["program", "args"], "additionalProperties": false
-        })),
-        tool("git_checkpoint", "Stage all changes and create a Git checkpoint commit.", json!({
-            "type": "object", "properties": {"message": {"type": "string"}},
-            "required": ["message"], "additionalProperties": false
-        })),
+            }),
+        ),
+        tool(
+            "patch_apply",
+            "Apply a guarded atomic multi-file byte-range patch transaction.",
+            json!({
+                "type": "object", "properties": {"edits": {"type": "array", "items": {
+                    "type": "object", "properties": {
+                        "path": {"type": "string"},
+                        "start_byte": {"type": "integer", "minimum": 0},
+                        "end_byte": {"type": "integer", "minimum": 0},
+                        "expected": {"type": "string"},
+                        "replacement": {"type": "string"}
+                    }, "required": ["path", "start_byte", "end_byte", "expected", "replacement"],
+                    "additionalProperties": false
+                }}}, "required": ["edits"], "additionalProperties": false
+            }),
+        ),
+        tool(
+            "symbol_rename",
+            "Rename one Rust identifier across indexed definitions and references using a guarded transaction.",
+            json!({
+                "type": "object", "properties": {
+                    "old_name": {"type": "string"}, "new_name": {"type": "string"}
+                }, "required": ["old_name", "new_name"], "additionalProperties": false
+            }),
+        ),
+        tool(
+            "shell_run",
+            "Run a non-destructive command in the repository and capture output.",
+            json!({
+                "type": "object", "properties": {
+                    "program": {"type": "string"},
+                    "args": {"type": "array", "items": {"type": "string"}}
+                }, "required": ["program", "args"], "additionalProperties": false
+            }),
+        ),
+        tool(
+            "git_checkpoint",
+            "Stage all changes and create a Git checkpoint commit.",
+            json!({
+                "type": "object", "properties": {"message": {"type": "string"}},
+                "required": ["message"], "additionalProperties": false
+            }),
+        ),
     ]
 }
 
@@ -131,8 +163,14 @@ pub(crate) fn format_command_output(
                 .collect::<Vec<_>>()
                 .join(" ")
         ),
-        format!("stdout={}", truncate(String::from_utf8_lossy(stdout).into_owned())),
-        format!("stderr={}", truncate(String::from_utf8_lossy(stderr).into_owned())),
+        format!(
+            "stdout={}",
+            truncate(String::from_utf8_lossy(stdout).into_owned())
+        ),
+        format!(
+            "stderr={}",
+            truncate(String::from_utf8_lossy(stderr).into_owned())
+        ),
     ]
 }
 

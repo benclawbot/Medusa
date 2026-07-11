@@ -26,7 +26,11 @@ pub(crate) fn write(repo: &Path, relative: &str, content: &str) -> MedusaResult<
         fs::set_permissions(&temporary, permissions)?;
     }
     fs::rename(&temporary, &path)?;
-    Ok(format!("wrote {} bytes to {}", content.len(), path.display()))
+    Ok(format!(
+        "wrote {} bytes to {}",
+        content.len(),
+        path.display()
+    ))
 }
 
 pub(crate) fn search(repo: &Path, query: &str) -> MedusaResult<String> {
@@ -64,8 +68,8 @@ mod tests {
     #[test]
     fn extracted_filesystem_tools_preserve_read_write_and_search_behavior() {
         let directory = tempfile::tempdir().expect("tempdir");
-        let receipt = write(directory.path(), "nested/value.txt", "alpha\nbeta\n")
-            .expect("atomic write");
+        let receipt =
+            write(directory.path(), "nested/value.txt", "alpha\nbeta\n").expect("atomic write");
         assert!(receipt.contains("11 bytes"));
         assert_eq!(
             read(directory.path(), "nested/value.txt").expect("read"),
@@ -73,8 +77,7 @@ mod tests {
         );
 
         fs::create_dir_all(directory.path().join(".medusa")).expect("medusa dir");
-        fs::write(directory.path().join(".medusa/hidden.txt"), "alpha")
-            .expect("hidden fixture");
+        fs::write(directory.path().join(".medusa/hidden.txt"), "alpha").expect("hidden fixture");
         let matches = search(directory.path(), "beta").expect("search");
         assert!(matches.contains("nested/value.txt:2:beta"));
         assert!(!matches.contains("hidden.txt"));
