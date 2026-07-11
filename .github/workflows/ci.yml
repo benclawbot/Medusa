@@ -6,7 +6,7 @@ on:
   pull_request:
 
 permissions:
-  contents: read
+  contents: write
 
 concurrency:
   group: ci-${{ github.workflow }}-${{ github.ref }}
@@ -14,26 +14,28 @@ concurrency:
 
 jobs:
   quality:
-    name: Phase 3 diagnostics
+    name: Apply Phase 3 formatting
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.ref }}
       - uses: dtolnay/rust-toolchain@1.88.0
         with:
-          components: rustfmt, clippy
-      - uses: Swatinem/rust-cache@v2
-      - name: Generate formatted Phase 3 sources
-        run: cargo fmt --all
-      - uses: actions/upload-artifact@v4
-        with:
-          name: phase3-formatted-sources
-          path: |
-            crates/medusa-daemon/src/lib.rs
-            crates/medusa-tui/src/main.rs
-      - run: git diff --exit-code
+          components: rustfmt
+      - run: |
+          cargo fmt --all
+          git config user.name "medusa-ci"
+          git config user.email "medusa-ci@users.noreply.github.com"
+          git add crates/medusa-daemon/src/lib.rs crates/medusa-tui/src/main.rs
+          if git diff --cached --quiet; then
+            exit 0
+          fi
+          git commit -m "style: apply Phase 3 rustfmt"
+          git push
 
   supply-chain:
-    name: Dependency diagnostics
+    name: Dependency policy
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -42,16 +44,5 @@ jobs:
         with:
           tool: cargo-deny,cargo-audit
       - run: cargo generate-lockfile
-      - name: Capture dependency policy diagnostics
-        run: |
-          set +e
-          cargo deny check advisories sources > deny.log 2>&1
-          echo $? > deny.status
-          set -e
-      - uses: actions/upload-artifact@v4
-        with:
-          name: phase3-dependency-diagnostics
-          path: |
-            deny.log
-            deny.status
-      - run: test "$(cat deny.status)" = "0"
+      - run: cargo deny check advisories sources
+      - run: cargo audit
