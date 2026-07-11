@@ -73,12 +73,34 @@ jobs:
       - run: test -s docs/OBSERVABILITY.md
       - run: test -s docs/SECURITY-HARDENING.md
 
-  live-minimax-canary:
-    if: ${{ secrets.MINIMAX_API_KEY != '' }}
+  live-minimax-coding-e2e:
     runs-on: ubuntu-latest
+    timeout-minutes: 45
     env:
       MINIMAX_API_KEY: ${{ secrets.MINIMAX_API_KEY }}
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@1.88.0
-      - run: cargo run --bin medusa -- doctor
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Require configured live-test secret
+        shell: bash
+        run: |
+          if [[ -z "${MINIMAX_API_KEY:-}" ]]; then
+            echo 'MINIMAX_API_KEY repository secret is required for the final live coding gate.' >&2
+            exit 2
+          fi
+      - name: Mask live credential defensively
+        shell: bash
+        run: echo "::add-mask::$MINIMAX_API_KEY"
+      - name: Run three autonomous coding scenarios
+        shell: bash
+        run: ./scripts/live-coding-e2e.sh
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: live-minimax-coding-evidence
+          path: |
+            /tmp/**/.medusa/sessions/*.json
+          if-no-files-found: ignore
