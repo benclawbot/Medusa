@@ -62,9 +62,21 @@ impl Migrator {
     pub fn upgrade_to_current(&self) -> MedusaResult<Vec<MigrationReceipt>> {
         fs::create_dir_all(&self.root)?;
         let migrations = [
-            Migration { from: 0, to: 1, name: "initialize-layout".into() },
-            Migration { from: 1, to: 2, name: "add-observability".into() },
-            Migration { from: 2, to: 3, name: "add-release-state".into() },
+            Migration {
+                from: 0,
+                to: 1,
+                name: "initialize-layout".into(),
+            },
+            Migration {
+                from: 1,
+                to: 2,
+                name: "add-observability".into(),
+            },
+            Migration {
+                from: 2,
+                to: 3,
+                name: "add-release-state".into(),
+            },
         ];
         let mut receipts = Vec::new();
         while self.schema_version()? < CURRENT_SCHEMA_VERSION {
@@ -193,7 +205,10 @@ impl Observability {
 
     pub fn increment(&self, name: &str, value: u64) -> MedusaResult<()> {
         validate_metric_name(name)?;
-        let mut counters = self.counters.lock().map_err(|_| internal("counter lock poisoned"))?;
+        let mut counters = self
+            .counters
+            .lock()
+            .map_err(|_| internal("counter lock poisoned"))?;
         *counters.entry(name.to_owned()).or_default() += value;
         Ok(())
     }
@@ -218,7 +233,11 @@ impl Observability {
     }
 
     pub fn snapshot(&self) -> MedusaResult<serde_json::Value> {
-        let counters = self.counters.lock().map_err(|_| internal("counter lock poisoned"))?.clone();
+        let counters = self
+            .counters
+            .lock()
+            .map_err(|_| internal("counter lock poisoned"))?
+            .clone();
         let durations = self
             .durations_ms
             .lock()
@@ -258,7 +277,9 @@ pub fn build_release_manifest(
     rollback_instructions: PathBuf,
 ) -> MedusaResult<ReleaseManifest> {
     if version.trim().is_empty() || target.trim().is_empty() || artifact_paths.is_empty() {
-        return Err(invalid("release manifest requires version, target, and artifacts"));
+        return Err(invalid(
+            "release manifest requires version, target, and artifacts",
+        ));
     }
     let mut artifacts = artifact_paths
         .iter()
@@ -283,14 +304,19 @@ pub fn build_release_manifest(
 }
 
 /// Validates archive entry paths without extracting them.
-pub fn validate_archive_entries<'a>(entries: impl IntoIterator<Item = &'a str>) -> MedusaResult<()> {
+pub fn validate_archive_entries<'a>(
+    entries: impl IntoIterator<Item = &'a str>,
+) -> MedusaResult<()> {
     let mut seen = BTreeSet::new();
     for entry in entries {
         let path = Path::new(entry);
         if entry.is_empty()
             || path.is_absolute()
             || path.components().any(|component| {
-                matches!(component, Component::ParentDir | Component::RootDir | Component::Prefix(_))
+                matches!(
+                    component,
+                    Component::ParentDir | Component::RootDir | Component::Prefix(_)
+                )
             })
             || !seen.insert(path.to_path_buf())
         {
@@ -383,7 +409,11 @@ fn redact_value(value: &mut serde_json::Value) {
 }
 
 fn append_atomic(path: &Path, bytes: &[u8]) -> MedusaResult<()> {
-    let mut existing = if path.exists() { fs::read(path)? } else { Vec::new() };
+    let mut existing = if path.exists() {
+        fs::read(path)?
+    } else {
+        Vec::new()
+    };
     existing.extend_from_slice(bytes);
     atomic_write(path, &existing)
 }
@@ -451,10 +481,17 @@ fn directory_digest(root: &Path) -> MedusaResult<String> {
     Ok(format!("{:x}", hasher.finalize()))
 }
 
-fn collect_files(root: &Path, current: &Path, files: &mut Vec<(PathBuf, Vec<u8>)>) -> MedusaResult<()> {
+fn collect_files(
+    root: &Path,
+    current: &Path,
+    files: &mut Vec<(PathBuf, Vec<u8>)>,
+) -> MedusaResult<()> {
     for entry in fs::read_dir(current)?.collect::<Result<Vec<_>, _>>()? {
         let path = entry.path();
-        if path.components().any(|component| component.as_os_str() == "backups") {
+        if path
+            .components()
+            .any(|component| component.as_os_str() == "backups")
+        {
             continue;
         }
         let metadata = fs::symlink_metadata(&path)?;
@@ -468,7 +505,10 @@ fn collect_files(root: &Path, current: &Path, files: &mut Vec<(PathBuf, Vec<u8>)
         if metadata.is_dir() {
             collect_files(root, &path, files)?;
         } else if metadata.is_file() {
-            files.push((path.strip_prefix(root).unwrap_or(&path).to_path_buf(), fs::read(path)?));
+            files.push((
+                path.strip_prefix(root).unwrap_or(&path).to_path_buf(),
+                fs::read(path)?,
+            ));
         }
     }
     Ok(())
@@ -495,11 +535,19 @@ fn now() -> MedusaResult<String> {
 }
 
 fn invalid(message: impl Into<String>) -> MedusaError {
-    MedusaError::new(ErrorCode::InvalidConfiguration, ErrorCategory::Validation, message)
+    MedusaError::new(
+        ErrorCode::InvalidConfiguration,
+        ErrorCategory::Validation,
+        message,
+    )
 }
 
 fn internal(message: impl Into<String>) -> MedusaError {
-    MedusaError::new(ErrorCode::InternalInvariant, ErrorCategory::Internal, message)
+    MedusaError::new(
+        ErrorCode::InternalInvariant,
+        ErrorCategory::Internal,
+        message,
+    )
 }
 
 #[cfg(test)]
@@ -515,17 +563,28 @@ mod tests {
         fs::write(root.join("legacy.json"), b"legacy-state").expect("legacy");
         let migrator = Migrator::new(&root);
         let receipts = migrator.upgrade_to_current().expect("upgrade");
-        assert_eq!(migrator.schema_version().expect("version"), CURRENT_SCHEMA_VERSION);
+        assert_eq!(
+            migrator.schema_version().expect("version"),
+            CURRENT_SCHEMA_VERSION
+        );
         assert_eq!(receipts.len(), 3);
         assert!(migrator.refuse_unsafe_downgrade(1).is_err());
-        migrator.rollback(receipts.first().expect("first receipt")).expect("rollback");
-        assert_eq!(fs::read(root.join("legacy.json")).expect("legacy restored"), b"legacy-state");
+        migrator
+            .rollback(receipts.first().expect("first receipt"))
+            .expect("rollback");
+        assert_eq!(
+            fs::read(root.join("legacy.json")).expect("legacy restored"),
+            b"legacy-state"
+        );
     }
 
     #[test]
     fn chaos_cycle_recovers_without_corruption() {
         let directory = tempfile::tempdir().expect("tempdir");
-        assert_eq!(chaos_recovery_cycle(directory.path(), 100).expect("chaos"), "chaos-recovery-ok:100");
+        assert_eq!(
+            chaos_recovery_cycle(directory.path(), 100).expect("chaos"),
+            "chaos-recovery-ok:100"
+        );
     }
 
     #[test]
@@ -567,7 +626,10 @@ mod tests {
             rollback.clone(),
         )
         .expect("manifest");
-        assert_eq!(first.artifacts[0].sha256, format!("{:x}", Sha256::digest(b"binary")));
+        assert_eq!(
+            first.artifacts[0].sha256,
+            format!("{:x}", Sha256::digest(b"binary"))
+        );
         assert_eq!(first.sbom, sbom);
         assert_eq!(first.rollback_instructions, rollback);
     }

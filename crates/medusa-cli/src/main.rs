@@ -1,4 +1,9 @@
-use std::{collections::BTreeMap, fs, path::{Path, PathBuf}, process::Command};
+use std::{
+    collections::BTreeMap,
+    fs,
+    path::{Path, PathBuf},
+    process::Command,
+};
 
 use clap::{Parser, Subcommand};
 use medusa_agent::{AgentEngine, bootstrap};
@@ -124,7 +129,9 @@ fn doctor(repo: &Path, config: &Config) -> MedusaResult<()> {
         },
         DoctorCheck {
             name: "schema",
-            ok: Migrator::new(repo.join(".medusa")).schema_version().unwrap_or_default()
+            ok: Migrator::new(repo.join(".medusa"))
+                .schema_version()
+                .unwrap_or_default()
                 <= CURRENT_SCHEMA_VERSION,
             detail: format!("supported schema <= {CURRENT_SCHEMA_VERSION}"),
         },
@@ -155,7 +162,11 @@ fn command_check(name: &'static str, program: &str, args: &[&str]) -> DoctorChec
             ok: output.status.success(),
             detail: String::from_utf8_lossy(&output.stdout).trim().to_owned(),
         },
-        Err(error) => DoctorCheck { name, ok: false, detail: error.to_string() },
+        Err(error) => DoctorCheck {
+            name,
+            ok: false,
+            detail: error.to_string(),
+        },
     }
 }
 
@@ -179,7 +190,10 @@ fn print_completion(session: &medusa_agent::AgentSession) {
 fn search(repo: &Path, pattern: &str) -> MedusaResult<()> {
     for entry in WalkDir::new(repo).into_iter().filter_map(Result::ok) {
         if !entry.file_type().is_file()
-            || entry.path().components().any(|part| part.as_os_str() == ".git")
+            || entry
+                .path()
+                .components()
+                .any(|part| part.as_os_str() == ".git")
         {
             continue;
         }
@@ -202,7 +216,10 @@ fn shell(repo: &Path, program: &str, args: &[String]) -> MedusaResult<()> {
             format!("hard-denied command: {program}"),
         ));
     }
-    let status = Command::new(program).args(args).current_dir(repo).status()?;
+    let status = Command::new(program)
+        .args(args)
+        .current_dir(repo)
+        .status()?;
     if status.success() {
         Ok(())
     } else {
