@@ -44,14 +44,26 @@ jobs:
         run: cargo generate-lockfile
       - name: Install Linux sandbox backend
         run: sudo apt-get update && sudo apt-get install -y bubblewrap
-      - name: Run required adversarial behaviors
-        run: bash scripts/adversarial-smoke.sh
-      - uses: actions/upload-artifact@v4
-        if: always()
-        with:
-          name: adversarial-regression-evidence
-          path: target/debug/deps
-          if-no-files-found: ignore
+      - name: Parent path escape is denied
+        run: cargo test -p medusa-agent parent_path_escape_is_denied --locked -- --nocapture
+      - name: Symlink escape is denied
+        run: cargo test -p medusa-agent symlink_escape_is_denied --locked -- --nocapture
+      - name: Dangerous shell commands are denied
+        run: cargo test -p medusa-agent dangerous_shell_commands_are_denied --locked -- --nocapture
+      - name: Sandbox blocks network and external writes
+        run: cargo test -p medusa-agent sandbox_blocks_network_and_external_writes --locked -- --nocapture
+      - name: Patch apply uses guarded transaction
+        run: cargo test -p medusa-agent patch_apply_tool_uses_guarded_transaction --locked -- --nocapture
+      - name: Parallel feature fixture merges and verifies
+        run: cargo test -p medusa-workers parallel_feature_fixture_merges_and_verifies --locked -- --nocapture
+      - name: Conflicting workers abort cleanly
+        run: cargo test -p medusa-workers conflicting_workers_abort_cleanly --locked -- --nocapture
+      - name: Malicious MCP cannot read secrets or redefine policy
+        run: cargo test -p medusa-extensions malicious_mcp_cannot_read_secret_or_redefine_policy --locked -- --nocapture
+      - name: Operational events redact credentials
+        run: cargo test -p medusa-hardening operational_events_redact_credentials --locked -- --nocapture
+      - name: Arbitrary archive paths never escape
+        run: cargo test -p medusa-hardening arbitrary_archive_paths_never_escape --locked -- --nocapture
 
   fuzz-smoke:
     runs-on: ubuntu-latest
