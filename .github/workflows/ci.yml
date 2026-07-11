@@ -23,10 +23,20 @@ jobs:
           components: rustfmt,clippy
       - name: Refresh dependency lock for the merged PR graph
         run: cargo generate-lockfile
-      - name: Format extracted modules
-        run: cargo fmt --all
+      - name: Check formatting
+        run: cargo fmt --all -- --check
       - name: Clippy
-        run: cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
+        shell: bash
+        run: |
+          set -o pipefail
+          cargo clippy --workspace --all-targets --all-features --locked -- -D warnings 2>&1 | tee clippy.log
+      - name: Upload Clippy diagnostics
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: clippy-diagnostics
+          path: clippy.log
+          if-no-files-found: error
       - name: Full workspace tests
         run: cargo test --workspace --all-features --locked
       - name: Documentation
