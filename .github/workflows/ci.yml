@@ -6,7 +6,7 @@ on:
   pull_request:
 
 permissions:
-  contents: write
+  contents: read
 
 concurrency:
   group: ci-${{ github.workflow }}-${{ github.ref }}
@@ -18,36 +18,25 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-        with:
-          ref: ${{ github.event.pull_request.head.ref }}
       - uses: dtolnay/rust-toolchain@1.88.0
         with:
           components: rustfmt,clippy
-      - name: Apply test-only import gate
-        shell: bash
-        run: |
-          python3 - <<'PY'
-          from pathlib import Path
-          path = Path('crates/medusa-agent/src/lib.rs')
-          text = path.read_text()
-          old = 'use policy::safe_path;\n'
-          new = '#[cfg(test)]\nuse policy::safe_path;\n'
-          if text.count(old) != 1:
-              raise SystemExit('safe_path import marker missing or ambiguous')
-          path.write_text(text.replace(old, new, 1))
-          PY
-          cargo fmt --all
-          git config user.name "medusa-ci"
-          git config user.email "medusa-ci@users.noreply.github.com"
-          git add crates/medusa-agent/src/lib.rs
-          git commit -m "fix(agent): gate test-only safe_path import"
-          git push
       - name: Refresh dependency lock for the merged PR graph
         run: cargo generate-lockfile
       - name: Check formatting
         run: cargo fmt --all -- --check
       - name: Clippy
-        run: cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
+        shell: bash
+        run: |
+          set -o pipefail
+          cargo clippy --workspace --all-targets --all-features --locked -- -D warnings 2>&1 | tee clippy.log
+      - name: Upload Clippy diagnostics
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: clippy-diagnostics
+          path: clippy.log
+          if-no-files-found: ignore
       - name: Full workspace tests
         run: cargo test --workspace --all-features --locked
       - name: Documentation
