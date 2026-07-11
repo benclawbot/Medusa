@@ -27,6 +27,27 @@ jobs:
       - run: cargo test --workspace --all-features
       - run: RUSTDOCFLAGS="-D warnings" cargo doc --workspace --all-features --no-deps
 
+  browser-e2e:
+    name: Playwright visual verification
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: browser
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: browser/package.json
+      - run: npm install --ignore-scripts --no-audit --no-fund
+      - run: npx playwright install --with-deps chromium
+      - run: npm run test:e2e
+      - uses: actions/upload-artifact@v4
+        with:
+          name: phase6-browser-evidence
+          path: browser/artifacts
+
   supply-chain:
     name: Dependency policy
     runs-on: ubuntu-latest
