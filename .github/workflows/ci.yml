@@ -27,46 +27,60 @@ jobs:
         run: |
           python3 - <<'PY'
           from pathlib import Path
-          import re
 
           path = Path('crates/medusa-agent/src/lib.rs')
           text = path.read_text()
 
-          text, prompt_count = re.subn(
-              r'const SYSTEM_PROMPT: &str = ".*?";',
-              'const SYSTEM_PROMPT: &str = "You are Medusa, an autonomous coding agent. Inspect the repository, make the smallest correct change, and verify it. Use tools rather than inventing repository contents. Never modify tests, verification scripts, snapshots, fixtures, or expected outputs unless the user explicitly asks for that exact change; fix the product code instead. Do not expose private chain-of-thought; provide concise decisions and evidence.";',
-              text,
-              count=1,
+          prompt_start = 'const SYSTEM_PROMPT: &str = "'
+          prompt_index = text.find(prompt_start)
+          if prompt_index < 0:
+              raise SystemExit('SYSTEM_PROMPT declaration not found')
+          prompt_end = text.find('";', prompt_index + len(prompt_start))
+          if prompt_end < 0:
+              raise SystemExit('SYSTEM_PROMPT terminator not found')
+          prompt = (
+              'const SYSTEM_PROMPT: &str = "You are Medusa, an autonomous coding agent. '
+              'Inspect the repository, make the smallest correct change, and verify it. '
+              'Use tools rather than inventing repository contents. Never modify tests, '
+              'verification scripts, snapshots, fixtures, or expected outputs unless the user '
+              'explicitly asks for that exact change; fix the product code instead. Do not expose '
+              'private chain-of-thought; provide concise decisions and evidence.";'
           )
-          text, shell_count = re.subn(
-              r'Some\(\("sh",\s*vec!\["verify\.sh"\]\)\)',
-              'Some(("bash", vec!["verify.sh"]))',
-              text,
-              count=1,
+          text = text[:prompt_index] + prompt + text[prompt_end + 2:]
+
+          shell_old = 'Some(("sh", vec!["verify.sh"]))'
+          if text.count(shell_old) != 1:
+              raise SystemExit(f'expected one verification shell token, found {text.count(shell_old)}')
+          text = text.replace(shell_old, 'Some(("bash", vec!["verify.sh"]))', 1)
+
+          temp_line = '            let temporary = path.with_extension("medusa-tmp");\n'
+          write_line = '            fs::write(&temporary, content)?;\n'
+          rename_line = '            fs::rename(&temporary, &path)?;\n'
+          if text.count(temp_line) != 1 or text.count(write_line) != 1 or text.count(rename_line) != 1:
+              raise SystemExit('atomic write tokens not found exactly once')
+          text = text.replace(
+              temp_line,
+              '            let original_permissions = fs::metadata(&path)\n'
+              '                .ok()\n'
+              '                .map(|metadata| metadata.permissions());\n'
+              + temp_line,
+              1,
           )
-          text, write_count = re.subn(
-              r'(?P<indent>\s*)let temporary = path\.with_extension\("medusa-tmp"\);\s*fs::write\(&temporary, content\)\?;\s*fs::rename\(&temporary, &path\)\?;',
-              lambda match: (
-                  f'{match.group("indent")}let original_permissions = fs::metadata(&path)\n'
-                  f'{match.group("indent")}    .ok()\n'
-                  f'{match.group("indent")}    .map(|metadata| metadata.permissions());\n'
-                  f'{match.group("indent")}let temporary = path.with_extension("medusa-tmp");\n'
-                  f'{match.group("indent")}fs::write(&temporary, content)?;\n'
-                  f'{match.group("indent")}if let Some(permissions) = original_permissions {{\n'
-                  f'{match.group("indent")}    fs::set_permissions(&temporary, permissions)?;\n'
-                  f'{match.group("indent")}}}\n'
-                  f'{match.group("indent")}fs::rename(&temporary, &path)?;'
-              ),
-              text,
-              count=1,
+          text = text.replace(
+              write_line,
+              write_line
+              + '            if let Some(permissions) = original_permissions {\n'
+              + '                fs::set_permissions(&temporary, permissions)?;\n'
+              + '            }\n',
+              1,
           )
 
-          if prompt_count != 1 or shell_count != 1 or write_count != 1:
-              raise SystemExit(
-                  f'patch counts prompt={prompt_count} shell={shell_count} write={write_count}'
-              )
-          if 'Never modify tests' not in text or 'Some(("bash", vec!["verify.sh"]))' not in text:
-              raise SystemExit('post-patch integrity assertion failed')
+          if 'Never modify tests' not in text:
+              raise SystemExit('prompt integrity assertion failed')
+          if 'Some(("bash", vec!["verify.sh"]))' not in text:
+              raise SystemExit('verification shell assertion failed')
+          if 'original_permissions' not in text:
+              raise SystemExit('permission preservation assertion failed')
           path.write_text(text)
           PY
           cargo fmt --all
