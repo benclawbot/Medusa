@@ -4,14 +4,16 @@ Medusa is a production-grade autonomous CLI coding agent implemented in Rust fro
 
 ## Current milestone
 
-Phase 1 is in active implementation on `agent/phase-1-vertical-slice` and covers:
+Phase 1 is complete and provides a working single-agent vertical slice:
 
-- CLI entry points and repository bootstrap;
-- filesystem search, guarded shell execution, and Git checkpoints;
-- persistent, checksummed sessions with restart and resume behavior;
-- the MiniMax-M3 provider boundary, agent loop, targeted verification, and end-to-end fixture gate.
+- CLI repository bootstrap, search, guarded shell, and Git checkpoints;
+- a provider-neutral model boundary and MiniMax-M3 Anthropic-compatible adapter;
+- strict model tool schemas and validated built-in filesystem, search, shell, and Git execution;
+- checksummed session persistence with restart and resume support;
+- deterministic targeted verification and exact evidence capture;
+- an end-to-end fixture that is inspected, fixed after a simulated restart, and verified.
 
-Every phase is independently verified, reported, committed, pushed, and merged to `main`. The user has explicitly authorized automatic progression through all phases; execution pauses only for a genuine external or safety blocker.
+Implementation proceeds automatically through the remaining phases. Each phase is independently tested, reported, committed, pushed, and merged to `main`; execution pauses only for a genuine external or safety blocker.
 
 ## Development checks
 
@@ -20,6 +22,8 @@ cargo fmt --all -- --check
 cargo clippy --workspace --all-targets --all-features -- -D warnings
 cargo test --workspace --all-features
 RUSTDOCFLAGS="-D warnings" cargo doc --workspace --all-features --no-deps
+cargo deny check advisories sources
+cargo audit
 ```
 
-See [`FINAL.md`](FINAL.md), [`CONTRIBUTING.md`](CONTRIBUTING.md), and [`docs/compatibility.md`](docs/compatibility.md).
+See [`FINAL.md`](FINAL.md), [`docs/phase-1-evidence.md`](docs/phase-1-evidence.md), [`CONTRIBUTING.md`](CONTRIBUTING.md), and [`docs/compatibility.md`](docs/compatibility.md).
