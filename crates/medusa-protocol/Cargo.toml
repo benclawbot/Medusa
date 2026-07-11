@@ -1,0 +1,22 @@
+[package]
+name = "medusa-protocol"
+description = "Versioned wire and event contracts for Medusa"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+hex.workspace = true
+medusa-core.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+time.workspace = true
+
+[dev-dependencies]
+proptest.workspace = true
