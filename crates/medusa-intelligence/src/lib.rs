@@ -104,7 +104,10 @@ impl CodeIndex {
     /// Returns exact symbol definitions by name.
     #[must_use]
     pub fn definitions(&self, name: &str) -> Vec<&Symbol> {
-        self.symbols.iter().filter(|symbol| symbol.name == name).collect()
+        self.symbols
+            .iter()
+            .filter(|symbol| symbol.name == name)
+            .collect()
     }
 
     /// Returns all syntax-token references by name.
@@ -137,25 +140,33 @@ fn index_tree(
                 start_line: node.start_position().row + 1,
                 end_line: node.end_position().row + 1,
             });
-            index.references.entry(name.clone()).or_default().push(Reference {
-                name,
-                path: relative_path.clone(),
-                start_byte: name_node.start_byte(),
-                end_byte: name_node.end_byte(),
-                line: name_node.start_position().row + 1,
-                is_definition: true,
-            });
+            index
+                .references
+                .entry(name.clone())
+                .or_default()
+                .push(Reference {
+                    name,
+                    path: relative_path.clone(),
+                    start_byte: name_node.start_byte(),
+                    end_byte: name_node.end_byte(),
+                    line: name_node.start_position().row + 1,
+                    is_definition: true,
+                });
         }
         if is_identifier(node.kind()) && !is_definition_name(node) {
             let name = text(source, node)?.to_owned();
-            index.references.entry(name.clone()).or_default().push(Reference {
-                name,
-                path: relative_path.clone(),
-                start_byte: node.start_byte(),
-                end_byte: node.end_byte(),
-                line: node.start_position().row + 1,
-                is_definition: false,
-            });
+            index
+                .references
+                .entry(name.clone())
+                .or_default()
+                .push(Reference {
+                    name,
+                    path: relative_path.clone(),
+                    start_byte: node.start_byte(),
+                    end_byte: node.end_byte(),
+                    line: node.start_position().row + 1,
+                    is_definition: false,
+                });
         }
         let mut cursor = node.walk();
         let mut children = node.children(&mut cursor).collect::<Vec<_>>();
@@ -246,7 +257,9 @@ impl PatchTransaction {
         new_name: &str,
     ) -> MedusaResult<usize> {
         if !valid_identifier(new_name) {
-            return Err(invalid(format!("invalid replacement identifier: {new_name}")));
+            return Err(invalid(format!(
+                "invalid replacement identifier: {new_name}"
+            )));
         }
         let references = index.references(old_name);
         if references.is_empty() {
@@ -294,7 +307,9 @@ impl PatchTransaction {
             for edit in &edits {
                 let actual = original
                     .get(edit.start_byte..edit.end_byte)
-                    .ok_or_else(|| invalid(format!("edit range outside {}", relative_path.display())))?;
+                    .ok_or_else(|| {
+                        invalid(format!("edit range outside {}", relative_path.display()))
+                    })?;
                 if actual != edit.expected {
                     return Err(invalid(format!(
                         "stale edit in {}: expected {:?}, found {:?}",
@@ -341,7 +356,10 @@ impl PatchTransaction {
 /// Runs the canonical formatter for changed file types.
 pub fn format_changed(repo: &Path, changed_paths: &[PathBuf]) -> MedusaResult<Vec<String>> {
     let mut evidence = Vec::new();
-    if changed_paths.iter().any(|path| path.extension().is_some_and(|ext| ext == "rs")) {
+    if changed_paths
+        .iter()
+        .any(|path| path.extension().is_some_and(|ext| ext == "rs"))
+    {
         let output = Command::new("cargo")
             .args(["fmt", "--all"])
             .current_dir(repo)
@@ -377,8 +395,12 @@ pub fn select_tests(changed_paths: &[PathBuf]) -> TestImpact {
         }
         if text.contains("Cargo.toml") || text.contains("Cargo.lock") {
             commands.insert("cargo test --workspace --all-features".to_owned());
-            commands.insert("cargo clippy --workspace --all-targets --all-features -- -D warnings".to_owned());
-            reasons.insert(format!("Rust dependency or workspace metadata changed: {text}"));
+            commands.insert(
+                "cargo clippy --workspace --all-targets --all-features -- -D warnings".to_owned(),
+            );
+            reasons.insert(format!(
+                "Rust dependency or workspace metadata changed: {text}"
+            ));
         }
         if text.starts_with(".github/workflows/") {
             commands.insert("cargo test --workspace --all-features".to_owned());
@@ -420,7 +442,10 @@ fn validate_relative(path: &Path) -> MedusaResult<()> {
     if path.as_os_str().is_empty()
         || path.is_absolute()
         || path.components().any(|component| {
-            matches!(component, Component::ParentDir | Component::RootDir | Component::Prefix(_))
+            matches!(
+                component,
+                Component::ParentDir | Component::RootDir | Component::Prefix(_)
+            )
         })
     {
         return Err(MedusaError::new(
@@ -503,15 +528,32 @@ mod tests {
         );
         let receipt = transaction.commit(directory.path()).expect("commit");
 
-        assert_eq!(receipt.changed_paths, vec![PathBuf::from("src/lib.rs"), PathBuf::from("tests/use_it.rs")]);
-        assert!(fs::read_to_string(directory.path().join("src/lib.rs")).expect("lib").contains("answer"));
-        assert!(fs::read_to_string(directory.path().join("tests/use_it.rs")).expect("test").contains("answer"));
+        assert_eq!(
+            receipt.changed_paths,
+            vec![
+                PathBuf::from("src/lib.rs"),
+                PathBuf::from("tests/use_it.rs")
+            ]
+        );
+        assert!(
+            fs::read_to_string(directory.path().join("src/lib.rs"))
+                .expect("lib")
+                .contains("answer")
+        );
+        assert!(
+            fs::read_to_string(directory.path().join("tests/use_it.rs"))
+                .expect("test")
+                .contains("answer")
+        );
         assert_eq!(
             hash(&fs::read(directory.path().join("README.md")).expect("readme")),
             unrelated_before
         );
         let impact = select_tests(&receipt.changed_paths);
-        assert_eq!(impact.commands, vec!["cargo test --workspace --all-features"]);
+        assert_eq!(
+            impact.commands,
+            vec!["cargo test --workspace --all-features"]
+        );
     }
 
     #[test]
@@ -529,6 +571,9 @@ mod tests {
             })
             .expect("edit");
         assert!(transaction.commit(directory.path()).is_err());
-        assert_eq!(fs::read_to_string(directory.path().join("file.rs")).expect("file"), "abcdef");
+        assert_eq!(
+            fs::read_to_string(directory.path().join("file.rs")).expect("file"),
+            "abcdef"
+        );
     }
 }
