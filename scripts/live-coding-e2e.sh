@@ -27,9 +27,18 @@ run_case() {
   local name="$1"
   local objective="$2"
   local repo="$ROOT/$name"
+  local verifier_before
+  local verifier_after
   shift 2
+  verifier_before="$(sha256sum "$repo/verify.sh" | awk '{print $1}')"
   echo "::group::live coding test: $name"
   "$MEDUSA" --repo "$repo" run "$objective" 2>&1 | tee "$ARTIFACTS/$name.log"
+  verifier_after="$(sha256sum "$repo/verify.sh" | awk '{print $1}')"
+  if [[ "$verifier_before" != "$verifier_after" ]]; then
+    echo "verification contract was modified by the agent" | tee -a "$ARTIFACTS/$name.log" >&2
+    exit 1
+  fi
+  test -x "$repo/verify.sh"
   (cd "$repo" && ./verify.sh) | tee -a "$ARTIFACTS/$name.log"
   for assertion in "$@"; do
     test -e "$repo/$assertion"
@@ -60,7 +69,7 @@ chmod +x "$repo/verify.sh"
 git -C "$repo" add -A
 git -C "$repo" commit -q -m baseline
 run_case rust-value-fix \
-  "Inspect this repository, fix the failing off-by-one value, run the repository verification, and stop only when it passes." \
+  "Inspect this repository, fix the failing off-by-one value without modifying tests or verify.sh, run the repository verification, and stop only when it passes." \
   value.txt
 
 repo="$ROOT/python-slugify"
@@ -86,7 +95,7 @@ chmod +x "$repo/verify.sh"
 git -C "$repo" add -A
 git -C "$repo" commit -q -m baseline
 run_case python-slugify \
-  "Implement the missing slugify function robustly, preserving the existing public API. Run verify.sh and iterate until every assertion passes." \
+  "Implement the missing slugify function robustly, preserving the existing public API and without modifying tests or verify.sh. Run verify.sh and iterate until every assertion passes." \
   src/slugify.py
 
 repo="$ROOT/javascript-counter"
@@ -120,7 +129,7 @@ chmod +x "$repo/verify.sh"
 git -C "$repo" add -A
 git -C "$repo" commit -q -m baseline
 run_case javascript-counter \
-  "Diagnose and repair the counter state transitions without changing the test contract. Run verify.sh and finish only after it passes." \
+  "Diagnose and repair the counter state transitions without changing the test contract, tests, or verify.sh. Run verify.sh and finish only after it passes." \
   src/counter.js
 
 printf '{"passed":3,"total":3,"provider":"minimax","credential_persisted":false}\n' > "$ARTIFACTS/summary.json"
