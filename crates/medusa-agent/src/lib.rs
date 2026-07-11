@@ -71,7 +71,9 @@ impl<P: ModelProvider> AgentEngine<P> {
             turn: 0,
             messages: vec![Message {
                 role: Role::User,
-                content: vec![MessageBlock::Text { text: objective.clone() }],
+                content: vec![MessageBlock::Text {
+                    text: objective.clone(),
+                }],
             }],
             events: Vec::new(),
             evidence: Vec::new(),
@@ -201,10 +203,12 @@ impl<P: ModelProvider> AgentEngine<P> {
         }
 
         if response.stop_reason.as_deref() == Some("end_turn")
-            && !session
-                .messages
-                .last()
-                .is_some_and(|message| matches!(message.content.first(), Some(MessageBlock::ToolResult { .. })))
+            && !session.messages.last().is_some_and(|message| {
+                matches!(
+                    message.content.first(),
+                    Some(MessageBlock::ToolResult { .. })
+                )
+            })
         {
             let verification = targeted_verification(&session.repo)?;
             append_event(
@@ -280,7 +284,10 @@ pub fn targeted_verification(repo: &Path) -> MedusaResult<VerificationResult> {
             "no targeted verification command could be inferred",
         ));
     };
-    let output = Command::new(program).args(&args).current_dir(repo).output()?;
+    let output = Command::new(program)
+        .args(&args)
+        .current_dir(repo)
+        .output()?;
     let mut evidence = format_command_output(program, &args, &output.stdout, &output.stderr);
     evidence.push(format!("exit_status={}", output.status));
     Ok(VerificationResult {
@@ -380,7 +387,11 @@ fn execute_tool(repo: &Path, name: &str, input: &Value) -> MedusaResult<String> 
             let temporary = path.with_extension("medusa-tmp");
             fs::write(&temporary, content)?;
             fs::rename(&temporary, &path)?;
-            Ok(format!("wrote {} bytes to {}", content.len(), path.display()))
+            Ok(format!(
+                "wrote {} bytes to {}",
+                content.len(),
+                path.display()
+            ))
         }
         "search_text" => search_text(repo, input_string(input, "query")?),
         "shell_run" => {
@@ -404,7 +415,10 @@ fn execute_tool(repo: &Path, name: &str, input: &Value) -> MedusaResult<String> 
                         .ok_or_else(|| invalid_tool("every arg must be a string"))
                 })
                 .collect::<MedusaResult<Vec<_>>>()?;
-            let output = Command::new(program).args(&args).current_dir(repo).output()?;
+            let output = Command::new(program)
+                .args(&args)
+                .current_dir(repo)
+                .output()?;
             let evidence = format_command_output(program, &args, &output.stdout, &output.stderr);
             if output.status.success() {
                 Ok(evidence.join("\n"))
@@ -455,9 +469,12 @@ fn search_text(repo: &Path, query: &str) -> MedusaResult<String> {
 fn safe_path(repo: &Path, relative: &str) -> MedusaResult<PathBuf> {
     let path = Path::new(relative);
     if path.is_absolute()
-        || path
-            .components()
-            .any(|component| matches!(component, Component::ParentDir | Component::RootDir | Component::Prefix(_)))
+        || path.components().any(|component| {
+            matches!(
+                component,
+                Component::ParentDir | Component::RootDir | Component::Prefix(_)
+            )
+        })
     {
         return Err(MedusaError::new(
             ErrorCode::PolicyDenied,
@@ -503,8 +520,14 @@ fn format_command_output(
                 .collect::<Vec<_>>()
                 .join(" ")
         ),
-        format!("stdout={}", truncate(String::from_utf8_lossy(stdout).into_owned())),
-        format!("stderr={}", truncate(String::from_utf8_lossy(stderr).into_owned())),
+        format!(
+            "stdout={}",
+            truncate(String::from_utf8_lossy(stdout).into_owned())
+        ),
+        format!(
+            "stderr={}",
+            truncate(String::from_utf8_lossy(stderr).into_owned())
+        ),
     ]
 }
 
@@ -651,7 +674,10 @@ mod tests {
         let mut session = first
             .create_session(directory.path(), "fix the off-by-one value".into())
             .expect("session");
-        assert_eq!(first.step(&mut session).expect("inspect step"), StepOutcome::Continue);
+        assert_eq!(
+            first.step(&mut session).expect("inspect step"),
+            StepOutcome::Continue
+        );
 
         let second = AgentEngine::new(
             ScriptedProvider::new(vec![
@@ -675,12 +701,27 @@ mod tests {
         let mut resumed = second
             .load_session(directory.path(), session.id.as_str())
             .expect("restart load");
-        second.run_to_completion(&mut resumed).expect("complete fix");
+        second
+            .run_to_completion(&mut resumed)
+            .expect("complete fix");
 
-        assert_eq!(fs::read_to_string(directory.path().join("value.txt")).expect("value"), "42\n");
+        assert_eq!(
+            fs::read_to_string(directory.path().join("value.txt")).expect("value"),
+            "42\n"
+        );
         assert!(resumed.completed);
-        assert!(resumed.evidence.iter().any(|line| line.contains("verified-value-42")));
-        assert!(resumed.evidence.iter().any(|line| line.contains("exit_status=exit status: 0")));
+        assert!(
+            resumed
+                .evidence
+                .iter()
+                .any(|line| line.contains("verified-value-42"))
+        );
+        assert!(
+            resumed
+                .evidence
+                .iter()
+                .any(|line| line.contains("exit_status=exit status: 0"))
+        );
     }
 
     #[test]

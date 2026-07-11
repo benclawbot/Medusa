@@ -28,8 +28,14 @@ pub enum Role {
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum MessageBlock {
-    Text { text: String },
-    ToolUse { id: String, name: String, input: Value },
+    Text {
+        text: String,
+    },
+    ToolUse {
+        id: String,
+        name: String,
+        input: Value,
+    },
     ToolResult {
         tool_use_id: String,
         content: String,
@@ -58,8 +64,14 @@ pub struct ModelRequest {
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum ResponseBlock {
-    Text { text: String },
-    ToolUse { id: String, name: String, input: Value },
+    Text {
+        text: String,
+    },
+    ToolUse {
+        id: String,
+        name: String,
+        input: Value,
+    },
 }
 
 /// Usage accounting returned by the provider.
@@ -183,9 +195,18 @@ struct WireResponse {
 #[derive(Debug, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 enum WireBlock {
-    Text { text: String },
-    ToolUse { id: String, name: String, input: Value },
-    Thinking { #[serde(default)] thinking: String },
+    Text {
+        text: String,
+    },
+    ToolUse {
+        id: String,
+        name: String,
+        input: Value,
+    },
+    Thinking {
+        #[serde(default)]
+        thinking: String,
+    },
     #[serde(other)]
     Unknown,
 }
