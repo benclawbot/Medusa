@@ -4,11 +4,17 @@
 
 The first post-release engineering priority is to split the largest source files into smaller, cohesive modules without changing externally observable behavior.
 
-### Why this matters
+## Current baseline
+
+The production-hardening phase is merged and the latest release-gate run is green across workspace coverage, named adversarial regressions, fuzzing, security, migrations, chaos recovery, documentation, Linux/macOS/Windows packaging, and the live MiniMax coding scenario.
+
+The current measured workspace line coverage is approximately 75.46%. The enforced non-regression floor is 75%. Reaching 90% remains a separate quality objective and must be achieved through meaningful assertions, not by excluding low-coverage crates or executing lines without validating behavior.
+
+## Why this matters
 
 Several implementation files currently combine protocol definitions, validation, persistence, execution, policy, and test fixtures. This made rapid end-to-end implementation possible, but it increases review cost, merge-conflict risk, compile-time coupling, and the chance that future changes accidentally cross subsystem boundaries.
 
-### Primary targets
+## Primary targets
 
 1. `crates/medusa-agent/src/lib.rs`
    - `engine.rs`: session lifecycle, model loop, step transitions
@@ -50,25 +56,27 @@ Several implementation files currently combine protocol definitions, validation,
    - `archive.rs`: archive-path safety
    - `chaos.rs`: recovery fixtures
 
-### Refactoring rules
+## Refactoring rules
 
 - Preserve public APIs unless a separate migration note is approved.
 - Move code in behavior-preserving commits before redesigning it.
 - Keep each production module focused on one responsibility.
 - Prefer private modules and narrow re-exports over broad public surfaces.
 - Keep test helpers in `tests/`, `testkit`, or `#[cfg(test)]` modules rather than production paths.
-- Do not weaken sandbox, path-containment, memory-validation, or rollback controls during extraction.
-- Maintain the 90% minimum line-coverage gate throughout the refactor.
+- Do not weaken sandbox, path-containment, memory-validation, secret-redaction, or rollback controls during extraction.
+- Maintain at least the current 75% workspace line-coverage floor throughout the refactor.
+- Raise coverage incrementally with meaningful tests, targeting 80%, then 85%, then 90%.
 - Treat coverage and adversarial behavior gates as independent release requirements.
+- Keep each refactor pull request behavior-preserving and limited to one crate or one tightly coupled extraction.
 
-### Required adversarial regression suite
+## Required adversarial regression suite
 
 The following named behaviors must remain explicit release checks. Passing the line-coverage threshold does not substitute for any of them.
 
 - **Symlink escape:** a repository-local symlink pointing outside the repository must be rejected by every read, write, patch, search, and rename path.
 - **Traversal and archive escape:** absolute paths, `..`, duplicate archive entries, and platform-specific root/prefix paths must be denied.
 - **Hard-deny bypasses:** reject force pushes, destructive Git cleanup/reset operations, shell chaining, `curl | sh`/`wget | sh`, secret-environment enumeration, SSH-key reads, credential-bearing headers, and endpoint-protection tampering attempts.
-- **Argument-form bypasses:** policy checks must normalize executable basenames, flag ordering, aliases, shell wrappers, and equivalent `--force` forms rather than rely on five exact program names.
+- **Argument-form bypasses:** policy checks must normalize executable basenames, flag ordering, aliases, shell wrappers, and equivalent `--force` forms rather than rely on exact command strings.
 - **Sandbox filesystem boundary:** an executed command must not write outside the repository or its isolated temporary filesystem.
 - **Sandbox network boundary:** commands without an explicit network grant must be unable to open outbound sockets or resolve external hosts.
 - **Sandbox environment boundary:** undeclared credentials and host environment variables must not be visible to child processes.
@@ -78,31 +86,67 @@ The following named behaviors must remain explicit release checks. Passing the l
 - **Protected verification contract:** autonomous runs must not alter tests, fixtures, snapshots, or verification scripts unless the user explicitly requested that exact modification.
 - **Secret exfiltration:** shell, MCP, hooks, logs, artifacts, and model-visible tool output must redact or deny known credentials and token-like values.
 
-Each case must have a stable test name, run in the dedicated adversarial CI job, and produce evidence that identifies the policy decision or rollback result.
+Each case must have a stable test name, run as an independently visible step in the dedicated adversarial CI job, and produce evidence that identifies the policy decision or rollback result.
 
-### Execution sequence
+## Delivery sequence
 
-1. Record baseline API, binary, coverage, performance, adversarial-suite, and fixture results.
-2. Extract pure data types and validators first.
-3. Extract persistence and protocol code.
-4. Extract tool implementations and sandbox policy.
-5. Extract orchestration state machines last.
-6. Replace cross-module concrete dependencies with narrow traits only where they reduce coupling.
-7. Run the complete coverage and adversarial release gates after every target crate.
-8. Remove obsolete compatibility shims after all downstream callers migrate.
+### PR 1 — Baseline and repository map
 
-### Acceptance criteria
+- Record source-file line counts, public exports, release-gate status, and benchmark commands.
+- Add a machine-checkable source-file ceiling.
+- Freeze the public API surface for the first extraction.
+- Update the architecture map and README.
+
+### PR 2 — `medusa-agent` policy and tool boundaries
+
+- Extract path containment and runtime policy first.
+- Extract filesystem, shell, Git, and intelligence tools behind the existing dispatch API.
+- Preserve all named adversarial tests and tool JSON schemas.
+
+### PR 3 — `medusa-agent` sessions and engine
+
+- Extract session persistence, evidence, verification, and orchestration state machines.
+- Keep serialized formats and resume behavior byte-compatible.
+
+### PR 4 — `medusa-intelligence`
+
+- Extract indexing, patch transactions, formatting, language adapters, and impact analysis.
+- Preserve transaction rollback semantics and formatter failure behavior.
+
+### PR 5 — `medusa-memory`
+
+- Extract schema, proposals, persistence, indexing, retrieval, and lifecycle modules.
+- Preserve canonical Markdown output and rebuildable-index behavior.
+
+### PR 6 — `medusa-extensions` and browser boundary
+
+- Extract skills, hooks, MCP, browser evidence, and redaction.
+- Keep poisoning defenses and credential isolation explicit.
+
+### PR 7 — `medusa-hardening`
+
+- Extract migrations, observability, release validation, archive safety, and chaos fixtures.
+- Re-run clean-install, upgrade, rollback, and corrupted-state recovery scenarios.
+
+### PR 8 — Cleanup and coverage expansion
+
+- Remove obsolete compatibility shims.
+- Raise coverage with behavior-focused tests for CLI, TUI, provider, extensions, agent, and hardening paths.
+- Reconcile the final architecture document and repository map with the implemented module tree.
+
+## Acceptance criteria
 
 - No production Rust source file exceeds 800 lines without a documented exception.
 - Most modules remain below 400 lines.
 - Circular module dependencies are absent.
 - Public API changes are documented and migration-tested.
-- Line coverage remains at or above 90%.
-- Every named adversarial regression case passes independently of the coverage percentage.
+- Workspace line coverage never falls below 75% during extraction.
+- Coverage reaches 90% before the modularization program is declared complete.
+- Every named adversarial regression passes independently of the coverage percentage.
 - All deterministic, live-provider, browser, security, migration, chaos, packaging, and cross-platform gates remain green.
 - Performance does not regress by more than 5% on the frozen benchmark suite without an explicit rationale.
 - The final architecture document and repository map match the actual module layout.
 
-### Suggested delivery
+## Immediate next action
 
-Deliver this as a sequence of small pull requests, one crate at a time, beginning with `medusa-agent`, because it currently has the broadest responsibility set and the highest future change frequency.
+Begin with PR 1: establish the measurable baseline, add the source-file ceiling check, and freeze the current public API before moving code. The first code-moving PR should then target `medusa-agent`, because it has the broadest responsibility set and the highest future change frequency.
