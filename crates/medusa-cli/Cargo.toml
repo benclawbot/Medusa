@@ -22,5 +22,8 @@ sha2.workspace = true
 time.workspace = true
 walkdir = "2.5"
 
+[dev-dependencies]
+tempfile.workspace = true
+
 [lints]
 workspace = true
