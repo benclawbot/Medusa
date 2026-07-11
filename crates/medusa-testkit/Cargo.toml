@@ -1,0 +1,16 @@
+[package]
+name = "medusa-testkit"
+description = "Deterministic fixtures for Medusa tests"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+medusa-core.workspace = true
+medusa-protocol.workspace = true
+time.workspace = true
