@@ -8,6 +8,8 @@ members = [
   "crates/medusa-provider",
   "crates/medusa-intelligence",
   "crates/medusa-agent",
+  "crates/medusa-daemon",
+  "crates/medusa-tui",
   "crates/medusa-cli",
 ]
 
