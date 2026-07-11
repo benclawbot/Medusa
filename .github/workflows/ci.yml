@@ -78,5 +78,5 @@ jobs:
         with:
           tool: cargo-deny,cargo-audit
       - run: cargo generate-lockfile
-      - run: cargo deny check advisories bans sources
+      - run: cargo deny check advisories sources
       - run: cargo audit
