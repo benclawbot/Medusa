@@ -181,11 +181,7 @@ impl MemoryDocument {
         list_field(&mut output, "superseded_by", &self.superseded_by);
         list_field(&mut output, "tags", &self.tags);
         optional_field(&mut output, "expires_at", self.expires_at.as_deref());
-        field(
-            &mut output,
-            "last_validated_at",
-            &self.last_validated_at,
-        );
+        field(&mut output, "last_validated_at", &self.last_validated_at);
         field(
             &mut output,
             "successful_reuse_count",
@@ -321,14 +317,11 @@ impl MemoryEngine {
     /// Commits a validated proposal to canonical Markdown and refreshes the index.
     pub fn commit_proposal(&self, proposal: &MemoryProposal) -> MedusaResult<MemoryDocument> {
         self.validate_proposal(proposal)?;
-        let duplicate = self
-            .documents()?
-            .into_iter()
-            .find(|(_, document)| {
-                document.status == Status::Active
-                    && normalize(&document.title) == normalize(&proposal.title)
-                    && normalize(&document.body).contains(&normalize(&proposal.claim))
-            });
+        let duplicate = self.documents()?.into_iter().find(|(_, document)| {
+            document.status == Status::Active
+                && normalize(&document.title) == normalize(&proposal.title)
+                && normalize(&document.body).contains(&normalize(&proposal.claim))
+        });
         if duplicate.is_some() {
             return Err(invalid("duplicate active memory claim"));
         }
@@ -427,7 +420,12 @@ impl MemoryEngine {
     }
 
     /// Retrieves only active, non-expired, high-confidence memory by deterministic score.
-    pub fn search(&self, query: &str, scope: Scope, limit: usize) -> MedusaResult<Vec<RetrievedMemory>> {
+    pub fn search(
+        &self,
+        query: &str,
+        scope: Scope,
+        limit: usize,
+    ) -> MedusaResult<Vec<RetrievedMemory>> {
         let terms = tokenize(query);
         let now = OffsetDateTime::now_utc();
         let mut results = self
@@ -515,7 +513,11 @@ impl MemoryEngine {
             if document.status != Status::Active || !document.validation.high_confidence() {
                 return Err(invalid("only active validated memory may be compacted"));
             }
-            claims.push(format!("- {}: {}", document.title, first_claim(&document.body)));
+            claims.push(format!(
+                "- {}: {}",
+                document.title,
+                first_claim(&document.body)
+            ));
             sources.push(format!("memory://{}", document.id));
             tags.extend(document.tags);
             confidence = confidence.min(document.confidence_milli);
@@ -554,9 +556,18 @@ impl MemoryEngine {
         let mut documents = Vec::new();
         for entry in WalkDir::new(&self.root).into_iter().filter_map(Result::ok) {
             if !entry.file_type().is_file()
-                || entry.path().extension().is_none_or(|extension| extension != "md")
-                || entry.path().file_name().is_some_and(|name| name == "README.md")
-                || entry.path().components().any(|component| component.as_os_str() == "archive")
+                || entry
+                    .path()
+                    .extension()
+                    .is_none_or(|extension| extension != "md")
+                || entry
+                    .path()
+                    .file_name()
+                    .is_some_and(|name| name == "README.md")
+                || entry
+                    .path()
+                    .components()
+                    .any(|component| component.as_os_str() == "archive")
             {
                 continue;
             }
@@ -660,11 +671,7 @@ fn score(document: &MemoryDocument, terms: &[String]) -> i64 {
             score += 90;
         }
     }
-    if terms.is_empty() {
-        0
-    } else {
-        score
-    }
+    if terms.is_empty() { 0 } else { score }
 }
 
 fn parse_fields(frontmatter: &str) -> MedusaResult<BTreeMap<String, String>> {
@@ -673,7 +680,10 @@ fn parse_fields(frontmatter: &str) -> MedusaResult<BTreeMap<String, String>> {
         let (key, value) = line
             .split_once(':')
             .ok_or_else(|| invalid(format!("invalid frontmatter line: {line}")))?;
-        if fields.insert(key.trim().to_owned(), value.trim().to_owned()).is_some() {
+        if fields
+            .insert(key.trim().to_owned(), value.trim().to_owned())
+            .is_some()
+        {
             return Err(invalid(format!("duplicate frontmatter key: {key}")));
         }
     }
@@ -689,10 +699,7 @@ fn required<'a>(fields: &'a BTreeMap<String, String>, key: &str) -> MedusaResult
 }
 
 fn optional(fields: &BTreeMap<String, String>, key: &str) -> Option<String> {
-    fields
-        .get(key)
-        .filter(|value| !value.is_empty())
-        .cloned()
+    fields.get(key).filter(|value| !value.is_empty()).cloned()
 }
 
 fn list(fields: &BTreeMap<String, String>, key: &str) -> Vec<String> {
@@ -721,7 +728,15 @@ fn optional_field(output: &mut String, key: &str, value: Option<&str>) {
 }
 
 fn list_field(output: &mut String, key: &str, values: &[String]) {
-    field(output, key, &values.iter().map(|value| escape(value)).collect::<Vec<_>>().join(", "));
+    field(
+        output,
+        key,
+        &values
+            .iter()
+            .map(|value| escape(value))
+            .collect::<Vec<_>>()
+            .join(", "),
+    );
 }
 
 fn escape(value: &str) -> String {
@@ -853,7 +868,10 @@ mod tests {
         let directory = tempfile::tempdir().expect("tempdir");
         let engine = MemoryEngine::new(directory.path()).expect("engine");
         let document = engine
-            .commit_proposal(&proposal("Run workspace tests", "Use `cargo test --workspace`."))
+            .commit_proposal(&proposal(
+                "Run workspace tests",
+                "Use `cargo test --workspace`.",
+            ))
             .expect("commit");
         assert_eq!(
             MemoryDocument::from_markdown(&document.to_markdown()).expect("parse"),
@@ -887,7 +905,10 @@ mod tests {
                 .contains("cargo test --workspace --all-features")
         );
         later_session
-            .record_reuse(&committed.id, "artifact://sessions/ses-later/verification-2")
+            .record_reuse(
+                &committed.id,
+                "artifact://sessions/ses-later/verification-2",
+            )
             .expect("reuse");
         let reused = later_session
             .search("cargo test workspace", Scope::Project, 1)
