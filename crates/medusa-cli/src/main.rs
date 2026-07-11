@@ -1,10 +1,12 @@
-use std::{collections::BTreeMap, fs, path::PathBuf, process::Command};
+use std::{collections::BTreeMap, fs, path::{Path, PathBuf}, process::Command};
 
 use clap::{Parser, Subcommand};
 use medusa_agent::{AgentEngine, bootstrap};
 use medusa_config::Config;
 use medusa_core::{ErrorCategory, ErrorCode, MedusaError, MedusaResult};
+use medusa_hardening::{CURRENT_SCHEMA_VERSION, Migrator};
 use medusa_provider::MiniMaxProvider;
+use serde::Serialize;
 use walkdir::WalkDir;
 
 #[derive(Parser, Debug)]
@@ -21,11 +23,20 @@ struct Cli {
 #[derive(Subcommand, Debug)]
 enum CommandKind {
     Bootstrap,
+    Doctor,
+    Migrate,
     Search { pattern: String },
     Shell { program: String, args: Vec<String> },
     Checkpoint { message: String },
     Run { objective: String },
     Resume { session: String },
+}
+
+#[derive(Debug, Serialize)]
+struct DoctorCheck {
+    name: &'static str,
+    ok: bool,
+    detail: String,
 }
 
 fn parse_key_value(raw: &str) -> Result<(String, String), String> {
@@ -56,6 +67,8 @@ fn run() -> MedusaResult<()> {
             println!("bootstrapped {}", repo.display());
             Ok(())
         }
+        CommandKind::Doctor => doctor(&repo, &config),
+        CommandKind::Migrate => migrate(&repo),
         CommandKind::Search { pattern } => search(&repo, &pattern),
         CommandKind::Shell { program, args } => shell(&repo, &program, &args),
         CommandKind::Checkpoint { message } => checkpoint(&repo, &message),
@@ -80,6 +93,82 @@ fn run() -> MedusaResult<()> {
     }
 }
 
+fn doctor(repo: &Path, config: &Config) -> MedusaResult<()> {
+    let checks = vec![
+        command_check("git", "git", &["--version"]),
+        command_check("node", "node", &["--version"]),
+        command_check("cargo", "cargo", &["--version"]),
+        DoctorCheck {
+            name: "repository",
+            ok: repo.is_dir(),
+            detail: repo.display().to_string(),
+        },
+        DoctorCheck {
+            name: "provider_credential",
+            ok: std::env::var("MINIMAX_API_KEY").is_ok(),
+            detail: if std::env::var("MINIMAX_API_KEY").is_ok() {
+                "MINIMAX_API_KEY is present".into()
+            } else {
+                "MINIMAX_API_KEY is absent; live model runs are unavailable".into()
+            },
+        },
+        DoctorCheck {
+            name: "model",
+            ok: !config.model.name.trim().is_empty(),
+            detail: config.model.name.clone(),
+        },
+        DoctorCheck {
+            name: "state_permissions",
+            ok: writable_directory(&repo.join(".medusa")),
+            detail: repo.join(".medusa").display().to_string(),
+        },
+        DoctorCheck {
+            name: "schema",
+            ok: Migrator::new(repo.join(".medusa")).schema_version().unwrap_or_default()
+                <= CURRENT_SCHEMA_VERSION,
+            detail: format!("supported schema <= {CURRENT_SCHEMA_VERSION}"),
+        },
+    ];
+    println!("{}", serde_json::to_string_pretty(&checks)?);
+    if checks.iter().all(|check| check.ok) {
+        Ok(())
+    } else {
+        Err(MedusaError::new(
+            ErrorCode::DependencyUnavailable,
+            ErrorCategory::Environment,
+            "one or more doctor checks failed",
+        ))
+    }
+}
+
+fn migrate(repo: &Path) -> MedusaResult<()> {
+    let migrator = Migrator::new(repo.join(".medusa"));
+    let receipts = migrator.upgrade_to_current()?;
+    println!("{}", serde_json::to_string_pretty(&receipts)?);
+    Ok(())
+}
+
+fn command_check(name: &'static str, program: &str, args: &[&str]) -> DoctorCheck {
+    match Command::new(program).args(args).output() {
+        Ok(output) => DoctorCheck {
+            name,
+            ok: output.status.success(),
+            detail: String::from_utf8_lossy(&output.stdout).trim().to_owned(),
+        },
+        Err(error) => DoctorCheck { name, ok: false, detail: error.to_string() },
+    }
+}
+
+fn writable_directory(path: &Path) -> bool {
+    if fs::create_dir_all(path).is_err() {
+        return false;
+    }
+    let probe = path.join(format!("doctor-{}.tmp", std::process::id()));
+    let written = fs::write(&probe, b"probe").is_ok();
+    let _ = fs::remove_file(probe);
+    written
+}
+
 fn print_completion(session: &medusa_agent::AgentSession) {
     println!("session {} completed", session.id);
     for item in &session.evidence {
@@ -87,13 +176,10 @@ fn print_completion(session: &medusa_agent::AgentSession) {
     }
 }
 
-fn search(repo: &std::path::Path, pattern: &str) -> MedusaResult<()> {
+fn search(repo: &Path, pattern: &str) -> MedusaResult<()> {
     for entry in WalkDir::new(repo).into_iter().filter_map(Result::ok) {
         if !entry.file_type().is_file()
-            || entry
-                .path()
-                .components()
-                .any(|part| part.as_os_str() == ".git")
+            || entry.path().components().any(|part| part.as_os_str() == ".git")
         {
             continue;
         }
@@ -108,7 +194,7 @@ fn search(repo: &std::path::Path, pattern: &str) -> MedusaResult<()> {
     Ok(())
 }
 
-fn shell(repo: &std::path::Path, program: &str, args: &[String]) -> MedusaResult<()> {
+fn shell(repo: &Path, program: &str, args: &[String]) -> MedusaResult<()> {
     if matches!(program, "rm" | "sudo" | "shutdown" | "reboot" | "mkfs") {
         return Err(MedusaError::new(
             ErrorCode::PolicyDenied,
@@ -116,10 +202,7 @@ fn shell(repo: &std::path::Path, program: &str, args: &[String]) -> MedusaResult
             format!("hard-denied command: {program}"),
         ));
     }
-    let status = Command::new(program)
-        .args(args)
-        .current_dir(repo)
-        .status()?;
+    let status = Command::new(program).args(args).current_dir(repo).status()?;
     if status.success() {
         Ok(())
     } else {
@@ -131,12 +214,12 @@ fn shell(repo: &std::path::Path, program: &str, args: &[String]) -> MedusaResult
     }
 }
 
-fn checkpoint(repo: &std::path::Path, message: &str) -> MedusaResult<()> {
+fn checkpoint(repo: &Path, message: &str) -> MedusaResult<()> {
     run_git(repo, &["add", "-A"])?;
     run_git(repo, &["commit", "-m", message])
 }
 
-fn run_git(repo: &std::path::Path, args: &[&str]) -> MedusaResult<()> {
+fn run_git(repo: &Path, args: &[&str]) -> MedusaResult<()> {
     let status = Command::new("git").args(args).current_dir(repo).status()?;
     if status.success() {
         Ok(())

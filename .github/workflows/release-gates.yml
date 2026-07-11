@@ -1,0 +1,84 @@
+name: Release Gates
+
+on:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-gates-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  fuzz-smoke:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@1.88.0
+      - run: ./scripts/fuzz-smoke.sh
+
+  chaos-and-migrations:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@1.88.0
+      - run: ./scripts/chaos-smoke.sh
+      - run: cargo test -p medusa-hardening clean_install_upgrade_and_rollback_are_byte_exact -- --exact
+
+  package-smoke:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@1.88.0
+      - name: Build release package
+        run: cargo build --release --locked --bin medusa
+      - name: Smoke test package on Unix
+        if: runner.os != 'Windows'
+        run: ./scripts/package-smoke.sh
+      - name: Smoke test package on Windows
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $binary = 'target/release/medusa.exe'
+          & $binary --version
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          & $binary --help | Select-String 'Autonomous coding agent'
+
+  security:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@1.88.0
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-deny,cargo-audit
+      - run: cargo deny check advisories sources
+      - run: cargo audit
+      - run: cargo test -p medusa-extensions malicious_mcp_cannot_read_secret_or_redefine_policy -- --exact
+      - run: cargo test -p medusa-hardening operational_events_redact_credentials -- --exact
+
+  docs-and-schema:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@1.88.0
+      - run: RUSTDOCFLAGS='-D warnings' cargo doc --workspace --all-features --no-deps
+      - run: test -s docs/RELEASE.md
+      - run: test -s docs/OBSERVABILITY.md
+      - run: test -s docs/SECURITY-HARDENING.md
+
+  live-minimax-canary:
+    if: ${{ secrets.MINIMAX_API_KEY != '' }}
+    runs-on: ubuntu-latest
+    env:
+      MINIMAX_API_KEY: ${{ secrets.MINIMAX_API_KEY }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@1.88.0
+      - run: cargo run --bin medusa -- doctor
