@@ -32,6 +32,23 @@ jobs:
           path: coverage.lcov
           if-no-files-found: error
 
+  adversarial-regression:
+    name: Named adversarial regressions
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@1.88.0
+      - name: Install Linux sandbox backend
+        run: sudo apt-get update && sudo apt-get install -y bubblewrap
+      - name: Run required adversarial behaviors
+        run: bash scripts/adversarial-smoke.sh
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: adversarial-regression-evidence
+          path: target/debug/deps
+          if-no-files-found: ignore
+
   fuzz-smoke:
     runs-on: ubuntu-latest
     steps:
