@@ -1,6 +1,8 @@
 //! Versioned wire and append-only event contracts.
 
-use medusa_core::{CorrelationId, ErrorCategory, ErrorCode, EventId, MedusaError, MedusaResult, SessionId};
+use medusa_core::{
+    CorrelationId, ErrorCategory, ErrorCode, EventId, MedusaError, MedusaResult, SessionId,
+};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use sha2::{Digest, Sha256};
@@ -76,27 +78,77 @@ pub enum SessionState {
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
 #[serde(tag = "type", content = "data", rename_all = "snake_case")]
 pub enum EventPayload {
-    SessionCreated { objective: String },
-    SessionStateChanged { from: SessionState, to: SessionState },
-    UserPromptReceived { text: String },
-    AssumptionRecorded { assumption: String, rationale: String },
-    PlanCreated { plan: Value },
-    PlanUpdated { update: Value },
-    ModelRequestStarted { provider: String, model: String },
-    ModelResponseReceived { response_id: Option<String>, usage: Value },
-    ToolCallRequested { tool: String, arguments: Value },
-    ToolCallDenied { tool: String, reason: String },
-    ToolExecutionStarted { tool: String },
-    ToolOutputChunk { artifact_ref: String, byte_count: u64 },
-    ToolExecutionCompleted { tool: String, exit_code: Option<i32> },
-    FileTransactionCommitted { paths: Vec<String>, rollback_ref: String },
-    CheckpointCreated { checkpoint_id: String },
-    VerificationStarted { commands: Vec<String> },
-    VerificationCompleted { passed: bool, evidence: Vec<String> },
-    SessionPaused { reason: String },
+    SessionCreated {
+        objective: String,
+    },
+    SessionStateChanged {
+        from: SessionState,
+        to: SessionState,
+    },
+    UserPromptReceived {
+        text: String,
+    },
+    AssumptionRecorded {
+        assumption: String,
+        rationale: String,
+    },
+    PlanCreated {
+        plan: Value,
+    },
+    PlanUpdated {
+        update: Value,
+    },
+    ModelRequestStarted {
+        provider: String,
+        model: String,
+    },
+    ModelResponseReceived {
+        response_id: Option<String>,
+        usage: Value,
+    },
+    ToolCallRequested {
+        tool: String,
+        arguments: Value,
+    },
+    ToolCallDenied {
+        tool: String,
+        reason: String,
+    },
+    ToolExecutionStarted {
+        tool: String,
+    },
+    ToolOutputChunk {
+        artifact_ref: String,
+        byte_count: u64,
+    },
+    ToolExecutionCompleted {
+        tool: String,
+        exit_code: Option<i32>,
+    },
+    FileTransactionCommitted {
+        paths: Vec<String>,
+        rollback_ref: String,
+    },
+    CheckpointCreated {
+        checkpoint_id: String,
+    },
+    VerificationStarted {
+        commands: Vec<String>,
+    },
+    VerificationCompleted {
+        passed: bool,
+        evidence: Vec<String>,
+    },
+    SessionPaused {
+        reason: String,
+    },
     SessionResumed,
-    SessionCompleted { report_ref: String },
-    SessionFailed { error: MedusaError },
+    SessionCompleted {
+        report_ref: String,
+    },
+    SessionFailed {
+        error: MedusaError,
+    },
 }
 
 /// Integrity-protected event envelope.
@@ -225,14 +277,25 @@ mod tests {
     #[test]
     fn tampering_is_detected() {
         let mut event = sample("original".into());
-        event.payload = EventPayload::SessionCreated { objective: "tampered".into() };
-        assert_eq!(event.validate().expect_err("tamper").code, ErrorCode::ChecksumMismatch);
+        event.payload = EventPayload::SessionCreated {
+            objective: "tampered".into(),
+        };
+        assert_eq!(
+            event.validate().expect_err("tamper").code,
+            ErrorCode::ChecksumMismatch
+        );
     }
 
     #[test]
     fn compatibility_rules_are_explicit() {
-        assert!(ProtocolVersion { major: 1, minor: 3 }.accepts(ProtocolVersion { major: 1, minor: 2 }));
-        assert!(!ProtocolVersion { major: 1, minor: 2 }.accepts(ProtocolVersion { major: 1, minor: 3 }));
-        assert!(!ProtocolVersion { major: 1, minor: 9 }.accepts(ProtocolVersion { major: 2, minor: 0 }));
+        assert!(
+            ProtocolVersion { major: 1, minor: 3 }.accepts(ProtocolVersion { major: 1, minor: 2 })
+        );
+        assert!(
+            !ProtocolVersion { major: 1, minor: 2 }.accepts(ProtocolVersion { major: 1, minor: 3 })
+        );
+        assert!(
+            !ProtocolVersion { major: 1, minor: 9 }.accepts(ProtocolVersion { major: 2, minor: 0 })
+        );
     }
 }

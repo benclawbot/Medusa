@@ -153,6 +153,9 @@ mod tests {
         )
         .with_retryable(true);
         let encoded = serde_json::to_string(&original).expect("serialize");
-        assert_eq!(serde_json::from_str::<MedusaError>(&encoded).expect("deserialize"), original);
+        assert_eq!(
+            serde_json::from_str::<MedusaError>(&encoded).expect("deserialize"),
+            original
+        );
     }
 }

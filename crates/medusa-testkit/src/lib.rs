@@ -11,7 +11,9 @@ pub fn session_created_event(objective: impl Into<String>) -> MedusaResult<Event
         SessionId::parse("ses-01ARZ3NDEKTSV4RRFFQ69G5FAV").expect("session fixture"),
         Actor::Coordinator,
         CorrelationId::parse("cor-01ARZ3NDEKTSV4RRFFQ69G5FAW").expect("correlation fixture"),
-        EventPayload::SessionCreated { objective: objective.into() },
+        EventPayload::SessionCreated {
+            objective: objective.into(),
+        },
         None,
         OffsetDateTime::UNIX_EPOCH,
     )
@@ -23,6 +25,9 @@ mod tests {
 
     #[test]
     fn fixture_validates() {
-        session_created_event("fix bug").expect("fixture").validate().expect("valid event");
+        session_created_event("fix bug")
+            .expect("fixture")
+            .validate()
+            .expect("valid event");
     }
 }
