@@ -5,6 +5,7 @@ members = [
   "crates/medusa-config",
   "crates/medusa-protocol",
   "crates/medusa-testkit",
+  "crates/medusa-cli",
 ]
 
 [workspace.package]
