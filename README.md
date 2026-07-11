@@ -2,7 +2,7 @@
 
 Medusa is a production-grade autonomous CLI coding agent implemented in Rust from the version 1.1.0 implementation contract recorded in [`MEDUSA_SPEC.md`](MEDUSA_SPEC.md).
 
-## Current milestone: Phase 0
+## Current milestone
 
 Phase 0 establishes:
 
@@ -11,9 +11,9 @@ Phase 0 establishes:
 - typed configuration with deterministic precedence and fail-closed validation;
 - structured errors and stable identifiers;
 - deterministic test fixtures;
-- CI formatting, linting, tests, docs, dependency audit, and license checks.
+- CI formatting, linting, tests, docs, dependency advisory, source, and audit checks.
 
-Development follows strict block-and-report phase gates. Phase 1 does not begin until Phase 0 is reviewed and explicitly approved.
+Implementation proceeds phase by phase. Every phase is independently verified, reported, committed, pushed, and merged to `main`. The user has authorized automatic progression between successful phases; execution pauses only for a genuine external or safety blocker.
 
 ## Development checks
 
