@@ -10,6 +10,7 @@ members = [
   "crates/medusa-agent",
   "crates/medusa-daemon",
   "crates/medusa-tui",
+  "crates/medusa-workers",
   "crates/medusa-cli",
 ]
 
