@@ -12,6 +12,7 @@ members = [
   "crates/medusa-tui",
   "crates/medusa-workers",
   "crates/medusa-memory",
+  "crates/medusa-extensions",
   "crates/medusa-cli",
 ]
 
