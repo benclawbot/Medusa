@@ -183,7 +183,9 @@ pub fn serve(paths: DaemonPaths) -> MedusaResult<()> {
 }
 
 /// Starts the server in a dedicated thread.
-pub fn spawn(paths: DaemonPaths) -> MedusaResult<(ServerHandle, thread::JoinHandle<MedusaResult<()>>)> {
+pub fn spawn(
+    paths: DaemonPaths,
+) -> MedusaResult<(ServerHandle, thread::JoinHandle<MedusaResult<()>>)> {
     fs::create_dir_all(&paths.directory)?;
     let shutdown = Arc::new(AtomicBool::new(false));
     let server_shutdown = shutdown.clone();
@@ -367,7 +369,8 @@ fn load_and_recover(paths: &DaemonPaths) -> MedusaResult<(BTreeMap<String, JobRe
         if matches!(job.state, JobState::Queued | JobState::Running) {
             job.state = JobState::Interrupted;
             job.finished_at = Some(OffsetDateTime::now_utc());
-            job.stderr.push_str("\n[daemon restarted before process completion]");
+            job.stderr
+                .push_str("\n[daemon restarted before process completion]");
             recovered = true;
         }
     }
@@ -483,7 +486,8 @@ mod tests {
                 program: "sh".into(),
                 args: vec![
                     "-c".into(),
-                    "sleep 0.3; printf done > finished.txt; printf verified-daemon-reconnect".into(),
+                    "sleep 0.3; printf done > finished.txt; printf verified-daemon-reconnect"
+                        .into(),
                 ],
             })
             .expect("submit")
