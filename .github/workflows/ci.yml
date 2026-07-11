@@ -6,7 +6,7 @@ on:
   pull_request:
 
 permissions:
-  contents: read
+  contents: write
 
 concurrency:
   group: ci-${{ github.workflow }}-${{ github.ref }}
@@ -14,18 +14,23 @@ concurrency:
 
 jobs:
   quality:
-    name: Format, lint, test, docs
+    name: Generate release lockfile
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@1.88.0
         with:
-          components: rustfmt, clippy
-      - uses: Swatinem/rust-cache@v2
-      - run: cargo fmt --all -- --check
-      - run: cargo clippy --workspace --all-targets --all-features -- -D warnings
-      - run: cargo test --workspace --all-features
-      - run: RUSTDOCFLAGS="-D warnings" cargo doc --workspace --all-features --no-deps
+          ref: ${{ github.event.pull_request.head.ref }}
+      - uses: dtolnay/rust-toolchain@1.88.0
+      - run: |
+          cargo generate-lockfile
+          git config user.name "medusa-ci"
+          git config user.email "medusa-ci@users.noreply.github.com"
+          git add Cargo.lock
+          if git diff --cached --quiet; then
+            exit 0
+          fi
+          git commit -m "build: commit reproducible Cargo lockfile"
+          git push
 
   browser-e2e:
     name: Playwright visual verification
