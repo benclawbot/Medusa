@@ -22,14 +22,12 @@ jobs:
         with:
           components: rustfmt, clippy
       - uses: Swatinem/rust-cache@v2
-      - name: Generate rustfmt patch
-        run: |
-          cargo fmt --all
-          git diff --binary > rustfmt.patch
+      - name: Generate formatted Phase 2 source
+        run: cargo fmt --all
       - uses: actions/upload-artifact@v4
         with:
-          name: rustfmt-phase2
-          path: rustfmt.patch
+          name: formatted-phase2-source
+          path: crates/medusa-intelligence/src/lib.rs
       - run: git diff --exit-code
       - run: cargo clippy --workspace --all-targets --all-features -- -D warnings
       - run: cargo test --workspace --all-features
