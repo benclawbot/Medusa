@@ -1,20 +1,22 @@
-use std::{io, path::PathBuf, thread, time::Duration};
+use std::{
+    io::{self, Write},
+    path::PathBuf,
+    thread,
+    time::Duration,
+};
 
 use clap::Parser;
 use crossterm::{
+    cursor::{Hide, MoveTo, Show},
     event::{self, Event, KeyCode},
-    execute,
-    terminal::{EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode},
+    execute, queue,
+    style::{Attribute, Print, SetAttribute},
+    terminal::{
+        Clear, ClearType, EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode,
+        enable_raw_mode, size,
+    },
 };
 use medusa_daemon::{DaemonClient, JobRecord, Request, Response};
-use ratatui::{
-    Terminal,
-    backend::CrosstermBackend,
-    layout::{Constraint, Direction, Layout},
-    style::{Modifier, Style},
-    text::Line,
-    widgets::{Block, Borders, List, ListItem, Paragraph},
-};
 
 #[derive(Parser, Debug)]
 #[command(name = "medusa-tui", about = "Medusa daemon dashboard")]
@@ -27,27 +29,21 @@ fn main() -> io::Result<()> {
     let args = Args::parse();
     enable_raw_mode()?;
     let mut stdout = io::stdout();
-    execute!(stdout, EnterAlternateScreen)?;
-    let backend = CrosstermBackend::new(stdout);
-    let mut terminal = Terminal::new(backend)?;
-    let result = run(&mut terminal, DaemonClient::new(args.socket));
+    execute!(stdout, EnterAlternateScreen, Hide)?;
+    let result = run(&mut stdout, DaemonClient::new(args.socket));
     disable_raw_mode()?;
-    execute!(terminal.backend_mut(), LeaveAlternateScreen)?;
-    terminal.show_cursor()?;
+    execute!(stdout, Show, LeaveAlternateScreen)?;
     result
 }
 
-fn run(
-    terminal: &mut Terminal<CrosstermBackend<io::Stdout>>,
-    client: DaemonClient,
-) -> io::Result<()> {
+fn run(stdout: &mut io::Stdout, client: DaemonClient) -> io::Result<()> {
     loop {
         let (jobs, status) = match client.request(Request::List) {
             Ok(Response::Jobs { jobs }) => (jobs, "connected".to_owned()),
             Ok(other) => (Vec::new(), format!("unexpected response: {other:?}")),
             Err(error) => (Vec::new(), format!("disconnected: {error}")),
         };
-        terminal.draw(|frame| draw(frame, &jobs, &status))?;
+        draw(stdout, &jobs, &status)?;
         if event::poll(Duration::from_millis(200))?
             && let Event::Key(key) = event::read()?
             && matches!(key.code, KeyCode::Char('q') | KeyCode::Esc)
@@ -59,36 +55,41 @@ fn run(
     Ok(())
 }
 
-fn draw(frame: &mut ratatui::Frame<'_>, jobs: &[JobRecord], status: &str) {
-    let chunks = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints([Constraint::Length(3), Constraint::Min(1), Constraint::Length(3)])
-        .split(frame.area());
-    let title = Paragraph::new(Line::from("Medusa daemon"))
-        .style(Style::default().add_modifier(Modifier::BOLD))
-        .block(Block::default().borders(Borders::ALL));
-    frame.render_widget(title, chunks[0]);
+fn draw(stdout: &mut io::Stdout, jobs: &[JobRecord], status: &str) -> io::Result<()> {
+    let (width, height) = size()?;
+    queue!(stdout, MoveTo(0, 0), Clear(ClearType::All))?;
+    queue!(
+        stdout,
+        SetAttribute(Attribute::Bold),
+        Print("Medusa daemon\r\n"),
+        SetAttribute(Attribute::Reset),
+        Print(format!("status: {status}\r\n")),
+        Print("─".repeat(width as usize)),
+        Print("\r\n")
+    )?;
 
-    let items = jobs
-        .iter()
-        .rev()
-        .map(|job| {
-            ListItem::new(format!(
+    let available_rows = height.saturating_sub(5) as usize;
+    if jobs.is_empty() {
+        queue!(stdout, Print("No jobs\r\n"))?;
+    } else {
+        for job in jobs.iter().rev().take(available_rows) {
+            let mut line = format!(
                 "{}  {:?}  {} {}",
                 job.id,
                 job.state,
                 job.program,
                 job.args.join(" ")
-            ))
-        })
-        .collect::<Vec<_>>();
-    frame.render_widget(
-        List::new(items).block(Block::default().title("Jobs").borders(Borders::ALL)),
-        chunks[1],
-    );
-    frame.render_widget(
-        Paragraph::new(format!("{status} — q/esc to exit"))
-            .block(Block::default().borders(Borders::ALL)),
-        chunks[2],
-    );
+            );
+            if line.len() > width as usize {
+                line.truncate(width as usize);
+            }
+            queue!(stdout, Print(line), Print("\r\n"))?;
+        }
+    }
+    queue!(
+        stdout,
+        MoveTo(0, height.saturating_sub(1)),
+        Print("q/esc to exit")
+    )?;
+    stdout.flush()
 }
