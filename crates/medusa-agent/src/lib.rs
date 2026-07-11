@@ -17,6 +17,7 @@ use medusa_provider::{Message, MessageBlock, ModelProvider, ModelRequest, Respon
 use serde::{Deserialize, Serialize};
 use time::OffsetDateTime;
 
+#[cfg(test)]
 use policy::safe_path;
 pub use policy::validate_shell_command;
 use tools::{built_in_tools, execute_tool, format_command_output};
