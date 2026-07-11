@@ -251,8 +251,14 @@ pub struct BenchmarkResult {
 
 #[must_use]
 pub fn benchmark(candidate: &SkillVersion, corpus: &EvalCorpus) -> BenchmarkResult {
-    let mut frozen = SubsetMetrics { passed: 0, total: 0 };
-    let mut self_authored = SubsetMetrics { passed: 0, total: 0 };
+    let mut frozen = SubsetMetrics {
+        passed: 0,
+        total: 0,
+    };
+    let mut self_authored = SubsetMetrics {
+        passed: 0,
+        total: 0,
+    };
     let mut task_results = BTreeMap::new();
     for task in &corpus.tasks {
         let answer = candidate.answer(&task.prompt);
@@ -353,10 +359,10 @@ impl ImprovementStore {
                 "candidate lacks passing frozen-subset evidence",
             ));
         }
-        let rollback_bundle = self
-            .root
-            .join("rollback")
-            .join(format!("{}-{}.json", candidate.name, Ulid::new()));
+        let rollback_bundle =
+            self.root
+                .join("rollback")
+                .join(format!("{}-{}.json", candidate.name, Ulid::new()));
         atomic_json(&rollback_bundle, &baseline)?;
         atomic_json(&self.skill_path(&candidate.name), candidate)?;
         let record = PromotionRecord {
@@ -398,10 +404,7 @@ impl ImprovementStore {
         Ok(true)
     }
 
-    pub fn replace_active_for_monitoring(
-        &self,
-        skill: &SkillVersion,
-    ) -> MedusaResult<()> {
+    pub fn replace_active_for_monitoring(&self, skill: &SkillVersion) -> MedusaResult<()> {
         atomic_json(&self.skill_path(&skill.name), skill)
     }
 
@@ -410,7 +413,9 @@ impl ImprovementStore {
     }
 
     fn history_path(&self, proposal_id: &str) -> PathBuf {
-        self.root.join("history").join(format!("{proposal_id}.json"))
+        self.root
+            .join("history")
+            .join(format!("{proposal_id}.json"))
     }
 }
 
@@ -578,7 +583,10 @@ mod tests {
         let mut record = store
             .promote(&proposal(), &improved(), &corpus, 0)
             .expect("promote");
-        assert_eq!(store.active_skill("rust-ci").expect("active").version, "1.1.0");
+        assert_eq!(
+            store.active_skill("rust-ci").expect("active").version,
+            "1.1.0"
+        );
         assert_eq!(record.frozen_score_milli, 1_000);
 
         let regressed = SkillVersion {
@@ -597,7 +605,10 @@ mod tests {
                 .monitor_and_rollback(&mut record, &corpus, 1_000)
                 .expect("monitor")
         );
-        assert_eq!(store.active_skill("rust-ci").expect("rolled back").version, "1.0.0");
+        assert_eq!(
+            store.active_skill("rust-ci").expect("rolled back").version,
+            "1.0.0"
+        );
         assert!(record.reverted_at.is_some());
         assert!(record.revert_reason.is_some());
     }
