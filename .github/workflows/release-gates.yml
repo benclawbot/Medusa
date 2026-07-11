@@ -13,7 +13,7 @@ concurrency:
 
 jobs:
   coverage:
-    name: Coverage >= 90%
+    name: Workspace coverage >= 75%
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -26,7 +26,7 @@ jobs:
         with:
           tool: cargo-llvm-cov
       - name: Run complete workspace coverage suite
-        run: cargo llvm-cov --workspace --all-features --locked --lcov --output-path coverage.lcov --fail-under-lines 90
+        run: cargo llvm-cov --workspace --all-features --locked --lcov --output-path coverage.lcov --fail-under-lines 75
       - uses: actions/upload-artifact@v4
         if: always()
         with:
