@@ -1,0 +1,21 @@
+[package]
+name = "medusa-intelligence"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+medusa-core.workspace = true
+serde.workspace = true
+sha2.workspace = true
+tree-sitter = "0.24"
+tree-sitter-rust = "0.23"
+walkdir = "2.5"
+
+[dev-dependencies]
+tempfile.workspace = true
+
+[lints]
+workspace = true
