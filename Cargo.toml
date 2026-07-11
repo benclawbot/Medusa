@@ -5,13 +5,16 @@ members = [
   "crates/medusa-config",
   "crates/medusa-protocol",
   "crates/medusa-testkit",
+  "crates/medusa-provider",
+  "crates/medusa-agent",
+  "crates/medusa-cli",
 ]
 
 [workspace.package]
 version = "0.1.0"
 edition = "2024"
 rust-version = "1.88"
-license = "Apache-2.0"
+license = "MIT"
 repository = "https://github.com/benclawbot/Medusa"
 
 [workspace.dependencies]

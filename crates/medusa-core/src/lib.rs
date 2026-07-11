@@ -62,6 +62,7 @@ pub enum ErrorCategory {
     Validation,
     Policy,
     Environment,
+    Execution,
     Transient,
     Persistence,
     Internal,
@@ -83,6 +84,10 @@ pub enum ErrorCode {
     PolicyDenied,
     #[error("dependency unavailable")]
     DependencyUnavailable,
+    #[error("tool execution failed")]
+    ToolExecutionFailed,
+    #[error("persistence failed")]
+    PersistenceFailed,
     #[error("internal invariant failed")]
     InternalInvariant,
 }
@@ -120,6 +125,26 @@ impl MedusaError {
     pub fn with_retryable(mut self, retryable: bool) -> Self {
         self.retryable = retryable;
         self
+    }
+}
+
+impl From<std::io::Error> for MedusaError {
+    fn from(error: std::io::Error) -> Self {
+        Self::new(
+            ErrorCode::PersistenceFailed,
+            ErrorCategory::Environment,
+            error.to_string(),
+        )
+    }
+}
+
+impl From<serde_json::Error> for MedusaError {
+    fn from(error: serde_json::Error) -> Self {
+        Self::new(
+            ErrorCode::PersistenceFailed,
+            ErrorCategory::Persistence,
+            error.to_string(),
+        )
     }
 }
 

@@ -1,79 +1,93 @@
-# Completion Report — Phase 0
+# Completion Report — Phases 0 and 1
 
 ## Outcome
 
-Phase 0 is complete on `agent/phase-0-contracts`. The repository contracts compile, all tests pass, documentation builds with warnings denied, and dependency advisory checks pass. The branch is ready for squash merge to `main`.
+Phase 0 and Phase 1 are complete. Medusa now has stable repository and protocol contracts plus a tested single-agent CLI vertical slice that can inspect a fixture, persist and reload its state, apply a fix through validated tools, run targeted verification, and retain exact evidence.
 
 ## What Changed and Why
 
-- Established a Rust 2024 Cargo workspace and pinned Rust 1.88, the minimum compatible toolchain for the patched dependency set.
-- Added stable typed identifiers and transport-safe structured errors.
-- Added explicit protocol compatibility rules and integrity-protected append-only event schemas.
-- Added fail-closed typed configuration with deterministic precedence and typed CLI/environment overrides.
-- Added deterministic test fixtures and least-privilege GitHub Actions quality and supply-chain gates.
+### Phase 0 — Repository and contracts
+
+- Established the Rust 2024 workspace and pinned Rust 1.88.
+- Added typed identifiers, structured errors, versioned protocol contracts, chained event checksums, deterministic configuration precedence, reusable test fixtures, and least-privilege CI.
+
+### Phase 1 — Single-agent vertical slice
+
+- Added `medusa-cli` with bootstrap, search, guarded shell, Git checkpoint, run, and resume commands.
+- Added `medusa-provider`, a provider-neutral interface and MiniMax-M3 Anthropic-compatible Messages adapter with credential isolation, bounded retries, usage accounting, strict response parsing, and private-thinking suppression.
+- Added `medusa-agent`, a persistent tool-driving loop with strict JSON Schemas, repository-contained file access, atomic writes, bounded tool output, shell hard denials, Git checkpoints, targeted verification, and exact evidence retention.
+- Added durable session restart behavior and an end-to-end bug-fix fixture that resumes under a new engine instance.
+- Added `.gitignore` protection for build and session artifacts and aligned Cargo metadata with the repository MIT license.
 
 ## Alternatives Rejected
 
-- Monolithic crate: rejected to preserve narrow contract boundaries.
-- Stub crates for later phases: rejected because disconnected placeholders violate the implementation contract.
-- Lenient unknown configuration fields: rejected because misspelled safety controls must fail closed.
-- Keeping Rust 1.85 with vulnerable `time 0.3.37`: rejected after RUSTSEC-2026-0009 was detected.
-- Keeping CI write permissions and auto-format commits: rejected after diagnostics were complete; final CI is check-only with `contents: read`.
+- A monolithic crate was rejected to preserve provider, protocol, configuration, orchestration, and CLI boundaries.
+- A fake runtime provider fallback was rejected; tests use an injected deterministic provider, while production execution requires `MINIMAX_API_KEY`.
+- Unvalidated free-form model actions were rejected in favor of strict tool schemas and typed validation.
+- Direct non-atomic file mutation was rejected in favor of temporary-file replacement.
+- Broad shell denial by default was rejected for the YOLO-first product goal; explicit destructive commands remain hard denied and deeper sandboxing is scheduled for hardening phases.
+- Committing CI caches was rejected and cleaned before the final branch; final CI is check-only with `contents: read`.
 
 ## Tests Run and Exact Results
 
-Local structural validation:
+Authoritative GitHub Actions run `29163040564` on Rust 1.88.0:
 
 ```text
-TOML_PARSE=PASS
-YAML_PARSE=PASS
-FILES=26
-RUST_FILES=8
-SPEC_SHA256=f6846b8570cacff1b4f4766e2fc564b60646fd3e1a18301e8edafe5a4d8d7dab
-```
-
-Authoritative GitHub Actions run `29159188370` on Rust 1.88.0:
-
-```text
-cargo fmt --all -- --check                                             PASS
-cargo clippy --workspace --all-targets --all-features -- -D warnings  PASS
-cargo test --workspace --all-features                                 PASS
+cargo fmt --all -- --check                                              PASS
+cargo clippy --workspace --all-targets --all-features -- -D warnings   PASS
+cargo test --workspace --all-features                                  PASS
 RUSTDOCFLAGS="-D warnings" cargo doc --workspace --all-features --no-deps PASS
-cargo deny check advisories sources                                   PASS
-cargo audit                                                            PASS
+cargo deny check advisories sources                                    PASS
+cargo audit                                                             PASS
 ```
 
-Regression coverage includes identifier and error serialization, protocol event round trips, tamper detection, compatibility rules, configuration defaults, fail-closed unknown fields, user/project/environment/CLI precedence, typed numeric and boolean overrides, string override fallback, and force-push denial.
+Phase 1 exit evidence is documented in [`docs/phase-1-evidence.md`](docs/phase-1-evidence.md). The regression test verifies that the engine reads an incorrect fixture value, persists the session, reloads it under a new engine instance, writes the corrected value, runs `sh verify.sh`, and records both `verified-value-42` and `exit_status=exit status: 0`.
+
+Regression coverage also includes:
+
+- identifier, error, protocol, and provider serialization;
+- event tamper detection and previous-hash continuity;
+- configuration precedence and fail-closed validation;
+- private-thinking suppression;
+- transient provider error classification;
+- path traversal denial;
+- restart-safe session persistence;
+- targeted verification failure and success behavior.
 
 ## Risk Level and Blast Radius
 
-Low. New repository bootstrap only; no runtime agent, shell execution, credentials, external publishing, or user repository mutation exists yet.
+Medium. Phase 1 introduces production code capable of model API calls, repository file mutation, shell commands, and Git commits. Access remains repository-relative for filesystem tools, destructive shell programs are hard denied, provider credentials are read only from environment variables, and all actions are persisted as checksummed session events.
 
 ## Files Touched and Why Each Matters
 
-- `Cargo.toml`, `rust-toolchain.toml`: workspace, dependency, and compiler contract.
-- `crates/medusa-core`: stable IDs and structured errors.
-- `crates/medusa-protocol`: protocol compatibility and event integrity.
-- `crates/medusa-config`: configuration schema, precedence, typed overrides, and fail-closed validation.
-- `crates/medusa-testkit`: deterministic reusable fixtures.
-- `.github/workflows/ci.yml`: least-privilege formatting, lint, test, docs, advisory, source, and audit gates.
-- `docs/compatibility.md`, `CONTRIBUTING.md`, `SECURITY.md`: governance and compatibility policy.
-- `MEDUSA_SPEC.md`: authoritative specification provenance and phase contract.
+- `crates/medusa-core`: stable IDs and execution-aware structured errors.
+- `crates/medusa-protocol`: durable checksummed event schema.
+- `crates/medusa-config`: typed runtime and model configuration.
+- `crates/medusa-provider`: provider boundary and MiniMax adapter.
+- `crates/medusa-agent`: persistent loop, built-in tools, verification, and restart fixture.
+- `crates/medusa-cli`: user-facing command entry points.
+- `.github/workflows/ci.yml`: strict quality and supply-chain gates.
+- `.gitignore`: excludes build outputs and local Medusa state.
+- `docs/phase-1-evidence.md`: reproducible phase-exit evidence.
 
 ## Known Uncertainty
 
-The GitHub connector cannot upload the original local attachment by path, so `MEDUSA_SPEC.md` records the exact authoritative source hash rather than embedding the complete 3,445-line attachment. GitHub Actions is the authoritative Rust execution environment because the implementation container lacks the Rust toolchain and outbound package resolution.
+- The MiniMax adapter is validated structurally and through response parsing tests, but a live canary requires a repository secret or local `MINIMAX_API_KEY`; no credential was available in CI.
+- Phase 1 uses non-streaming completion internally. The provider-neutral data model is ready for streaming, but full cancellation, streamed deltas, prompt caching controls, and idempotency keys remain to be completed during provider and production hardening.
+- Filesystem containment is lexical in Phase 1. Symlink-aware containment and OS-level sandbox enforcement are required before the production hardening gate.
+- GitHub Actions remains the authoritative Rust execution environment because the implementation container has no Rust toolchain or outbound package resolution.
 
 ## Rollback Plan
 
-Revert the Phase 0 squash merge commit on `main`. The pre-phase checkpoint is initial commit `129ceeb1f03bce9b59064e2e609606cea9ef4927`.
+Revert the Phase 1 squash merge on `main`. The pre-Phase-1 checkpoint is the Phase 0 merge commit `d54386dc50254e341a13d3e9462e9b1363dc3555`.
 
 ## Checkpoints
 
-- Initial `main`: `129ceeb1f03bce9b59064e2e609606cea9ef4927`.
-- Phase branch: `agent/phase-0-contracts`.
-- Final verified branch head before report update: `1ecf3d8e52883c4778578aa7cc2b4188c30f8df0`.
+- Initial repository: `129ceeb1f03bce9b59064e2e609606cea9ef4927`.
+- Phase 0 merge: `d54386dc50254e341a13d3e9462e9b1363dc3555`.
+- Phase 1 branch: `agent/phase-1-vertical-slice`.
+- Phase 1 verified implementation head before report update: `21a56b0c1a208c604d737856ce2cddc70f0159c7`.
 
-## Remaining Follow-Up
+## Next Phase
 
-The user explicitly authorized automatic phase progression on July 11, 2026. After Phase 0 merges, begin Phase 1 automatically and stop only for a genuine external or safety blocker.
+Begin Phase 2 automatically: Tree-sitter code intelligence, symbol and reference indexing, atomic patch transactions, formatting integration, and test-impact selection, with regression checks for all Phase 0 and Phase 1 gates.

@@ -1,0 +1,23 @@
+[package]
+name = "medusa-agent"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+medusa-config = { path = "../medusa-config" }
+medusa-core.workspace = true
+medusa-protocol.workspace = true
+medusa-provider = { path = "../medusa-provider" }
+serde.workspace = true
+serde_json.workspace = true
+time.workspace = true
+walkdir = "2.5"
+
+[dev-dependencies]
+tempfile.workspace = true
+
+[lints]
+workspace = true
