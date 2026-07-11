@@ -59,16 +59,36 @@ Several implementation files currently combine protocol definitions, validation,
 - Keep test helpers in `tests/`, `testkit`, or `#[cfg(test)]` modules rather than production paths.
 - Do not weaken sandbox, path-containment, memory-validation, or rollback controls during extraction.
 - Maintain the 90% minimum line-coverage gate throughout the refactor.
+- Treat coverage and adversarial behavior gates as independent release requirements.
+
+### Required adversarial regression suite
+
+The following named behaviors must remain explicit release checks. Passing the line-coverage threshold does not substitute for any of them.
+
+- **Symlink escape:** a repository-local symlink pointing outside the repository must be rejected by every read, write, patch, search, and rename path.
+- **Traversal and archive escape:** absolute paths, `..`, duplicate archive entries, and platform-specific root/prefix paths must be denied.
+- **Hard-deny bypasses:** reject force pushes, destructive Git cleanup/reset operations, shell chaining, `curl | sh`/`wget | sh`, secret-environment enumeration, SSH-key reads, credential-bearing headers, and endpoint-protection tampering attempts.
+- **Argument-form bypasses:** policy checks must normalize executable basenames, flag ordering, aliases, shell wrappers, and equivalent `--force` forms rather than rely on five exact program names.
+- **Sandbox filesystem boundary:** an executed command must not write outside the repository or its isolated temporary filesystem.
+- **Sandbox network boundary:** commands without an explicit network grant must be unable to open outbound sockets or resolve external hosts.
+- **Sandbox environment boundary:** undeclared credentials and host environment variables must not be visible to child processes.
+- **Worker worktree races:** concurrent workers editing the same logical area must produce a deterministic conflict, preserve both worker commits, and leave the coordinator repository clean after abort.
+- **Worker cleanup races:** interrupted or concurrently completed workers must not delete another worker's active worktree or branch.
+- **Patch transaction integrity:** stale ranges, overlapping hunks, symlink targets, partial multi-file failures, and formatter failures must leave the repository byte-identical or fully rolled back.
+- **Protected verification contract:** autonomous runs must not alter tests, fixtures, snapshots, or verification scripts unless the user explicitly requested that exact modification.
+- **Secret exfiltration:** shell, MCP, hooks, logs, artifacts, and model-visible tool output must redact or deny known credentials and token-like values.
+
+Each case must have a stable test name, run in the dedicated adversarial CI job, and produce evidence that identifies the policy decision or rollback result.
 
 ### Execution sequence
 
-1. Record baseline API, binary, coverage, performance, and fixture results.
+1. Record baseline API, binary, coverage, performance, adversarial-suite, and fixture results.
 2. Extract pure data types and validators first.
 3. Extract persistence and protocol code.
 4. Extract tool implementations and sandbox policy.
 5. Extract orchestration state machines last.
 6. Replace cross-module concrete dependencies with narrow traits only where they reduce coupling.
-7. Run the complete release gate after every target crate.
+7. Run the complete coverage and adversarial release gates after every target crate.
 8. Remove obsolete compatibility shims after all downstream callers migrate.
 
 ### Acceptance criteria
@@ -78,6 +98,7 @@ Several implementation files currently combine protocol definitions, validation,
 - Circular module dependencies are absent.
 - Public API changes are documented and migration-tested.
 - Line coverage remains at or above 90%.
+- Every named adversarial regression case passes independently of the coverage percentage.
 - All deterministic, live-provider, browser, security, migration, chaos, packaging, and cross-platform gates remain green.
 - Performance does not regress by more than 5% on the frozen benchmark suite without an explicit rationale.
 - The final architecture document and repository map match the actual module layout.
