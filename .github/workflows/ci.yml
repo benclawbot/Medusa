@@ -6,7 +6,7 @@ on:
   pull_request:
 
 permissions:
-  contents: write
+  contents: read
 
 concurrency:
   group: ci-${{ github.workflow }}-${{ github.ref }}
@@ -14,81 +14,37 @@ concurrency:
 
 jobs:
   quality:
-    name: Apply live-agent integrity fixes
+    name: Diagnose live-agent patch tokens
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-        with:
-          ref: ${{ github.event.pull_request.head.ref }}
-      - uses: dtolnay/rust-toolchain@1.88.0
-        with:
-          components: rustfmt
-      - name: Patch verification and atomic-write integrity
+      - name: Record source token diagnostics
         run: |
           python3 - <<'PY'
           from pathlib import Path
-
           path = Path('crates/medusa-agent/src/lib.rs')
           text = path.read_text()
-
-          prompt_start = 'const SYSTEM_PROMPT: &str = "'
-          prompt_index = text.find(prompt_start)
-          if prompt_index < 0:
-              raise SystemExit('SYSTEM_PROMPT declaration not found')
-          prompt_end = text.find('";', prompt_index + len(prompt_start))
-          if prompt_end < 0:
-              raise SystemExit('SYSTEM_PROMPT terminator not found')
-          prompt = (
-              'const SYSTEM_PROMPT: &str = "You are Medusa, an autonomous coding agent. '
-              'Inspect the repository, make the smallest correct change, and verify it. '
-              'Use tools rather than inventing repository contents. Never modify tests, '
-              'verification scripts, snapshots, fixtures, or expected outputs unless the user '
-              'explicitly asks for that exact change; fix the product code instead. Do not expose '
-              'private chain-of-thought; provide concise decisions and evidence.";'
-          )
-          text = text[:prompt_index] + prompt + text[prompt_end + 2:]
-
-          shell_old = 'Some(("sh", vec!["verify.sh"]))'
-          if text.count(shell_old) != 1:
-              raise SystemExit(f'expected one verification shell token, found {text.count(shell_old)}')
-          text = text.replace(shell_old, 'Some(("bash", vec!["verify.sh"]))', 1)
-
-          temp_line = '            let temporary = path.with_extension("medusa-tmp");\n'
-          write_line = '            fs::write(&temporary, content)?;\n'
-          rename_line = '            fs::rename(&temporary, &path)?;\n'
-          if text.count(temp_line) != 1 or text.count(write_line) != 1 or text.count(rename_line) != 1:
-              raise SystemExit('atomic write tokens not found exactly once')
-          text = text.replace(
-              temp_line,
-              '            let original_permissions = fs::metadata(&path)\n'
-              '                .ok()\n'
-              '                .map(|metadata| metadata.permissions());\n'
-              + temp_line,
-              1,
-          )
-          text = text.replace(
-              write_line,
-              write_line
-              + '            if let Some(permissions) = original_permissions {\n'
-              + '                fs::set_permissions(&temporary, permissions)?;\n'
-              + '            }\n',
-              1,
-          )
-
-          if 'Never modify tests' not in text:
-              raise SystemExit('prompt integrity assertion failed')
-          if 'Some(("bash", vec!["verify.sh"]))' not in text:
-              raise SystemExit('verification shell assertion failed')
-          if 'original_permissions' not in text:
-              raise SystemExit('permission preservation assertion failed')
-          path.write_text(text)
+          tokens = {
+              'prompt_start': 'const SYSTEM_PROMPT: &str = "',
+              'shell_exact': 'Some(("sh", vec!["verify.sh"]))',
+              'temp_line': '            let temporary = path.with_extension("medusa-tmp");\n',
+              'write_line': '            fs::write(&temporary, content)?;\n',
+              'rename_line': '            fs::rename(&temporary, &path)?;\n',
+          }
+          with open('patch-diagnostics.txt', 'w') as output:
+              for name, token in tokens.items():
+                  output.write(f'{name}={text.count(token)}\n')
+              for needle in ['SYSTEM_PROMPT', 'verify.sh', 'medusa-tmp', 'fs::write(&temporary', 'fs::rename(&temporary']:
+                  index = text.find(needle)
+                  output.write(f'\n[{needle}] index={index}\n')
+                  if index >= 0:
+                      output.write(text[max(0, index-180):index+420])
+                      output.write('\n')
           PY
-          cargo fmt --all
-          git config user.name "medusa-ci"
-          git config user.email "medusa-ci@users.noreply.github.com"
-          git add crates/medusa-agent/src/lib.rs
-          git commit -m "fix: preserve verifier integrity in live agent runs"
-          git push
+      - uses: actions/upload-artifact@v4
+        with:
+          name: live-agent-patch-diagnostics
+          path: patch-diagnostics.txt
 
   supply-chain:
     name: Dependency policy
