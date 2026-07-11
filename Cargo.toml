@@ -6,6 +6,7 @@ members = [
   "crates/medusa-protocol",
   "crates/medusa-testkit",
   "crates/medusa-provider",
+  "crates/medusa-intelligence",
   "crates/medusa-agent",
   "crates/medusa-cli",
 ]
