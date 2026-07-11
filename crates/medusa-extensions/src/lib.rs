@@ -3,7 +3,7 @@
 use std::{
     collections::{BTreeMap, BTreeSet},
     fs,
-    io::{BufRead, BufReader, Write},
+    io::Write,
     path::{Component, Path, PathBuf},
     process::{Command, Stdio},
     thread,
