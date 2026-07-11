@@ -7,9 +7,7 @@ use std::{
 
 use clap::{Parser, Subcommand};
 use medusa_config::Config;
-use medusa_core::{
-    CorrelationId, ErrorCategory, ErrorCode, MedusaError, MedusaResult, SessionId,
-};
+use medusa_core::{CorrelationId, ErrorCategory, ErrorCode, MedusaError, MedusaResult, SessionId};
 use medusa_protocol::{Actor, EventEnvelope, EventPayload};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -30,22 +28,11 @@ struct Cli {
 #[derive(Subcommand, Debug)]
 enum CommandKind {
     Bootstrap,
-    Search {
-        pattern: String,
-    },
-    Shell {
-        program: String,
-        args: Vec<String>,
-    },
-    Checkpoint {
-        message: String,
-    },
-    Run {
-        objective: String,
-    },
-    Resume {
-        session: String,
-    },
+    Search { pattern: String },
+    Shell { program: String, args: Vec<String> },
+    Checkpoint { message: String },
+    Run { objective: String },
+    Resume { session: String },
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -123,12 +110,7 @@ fn search(repo: &Path, pattern: &str) -> MedusaResult<()> {
         if let Ok(text) = fs::read_to_string(entry.path()) {
             for (index, line) in text.lines().enumerate() {
                 if line.contains(pattern) {
-                    println!(
-                        "{}:{}:{}",
-                        entry.path().display(),
-                        index + 1,
-                        line.trim()
-                    );
+                    println!("{}:{}:{}", entry.path().display(), index + 1, line.trim());
                 }
             }
         }
@@ -261,12 +243,8 @@ mod tests {
     #[test]
     fn session_survives_restart() {
         let directory = tempfile::tempdir().expect("tempdir");
-        run_session(
-            directory.path(),
-            "fix fixture".into(),
-            &Config::default(),
-        )
-        .expect("create session");
+        run_session(directory.path(), "fix fixture".into(), &Config::default())
+            .expect("create session");
         let sessions = fs::read_dir(medusa_dir(directory.path()).join("sessions"))
             .expect("sessions")
             .collect::<Result<Vec<_>, _>>()
