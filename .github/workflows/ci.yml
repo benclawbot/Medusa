@@ -6,7 +6,7 @@ on:
   pull_request:
 
 permissions:
-  contents: write
+  contents: read
 
 concurrency:
   group: ci-${{ github.workflow }}-${{ github.ref }}
@@ -18,26 +18,25 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-        with:
-          ref: ${{ github.event.pull_request.head.ref }}
       - uses: dtolnay/rust-toolchain@1.88.0
         with:
           components: rustfmt,clippy
       - name: Refresh dependency lock for the merged PR graph
         run: cargo generate-lockfile
-      - name: Apply rustfmt to extraction
+      - name: Check formatting
+        run: cargo fmt --all -- --check
+      - name: Clippy
         shell: bash
         run: |
-          cargo fmt --all
-          if ! git diff --quiet; then
-            git config user.name "medusa-ci"
-            git config user.email "medusa-ci@users.noreply.github.com"
-            git add Cargo.lock crates/medusa-agent/src
-            git commit -m "style(agent): apply rustfmt to extracted modules"
-            git push
-          fi
-      - name: Clippy
-        run: cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
+          set -o pipefail
+          cargo clippy --workspace --all-targets --all-features --locked -- -D warnings 2>&1 | tee clippy.log
+      - name: Upload Clippy diagnostics
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: clippy-diagnostics
+          path: clippy.log
+          if-no-files-found: ignore
       - name: Full workspace tests
         run: cargo test --workspace --all-features --locked
       - name: Documentation
