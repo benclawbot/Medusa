@@ -27,26 +27,46 @@ jobs:
         run: |
           python3 - <<'PY'
           from pathlib import Path
+          import re
+
           path = Path('crates/medusa-agent/src/lib.rs')
           text = path.read_text()
-          replacements = [
-              (
-                  'const SYSTEM_PROMPT: &str = "You are Medusa, an autonomous coding agent. Inspect the repository, make the smallest correct change, and verify it. Use tools rather than inventing repository contents. Do not expose private chain-of-thought; provide concise decisions and evidence.";',
-                  'const SYSTEM_PROMPT: &str = "You are Medusa, an autonomous coding agent. Inspect the repository, make the smallest correct change, and verify it. Use tools rather than inventing repository contents. Never modify tests, verification scripts, snapshots, fixtures, or expected outputs unless the user explicitly asks for that exact change; fix the product code instead. Do not expose private chain-of-thought; provide concise decisions and evidence.";'
+
+          text, prompt_count = re.subn(
+              r'const SYSTEM_PROMPT: &str = ".*?";',
+              'const SYSTEM_PROMPT: &str = "You are Medusa, an autonomous coding agent. Inspect the repository, make the smallest correct change, and verify it. Use tools rather than inventing repository contents. Never modify tests, verification scripts, snapshots, fixtures, or expected outputs unless the user explicitly asks for that exact change; fix the product code instead. Do not expose private chain-of-thought; provide concise decisions and evidence.";',
+              text,
+              count=1,
+          )
+          text, shell_count = re.subn(
+              r'Some\(\("sh",\s*vec!\["verify\.sh"\]\)\)',
+              'Some(("bash", vec!["verify.sh"]))',
+              text,
+              count=1,
+          )
+          text, write_count = re.subn(
+              r'(?P<indent>\s*)let temporary = path\.with_extension\("medusa-tmp"\);\s*fs::write\(&temporary, content\)\?;\s*fs::rename\(&temporary, &path\)\?;',
+              lambda match: (
+                  f'{match.group("indent")}let original_permissions = fs::metadata(&path)\n'
+                  f'{match.group("indent")}    .ok()\n'
+                  f'{match.group("indent")}    .map(|metadata| metadata.permissions());\n'
+                  f'{match.group("indent")}let temporary = path.with_extension("medusa-tmp");\n'
+                  f'{match.group("indent")}fs::write(&temporary, content)?;\n'
+                  f'{match.group("indent")}if let Some(permissions) = original_permissions {{\n'
+                  f'{match.group("indent")}    fs::set_permissions(&temporary, permissions)?;\n'
+                  f'{match.group("indent")}}}\n'
+                  f'{match.group("indent")}fs::rename(&temporary, &path)?;'
               ),
-              (
-                  '        Some(("sh", vec!["verify.sh"]))',
-                  '        Some(("bash", vec!["verify.sh"]))'
-              ),
-              (
-                  '            let temporary = path.with_extension("medusa-tmp");\n            fs::write(&temporary, content)?;\n            fs::rename(&temporary, &path)?;',
-                  '            let original_permissions = fs::metadata(&path).ok().map(|metadata| metadata.permissions());\n            let temporary = path.with_extension("medusa-tmp");\n            fs::write(&temporary, content)?;\n            if let Some(permissions) = original_permissions {\n                fs::set_permissions(&temporary, permissions)?;\n            }\n            fs::rename(&temporary, &path)?;'
-              ),
-          ]
-          for old, new in replacements:
-              if text.count(old) != 1:
-                  raise SystemExit(f'expected exactly one match for: {old[:80]}')
-              text = text.replace(old, new)
+              text,
+              count=1,
+          )
+
+          if prompt_count != 1 or shell_count != 1 or write_count != 1:
+              raise SystemExit(
+                  f'patch counts prompt={prompt_count} shell={shell_count} write={write_count}'
+              )
+          if 'Never modify tests' not in text or 'Some(("bash", vec!["verify.sh"]))' not in text:
+              raise SystemExit('post-patch integrity assertion failed')
           path.write_text(text)
           PY
           cargo fmt --all
