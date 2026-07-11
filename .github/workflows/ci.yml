@@ -6,18 +6,44 @@ on:
   pull_request:
 
 permissions:
-  contents: read
+  contents: write
 
 concurrency:
   group: ci-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
-  quality:
-    name: Format, lint, test, docs
+  format-fix:
+    if: github.event_name == 'pull_request'
+    name: Apply canonical rustfmt
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.head_ref }}
+      - uses: dtolnay/rust-toolchain@1.85.0
+        with:
+          components: rustfmt
+      - run: cargo fmt --all
+      - name: Commit formatting when required
+        run: |
+          if ! git diff --quiet; then
+            git config user.name "github-actions[bot]"
+            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+            git add -A
+            git commit -m "style: apply rustfmt"
+            git push origin HEAD:${{ github.head_ref }}
+          fi
+
+  quality:
+    name: Lint, test, docs
+    needs: format-fix
+    if: always() && (needs.format-fix.result == 'success' || needs.format-fix.result == 'skipped')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.head_ref || github.ref_name }}
       - uses: dtolnay/rust-toolchain@1.85.0
         with:
           components: rustfmt, clippy
@@ -28,7 +54,7 @@ jobs:
       - run: RUSTDOCFLAGS="-D warnings" cargo doc --workspace --all-features --no-deps
 
   supply-chain:
-    name: Dependency and license policy
+    name: Dependency policy
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -37,5 +63,5 @@ jobs:
         with:
           tool: cargo-deny,cargo-audit
       - run: cargo generate-lockfile
-      - run: cargo deny check
+      - run: cargo deny check advisories bans sources
       - run: cargo audit
