@@ -204,7 +204,7 @@ fn is_definition_name(node: Node<'_>) -> bool {
     })
 }
 
-fn text(source: &str, node: Node<'_>) -> MedusaResult<&str> {
+fn text<'a>(source: &'a str, node: Node<'_>) -> MedusaResult<&'a str> {
     source
         .get(node.byte_range())
         .ok_or_else(|| internal("syntax node byte range is invalid"))
