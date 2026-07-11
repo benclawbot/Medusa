@@ -1,0 +1,163 @@
+name: Release Gates
+
+on:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-gates-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  coverage:
+    name: Workspace coverage >= 75%
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@1.88.0
+        with:
+          components: llvm-tools-preview
+      - name: Refresh dependency lock for the merged PR graph
+        run: cargo generate-lockfile
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-llvm-cov
+      - name: Run complete workspace coverage suite
+        run: cargo llvm-cov --workspace --all-features --locked --lcov --output-path coverage.lcov --fail-under-lines 75
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: coverage-lcov
+          path: coverage.lcov
+          if-no-files-found: error
+
+  adversarial-regression:
+    name: Named adversarial regressions
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@1.88.0
+      - name: Refresh dependency lock for the merged PR graph
+        run: cargo generate-lockfile
+      - name: Install Linux sandbox backend
+        run: sudo apt-get update && sudo apt-get install -y bubblewrap
+      - name: Parent path escape is denied
+        run: cargo test -p medusa-agent parent_path_escape_is_denied --locked -- --nocapture
+      - name: Symlink escape is denied
+        run: cargo test -p medusa-agent symlink_escape_is_denied --locked -- --nocapture
+      - name: Dangerous shell commands are denied
+        run: cargo test -p medusa-agent dangerous_shell_commands_are_denied --locked -- --nocapture
+      - name: Sandbox blocks network and external writes
+        run: cargo test -p medusa-agent sandbox_blocks_network_and_external_writes --locked -- --nocapture
+      - name: Patch apply uses guarded transaction
+        run: cargo test -p medusa-agent patch_apply_tool_uses_guarded_transaction --locked -- --nocapture
+      - name: Parallel feature fixture merges and verifies
+        run: cargo test -p medusa-workers parallel_feature_fixture_merges_and_verifies --locked -- --nocapture
+      - name: Conflicting workers abort cleanly
+        run: cargo test -p medusa-workers conflicting_workers_abort_cleanly --locked -- --nocapture
+      - name: Malicious MCP cannot read secrets or redefine policy
+        run: cargo test -p medusa-extensions malicious_mcp_cannot_read_secret_or_redefine_policy --locked -- --nocapture
+      - name: Operational events redact credentials
+        run: cargo test -p medusa-hardening operational_events_redact_credentials --locked -- --nocapture
+      - name: Arbitrary archive paths never escape
+        run: cargo test -p medusa-hardening arbitrary_archive_paths_never_escape --locked -- --nocapture
+
+  fuzz-smoke:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@1.88.0
+      - run: bash scripts/fuzz-smoke.sh
+
+  chaos-and-migrations:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@1.88.0
+      - run: bash scripts/chaos-smoke.sh
+      - run: cargo test -p medusa-hardening clean_install_upgrade_and_rollback_are_byte_exact -- --exact
+
+  package-smoke:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@1.88.0
+      - name: Refresh dependency lock for the merged PR graph
+        run: cargo generate-lockfile
+      - name: Build release package
+        run: cargo build --release --locked --bin medusa
+      - name: Smoke test package on Unix
+        if: runner.os != 'Windows'
+        run: bash scripts/package-smoke.sh
+      - name: Smoke test package on Windows
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $binary = 'target/release/medusa.exe'
+          & $binary --version
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          & $binary --help | Select-String 'Autonomous coding agent'
+
+  security:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@1.88.0
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-deny,cargo-audit
+      - run: cargo deny check advisories sources
+      - run: cargo audit
+      - run: cargo test -p medusa-extensions malicious_mcp_cannot_read_secret_or_redefine_policy -- --exact
+      - run: cargo test -p medusa-hardening operational_events_redact_credentials -- --exact
+
+  docs-and-schema:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@1.88.0
+      - run: RUSTDOCFLAGS='-D warnings' cargo doc --workspace --all-features --no-deps
+      - run: test -s docs/RELEASE.md
+      - run: test -s docs/OBSERVABILITY.md
+      - run: test -s docs/SECURITY-HARDENING.md
+      - run: test -s docs/NEXT-STEPS.md
+
+  live-minimax-coding-e2e:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    env:
+      MINIMAX_API_KEY: ${{ secrets.MINIMAX_API_KEY }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@1.88.0
+      - name: Refresh dependency lock for the merged PR graph
+        run: cargo generate-lockfile
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Require configured live-test secret
+        shell: bash
+        run: |
+          if [[ -z "${MINIMAX_API_KEY:-}" ]]; then
+            echo 'MINIMAX_API_KEY repository secret is required for the final live coding gate.' >&2
+            exit 2
+          fi
+      - name: Mask live credential defensively
+        shell: bash
+        run: echo "::add-mask::$MINIMAX_API_KEY"
+      - name: Run three autonomous coding scenarios
+        shell: bash
+        run: bash scripts/live-coding-e2e.sh
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: live-minimax-coding-evidence
+          path: live-e2e-artifacts
+          if-no-files-found: ignore

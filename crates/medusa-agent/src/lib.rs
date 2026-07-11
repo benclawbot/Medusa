@@ -18,7 +18,7 @@ use serde_json::{Value, json};
 use time::OffsetDateTime;
 use walkdir::WalkDir;
 
-const SYSTEM_PROMPT: &str = "You are Medusa, an autonomous coding agent. Inspect the repository, make the smallest correct change, and verify it. Use tools rather than inventing repository contents. Do not expose private chain-of-thought; provide concise decisions and evidence.";
+const SYSTEM_PROMPT: &str = "You are Medusa, an autonomous coding agent. Inspect the repository, make the smallest correct change, and verify it. Use tools rather than inventing repository contents. Never modify tests, verification scripts, snapshots, fixtures, or expected outputs unless the user explicitly asks for that exact change; fix the product code instead. Do not expose private chain-of-thought; provide concise decisions and evidence.";
 const MAX_TOOL_OUTPUT_BYTES: usize = 1_000_000;
 
 /// Durable state for one single-agent session.
@@ -267,7 +267,7 @@ pub fn bootstrap(repo: &Path) -> MedusaResult<()> {
 /// Runs deterministic repository-specific verification.
 pub fn targeted_verification(repo: &Path) -> MedusaResult<VerificationResult> {
     let command = if repo.join("verify.sh").is_file() {
-        Some(("sh", vec!["verify.sh"]))
+        Some(("bash", vec!["verify.sh"]))
     } else if repo.join("Cargo.toml").is_file() {
         Some(("cargo", vec!["test", "--all-targets", "--all-features"]))
     } else if repo.join("package.json").is_file() {
@@ -384,8 +384,14 @@ fn execute_tool(repo: &Path, name: &str, input: &Value) -> MedusaResult<String> 
             if let Some(parent) = path.parent() {
                 fs::create_dir_all(parent)?;
             }
+            let original_permissions = fs::metadata(&path)
+                .ok()
+                .map(|metadata| metadata.permissions());
             let temporary = path.with_extension("medusa-tmp");
             fs::write(&temporary, content)?;
+            if let Some(permissions) = original_permissions {
+                fs::set_permissions(&temporary, permissions)?;
+            }
             fs::rename(&temporary, &path)?;
             Ok(format!(
                 "wrote {} bytes to {}",
