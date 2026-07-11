@@ -66,7 +66,14 @@ impl WorkerManager {
         let worktree = self.worktree_root.join(&id);
         run_git(
             &self.repo,
-            &["worktree", "add", "-b", &branch, path_text(&worktree)?, "HEAD"],
+            &[
+                "worktree",
+                "add",
+                "-b",
+                &branch,
+                path_text(&worktree)?,
+                "HEAD",
+            ],
         )?;
         Ok(Worker {
             id,
@@ -150,7 +157,12 @@ impl WorkerManager {
             if worker.worktree.exists() {
                 run_git(
                     &self.repo,
-                    &["worktree", "remove", "--force", path_text(&worker.worktree)?],
+                    &[
+                        "worktree",
+                        "remove",
+                        "--force",
+                        path_text(&worker.worktree)?,
+                    ],
                 )?;
             }
         }
@@ -171,10 +183,7 @@ fn execute_worker(mut worker: Worker, task: DelegatedTask) -> MedusaResult<Worke
         return Ok(worker);
     }
     run_git(&worker.worktree, &["add", "-A"])?;
-    run_git(
-        &worker.worktree,
-        &["commit", "-m", &task.commit_message],
-    )?;
+    run_git(&worker.worktree, &["commit", "-m", &task.commit_message])?;
     worker.commit = Some(git_stdout(&worker.worktree, &["rev-parse", "HEAD"])?);
     worker.state = WorkerState::Succeeded;
     Ok(worker)
@@ -304,7 +313,11 @@ mod tests {
                 ),
             ])
             .expect("delegate");
-        assert!(workers.iter().all(|worker| worker.state == WorkerState::Succeeded));
+        assert!(
+            workers
+                .iter()
+                .all(|worker| worker.state == WorkerState::Succeeded)
+        );
         assert_eq!(manager.merge_successful(&workers).expect("merge").len(), 2);
         assert!(
             manager
@@ -312,8 +325,14 @@ mod tests {
                 .expect("verify")
                 .contains("combined-verification-ok")
         );
-        assert_eq!(fs::read_to_string(repo.join("feature-a.txt")).expect("a"), "alpha");
-        assert_eq!(fs::read_to_string(repo.join("feature-b.txt")).expect("b"), "beta");
+        assert_eq!(
+            fs::read_to_string(repo.join("feature-a.txt")).expect("a"),
+            "alpha"
+        );
+        assert_eq!(
+            fs::read_to_string(repo.join("feature-b.txt")).expect("b"),
+            "beta"
+        );
         manager.cleanup(&workers).expect("cleanup");
     }
 }
