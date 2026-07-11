@@ -1,0 +1,40 @@
+name: Refactor Guardrails
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: refactor-guardrails-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  source-size:
+    name: Production source files <= 800 lines
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Enforce source-size ceiling and exception registry
+        run: bash scripts/check-source-size.sh
+
+  compatibility-baseline:
+    name: Public API and benchmark baseline present
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Validate baseline documents
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -s docs/REFACTOR-BASELINE.md
+          test -s docs/PUBLIC-API-BASELINE.md
+          test -s docs/BENCHMARKS.md
+          test -s docs/source-size-exceptions.txt
+          grep -q '75%' docs/REFACTOR-BASELINE.md
+          grep -q '5%' docs/BENCHMARKS.md
+          grep -q 'medusa-agent' docs/PUBLIC-API-BASELINE.md
+          echo refactor-baseline-ok
