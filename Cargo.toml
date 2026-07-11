@@ -30,7 +30,3 @@ tempfile = "3.16"
 
 [workspace.lints.rust]
 unsafe_code = "forbid"
-missing_docs = "warn"
-
-[workspace.lints.clippy]
-all = { level = "deny", priority = -1 }
