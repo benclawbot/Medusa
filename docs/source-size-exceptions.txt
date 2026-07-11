@@ -1,0 +1,2 @@
+# path|max_lines|reason
+crates/medusa-memory/src/lib.rs|1000|Legacy single-file implementation scheduled for extraction in modularization PR 5; growth beyond this cap is forbidden.
