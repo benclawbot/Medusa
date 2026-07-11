@@ -4,16 +4,14 @@ Medusa is a production-grade autonomous CLI coding agent implemented in Rust fro
 
 ## Current milestone
 
-Phase 0 establishes:
+Phase 1 is in active implementation on `agent/phase-1-vertical-slice` and covers:
 
-- Rust 2024 Cargo workspace and pinned compiler contract;
-- versioned protocol and integrity-protected event envelopes;
-- typed configuration with deterministic precedence and fail-closed validation;
-- structured errors and stable identifiers;
-- deterministic test fixtures;
-- CI formatting, linting, tests, docs, dependency advisory, source, and audit checks.
+- CLI entry points and repository bootstrap;
+- filesystem search, guarded shell execution, and Git checkpoints;
+- persistent, checksummed sessions with restart and resume behavior;
+- the MiniMax-M3 provider boundary, agent loop, targeted verification, and end-to-end fixture gate.
 
-Implementation proceeds phase by phase. Every phase is independently verified, reported, committed, pushed, and merged to `main`. The user has authorized automatic progression between successful phases; execution pauses only for a genuine external or safety blocker.
+Every phase is independently verified, reported, committed, pushed, and merged to `main`. The user has explicitly authorized automatic progression through all phases; execution pauses only for a genuine external or safety blocker.
 
 ## Development checks
 
