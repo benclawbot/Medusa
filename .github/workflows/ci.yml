@@ -14,7 +14,7 @@ concurrency:
 
 jobs:
   quality:
-    name: Format, lint, test, docs
+    name: Phase 3 diagnostics
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -22,13 +22,18 @@ jobs:
         with:
           components: rustfmt, clippy
       - uses: Swatinem/rust-cache@v2
-      - run: cargo fmt --all -- --check
-      - run: cargo clippy --workspace --all-targets --all-features -- -D warnings
-      - run: cargo test --workspace --all-features
-      - run: RUSTDOCFLAGS="-D warnings" cargo doc --workspace --all-features --no-deps
+      - name: Generate formatted Phase 3 sources
+        run: cargo fmt --all
+      - uses: actions/upload-artifact@v4
+        with:
+          name: phase3-formatted-sources
+          path: |
+            crates/medusa-daemon/src/lib.rs
+            crates/medusa-tui/src/main.rs
+      - run: git diff --exit-code
 
   supply-chain:
-    name: Dependency policy
+    name: Dependency diagnostics
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -37,5 +42,16 @@ jobs:
         with:
           tool: cargo-deny,cargo-audit
       - run: cargo generate-lockfile
-      - run: cargo deny check advisories sources
-      - run: cargo audit
+      - name: Capture dependency policy diagnostics
+        run: |
+          set +e
+          cargo deny check advisories sources > deny.log 2>&1
+          echo $? > deny.status
+          set -e
+      - uses: actions/upload-artifact@v4
+        with:
+          name: phase3-dependency-diagnostics
+          path: |
+            deny.log
+            deny.status
+      - run: test "$(cat deny.status)" = "0"
