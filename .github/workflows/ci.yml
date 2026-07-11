@@ -6,7 +6,7 @@ on:
   pull_request:
 
 permissions:
-  contents: write
+  contents: read
 
 concurrency:
   group: ci-${{ github.workflow }}-${{ github.ref }}
@@ -14,30 +14,18 @@ concurrency:
 
 jobs:
   quality:
-    name: Apply compiler fix
+    name: Format, lint, test, docs
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@1.88.0
         with:
-          ref: ${{ github.event.pull_request.head.ref }}
-      - name: Apply lifetime fix
-        run: |
-          python3 - <<'PY'
-          from pathlib import Path
-          path = Path('crates/medusa-intelligence/src/lib.rs')
-          text = path.read_text()
-          old = "fn text(source: &str, node: Node<'_>) -> MedusaResult<&str> {"
-          new = "fn text<'a>(source: &'a str, node: Node<'_>) -> MedusaResult<&'a str> {"
-          if text.count(old) != 1:
-              raise SystemExit('expected exactly one lifetime signature')
-          path.write_text(text.replace(old, new))
-          PY
-          cargo fmt --all
-          git config user.name "medusa-ci"
-          git config user.email "medusa-ci@users.noreply.github.com"
-          git add crates/medusa-intelligence/src/lib.rs
-          git commit -m "fix: tie syntax text lifetime to source"
-          git push
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo fmt --all -- --check
+      - run: cargo clippy --workspace --all-targets --all-features -- -D warnings
+      - run: cargo test --workspace --all-features
+      - run: RUSTDOCFLAGS="-D warnings" cargo doc --workspace --all-features --no-deps
 
   supply-chain:
     name: Dependency policy
