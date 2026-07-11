@@ -49,22 +49,7 @@ jobs:
           components: rustfmt, clippy
       - uses: Swatinem/rust-cache@v2
       - run: cargo fmt --all -- --check
-      - name: Clippy
-        id: clippy
-        shell: bash
-        run: |
-          set +e
-          cargo clippy --workspace --all-targets --all-features -- -D warnings 2>&1 | tee clippy.log
-          code=${PIPESTATUS[0]}
-          echo "exit_code=$code" >> "$GITHUB_OUTPUT"
-          exit 0
-      - uses: actions/upload-artifact@v4
-        if: always()
-        with:
-          name: clippy-log
-          path: clippy.log
-      - name: Enforce Clippy result
-        run: test "${{ steps.clippy.outputs.exit_code }}" = "0"
+      - run: cargo clippy --workspace --all-targets --all-features -- -D warnings
       - run: cargo test --workspace --all-features
       - run: RUSTDOCFLAGS="-D warnings" cargo doc --workspace --all-features --no-deps
 
@@ -78,5 +63,20 @@ jobs:
         with:
           tool: cargo-deny,cargo-audit
       - run: cargo generate-lockfile
-      - run: cargo deny check advisories sources
+      - name: Cargo deny
+        id: deny
+        shell: bash
+        run: |
+          set +e
+          cargo deny check advisories sources 2>&1 | tee cargo-deny.log
+          code=${PIPESTATUS[0]}
+          echo "exit_code=$code" >> "$GITHUB_OUTPUT"
+          exit 0
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: cargo-deny-log
+          path: cargo-deny.log
+      - name: Enforce cargo-deny result
+        run: test "${{ steps.deny.outputs.exit_code }}" = "0"
       - run: cargo audit
