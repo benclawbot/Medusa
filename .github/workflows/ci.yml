@@ -14,37 +14,39 @@ concurrency:
 
 jobs:
   quality:
-    name: Diagnose live-agent patch tokens
+    name: Format, lint, test, docs
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Record source token diagnostics
-        run: |
-          python3 - <<'PY'
-          from pathlib import Path
-          path = Path('crates/medusa-agent/src/lib.rs')
-          text = path.read_text()
-          tokens = {
-              'prompt_start': 'const SYSTEM_PROMPT: &str = "',
-              'shell_exact': 'Some(("sh", vec!["verify.sh"]))',
-              'temp_line': '            let temporary = path.with_extension("medusa-tmp");\n',
-              'write_line': '            fs::write(&temporary, content)?;\n',
-              'rename_line': '            fs::rename(&temporary, &path)?;\n',
-          }
-          with open('patch-diagnostics.txt', 'w') as output:
-              for name, token in tokens.items():
-                  output.write(f'{name}={text.count(token)}\n')
-              for needle in ['SYSTEM_PROMPT', 'verify.sh', 'medusa-tmp', 'fs::write(&temporary', 'fs::rename(&temporary']:
-                  index = text.find(needle)
-                  output.write(f'\n[{needle}] index={index}\n')
-                  if index >= 0:
-                      output.write(text[max(0, index-180):index+420])
-                      output.write('\n')
-          PY
+      - uses: dtolnay/rust-toolchain@1.88.0
+        with:
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo fmt --all -- --check
+      - run: cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
+      - run: cargo test --workspace --all-features --locked
+      - run: RUSTDOCFLAGS="-D warnings" cargo doc --workspace --all-features --no-deps --locked
+
+  browser-e2e:
+    name: Playwright visual verification
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: browser
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: browser/package.json
+      - run: npm install --ignore-scripts --no-audit --no-fund
+      - run: npx playwright install --with-deps chromium
+      - run: npm run test:e2e
       - uses: actions/upload-artifact@v4
         with:
-          name: live-agent-patch-diagnostics
-          path: patch-diagnostics.txt
+          name: phase6-browser-evidence
+          path: browser/artifacts
 
   supply-chain:
     name: Dependency policy
