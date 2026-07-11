@@ -10,7 +10,6 @@ use std::{
 use medusa_core::{ErrorCategory, ErrorCode, MedusaError, MedusaResult};
 use rusqlite::{Connection, params};
 use serde::{Deserialize, Serialize};
-use sha2::{Digest, Sha256};
 use time::{OffsetDateTime, format_description::well_known::Rfc3339};
 use ulid::Ulid;
 use walkdir::WalkDir;
