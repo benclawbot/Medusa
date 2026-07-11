@@ -88,11 +88,9 @@ fn validate_skill_manifest(manifest: &SkillManifest) -> MedusaResult<()> {
     {
         return Err(invalid("skill metadata is incomplete"));
     }
-    if !manifest
-        .name
-        .chars()
-        .all(|character| character.is_ascii_lowercase() || character.is_ascii_digit() || character == '-')
-    {
+    if !manifest.name.chars().all(|character| {
+        character.is_ascii_lowercase() || character.is_ascii_digit() || character == '-'
+    }) {
         return Err(invalid("skill name must be lowercase kebab-case"));
     }
     if manifest.tools.iter().any(|tool| tool.trim().is_empty()) {
@@ -116,7 +114,10 @@ fn static_skill_scan(root: &Path) -> MedusaResult<()> {
                 return Err(MedusaError::new(
                     ErrorCode::PolicyDenied,
                     ErrorCategory::Policy,
-                    format!("skill static scan rejected {}: {forbidden}", entry.display()),
+                    format!(
+                        "skill static scan rejected {}: {forbidden}",
+                        entry.display()
+                    ),
                 ));
             }
         }
@@ -201,7 +202,10 @@ pub fn run_command_hook(
         }
     }
     let mut child = command.spawn()?;
-    let mut stdin = child.stdin.take().ok_or_else(|| internal("hook stdin unavailable"))?;
+    let mut stdin = child
+        .stdin
+        .take()
+        .ok_or_else(|| internal("hook stdin unavailable"))?;
     serde_json::to_writer(&mut stdin, input)?;
     stdin.write_all(b"\n")?;
     drop(stdin);
@@ -230,7 +234,10 @@ pub fn run_command_hook(
         return Err(MedusaError::new(
             ErrorCode::PolicyDenied,
             ErrorCategory::Policy,
-            decision.reason.clone().unwrap_or_else(|| "hook denied action".into()),
+            decision
+                .reason
+                .clone()
+                .unwrap_or_else(|| "hook denied action".into()),
         ));
     }
     Ok(decision)
@@ -238,12 +245,17 @@ pub fn run_command_hook(
 
 fn validate_hook(hook: &CommandHook, repository: &Path) -> MedusaResult<()> {
     if hook.id.trim().is_empty() || hook.program.trim().is_empty() || hook.timeout_ms == 0 {
-        return Err(invalid("hook id, program, and positive timeout are required"));
+        return Err(invalid(
+            "hook id, program, and positive timeout are required",
+        ));
     }
     for scope in &hook.path_scope {
         if scope.is_absolute()
             || scope.components().any(|component| {
-                matches!(component, Component::ParentDir | Component::RootDir | Component::Prefix(_))
+                matches!(
+                    component,
+                    Component::ParentDir | Component::RootDir | Component::Prefix(_)
+                )
             })
         {
             return Err(MedusaError::new(
@@ -314,7 +326,10 @@ pub fn call_mcp_stdio(
         }
     }
     let mut child = command.spawn()?;
-    let mut stdin = child.stdin.take().ok_or_else(|| internal("MCP stdin unavailable"))?;
+    let mut stdin = child
+        .stdin
+        .take()
+        .ok_or_else(|| internal("MCP stdin unavailable"))?;
     serde_json::to_writer(&mut stdin, request)?;
     stdin.write_all(b"\n")?;
     drop(stdin);
@@ -341,7 +356,10 @@ pub fn call_mcp_stdio(
 }
 
 fn validate_mcp_entry(entry: &McpRegistryEntry, executable: &Path) -> MedusaResult<()> {
-    if entry.transport != "stdio" || entry.source.trim().is_empty() || entry.digest.trim().is_empty() {
+    if entry.transport != "stdio"
+        || entry.source.trim().is_empty()
+        || entry.digest.trim().is_empty()
+    {
         return Err(invalid("MCP entry must be pinned and use stdio"));
     }
     let actual = file_digest(executable)?;
@@ -415,7 +433,10 @@ pub fn verify_browser(
         return Err(MedusaError::new(
             ErrorCode::ToolExecutionFailed,
             ErrorCategory::Execution,
-            format!("browser sidecar failed: {}", String::from_utf8_lossy(&output.stderr)),
+            format!(
+                "browser sidecar failed: {}",
+                String::from_utf8_lossy(&output.stderr)
+            ),
         ));
     }
     let evidence: BrowserEvidence = serde_json::from_slice(&output.stdout)?;
@@ -444,7 +465,9 @@ fn split_frontmatter(text: &str) -> MedusaResult<(&str, &str)> {
 fn directory_digest(root: &Path) -> MedusaResult<String> {
     let mut hasher = Sha256::new();
     for path in walk_files(root)? {
-        let relative = path.strip_prefix(root).map_err(|_| internal("skill path escaped root"))?;
+        let relative = path
+            .strip_prefix(root)
+            .map_err(|_| internal("skill path escaped root"))?;
         hasher.update(relative.to_string_lossy().as_bytes());
         hasher.update([0]);
         hasher.update(fs::read(path)?);
@@ -486,12 +509,18 @@ fn walk_files(root: &Path) -> MedusaResult<Vec<PathBuf>> {
 
 fn validate_relative_tree(root: &Path) -> MedusaResult<()> {
     if !root.is_dir() {
-        return Err(invalid(format!("extension root is not a directory: {}", root.display())));
+        return Err(invalid(format!(
+            "extension root is not a directory: {}",
+            root.display()
+        )));
     }
     Ok(())
 }
 
-fn wait_with_timeout(mut child: std::process::Child, timeout: Duration) -> MedusaResult<std::process::Output> {
+fn wait_with_timeout(
+    mut child: std::process::Child,
+    timeout: Duration,
+) -> MedusaResult<std::process::Output> {
     let started = Instant::now();
     loop {
         if child.try_wait()?.is_some() {
@@ -528,11 +557,19 @@ fn redact_value(value: &mut Value) {
 }
 
 fn invalid(message: impl Into<String>) -> MedusaError {
-    MedusaError::new(ErrorCode::InvalidConfiguration, ErrorCategory::Validation, message)
+    MedusaError::new(
+        ErrorCode::InvalidConfiguration,
+        ErrorCategory::Validation,
+        message,
+    )
 }
 
 fn internal(message: impl Into<String>) -> MedusaError {
-    MedusaError::new(ErrorCode::InternalInvariant, ErrorCategory::Internal, message)
+    MedusaError::new(
+        ErrorCode::InternalInvariant,
+        ErrorCategory::Internal,
+        message,
+    )
 }
 
 fn yaml_error(error: serde_yaml::Error) -> MedusaError {
@@ -626,6 +663,14 @@ mod tests {
             environment_allowlist: Vec::new(),
             failure_policy: HookFailurePolicy::Block,
         };
-        assert!(run_command_hook(&hook, directory.path(), &serde_json::json!({}), &BTreeMap::new()).is_err());
+        assert!(
+            run_command_hook(
+                &hook,
+                directory.path(),
+                &serde_json::json!({}),
+                &BTreeMap::new()
+            )
+            .is_err()
+        );
     }
 }
