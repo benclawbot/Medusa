@@ -266,12 +266,20 @@ fn merge(base: &mut toml::Value, overlay: toml::Value) {
 
 fn apply_overrides(root: &mut toml::Value, values: &BTreeMap<String, String>) -> MedusaResult<()> {
     for (path, raw) in values {
-        let value = raw
-            .parse::<toml::Value>()
-            .unwrap_or_else(|_| toml::Value::String(raw.clone()));
-        set_path(root, path, value)?;
+        set_path(root, path, parse_override_value(raw))?;
     }
     Ok(())
+}
+
+fn parse_override_value(raw: &str) -> MedusaResult<toml::Value> {
+    let document = format!("value = {raw}");
+    match toml::from_str::<toml::Value>(&document) {
+        Ok(toml::Value::Table(mut table)) => table
+            .remove("value")
+            .ok_or_else(|| invalid("override parser produced no value")),
+        Ok(_) => Err(invalid("override parser produced a non-table document")),
+        Err(_) => Ok(toml::Value::String(raw.to_owned())),
+    }
 }
 
 fn set_path(root: &mut toml::Value, path: &str, value: toml::Value) -> MedusaResult<()> {
@@ -317,10 +325,22 @@ mod tests {
         fs::write(&user, "[agent]\nmax_turns = 100\n").expect("user config");
         fs::write(&project, "[agent]\nmax_turns = 200\n").expect("project config");
         let environment = BTreeMap::from([("agent.max_turns".into(), "300".into())]);
-        let cli = BTreeMap::from([("agent.max_turns".into(), "400".into())]);
+        let cli = BTreeMap::from([
+            ("agent.max_turns".into(), "400".into()),
+            ("verification.required".into(), "false".into()),
+        ]);
         let config = Config::load_layers(Some(&user), Some(&project), &environment, &cli)
             .expect("layered config");
         assert_eq!(config.agent.max_turns, 400);
+        assert!(!config.verification.required);
+    }
+
+    #[test]
+    fn unquoted_override_text_remains_a_string() {
+        assert_eq!(
+            parse_override_value("only_irreducible").expect("string override"),
+            toml::Value::String("only_irreducible".into())
+        );
     }
 
     #[test]
