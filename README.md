@@ -4,14 +4,13 @@ Medusa is a production-grade autonomous CLI coding agent implemented in Rust fro
 
 ## Current milestone
 
-Phase 1 is complete and provides a working single-agent vertical slice:
+Phases 0–2 are complete and merged. Phase 3 is in active implementation and adds:
 
-- CLI repository bootstrap, search, guarded shell, and Git checkpoints;
-- a provider-neutral model boundary and MiniMax-M3 Anthropic-compatible adapter;
-- strict model tool schemas and validated built-in filesystem, search, shell, and Git execution;
-- checksummed session persistence with restart and resume support;
-- deterministic targeted verification and exact evidence capture;
-- an end-to-end fixture that is inspected, fixed after a simulated restart, and verified.
+- a persistent local daemon with Unix-socket JSON protocol;
+- single-process ownership and durable job records;
+- restart recovery for orphaned work;
+- reconnect-safe clients while daemon-owned processes continue;
+- a Ratatui terminal dashboard consuming the same protocol.
 
 Implementation proceeds automatically through the remaining phases. Each phase is independently tested, reported, committed, pushed, and merged to `main`; execution pauses only for a genuine external or safety blocker.
 
