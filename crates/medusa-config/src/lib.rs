@@ -266,7 +266,7 @@ fn merge(base: &mut toml::Value, overlay: toml::Value) {
 
 fn apply_overrides(root: &mut toml::Value, values: &BTreeMap<String, String>) -> MedusaResult<()> {
     for (path, raw) in values {
-        set_path(root, path, parse_override_value(raw))?;
+        set_path(root, path, parse_override_value(raw)?)?;
     }
     Ok(())
 }
