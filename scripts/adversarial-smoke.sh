@@ -4,8 +4,20 @@ set -euo pipefail
 run_named_test() {
   local package="$1"
   local test_name="$2"
+  local listed
+  local count
   local output
+
   echo "::group::adversarial test: $package::$test_name"
+
+  listed="$(cargo test -p "$package" --locked -- --list 2>&1)"
+  count="$(grep -Ec "(^|::)${test_name}: test$" <<<"$listed" || true)"
+  if [[ "$count" -ne 1 ]]; then
+    printf '%s\n' "$listed"
+    echo "required adversarial test must resolve exactly once: $package::$test_name (matches=$count)" >&2
+    exit 1
+  fi
+
   set +e
   output="$(cargo test -p "$package" "$test_name" --locked -- --nocapture 2>&1)"
   local status=$?
@@ -15,10 +27,7 @@ run_named_test() {
     echo "adversarial test failed: $package::$test_name" >&2
     exit "$status"
   fi
-  if ! grep -Eq 'test result: ok\. 1 passed; 0 failed' <<<"$output"; then
-    echo "required adversarial test is missing, ambiguous, or did not run exactly once: $package::$test_name" >&2
-    exit 1
-  fi
+
   echo "::endgroup::"
 }
 
