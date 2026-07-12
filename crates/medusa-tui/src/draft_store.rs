@@ -1,6 +1,5 @@
 use std::{
-    fs,
-    io,
+    fs, io,
     path::{Path, PathBuf},
 };
 
@@ -191,7 +190,10 @@ fn validate_attachment_name(name: &str) -> io::Result<()> {
 
 fn atomic_write(path: &Path, bytes: &[u8]) -> io::Result<()> {
     let parent = path.parent().ok_or_else(|| {
-        io::Error::new(io::ErrorKind::InvalidInput, "target has no parent directory")
+        io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "target has no parent directory",
+        )
     })?;
     fs::create_dir_all(parent)?;
     let temporary = path.with_extension(format!("tmp-{}", std::process::id()));
@@ -229,10 +231,7 @@ mod tests {
         };
 
         store.save("session_123", &draft).expect("save draft");
-        assert_eq!(
-            store.load("session_123").expect("load draft"),
-            Some(draft)
-        );
+        assert_eq!(store.load("session_123").expect("load draft"), Some(draft));
     }
 
     #[test]
