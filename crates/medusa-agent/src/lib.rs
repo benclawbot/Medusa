@@ -18,9 +18,7 @@ mod tests {
 
     use medusa_config::Config;
     use medusa_core::{ErrorCategory, ErrorCode, MedusaError, MedusaResult};
-    use medusa_provider::{
-        MessageBlock, ModelProvider, ModelRequest, ModelResponse, ResponseBlock, Usage,
-    };
+    use medusa_provider::{ModelProvider, ModelRequest, ModelResponse, ResponseBlock, Usage};
     use serde_json::json;
 
     use super::*;
