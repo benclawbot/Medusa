@@ -24,12 +24,25 @@ pub enum Role {
     Assistant,
 }
 
+/// Provider-neutral image source.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum ImageSource {
+    Base64 { media_type: String, data: String },
+    AttachmentRef { attachment_id: String },
+}
+
 /// Provider-neutral message content.
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum MessageBlock {
     Text {
         text: String,
+    },
+    Image {
+        source: ImageSource,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        alt_text: Option<String>,
     },
     ToolUse {
         id: String,
@@ -83,6 +96,15 @@ pub struct Usage {
     pub cache_creation_input_tokens: u64,
 }
 
+/// Explicit provider feature contract used before request submission.
+#[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+pub struct ProviderCapabilities {
+    pub image_input: bool,
+    pub supported_image_media_types: Vec<String>,
+    pub max_image_bytes: Option<u64>,
+    pub max_images_per_request: Option<u32>,
+}
+
 /// Provider response stripped of private hidden reasoning.
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
 pub struct ModelResponse {
@@ -95,6 +117,10 @@ pub struct ModelResponse {
 /// Pluggable provider interface used by orchestration.
 pub trait ModelProvider {
     fn complete(&self, request: &ModelRequest) -> MedusaResult<ModelResponse>;
+
+    fn capabilities(&self) -> ProviderCapabilities {
+        ProviderCapabilities::default()
+    }
 }
 
 /// MiniMax-M3 adapter using the Anthropic-compatible Messages API.
@@ -104,6 +130,7 @@ pub struct MiniMaxProvider {
     api_key: String,
     model: String,
     max_retries: u8,
+    capabilities: ProviderCapabilities,
 }
 
 impl MiniMaxProvider {
@@ -128,6 +155,7 @@ impl MiniMaxProvider {
             api_key,
             model: config.model.name.clone(),
             max_retries: 5,
+            capabilities: minimax_capabilities_from_environment(),
         })
     }
 
@@ -142,10 +170,42 @@ impl MiniMaxProvider {
             "stream": false
         })
     }
+
+    fn validate_request(&self, request: &ModelRequest) -> MedusaResult<()> {
+        let images = request
+            .messages
+            .iter()
+            .flat_map(|message| &message.content)
+            .filter(|block| matches!(block, MessageBlock::Image { .. }))
+            .count();
+        if images == 0 {
+            return Ok(());
+        }
+        if !self.capabilities.image_input {
+            return Err(MedusaError::new(
+                ErrorCode::DependencyUnavailable,
+                ErrorCategory::Validation,
+                "configured MiniMax model does not declare image-input support; screenshot submission was blocked",
+            ));
+        }
+        if self
+            .capabilities
+            .max_images_per_request
+            .is_some_and(|limit| images > limit as usize)
+        {
+            return Err(MedusaError::new(
+                ErrorCode::DependencyUnavailable,
+                ErrorCategory::Validation,
+                format!("request contains {images} images, exceeding provider limit"),
+            ));
+        }
+        Ok(())
+    }
 }
 
 impl ModelProvider for MiniMaxProvider {
     fn complete(&self, request: &ModelRequest) -> MedusaResult<ModelResponse> {
+        self.validate_request(request)?;
         let endpoint = format!("{}/v1/messages", self.base_url);
         let body = self.request_body(request);
         let mut attempt = 0_u8;
@@ -179,6 +239,31 @@ impl ModelProvider for MiniMaxProvider {
             attempt = attempt.saturating_add(1);
             thread::sleep(Duration::from_millis(250 * u64::from(attempt)));
         }
+    }
+
+    fn capabilities(&self) -> ProviderCapabilities {
+        self.capabilities.clone()
+    }
+}
+
+fn minimax_capabilities_from_environment() -> ProviderCapabilities {
+    let image_input = env::var("MINIMAX_IMAGE_INPUT")
+        .ok()
+        .is_some_and(|value| matches!(value.as_str(), "1" | "true" | "TRUE" | "yes"));
+    if image_input {
+        ProviderCapabilities {
+            image_input: true,
+            supported_image_media_types: vec![
+                "image/png".to_owned(),
+                "image/jpeg".to_owned(),
+                "image/webp".to_owned(),
+                "image/gif".to_owned(),
+            ],
+            max_image_bytes: Some(20 * 1024 * 1024),
+            max_images_per_request: Some(10),
+        }
+    } else {
+        ProviderCapabilities::default()
     }
 }
 
@@ -303,6 +388,32 @@ mod tests {
                 text: "concise result".into()
             }]
         );
+    }
+
+    #[test]
+    fn image_block_serializes_as_structured_content() {
+        let value = serde_json::to_value(MessageBlock::Image {
+            source: ImageSource::Base64 {
+                media_type: "image/png".to_owned(),
+                data: "AAEC".to_owned(),
+            },
+            alt_text: Some("test screenshot".to_owned()),
+        })
+        .expect("serialize image");
+        assert_eq!(value["type"], "image");
+        assert_eq!(value["source"]["type"], "base64");
+        assert_eq!(value["source"]["media_type"], "image/png");
+    }
+
+    #[test]
+    fn default_provider_capabilities_reject_images_by_contract() {
+        struct TextOnly;
+        impl ModelProvider for TextOnly {
+            fn complete(&self, _request: &ModelRequest) -> MedusaResult<ModelResponse> {
+                unreachable!("not called")
+            }
+        }
+        assert!(!TextOnly.capabilities().image_input);
     }
 
     #[test]
