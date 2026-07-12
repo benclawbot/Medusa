@@ -1,5 +1,5 @@
 use medusa_core::MedusaResult;
-use time::{format_description::well_known::Rfc3339, OffsetDateTime};
+use time::{OffsetDateTime, format_description::well_known::Rfc3339};
 
 use crate::{
     engine::MemoryEngine,

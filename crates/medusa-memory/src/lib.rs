@@ -10,9 +10,7 @@ mod schema;
 mod support;
 
 pub use engine::MemoryEngine;
-pub use schema::{
-    MemoryDocument, MemoryProposal, RetrievedMemory, Scope, Status, Validation,
-};
+pub use schema::{MemoryDocument, MemoryProposal, RetrievedMemory, Scope, Status, Validation};
 
 #[cfg(test)]
 mod tests {

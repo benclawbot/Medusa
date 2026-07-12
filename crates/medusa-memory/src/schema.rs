@@ -2,7 +2,7 @@ use std::{collections::BTreeMap, path::PathBuf};
 
 use medusa_core::MedusaResult;
 use serde::{Deserialize, Serialize};
-use time::{format_description::well_known::Rfc3339, OffsetDateTime};
+use time::{OffsetDateTime, format_description::well_known::Rfc3339};
 
 use crate::support::invalid;
 

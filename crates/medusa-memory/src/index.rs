@@ -1,7 +1,7 @@
 use std::fs;
 
 use medusa_core::MedusaResult;
-use rusqlite::{params, Connection};
+use rusqlite::{Connection, params};
 
 use crate::{engine::MemoryEngine, support::sql_error};
 
