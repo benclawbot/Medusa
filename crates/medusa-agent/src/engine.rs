@@ -306,7 +306,12 @@ fn validate_user_content(
 }
 
 fn estimated_base64_bytes(data: &str) -> u64 {
-    let padding = data.as_bytes().iter().rev().take_while(|byte| **byte == b'=').count() as u64;
+    let padding = data
+        .as_bytes()
+        .iter()
+        .rev()
+        .take_while(|byte| **byte == b'=')
+        .count() as u64;
     (data.len() as u64).saturating_mul(3) / 4 - padding.min(2)
 }
 
@@ -362,11 +367,8 @@ mod tests {
             max_image_bytes: None,
             max_images_per_request: None,
         };
-        let error = validate_user_content(
-            &[image_block("image/tiff", "AAEC")],
-            &capabilities,
-        )
-        .expect_err("reject unsupported type");
+        let error = validate_user_content(&[image_block("image/tiff", "AAEC")], &capabilities)
+            .expect_err("reject unsupported type");
         assert!(error.message.contains("image/tiff"));
     }
 }
