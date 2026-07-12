@@ -89,7 +89,10 @@ mod tests {
         let payload = serde_json::to_string(evidence).expect("serialize evidence");
         let script = match exit_status {
             Some(status) => format!("#!/bin/sh\necho browser-failed >&2\nexit {status}\n"),
-            None => format!("#!/bin/sh\nprintf '%s\\n' '{}'\n", payload.replace('\'', "'\\''")),
+            None => format!(
+                "#!/bin/sh\nprintf '%s\\n' '{}'\n",
+                payload.replace('\'', "'\\''")
+            ),
         };
         fs::write(&path, script).expect("sidecar");
         path

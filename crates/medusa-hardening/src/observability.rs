@@ -139,8 +139,12 @@ mod tests {
     fn metrics_snapshot_tracks_counters_and_durations() {
         let directory = tempfile::tempdir().expect("tempdir");
         let observability = Observability::new(directory.path()).expect("observability");
-        observability.increment("agent.turns", 2).expect("increment");
-        observability.increment("agent.turns", 3).expect("increment");
+        observability
+            .increment("agent.turns", 2)
+            .expect("increment");
+        observability
+            .increment("agent.turns", 3)
+            .expect("increment");
         observability
             .record_duration("agent.latency_ms", Instant::now())
             .expect("duration");

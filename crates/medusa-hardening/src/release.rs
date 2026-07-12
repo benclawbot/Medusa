@@ -91,9 +91,7 @@ mod tests {
         let directory = tempfile::tempdir().expect("tempdir");
         let sbom = directory.path().join("sbom.json");
         let rollback = directory.path().join("ROLLBACK.md");
-        assert!(
-            build_release_manifest("", "target", &[], sbom.clone(), rollback.clone()).is_err()
-        );
+        assert!(build_release_manifest("", "target", &[], sbom.clone(), rollback.clone()).is_err());
         assert!(
             build_release_manifest(
                 "1.0.0",
@@ -136,10 +134,7 @@ mod tests {
         let success = directory.path().join("success.sh");
         fs::write(&success, "#!/bin/sh\necho medusa-test 1.0.0\n").expect("success");
         fs::set_permissions(&success, fs::Permissions::from_mode(0o700)).expect("permissions");
-        assert_eq!(
-            package_smoke(&success).expect("smoke"),
-            "medusa-test 1.0.0"
-        );
+        assert_eq!(package_smoke(&success).expect("smoke"), "medusa-test 1.0.0");
 
         let failure = directory.path().join("failure.sh");
         fs::write(&failure, "#!/bin/sh\necho broken >&2\nexit 7\n").expect("failure");
