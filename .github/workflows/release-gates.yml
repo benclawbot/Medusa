@@ -129,10 +129,11 @@ jobs:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@1.88.0
       - run: RUSTDOCFLAGS='-D warnings' cargo doc --workspace --all-features --no-deps
+      - run: test -s README.md
+      - run: test -s CONTRIBUTING.md
       - run: test -s docs/RELEASE.md
       - run: test -s docs/OBSERVABILITY.md
       - run: test -s docs/SECURITY-HARDENING.md
-      - run: test -s docs/NEXT-STEPS.md
 
   live-minimax-coding-e2e:
     runs-on: ubuntu-latest
