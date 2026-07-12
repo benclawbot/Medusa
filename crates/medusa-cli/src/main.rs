@@ -299,8 +299,7 @@ mod tests {
 
     #[test]
     fn headless_run_remains_available() {
-        let cli = Cli::try_parse_from(["medusa", "run", "fix tests"])
-            .expect("parse headless run");
+        let cli = Cli::try_parse_from(["medusa", "run", "fix tests"]).expect("parse headless run");
         assert!(matches!(
             cli.command,
             Some(CommandKind::Run { objective }) if objective == "fix tests"
