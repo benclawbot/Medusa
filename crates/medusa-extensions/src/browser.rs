@@ -73,3 +73,93 @@ pub fn verify_browser(
     }
     Ok(evidence)
 }
+
+#[cfg(all(test, unix))]
+mod tests {
+    use std::{collections::BTreeMap, fs, time::Duration};
+
+    use super::*;
+
+    fn sidecar_script(
+        directory: &Path,
+        evidence: &BrowserEvidence,
+        exit_status: Option<i32>,
+    ) -> PathBuf {
+        let path = directory.join("sidecar.sh");
+        let payload = serde_json::to_string(evidence).expect("serialize evidence");
+        let script = match exit_status {
+            Some(status) => format!("#!/bin/sh\necho browser-failed >&2\nexit {status}\n"),
+            None => format!("#!/bin/sh\nprintf '%s\\n' '{}'\n", payload.replace('\'', "'\\''")),
+        };
+        fs::write(&path, script).expect("sidecar");
+        path
+    }
+
+    fn evidence(screenshot: PathBuf) -> BrowserEvidence {
+        BrowserEvidence {
+            url: "https://example.invalid".into(),
+            screenshot,
+            accessibility_snapshot: "document".into(),
+            console_errors: Vec::new(),
+            failed_requests: Vec::new(),
+            assertions: BTreeMap::from([("expected_text".into(), true)]),
+            viewport: "1280x720".into(),
+            browser_version: "fixture-1".into(),
+            trace: None,
+        }
+    }
+
+    #[test]
+    fn valid_browser_evidence_is_accepted() {
+        let directory = tempfile::tempdir().expect("tempdir");
+        let screenshot = directory.path().join("shot.png");
+        fs::write(&screenshot, b"png").expect("screenshot");
+        let expected = evidence(screenshot);
+        let sidecar = sidecar_script(directory.path(), &expected, None);
+
+        let actual = verify_browser(
+            Path::new("/bin/sh"),
+            &sidecar,
+            "https://example.invalid",
+            &directory.path().join("output"),
+            "Example",
+            Duration::from_secs(2),
+        )
+        .expect("browser evidence");
+        assert_eq!(actual, expected);
+    }
+
+    #[test]
+    fn browser_policy_rejects_failed_assertions_and_sidecar_errors() {
+        let directory = tempfile::tempdir().expect("tempdir");
+        let screenshot = directory.path().join("shot.png");
+        fs::write(&screenshot, b"png").expect("screenshot");
+        let mut invalid = evidence(screenshot);
+        invalid.assertions.insert("expected_text".into(), false);
+        let sidecar = sidecar_script(directory.path(), &invalid, None);
+        assert!(
+            verify_browser(
+                Path::new("/bin/sh"),
+                &sidecar,
+                "https://example.invalid",
+                &directory.path().join("output"),
+                "Example",
+                Duration::from_secs(2),
+            )
+            .is_err()
+        );
+
+        let failing = sidecar_script(directory.path(), &invalid, Some(9));
+        assert!(
+            verify_browser(
+                Path::new("/bin/sh"),
+                &failing,
+                "https://example.invalid",
+                &directory.path().join("output-2"),
+                "Example",
+                Duration::from_secs(2),
+            )
+            .is_err()
+        );
+    }
+}
