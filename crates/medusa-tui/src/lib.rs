@@ -290,7 +290,7 @@ fn draw_common(
         SetAttribute(Attribute::Bold),
         Print("Prompt"),
         SetAttribute(Attribute::Reset),
-        Print("  paste text normally | Ctrl+Shift+V clipboard | Enter submit\r\n")
+        Print("  Ctrl+V paste text or screenshot | Enter submit\r\n")
     )?;
     let prompt = if app.composer.draft.text.is_empty() {
         "Describe a coding task...".to_owned()
