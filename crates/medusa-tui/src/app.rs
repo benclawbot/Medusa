@@ -120,13 +120,12 @@ impl AppState {
                 for path in paths {
                     let metadata = std::fs::metadata(&path)?;
                     if metadata.is_file() {
-                        self.composer
-                            .draft
-                            .attachments
-                            .push(PromptAttachment::File(FileAttachment {
+                        self.composer.draft.attachments.push(PromptAttachment::File(
+                            FileAttachment {
                                 path,
                                 byte_len: usize::try_from(metadata.len()).unwrap_or(usize::MAX),
-                            }));
+                            },
+                        ));
                         added = added.saturating_add(1);
                     }
                 }
@@ -217,13 +216,8 @@ mod tests {
             rgba: vec![0; 8],
             source_format: Some("image/rgba8".to_owned()),
         })));
-        let mut app = AppState::new(
-            repository.path().to_path_buf(),
-            "session_2",
-            "",
-            clipboard,
-        )
-        .expect("create app");
+        let mut app = AppState::new(repository.path().to_path_buf(), "session_2", "", clipboard)
+            .expect("create app");
         app.paste_from_clipboard().expect("paste screenshot");
         assert_eq!(app.composer.draft.attachments.len(), 1);
         assert!(app.status.contains("2×1"));
