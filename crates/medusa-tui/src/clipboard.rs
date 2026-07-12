@@ -86,7 +86,11 @@ impl Default for PromptDraft {
 }
 
 impl PromptDraft {
-    pub fn insert_pasted_text(&mut self, cursor: usize, pasted: &str) -> Result<(), ClipboardError> {
+    pub fn insert_pasted_text(
+        &mut self,
+        cursor: usize,
+        pasted: &str,
+    ) -> Result<(), ClipboardError> {
         if pasted.as_bytes().contains(&0) {
             return Err(ClipboardError::NulByte);
         }
@@ -115,7 +119,9 @@ impl PromptDraft {
         if image_count >= MAX_IMAGES_PER_PROMPT {
             return Err(ClipboardError::ImageCountLimit(MAX_IMAGES_PER_PROMPT));
         }
-        let total = self.total_attachment_bytes().saturating_add(image.rgba.len());
+        let total = self
+            .total_attachment_bytes()
+            .saturating_add(image.rgba.len());
         if total > MAX_TOTAL_ATTACHMENT_BYTES {
             return Err(ClipboardError::TotalAttachmentByteLimit {
                 bytes: total,
@@ -202,21 +208,36 @@ impl fmt::Display for ClipboardError {
             Self::NulByte => formatter.write_str("clipboard text contains a NUL byte"),
             Self::InvalidCursor(cursor) => write!(formatter, "invalid paste cursor {cursor}"),
             Self::TextByteLimit { bytes, limit } => {
-                write!(formatter, "clipboard text is {bytes} bytes; limit is {limit}")
+                write!(
+                    formatter,
+                    "clipboard text is {bytes} bytes; limit is {limit}"
+                )
             }
-            Self::InvalidImageDimensions => formatter.write_str("clipboard image has zero dimensions"),
+            Self::InvalidImageDimensions => {
+                formatter.write_str("clipboard image has zero dimensions")
+            }
             Self::ImagePixelLimit { pixels, limit } => {
-                write!(formatter, "clipboard image has {pixels} pixels; limit is {limit}")
+                write!(
+                    formatter,
+                    "clipboard image has {pixels} pixels; limit is {limit}"
+                )
             }
-            Self::ImageByteCountOverflow => formatter.write_str("clipboard image byte count overflowed"),
+            Self::ImageByteCountOverflow => {
+                formatter.write_str("clipboard image byte count overflowed")
+            }
             Self::InvalidRgbaLength { expected, actual } => write!(
                 formatter,
                 "clipboard image RGBA length is {actual}; expected {expected}"
             ),
             Self::ImageByteLimit { bytes, limit } => {
-                write!(formatter, "clipboard image is {bytes} bytes; limit is {limit}")
+                write!(
+                    formatter,
+                    "clipboard image is {bytes} bytes; limit is {limit}"
+                )
             }
-            Self::ImageCountLimit(limit) => write!(formatter, "prompt allows at most {limit} images"),
+            Self::ImageCountLimit(limit) => {
+                write!(formatter, "prompt allows at most {limit} images")
+            }
             Self::TotalAttachmentByteLimit { bytes, limit } => write!(
                 formatter,
                 "prompt attachments total {bytes} bytes; limit is {limit}"
@@ -244,10 +265,7 @@ mod tests {
         draft
             .insert_pasted_text(7, "echo unsafe\r\nsecond line\rthird")
             .expect("paste text");
-        assert_eq!(
-            draft.text,
-            "before echo unsafe\nsecond line\nthirdafter"
-        );
+        assert_eq!(draft.text, "before echo unsafe\nsecond line\nthirdafter");
         assert_eq!(draft.revision, 1);
     }
 
