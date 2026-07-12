@@ -26,13 +26,18 @@ jobs:
         with:
           tool: cargo-llvm-cov
       - name: Run complete workspace coverage suite
-        run: cargo llvm-cov --workspace --all-features --locked --lcov --output-path coverage.lcov --fail-under-lines 75
+        shell: bash
+        run: |
+          set -o pipefail
+          cargo llvm-cov --workspace --all-features --locked --lcov --output-path coverage.lcov --fail-under-lines 75 2>&1 | tee coverage.log
       - uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: coverage-lcov
-          path: coverage.lcov
-          if-no-files-found: error
+          name: coverage-diagnostics
+          path: |
+            coverage.log
+            coverage.lcov
+          if-no-files-found: warn
 
   adversarial-regression:
     name: Named adversarial regressions
