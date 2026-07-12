@@ -3,6 +3,7 @@ pub mod clipboard;
 pub mod draft_store;
 pub mod input;
 pub mod native_clipboard;
+pub mod runtime;
 
 use std::{
     io::{self, IsTerminal, Write},
@@ -28,6 +29,7 @@ use crossterm::{
     },
 };
 use native_clipboard::NativeClipboard;
+use runtime::{RuntimeController, RuntimeEvent};
 
 #[cfg(unix)]
 use medusa_daemon::{DaemonClient, JobRecord, Request, Response};
@@ -88,8 +90,9 @@ pub fn run(options: TuiOptions) -> io::Result<ExitReason> {
         options.initial_prompt.clone().unwrap_or_default(),
         clipboard,
     )?;
+    let runtime = RuntimeController::start(options.repo.clone());
     let mut terminal = TerminalGuard::enter()?;
-    run_loop(terminal.stdout(), &options, &mut app)
+    run_loop(terminal.stdout(), &options, &mut app, &runtime)
 }
 
 struct TerminalGuard {
@@ -141,9 +144,11 @@ fn run_loop(
     stdout: &mut io::Stdout,
     options: &TuiOptions,
     app: &mut AppState,
+    runtime: &RuntimeController,
 ) -> io::Result<ExitReason> {
     let client = DaemonClient::new(options.socket_path());
     loop {
+        drain_runtime_events(app, runtime)?;
         let (jobs, daemon_status) = match client.request(Request::List) {
             Ok(Response::Jobs { jobs }) => (jobs, "connected".to_owned()),
             Ok(other) => (Vec::new(), format!("unexpected response: {other:?}")),
@@ -155,18 +160,7 @@ fn run_loop(
             if ctrl_d_on_empty(&terminal_event, app) {
                 return Ok(ExitReason::InputClosed);
             }
-            match app.handle_event(terminal_event).map_err(app_error)? {
-                AppAction::Quit => return Ok(ExitReason::UserQuit),
-                AppAction::Interrupt => app.status = "interrupt requested".to_owned(),
-                AppAction::Submit(draft) => {
-                    app.status = format!(
-                        "prompt queued: {} bytes, {} attachment(s)",
-                        draft.text.len(),
-                        draft.attachments.len()
-                    );
-                }
-                AppAction::None | AppAction::Redraw => {}
-            }
+            handle_app_action(app, runtime, terminal_event)?;
         }
         thread::sleep(Duration::from_millis(25));
     }
@@ -177,28 +171,71 @@ fn run_loop(
     stdout: &mut io::Stdout,
     options: &TuiOptions,
     app: &mut AppState,
+    runtime: &RuntimeController,
 ) -> io::Result<ExitReason> {
     loop {
+        drain_runtime_events(app, runtime)?;
         draw_portable(stdout, options, app)?;
         if event::poll(Duration::from_millis(100))? {
             let terminal_event = event::read()?;
             if ctrl_d_on_empty(&terminal_event, app) {
                 return Ok(ExitReason::InputClosed);
             }
-            match app.handle_event(terminal_event).map_err(app_error)? {
-                AppAction::Quit => return Ok(ExitReason::UserQuit),
-                AppAction::Interrupt => app.status = "interrupt requested".to_owned(),
-                AppAction::Submit(draft) => {
-                    app.status = format!(
-                        "prompt queued: {} bytes, {} attachment(s)",
-                        draft.text.len(),
-                        draft.attachments.len()
-                    );
+            handle_app_action(app, runtime, terminal_event)?;
+        }
+    }
+}
+
+fn handle_app_action(
+    app: &mut AppState,
+    runtime: &RuntimeController,
+    terminal_event: Event,
+) -> io::Result<()> {
+    match app.handle_event(terminal_event).map_err(app_error)? {
+        AppAction::Quit => Err(io::Error::new(io::ErrorKind::Interrupted, "user quit")),
+        AppAction::Interrupt => {
+            app.status = "interrupt requested; cancellation wiring is pending".to_owned();
+            Ok(())
+        }
+        AppAction::Submit(draft) => {
+            let bytes = draft.text.len();
+            let attachments = draft.attachments.len();
+            runtime.submit(draft).map_err(runtime_error)?;
+            app.status = format!("running prompt: {bytes} bytes, {attachments} attachment(s)");
+            Ok(())
+        }
+        AppAction::None | AppAction::Redraw => Ok(()),
+    }
+}
+
+fn drain_runtime_events(app: &mut AppState, runtime: &RuntimeController) -> io::Result<()> {
+    while let Some(event) = runtime.try_event().map_err(runtime_error)? {
+        match event {
+            RuntimeEvent::Started => {
+                app.status = "agent running".to_owned();
+            }
+            RuntimeEvent::Completed {
+                session_id,
+                assistant_text,
+                evidence,
+            } => {
+                if !assistant_text.trim().is_empty() {
+                    app.transcript.push(TranscriptEntry::System(assistant_text));
                 }
-                AppAction::None | AppAction::Redraw => {}
+                for line in evidence {
+                    app.transcript
+                        .push(TranscriptEntry::System(format!("evidence: {line}")));
+                }
+                app.status = format!("session {session_id} completed");
+            }
+            RuntimeEvent::Failed(error) => {
+                app.transcript
+                    .push(TranscriptEntry::System(format!("error: {error}")));
+                app.status = "agent failed".to_owned();
             }
         }
     }
+    Ok(())
 }
 
 fn ctrl_d_on_empty(event: &Event, app: &AppState) -> bool {
@@ -339,6 +376,10 @@ fn truncate(value: &str, width: u16) -> String {
 }
 
 fn app_error(error: AppError) -> io::Error {
+    io::Error::other(error)
+}
+
+fn runtime_error(error: runtime::RuntimeError) -> io::Error {
     io::Error::other(error)
 }
 
