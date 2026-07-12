@@ -68,9 +68,7 @@ impl AppState {
             if key.code == KeyCode::Esc {
                 return Ok(AppAction::Quit);
             }
-            if key.code == KeyCode::Char('v')
-                && key.modifiers.contains(KeyModifiers::CONTROL)
-            {
+            if key.code == KeyCode::Char('v') && key.modifiers.contains(KeyModifiers::CONTROL) {
                 self.paste_from_clipboard()?;
                 self.persist_draft()?;
                 return Ok(AppAction::Redraw);
