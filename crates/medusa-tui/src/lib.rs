@@ -160,7 +160,9 @@ fn run_loop(
             if ctrl_d_on_empty(&terminal_event, app) {
                 return Ok(ExitReason::InputClosed);
             }
-            handle_app_action(app, runtime, terminal_event)?;
+            if handle_app_action(app, runtime, terminal_event)? {
+                return Ok(ExitReason::UserQuit);
+            }
         }
         thread::sleep(Duration::from_millis(25));
     }
@@ -181,7 +183,9 @@ fn run_loop(
             if ctrl_d_on_empty(&terminal_event, app) {
                 return Ok(ExitReason::InputClosed);
             }
-            handle_app_action(app, runtime, terminal_event)?;
+            if handle_app_action(app, runtime, terminal_event)? {
+                return Ok(ExitReason::UserQuit);
+            }
         }
     }
 }
@@ -190,21 +194,34 @@ fn handle_app_action(
     app: &mut AppState,
     runtime: &RuntimeController,
     terminal_event: Event,
-) -> io::Result<()> {
+) -> io::Result<bool> {
     match app.handle_event(terminal_event).map_err(app_error)? {
-        AppAction::Quit => Err(io::Error::new(io::ErrorKind::Interrupted, "user quit")),
+        AppAction::Quit => Ok(true),
         AppAction::Interrupt => {
-            app.status = "interrupt requested; cancellation wiring is pending".to_owned();
-            Ok(())
+            app.status = if runtime.cancel() {
+                "cancellation requested".to_owned()
+            } else {
+                "no running task to cancel".to_owned()
+            };
+            Ok(false)
         }
         AppAction::Submit(draft) => {
             let bytes = draft.text.len();
             let attachments = draft.attachments.len();
-            runtime.submit(draft).map_err(runtime_error)?;
-            app.status = format!("running prompt: {bytes} bytes, {attachments} attachment(s)");
-            Ok(())
+            match runtime.submit(draft) {
+                Ok(()) => {
+                    app.status =
+                        format!("running prompt: {bytes} bytes, {attachments} attachment(s)");
+                }
+                Err(error) => {
+                    app.transcript
+                        .push(TranscriptEntry::System(format!("error: {error}")));
+                    app.status = "submission rejected".to_owned();
+                }
+            }
+            Ok(false)
         }
-        AppAction::None | AppAction::Redraw => Ok(()),
+        AppAction::None | AppAction::Redraw => Ok(false),
     }
 }
 
@@ -213,6 +230,9 @@ fn drain_runtime_events(app: &mut AppState, runtime: &RuntimeController) -> io::
         match event {
             RuntimeEvent::Started => {
                 app.status = "agent running".to_owned();
+            }
+            RuntimeEvent::Progress { turn } => {
+                app.status = format!("agent running · turn {turn}");
             }
             RuntimeEvent::Completed {
                 session_id,
@@ -227,6 +247,11 @@ fn drain_runtime_events(app: &mut AppState, runtime: &RuntimeController) -> io::
                         .push(TranscriptEntry::System(format!("evidence: {line}")));
                 }
                 app.status = format!("session {session_id} completed");
+            }
+            RuntimeEvent::Cancelled => {
+                app.transcript
+                    .push(TranscriptEntry::System("task cancelled".to_owned()));
+                app.status = "cancelled".to_owned();
             }
             RuntimeEvent::Failed(error) => {
                 app.transcript
@@ -327,7 +352,7 @@ fn draw_common(
         SetAttribute(Attribute::Bold),
         Print("Prompt"),
         SetAttribute(Attribute::Reset),
-        Print("  Ctrl+V paste text or screenshot | Enter submit\r\n")
+        Print("  Ctrl+V paste | Enter submit | Ctrl+C cancel | Esc exit\r\n")
     )?;
     let prompt = if app.composer.draft.text.is_empty() {
         "Describe a coding task...".to_owned()
