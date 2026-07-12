@@ -68,21 +68,11 @@ impl ClipboardService for UnsupportedClipboard {
     }
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct PromptDraft {
     pub text: String,
     pub attachments: Vec<PromptAttachment>,
     pub revision: u64,
-}
-
-impl Default for PromptDraft {
-    fn default() -> Self {
-        Self {
-            text: String::new(),
-            attachments: Vec::new(),
-            revision: 0,
-        }
-    }
 }
 
 impl PromptDraft {
