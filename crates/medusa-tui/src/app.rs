@@ -70,7 +70,6 @@ impl AppState {
             }
             if key.code == KeyCode::Char('v')
                 && key.modifiers.contains(KeyModifiers::CONTROL)
-                && key.modifiers.contains(KeyModifiers::SHIFT)
             {
                 self.paste_from_clipboard()?;
                 self.persist_draft()?;
@@ -205,6 +204,27 @@ mod tests {
             .expect("load draft")
             .expect("draft exists");
         assert_eq!(recovered.text, "fix this: compiler error\nline two");
+    }
+
+    #[test]
+    fn ctrl_v_pastes_clipboard_content() {
+        let repository = tempdir().expect("temporary repository");
+        let clipboard = Arc::new(FakeClipboard(ClipboardContent::Text("pasted".to_owned())));
+        let mut app = AppState::new(
+            repository.path().to_path_buf(),
+            "session_ctrl_v",
+            "before ",
+            clipboard,
+        )
+        .expect("create app");
+        let action = app
+            .handle_event(Event::Key(crossterm::event::KeyEvent::new(
+                KeyCode::Char('v'),
+                KeyModifiers::CONTROL,
+            )))
+            .expect("handle Ctrl+V");
+        assert_eq!(action, AppAction::Redraw);
+        assert_eq!(app.composer.draft.text, "before pasted");
     }
 
     #[test]
