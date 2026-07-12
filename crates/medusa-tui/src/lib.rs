@@ -7,13 +7,19 @@ pub mod native_clipboard;
 use std::{
     io::{self, IsTerminal, Write},
     path::PathBuf,
+    sync::Arc,
     thread,
     time::Duration,
 };
 
+use app::{AppAction, AppError, AppState, TranscriptEntry};
+use clipboard::{ClipboardService, PromptAttachment, UnsupportedClipboard};
 use crossterm::{
     cursor::{Hide, MoveTo, Show},
-    event::{self, Event, KeyCode, KeyEventKind},
+    event::{
+        self, DisableBracketedPaste, EnableBracketedPaste, Event, KeyCode, KeyEventKind,
+        KeyModifiers,
+    },
     execute, queue,
     style::{Attribute, Print, SetAttribute},
     terminal::{
@@ -21,6 +27,7 @@ use crossterm::{
         enable_raw_mode, size,
     },
 };
+use native_clipboard::NativeClipboard;
 
 #[cfg(unix)]
 use medusa_daemon::{DaemonClient, JobRecord, Request, Response};
@@ -68,8 +75,21 @@ pub fn run(options: TuiOptions) -> io::Result<ExitReason> {
         ));
     }
 
+    let clipboard: Arc<dyn ClipboardService> = NativeClipboard::new()
+        .map(|service| Arc::new(service) as Arc<dyn ClipboardService>)
+        .unwrap_or_else(|_| Arc::new(UnsupportedClipboard));
+    let draft_key = options
+        .resume_session
+        .clone()
+        .unwrap_or_else(|| "current".to_owned());
+    let mut app = AppState::new(
+        options.repo.clone(),
+        draft_key,
+        options.initial_prompt.clone().unwrap_or_default(),
+        clipboard,
+    )?;
     let mut terminal = TerminalGuard::enter()?;
-    run_loop(terminal.stdout(), options)
+    run_loop(terminal.stdout(), &options, &mut app)
 }
 
 struct TerminalGuard {
@@ -81,7 +101,7 @@ impl TerminalGuard {
     fn enter() -> io::Result<Self> {
         enable_raw_mode()?;
         let mut stdout = io::stdout();
-        if let Err(error) = execute!(stdout, EnterAlternateScreen, Hide) {
+        if let Err(error) = execute!(stdout, EnterAlternateScreen, EnableBracketedPaste, Hide) {
             let _ = disable_raw_mode();
             return Err(error);
         }
@@ -100,7 +120,12 @@ impl TerminalGuard {
             return;
         }
         let _ = disable_raw_mode();
-        let _ = execute!(self.stdout, Show, LeaveAlternateScreen);
+        let _ = execute!(
+            self.stdout,
+            DisableBracketedPaste,
+            Show,
+            LeaveAlternateScreen
+        );
         self.active = false;
     }
 }
@@ -112,115 +137,219 @@ impl Drop for TerminalGuard {
 }
 
 #[cfg(unix)]
-fn run_loop(stdout: &mut io::Stdout, options: TuiOptions) -> io::Result<ExitReason> {
+fn run_loop(
+    stdout: &mut io::Stdout,
+    options: &TuiOptions,
+    app: &mut AppState,
+) -> io::Result<ExitReason> {
     let client = DaemonClient::new(options.socket_path());
     loop {
-        let (jobs, status) = match client.request(Request::List) {
+        let (jobs, daemon_status) = match client.request(Request::List) {
             Ok(Response::Jobs { jobs }) => (jobs, "connected".to_owned()),
             Ok(other) => (Vec::new(), format!("unexpected response: {other:?}")),
             Err(error) => (Vec::new(), format!("disconnected: {error}")),
         };
-        draw(stdout, &options, &jobs, &status)?;
-        if event::poll(Duration::from_millis(100))?
-            && let Event::Key(key) = event::read()?
-            && key.kind == KeyEventKind::Press
-        {
-            match key.code {
-                KeyCode::Char('q') | KeyCode::Esc => return Ok(ExitReason::UserQuit),
-                KeyCode::Char('d') if key.modifiers.contains(event::KeyModifiers::CONTROL) => {
-                    return Ok(ExitReason::InputClosed);
+        draw(stdout, options, app, &jobs, &daemon_status)?;
+        if event::poll(Duration::from_millis(100))? {
+            let terminal_event = event::read()?;
+            if ctrl_d_on_empty(&terminal_event, app) {
+                return Ok(ExitReason::InputClosed);
+            }
+            match app.handle_event(terminal_event).map_err(app_error)? {
+                AppAction::Quit => return Ok(ExitReason::UserQuit),
+                AppAction::Interrupt => app.status = "interrupt requested".to_owned(),
+                AppAction::Submit(draft) => {
+                    app.status = format!(
+                        "prompt queued: {} bytes, {} attachment(s)",
+                        draft.text.len(),
+                        draft.attachments.len()
+                    );
                 }
-                _ => {}
+                AppAction::None | AppAction::Redraw => {}
             }
         }
-        thread::sleep(Duration::from_millis(50));
+        thread::sleep(Duration::from_millis(25));
     }
 }
 
 #[cfg(not(unix))]
-fn run_loop(stdout: &mut io::Stdout, options: TuiOptions) -> io::Result<ExitReason> {
+fn run_loop(
+    stdout: &mut io::Stdout,
+    options: &TuiOptions,
+    app: &mut AppState,
+) -> io::Result<ExitReason> {
     loop {
-        draw_unsupported(stdout, &options)?;
-        if event::poll(Duration::from_millis(100))?
-            && let Event::Key(key) = event::read()?
-            && key.kind == KeyEventKind::Press
-            && matches!(key.code, KeyCode::Char('q') | KeyCode::Esc)
-        {
-            return Ok(ExitReason::UserQuit);
+        draw_portable(stdout, options, app)?;
+        if event::poll(Duration::from_millis(100))? {
+            let terminal_event = event::read()?;
+            if ctrl_d_on_empty(&terminal_event, app) {
+                return Ok(ExitReason::InputClosed);
+            }
+            match app.handle_event(terminal_event).map_err(app_error)? {
+                AppAction::Quit => return Ok(ExitReason::UserQuit),
+                AppAction::Interrupt => app.status = "interrupt requested".to_owned(),
+                AppAction::Submit(draft) => {
+                    app.status = format!(
+                        "prompt queued: {} bytes, {} attachment(s)",
+                        draft.text.len(),
+                        draft.attachments.len()
+                    );
+                }
+                AppAction::None | AppAction::Redraw => {}
+            }
         }
     }
+}
+
+fn ctrl_d_on_empty(event: &Event, app: &AppState) -> bool {
+    matches!(
+        event,
+        Event::Key(key)
+            if key.kind == KeyEventKind::Press
+                && key.code == KeyCode::Char('d')
+                && key.modifiers.contains(KeyModifiers::CONTROL)
+                && app.composer.draft.text.is_empty()
+                && app.composer.draft.attachments.is_empty()
+    )
 }
 
 #[cfg(unix)]
 fn draw(
     stdout: &mut io::Stdout,
     options: &TuiOptions,
+    app: &AppState,
     jobs: &[JobRecord],
-    status: &str,
+    daemon_status: &str,
+) -> io::Result<()> {
+    let job_lines = jobs
+        .iter()
+        .rev()
+        .take(3)
+        .map(|job| {
+            format!(
+                "job {} {:?} {} {}",
+                job.id,
+                job.state,
+                job.program,
+                job.args.join(" ")
+            )
+        })
+        .collect::<Vec<_>>();
+    draw_common(stdout, options, app, &job_lines, daemon_status)
+}
+
+#[cfg(not(unix))]
+fn draw_portable(
+    stdout: &mut io::Stdout,
+    options: &TuiOptions,
+    app: &AppState,
+) -> io::Result<()> {
+    draw_common(stdout, options, app, &[], "local transport unavailable")
+}
+
+fn draw_common(
+    stdout: &mut io::Stdout,
+    options: &TuiOptions,
+    app: &AppState,
+    job_lines: &[String],
+    daemon_status: &str,
 ) -> io::Result<()> {
     let (width, height) = size()?;
     queue!(stdout, MoveTo(0, 0), Clear(ClearType::All))?;
     queue!(
         stdout,
         SetAttribute(Attribute::Bold),
-        Print("Medusa interactive\r\n"),
+        Print("Medusa interactive"),
         SetAttribute(Attribute::Reset),
-        Print(format!("repo: {}\r\n", options.repo.display())),
-        Print(format!("daemon: {status}\r\n")),
-        Print("─".repeat(width as usize)),
+        Print(format!("  {}\r\n", options.repo.display())),
+        Print(format!("daemon: {daemon_status}\r\n")),
+        Print(format!("status: {}\r\n", app.status)),
+        Print("-".repeat(width as usize)),
         Print("\r\n")
     )?;
 
-    let available_rows = height.saturating_sub(7) as usize;
-    if let Some(prompt) = &options.initial_prompt {
-        queue!(stdout, Print(format!("initial objective: {prompt}\r\n")))?;
-    }
-    if jobs.is_empty() {
-        queue!(stdout, Print("No daemon jobs\r\n"))?;
-    } else {
-        for job in jobs.iter().rev().take(available_rows) {
-            let mut line = format!(
-                "{}  {:?}  {} {}",
-                job.id,
-                job.state,
-                job.program,
-                job.args.join(" ")
-            );
-            if line.len() > width as usize {
-                line.truncate(width as usize);
+    let composer_height = 7_u16.min(height.saturating_sub(5));
+    let content_rows = height.saturating_sub(composer_height + 5) as usize;
+    let mut lines = Vec::new();
+    for entry in &app.transcript {
+        match entry {
+            TranscriptEntry::User(draft) => {
+                lines.push(format!("> {}", draft.text.replace('\n', " / ")));
+                lines.extend(draft.attachments.iter().map(attachment_label));
             }
-            queue!(stdout, Print(line), Print("\r\n"))?;
+            TranscriptEntry::System(message) => lines.push(format!("* {message}")),
         }
     }
+    lines.extend(job_lines.iter().cloned());
+    for line in lines.iter().rev().take(content_rows).rev() {
+        queue!(stdout, Print(truncate(line, width)), Print("\r\n"))?;
+    }
+
+    let composer_top = height.saturating_sub(composer_height + 1);
     queue!(
         stdout,
-        MoveTo(0, height.saturating_sub(1)),
-        Print("q/esc to exit")
+        MoveTo(0, composer_top),
+        Print("-".repeat(width as usize)),
+        MoveTo(0, composer_top.saturating_add(1)),
+        SetAttribute(Attribute::Bold),
+        Print("Prompt"),
+        SetAttribute(Attribute::Reset),
+        Print("  paste text normally | Ctrl+Shift+V clipboard | Enter submit\r\n")
     )?;
+    let prompt = if app.composer.draft.text.is_empty() {
+        "Describe a coding task...".to_owned()
+    } else {
+        app.composer.draft.text.replace('\n', " / ")
+    };
+    queue!(stdout, Print(truncate(&prompt, width)), Print("\r\n"))?;
+    for attachment in app.composer.draft.attachments.iter().take(3) {
+        queue!(
+            stdout,
+            Print(truncate(&attachment_label(attachment), width)),
+            Print("\r\n")
+        )?;
+    }
     stdout.flush()
 }
 
-#[cfg(not(unix))]
-fn draw_unsupported(stdout: &mut io::Stdout, options: &TuiOptions) -> io::Result<()> {
-    let (_, height) = size()?;
-    queue!(stdout, MoveTo(0, 0), Clear(ClearType::All))?;
-    queue!(
-        stdout,
-        SetAttribute(Attribute::Bold),
-        Print("Medusa interactive\r\n"),
-        SetAttribute(Attribute::Reset),
-        Print(format!("repo: {}\r\n\r\n", options.repo.display())),
-        Print("The Windows local transport is not active in this build.\r\n"),
-        Print("The integration branch will replace this with named-pipe transport.\r\n"),
-        MoveTo(0, height.saturating_sub(1)),
-        Print("q/esc to exit")
-    )?;
-    stdout.flush()
+fn attachment_label(attachment: &PromptAttachment) -> String {
+    match attachment {
+        PromptAttachment::PastedText(text) => {
+            format!("[text] {} | {} bytes", text.display_name, text.text.len())
+        }
+        PromptAttachment::Image(image) => format!(
+            "[image] {} | {}x{} | {} bytes",
+            image.display_name,
+            image.width,
+            image.height,
+            image.rgba.len()
+        ),
+        PromptAttachment::File(file) => {
+            format!("[file] {} | {} bytes", file.path.display(), file.byte_len)
+        }
+    }
+}
+
+fn truncate(value: &str, width: u16) -> String {
+    let limit = usize::from(width);
+    if value.chars().count() <= limit {
+        return value.to_owned();
+    }
+    value
+        .chars()
+        .take(limit.saturating_sub(1))
+        .chain(std::iter::once('~'))
+        .collect()
+}
+
+fn app_error(error: AppError) -> io::Error {
+    io::Error::other(error)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::clipboard::ImageAttachment;
 
     #[test]
     fn default_socket_is_repository_scoped() {
@@ -236,5 +365,17 @@ mod tests {
         let mut options = TuiOptions::for_repo("/tmp/example");
         options.socket = Some(PathBuf::from("/tmp/medusa.sock"));
         assert_eq!(options.socket_path(), PathBuf::from("/tmp/medusa.sock"));
+    }
+
+    #[test]
+    fn image_attachment_label_includes_dimensions() {
+        let attachment = PromptAttachment::Image(ImageAttachment {
+            display_name: "shot.png".to_owned(),
+            width: 10,
+            height: 20,
+            rgba: vec![0; 8],
+            source_format: Some("image/rgba8".to_owned()),
+        });
+        assert!(attachment_label(&attachment).contains("10x20"));
     }
 }
