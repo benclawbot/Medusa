@@ -6,7 +6,7 @@ on:
   pull_request:
 
 permissions:
-  contents: write
+  contents: read
 
 concurrency:
   group: ci-${{ github.workflow }}-${{ github.ref }}
@@ -18,24 +18,13 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-        with:
-          ref: ${{ github.event.pull_request.head.ref }}
       - uses: dtolnay/rust-toolchain@1.88.0
         with:
           components: rustfmt,clippy
-      - name: Apply rustfmt to hardening extraction
-        shell: bash
-        run: |
-          cargo fmt --all
-          if ! git diff --quiet; then
-            git config user.name "medusa-ci"
-            git config user.email "medusa-ci@users.noreply.github.com"
-            git add crates/medusa-hardening/src
-            git commit -m "style(hardening): format module extraction"
-            git push
-          fi
       - name: Refresh dependency lock for the merged PR graph
         run: cargo generate-lockfile
+      - name: Check formatting
+        run: cargo fmt --all -- --check
       - name: Clippy
         shell: bash
         run: |
