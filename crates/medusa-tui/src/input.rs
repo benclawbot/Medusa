@@ -111,6 +111,8 @@ fn normalized_len(text: &str) -> usize {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::clipboard::{FileAttachment, PromptAttachment};
+    use std::path::PathBuf;
 
     #[test]
     fn bracketed_paste_never_submits() {
@@ -142,6 +144,128 @@ mod tests {
             )))
             .expect("handle enter");
         assert_eq!(action, ComposerAction::Submit);
+    }
+
+    #[test]
+    fn empty_enter_is_ignored_but_attachment_only_prompt_submits() {
+        let mut composer = ComposerState::new("   ");
+        assert_eq!(
+            composer
+                .handle_event(Event::Key(KeyEvent::new(
+                    KeyCode::Enter,
+                    KeyModifiers::NONE,
+                )))
+                .expect("empty enter"),
+            ComposerAction::None
+        );
+        composer
+            .draft
+            .attachments
+            .push(PromptAttachment::File(FileAttachment {
+                path: PathBuf::from("context.txt"),
+                byte_len: 3,
+            }));
+        assert_eq!(
+            composer
+                .handle_event(Event::Key(KeyEvent::new(
+                    KeyCode::Enter,
+                    KeyModifiers::NONE,
+                )))
+                .expect("attachment enter"),
+            ComposerAction::Submit
+        );
+    }
+
+    #[test]
+    fn shift_enter_inserts_newline_and_ctrl_c_interrupts() {
+        let mut composer = ComposerState::new("line one");
+        assert_eq!(
+            composer
+                .handle_event(Event::Key(KeyEvent::new(
+                    KeyCode::Enter,
+                    KeyModifiers::SHIFT,
+                )))
+                .expect("shift enter"),
+            ComposerAction::Changed
+        );
+        assert_eq!(composer.draft.text, "line one\n");
+        assert_eq!(
+            composer
+                .handle_event(Event::Key(KeyEvent::new(
+                    KeyCode::Char('c'),
+                    KeyModifiers::CONTROL,
+                )))
+                .expect("ctrl c"),
+            ComposerAction::Interrupt
+        );
+    }
+
+    #[test]
+    fn character_input_and_cursor_navigation_are_unicode_safe() {
+        let mut composer = ComposerState::new("aé");
+        assert_eq!(
+            composer
+                .handle_event(Event::Key(KeyEvent::new(
+                    KeyCode::Left,
+                    KeyModifiers::NONE,
+                )))
+                .expect("left"),
+            ComposerAction::None
+        );
+        assert_eq!(composer.cursor, 1);
+        assert_eq!(
+            composer
+                .handle_event(Event::Key(KeyEvent::new(
+                    KeyCode::Char('Z'),
+                    KeyModifiers::SHIFT,
+                )))
+                .expect("character"),
+            ComposerAction::Changed
+        );
+        assert_eq!(composer.draft.text, "aZé");
+        assert_eq!(
+            composer
+                .handle_event(Event::Key(KeyEvent::new(
+                    KeyCode::Right,
+                    KeyModifiers::NONE,
+                )))
+                .expect("right"),
+            ComposerAction::None
+        );
+        assert_eq!(composer.cursor, composer.draft.text.len());
+    }
+
+    #[test]
+    fn boundary_navigation_and_non_press_events_are_noops() {
+        let mut composer = ComposerState::new("x");
+        composer.cursor = 0;
+        assert_eq!(
+            composer
+                .handle_event(Event::Key(KeyEvent::new(
+                    KeyCode::Backspace,
+                    KeyModifiers::NONE,
+                )))
+                .expect("backspace at start"),
+            ComposerAction::None
+        );
+        assert_eq!(
+            composer
+                .handle_event(Event::Key(KeyEvent::new(
+                    KeyCode::Left,
+                    KeyModifiers::NONE,
+                )))
+                .expect("left at start"),
+            ComposerAction::None
+        );
+        let mut release = KeyEvent::new(KeyCode::Char('q'), KeyModifiers::NONE);
+        release.kind = KeyEventKind::Release;
+        assert_eq!(
+            composer
+                .handle_event(Event::Key(release))
+                .expect("release"),
+            ComposerAction::None
+        );
+        assert_eq!(composer.draft.text, "x");
     }
 
     #[test]
