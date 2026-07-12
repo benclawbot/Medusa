@@ -71,5 +71,27 @@ jobs:
       - uses: taiki-e/install-action@v2
         with:
           tool: cargo-deny,cargo-audit
-      - run: cargo deny check advisories sources
-      - run: cargo audit
+      - name: Cargo deny
+        shell: bash
+        run: |
+          set -o pipefail
+          cargo deny check advisories sources 2>&1 | tee cargo-deny.log
+      - name: Upload cargo-deny diagnostics
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: cargo-deny-diagnostics
+          path: cargo-deny.log
+          if-no-files-found: error
+      - name: Cargo audit
+        shell: bash
+        run: |
+          set -o pipefail
+          cargo audit 2>&1 | tee cargo-audit.log
+      - name: Upload cargo-audit diagnostics
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: cargo-audit-diagnostics
+          path: cargo-audit.log
+          if-no-files-found: error
