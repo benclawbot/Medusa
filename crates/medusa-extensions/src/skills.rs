@@ -1,9 +1,14 @@
-use std::{fs, path::{Path, PathBuf}};
+use std::{
+    fs,
+    path::{Path, PathBuf},
+};
 
 use medusa_core::{ErrorCategory, ErrorCode, MedusaError, MedusaResult};
 use serde::{Deserialize, Serialize};
 
-use crate::support::{directory_digest, invalid, split_frontmatter, validate_relative_tree, walk_files, yaml_error};
+use crate::support::{
+    directory_digest, invalid, split_frontmatter, validate_relative_tree, walk_files, yaml_error,
+};
 
 /// Parsed and audited skill metadata.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]

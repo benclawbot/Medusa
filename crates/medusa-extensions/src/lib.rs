@@ -8,13 +8,9 @@ mod skills;
 mod support;
 
 pub use browser::{BrowserEvidence, verify_browser};
-pub use hooks::{
-    CommandHook, HookDecision, HookEvent, HookFailurePolicy, run_command_hook,
-};
+pub use hooks::{CommandHook, HookDecision, HookEvent, HookFailurePolicy, run_command_hook};
 pub use mcp::{McpRegistryEntry, McpRequest, McpResponse, call_mcp_stdio};
-pub use skills::{
-    LoadedSkill, SkillCompatibility, SkillManifest, SkillPermissions, load_skill,
-};
+pub use skills::{LoadedSkill, SkillCompatibility, SkillManifest, SkillPermissions, load_skill};
 
 #[cfg(test)]
 mod tests {
