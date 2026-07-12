@@ -79,3 +79,75 @@ pub fn package_smoke(binary: &Path) -> MedusaResult<String> {
     }
     Ok(String::from_utf8_lossy(&output.stdout).trim().to_owned())
 }
+
+#[cfg(test)]
+mod tests {
+    use std::fs;
+
+    use super::*;
+
+    #[test]
+    fn manifest_requires_complete_inputs_and_existing_artifacts() {
+        let directory = tempfile::tempdir().expect("tempdir");
+        let sbom = directory.path().join("sbom.json");
+        let rollback = directory.path().join("ROLLBACK.md");
+        assert!(
+            build_release_manifest("", "target", &[], sbom.clone(), rollback.clone()).is_err()
+        );
+        assert!(
+            build_release_manifest(
+                "1.0.0",
+                "target",
+                &[directory.path().join("missing")],
+                sbom,
+                rollback,
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn manifest_sorts_artifacts_and_records_sizes() {
+        let directory = tempfile::tempdir().expect("tempdir");
+        let first = directory.path().join("a.bin");
+        let second = directory.path().join("z.bin");
+        fs::write(&first, b"a").expect("first");
+        fs::write(&second, b"zz").expect("second");
+        let manifest = build_release_manifest(
+            "1.2.3",
+            "test-target",
+            &[second.clone(), first.clone()],
+            directory.path().join("sbom.json"),
+            directory.path().join("ROLLBACK.md"),
+        )
+        .expect("manifest");
+        assert_eq!(manifest.artifacts[0].path, first);
+        assert_eq!(manifest.artifacts[0].size, 1);
+        assert_eq!(manifest.artifacts[1].path, second);
+        assert_eq!(manifest.artifacts[1].size, 2);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn package_smoke_accepts_successful_binary_and_rejects_failures() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let directory = tempfile::tempdir().expect("tempdir");
+        let success = directory.path().join("success.sh");
+        fs::write(&success, "#!/bin/sh\necho medusa-test 1.0.0\n").expect("success");
+        fs::set_permissions(&success, fs::Permissions::from_mode(0o700)).expect("permissions");
+        assert_eq!(
+            package_smoke(&success).expect("smoke"),
+            "medusa-test 1.0.0"
+        );
+
+        let failure = directory.path().join("failure.sh");
+        fs::write(&failure, "#!/bin/sh\necho broken >&2\nexit 7\n").expect("failure");
+        fs::set_permissions(&failure, fs::Permissions::from_mode(0o700)).expect("permissions");
+        assert!(package_smoke(&failure).is_err());
+
+        let empty = directory.path().join("empty");
+        fs::write(&empty, b"").expect("empty");
+        assert!(package_smoke(&empty).is_err());
+    }
+}
