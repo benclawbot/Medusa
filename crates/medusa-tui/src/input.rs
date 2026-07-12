@@ -205,10 +205,9 @@ mod tests {
         let mut composer = ComposerState::new("aé");
         assert_eq!(
             composer
-                .handle_event(Event::Key(KeyEvent::new(
-                    KeyCode::Left,
-                    KeyModifiers::NONE,
-                )))
+                .handle_event(Event::Key(
+                    KeyEvent::new(KeyCode::Left, KeyModifiers::NONE,)
+                ))
                 .expect("left"),
             ComposerAction::None
         );
@@ -250,19 +249,16 @@ mod tests {
         );
         assert_eq!(
             composer
-                .handle_event(Event::Key(KeyEvent::new(
-                    KeyCode::Left,
-                    KeyModifiers::NONE,
-                )))
+                .handle_event(Event::Key(
+                    KeyEvent::new(KeyCode::Left, KeyModifiers::NONE,)
+                ))
                 .expect("left at start"),
             ComposerAction::None
         );
         let mut release = KeyEvent::new(KeyCode::Char('q'), KeyModifiers::NONE);
         release.kind = KeyEventKind::Release;
         assert_eq!(
-            composer
-                .handle_event(Event::Key(release))
-                .expect("release"),
+            composer.handle_event(Event::Key(release)).expect("release"),
             ComposerAction::None
         );
         assert_eq!(composer.draft.text, "x");
