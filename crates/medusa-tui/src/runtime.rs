@@ -28,7 +28,9 @@ pub enum RuntimeCommand {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum RuntimeEvent {
     Started,
-    Progress { turn: u32 },
+    Progress {
+        turn: u32,
+    },
     Completed {
         session_id: String,
         assistant_text: String,
