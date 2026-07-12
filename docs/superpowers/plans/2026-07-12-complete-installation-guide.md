@@ -50,7 +50,7 @@ Document Winget installs for Git and Rustup, optional Node.js 22 installation, o
 ```powershell
 winget install --id Git.Git -e
 winget install --id Rustlang.Rustup -e
-winget install --id OpenJS.NodeJS.LTS -e
+winget install --id OpenJS.NodeJS.22 -e
 rustup toolchain install 1.88.0 --profile minimal --component clippy,rustfmt
 rustup default 1.88.0
 ```

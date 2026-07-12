@@ -20,19 +20,199 @@ Medusa is a production-grade autonomous coding agent written in Rust. It combine
 
 ## Requirements
 
-- Rust 1.88 or newer
-- Cargo and Git
+- Git
+- Rust 1.88 or newer and Cargo (the repository pins Rust 1.88.0)
 - `MINIMAX_API_KEY` for live MiniMax execution
-- Node.js 22 when browser verification is enabled
+- Node.js 22 only when browser verification is enabled
 
 ## Installation
 
+Medusa is currently installed from source. The first optimized build can take several minutes because Cargo compiles Medusa and its dependencies locally.
+
+### Fast path
+
+If Git, Rust 1.88 or newer, and Cargo are already available:
+
 ```bash
+git clone https://github.com/benclawbot/Medusa.git
+cd Medusa
 cargo install --path crates/medusa-cli --locked
+medusa --version
 medusa doctor
 ```
 
-For local development:
+`medusa doctor` exits with a failure until `MINIMAX_API_KEY` is configured. This is expected; the other checks still show whether Git, Cargo, repository access, state permissions, and schema support are ready.
+
+### Windows (PowerShell)
+
+Install Git and Rustup with Winget. Install Node.js 22 as well if you want browser verification:
+
+```powershell
+winget install --id Git.Git -e --accept-package-agreements --accept-source-agreements
+winget install --id Rustlang.Rustup -e --accept-package-agreements --accept-source-agreements
+
+# Optional: required only for browser verification
+winget install --id OpenJS.NodeJS.22 -e --accept-package-agreements --accept-source-agreements
+```
+
+Close PowerShell and open a new window so the installers' environment changes are loaded. Then install Medusa's pinned Rust toolchain:
+
+```powershell
+rustup toolchain install 1.88.0 --profile minimal --component clippy,rustfmt
+rustup default 1.88.0
+```
+
+Ensure Cargo-installed programs are available in the current session and future PowerShell windows:
+
+```powershell
+$cargoBin = Join-Path $HOME '.cargo\bin'
+$userPath = [Environment]::GetEnvironmentVariable('Path', 'User')
+$entries = @($userPath -split ';' | Where-Object { $_ })
+if ($entries.TrimEnd('\') -notcontains $cargoBin.TrimEnd('\')) {
+    $updatedPath = (($entries + $cargoBin) -join ';')
+    [Environment]::SetEnvironmentVariable('Path', $updatedPath, 'User')
+}
+$env:Path = "$cargoBin;$env:Path"
+```
+
+Clone, install, and verify Medusa:
+
+```powershell
+git clone https://github.com/benclawbot/Medusa.git
+Set-Location Medusa
+cargo install --path crates/medusa-cli --locked
+medusa --version
+```
+
+Configure the API key for the current PowerShell session, then run the full diagnostic:
+
+```powershell
+$env:MINIMAX_API_KEY = '<your-key>'
+medusa doctor
+```
+
+Do not put a real API key in the repository. For persistent use, store it with your preferred Windows credential or environment-management tool and inject it into the shell that launches Medusa.
+
+### macOS
+
+Install Apple's command-line developer tools:
+
+```bash
+xcode-select --install
+```
+
+If Homebrew is not installed, use the installation command published at [brew.sh](https://brew.sh/) after reviewing it. Then install Git and, optionally, Node.js 22:
+
+```bash
+brew install git
+
+# Optional: required only for browser verification
+brew install node@22
+brew link --overwrite node@22
+```
+
+Install Rustup using the command published at [rustup.rs](https://rustup.rs/). Review remote installer commands before running them:
+
+```bash
+curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
+source "$HOME/.cargo/env"
+rustup toolchain install 1.88.0 --profile minimal --component clippy,rustfmt
+rustup default 1.88.0
+```
+
+Clone, install, configure, and verify Medusa:
+
+```bash
+git clone https://github.com/benclawbot/Medusa.git
+cd Medusa
+cargo install --path crates/medusa-cli --locked
+export MINIMAX_API_KEY='<your-key>'
+medusa --version
+medusa doctor
+```
+
+The `export` applies only to the current shell. Use your preferred secret manager or shell environment tooling for persistent use; never commit the key.
+
+### Linux
+
+Install Git, a C/C++ build toolchain, and `curl` using your distribution's package manager.
+
+Debian or Ubuntu:
+
+```bash
+sudo apt update
+sudo apt install -y build-essential git curl pkg-config
+```
+
+Fedora or RHEL-family systems:
+
+```bash
+sudo dnf group install -y "Development Tools"
+sudo dnf install -y git curl pkgconf-pkg-config
+```
+
+Arch Linux:
+
+```bash
+sudo pacman -Syu --needed base-devel git curl pkgconf
+```
+
+Install Rustup, load Cargo into the current shell, and install the pinned toolchain. Review remote installer commands before running them:
+
+```bash
+curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
+source "$HOME/.cargo/env"
+rustup toolchain install 1.88.0 --profile minimal --component clippy,rustfmt
+rustup default 1.88.0
+```
+
+Node.js 22 is optional and is needed only for browser verification. Install it using your distribution's supported Node.js 22 package or the instructions at [nodejs.org](https://nodejs.org/en/download/package-manager); package names and versions vary by distribution.
+
+Clone, install, configure, and verify Medusa:
+
+```bash
+git clone https://github.com/benclawbot/Medusa.git
+cd Medusa
+cargo install --path crates/medusa-cli --locked
+export MINIMAX_API_KEY='<your-key>'
+medusa --version
+medusa doctor
+```
+
+### Verify prerequisites
+
+These commands should all print versions. Skip `node --version` if browser verification is not needed:
+
+```bash
+git --version
+rustc --version
+cargo --version
+node --version
+medusa --version
+medusa doctor
+```
+
+### Installation troubleshooting
+
+If `cargo` or `medusa` is reported as an unknown command, open a new terminal first. On macOS or Linux, run `source "$HOME/.cargo/env"`. On Windows, confirm that `%USERPROFILE%\.cargo\bin` appears in the user `PATH`; the PowerShell `PATH` block above adds it without replacing existing entries.
+
+If Rustup reports a partially installed or conflicting `1.88.0` toolchain, close other Rust and Cargo processes and retry:
+
+```bash
+rustup toolchain install 1.88.0 --profile minimal --component clippy,rustfmt
+```
+
+If the same conflict remains, remove and download only the pinned toolchain again. The first command deletes the local `1.88.0` toolchain before the second command reinstalls it; it does not remove your source repositories:
+
+```bash
+rustup toolchain uninstall 1.88.0
+rustup toolchain install 1.88.0 --profile minimal --component clippy,rustfmt
+rustup default 1.88.0
+```
+
+### Local development
+
+To build without installing the binary globally:
 
 ```bash
 git clone https://github.com/benclawbot/Medusa.git
