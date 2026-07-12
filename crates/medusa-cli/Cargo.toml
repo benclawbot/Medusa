@@ -17,6 +17,7 @@ medusa-config = { path = "../medusa-config" }
 medusa-core.workspace = true
 medusa-hardening = { path = "../medusa-hardening" }
 medusa-provider = { path = "../medusa-provider" }
+medusa-tui = { path = "../medusa-tui" }
 serde.workspace = true
 serde_json.workspace = true
 walkdir = "2.5"
