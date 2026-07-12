@@ -13,7 +13,11 @@ pub(crate) fn source_files(repo: &Path) -> Vec<PathBuf> {
         .filter(|path| path.extension().is_some_and(|ext| ext == "rs"))
         .filter(|path| {
             !path.components().any(|component| {
-                matches!(component, Component::Normal(name) if name == ".git" || name == "target" || name == ".medusa")
+                matches!(
+                    component,
+                    Component::Normal(name)
+                        if name == ".git" || name == "target" || name == ".medusa"
+                )
             })
         })
         .collect::<Vec<_>>();
