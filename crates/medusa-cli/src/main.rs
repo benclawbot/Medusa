@@ -11,18 +11,30 @@ use medusa_config::Config;
 use medusa_core::{ErrorCategory, ErrorCode, MedusaError, MedusaResult};
 use medusa_hardening::{CURRENT_SCHEMA_VERSION, Migrator};
 use medusa_provider::MiniMaxProvider;
+use medusa_tui::{TuiOptions, run as run_tui};
 use serde::Serialize;
 use walkdir::WalkDir;
 
 #[derive(Parser, Debug)]
-#[command(name = "medusa", version, about = "Autonomous coding agent")]
+#[command(
+    name = "medusa",
+    version,
+    about = "Autonomous coding agent",
+    after_help = "Run `medusa` without a subcommand to open the interactive terminal. Use `medusa run` for headless execution."
+)]
 struct Cli {
-    #[arg(long, default_value = ".")]
+    #[arg(long, default_value = ".", global = true)]
     repo: PathBuf,
-    #[arg(long = "set", value_parser = parse_key_value)]
+    #[arg(long = "set", value_parser = parse_key_value, global = true)]
     overrides: Vec<(String, String)>,
+    #[arg(long, conflicts_with = "command")]
+    prompt: Option<String>,
+    #[arg(long, conflicts_with_all = ["command", "resume_session"])]
+    r#continue: bool,
+    #[arg(long = "resume", value_name = "SESSION", conflicts_with_all = ["command", "continue"])]
+    resume_session: Option<String>,
     #[command(subcommand)]
-    command: CommandKind,
+    command: Option<CommandKind>,
 }
 
 #[derive(Subcommand, Debug)]
@@ -62,11 +74,21 @@ fn main() {
 
 fn run() -> MedusaResult<()> {
     let cli = Cli::parse();
-    let overrides = cli.overrides.into_iter().collect::<BTreeMap<_, _>>();
-    let config = Config::load_layers(None, None, &BTreeMap::new(), &overrides)?;
     let repo = cli.repo.canonicalize().unwrap_or(cli.repo);
 
-    match cli.command {
+    if cli.command.is_none() {
+        let mut options = TuiOptions::for_repo(repo);
+        options.initial_prompt = cli.prompt;
+        options.resume_session = cli.resume_session;
+        options.continue_latest = cli.r#continue;
+        let _ = run_tui(options)?;
+        return Ok(());
+    }
+
+    let overrides = cli.overrides.into_iter().collect::<BTreeMap<_, _>>();
+    let config = Config::load_layers(None, None, &BTreeMap::new(), &overrides)?;
+
+    match cli.command.expect("checked above") {
         CommandKind::Bootstrap => {
             bootstrap(&repo)?;
             println!("bootstrapped {}", repo.display());
@@ -246,5 +268,42 @@ fn run_git(repo: &Path, args: &[&str]) -> MedusaResult<()> {
             ErrorCategory::Execution,
             format!("git {} failed with {status}", args.join(" ")),
         ))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use clap::CommandFactory;
+
+    #[test]
+    fn clap_definition_is_valid() {
+        Cli::command().debug_assert();
+    }
+
+    #[test]
+    fn bare_medusa_selects_interactive_mode() {
+        let cli = Cli::try_parse_from(["medusa"]).expect("parse bare invocation");
+        assert!(cli.command.is_none());
+        assert!(cli.prompt.is_none());
+        assert!(!cli.r#continue);
+    }
+
+    #[test]
+    fn headless_run_remains_available() {
+        let cli = Cli::try_parse_from(["medusa", "run", "fix tests"])
+            .expect("parse headless run");
+        assert!(matches!(
+            cli.command,
+            Some(CommandKind::Run { objective }) if objective == "fix tests"
+        ));
+    }
+
+    #[test]
+    fn interactive_resume_flags_are_parsed() {
+        let cli = Cli::try_parse_from(["medusa", "--resume", "session-123"])
+            .expect("parse interactive resume");
+        assert_eq!(cli.resume_session.as_deref(), Some("session-123"));
+        assert!(cli.command.is_none());
     }
 }
