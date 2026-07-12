@@ -1,3 +1,5 @@
+pub mod clipboard;
+
 use std::{
     io::{self, IsTerminal, Write},
     path::PathBuf,
