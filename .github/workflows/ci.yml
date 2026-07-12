@@ -24,7 +24,25 @@ jobs:
       - name: Refresh dependency lock for the merged PR graph
         run: cargo generate-lockfile
       - name: Check formatting
-        run: cargo fmt --all -- --check
+        shell: bash
+        run: |
+          set -o pipefail
+          cargo fmt --all -- --check 2>&1 | tee rustfmt.log
+      - name: Capture rustfmt patch
+        if: failure()
+        shell: bash
+        run: |
+          cargo fmt --all
+          git diff -- . ':!Cargo.lock' > rustfmt.patch
+      - name: Upload rustfmt diagnostics
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: rustfmt-diagnostics
+          path: |
+            rustfmt.log
+            rustfmt.patch
+          if-no-files-found: ignore
       - name: Clippy
         shell: bash
         run: |
