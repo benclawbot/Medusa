@@ -1,4 +1,7 @@
-use std::{collections::BTreeSet, path::{Component, Path}};
+use std::{
+    collections::BTreeSet,
+    path::{Component, Path},
+};
 
 use medusa_core::{ErrorCategory, ErrorCode, MedusaError, MedusaResult};
 

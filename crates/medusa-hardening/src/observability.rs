@@ -1,4 +1,10 @@
-use std::{collections::BTreeMap, fs, path::PathBuf, sync::{Arc, Mutex}, time::Instant};
+use std::{
+    collections::BTreeMap,
+    fs,
+    path::PathBuf,
+    sync::{Arc, Mutex},
+    time::Instant,
+};
 
 use medusa_core::MedusaResult;
 use serde::{Deserialize, Serialize};

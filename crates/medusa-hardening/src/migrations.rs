@@ -4,7 +4,9 @@ use medusa_core::{ErrorCategory, ErrorCode, MedusaError, MedusaResult};
 use serde::{Deserialize, Serialize};
 use ulid::Ulid;
 
-use crate::support::{atomic_json, atomic_write, copy_tree, directory_digest, invalid, now, restore_tree};
+use crate::support::{
+    atomic_json, atomic_write, copy_tree, directory_digest, invalid, now, restore_tree,
+};
 
 pub const CURRENT_SCHEMA_VERSION: u32 = 3;
 
@@ -53,9 +55,21 @@ impl Migrator {
     pub fn upgrade_to_current(&self) -> MedusaResult<Vec<MigrationReceipt>> {
         fs::create_dir_all(&self.root)?;
         let migrations = [
-            Migration { from: 0, to: 1, name: "initialize-layout".into() },
-            Migration { from: 1, to: 2, name: "add-observability".into() },
-            Migration { from: 2, to: 3, name: "add-release-state".into() },
+            Migration {
+                from: 0,
+                to: 1,
+                name: "initialize-layout".into(),
+            },
+            Migration {
+                from: 1,
+                to: 2,
+                name: "add-observability".into(),
+            },
+            Migration {
+                from: 2,
+                to: 3,
+                name: "add-release-state".into(),
+            },
         ];
         let mut receipts = Vec::new();
         while self.schema_version()? < CURRENT_SCHEMA_VERSION {

@@ -1,17 +1,28 @@
-use std::{fs, path::{Path, PathBuf}};
+use std::{
+    fs,
+    path::{Path, PathBuf},
+};
 
 use medusa_core::{ErrorCategory, ErrorCode, MedusaError, MedusaResult};
 use serde::Serialize;
 use sha2::{Digest, Sha256};
-use time::{format_description::well_known::Rfc3339, OffsetDateTime};
+use time::{OffsetDateTime, format_description::well_known::Rfc3339};
 
 pub(crate) fn append_atomic(path: &Path, bytes: &[u8]) -> MedusaResult<()> {
-    let mut existing = if path.exists() { fs::read(path)? } else { Vec::new() };
+    let mut existing = if path.exists() {
+        fs::read(path)?
+    } else {
+        Vec::new()
+    };
     existing.extend_from_slice(bytes);
     atomic_write(path, &existing)
 }
 
-pub(crate) fn copy_tree(source: &Path, destination: &Path, skip_name: Option<&str>) -> MedusaResult<()> {
+pub(crate) fn copy_tree(
+    source: &Path,
+    destination: &Path,
+    skip_name: Option<&str>,
+) -> MedusaResult<()> {
     fs::create_dir_all(destination)?;
     if !source.exists() {
         return Ok(());
@@ -74,10 +85,17 @@ pub(crate) fn directory_digest(root: &Path) -> MedusaResult<String> {
     Ok(format!("{:x}", hasher.finalize()))
 }
 
-fn collect_files(root: &Path, current: &Path, files: &mut Vec<(PathBuf, Vec<u8>)>) -> MedusaResult<()> {
+fn collect_files(
+    root: &Path,
+    current: &Path,
+    files: &mut Vec<(PathBuf, Vec<u8>)>,
+) -> MedusaResult<()> {
     for entry in fs::read_dir(current)?.collect::<Result<Vec<_>, _>>()? {
         let path = entry.path();
-        if path.components().any(|component| component.as_os_str() == "backups") {
+        if path
+            .components()
+            .any(|component| component.as_os_str() == "backups")
+        {
             continue;
         }
         let metadata = fs::symlink_metadata(&path)?;
@@ -91,7 +109,10 @@ fn collect_files(root: &Path, current: &Path, files: &mut Vec<(PathBuf, Vec<u8>)
         if metadata.is_dir() {
             collect_files(root, &path, files)?;
         } else if metadata.is_file() {
-            files.push((path.strip_prefix(root).unwrap_or(&path).to_path_buf(), fs::read(path)?));
+            files.push((
+                path.strip_prefix(root).unwrap_or(&path).to_path_buf(),
+                fs::read(path)?,
+            ));
         }
     }
     Ok(())
@@ -118,9 +139,17 @@ pub(crate) fn now() -> MedusaResult<String> {
 }
 
 pub(crate) fn invalid(message: impl Into<String>) -> MedusaError {
-    MedusaError::new(ErrorCode::InvalidConfiguration, ErrorCategory::Validation, message)
+    MedusaError::new(
+        ErrorCode::InvalidConfiguration,
+        ErrorCategory::Validation,
+        message,
+    )
 }
 
 pub(crate) fn internal(message: impl Into<String>) -> MedusaError {
-    MedusaError::new(ErrorCode::InternalInvariant, ErrorCategory::Internal, message)
+    MedusaError::new(
+        ErrorCode::InternalInvariant,
+        ErrorCategory::Internal,
+        message,
+    )
 }
