@@ -38,3 +38,57 @@ pub fn select_tests(changed_paths: &[PathBuf]) -> TestImpact {
         reasons: reasons.into_iter().collect(),
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn empty_or_unrelated_changes_select_no_tests() {
+        assert_eq!(
+            select_tests(&[]),
+            TestImpact {
+                commands: Vec::new(),
+                reasons: Vec::new(),
+            }
+        );
+        assert_eq!(
+            select_tests(&[PathBuf::from("README.md")]),
+            TestImpact {
+                commands: Vec::new(),
+                reasons: Vec::new(),
+            }
+        );
+    }
+
+    #[test]
+    fn rust_dependency_and_workflow_changes_are_deduplicated_and_sorted() {
+        let impact = select_tests(&[
+            PathBuf::from("src/lib.rs"),
+            PathBuf::from("Cargo.toml"),
+            PathBuf::from("Cargo.lock"),
+            PathBuf::from(".github/workflows/ci.yml"),
+            PathBuf::from("src/main.rs"),
+        ]);
+        assert_eq!(
+            impact.commands,
+            vec![
+                "cargo clippy --workspace --all-targets --all-features -- -D warnings",
+                "cargo test --workspace --all-features",
+            ]
+        );
+        assert_eq!(impact.reasons.len(), 5);
+        assert!(
+            impact
+                .reasons
+                .iter()
+                .any(|reason| reason == "CI workflow changed: .github/workflows/ci.yml")
+        );
+        assert!(
+            impact
+                .reasons
+                .iter()
+                .any(|reason| reason == "Rust source changed: src/lib.rs")
+        );
+    }
+}
