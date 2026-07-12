@@ -829,6 +829,7 @@ version = "1.0.0"
 dependencies = [
  "medusa-config",
  "medusa-core",
+ "medusa-intelligence",
  "medusa-protocol",
  "medusa-provider",
  "serde",
