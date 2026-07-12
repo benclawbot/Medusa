@@ -2,12 +2,16 @@ use std::{
     collections::BTreeMap,
     fs, io,
     path::{Path, PathBuf},
-    sync::mpsc::{self, Receiver, Sender, TryRecvError},
+    sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+        mpsc::{self, Receiver, Sender, TryRecvError},
+    },
     thread,
 };
 
 use base64::{Engine as _, engine::general_purpose::STANDARD};
-use medusa_agent::AgentEngine;
+use medusa_agent::{AgentEngine, StepOutcome};
 use medusa_config::Config;
 use medusa_provider::{ImageSource, MessageBlock, MiniMaxProvider, Role};
 
@@ -24,37 +28,69 @@ pub enum RuntimeCommand {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum RuntimeEvent {
     Started,
+    Progress { turn: u32 },
     Completed {
         session_id: String,
         assistant_text: String,
         evidence: Vec<String>,
     },
+    Cancelled,
     Failed(String),
 }
 
 pub struct RuntimeController {
     commands: Sender<RuntimeCommand>,
     events: Receiver<RuntimeEvent>,
+    cancel: Arc<AtomicBool>,
+    busy: Arc<AtomicBool>,
 }
 
 impl RuntimeController {
     pub fn start(repo: PathBuf) -> Self {
         let (command_tx, command_rx) = mpsc::channel();
         let (event_tx, event_rx) = mpsc::channel();
+        let cancel = Arc::new(AtomicBool::new(false));
+        let busy = Arc::new(AtomicBool::new(false));
+        let worker_cancel = Arc::clone(&cancel);
+        let worker_busy = Arc::clone(&busy);
         thread::Builder::new()
             .name("medusa-tui-runtime".to_owned())
-            .spawn(move || worker_loop(repo, command_rx, event_tx))
+            .spawn(move || {
+                worker_loop(repo, command_rx, event_tx, worker_cancel, worker_busy);
+            })
             .expect("spawn TUI runtime worker");
         Self {
             commands: command_tx,
             events: event_rx,
+            cancel,
+            busy,
         }
     }
 
     pub fn submit(&self, draft: PromptDraft) -> Result<(), RuntimeError> {
-        self.commands
-            .send(RuntimeCommand::Submit(draft))
-            .map_err(|_| RuntimeError::WorkerStopped)
+        self.busy
+            .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
+            .map_err(|_| RuntimeError::Busy)?;
+        self.cancel.store(false, Ordering::SeqCst);
+        if self.commands.send(RuntimeCommand::Submit(draft)).is_err() {
+            self.busy.store(false, Ordering::SeqCst);
+            return Err(RuntimeError::WorkerStopped);
+        }
+        Ok(())
+    }
+
+    pub fn cancel(&self) -> bool {
+        if self.busy.load(Ordering::SeqCst) {
+            self.cancel.store(true, Ordering::SeqCst);
+            true
+        } else {
+            false
+        }
+    }
+
+    #[must_use]
+    pub fn is_busy(&self) -> bool {
+        self.busy.load(Ordering::SeqCst)
     }
 
     pub fn try_event(&self) -> Result<Option<RuntimeEvent>, RuntimeError> {
@@ -68,32 +104,47 @@ impl RuntimeController {
 
 impl Drop for RuntimeController {
     fn drop(&mut self) {
+        self.cancel.store(true, Ordering::SeqCst);
         let _ = self.commands.send(RuntimeCommand::Shutdown);
     }
 }
 
-fn worker_loop(repo: PathBuf, commands: Receiver<RuntimeCommand>, events: Sender<RuntimeEvent>) {
+fn worker_loop(
+    repo: PathBuf,
+    commands: Receiver<RuntimeCommand>,
+    events: Sender<RuntimeEvent>,
+    cancel: Arc<AtomicBool>,
+    busy: Arc<AtomicBool>,
+) {
     while let Ok(command) = commands.recv() {
         match command {
             RuntimeCommand::Submit(draft) => {
                 let _ = events.send(RuntimeEvent::Started);
-                let outcome = run_prompt(&repo, draft);
+                let outcome = run_prompt(&repo, draft, &events, &cancel);
                 let event = match outcome {
                     Ok(completed) => completed,
                     Err(error) => RuntimeEvent::Failed(error.to_string()),
                 };
+                busy.store(false, Ordering::SeqCst);
                 let _ = events.send(event);
             }
             RuntimeCommand::Shutdown => break,
         }
     }
+    busy.store(false, Ordering::SeqCst);
 }
 
-fn run_prompt(repo: &Path, draft: PromptDraft) -> Result<RuntimeEvent, RuntimeError> {
+fn run_prompt(
+    repo: &Path,
+    draft: PromptDraft,
+    events: &Sender<RuntimeEvent>,
+    cancel: &AtomicBool,
+) -> Result<RuntimeEvent, RuntimeError> {
     let project = repo.join(".medusa/config.toml");
     let project = project.exists().then_some(project);
     let config = Config::load_layers(None, project.as_deref(), &BTreeMap::new(), &BTreeMap::new())
         .map_err(RuntimeError::agent)?;
+    let max_turns = config.agent.max_turns;
     let provider = MiniMaxProvider::from_config(&config).map_err(RuntimeError::agent)?;
     let engine = AgentEngine::new(provider, config);
     let objective = objective_for(&draft);
@@ -101,9 +152,24 @@ fn run_prompt(repo: &Path, draft: PromptDraft) -> Result<RuntimeEvent, RuntimeEr
     let mut session = engine
         .create_session_with_content(repo, objective, content)
         .map_err(RuntimeError::agent)?;
-    engine
-        .run_to_completion(&mut session)
-        .map_err(RuntimeError::agent)?;
+
+    while !session.completed && session.turn < max_turns {
+        if cancel.load(Ordering::SeqCst) {
+            return Ok(RuntimeEvent::Cancelled);
+        }
+        let outcome = engine.step(&mut session).map_err(RuntimeError::agent)?;
+        let _ = events.send(RuntimeEvent::Progress { turn: session.turn });
+        if outcome == StepOutcome::Completed {
+            break;
+        }
+    }
+
+    if cancel.load(Ordering::SeqCst) {
+        return Ok(RuntimeEvent::Cancelled);
+    }
+    if !session.completed {
+        return Err(RuntimeError::TurnLimit(max_turns));
+    }
 
     let assistant_text = session
         .messages
@@ -205,7 +271,9 @@ pub enum RuntimeError {
     Io(io::Error),
     Png(String),
     WorkerStopped,
+    Busy,
     EmptyPrompt,
+    TurnLimit(u32),
     BinaryFile { path: PathBuf },
     FileTooLarge { path: PathBuf, bytes: usize },
 }
@@ -227,7 +295,9 @@ impl std::fmt::Display for RuntimeError {
             Self::Io(error) => write!(formatter, "runtime I/O failed: {error}"),
             Self::Png(error) => write!(formatter, "screenshot encoding failed: {error}"),
             Self::WorkerStopped => formatter.write_str("agent runtime worker stopped"),
+            Self::Busy => formatter.write_str("an agent task is already running"),
             Self::EmptyPrompt => formatter.write_str("prompt and attachments are empty"),
+            Self::TurnLimit(limit) => write!(formatter, "agent reached the {limit}-turn limit"),
             Self::BinaryFile { path } => write!(
                 formatter,
                 "attached file is not UTF-8 text: {}",
@@ -309,5 +379,13 @@ mod tests {
             &blocks[0],
             MessageBlock::Text { text } if text.contains("compiler error")
         ));
+    }
+
+    #[test]
+    fn idle_runtime_cancel_is_a_noop() {
+        let directory = tempdir().expect("temporary directory");
+        let runtime = RuntimeController::start(directory.path().to_path_buf());
+        assert!(!runtime.cancel());
+        assert!(!runtime.is_busy());
     }
 }
