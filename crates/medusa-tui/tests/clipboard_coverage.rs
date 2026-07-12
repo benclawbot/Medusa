@@ -2,8 +2,9 @@ use std::path::PathBuf;
 
 use medusa_tui::clipboard::{
     ClipboardError, ClipboardImage, ClipboardService, FileAttachment, ImageAttachment,
-    PromptAttachment, PromptDraft, TextAttachment, UnsupportedClipboard, MAX_CLIPBOARD_TEXT_BYTES,
-    MAX_IMAGE_BYTES, MAX_IMAGE_PIXELS, MAX_IMAGES_PER_PROMPT, MAX_TOTAL_ATTACHMENT_BYTES,
+    MAX_CLIPBOARD_TEXT_BYTES, MAX_IMAGE_BYTES, MAX_IMAGE_PIXELS, MAX_IMAGES_PER_PROMPT,
+    MAX_TOTAL_ATTACHMENT_BYTES, PromptAttachment, PromptDraft, TextAttachment,
+    UnsupportedClipboard,
 };
 
 fn image(width: u32, height: u32) -> ClipboardImage {
@@ -98,9 +99,7 @@ fn image_count_and_total_attachment_limits_are_enforced() {
         draft.add_image(image(1, 1)).expect("image within count");
     }
     assert_eq!(
-        draft
-            .add_image(image(1, 1))
-            .expect_err("image count limit"),
+        draft.add_image(image(1, 1)).expect_err("image count limit"),
         ClipboardError::ImageCountLimit(MAX_IMAGES_PER_PROMPT)
     );
 
@@ -152,7 +151,10 @@ fn every_clipboard_error_has_actionable_display_text() {
         ClipboardError::InvalidCursor(7),
         ClipboardError::TextByteLimit { bytes: 8, limit: 4 },
         ClipboardError::InvalidImageDimensions,
-        ClipboardError::ImagePixelLimit { pixels: 9, limit: 8 },
+        ClipboardError::ImagePixelLimit {
+            pixels: 9,
+            limit: 8,
+        },
         ClipboardError::ImageByteCountOverflow,
         ClipboardError::InvalidRgbaLength {
             expected: 4,
