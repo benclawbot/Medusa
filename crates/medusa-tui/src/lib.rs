@@ -16,7 +16,7 @@ use std::{
 use std::thread;
 
 use app::{AppAction, AppError, AppState, TranscriptEntry};
-use clipboard::{ClipboardService, PromptAttachment, UnsupportedClipboard};
+use clipboard::{ClipboardService, PromptAttachment, PromptDraft, UnsupportedClipboard};
 use crossterm::{
     cursor::{Hide, MoveTo, Show},
     event::{
@@ -177,11 +177,19 @@ fn run_loop(
     app: &mut AppState,
     runtime: &RuntimeController,
 ) -> io::Result<ExitReason> {
+    let mut last_render = None;
     loop {
         drain_runtime_events(app, runtime)?;
-        draw_portable(stdout, options, app)?;
+        let snapshot = portable_render_snapshot(app, size()?);
+        if last_render.as_ref() != Some(&snapshot) {
+            draw_portable(stdout, options, app)?;
+            last_render = Some(snapshot);
+        }
         if event::poll(Duration::from_millis(100))? {
             let terminal_event = event::read()?;
+            if matches!(terminal_event, Event::Resize(_, _)) {
+                last_render = None;
+            }
             if ctrl_d_on_empty(&terminal_event, app) {
                 return Ok(ExitReason::InputClosed);
             }
@@ -234,7 +242,7 @@ fn drain_runtime_events(app: &mut AppState, runtime: &RuntimeController) -> io::
                 app.status = "agent running".to_owned();
             }
             RuntimeEvent::Progress { turn } => {
-                app.status = format!("agent running · turn {turn}");
+                app.status = running_status(turn);
             }
             RuntimeEvent::Completed {
                 session_id,
@@ -304,7 +312,32 @@ fn draw(
 
 #[cfg(not(unix))]
 fn draw_portable(stdout: &mut io::Stdout, options: &TuiOptions, app: &AppState) -> io::Result<()> {
-    draw_common(stdout, options, app, &[], "local transport unavailable")
+    draw_common(stdout, options, app, &[], portable_daemon_status())
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct PortableRenderSnapshot {
+    terminal_size: (u16, u16),
+    status: String,
+    transcript: Vec<TranscriptEntry>,
+    draft: PromptDraft,
+}
+
+fn portable_render_snapshot(app: &AppState, terminal_size: (u16, u16)) -> PortableRenderSnapshot {
+    PortableRenderSnapshot {
+        terminal_size,
+        status: app.status.clone(),
+        transcript: app.transcript.clone(),
+        draft: app.composer.draft.clone(),
+    }
+}
+
+fn portable_daemon_status() -> &'static str {
+    "direct runtime (no daemon required)"
+}
+
+fn running_status(turn: u32) -> String {
+    format!("agent running - turn {turn}; results appear when complete")
 }
 
 fn draw_common(
@@ -441,5 +474,35 @@ mod tests {
             source_format: Some("image/rgba8".to_owned()),
         });
         assert!(attachment_label(&attachment).contains("10x20"));
+    }
+
+    #[test]
+    fn portable_render_snapshot_changes_only_with_visible_state() {
+        let directory = tempfile::tempdir().expect("tempdir");
+        let mut app = AppState::new(
+            directory.path().to_path_buf(),
+            "redraw-test",
+            "",
+            Arc::new(UnsupportedClipboard),
+        )
+        .expect("app");
+
+        let initial = portable_render_snapshot(&app, (80, 24));
+        assert_eq!(initial, portable_render_snapshot(&app, (80, 24)));
+
+        app.status = "agent running".to_owned();
+        assert_ne!(initial, portable_render_snapshot(&app, (80, 24)));
+    }
+
+    #[test]
+    fn portable_status_explains_direct_runtime_and_deferred_results() {
+        assert_eq!(
+            portable_daemon_status(),
+            "direct runtime (no daemon required)"
+        );
+        assert_eq!(
+            running_status(3),
+            "agent running - turn 3; results appear when complete"
+        );
     }
 }
