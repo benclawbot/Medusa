@@ -8,7 +8,7 @@ mod patch;
 mod support;
 
 pub use format::format_changed;
-pub use impact::{select_tests, TestImpact};
+pub use impact::{TestImpact, select_tests};
 pub use language::{CodeIndex, Language, Reference, Symbol, SymbolKind};
 pub use patch::{PatchTransaction, TextEdit, TransactionReceipt};
 
@@ -50,8 +50,7 @@ mod tests {
         )
         .expect("test");
         fs::write(directory.path().join("README.md"), "unchanged\n").expect("readme");
-        let unrelated_before =
-            hash(&fs::read(directory.path().join("README.md")).expect("readme"));
+        let unrelated_before = hash(&fs::read(directory.path().join("README.md")).expect("readme"));
 
         let index = CodeIndex::build(directory.path()).expect("index");
         let mut transaction = PatchTransaction::new();
