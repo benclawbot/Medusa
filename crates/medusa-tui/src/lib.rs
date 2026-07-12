@@ -1,6 +1,8 @@
+pub mod app;
 pub mod clipboard;
 pub mod draft_store;
 pub mod input;
+pub mod native_clipboard;
 
 use std::{
     io::{self, IsTerminal, Write},
