@@ -8,7 +8,7 @@ use time::OffsetDateTime;
 
 use crate::{
     evidence::append_event,
-    session::{bootstrap, load, persist, AgentSession},
+    session::{AgentSession, bootstrap, load, persist},
     tools::{built_in_tools, execute_tool},
     verification::targeted_verification,
 };

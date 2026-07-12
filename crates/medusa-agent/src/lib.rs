@@ -14,12 +14,7 @@ pub use verification::{VerificationResult, targeted_verification};
 
 #[cfg(test)]
 mod tests {
-    use std::{
-        collections::VecDeque,
-        fs,
-        process::Command,
-        sync::Mutex,
-    };
+    use std::{collections::VecDeque, fs, process::Command, sync::Mutex};
 
     use medusa_config::Config;
     use medusa_core::{ErrorCategory, ErrorCode, MedusaError, MedusaResult};
