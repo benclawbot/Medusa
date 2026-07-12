@@ -52,7 +52,7 @@ impl ClipboardService for NativeClipboard {
                     source_format: Some("image/rgba8".to_owned()),
                 };
                 image.validate()?;
-                return Ok(ClipboardContent::Image(image));
+                Ok(ClipboardContent::Image(image))
             }
             Err(image_error) => match clipboard.get_text() {
                 Ok(text) if text.is_empty() => Ok(ClipboardContent::Empty),
