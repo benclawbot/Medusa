@@ -1,5 +1,6 @@
 pub mod clipboard;
 pub mod draft_store;
+pub mod input;
 
 use std::{
     io::{self, IsTerminal, Write},
