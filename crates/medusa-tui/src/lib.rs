@@ -9,9 +9,11 @@ use std::{
     io::{self, IsTerminal, Write},
     path::PathBuf,
     sync::Arc,
-    thread,
     time::Duration,
 };
+
+#[cfg(unix)]
+use std::thread;
 
 use app::{AppAction, AppError, AppState, TranscriptEntry};
 use clipboard::{ClipboardService, PromptAttachment, UnsupportedClipboard};

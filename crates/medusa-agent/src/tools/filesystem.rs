@@ -46,12 +46,13 @@ pub(crate) fn search(repo: &Path, query: &str) -> MedusaResult<String> {
         if let Ok(text) = fs::read_to_string(entry.path()) {
             for (index, line) in text.lines().enumerate() {
                 if line.contains(query) {
-                    results.push(format!(
-                        "{}:{}:{}",
-                        entry.path().display(),
-                        index + 1,
-                        line.trim()
-                    ));
+                    let relative = entry.path().strip_prefix(repo).unwrap_or(entry.path());
+                    let relative = relative
+                        .components()
+                        .map(|part| part.as_os_str().to_string_lossy())
+                        .collect::<Vec<_>>()
+                        .join("/");
+                    results.push(format!("{}:{}:{}", relative, index + 1, line.trim()));
                 }
             }
         }

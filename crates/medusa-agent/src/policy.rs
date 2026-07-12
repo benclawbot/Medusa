@@ -1,8 +1,11 @@
 use std::{
     fs,
     path::{Component, Path, PathBuf},
-    process::{Command, Output},
+    process::Output,
 };
+
+#[cfg(target_os = "linux")]
+use std::process::Command;
 
 use medusa_core::{ErrorCategory, ErrorCode, MedusaError, MedusaResult};
 

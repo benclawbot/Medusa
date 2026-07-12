@@ -137,6 +137,19 @@ impl WorkerManager {
 
     /// Runs combined repository verification after all worker commits merge.
     pub fn verify_combined(&self) -> MedusaResult<String> {
+        #[cfg(windows)]
+        let output = if self.repo.join("verify.ps1").is_file() {
+            Command::new("powershell.exe")
+                .args(["-NoProfile", "-File", "verify.ps1"])
+                .current_dir(&self.repo)
+                .output()?
+        } else {
+            Command::new("cargo")
+                .args(["test", "--workspace", "--all-features"])
+                .current_dir(&self.repo)
+                .output()?
+        };
+        #[cfg(not(windows))]
         let output = if self.repo.join("verify.sh").is_file() {
             Command::new("sh")
                 .arg("verify.sh")
@@ -282,6 +295,13 @@ mod tests {
         git(&repo, &["config", "user.name", "Medusa Test"]);
         git(&repo, &["config", "user.email", "medusa@example.invalid"]);
         fs::write(repo.join("base.txt"), "base\n").expect("base");
+        #[cfg(windows)]
+        fs::write(
+            repo.join("verify.ps1"),
+            "$ErrorActionPreference = 'Stop'\nif ((Get-Content -Raw feature-a.txt) -ne 'alpha') { exit 1 }\nif ((Get-Content -Raw feature-b.txt) -ne 'beta') { exit 1 }\nWrite-Output 'combined-verification-ok'\n",
+        )
+        .expect("verify");
+        #[cfg(not(windows))]
         fs::write(
             repo.join("verify.sh"),
             "#!/bin/sh\nset -eu\ntest \"$(cat feature-a.txt)\" = alpha\ntest \"$(cat feature-b.txt)\" = beta\necho combined-verification-ok\n",
@@ -293,26 +313,53 @@ mod tests {
         let manager = WorkerManager::new(&repo, &worktrees).expect("manager");
         let worker_a = manager.create_worker("feature-a").expect("worker a");
         let worker_b = manager.create_worker("feature-b").expect("worker b");
-        let workers = manager
-            .delegate_parallel(vec![
-                (
-                    worker_a,
-                    DelegatedTask {
-                        program: "sh".into(),
-                        args: vec!["-c".into(), "printf alpha > feature-a.txt".into()],
-                        commit_message: "add feature a".into(),
-                    },
-                ),
-                (
-                    worker_b,
-                    DelegatedTask {
-                        program: "sh".into(),
-                        args: vec!["-c".into(), "printf beta > feature-b.txt".into()],
-                        commit_message: "add feature b".into(),
-                    },
-                ),
-            ])
-            .expect("delegate");
+        #[cfg(windows)]
+        let tasks = vec![
+            (
+                worker_a,
+                DelegatedTask {
+                    program: "powershell.exe".into(),
+                    args: vec![
+                        "-NoProfile".into(),
+                        "-Command".into(),
+                        "[IO.File]::WriteAllText('feature-a.txt','alpha')".into(),
+                    ],
+                    commit_message: "add feature a".into(),
+                },
+            ),
+            (
+                worker_b,
+                DelegatedTask {
+                    program: "powershell.exe".into(),
+                    args: vec![
+                        "-NoProfile".into(),
+                        "-Command".into(),
+                        "[IO.File]::WriteAllText('feature-b.txt','beta')".into(),
+                    ],
+                    commit_message: "add feature b".into(),
+                },
+            ),
+        ];
+        #[cfg(not(windows))]
+        let tasks = vec![
+            (
+                worker_a,
+                DelegatedTask {
+                    program: "sh".into(),
+                    args: vec!["-c".into(), "printf alpha > feature-a.txt".into()],
+                    commit_message: "add feature a".into(),
+                },
+            ),
+            (
+                worker_b,
+                DelegatedTask {
+                    program: "sh".into(),
+                    args: vec!["-c".into(), "printf beta > feature-b.txt".into()],
+                    commit_message: "add feature b".into(),
+                },
+            ),
+        ];
+        let workers = manager.delegate_parallel(tasks).expect("delegate");
         assert!(
             workers
                 .iter()
