@@ -2,9 +2,7 @@ use std::sync::Mutex;
 
 use arboard::Clipboard;
 
-use crate::clipboard::{
-    ClipboardContent, ClipboardError, ClipboardImage, ClipboardService,
-};
+use crate::clipboard::{ClipboardContent, ClipboardError, ClipboardImage, ClipboardService};
 
 /// Cross-platform clipboard implementation backed by the operating system.
 ///
@@ -25,9 +23,9 @@ impl NativeClipboard {
     }
 
     fn lock(&self) -> Result<std::sync::MutexGuard<'_, Clipboard>, ClipboardError> {
-        self.clipboard.lock().map_err(|_| {
-            ClipboardError::Unavailable("clipboard lock was poisoned".to_owned())
-        })
+        self.clipboard
+            .lock()
+            .map_err(|_| ClipboardError::Unavailable("clipboard lock was poisoned".to_owned()))
     }
 }
 
