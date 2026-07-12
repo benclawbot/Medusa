@@ -239,11 +239,7 @@ fn draw(
 }
 
 #[cfg(not(unix))]
-fn draw_portable(
-    stdout: &mut io::Stdout,
-    options: &TuiOptions,
-    app: &AppState,
-) -> io::Result<()> {
+fn draw_portable(stdout: &mut io::Stdout, options: &TuiOptions, app: &AppState) -> io::Result<()> {
     draw_common(stdout, options, app, &[], "local transport unavailable")
 }
 
