@@ -27,11 +27,11 @@ struct Cli {
     repo: PathBuf,
     #[arg(long = "set", value_parser = parse_key_value, global = true)]
     overrides: Vec<(String, String)>,
-    #[arg(long, conflicts_with = "command")]
+    #[arg(long)]
     prompt: Option<String>,
-    #[arg(long, conflicts_with_all = ["command", "resume_session"])]
+    #[arg(long, conflicts_with = "resume_session")]
     r#continue: bool,
-    #[arg(long = "resume", value_name = "SESSION", conflicts_with_all = ["command", "continue"])]
+    #[arg(long = "resume", value_name = "SESSION", conflicts_with = "continue")]
     resume_session: Option<String>,
     #[command(subcommand)]
     command: Option<CommandKind>,
@@ -85,10 +85,18 @@ fn run() -> MedusaResult<()> {
         return Ok(());
     }
 
+    if cli.prompt.is_some() || cli.r#continue || cli.resume_session.is_some() {
+        return Err(MedusaError::new(
+            ErrorCode::InvalidConfiguration,
+            ErrorCategory::Validation,
+            "--prompt, --continue, and --resume are interactive-only and cannot be combined with a subcommand",
+        ));
+    }
+
     let overrides = cli.overrides.into_iter().collect::<BTreeMap<_, _>>();
     let config = Config::load_layers(None, None, &BTreeMap::new(), &overrides)?;
 
-    match cli.command.expect("checked above") {
+    match cli.command.expect("subcommand checked above") {
         CommandKind::Bootstrap => {
             bootstrap(&repo)?;
             println!("bootstrapped {}", repo.display());
@@ -291,7 +299,8 @@ mod tests {
 
     #[test]
     fn headless_run_remains_available() {
-        let cli = Cli::try_parse_from(["medusa", "run", "fix tests"]).expect("parse headless run");
+        let cli = Cli::try_parse_from(["medusa", "run", "fix tests"])
+            .expect("parse headless run");
         assert!(matches!(
             cli.command,
             Some(CommandKind::Run { objective }) if objective == "fix tests"
@@ -304,5 +313,13 @@ mod tests {
             .expect("parse interactive resume");
         assert_eq!(cli.resume_session.as_deref(), Some("session-123"));
         assert!(cli.command.is_none());
+    }
+
+    #[test]
+    fn interactive_flags_parse_with_subcommand_for_runtime_validation() {
+        let cli = Cli::try_parse_from(["medusa", "--prompt", "hello", "doctor"])
+            .expect("parse before semantic validation");
+        assert!(cli.command.is_some());
+        assert_eq!(cli.prompt.as_deref(), Some("hello"));
     }
 }
