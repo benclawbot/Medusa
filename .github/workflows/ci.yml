@@ -24,7 +24,25 @@ jobs:
       - name: Refresh dependency lock for the merged PR graph
         run: cargo generate-lockfile
       - name: Check formatting
-        run: cargo fmt --all -- --check
+        shell: bash
+        run: |
+          set -o pipefail
+          cargo fmt --all -- --check 2>&1 | tee rustfmt.log
+      - name: Capture rustfmt patch
+        if: failure()
+        shell: bash
+        run: |
+          cargo fmt --all
+          git diff -- . ':!Cargo.lock' > rustfmt.patch
+      - name: Upload rustfmt diagnostics
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: rustfmt-diagnostics
+          path: |
+            rustfmt.log
+            rustfmt.patch
+          if-no-files-found: ignore
       - name: Clippy
         shell: bash
         run: |
@@ -38,7 +56,17 @@ jobs:
           path: clippy.log
           if-no-files-found: ignore
       - name: Full workspace tests
-        run: cargo test --workspace --all-features --locked
+        shell: bash
+        run: |
+          set -o pipefail
+          cargo test --workspace --all-features --locked -- --nocapture 2>&1 | tee workspace-tests.log
+      - name: Upload workspace test diagnostics
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: workspace-test-diagnostics
+          path: workspace-tests.log
+          if-no-files-found: error
       - name: Documentation
         env:
           RUSTDOCFLAGS: -D warnings
@@ -53,5 +81,27 @@ jobs:
       - uses: taiki-e/install-action@v2
         with:
           tool: cargo-deny,cargo-audit
-      - run: cargo deny check advisories sources
-      - run: cargo audit
+      - name: Cargo deny
+        shell: bash
+        run: |
+          set -o pipefail
+          cargo deny check advisories sources 2>&1 | tee cargo-deny.log
+      - name: Upload cargo-deny diagnostics
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: cargo-deny-diagnostics
+          path: cargo-deny.log
+          if-no-files-found: error
+      - name: Cargo audit
+        shell: bash
+        run: |
+          set -o pipefail
+          cargo audit 2>&1 | tee cargo-audit.log
+      - name: Upload cargo-audit diagnostics
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: cargo-audit-diagnostics
+          path: cargo-audit.log
+          if-no-files-found: error

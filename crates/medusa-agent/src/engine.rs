@@ -3,7 +3,10 @@ use std::{collections::VecDeque, path::Path};
 use medusa_config::Config;
 use medusa_core::{ErrorCategory, ErrorCode, MedusaError, MedusaResult, SessionId};
 use medusa_protocol::{Actor, EventPayload};
-use medusa_provider::{Message, MessageBlock, ModelProvider, ModelRequest, ResponseBlock, Role};
+use medusa_provider::{
+    ImageSource, Message, MessageBlock, ModelProvider, ModelRequest, ProviderCapabilities,
+    ResponseBlock, Role,
+};
 use time::OffsetDateTime;
 
 use crate::{
@@ -35,6 +38,20 @@ impl<P: ModelProvider> AgentEngine<P> {
     }
 
     pub fn create_session(&self, repo: &Path, objective: String) -> MedusaResult<AgentSession> {
+        self.create_session_with_content(
+            repo,
+            objective.clone(),
+            vec![MessageBlock::Text { text: objective }],
+        )
+    }
+
+    pub fn create_session_with_content(
+        &self,
+        repo: &Path,
+        objective: String,
+        content: Vec<MessageBlock>,
+    ) -> MedusaResult<AgentSession> {
+        validate_user_content(&content, &self.provider.capabilities())?;
         bootstrap(repo)?;
         let now = OffsetDateTime::now_utc();
         let id = SessionId::new();
@@ -48,9 +65,7 @@ impl<P: ModelProvider> AgentEngine<P> {
             turn: 0,
             messages: vec![Message {
                 role: Role::User,
-                content: vec![MessageBlock::Text {
-                    text: objective.clone(),
-                }],
+                content,
             }],
             events: Vec::new(),
             evidence: Vec::new(),
@@ -87,6 +102,7 @@ impl<P: ModelProvider> AgentEngine<P> {
         if session.completed {
             return Ok(StepOutcome::Completed);
         }
+        validate_messages(&session.messages, &self.provider.capabilities())?;
         session.turn = session.turn.saturating_add(1);
         append_event(
             session,
@@ -216,10 +232,143 @@ impl<P: ModelProvider> AgentEngine<P> {
     }
 }
 
+fn validate_messages(
+    messages: &[Message],
+    capabilities: &ProviderCapabilities,
+) -> MedusaResult<()> {
+    for message in messages {
+        validate_user_content(&message.content, capabilities)?;
+    }
+    Ok(())
+}
+
+fn validate_user_content(
+    content: &[MessageBlock],
+    capabilities: &ProviderCapabilities,
+) -> MedusaResult<()> {
+    let images = content
+        .iter()
+        .filter_map(|block| match block {
+            MessageBlock::Image { source, .. } => Some(source),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    if images.is_empty() {
+        return Ok(());
+    }
+    if !capabilities.image_input {
+        return Err(MedusaError::new(
+            ErrorCode::DependencyUnavailable,
+            ErrorCategory::Validation,
+            "the active provider cannot consume image attachments; submission was blocked",
+        ));
+    }
+    if capabilities
+        .max_images_per_request
+        .is_some_and(|limit| images.len() > limit as usize)
+    {
+        return Err(MedusaError::new(
+            ErrorCode::DependencyUnavailable,
+            ErrorCategory::Validation,
+            format!(
+                "prompt contains {} images, exceeding the provider limit",
+                images.len()
+            ),
+        ));
+    }
+    for source in images {
+        if let ImageSource::Base64 { media_type, data } = source {
+            if !capabilities.supported_image_media_types.is_empty()
+                && !capabilities
+                    .supported_image_media_types
+                    .iter()
+                    .any(|supported| supported == media_type)
+            {
+                return Err(MedusaError::new(
+                    ErrorCode::DependencyUnavailable,
+                    ErrorCategory::Validation,
+                    format!("provider does not support image media type {media_type}"),
+                ));
+            }
+            if capabilities
+                .max_image_bytes
+                .is_some_and(|limit| estimated_base64_bytes(data) > limit)
+            {
+                return Err(MedusaError::new(
+                    ErrorCode::DependencyUnavailable,
+                    ErrorCategory::Validation,
+                    "image attachment exceeds the provider byte limit",
+                ));
+            }
+        }
+    }
+    Ok(())
+}
+
+fn estimated_base64_bytes(data: &str) -> u64 {
+    let padding = data
+        .as_bytes()
+        .iter()
+        .rev()
+        .take_while(|byte| **byte == b'=')
+        .count() as u64;
+    (data.len() as u64).saturating_mul(3) / 4 - padding.min(2)
+}
+
 fn json_error(error: serde_json::Error) -> MedusaError {
     MedusaError::new(
         ErrorCode::InternalInvariant,
         ErrorCategory::Internal,
         error.to_string(),
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn image_block(media_type: &str, data: &str) -> MessageBlock {
+        MessageBlock::Image {
+            source: ImageSource::Base64 {
+                media_type: media_type.to_owned(),
+                data: data.to_owned(),
+            },
+            alt_text: Some("screenshot".to_owned()),
+        }
+    }
+
+    #[test]
+    fn image_submission_is_blocked_for_text_only_provider() {
+        let error = validate_user_content(
+            &[image_block("image/png", "AAEC")],
+            &ProviderCapabilities::default(),
+        )
+        .expect_err("block unsupported image");
+        assert!(error.message.contains("cannot consume image"));
+    }
+
+    #[test]
+    fn supported_image_content_passes_validation() {
+        let capabilities = ProviderCapabilities {
+            image_input: true,
+            supported_image_media_types: vec!["image/png".to_owned()],
+            max_image_bytes: Some(1024),
+            max_images_per_request: Some(2),
+        };
+        validate_user_content(&[image_block("image/png", "AAEC")], &capabilities)
+            .expect("accept supported image");
+    }
+
+    #[test]
+    fn unsupported_media_type_is_rejected() {
+        let capabilities = ProviderCapabilities {
+            image_input: true,
+            supported_image_media_types: vec!["image/png".to_owned()],
+            max_image_bytes: None,
+            max_images_per_request: None,
+        };
+        let error = validate_user_content(&[image_block("image/tiff", "AAEC")], &capabilities)
+            .expect_err("reject unsupported type");
+        assert!(error.message.contains("image/tiff"));
+    }
 }

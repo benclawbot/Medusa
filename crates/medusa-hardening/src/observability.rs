@@ -128,3 +128,77 @@ pub(crate) fn redact_value(value: &mut serde_json::Value) {
         _ => {}
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use std::{collections::BTreeMap, time::Instant};
+
+    use super::*;
+
+    #[test]
+    fn metrics_snapshot_tracks_counters_and_durations() {
+        let directory = tempfile::tempdir().expect("tempdir");
+        let observability = Observability::new(directory.path()).expect("observability");
+        observability
+            .increment("agent.turns", 2)
+            .expect("increment");
+        observability
+            .increment("agent.turns", 3)
+            .expect("increment");
+        observability
+            .record_duration("agent.latency_ms", Instant::now())
+            .expect("duration");
+
+        let snapshot = observability.snapshot().expect("snapshot");
+        assert_eq!(snapshot["counters"]["agent.turns"], 5);
+        assert_eq!(
+            snapshot["durations_ms"]["agent.latency_ms"]
+                .as_array()
+                .expect("durations")
+                .len(),
+            1
+        );
+    }
+
+    #[test]
+    fn invalid_metric_names_are_rejected() {
+        let directory = tempfile::tempdir().expect("tempdir");
+        let observability = Observability::new(directory.path()).expect("observability");
+        assert!(observability.increment("", 1).is_err());
+        assert!(observability.increment("agent turns", 1).is_err());
+        assert!(
+            observability
+                .record_duration("agent/latency", Instant::now())
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn nested_events_are_redacted_and_appended() {
+        let directory = tempfile::tempdir().expect("tempdir");
+        let observability = Observability::new(directory.path()).expect("observability");
+        for correlation_id in ["cor-1", "cor-2"] {
+            observability
+                .emit(OperationalEvent {
+                    timestamp: "2026-07-12T00:00:00Z".into(),
+                    level: "info".into(),
+                    component: "test".into(),
+                    event: "nested".into(),
+                    correlation_id: correlation_id.into(),
+                    fields: BTreeMap::from([
+                        ("token_value".into(), serde_json::json!("plain-secret")),
+                        (
+                            "payload".into(),
+                            serde_json::json!({"items": ["safe", "ghp_hidden"]}),
+                        ),
+                    ]),
+                })
+                .expect("emit");
+        }
+        let text = fs::read_to_string(directory.path().join("events.jsonl")).expect("events");
+        assert_eq!(text.lines().count(), 2);
+        assert!(!text.contains("plain-secret"));
+        assert!(!text.contains("ghp_hidden"));
+        assert!(text.contains("[REDACTED]"));
+    }
+}
