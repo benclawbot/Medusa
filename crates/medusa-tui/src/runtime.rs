@@ -1,7 +1,6 @@
 use std::{
     collections::BTreeMap,
-    fs,
-    io,
+    fs, io,
     path::{Path, PathBuf},
     sync::mpsc::{self, Receiver, Sender, TryRecvError},
     thread,
@@ -93,13 +92,8 @@ fn worker_loop(repo: PathBuf, commands: Receiver<RuntimeCommand>, events: Sender
 fn run_prompt(repo: &Path, draft: PromptDraft) -> Result<RuntimeEvent, RuntimeError> {
     let project = repo.join(".medusa/config.toml");
     let project = project.exists().then_some(project);
-    let config = Config::load_layers(
-        None,
-        project.as_deref(),
-        &BTreeMap::new(),
-        &BTreeMap::new(),
-    )
-    .map_err(RuntimeError::agent)?;
+    let config = Config::load_layers(None, project.as_deref(), &BTreeMap::new(), &BTreeMap::new())
+        .map_err(RuntimeError::agent)?;
     let provider = MiniMaxProvider::from_config(&config).map_err(RuntimeError::agent)?;
     let engine = AgentEngine::new(provider, config);
     let objective = objective_for(&draft);
@@ -133,7 +127,10 @@ fn run_prompt(repo: &Path, draft: PromptDraft) -> Result<RuntimeEvent, RuntimeEr
 fn objective_for(draft: &PromptDraft) -> String {
     let trimmed = draft.text.trim();
     if trimmed.is_empty() {
-        format!("Use the {} attached item(s) as context and complete the coding task.", draft.attachments.len())
+        format!(
+            "Use the {} attached item(s) as context and complete the coding task.",
+            draft.attachments.len()
+        )
     } else {
         trimmed.to_owned()
     }
