@@ -40,7 +40,7 @@ impl ComposerState {
                 self.cursor += normalized_len(&text);
                 Ok(ComposerAction::Changed)
             }
-            Event::Key(key) if key.kind == KeyEventKind::Press => self.handle_key(key),
+            Event::Key(key) if key.kind != KeyEventKind::Release => self.handle_key(key),
             _ => Ok(ComposerAction::None),
         }
     }
@@ -285,6 +285,18 @@ mod tests {
             ComposerAction::None
         );
         assert_eq!(composer.draft.text, "x");
+    }
+
+    #[test]
+    fn repeated_character_events_are_kept_while_key_releases_are_ignored() {
+        let mut composer = ComposerState::new("");
+        let mut repeat = KeyEvent::new(KeyCode::Char('n'), KeyModifiers::NONE);
+        repeat.kind = KeyEventKind::Repeat;
+        assert_eq!(
+            composer.handle_event(Event::Key(repeat)).expect("repeat"),
+            ComposerAction::Changed
+        );
+        assert_eq!(composer.draft.text, "n");
     }
 
     #[test]

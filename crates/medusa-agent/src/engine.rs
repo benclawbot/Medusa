@@ -12,20 +12,22 @@ use time::OffsetDateTime;
 use crate::{
     evidence::append_event,
     session::{
-        AgentPlanStep, AgentPlanStepStatus, AgentQuestion, AgentSession, bootstrap, load, persist,
+        AgentPlanStep, AgentPlanStepStatus, AgentQuestion, AgentQuestionItem, AgentQuestionOption,
+        AgentSession, bootstrap, load, persist,
     },
     tools::{available_skills, built_in_tools, execute_tool},
     verification::targeted_verification,
 };
 
-const SYSTEM_PROMPT: &str = "You are Medusa, an autonomous coding agent. Inspect the repository, make the smallest correct change, and verify it. Use tools rather than inventing repository contents. Use `fs_read` with path `.` to list repository files before reading a specific file. You have `web_search` for current public information and `web_fetch` for public pages; use them when the user requests current, external, or source-linked information. For work requiring more than one action, call `update_plan` before meaningful work and update its statuses as you progress. When information from the user is needed to proceed, call `ask_user_question` with exactly one concise question; do not put blocking questions in assistant text, do not ask multiple questions at once, and do not mark the plan or task complete while waiting. Never modify tests, verification scripts, snapshots, fixtures, or expected outputs unless the user explicitly asks for that exact change; fix the product code instead. Do not expose private chain-of-thought; provide concise decisions and evidence.";
-const PLAN_SYSTEM_PROMPT: &str = "You are Medusa in read-only planning mode. Inspect the repository and produce a concise, ordered implementation plan grounded in the files you examined. Use `update_plan` to maintain the visible plan as your understanding changes. When clarification is necessary, call `ask_user_question` with exactly one concise question and wait for its answer before producing a final plan. You can use `web_search` and `web_fetch` for current public information. Do not modify files, create commits, or claim that work has been completed. Only read-only repository and web tools are available. Do not expose private chain-of-thought; provide concise decisions and evidence.";
+const SYSTEM_PROMPT: &str = "You are Medusa, an autonomous coding agent. Inspect the repository, make the smallest correct change, and verify it. Use tools rather than inventing repository contents. Use `fs_read` with path `.` to list repository files before reading a specific file. You have `web_search` for current public information and `web_fetch` for public pages; use them when the user requests current, external, or source-linked information. For work requiring more than one action, call `update_plan` before meaningful work and update its statuses as you progress. When information from the user is needed to proceed, call `ask_user_question` with one to four concise multiple-choice questions in a single call, each with a short header and two to four options. Never put blocking questions in assistant text, and do not mark the plan or task complete while waiting. Never modify tests, verification scripts, snapshots, fixtures, or expected outputs unless the user explicitly asks for that exact change; fix the product code instead. Do not expose private chain-of-thought; provide concise decisions and evidence.";
+const PLAN_SYSTEM_PROMPT: &str = "You are Medusa in read-only planning mode. Inspect the repository and produce a concise, ordered implementation plan grounded in the files you examined. Use `update_plan` to maintain the visible plan as your understanding changes. When clarification is necessary, call `ask_user_question` with one to four concise multiple-choice questions in a single call, each with a short header and two to four options, then wait for its answer before producing a final plan. You can use `web_search` and `web_fetch` for current public information. Do not modify files, create commits, or claim that implementation work has been completed. Only read-only repository and web tools are available. Do not expose private chain-of-thought; provide concise decisions and evidence.";
 const MAX_REPOSITORY_INSTRUCTIONS_BYTES: usize = 32_000;
 
 /// Result of one durable model/tool step.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum StepOutcome {
     Continue,
+    TurnComplete,
     WaitingForUser,
     Completed,
 }
@@ -202,12 +204,16 @@ impl<P: ModelProvider> AgentEngine<P> {
 
     pub fn run_to_completion(&self, session: &mut AgentSession) -> MedusaResult<()> {
         while !session.completed && session.turn < self.config.agent.max_turns {
-            if self.step(session)? == StepOutcome::WaitingForUser {
-                return Err(MedusaError::new(
-                    ErrorCode::DependencyUnavailable,
-                    ErrorCategory::Execution,
-                    "agent is waiting for a user response",
-                ));
+            match self.step(session)? {
+                StepOutcome::WaitingForUser => {
+                    return Err(MedusaError::new(
+                        ErrorCode::DependencyUnavailable,
+                        ErrorCategory::Execution,
+                        "agent is waiting for a user response",
+                    ));
+                }
+                StepOutcome::TurnComplete => return Ok(()),
+                StepOutcome::Continue | StepOutcome::Completed => {}
             }
         }
         if session.completed {
@@ -375,19 +381,10 @@ impl<P: ModelProvider> AgentEngine<P> {
                 )
             })
         {
-            if self.config.agent.mode == Mode::ReadOnly {
-                session.completed = true;
-                publish_completed_plan(session, &mut observer);
-                append_observed(
-                    session,
-                    EventPayload::SessionCompleted {
-                        report_ref: format!("session:{}.json", session.id),
-                    },
-                    &mut observer,
-                )?;
+            if self.config.agent.mode == Mode::ReadOnly || !has_mutating_tool_result(session) {
                 session.updated_at = OffsetDateTime::now_utc();
                 persist(session)?;
-                return Ok(StepOutcome::Completed);
+                return Ok(StepOutcome::TurnComplete);
             }
             append_observed(
                 session,
@@ -406,9 +403,8 @@ impl<P: ModelProvider> AgentEngine<P> {
                 &mut observer,
             )?;
             session.evidence.extend(verification.evidence.clone());
-            if verification.passed {
+            if verification.passed && plan_is_complete(session) {
                 session.completed = true;
-                publish_completed_plan(session, &mut observer);
                 append_observed(
                     session,
                     EventPayload::SessionCompleted {
@@ -416,7 +412,7 @@ impl<P: ModelProvider> AgentEngine<P> {
                     },
                     &mut observer,
                 )?;
-            } else {
+            } else if !verification.passed {
                 session.messages.push(Message {
                     role: Role::User,
                     content: vec![MessageBlock::Text {
@@ -432,6 +428,8 @@ impl<P: ModelProvider> AgentEngine<P> {
         persist(session)?;
         Ok(if session.completed {
             StepOutcome::Completed
+        } else if response.stop_reason.as_deref() == Some("end_turn") {
+            StepOutcome::TurnComplete
         } else {
             StepOutcome::Continue
         })
@@ -500,39 +498,80 @@ fn question_from_input(
     tool_use_id: String,
     input: &serde_json::Value,
 ) -> MedusaResult<AgentQuestion> {
+    let questions = input
+        .get("questions")
+        .and_then(serde_json::Value::as_array)
+        .ok_or_else(|| invalid_question("questions must be an array"))?;
+    if questions.is_empty() || questions.len() > 4 {
+        return Err(invalid_question(
+            "ask_user_question accepts between 1 and 4 questions",
+        ));
+    }
+    let questions = questions
+        .iter()
+        .map(question_item_from_input)
+        .collect::<MedusaResult<Vec<_>>>()?;
+    Ok(AgentQuestion {
+        tool_use_id: Some(tool_use_id),
+        questions,
+        legacy_question: None,
+        legacy_options: Vec::new(),
+    })
+}
+
+fn question_item_from_input(input: &serde_json::Value) -> MedusaResult<AgentQuestionItem> {
+    let header = input
+        .get("header")
+        .and_then(serde_json::Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty() && value.chars().count() <= 12)
+        .ok_or_else(|| invalid_question("every question header must be 1 to 12 characters"))?;
     let question = input
         .get("question")
         .and_then(serde_json::Value::as_str)
         .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .filter(|value| value.chars().count() <= 500)
-        .ok_or_else(|| invalid_question("question must be between 1 and 500 characters"))?;
+        .filter(|value| !value.is_empty() && value.chars().count() <= 500)
+        .ok_or_else(|| invalid_question("every question must be 1 to 500 characters"))?;
     let options = input
         .get("options")
-        .map(|value| {
-            value
-                .as_array()
-                .ok_or_else(|| invalid_question("options must be an array"))?
-                .iter()
-                .map(|value| {
-                    value
-                        .as_str()
-                        .map(str::trim)
-                        .filter(|option| !option.is_empty() && option.chars().count() <= 140)
-                        .map(str::to_owned)
-                        .ok_or_else(|| invalid_question("every option must be 1 to 140 characters"))
-                })
-                .collect::<MedusaResult<Vec<_>>>()
-        })
-        .transpose()?
-        .unwrap_or_default();
-    if options.len() > 6 {
-        return Err(invalid_question("a question can offer at most 6 options"));
+        .and_then(serde_json::Value::as_array)
+        .ok_or_else(|| invalid_question("every question needs an options array"))?;
+    if !(2..=4).contains(&options.len()) {
+        return Err(invalid_question(
+            "every question needs between 2 and 4 options",
+        ));
     }
-    Ok(AgentQuestion {
-        tool_use_id: Some(tool_use_id),
+    let options = options
+        .iter()
+        .map(|option| {
+            let label = option
+                .get("label")
+                .and_then(serde_json::Value::as_str)
+                .map(str::trim)
+                .filter(|value| !value.is_empty() && value.chars().count() <= 80)
+                .ok_or_else(|| invalid_question("every option label must be 1 to 80 characters"))?;
+            let description = option
+                .get("description")
+                .and_then(serde_json::Value::as_str)
+                .map(str::trim)
+                .filter(|value| value.chars().count() <= 240)
+                .ok_or_else(|| {
+                    invalid_question("every option description must be at most 240 characters")
+                })?;
+            Ok(AgentQuestionOption {
+                label: label.to_owned(),
+                description: description.to_owned(),
+            })
+        })
+        .collect::<MedusaResult<Vec<_>>>()?;
+    Ok(AgentQuestionItem {
+        header: header.to_owned(),
         question: question.to_owned(),
         options,
+        multi_select: input
+            .get("multiSelect")
+            .and_then(serde_json::Value::as_bool)
+            .unwrap_or(false),
     })
 }
 
@@ -557,8 +596,14 @@ fn question_from_assistant_text(text: &str) -> Option<AgentQuestion> {
     })?;
     Some(AgentQuestion {
         tool_use_id: None,
-        question,
-        options: Vec::new(),
+        questions: vec![AgentQuestionItem {
+            header: "Question".to_owned(),
+            question,
+            options: Vec::new(),
+            multi_select: false,
+        }],
+        legacy_question: None,
+        legacy_options: Vec::new(),
     })
 }
 
@@ -626,26 +671,24 @@ fn plan_from_input(input: &serde_json::Value) -> MedusaResult<Vec<AgentPlanStep>
         .collect()
 }
 
-fn publish_completed_plan<F>(session: &mut AgentSession, observer: &mut F)
-where
-    F: FnMut(&AgentUpdate),
-{
-    if session.plan.is_empty() {
-        return;
-    }
-    let mut changed = false;
-    for step in &mut session.plan {
-        if matches!(
-            step.status,
-            AgentPlanStepStatus::Pending | AgentPlanStepStatus::InProgress
-        ) {
-            step.status = AgentPlanStepStatus::Completed;
-            changed = true;
-        }
-    }
-    if changed {
-        observer(&AgentUpdate::Plan(session.plan.clone()));
-    }
+fn has_mutating_tool_result(session: &AgentSession) -> bool {
+    session.events.iter().any(|event| {
+        matches!(
+            &event.payload,
+            EventPayload::ToolExecutionCompleted {
+                tool,
+                exit_code: Some(0)
+            } if matches!(tool.as_str(), "fs_write" | "patch_apply" | "symbol_rename" | "git_checkpoint")
+        )
+    })
+}
+
+fn plan_is_complete(session: &AgentSession) -> bool {
+    session.plan.is_empty()
+        || session
+            .plan
+            .iter()
+            .all(|step| step.status == AgentPlanStepStatus::Completed)
 }
 
 fn invalid_plan(message: impl Into<String>) -> MedusaError {
@@ -982,6 +1025,10 @@ mod tests {
         )
         .expect("question");
         assert_eq!(question.tool_use_id, None);
-        assert_eq!(question.question, "What kind of website is it?");
+        assert_eq!(question.questions.len(), 1);
+        assert_eq!(
+            question.questions[0].question,
+            "What kind of website is it?"
+        );
     }
 }

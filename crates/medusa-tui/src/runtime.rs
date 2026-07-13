@@ -22,7 +22,9 @@ use medusa_provider::{ImageSource, MessageBlock, MiniMaxProvider};
 use serde_json::Value;
 
 use crate::{
-    app::{TranscriptPlan, TranscriptPlanStep, TranscriptPlanStepState},
+    app::{
+        QuestionOption, QuestionPrompt, TranscriptPlan, TranscriptPlanStep, TranscriptPlanStepState,
+    },
     clipboard::{ImageAttachment, PromptAttachment, PromptDraft},
     commands::{Effort, ModelCommand, ModelConfiguration, SlashCommand},
 };
@@ -66,6 +68,7 @@ pub enum RuntimeEvent {
     Completed {
         session_id: String,
     },
+    TurnFinished,
     Cancelled,
     Failed(String),
 }
@@ -89,8 +92,7 @@ pub struct RuntimeActivity {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct RuntimeQuestion {
-    pub question: String,
-    pub options: Vec<String>,
+    pub questions: Vec<QuestionPrompt>,
 }
 
 pub struct RuntimeController {
@@ -364,6 +366,7 @@ fn run_prompt(
             let _ = events.send(RuntimeEvent::Progress { turn: session.turn });
             match outcome {
                 StepOutcome::Completed => break,
+                StepOutcome::TurnComplete => return Ok(RuntimeEvent::TurnFinished),
                 StepOutcome::WaitingForUser => {
                     let question = session.pending_question.as_ref().ok_or_else(|| {
                         RuntimeError::agent("agent paused without a pending question")
@@ -818,8 +821,23 @@ fn forward_update(update: &AgentUpdate, events: &Sender<RuntimeEvent>, state: &m
 
 fn runtime_question(question: &AgentQuestion) -> RuntimeQuestion {
     RuntimeQuestion {
-        question: question.question.clone(),
-        options: question.options.clone(),
+        questions: question
+            .prompts()
+            .iter()
+            .map(|item| QuestionPrompt {
+                header: item.header.clone(),
+                question: item.question.clone(),
+                options: item
+                    .options
+                    .iter()
+                    .map(|option| QuestionOption {
+                        label: option.label.clone(),
+                        description: option.description.clone(),
+                    })
+                    .collect(),
+                multi_select: item.multi_select,
+            })
+            .collect(),
     }
 }
 

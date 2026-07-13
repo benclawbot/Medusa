@@ -134,6 +134,9 @@ pub fn parse_slash_command(input: &str) -> Result<Option<SlashCommand>, String> 
     if !trimmed.starts_with('/') {
         return Ok(None);
     }
+    if trimmed == "/" {
+        return Ok(None);
+    }
     if trimmed.contains('\n') {
         return Err("slash commands must be entered on one line".to_owned());
     }
@@ -280,6 +283,7 @@ mod tests {
 
     #[test]
     fn reports_invalid_and_unknown_commands() {
+        assert_eq!(parse_slash_command("/"), Ok(None));
         assert!(parse_slash_command("/effort extreme").is_err());
         assert!(parse_slash_command("/mystery").is_err());
         assert_eq!(parse_slash_command("fix tests"), Ok(None));

@@ -72,61 +72,199 @@ pub enum AppAction {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub struct QuestionModal {
-    question: String,
-    options: Vec<String>,
-    selected_option: usize,
+pub struct QuestionOption {
+    pub label: String,
+    pub description: String,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct QuestionPrompt {
+    pub header: String,
+    pub question: String,
+    pub options: Vec<QuestionOption>,
+    pub multi_select: bool,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Default)]
+struct QuestionAnswer {
+    selected_options: Vec<usize>,
     custom_answer: String,
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct QuestionModal {
+    questions: Vec<QuestionPrompt>,
+    answers: Vec<QuestionAnswer>,
+    selected_options: Vec<usize>,
+    active_question: usize,
+    reviewing: bool,
+}
+
 impl QuestionModal {
-    pub fn new(question: String, options: Vec<String>) -> Self {
+    pub fn new(questions: Vec<QuestionPrompt>) -> Self {
+        let count = questions.len();
         Self {
-            question,
-            options,
-            selected_option: 0,
-            custom_answer: String::new(),
+            questions,
+            answers: vec![QuestionAnswer::default(); count],
+            selected_options: vec![0; count],
+            active_question: 0,
+            reviewing: false,
         }
     }
 
     #[must_use]
-    pub fn question(&self) -> &str {
-        &self.question
+    pub fn questions(&self) -> &[QuestionPrompt] {
+        &self.questions
     }
 
     #[must_use]
-    pub fn options(&self) -> &[String] {
-        &self.options
+    pub fn active_question(&self) -> usize {
+        self.active_question
     }
 
     #[must_use]
-    pub const fn selected_option(&self) -> usize {
-        self.selected_option
+    pub fn is_reviewing(&self) -> bool {
+        self.reviewing
     }
 
     #[must_use]
-    pub fn custom_answer(&self) -> &str {
-        &self.custom_answer
+    pub fn active_prompt(&self) -> Option<&QuestionPrompt> {
+        self.questions.get(self.active_question)
+    }
+
+    #[must_use]
+    pub fn active_selected_option(&self) -> usize {
+        self.selected_options
+            .get(self.active_question)
+            .copied()
+            .unwrap_or_default()
+    }
+
+    #[must_use]
+    pub fn active_custom_answer(&self) -> &str {
+        self.answers
+            .get(self.active_question)
+            .map(|answer| answer.custom_answer.as_str())
+            .unwrap_or_default()
     }
 
     fn move_selection(&mut self, delta: isize) {
-        if !self.options.is_empty() {
-            self.selected_option = cycle_index(self.selected_option, self.options.len(), delta);
+        let active_question = self.active_question;
+        let option_count = self
+            .questions
+            .get(active_question)
+            .map_or(0, |prompt| prompt.options.len());
+        if let Some(selected) = self.selected_options.get_mut(active_question)
+            && option_count > 0
+        {
+            *selected = cycle_index(*selected, option_count, delta);
         }
     }
 
+    fn move_question(&mut self, delta: isize) {
+        if self.questions.is_empty() {
+            return;
+        }
+        if self.reviewing {
+            self.reviewing = false;
+            self.active_question = self.questions.len().saturating_sub(1);
+            return;
+        }
+        self.active_question = cycle_index(self.active_question, self.questions.len(), delta);
+    }
+
+    fn advance_or_review(&mut self) {
+        if self.active_question.saturating_add(1) < self.questions.len() {
+            self.active_question = self.active_question.saturating_add(1);
+        } else {
+            self.reviewing = true;
+        }
+    }
+
+    fn toggle_current_option(&mut self) {
+        let active_question = self.active_question;
+        let Some((option_count, multi_select)) = self
+            .questions
+            .get(active_question)
+            .map(|prompt| (prompt.options.len(), prompt.multi_select))
+        else {
+            return;
+        };
+        if option_count == 0 || !multi_select {
+            return;
+        }
+        let selected = self.active_selected_option();
+        let answer = &mut self.answers[active_question];
+        if let Some(position) = answer
+            .selected_options
+            .iter()
+            .position(|option| *option == selected)
+        {
+            answer.selected_options.remove(position);
+        } else {
+            answer.selected_options.push(selected);
+            answer.selected_options.sort_unstable();
+        }
+    }
+
+    fn select_current_answer(&mut self) -> bool {
+        let active_question = self.active_question;
+        let Some((option_count, multi_select)) = self
+            .questions
+            .get(active_question)
+            .map(|prompt| (prompt.options.len(), prompt.multi_select))
+        else {
+            return false;
+        };
+        if option_count > 0 && !multi_select {
+            let selected = self.active_selected_option();
+            self.answers[active_question].selected_options = vec![selected];
+        } else if option_count > 0 && self.answer_for(active_question).is_none() {
+            self.toggle_current_option();
+        }
+        self.answer_for(active_question).is_some()
+    }
+
     fn insert_answer(&mut self, text: &str) {
-        self.custom_answer.push_str(text);
+        if let Some(answer) = self.answers.get_mut(self.active_question) {
+            answer.custom_answer.push_str(text);
+        }
     }
 
     fn delete_answer_character(&mut self) {
-        self.custom_answer.pop();
+        if let Some(answer) = self.answers.get_mut(self.active_question) {
+            answer.custom_answer.pop();
+        }
     }
 
-    fn answer(&self) -> Option<String> {
-        (!self.custom_answer.trim().is_empty())
-            .then(|| self.custom_answer.trim().to_owned())
-            .or_else(|| self.options.get(self.selected_option).cloned())
+    #[must_use]
+    pub fn answer_for(&self, index: usize) -> Option<String> {
+        let prompt = self.questions.get(index)?;
+        let answer = self.answers.get(index)?;
+        (!answer.custom_answer.trim().is_empty())
+            .then(|| answer.custom_answer.trim().to_owned())
+            .or_else(|| {
+                let labels = answer
+                    .selected_options
+                    .iter()
+                    .filter_map(|option| prompt.options.get(*option))
+                    .map(|option| option.label.as_str())
+                    .collect::<Vec<_>>();
+                (!labels.is_empty()).then(|| labels.join(", "))
+            })
+    }
+
+    fn answer_bundle(&self) -> Option<String> {
+        let answers = self
+            .questions
+            .iter()
+            .enumerate()
+            .map(|(index, prompt)| {
+                self.answer_for(index)
+                    .map(|answer| format!("{}: {answer}", prompt.header))
+            })
+            .collect::<Option<Vec<_>>>()?;
+        Some(answers.join("\n"))
     }
 }
 
@@ -415,6 +553,10 @@ impl AppState {
             ComposerAction::CompleteCommand => self.complete_command(),
             ComposerAction::Submit => {
                 let submitted = self.composer.draft.clone();
+                if submitted.attachments.is_empty() && submitted.text.trim() == "/" {
+                    self.status = "choose a command".to_owned();
+                    return Ok(AppAction::Redraw);
+                }
                 self.composer = ComposerState::new("");
                 self.draft_store.delete(&self.draft_key)?;
                 self.command_selection = 0;
@@ -498,8 +640,8 @@ impl AppState {
         self.task_list_visible = true;
     }
 
-    pub fn open_question(&mut self, question: String, options: Vec<String>) {
-        self.question_modal = Some(QuestionModal::new(question, options));
+    pub fn open_question(&mut self, questions: Vec<QuestionPrompt>) {
+        self.question_modal = Some(QuestionModal::new(questions));
         self.status = "waiting for your answer".to_owned();
         self.finish_run();
     }
@@ -543,7 +685,7 @@ impl AppState {
                 }
                 Ok(AppAction::Redraw)
             }
-            Event::Key(key) if key.kind == KeyEventKind::Press => match key.code {
+            Event::Key(key) if key.kind != KeyEventKind::Release => match key.code {
                 KeyCode::Esc => {
                     self.model_modal = None;
                     self.status = "model configuration cancelled".to_owned();
@@ -634,12 +776,45 @@ impl AppState {
                     .insert_answer(&text);
                 Ok(AppAction::Redraw)
             }
-            Event::Key(key) if key.kind == KeyEventKind::Press => match key.code {
+            Event::Key(key) if key.kind != KeyEventKind::Release => match key.code {
                 KeyCode::Esc => {
-                    self.status = "waiting for your answer".to_owned();
+                    if let Some(modal) = self.question_modal.as_mut()
+                        && modal.is_reviewing()
+                    {
+                        modal.move_question(-1);
+                    }
+                    self.status = "waiting for your answers".to_owned();
+                    Ok(AppAction::Redraw)
+                }
+                KeyCode::BackTab => {
+                    self.question_modal
+                        .as_mut()
+                        .expect("question modal exists")
+                        .move_question(-1);
+                    Ok(AppAction::Redraw)
+                }
+                KeyCode::Tab if key.modifiers.contains(KeyModifiers::SHIFT) => {
+                    self.question_modal
+                        .as_mut()
+                        .expect("question modal exists")
+                        .move_question(-1);
+                    Ok(AppAction::Redraw)
+                }
+                KeyCode::Tab => {
+                    self.question_modal
+                        .as_mut()
+                        .expect("question modal exists")
+                        .move_question(1);
                     Ok(AppAction::Redraw)
                 }
                 KeyCode::Up | KeyCode::Left => {
+                    if self
+                        .question_modal
+                        .as_ref()
+                        .is_some_and(QuestionModal::is_reviewing)
+                    {
+                        return Ok(AppAction::Redraw);
+                    }
                     self.question_modal
                         .as_mut()
                         .expect("question modal exists")
@@ -647,6 +822,13 @@ impl AppState {
                     Ok(AppAction::Redraw)
                 }
                 KeyCode::Down | KeyCode::Right => {
+                    if self
+                        .question_modal
+                        .as_ref()
+                        .is_some_and(QuestionModal::is_reviewing)
+                    {
+                        return Ok(AppAction::Redraw);
+                    }
                     self.question_modal
                         .as_mut()
                         .expect("question modal exists")
@@ -654,14 +836,25 @@ impl AppState {
                     Ok(AppAction::Redraw)
                 }
                 KeyCode::Backspace => {
-                    self.question_modal
-                        .as_mut()
-                        .expect("question modal exists")
-                        .delete_answer_character();
+                    if self
+                        .question_modal
+                        .as_ref()
+                        .is_some_and(|modal| !modal.is_reviewing())
+                    {
+                        self.question_modal
+                            .as_mut()
+                            .expect("question modal exists")
+                            .delete_answer_character();
+                    }
                     Ok(AppAction::Redraw)
                 }
                 KeyCode::Char('v') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                    if let ClipboardContent::Text(text) = self.clipboard.read()? {
+                    if self
+                        .question_modal
+                        .as_ref()
+                        .is_some_and(|modal| !modal.is_reviewing())
+                        && let ClipboardContent::Text(text) = self.clipboard.read()?
+                    {
                         self.question_modal
                             .as_mut()
                             .expect("question modal exists")
@@ -669,28 +862,55 @@ impl AppState {
                     }
                     Ok(AppAction::Redraw)
                 }
+                KeyCode::Char(' ') if key.modifiers.is_empty() => {
+                    if self
+                        .question_modal
+                        .as_ref()
+                        .is_some_and(|modal| !modal.is_reviewing())
+                    {
+                        self.question_modal
+                            .as_mut()
+                            .expect("question modal exists")
+                            .toggle_current_option();
+                    }
+                    Ok(AppAction::Redraw)
+                }
                 KeyCode::Char(character)
                     if key.modifiers.is_empty() || key.modifiers == KeyModifiers::SHIFT =>
                 {
-                    self.question_modal
-                        .as_mut()
-                        .expect("question modal exists")
-                        .insert_answer(&character.to_string());
+                    if self
+                        .question_modal
+                        .as_ref()
+                        .is_some_and(|modal| !modal.is_reviewing())
+                    {
+                        self.question_modal
+                            .as_mut()
+                            .expect("question modal exists")
+                            .insert_answer(&character.to_string());
+                    }
                     Ok(AppAction::Redraw)
                 }
                 KeyCode::Enter => {
-                    let answer = self.question_modal.as_ref().and_then(QuestionModal::answer);
-                    let Some(answer) = answer else {
+                    let modal = self.question_modal.as_mut().expect("question modal exists");
+                    if modal.is_reviewing() {
+                        let Some(answer) = modal.answer_bundle() else {
+                            self.status = "answer every question before confirming".to_owned();
+                            return Ok(AppAction::Redraw);
+                        };
+                        self.question_modal = None;
+                        self.transcript.push(TranscriptEntry::User(PromptDraft {
+                            text: answer.clone(),
+                            ..PromptDraft::default()
+                        }));
+                        self.status = "answers confirmed".to_owned();
+                        return Ok(AppAction::AnswerQuestion(answer));
+                    }
+                    if !modal.select_current_answer() {
                         self.status = "choose or type an answer".to_owned();
                         return Ok(AppAction::Redraw);
-                    };
-                    self.question_modal = None;
-                    self.transcript.push(TranscriptEntry::User(PromptDraft {
-                        text: answer.clone(),
-                        ..PromptDraft::default()
-                    }));
-                    self.status = "answer submitted".to_owned();
-                    Ok(AppAction::AnswerQuestion(answer))
+                    }
+                    modal.advance_or_review();
+                    Ok(AppAction::Redraw)
                 }
                 _ => Ok(AppAction::None),
             },
@@ -982,6 +1202,46 @@ mod tests {
     }
 
     #[test]
+    fn typed_slash_commands_keep_their_name_and_a_bare_slash_stays_in_the_picker() {
+        let repository = tempdir().expect("temporary repository");
+        let mut app = AppState::new(
+            repository.path().to_path_buf(),
+            "typed-command",
+            "/",
+            Arc::new(FakeClipboard(ClipboardContent::Empty)),
+        )
+        .expect("create app");
+
+        assert_eq!(
+            app.handle_event(Event::Key(crossterm::event::KeyEvent::new(
+                KeyCode::Enter,
+                KeyModifiers::NONE,
+            )))
+            .expect("submit bare slash"),
+            AppAction::Redraw
+        );
+        assert_eq!(app.composer.draft.text, "/");
+        assert!(app.transcript.is_empty());
+
+        for character in ['n', 'e', 'w'] {
+            app.handle_event(Event::Key(crossterm::event::KeyEvent::new(
+                KeyCode::Char(character),
+                KeyModifiers::NONE,
+            )))
+            .expect("type command");
+        }
+        assert_eq!(app.composer.draft.text, "/new");
+        assert_eq!(
+            app.handle_event(Event::Key(crossterm::event::KeyEvent::new(
+                KeyCode::Enter,
+                KeyModifiers::NONE,
+            )))
+            .expect("submit command"),
+            AppAction::Command(SlashCommand::New)
+        );
+    }
+
+    #[test]
     fn model_command_opens_a_picker_and_returns_a_redacted_configuration() {
         let repository = tempdir().expect("temporary repository");
         let mut app = AppState::new(
@@ -1089,7 +1349,7 @@ mod tests {
     }
 
     #[test]
-    fn question_modal_submits_one_selected_answer_without_using_the_composer() {
+    fn question_modal_tabs_answers_and_requires_confirmation_before_submission() {
         let repository = tempdir().expect("temporary repository");
         let mut app = AppState::new(
             repository.path().to_path_buf(),
@@ -1098,32 +1358,78 @@ mod tests {
             Arc::new(FakeClipboard(ClipboardContent::Empty)),
         )
         .expect("create app");
-        app.open_question(
-            "Which project should I use?".to_owned(),
-            vec![
-                "Projects/site-a".to_owned(),
-                "Create a new project".to_owned(),
-            ],
+        app.open_question(vec![
+            QuestionPrompt {
+                header: "Project".to_owned(),
+                question: "Which project should I use?".to_owned(),
+                options: vec![
+                    QuestionOption {
+                        label: "Projects/site-a".to_owned(),
+                        description: "Use the existing site".to_owned(),
+                    },
+                    QuestionOption {
+                        label: "Create a new project".to_owned(),
+                        description: "Start fresh".to_owned(),
+                    },
+                ],
+                multi_select: false,
+            },
+            QuestionPrompt {
+                header: "Audience".to_owned(),
+                question: "Who is this for?".to_owned(),
+                options: vec![
+                    QuestionOption {
+                        label: "Customers".to_owned(),
+                        description: "Public visitors".to_owned(),
+                    },
+                    QuestionOption {
+                        label: "Team".to_owned(),
+                        description: "Internal users".to_owned(),
+                    },
+                ],
+                multi_select: false,
+            },
+        ]);
+        assert_eq!(
+            app.handle_event(Event::Key(crossterm::event::KeyEvent::new(
+                KeyCode::Enter,
+                KeyModifiers::NONE,
+            )))
+            .expect("answer first question"),
+            AppAction::Redraw
         );
-        app.handle_event(Event::Key(crossterm::event::KeyEvent::new(
-            KeyCode::Down,
-            KeyModifiers::NONE,
-        )))
-        .expect("select option");
+        assert_eq!(
+            app.question_modal()
+                .expect("question modal")
+                .active_question(),
+            1
+        );
+        assert!(app.transcript.is_empty());
+        assert_eq!(
+            app.handle_event(Event::Key(crossterm::event::KeyEvent::new(
+                KeyCode::Enter,
+                KeyModifiers::NONE,
+            )))
+            .expect("answer second question"),
+            AppAction::Redraw
+        );
+        assert!(app.question_modal().expect("review answers").is_reviewing());
+        assert!(app.transcript.is_empty());
         let action = app
             .handle_event(Event::Key(crossterm::event::KeyEvent::new(
                 KeyCode::Enter,
                 KeyModifiers::NONE,
             )))
-            .expect("submit answer");
+            .expect("confirm answers");
         assert_eq!(
             action,
-            AppAction::AnswerQuestion("Create a new project".to_owned())
+            AppAction::AnswerQuestion("Project: Projects/site-a\nAudience: Customers".to_owned())
         );
         assert!(app.question_modal().is_none());
         assert!(matches!(
             app.transcript.last(),
-            Some(TranscriptEntry::User(draft)) if draft.text == "Create a new project"
+            Some(TranscriptEntry::User(draft))
+                if draft.text == "Project: Projects/site-a\nAudience: Customers"
         ));
         assert_eq!(app.composer.draft.text, "draft text");
     }

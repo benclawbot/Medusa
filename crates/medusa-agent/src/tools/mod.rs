@@ -134,12 +134,23 @@ pub(crate) fn built_in_tools() -> Vec<ToolDefinition> {
         ),
         tool(
             "ask_user_question",
-            "Ask exactly one blocking clarification question. The session pauses until the user answers; never ask a blocking question in ordinary assistant text.",
+            "Ask one to four blocking multiple-choice clarification questions. The session pauses until the user reviews and confirms every answer; never ask blocking questions in ordinary assistant text.",
             json!({
                 "type": "object", "properties": {
-                    "question": {"type": "string"},
-                    "options": {"type": "array", "maxItems": 6, "items": {"type": "string"}}
-                }, "required": ["question"], "additionalProperties": false
+                    "questions": {"type": "array", "minItems": 1, "maxItems": 4, "items": {
+                        "type": "object", "properties": {
+                            "header": {"type": "string", "maxLength": 12},
+                            "question": {"type": "string"},
+                            "options": {"type": "array", "minItems": 2, "maxItems": 4, "items": {
+                                "type": "object", "properties": {
+                                    "label": {"type": "string"},
+                                    "description": {"type": "string"}
+                                }, "required": ["label", "description"], "additionalProperties": false
+                            }},
+                            "multiSelect": {"type": "boolean"}
+                        }, "required": ["header", "question", "options"], "additionalProperties": false
+                    }}
+                }, "required": ["questions"], "additionalProperties": false
             }),
         ),
         tool(

@@ -28,12 +28,59 @@ pub enum AgentPlanStepStatus {
     Failed,
 }
 
-/// A single model-authored question that blocks the session until the user answers it.
+/// One selectable option inside a model-authored question.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct AgentQuestionOption {
+    pub label: String,
+    pub description: String,
+}
+
+/// One question inside a model-authored question set.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct AgentQuestionItem {
+    pub header: String,
+    pub question: String,
+    pub options: Vec<AgentQuestionOption>,
+    pub multi_select: bool,
+}
+
+/// A model-authored question set that blocks the session until the user confirms every answer.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct AgentQuestion {
     pub tool_use_id: Option<String>,
-    pub question: String,
-    pub options: Vec<String>,
+    #[serde(default)]
+    pub questions: Vec<AgentQuestionItem>,
+    #[serde(default, rename = "question", skip_serializing)]
+    pub(crate) legacy_question: Option<String>,
+    #[serde(default, rename = "options", skip_serializing)]
+    pub(crate) legacy_options: Vec<String>,
+}
+
+impl AgentQuestion {
+    #[must_use]
+    pub fn prompts(&self) -> Vec<AgentQuestionItem> {
+        if !self.questions.is_empty() {
+            return self.questions.clone();
+        }
+        self.legacy_question
+            .as_deref()
+            .filter(|question| !question.trim().is_empty())
+            .map(|question| AgentQuestionItem {
+                header: "Question".to_owned(),
+                question: question.to_owned(),
+                options: self
+                    .legacy_options
+                    .iter()
+                    .map(|label| AgentQuestionOption {
+                        label: label.clone(),
+                        description: String::new(),
+                    })
+                    .collect(),
+                multi_select: false,
+            })
+            .into_iter()
+            .collect()
+    }
 }
 
 /// Durable state for one single-agent session.

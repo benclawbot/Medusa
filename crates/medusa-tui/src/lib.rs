@@ -328,7 +328,7 @@ fn drain_runtime_events(app: &mut AppState, runtime: &RuntimeController) -> io::
                 app.set_plan(plan);
             }
             RuntimeEvent::Question(question) => {
-                app.open_question(question.question, question.options);
+                app.open_question(question.questions);
             }
             RuntimeEvent::Usage { output_tokens } => {
                 app.add_output_tokens(output_tokens);
@@ -368,6 +368,10 @@ fn drain_runtime_events(app: &mut AppState, runtime: &RuntimeController) -> io::
                     details: vec![format!("session {session_id}")],
                 });
                 app.status = "completed".to_owned();
+                app.finish_run();
+            }
+            RuntimeEvent::TurnFinished => {
+                app.status = "ready".to_owned();
                 app.finish_run();
             }
             RuntimeEvent::Cancelled => {
@@ -795,8 +799,12 @@ fn render_frame(identity: &UiIdentity, app: &AppState, width: u16, height: u16) 
         }
         set_frame_line(&mut frame, bottom_row, separator_line(width));
         bottom_row = bottom_row.saturating_add(1);
-        let help = if question_modal.is_some() {
-            "up/down choose - type an answer - enter submit"
+        let help = if let Some(question_modal) = question_modal {
+            if question_modal.is_reviewing() {
+                "enter confirm and send - shift+tab edit answers"
+            } else {
+                "up/down choose - space multi-select - enter next - tab switch"
+            }
         } else {
             "up/down choose - tab focus - enter set - esc cancel"
         };
@@ -1000,15 +1008,66 @@ fn model_modal_lines(model_modal: &app::ModelModal) -> Vec<StyledLine> {
 }
 
 fn question_modal_lines(question_modal: &app::QuestionModal) -> Vec<StyledLine> {
-    let mut lines = vec![StyledLine::new("Question", Color::Cyan)];
+    if question_modal.is_reviewing() {
+        let mut lines = vec![StyledLine::new("Review answers", Color::Cyan)];
+        for (index, prompt) in question_modal.questions().iter().enumerate() {
+            lines.push(StyledLine::with_marker(
+                "  ",
+                Color::DarkGrey,
+                format!(
+                    "{}: {}",
+                    prompt.header,
+                    question_modal
+                        .answer_for(index)
+                        .unwrap_or_else(|| "Not answered".to_owned())
+                ),
+                if question_modal.answer_for(index).is_some() {
+                    Color::White
+                } else {
+                    Color::Red
+                },
+            ));
+        }
+        lines.push(StyledLine::new(
+            "Enter confirms and sends these answers",
+            Color::Grey,
+        ));
+        return lines;
+    }
+
+    let Some(prompt) = question_modal.active_prompt() else {
+        return vec![StyledLine::new("Question unavailable", Color::Red)];
+    };
+    let active = question_modal.active_question();
+    let mut lines = vec![StyledLine::new(
+        format!(
+            "Questions {}/{}  [{}]",
+            active.saturating_add(1),
+            question_modal.questions().len(),
+            question_modal
+                .questions()
+                .iter()
+                .enumerate()
+                .map(|(index, question)| {
+                    if index == active {
+                        format!("{}*", question.header)
+                    } else {
+                        question.header.clone()
+                    }
+                })
+                .collect::<Vec<_>>()
+                .join(" | ")
+        ),
+        Color::Cyan,
+    )];
     lines.extend(
-        question_modal
-            .question()
+        prompt
+            .question
             .lines()
             .map(|line| StyledLine::new(line.trim(), Color::White)),
     );
-    for (index, option) in question_modal.options().iter().enumerate() {
-        let selected = index == question_modal.selected_option();
+    for (index, option) in prompt.options.iter().enumerate() {
+        let selected = index == question_modal.active_selected_option();
         lines.push(StyledLine::with_marker(
             if selected { "> " } else { "  " },
             if selected {
@@ -1016,11 +1075,15 @@ fn question_modal_lines(question_modal: &app::QuestionModal) -> Vec<StyledLine> 
             } else {
                 Color::DarkGrey
             },
-            option,
+            if option.description.is_empty() {
+                option.label.clone()
+            } else {
+                format!("{}  {}", option.label, option.description)
+            },
             if selected { Color::White } else { Color::Grey },
         ));
     }
-    let answer = question_modal.custom_answer();
+    let answer = question_modal.active_custom_answer();
     lines.push(StyledLine::with_marker(
         "> ",
         Color::Cyan,
@@ -1357,10 +1420,15 @@ mod tests {
                 .any(|line| { line.text.contains("Inspect the repository") })
         );
 
-        app.open_question(
-            "Which project should I use?".to_owned(),
-            vec!["Projects/site-a".to_owned()],
-        );
+        app.open_question(vec![app::QuestionPrompt {
+            header: "Project".to_owned(),
+            question: "Which project should I use?".to_owned(),
+            options: vec![app::QuestionOption {
+                label: "Projects/site-a".to_owned(),
+                description: "Use the existing site".to_owned(),
+            }],
+            multi_select: false,
+        }]);
         let question_frame = render_frame(&UiIdentity::for_repo(directory.path()), &app, 80, 24);
         assert!(
             question_frame

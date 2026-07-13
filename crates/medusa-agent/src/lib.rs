@@ -11,7 +11,10 @@ pub use engine::{
     AgentEngine, AgentUpdate, StepOutcome, compact_session, update_session_objective,
 };
 pub use policy::validate_shell_command;
-pub use session::{AgentPlanStep, AgentPlanStepStatus, AgentQuestion, AgentSession, bootstrap};
+pub use session::{
+    AgentPlanStep, AgentPlanStepStatus, AgentQuestion, AgentQuestionItem, AgentQuestionOption,
+    AgentSession, bootstrap,
+};
 pub use verification::{VerificationResult, targeted_verification};
 
 #[cfg(test)]
@@ -147,6 +150,38 @@ mod tests {
     }
 
     #[test]
+    fn conversational_end_turn_returns_to_the_composer_without_verification_or_completion() {
+        let directory = tempfile::tempdir().expect("tempdir");
+        let engine = AgentEngine::new(
+            ScriptedProvider::new(vec![response(
+                vec![ResponseBlock::Text {
+                    text: "Hey! What can I help you with?".into(),
+                }],
+                "end_turn",
+            )]),
+            Config::default(),
+        );
+        let mut session = engine
+            .create_session(directory.path(), "say hello".into())
+            .expect("session");
+        let mut updates = Vec::new();
+        assert_eq!(
+            engine
+                .step_with_observer(&mut session, |update| updates.push(update.clone()))
+                .expect("conversational turn"),
+            StepOutcome::TurnComplete
+        );
+        assert!(!session.completed);
+        assert!(!updates.iter().any(|update| {
+            matches!(
+                update,
+                AgentUpdate::Event(EventPayload::VerificationStarted { .. })
+                    | AgentUpdate::Event(EventPayload::SessionCompleted { .. })
+            )
+        }));
+    }
+
+    #[test]
     fn compacting_and_updating_a_goal_changes_durable_session_context() {
         let directory = tempfile::tempdir().expect("temporary directory");
         let engine = AgentEngine::new(ScriptedProvider::new(Vec::new()), Config::default());
@@ -253,7 +288,7 @@ mod tests {
     }
 
     #[test]
-    fn a_model_question_pauses_the_session_until_one_answer_is_supplied() {
+    fn a_model_question_set_pauses_the_session_until_confirmed_answers_are_supplied() {
         let directory = tempfile::tempdir().expect("temporary directory");
         let engine = AgentEngine::new(
             ScriptedProvider::new(vec![response(
@@ -261,8 +296,24 @@ mod tests {
                     id: "question-1".into(),
                     name: "ask_user_question".into(),
                     input: json!({
-                        "question": "Which project should I use?",
-                        "options": ["Projects/site-a", "Create a new project"]
+                        "questions": [
+                            {
+                                "header": "Project",
+                                "question": "Which project should I use?",
+                                "options": [
+                                    {"label": "Projects/site-a", "description": "Use the existing site"},
+                                    {"label": "New project", "description": "Start a new workspace"}
+                                ]
+                            },
+                            {
+                                "header": "Audience",
+                                "question": "Who is the audience?",
+                                "options": [
+                                    {"label": "Customers", "description": "Public-facing experience"},
+                                    {"label": "Team", "description": "Internal tool"}
+                                ]
+                            }
+                        ]
                     }),
                 }],
                 "tool_use",
@@ -282,7 +333,8 @@ mod tests {
         assert!(!session.completed);
         assert!(session.pending_question.is_some());
         assert!(updates.iter().any(|update| {
-            matches!(update, AgentUpdate::Question(question) if question.options.len() == 2)
+            matches!(update, AgentUpdate::Question(question)
+                if question.questions.len() == 2 && question.questions[0].options.len() == 2)
         }));
         let restored = engine
             .load_session(directory.path(), session.id.as_str())
@@ -293,7 +345,7 @@ mod tests {
             .answer_pending_question(
                 &mut session,
                 vec![medusa_provider::MessageBlock::Text {
-                    text: "Projects/site-a".to_owned(),
+                    text: "Project: Projects/site-a\nAudience: Customers".to_owned(),
                 }],
             )
             .expect("answer question");
@@ -301,7 +353,9 @@ mod tests {
         assert!(matches!(
             session.messages.last().and_then(|message| message.content.first()),
             Some(medusa_provider::MessageBlock::ToolResult { tool_use_id, content, .. })
-                if tool_use_id == "question-1" && content.contains("Projects/site-a")
+                if tool_use_id == "question-1"
+                    && content.contains("Projects/site-a")
+                    && content.contains("Audience: Customers")
         ));
     }
 
