@@ -175,7 +175,9 @@ fn run_loop(
         draw(stdout, options, identity, app, &jobs, &daemon_status)?;
         if event::poll(Duration::from_millis(100))? {
             let terminal_event = event::read()?;
-            app.dismiss_welcome_for_event(&terminal_event);
+            if app.dismiss_welcome_for_event(&terminal_event) {
+                continue;
+            }
             if ctrl_l_redraw(&terminal_event) {
                 continue;
             }
@@ -211,7 +213,9 @@ fn run_loop(
         }
         if event::poll(Duration::from_millis(100))? {
             let terminal_event = event::read()?;
-            app.dismiss_welcome_for_event(&terminal_event);
+            if app.dismiss_welcome_for_event(&terminal_event) {
+                continue;
+            }
             if matches!(terminal_event, Event::Resize(_, _)) {
                 last_frame = None;
             }
@@ -892,7 +896,10 @@ fn render_frame(identity: &UiIdentity, app: &AppState, width: u16, height: u16) 
 }
 
 fn render_loading_screen(frame: &mut [StyledLine], width: u16, height: u16) {
-    let logo = MEDUSA_LOADING_LOGO.trim().lines().collect::<Vec<_>>();
+    let logo = MEDUSA_LOADING_LOGO
+        .trim_matches(['\r', '\n'])
+        .lines()
+        .collect::<Vec<_>>();
     let block_width = logo
         .iter()
         .map(|line| line.chars().count())
@@ -1473,29 +1480,36 @@ mod tests {
     }
 
     #[test]
-    fn loading_logo_disappears_after_first_user_input() {
+    fn loading_logo_is_aligned_and_first_input_only_dismisses_it() {
         let directory = tempfile::tempdir().expect("tempdir");
         let mut app = AppState::new(
             directory.path().to_path_buf(),
             "loading-logo",
-            "",
+            "identify",
             Arc::new(UnsupportedClipboard),
         )
         .expect("app");
 
         let initial = render_frame(&UiIdentity::for_repo(directory.path()), &app, 80, 40);
         assert!(initial.iter().any(|line| line.text.contains("@@@@@@@@@@")));
+        let first_logo_line = initial
+            .iter()
+            .find(|line| line.text.contains(":-++**+=:"))
+            .expect("first logo line");
+        assert_eq!(first_logo_line.text.find(":-++**+=:"), Some(29));
         assert!(
             initial
                 .iter()
                 .any(|line| line.text.contains("Start typing to begin"))
         );
 
-        app.handle_event(Event::Key(crossterm::event::KeyEvent::new(
-            KeyCode::Char('h'),
+        let enter = Event::Key(crossterm::event::KeyEvent::new(
+            KeyCode::Enter,
             KeyModifiers::NONE,
-        )))
-        .expect("handle first input");
+        ));
+        assert!(app.dismiss_welcome_for_event(&enter));
+        assert_eq!(app.composer.draft.text, "identify");
+        assert!(app.transcript.is_empty());
 
         let after_input = render_frame(&UiIdentity::for_repo(directory.path()), &app, 80, 40);
         assert!(
@@ -1503,7 +1517,11 @@ mod tests {
                 .iter()
                 .any(|line| line.text.contains("@@@@@@@@@@"))
         );
-        assert!(after_input.iter().any(|line| line.text.contains('h')));
+        assert!(
+            after_input
+                .iter()
+                .any(|line| line.text.contains("identify"))
+        );
     }
 
     #[test]

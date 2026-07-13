@@ -611,12 +611,14 @@ impl AppState {
         self.welcome_visible
     }
 
-    pub fn dismiss_welcome_for_event(&mut self, event: &Event) {
-        if matches!(event, Event::Key(key) if key.kind != KeyEventKind::Release)
-            || matches!(event, Event::Paste(_) | Event::Mouse(_))
-        {
+    pub fn dismiss_welcome_for_event(&mut self, event: &Event) -> bool {
+        let is_user_input = matches!(event, Event::Key(key) if key.kind != KeyEventKind::Release)
+            || matches!(event, Event::Paste(_) | Event::Mouse(_));
+        if self.welcome_visible && is_user_input {
             self.welcome_visible = false;
+            return true;
         }
+        false
     }
 
     pub fn clear_for_new_session(&mut self) {
