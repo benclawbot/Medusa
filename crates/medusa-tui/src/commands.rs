@@ -18,6 +18,26 @@ impl Effort {
     }
 }
 
+#[derive(Clone, Eq, PartialEq)]
+pub struct ModelConfiguration {
+    pub provider: String,
+    pub model: String,
+    pub effort: Effort,
+    pub api_key: Option<String>,
+}
+
+impl std::fmt::Debug for ModelConfiguration {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("ModelConfiguration")
+            .field("provider", &self.provider)
+            .field("model", &self.model)
+            .field("effort", &self.effort)
+            .field("api_key", &self.api_key.as_ref().map(|_| "<redacted>"))
+            .finish()
+    }
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum SlashCommand {
     Help,
@@ -205,7 +225,9 @@ pub fn parse_slash_command(input: &str) -> Result<Option<SlashCommand>, String> 
 
 #[must_use]
 pub fn command_suggestions(input: &str) -> Vec<CommandSpec> {
-    let prefix = input.trim_start().strip_prefix('/').unwrap_or_default();
+    let Some(prefix) = input.trim_start().strip_prefix('/') else {
+        return Vec::new();
+    };
     if prefix.contains(char::is_whitespace) {
         return Vec::new();
     }
@@ -265,6 +287,8 @@ mod tests {
 
     #[test]
     fn suggestions_and_tab_completion_are_prefix_aware() {
+        assert!(command_suggestions("").is_empty());
+        assert!(command_suggestions("fix tests").is_empty());
         assert_eq!(command_suggestions("/pl")[0].name, "plan");
         assert_eq!(complete_first_command("/mo"), Some("/model ".to_owned()));
         assert!(command_suggestions("/plan task").is_empty());

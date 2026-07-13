@@ -195,6 +195,7 @@ fn run_loop(
     let mut last_render = None;
     loop {
         drain_runtime_events(app, runtime)?;
+        app.tick();
         let snapshot = portable_render_snapshot(app, size()?);
         if last_render.as_ref() != Some(&snapshot) {
             draw_portable(stdout, options, identity, app)?;
@@ -259,6 +260,19 @@ fn handle_app_action(
             }
             Ok(false)
         }
+        AppAction::ConfigureModel(configuration) => {
+            match runtime.configure_model(configuration) {
+                Ok(()) => {
+                    app.status = "updating model configuration".to_owned();
+                }
+                Err(error) => {
+                    app.transcript
+                        .push(TranscriptEntry::System(format!("error: {error}")));
+                    app.status = "model configuration rejected".to_owned();
+                }
+            }
+            Ok(false)
+        }
         AppAction::None | AppAction::Redraw => Ok(false),
     }
 }
@@ -296,8 +310,9 @@ fn drain_runtime_events(app: &mut AppState, runtime: &RuntimeController) -> io::
                 model,
                 effort,
                 plan_mode,
+                credential_configured,
             } => {
-                app.set_runtime_settings(model, effort, plan_mode);
+                app.set_runtime_settings(model, effort, plan_mode, credential_configured);
             }
             RuntimeEvent::Notice { title, details } => {
                 let status = title.to_ascii_lowercase();
@@ -397,6 +412,8 @@ struct PortableRenderSnapshot {
     model_label: Option<String>,
     effort_label: Option<String>,
     plan_mode: bool,
+    spinner_frame: u8,
+    model_modal: Option<app::ModelModal>,
 }
 
 fn portable_render_snapshot(app: &AppState, terminal_size: (u16, u16)) -> PortableRenderSnapshot {
@@ -412,6 +429,8 @@ fn portable_render_snapshot(app: &AppState, terminal_size: (u16, u16)) -> Portab
         model_label: app.model_label.clone(),
         effort_label: app.effort_label.clone(),
         plan_mode: app.plan_mode,
+        spinner_frame: app.spinner_frame,
+        model_modal: app.model_modal().cloned(),
     }
 }
 
@@ -469,12 +488,13 @@ fn effort_label(max_turns: u32) -> &'static str {
 
 fn draw_common(stdout: &mut io::Stdout, identity: &UiIdentity, app: &AppState) -> io::Result<()> {
     let (width, height) = size()?;
-    queue!(stdout, MoveTo(0, 0), Clear(ClearType::All), MoveTo(0, 1))?;
+    queue!(stdout, MoveTo(0, 0))?;
     for logo_line in MEDUSA_LOGO {
         print_styled_line(stdout, width, logo_line, Color::Cyan, Attribute::Bold)?;
     }
     queue!(
         stdout,
+        Clear(ClearType::UntilNewLine),
         SetForegroundColor(Color::Magenta),
         SetAttribute(Attribute::Bold),
         Print(truncate(
@@ -489,16 +509,24 @@ fn draw_common(stdout: &mut io::Stdout, identity: &UiIdentity, app: &AppState) -
         ResetColor,
         Print("\r\n"),
     )?;
-    let header_height = 6_u16;
-    let suggestions = command_suggestions(&app.composer.draft.text);
+    let header_height = 4_u16;
+    let model_modal = app.model_modal();
+    let modal_lines = model_modal.map(model_modal_lines).unwrap_or_default();
+    let suggestions = model_modal
+        .is_none()
+        .then(|| command_suggestions(&app.composer.draft.text))
+        .unwrap_or_default();
     let available_suggestion_rows = height.saturating_sub(header_height.saturating_add(4));
     let visible_suggestions = suggestions
         .iter()
         .take(usize::from(available_suggestion_rows))
         .collect::<Vec<_>>();
-    let composer_height = 4_u16
-        .saturating_add(u16::try_from(visible_suggestions.len()).unwrap_or(u16::MAX))
-        .min(height.saturating_sub(header_height));
+    let requested_composer_height = if model_modal.is_some() {
+        3_u16.saturating_add(u16::try_from(modal_lines.len()).unwrap_or(u16::MAX))
+    } else {
+        4_u16.saturating_add(u16::try_from(visible_suggestions.len()).unwrap_or(u16::MAX))
+    };
+    let composer_height = requested_composer_height.min(height.saturating_sub(header_height));
     let content_rows = height.saturating_sub(composer_height + header_height) as usize;
     let mut lines = Vec::new();
     for entry in &app.transcript {
@@ -523,7 +551,7 @@ fn draw_common(stdout: &mut io::Stdout, identity: &UiIdentity, app: &AppState) -
     }
     if app.is_running() {
         lines.push(StyledLine::with_marker(
-            "✻ ",
+            spinner_marker(app.spinner_frame),
             Color::Magenta,
             running_status(app),
             Color::Grey,
@@ -532,8 +560,17 @@ fn draw_common(stdout: &mut io::Stdout, identity: &UiIdentity, app: &AppState) -
     if let Some(plan) = &app.plan {
         lines.extend(plan_lines(plan));
     }
-    for line in lines.iter().rev().take(content_rows).rev() {
+    let visible_content = lines
+        .iter()
+        .rev()
+        .take(content_rows)
+        .rev()
+        .collect::<Vec<_>>();
+    for line in &visible_content {
         line.print(stdout, width)?;
+    }
+    for _ in visible_content.len()..content_rows {
+        queue!(stdout, Clear(ClearType::UntilNewLine), Print("\r\n"))?;
     }
 
     let composer_top = height.saturating_sub(composer_height);
@@ -545,6 +582,21 @@ fn draw_common(stdout: &mut io::Stdout, identity: &UiIdentity, app: &AppState) -
         ResetColor,
         Print("\r\n")
     )?;
+    if model_modal.is_some() {
+        let available_modal_rows = composer_height.saturating_sub(3);
+        for line in modal_lines.iter().take(usize::from(available_modal_rows)) {
+            line.print(stdout, width)?;
+        }
+        print_separator(stdout, width)?;
+        StyledLine::with_marker(
+            "› ",
+            Color::Magenta,
+            "up/down choose · tab focus · enter set for this session · esc cancel",
+            Color::DarkGrey,
+        )
+        .print(stdout, width)?;
+        return stdout.flush();
+    }
     for (index, suggestion) in visible_suggestions.iter().enumerate() {
         let selected = index == app.command_selection;
         StyledLine::with_marker(
@@ -588,6 +640,86 @@ fn draw_common(stdout: &mut io::Stdout, identity: &UiIdentity, app: &AppState) -
     )
     .print(stdout, width)?;
     stdout.flush()
+}
+
+fn spinner_marker(frame: u8) -> &'static str {
+    match frame % 4 {
+        0 => ". ",
+        1 => "o ",
+        2 => "O ",
+        _ => "o ",
+    }
+}
+
+fn model_modal_lines(model_modal: &app::ModelModal) -> Vec<StyledLine> {
+    use app::ModelModalFocus::{ApiKey, Effort, Model, Provider};
+
+    let focus = model_modal.focus();
+    let mut lines = vec![StyledLine::new("Select model", Color::Cyan)];
+    lines.push(StyledLine::with_marker(
+        if focus == Provider { "› " } else { "  " },
+        if focus == Provider {
+            Color::Magenta
+        } else {
+            Color::DarkGrey
+        },
+        format!("Provider  {}", model_modal.provider()),
+        if focus == Provider {
+            Color::White
+        } else {
+            Color::Grey
+        },
+    ));
+    for (index, model) in model_modal.model_options().iter().enumerate() {
+        let selected = index == model_modal.selected_model_index();
+        lines.push(StyledLine::with_marker(
+            if selected && focus == Model {
+                "› "
+            } else {
+                "  "
+            },
+            if selected && focus == Model {
+                Color::Magenta
+            } else {
+                Color::DarkGrey
+            },
+            if selected {
+                format!("{model}  selected")
+            } else {
+                model.clone()
+            },
+            if selected { Color::Green } else { Color::Grey },
+        ));
+    }
+    lines.push(StyledLine::with_marker(
+        if focus == Effort { "› " } else { "  " },
+        if focus == Effort {
+            Color::Magenta
+        } else {
+            Color::DarkGrey
+        },
+        format!("{} effort", model_modal.effort().label()),
+        if focus == Effort {
+            Color::White
+        } else {
+            Color::Grey
+        },
+    ));
+    lines.push(StyledLine::with_marker(
+        if focus == ApiKey { "› " } else { "  " },
+        if focus == ApiKey {
+            Color::Magenta
+        } else {
+            Color::DarkGrey
+        },
+        format!("API key  {}", model_modal.api_key_mask()),
+        if focus == ApiKey {
+            Color::White
+        } else {
+            Color::Grey
+        },
+    ));
+    lines
 }
 
 fn composer_prompt_text(text: &str) -> String {
@@ -634,6 +766,7 @@ impl StyledLine {
             let remaining = width.saturating_sub(marker.chars().count() as u16);
             return queue!(
                 stdout,
+                Clear(ClearType::UntilNewLine),
                 SetAttribute(Attribute::Reset),
                 ResetColor,
                 SetForegroundColor(*marker_color),
@@ -674,7 +807,9 @@ fn activity_lines(activity: &TranscriptActivity) -> Vec<StyledLine> {
     };
     let foreground = if matches!(
         activity.kind,
-        TranscriptActivityKind::Assistant | TranscriptActivityKind::Error
+        TranscriptActivityKind::Assistant
+            | TranscriptActivityKind::Error
+            | TranscriptActivityKind::Tool
     ) {
         Color::White
     } else {
@@ -717,6 +852,7 @@ fn plan_lines(plan: &app::TranscriptPlan) -> Vec<StyledLine> {
 fn print_separator(stdout: &mut io::Stdout, width: u16) -> io::Result<()> {
     queue!(
         stdout,
+        Clear(ClearType::UntilNewLine),
         SetAttribute(Attribute::Reset),
         ResetColor,
         SetForegroundColor(Color::DarkGrey),
@@ -735,6 +871,7 @@ fn print_styled_line(
 ) -> io::Result<()> {
     queue!(
         stdout,
+        Clear(ClearType::UntilNewLine),
         SetAttribute(Attribute::Reset),
         ResetColor,
         SetForegroundColor(foreground),
@@ -836,6 +973,11 @@ mod tests {
 
         app.status = "agent running".to_owned();
         assert_ne!(initial, portable_render_snapshot(&app, (80, 24)));
+
+        app.begin_run();
+        let running = portable_render_snapshot(&app, (80, 24));
+        app.tick();
+        assert_ne!(running, portable_render_snapshot(&app, (80, 24)));
     }
 
     #[test]

@@ -23,7 +23,7 @@ use serde_json::Value;
 use crate::{
     app::{TranscriptPlan, TranscriptPlanStep, TranscriptPlanStepState},
     clipboard::{ImageAttachment, PromptAttachment, PromptDraft},
-    commands::{Effort, ModelCommand, SlashCommand},
+    commands::{Effort, ModelCommand, ModelConfiguration, SlashCommand},
 };
 
 const MAX_FILE_CONTEXT_BYTES: usize = 2 * 1024 * 1024;
@@ -32,6 +32,7 @@ const MAX_FILE_CONTEXT_BYTES: usize = 2 * 1024 * 1024;
 pub enum RuntimeCommand {
     Submit(PromptDraft),
     Slash(SlashCommand),
+    ConfigureModel(ModelConfiguration),
     Shutdown,
 }
 
@@ -50,6 +51,7 @@ pub enum RuntimeEvent {
         model: String,
         effort: String,
         plan_mode: bool,
+        credential_configured: bool,
     },
     Notice {
         title: String,
@@ -139,6 +141,15 @@ impl RuntimeController {
             return Err(RuntimeError::WorkerStopped);
         }
         Ok(())
+    }
+
+    pub fn configure_model(&self, configuration: ModelConfiguration) -> Result<(), RuntimeError> {
+        if self.busy.load(Ordering::SeqCst) {
+            return Err(RuntimeError::Busy);
+        }
+        self.commands
+            .send(RuntimeCommand::ConfigureModel(configuration))
+            .map_err(|_| RuntimeError::WorkerStopped)
     }
 
     pub fn cancel(&self) -> bool {
@@ -232,6 +243,14 @@ fn worker_loop(
                     }
                 }
             }
+            RuntimeCommand::ConfigureModel(configuration) => {
+                if let Err(error) = configure_model(&mut state, configuration, &events) {
+                    let _ = events.send(RuntimeEvent::Notice {
+                        title: "Model configuration failed".to_owned(),
+                        details: vec![error.to_string()],
+                    });
+                }
+            }
             RuntimeCommand::Shutdown => break,
         }
     }
@@ -276,6 +295,9 @@ impl RuntimeState {
             ),
             effort: format!("effort:{}", self.effort.label()),
             plan_mode: self.plan_mode,
+            credential_configured: self.session_api_key.is_some()
+                || credential_environment(&self.config.model.provider)
+                    .is_some_and(|name| env::var(name).is_ok()),
         }
     }
 }
@@ -528,6 +550,34 @@ fn execute_slash_command(
         }
     }
     Ok(None)
+}
+
+fn configure_model(
+    state: &mut RuntimeState,
+    configuration: ModelConfiguration,
+    events: &Sender<RuntimeEvent>,
+) -> Result<(), RuntimeError> {
+    if !is_supported_provider(&configuration.provider) {
+        return Err(RuntimeError::InvalidCommand(
+            "supported providers are minimax, anthropic, and anthropic-compatible".to_owned(),
+        ));
+    }
+    state.config.model.provider = configuration.provider;
+    state.config.model.name = configuration.model;
+    state.effort = configuration.effort;
+    state.config.agent.max_turns = match configuration.effort {
+        Effort::Auto => state.base_config.agent.max_turns,
+        effort => turns_for_effort(effort),
+    };
+    if let Some(api_key) = configuration.api_key {
+        state.session_api_key = Some(api_key);
+    }
+    let _ = events.send(state.settings_event());
+    let _ = events.send(RuntimeEvent::Notice {
+        title: "Model configuration updated".to_owned(),
+        details: model_configuration_details(state),
+    });
+    Ok(())
 }
 
 fn effort_for_turns(max_turns: u32) -> Effort {
@@ -1189,6 +1239,41 @@ mod tests {
         let details = model_configuration_details(&state).join("\n");
         assert!(details.contains("credential: configured"));
         assert!(!details.contains("secret-value"));
+    }
+
+    #[test]
+    fn model_picker_configuration_updates_provider_model_effort_and_session_key() {
+        let directory = tempdir().expect("temporary directory");
+        let mut state = RuntimeState::load(directory.path().to_path_buf()).expect("runtime state");
+        let (sender, receiver) = mpsc::channel();
+
+        configure_model(
+            &mut state,
+            ModelConfiguration {
+                provider: "anthropic".to_owned(),
+                model: "claude-sonnet-4-6".to_owned(),
+                effort: Effort::Low,
+                api_key: Some("session-secret".to_owned()),
+            },
+            &sender,
+        )
+        .expect("configure model");
+
+        assert_eq!(state.config.model.provider, "anthropic");
+        assert_eq!(state.config.model.name, "claude-sonnet-4-6");
+        assert_eq!(state.config.agent.max_turns, 64);
+        assert_eq!(state.session_api_key.as_deref(), Some("session-secret"));
+        assert!(matches!(
+            receiver.recv().expect("settings update"),
+            RuntimeEvent::Settings {
+                model,
+                effort,
+                credential_configured: true,
+                ..
+            } if model == "anthropic / claude-sonnet-4-6" && effort == "effort:low"
+        ));
+        let notice = receiver.recv().expect("configuration notice");
+        assert!(!format!("{notice:?}").contains("session-secret"));
     }
 
     #[test]
