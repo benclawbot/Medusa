@@ -11,6 +11,23 @@ use time::OffsetDateTime;
 
 use crate::evidence::verify_chain;
 
+/// A durable model-authored task plan step.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct AgentPlanStep {
+    pub title: String,
+    pub status: AgentPlanStepStatus,
+}
+
+/// The current execution state of a task plan step.
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AgentPlanStepStatus {
+    Pending,
+    InProgress,
+    Completed,
+    Failed,
+}
+
 /// Durable state for one single-agent session.
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct AgentSession {
@@ -23,6 +40,8 @@ pub struct AgentSession {
     pub updated_at: OffsetDateTime,
     pub completed: bool,
     pub turn: u32,
+    #[serde(default)]
+    pub plan: Vec<AgentPlanStep>,
     pub messages: Vec<Message>,
     pub events: Vec<EventEnvelope>,
     pub evidence: Vec<String>,

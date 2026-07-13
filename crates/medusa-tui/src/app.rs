@@ -181,6 +181,19 @@ impl ModelModal {
         };
     }
 
+    fn cycle_focus_back(&mut self) {
+        self.focus = match self.focus {
+            ModelModalFocus::Provider => ModelModalFocus::ApiKey,
+            ModelModalFocus::Model => ModelModalFocus::Provider,
+            ModelModalFocus::Effort => ModelModalFocus::Model,
+            ModelModalFocus::ApiKey => ModelModalFocus::Effort,
+        };
+    }
+
+    fn focus_api_key(&mut self) {
+        self.focus = ModelModalFocus::ApiKey;
+    }
+
     fn move_selection(&mut self, delta: isize) {
         match self.focus {
             ModelModalFocus::Provider => {
@@ -206,7 +219,8 @@ impl ModelModal {
     }
 
     fn insert_key_text(&mut self, text: &str) {
-        self.api_key.push_str(text);
+        self.api_key
+            .extend(text.chars().filter(|character| !character.is_whitespace()));
     }
 
     fn delete_key_character(&mut self) {
@@ -439,9 +453,8 @@ impl AppState {
     fn handle_model_modal_event(&mut self, event: Event) -> Result<AppAction, AppError> {
         match event {
             Event::Paste(text) => {
-                if let Some(modal) = self.model_modal.as_mut()
-                    && modal.focus == ModelModalFocus::ApiKey
-                {
+                if let Some(modal) = self.model_modal.as_mut() {
+                    modal.focus_api_key();
                     modal.insert_key_text(&text);
                 }
                 Ok(AppAction::Redraw)
@@ -459,6 +472,20 @@ impl AppState {
                         .expect("model modal exists")
                         .configuration();
                     Ok(AppAction::ConfigureModel(configuration))
+                }
+                KeyCode::BackTab => {
+                    self.model_modal
+                        .as_mut()
+                        .expect("model modal exists")
+                        .cycle_focus_back();
+                    Ok(AppAction::Redraw)
+                }
+                KeyCode::Tab if key.modifiers.contains(KeyModifiers::SHIFT) => {
+                    self.model_modal
+                        .as_mut()
+                        .expect("model modal exists")
+                        .cycle_focus_back();
+                    Ok(AppAction::Redraw)
                 }
                 KeyCode::Tab => {
                     self.model_modal
@@ -493,8 +520,8 @@ impl AppState {
                     let clipboard = self.clipboard.read()?;
                     if let ClipboardContent::Text(text) = clipboard
                         && let Some(modal) = self.model_modal.as_mut()
-                        && modal.focus == ModelModalFocus::ApiKey
                     {
+                        modal.focus_api_key();
                         modal.insert_key_text(&text);
                     }
                     Ok(AppAction::Redraw)
@@ -502,9 +529,8 @@ impl AppState {
                 KeyCode::Char(character)
                     if key.modifiers.is_empty() || key.modifiers == KeyModifiers::SHIFT =>
                 {
-                    if let Some(modal) = self.model_modal.as_mut()
-                        && modal.focus == ModelModalFocus::ApiKey
-                    {
+                    if let Some(modal) = self.model_modal.as_mut() {
+                        modal.focus_api_key();
                         modal.insert_key_text(&character.to_string());
                     }
                     Ok(AppAction::Redraw)
@@ -818,20 +844,10 @@ mod tests {
         );
 
         app.handle_event(Event::Key(crossterm::event::KeyEvent::new(
-            KeyCode::Tab,
-            KeyModifiers::NONE,
-        )))
-        .expect("focus effort");
-        app.handle_event(Event::Key(crossterm::event::KeyEvent::new(
-            KeyCode::Tab,
-            KeyModifiers::NONE,
-        )))
-        .expect("focus api key");
-        app.handle_event(Event::Key(crossterm::event::KeyEvent::new(
             KeyCode::Char('x'),
             KeyModifiers::NONE,
         )))
-        .expect("enter api key");
+        .expect("enter api key without changing focus first");
 
         let action = app
             .handle_event(Event::Key(crossterm::event::KeyEvent::new(

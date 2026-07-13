@@ -11,7 +11,7 @@ pub use engine::{
     AgentEngine, AgentUpdate, StepOutcome, compact_session, update_session_objective,
 };
 pub use policy::validate_shell_command;
-pub use session::{AgentSession, bootstrap};
+pub use session::{AgentPlanStep, AgentPlanStepStatus, AgentSession, bootstrap};
 pub use verification::{VerificationResult, targeted_verification};
 
 #[cfg(test)]
@@ -212,6 +212,44 @@ mod tests {
                 AgentUpdate::Event(EventPayload::ToolCallDenied { tool, .. }) if tool == "fs_write"
             )
         }));
+    }
+
+    #[test]
+    fn model_plan_updates_are_persisted_and_observed() {
+        let directory = tempfile::tempdir().expect("temporary directory");
+        let engine = AgentEngine::new(
+            ScriptedProvider::new(vec![response(
+                vec![ResponseBlock::ToolUse {
+                    id: "plan-1".into(),
+                    name: "update_plan".into(),
+                    input: json!({"steps": [
+                        {"title": "Inspect the project", "status": "completed"},
+                        {"title": "Implement the fix", "status": "in_progress"}
+                    ]}),
+                }],
+                "tool_use",
+            )]),
+            Config::default(),
+        );
+        let mut session = engine
+            .create_session(directory.path(), "fix the issue".to_owned())
+            .expect("session");
+        let mut updates = Vec::new();
+        engine
+            .step_with_observer(&mut session, |update| updates.push(update.clone()))
+            .expect("plan step");
+
+        assert_eq!(session.plan.len(), 2);
+        assert_eq!(session.plan[1].status, AgentPlanStepStatus::InProgress);
+        assert!(
+            updates
+                .iter()
+                .any(|update| { matches!(update, AgentUpdate::Plan(steps) if steps.len() == 2) })
+        );
+        let restored = engine
+            .load_session(directory.path(), session.id.as_str())
+            .expect("restored session");
+        assert_eq!(restored.plan, session.plan);
     }
 
     #[test]

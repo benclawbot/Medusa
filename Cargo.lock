@@ -976,6 +976,7 @@ dependencies = [
  "medusa-intelligence",
  "medusa-protocol",
  "medusa-provider",
+ "reqwest",
  "serde",
  "serde_json",
  "tempfile",

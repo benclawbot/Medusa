@@ -13,7 +13,8 @@ use std::{
 
 use base64::{Engine as _, engine::general_purpose::STANDARD};
 use medusa_agent::{
-    AgentEngine, AgentSession, AgentUpdate, StepOutcome, compact_session, update_session_objective,
+    AgentEngine, AgentPlanStep, AgentPlanStepStatus, AgentSession, AgentUpdate, StepOutcome,
+    compact_session, update_session_objective,
 };
 use medusa_config::{Config, Mode};
 use medusa_protocol::EventPayload;
@@ -333,11 +334,10 @@ fn run_prompt(
                 .map_err(RuntimeError::agent)?
         }
     };
-    let mut updates = UpdateState::new(state.config.agent.mode);
-    let _ = events.send(RuntimeEvent::Plan(plan_for(
-        PlanPhase::Understand,
-        state.config.agent.mode,
-    )));
+    let mut updates = UpdateState::new();
+    if !session.plan.is_empty() {
+        let _ = events.send(RuntimeEvent::Plan(transcript_plan(&session.plan)));
+    }
 
     let result = (|| {
         while !session.completed && session.turn < max_turns {
@@ -678,17 +678,13 @@ fn skill_description(path: &Path) -> Option<String> {
 struct UpdateState {
     next_tool_id: u64,
     pending_tools: VecDeque<PendingTool>,
-    plan_phase: PlanPhase,
-    mode: Mode,
 }
 
 impl UpdateState {
-    fn new(mode: Mode) -> Self {
+    fn new() -> Self {
         Self {
             next_tool_id: 0,
             pending_tools: VecDeque::new(),
-            plan_phase: PlanPhase::Understand,
-            mode,
         }
     }
 }
@@ -701,17 +697,6 @@ struct PendingTool {
     started_at: Instant,
 }
 
-#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
-enum PlanPhase {
-    #[default]
-    Understand,
-    Inspect,
-    Implement,
-    Verify,
-    Completed,
-    Failed,
-}
-
 fn forward_update(update: &AgentUpdate, events: &Sender<RuntimeEvent>, state: &mut UpdateState) {
     match update {
         AgentUpdate::Event(EventPayload::ModelResponseReceived { usage, .. }) => {
@@ -720,7 +705,6 @@ fn forward_update(update: &AgentUpdate, events: &Sender<RuntimeEvent>, state: &m
             }
         }
         AgentUpdate::Event(EventPayload::ToolCallRequested { tool, arguments }) => {
-            publish_plan(events, state, plan_phase_for_tool(tool));
             state.next_tool_id = state.next_tool_id.saturating_add(1);
             let pending = PendingTool {
                 id: format!("tool-{}", state.next_tool_id),
@@ -737,19 +721,7 @@ fn forward_update(update: &AgentUpdate, events: &Sender<RuntimeEvent>, state: &m
             }));
             state.pending_tools.push_back(pending);
         }
-        AgentUpdate::Event(EventPayload::VerificationStarted { .. }) => {
-            publish_plan(events, state, PlanPhase::Verify);
-        }
         AgentUpdate::Event(EventPayload::VerificationCompleted { passed, evidence }) => {
-            publish_plan(
-                events,
-                state,
-                if *passed {
-                    PlanPhase::Completed
-                } else {
-                    PlanPhase::Failed
-                },
-            );
             let _ = events.send(RuntimeEvent::Activity(RuntimeActivity {
                 id: None,
                 kind: RuntimeActivityKind::Verification,
@@ -771,6 +743,9 @@ fn forward_update(update: &AgentUpdate, events: &Sender<RuntimeEvent>, state: &m
                     details: lines.map(summarize).collect(),
                 }));
             }
+        }
+        AgentUpdate::Plan(steps) => {
+            let _ = events.send(RuntimeEvent::Plan(transcript_plan(steps)));
         }
         AgentUpdate::ToolOutput {
             tool,
@@ -815,67 +790,20 @@ fn forward_update(update: &AgentUpdate, events: &Sender<RuntimeEvent>, state: &m
     }
 }
 
-fn publish_plan(events: &Sender<RuntimeEvent>, state: &mut UpdateState, phase: PlanPhase) {
-    if state.plan_phase != phase {
-        state.plan_phase = phase;
-        let _ = events.send(RuntimeEvent::Plan(plan_for(phase, state.mode)));
-    }
-}
-
-fn plan_phase_for_tool(tool: &str) -> PlanPhase {
-    match tool {
-        "fs_read" | "search_text" | "code_index" => PlanPhase::Inspect,
-        _ => PlanPhase::Implement,
-    }
-}
-
-fn plan_for(phase: PlanPhase, mode: Mode) -> TranscriptPlan {
-    use TranscriptPlanStepState::{Active, Completed, Failed, Pending};
-    if mode == Mode::ReadOnly {
-        let states = match phase {
-            PlanPhase::Understand => [Active, Pending, Pending],
-            PlanPhase::Inspect => [Completed, Active, Pending],
-            PlanPhase::Implement | PlanPhase::Verify => [Completed, Completed, Active],
-            PlanPhase::Completed => [Completed, Completed, Completed],
-            PlanPhase::Failed => [Completed, Completed, Failed],
-        };
-        return TranscriptPlan {
-            steps: [
-                "Understand the task",
-                "Inspect the codebase",
-                "Draft the plan",
-            ]
-            .into_iter()
-            .zip(states)
-            .map(|(title, state)| TranscriptPlanStep {
-                title: title.to_owned(),
-                state,
+fn transcript_plan(steps: &[AgentPlanStep]) -> TranscriptPlan {
+    TranscriptPlan {
+        steps: steps
+            .iter()
+            .map(|step| TranscriptPlanStep {
+                title: step.title.clone(),
+                state: match step.status {
+                    AgentPlanStepStatus::Pending => TranscriptPlanStepState::Pending,
+                    AgentPlanStepStatus::InProgress => TranscriptPlanStepState::Active,
+                    AgentPlanStepStatus::Completed => TranscriptPlanStepState::Completed,
+                    AgentPlanStepStatus::Failed => TranscriptPlanStepState::Failed,
+                },
             })
             .collect(),
-        };
-    }
-    let states = match phase {
-        PlanPhase::Understand => [Active, Pending, Pending, Pending],
-        PlanPhase::Inspect => [Completed, Active, Pending, Pending],
-        PlanPhase::Implement => [Completed, Completed, Active, Pending],
-        PlanPhase::Verify => [Completed, Completed, Completed, Active],
-        PlanPhase::Completed => [Completed, Completed, Completed, Completed],
-        PlanPhase::Failed => [Completed, Completed, Completed, Failed],
-    };
-    TranscriptPlan {
-        steps: [
-            "Understand the task",
-            "Inspect the codebase",
-            "Implement the change",
-            "Verify the result",
-        ]
-        .into_iter()
-        .zip(states)
-        .map(|(title, state)| TranscriptPlanStep {
-            title: title.to_owned(),
-            state,
-        })
-        .collect(),
     }
 }
 
@@ -899,6 +827,8 @@ fn tool_title(tool: &str, arguments: &Value) -> String {
             json_string(arguments, "new_name")
         ),
         "shell_run" => format!("Bash({})", shell_command(arguments)),
+        "web_search" => format!("WebSearch({})", json_string(arguments, "query")),
+        "web_fetch" => format!("WebFetch({})", json_string(arguments, "url")),
         "git_checkpoint" => format!("Checkpoint({})", json_string(arguments, "message")),
         _ => tool.to_owned(),
     }
@@ -1114,7 +1044,7 @@ impl From<io::Error> for RuntimeError {
 mod tests {
     use std::sync::mpsc;
 
-    use medusa_agent::AgentUpdate;
+    use medusa_agent::{AgentPlanStep, AgentPlanStepStatus, AgentUpdate};
     use medusa_protocol::EventPayload;
     use serde_json::json;
 
@@ -1180,7 +1110,7 @@ mod tests {
     #[test]
     fn tool_call_is_shown_before_its_result_updates_the_same_row() {
         let (sender, receiver) = mpsc::channel();
-        let mut state = UpdateState::new(Mode::Yolo);
+        let mut state = UpdateState::new();
         forward_update(
             &AgentUpdate::Event(EventPayload::ToolCallRequested {
                 tool: "fs_read".to_owned(),
@@ -1190,10 +1120,6 @@ mod tests {
             &mut state,
         );
 
-        assert!(matches!(
-            receiver.recv().expect("plan update"),
-            RuntimeEvent::Plan(_)
-        ));
         let started = match receiver.recv().expect("tool start") {
             RuntimeEvent::Activity(activity) => activity,
             other => panic!("expected tool activity, received {other:?}"),
@@ -1315,9 +1241,28 @@ mod tests {
     }
 
     #[test]
-    fn planning_mode_uses_a_read_only_three_step_plan() {
-        let plan = plan_for(PlanPhase::Understand, Mode::ReadOnly);
-        assert_eq!(plan.steps.len(), 3);
-        assert_eq!(plan.steps[2].title, "Draft the plan");
+    fn model_plan_update_maps_each_status_to_the_transcript() {
+        let (sender, receiver) = mpsc::channel();
+        let mut state = UpdateState::new();
+        forward_update(
+            &AgentUpdate::Plan(vec![
+                AgentPlanStep {
+                    title: "Inspect the repository".to_owned(),
+                    status: AgentPlanStepStatus::Completed,
+                },
+                AgentPlanStep {
+                    title: "Implement the change".to_owned(),
+                    status: AgentPlanStepStatus::InProgress,
+                },
+            ]),
+            &sender,
+            &mut state,
+        );
+
+        let RuntimeEvent::Plan(plan) = receiver.recv().expect("model plan") else {
+            panic!("expected plan event");
+        };
+        assert_eq!(plan.steps[0].state, TranscriptPlanStepState::Completed);
+        assert_eq!(plan.steps[1].state, TranscriptPlanStepState::Active);
     }
 }

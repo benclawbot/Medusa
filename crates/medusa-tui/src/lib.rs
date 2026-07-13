@@ -44,6 +44,7 @@ const MEDUSA_LOGO: [&str; 3] = [
     "│││├╴  │││ │╰─╮├─┤",
     "╵ ╵╰─╴╶┴╯╰─╯╰─╯╵ ╵",
 ];
+const HEADER_TOP_PADDING: u16 = 1;
 
 #[cfg(unix)]
 use medusa_daemon::{DaemonClient, JobRecord, Request, Response};
@@ -173,6 +174,9 @@ fn run_loop(
         draw(stdout, options, identity, app, &jobs, &daemon_status)?;
         if event::poll(Duration::from_millis(100))? {
             let terminal_event = event::read()?;
+            if ctrl_l_redraw(&terminal_event) {
+                continue;
+            }
             if ctrl_d_on_empty(&terminal_event, app) {
                 return Ok(ExitReason::InputClosed);
             }
@@ -205,6 +209,10 @@ fn run_loop(
             let terminal_event = event::read()?;
             if matches!(terminal_event, Event::Resize(_, _)) {
                 last_render = None;
+            }
+            if ctrl_l_redraw(&terminal_event) {
+                last_render = None;
+                continue;
             }
             if ctrl_d_on_empty(&terminal_event, app) {
                 return Ok(ExitReason::InputClosed);
@@ -377,6 +385,16 @@ fn ctrl_d_on_empty(event: &Event, app: &AppState) -> bool {
     )
 }
 
+fn ctrl_l_redraw(event: &Event) -> bool {
+    matches!(
+        event,
+        Event::Key(key)
+            if key.kind == KeyEventKind::Press
+                && key.code == KeyCode::Char('l')
+                && key.modifiers.contains(KeyModifiers::CONTROL)
+    )
+}
+
 #[cfg(unix)]
 fn draw(
     stdout: &mut io::Stdout,
@@ -488,7 +506,12 @@ fn effort_label(max_turns: u32) -> &'static str {
 
 fn draw_common(stdout: &mut io::Stdout, identity: &UiIdentity, app: &AppState) -> io::Result<()> {
     let (width, height) = size()?;
-    queue!(stdout, MoveTo(0, 0))?;
+    queue!(
+        stdout,
+        MoveTo(0, 0),
+        Clear(ClearType::CurrentLine),
+        MoveTo(0, HEADER_TOP_PADDING)
+    )?;
     for logo_line in MEDUSA_LOGO {
         print_styled_line(stdout, width, logo_line, Color::Cyan, Attribute::Bold)?;
     }
@@ -509,7 +532,7 @@ fn draw_common(stdout: &mut io::Stdout, identity: &UiIdentity, app: &AppState) -
         ResetColor,
         Print("\r\n"),
     )?;
-    let header_height = 4_u16;
+    let header_height = HEADER_TOP_PADDING + 4;
     let model_modal = app.model_modal();
     let modal_lines = model_modal.map(model_modal_lines).unwrap_or_default();
     let suggestions = model_modal
@@ -943,6 +966,14 @@ mod tests {
         let mut options = TuiOptions::for_repo("/tmp/example");
         options.socket = Some(PathBuf::from("/tmp/medusa.sock"));
         assert_eq!(options.socket_path(), PathBuf::from("/tmp/medusa.sock"));
+    }
+
+    #[test]
+    fn ctrl_l_requests_a_terminal_redraw() {
+        assert!(ctrl_l_redraw(&Event::Key(crossterm::event::KeyEvent::new(
+            KeyCode::Char('l'),
+            KeyModifiers::CONTROL,
+        ))));
     }
 
     #[test]

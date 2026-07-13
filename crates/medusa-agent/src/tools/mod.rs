@@ -2,6 +2,8 @@ mod filesystem;
 mod git;
 mod intelligence;
 mod shell;
+mod skills;
+mod web;
 
 use std::path::Path;
 
@@ -10,6 +12,10 @@ use medusa_provider::ToolDefinition;
 use serde_json::{Value, json};
 
 const MAX_TOOL_OUTPUT_BYTES: usize = 1_000_000;
+
+pub(crate) fn available_skills(repo: &Path) -> Vec<skills::SkillSummary> {
+    skills::summaries(repo)
+}
 
 pub(crate) fn built_in_tools() -> Vec<ToolDefinition> {
     vec![
@@ -82,6 +88,51 @@ pub(crate) fn built_in_tools() -> Vec<ToolDefinition> {
             }),
         ),
         tool(
+            "web_search",
+            "Search the public web for current information. Optionally restrict or exclude domains.",
+            json!({
+                "type": "object", "properties": {
+                    "query": {"type": "string"},
+                    "allowed_domains": {"type": "array", "items": {"type": "string"}},
+                    "blocked_domains": {"type": "array", "items": {"type": "string"}}
+                }, "required": ["query"], "additionalProperties": false
+            }),
+        ),
+        tool(
+            "web_fetch",
+            "Fetch a public HTTP(S) page and return readable text. Use `prompt` to state what information to extract.",
+            json!({
+                "type": "object", "properties": {
+                    "url": {"type": "string"},
+                    "prompt": {"type": "string"}
+                }, "required": ["url"], "additionalProperties": false
+            }),
+        ),
+        tool(
+            "skill_read",
+            "Read an available Medusa or Claude skill's instructions before applying that skill. Use the skill name and optional project or user scope.",
+            json!({
+                "type": "object", "properties": {
+                    "name": {"type": "string"},
+                    "scope": {"type": "string", "enum": ["project", "user"]}
+                }, "required": ["name"], "additionalProperties": false
+            }),
+        ),
+        tool(
+            "update_plan",
+            "Create or update the visible task plan. Use it before meaningful work, and update statuses as work progresses. This does not modify repository files.",
+            json!({
+                "type": "object", "properties": {
+                    "steps": {"type": "array", "minItems": 1, "maxItems": 8, "items": {
+                        "type": "object", "properties": {
+                            "title": {"type": "string"},
+                            "status": {"type": "string", "enum": ["pending", "in_progress", "completed", "failed"]}
+                        }, "required": ["title", "status"], "additionalProperties": false
+                    }}
+                }, "required": ["steps"], "additionalProperties": false
+            }),
+        ),
+        tool(
             "git_checkpoint",
             "Stage all changes and create a Git checkpoint commit.",
             json!({
@@ -120,9 +171,43 @@ pub(crate) fn execute_tool(repo: &Path, name: &str, input: &Value) -> MedusaResu
                 .collect::<MedusaResult<Vec<_>>>()?;
             shell::run(repo, program, &args)
         }
+        "web_search" => web::search(
+            input_string(input, "query")?,
+            input_domains(input, "allowed_domains")?,
+            input_domains(input, "blocked_domains")?,
+        ),
+        "web_fetch" => web::fetch(
+            input_string(input, "url")?,
+            input.get("prompt").and_then(Value::as_str),
+        ),
+        "skill_read" => skills::read(
+            repo,
+            input_string(input, "name")?,
+            input.get("scope").and_then(Value::as_str),
+        ),
         "git_checkpoint" => git::checkpoint(repo, input_string(input, "message")?),
         _ => Err(invalid_tool(format!("unknown tool: {name}"))),
     }
+}
+
+fn input_domains(input: &Value, key: &str) -> MedusaResult<Vec<String>> {
+    let Some(domains) = input.get(key) else {
+        return Ok(Vec::new());
+    };
+    domains
+        .as_array()
+        .ok_or_else(|| invalid_tool(format!("{key} must be an array")))?
+        .iter()
+        .map(|value| {
+            value
+                .as_str()
+                .map(|domain| domain.trim().to_ascii_lowercase())
+                .filter(|domain| !domain.is_empty())
+                .ok_or_else(|| {
+                    invalid_tool(format!("every {key} entry must be a non-empty string"))
+                })
+        })
+        .collect()
 }
 
 fn tool(name: &str, description: &str, input_schema: Value) -> ToolDefinition {

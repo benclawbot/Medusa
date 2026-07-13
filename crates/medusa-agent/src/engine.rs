@@ -1,4 +1,4 @@
-use std::{collections::VecDeque, path::Path};
+use std::{collections::VecDeque, fs, path::Path};
 
 use medusa_config::{Config, Mode};
 use medusa_core::{ErrorCategory, ErrorCode, MedusaError, MedusaResult, SessionId};
@@ -11,13 +11,14 @@ use time::OffsetDateTime;
 
 use crate::{
     evidence::append_event,
-    session::{AgentSession, bootstrap, load, persist},
-    tools::{built_in_tools, execute_tool},
+    session::{AgentPlanStep, AgentPlanStepStatus, AgentSession, bootstrap, load, persist},
+    tools::{available_skills, built_in_tools, execute_tool},
     verification::targeted_verification,
 };
 
-const SYSTEM_PROMPT: &str = "You are Medusa, an autonomous coding agent. Inspect the repository, make the smallest correct change, and verify it. Use tools rather than inventing repository contents. Use `fs_read` with path `.` to list repository files before reading a specific file. Never modify tests, verification scripts, snapshots, fixtures, or expected outputs unless the user explicitly asks for that exact change; fix the product code instead. Do not expose private chain-of-thought; provide concise decisions and evidence.";
-const PLAN_SYSTEM_PROMPT: &str = "You are Medusa in read-only planning mode. Inspect the repository and produce a concise, ordered implementation plan grounded in the files you examined. Do not modify files, create commits, or claim that work has been completed. Only the read-only repository tools are available. Do not expose private chain-of-thought; provide concise decisions and evidence.";
+const SYSTEM_PROMPT: &str = "You are Medusa, an autonomous coding agent. Inspect the repository, make the smallest correct change, and verify it. Use tools rather than inventing repository contents. Use `fs_read` with path `.` to list repository files before reading a specific file. You have `web_search` for current public information and `web_fetch` for public pages; use them when the user requests current, external, or source-linked information. For work requiring more than one action, call `update_plan` before meaningful work and update its statuses as you progress. Never modify tests, verification scripts, snapshots, fixtures, or expected outputs unless the user explicitly asks for that exact change; fix the product code instead. Do not expose private chain-of-thought; provide concise decisions and evidence.";
+const PLAN_SYSTEM_PROMPT: &str = "You are Medusa in read-only planning mode. Inspect the repository and produce a concise, ordered implementation plan grounded in the files you examined. Use `update_plan` to maintain the visible plan as your understanding changes. You can use `web_search` and `web_fetch` for current public information. Do not modify files, create commits, or claim that work has been completed. Only read-only repository and web tools are available. Do not expose private chain-of-thought; provide concise decisions and evidence.";
+const MAX_REPOSITORY_INSTRUCTIONS_BYTES: usize = 32_000;
 
 /// Result of one durable model/tool step.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -31,6 +32,7 @@ pub enum StepOutcome {
 pub enum AgentUpdate {
     Event(EventPayload),
     AssistantText(String),
+    Plan(Vec<AgentPlanStep>),
     ToolOutput {
         tool: String,
         output: String,
@@ -76,6 +78,7 @@ impl<P: ModelProvider> AgentEngine<P> {
             updated_at: now,
             completed: false,
             turn: 0,
+            plan: Vec::new(),
             messages: vec![Message {
                 role: Role::User,
                 content,
@@ -184,7 +187,7 @@ impl<P: ModelProvider> AgentEngine<P> {
             &mut observer,
         )?;
         let response = self.provider.complete(&ModelRequest {
-            system: system_prompt(self.config.agent.mode).into(),
+            system: system_prompt(self.config.agent.mode, &session.repo),
             messages: session.messages.clone(),
             tools: available_tools(self.config.agent.mode),
             max_tokens: self.config.model.max_output_tokens,
@@ -237,7 +240,12 @@ impl<P: ModelProvider> AgentEngine<P> {
                 },
                 &mut observer,
             )?;
-            let result = if tool_allowed(self.config.agent.mode, &name) {
+            let result = if name == "update_plan" {
+                let plan = plan_from_input(&input)?;
+                session.plan = plan.clone();
+                observer(&AgentUpdate::Plan(plan));
+                Ok("Visible task plan updated.".to_owned())
+            } else if tool_allowed(self.config.agent.mode, &name) {
                 execute_tool(&session.repo, &name, &input)
             } else {
                 let reason = "tool is unavailable in read-only planning mode".to_owned();
@@ -293,6 +301,7 @@ impl<P: ModelProvider> AgentEngine<P> {
         {
             if self.config.agent.mode == Mode::ReadOnly {
                 session.completed = true;
+                publish_completed_plan(session, &mut observer);
                 append_observed(
                     session,
                     EventPayload::SessionCompleted {
@@ -323,6 +332,7 @@ impl<P: ModelProvider> AgentEngine<P> {
             session.evidence.extend(verification.evidence.clone());
             if verification.passed {
                 session.completed = true;
+                publish_completed_plan(session, &mut observer);
                 append_observed(
                     session,
                     EventPayload::SessionCompleted {
@@ -352,12 +362,40 @@ impl<P: ModelProvider> AgentEngine<P> {
     }
 }
 
-fn system_prompt(mode: Mode) -> &'static str {
-    if mode == Mode::ReadOnly {
+fn system_prompt(mode: Mode, repo: &Path) -> String {
+    let base = if mode == Mode::ReadOnly {
         PLAN_SYSTEM_PROMPT
     } else {
         SYSTEM_PROMPT
+    };
+    let mut prompt = format!("{base}\n\nWorkspace: {}", repo.display());
+    let instructions = repository_instructions(repo);
+    if instructions.is_empty() {
+        prompt.push_str("\n\nNo repository instruction files were found.");
+    } else {
+        prompt.push_str("\n\nRepository instructions (follow them as project constraints; the user request and system rules take precedence):\n");
+        prompt.push_str(&instructions);
     }
+    let skills = available_skills(repo);
+    if skills.is_empty() {
+        prompt.push_str("\n\nNo Medusa or Claude skills are installed for this workspace or user.");
+    } else {
+        prompt.push_str(
+            "\n\nAvailable skills: call `skill_read` before applying a relevant skill.\n",
+        );
+        for skill in skills {
+            prompt.push_str(&format!(
+                "- {} ({}){}\n",
+                skill.name,
+                skill.scope,
+                skill
+                    .description
+                    .map(|description| format!(": {description}"))
+                    .unwrap_or_default()
+            ));
+        }
+    }
+    prompt
 }
 
 fn available_tools(mode: Mode) -> Vec<medusa_provider::ToolDefinition> {
@@ -368,7 +406,111 @@ fn available_tools(mode: Mode) -> Vec<medusa_provider::ToolDefinition> {
 }
 
 fn tool_allowed(mode: Mode, tool: &str) -> bool {
-    mode != Mode::ReadOnly || matches!(tool, "fs_read" | "search_text" | "code_index")
+    mode != Mode::ReadOnly
+        || matches!(
+            tool,
+            "fs_read"
+                | "search_text"
+                | "code_index"
+                | "web_search"
+                | "web_fetch"
+                | "skill_read"
+                | "update_plan"
+        )
+}
+
+fn plan_from_input(input: &serde_json::Value) -> MedusaResult<Vec<AgentPlanStep>> {
+    let steps = input
+        .get("steps")
+        .and_then(serde_json::Value::as_array)
+        .ok_or_else(|| invalid_plan("steps must be an array"))?;
+    if steps.is_empty() || steps.len() > 8 {
+        return Err(invalid_plan("plan must contain between 1 and 8 steps"));
+    }
+    steps
+        .iter()
+        .map(|step| {
+            let title = step
+                .get("title")
+                .and_then(serde_json::Value::as_str)
+                .map(str::trim)
+                .filter(|title| !title.is_empty())
+                .filter(|title| title.chars().count() <= 140)
+                .ok_or_else(|| {
+                    invalid_plan("every plan step needs a title of at most 140 characters")
+                })?;
+            let status = match step.get("status").and_then(serde_json::Value::as_str) {
+                Some("pending") => AgentPlanStepStatus::Pending,
+                Some("in_progress") => AgentPlanStepStatus::InProgress,
+                Some("completed") => AgentPlanStepStatus::Completed,
+                Some("failed") => AgentPlanStepStatus::Failed,
+                _ => return Err(invalid_plan("every plan step needs a valid status")),
+            };
+            Ok(AgentPlanStep {
+                title: title.to_owned(),
+                status,
+            })
+        })
+        .collect()
+}
+
+fn publish_completed_plan<F>(session: &mut AgentSession, observer: &mut F)
+where
+    F: FnMut(&AgentUpdate),
+{
+    if session.plan.is_empty() {
+        return;
+    }
+    let mut changed = false;
+    for step in &mut session.plan {
+        if matches!(
+            step.status,
+            AgentPlanStepStatus::Pending | AgentPlanStepStatus::InProgress
+        ) {
+            step.status = AgentPlanStepStatus::Completed;
+            changed = true;
+        }
+    }
+    if changed {
+        observer(&AgentUpdate::Plan(session.plan.clone()));
+    }
+}
+
+fn invalid_plan(message: impl Into<String>) -> MedusaError {
+    MedusaError::new(
+        ErrorCode::InvalidConfiguration,
+        ErrorCategory::Validation,
+        message,
+    )
+}
+
+fn repository_instructions(repo: &Path) -> String {
+    let mut remaining = MAX_REPOSITORY_INSTRUCTIONS_BYTES;
+    let mut output = String::new();
+    for name in ["AGENTS.md", "CLAUDE.md", "MEDUSA.md", ".medusa/AGENTS.md"] {
+        if remaining == 0 {
+            break;
+        }
+        let path = repo.join(name);
+        let Ok(content) = fs::read_to_string(&path) else {
+            continue;
+        };
+        let content = truncate_for_prompt(&content, remaining);
+        remaining = remaining.saturating_sub(content.len());
+        output.push_str(&format!("\n--- {name} ---\n{content}\n"));
+    }
+    output
+}
+
+fn truncate_for_prompt(content: &str, max_bytes: usize) -> String {
+    if content.len() <= max_bytes {
+        return content.to_owned();
+    }
+    let mut end = max_bytes;
+    while !content.is_char_boundary(end) {
+        end = end.saturating_sub(1);
+    }
+    format!("{}\n[truncated]", &content[..end])
 }
 
 /// Updates a session goal without requiring a live model provider.
@@ -574,7 +716,10 @@ fn json_error(error: serde_json::Error) -> MedusaError {
 
 #[cfg(test)]
 mod tests {
+    use std::fs;
+
     use super::*;
+    use tempfile::tempdir;
 
     fn image_block(media_type: &str, data: &str) -> MessageBlock {
         MessageBlock::Image {
@@ -619,5 +764,42 @@ mod tests {
         let error = validate_user_content(&[image_block("image/tiff", "AAEC")], &capabilities)
             .expect_err("reject unsupported type");
         assert!(error.message.contains("image/tiff"));
+    }
+
+    #[test]
+    fn web_tools_are_available_in_standard_and_planning_modes() {
+        for mode in [Mode::Yolo, Mode::ReadOnly] {
+            let tools = available_tools(mode)
+                .into_iter()
+                .map(|tool| tool.name)
+                .collect::<Vec<_>>();
+            assert!(tools.contains(&"web_search".to_owned()));
+            assert!(tools.contains(&"web_fetch".to_owned()));
+            assert!(tools.contains(&"skill_read".to_owned()));
+            assert!(tools.contains(&"update_plan".to_owned()));
+        }
+    }
+
+    #[test]
+    fn workspace_instructions_and_skills_are_added_to_the_model_context() {
+        let directory = tempdir().expect("temporary directory");
+        fs::write(
+            directory.path().join("AGENTS.md"),
+            "Run the focused test suite.",
+        )
+        .expect("write instructions");
+        let skill = directory.path().join(".medusa/skills/release/SKILL.md");
+        fs::create_dir_all(skill.parent().expect("skill directory"))
+            .expect("create skill directory");
+        fs::write(
+            &skill,
+            "description: Release preparation\nUse the release checklist.",
+        )
+        .expect("write skill");
+
+        let prompt = system_prompt(Mode::Yolo, directory.path());
+        assert!(prompt.contains("Run the focused test suite."));
+        assert!(prompt.contains("release (project): Release preparation"));
+        assert!(prompt.contains("call `skill_read`"));
     }
 }
