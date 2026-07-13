@@ -13,8 +13,8 @@ use std::{
 
 use base64::{Engine as _, engine::general_purpose::STANDARD};
 use medusa_agent::{
-    AgentEngine, AgentPlanStep, AgentPlanStepStatus, AgentSession, AgentUpdate, StepOutcome,
-    compact_session, update_session_objective,
+    AgentEngine, AgentPlanStep, AgentPlanStepStatus, AgentQuestion, AgentSession, AgentUpdate,
+    StepOutcome, compact_session, update_session_objective,
 };
 use medusa_config::{Config, Mode};
 use medusa_protocol::EventPayload;
@@ -42,6 +42,7 @@ pub enum RuntimeEvent {
     Started,
     Activity(RuntimeActivity),
     Plan(TranscriptPlan),
+    Question(RuntimeQuestion),
     Usage {
         output_tokens: u64,
     },
@@ -84,6 +85,12 @@ pub struct RuntimeActivity {
     pub kind: RuntimeActivityKind,
     pub title: String,
     pub details: Vec<String>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct RuntimeQuestion {
+    pub question: String,
+    pub options: Vec<String>,
 }
 
 pub struct RuntimeController {
@@ -318,7 +325,12 @@ fn run_prompt(
     let content = message_blocks(&draft)?;
     let mut session = match state.session.take() {
         Some(mut session) => {
-            if let Err(error) = engine.append_user_message(&mut session, content) {
+            let update = if session.pending_question.is_some() {
+                engine.answer_pending_question(&mut session, content)
+            } else {
+                engine.append_user_message(&mut session, content)
+            };
+            if let Err(error) = update {
                 state.session = Some(session);
                 return Err(RuntimeError::agent(error));
             }
@@ -350,8 +362,15 @@ fn run_prompt(
                 })
                 .map_err(RuntimeError::agent)?;
             let _ = events.send(RuntimeEvent::Progress { turn: session.turn });
-            if outcome == StepOutcome::Completed {
-                break;
+            match outcome {
+                StepOutcome::Completed => break,
+                StepOutcome::WaitingForUser => {
+                    let question = session.pending_question.as_ref().ok_or_else(|| {
+                        RuntimeError::agent("agent paused without a pending question")
+                    })?;
+                    return Ok(RuntimeEvent::Question(runtime_question(question)));
+                }
+                StepOutcome::Continue => {}
             }
         }
 
@@ -705,6 +724,9 @@ fn forward_update(update: &AgentUpdate, events: &Sender<RuntimeEvent>, state: &m
             }
         }
         AgentUpdate::Event(EventPayload::ToolCallRequested { tool, arguments }) => {
+            if is_internal_tool(tool) {
+                return;
+            }
             state.next_tool_id = state.next_tool_id.saturating_add(1);
             let pending = PendingTool {
                 id: format!("tool-{}", state.next_tool_id),
@@ -734,24 +756,28 @@ fn forward_update(update: &AgentUpdate, events: &Sender<RuntimeEvent>, state: &m
             }));
         }
         AgentUpdate::AssistantText(text) => {
-            let mut lines = text.lines().map(str::trim).filter(|line| !line.is_empty());
+            let mut lines = markdown_lines(text).into_iter();
             if let Some(title) = lines.next() {
                 let _ = events.send(RuntimeEvent::Activity(RuntimeActivity {
                     id: None,
                     kind: RuntimeActivityKind::Assistant,
-                    title: summarize(title),
-                    details: lines.map(summarize).collect(),
+                    title: summarize(&title),
+                    details: lines.map(|line| summarize(&line)).collect(),
                 }));
             }
         }
         AgentUpdate::Plan(steps) => {
             let _ = events.send(RuntimeEvent::Plan(transcript_plan(steps)));
         }
+        AgentUpdate::Question(_) => {}
         AgentUpdate::ToolOutput {
             tool,
             output,
             is_error,
         } => {
+            if is_internal_tool(tool) {
+                return;
+            }
             let pending = state
                 .pending_tools
                 .iter()
@@ -788,6 +814,49 @@ fn forward_update(update: &AgentUpdate, events: &Sender<RuntimeEvent>, state: &m
         }
         _ => {}
     }
+}
+
+fn runtime_question(question: &AgentQuestion) -> RuntimeQuestion {
+    RuntimeQuestion {
+        question: question.question.clone(),
+        options: question.options.clone(),
+    }
+}
+
+fn is_internal_tool(tool: &str) -> bool {
+    matches!(tool, "update_plan" | "ask_user_question")
+}
+
+fn markdown_lines(text: &str) -> Vec<String> {
+    let mut in_code_block = false;
+    text.lines()
+        .filter_map(|line| {
+            let trimmed = line.trim();
+            if trimmed.starts_with("```") {
+                in_code_block = !in_code_block;
+                return None;
+            }
+            if trimmed.is_empty() {
+                return None;
+            }
+            let line = trimmed.trim_start_matches('#').trim_start();
+            let line = if let Some(item) = line
+                .strip_prefix("- ")
+                .or_else(|| line.strip_prefix("* "))
+                .or_else(|| line.strip_prefix("+ "))
+            {
+                format!("- {item}")
+            } else {
+                line.to_owned()
+            };
+            let line = line.replace("**", "").replace("__", "").replace('`', "");
+            if in_code_block {
+                Some(format!("  {line}"))
+            } else {
+                Some(line)
+            }
+        })
+        .collect()
 }
 
 fn transcript_plan(steps: &[AgentPlanStep]) -> TranscriptPlan {
@@ -1264,5 +1333,27 @@ mod tests {
         };
         assert_eq!(plan.steps[0].state, TranscriptPlanStepState::Completed);
         assert_eq!(plan.steps[1].state, TranscriptPlanStepState::Active);
+    }
+
+    #[test]
+    fn internal_plan_transport_and_markdown_markers_do_not_leak_into_the_transcript() {
+        let (sender, receiver) = mpsc::channel();
+        let mut state = UpdateState::new();
+        forward_update(
+            &AgentUpdate::Event(EventPayload::ToolCallRequested {
+                tool: "update_plan".to_owned(),
+                arguments: json!({"steps": [{"title": "Inspect", "status": "active"}]}),
+            }),
+            &sender,
+            &mut state,
+        );
+        assert!(matches!(
+            receiver.try_recv(),
+            Err(mpsc::TryRecvError::Empty)
+        ));
+        assert_eq!(
+            markdown_lines("**Heading**\n- `cargo test`"),
+            vec!["Heading".to_owned(), "- cargo test".to_owned()]
+        );
     }
 }

@@ -191,27 +191,29 @@ fn run_loop(
 #[cfg(not(unix))]
 fn run_loop(
     stdout: &mut io::Stdout,
-    options: &TuiOptions,
+    _options: &TuiOptions,
     identity: &UiIdentity,
     app: &mut AppState,
     runtime: &RuntimeController,
 ) -> io::Result<ExitReason> {
-    let mut last_render = None;
+    let mut last_frame: Option<Vec<StyledLine>> = None;
     loop {
         drain_runtime_events(app, runtime)?;
         app.tick();
-        let snapshot = portable_render_snapshot(app, size()?);
-        if last_render.as_ref() != Some(&snapshot) {
-            draw_portable(stdout, options, identity, app)?;
-            last_render = Some(snapshot);
+        let (width, height) = size()?;
+        let frame = render_frame(identity, app, width, height);
+        if last_frame.as_ref() != Some(&frame) {
+            draw_frame(stdout, width, &frame, last_frame.as_deref())?;
+            stdout.flush()?;
+            last_frame = Some(frame);
         }
         if event::poll(Duration::from_millis(100))? {
             let terminal_event = event::read()?;
             if matches!(terminal_event, Event::Resize(_, _)) {
-                last_render = None;
+                last_frame = None;
             }
             if ctrl_l_redraw(&terminal_event) {
-                last_render = None;
+                last_frame = None;
                 continue;
             }
             if ctrl_d_on_empty(&terminal_event, app) {
@@ -251,6 +253,23 @@ fn handle_app_action(
                     app.transcript
                         .push(TranscriptEntry::System(format!("error: {error}")));
                     app.status = "submission rejected".to_owned();
+                }
+            }
+            Ok(false)
+        }
+        AppAction::AnswerQuestion(answer) => {
+            let draft = PromptDraft {
+                text: answer,
+                ..PromptDraft::default()
+            };
+            match runtime.submit(draft) {
+                Ok(()) => {
+                    app.status = "continuing with your answer".to_owned();
+                }
+                Err(error) => {
+                    app.transcript
+                        .push(TranscriptEntry::System(format!("error: {error}")));
+                    app.status = "answer rejected".to_owned();
                 }
             }
             Ok(false)
@@ -306,7 +325,10 @@ fn drain_runtime_events(app: &mut AppState, runtime: &RuntimeController) -> io::
                 });
             }
             RuntimeEvent::Plan(plan) => {
-                app.plan = Some(plan);
+                app.set_plan(plan);
+            }
+            RuntimeEvent::Question(question) => {
+                app.open_question(question.question, question.options);
             }
             RuntimeEvent::Usage { output_tokens } => {
                 app.add_output_tokens(output_tokens);
@@ -408,15 +430,24 @@ fn draw(
 }
 
 #[cfg(not(unix))]
+#[allow(dead_code)]
 fn draw_portable(
     stdout: &mut io::Stdout,
     _options: &TuiOptions,
     identity: &UiIdentity,
     app: &AppState,
 ) -> io::Result<()> {
-    draw_common(stdout, identity, app)
+    let (width, height) = size()?;
+    draw_frame(
+        stdout,
+        width,
+        &render_frame(identity, app, width, height),
+        None,
+    )?;
+    stdout.flush()
 }
 
+#[cfg(test)]
 #[derive(Clone, Debug, Eq, PartialEq)]
 struct PortableRenderSnapshot {
     terminal_size: (u16, u16),
@@ -434,6 +465,7 @@ struct PortableRenderSnapshot {
     model_modal: Option<app::ModelModal>,
 }
 
+#[cfg(test)]
 fn portable_render_snapshot(app: &AppState, terminal_size: (u16, u16)) -> PortableRenderSnapshot {
     PortableRenderSnapshot {
         terminal_size,
@@ -504,7 +536,20 @@ fn effort_label(max_turns: u32) -> &'static str {
     }
 }
 
+#[cfg(unix)]
 fn draw_common(stdout: &mut io::Stdout, identity: &UiIdentity, app: &AppState) -> io::Result<()> {
+    let (width, height) = size()?;
+    let frame = render_frame(identity, app, width, height);
+    draw_frame(stdout, width, &frame, None)?;
+    stdout.flush()
+}
+
+#[allow(dead_code)]
+fn legacy_draw_common(
+    stdout: &mut io::Stdout,
+    identity: &UiIdentity,
+    app: &AppState,
+) -> io::Result<()> {
     let (width, height) = size()?;
     queue!(
         stdout,
@@ -665,6 +710,215 @@ fn draw_common(stdout: &mut io::Stdout, identity: &UiIdentity, app: &AppState) -
     stdout.flush()
 }
 
+fn render_frame(identity: &UiIdentity, app: &AppState, width: u16, height: u16) -> Vec<StyledLine> {
+    let blank = StyledLine::new("", Color::Reset);
+    let mut frame = vec![blank.clone(); usize::from(height)];
+    let mut row = usize::from(HEADER_TOP_PADDING);
+    for logo_line in MEDUSA_LOGO {
+        set_frame_line(&mut frame, row, StyledLine::new(logo_line, Color::Cyan));
+        row = row.saturating_add(1);
+    }
+    set_frame_line(
+        &mut frame,
+        row,
+        StyledLine::new(
+            format!(
+                "{} {}",
+                app.model_label.as_deref().unwrap_or(&identity.model),
+                app.effort_label.as_deref().unwrap_or(&identity.effort)
+            ),
+            Color::Magenta,
+        ),
+    );
+
+    let header_height = HEADER_TOP_PADDING + 4;
+    let question_modal = app.question_modal();
+    let model_modal = app.model_modal();
+    let modal_lines = question_modal
+        .map(question_modal_lines)
+        .or_else(|| model_modal.map(model_modal_lines))
+        .unwrap_or_default();
+    let is_modal = question_modal.is_some() || model_modal.is_some();
+    let plan_panel = (!is_modal && app.task_list_visible)
+        .then(|| app.plan.as_ref().map(plan_lines).unwrap_or_default())
+        .unwrap_or_default();
+    let panel_rows = u16::try_from(plan_panel.len()).unwrap_or(u16::MAX);
+    let base_composer_rows = 4_u16.saturating_add(panel_rows);
+    let suggestions = (!is_modal)
+        .then(|| command_suggestions(&app.composer.draft.text))
+        .unwrap_or_default();
+    let available_suggestion_rows =
+        height.saturating_sub(header_height.saturating_add(base_composer_rows));
+    let visible_suggestions = suggestions
+        .into_iter()
+        .take(usize::from(available_suggestion_rows))
+        .collect::<Vec<_>>();
+    let requested_composer_height = if is_modal {
+        3_u16.saturating_add(u16::try_from(modal_lines.len()).unwrap_or(u16::MAX))
+    } else {
+        base_composer_rows
+            .saturating_add(u16::try_from(visible_suggestions.len()).unwrap_or(u16::MAX))
+    };
+    let composer_height = requested_composer_height.min(height.saturating_sub(header_height));
+    let content_rows = usize::from(height.saturating_sub(composer_height + header_height));
+    let mut content = transcript_lines(app);
+    if app.is_running() {
+        content.push(StyledLine::with_marker(
+            spinner_marker(app.spinner_frame),
+            Color::Magenta,
+            running_status(app),
+            Color::Grey,
+        ));
+    }
+    let visible_content = content
+        .iter()
+        .rev()
+        .take(content_rows)
+        .rev()
+        .collect::<Vec<_>>();
+    let mut content_row = usize::from(header_height);
+    for line in visible_content {
+        set_frame_line(&mut frame, content_row, line.clone());
+        content_row = content_row.saturating_add(1);
+    }
+
+    let mut bottom_row = usize::from(height.saturating_sub(composer_height));
+    set_frame_line(&mut frame, bottom_row, separator_line(width));
+    bottom_row = bottom_row.saturating_add(1);
+    if is_modal {
+        for line in modal_lines
+            .into_iter()
+            .take(usize::from(composer_height.saturating_sub(3)))
+        {
+            set_frame_line(&mut frame, bottom_row, line);
+            bottom_row = bottom_row.saturating_add(1);
+        }
+        set_frame_line(&mut frame, bottom_row, separator_line(width));
+        bottom_row = bottom_row.saturating_add(1);
+        let help = if question_modal.is_some() {
+            "up/down choose - type an answer - enter submit"
+        } else {
+            "up/down choose - tab focus - enter set - esc cancel"
+        };
+        set_frame_line(
+            &mut frame,
+            bottom_row,
+            StyledLine::with_marker("> ", Color::Magenta, help, Color::DarkGrey),
+        );
+        return frame;
+    }
+
+    for line in plan_panel {
+        set_frame_line(&mut frame, bottom_row, line);
+        bottom_row = bottom_row.saturating_add(1);
+    }
+    for (index, suggestion) in visible_suggestions.iter().enumerate() {
+        let selected = index == app.command_selection;
+        set_frame_line(
+            &mut frame,
+            bottom_row,
+            StyledLine::with_marker(
+                if selected { "> " } else { "  " },
+                if selected {
+                    Color::Magenta
+                } else {
+                    Color::DarkGrey
+                },
+                format!("{:<34} {}", suggestion.usage, suggestion.description),
+                if selected { Color::White } else { Color::Grey },
+            ),
+        );
+        bottom_row = bottom_row.saturating_add(1);
+    }
+    let prompt = if app.composer.draft.text.is_empty() {
+        "Describe a coding task...".to_owned()
+    } else {
+        composer_prompt_text(&app.composer.draft.text)
+    };
+    set_frame_line(
+        &mut frame,
+        bottom_row,
+        StyledLine::with_marker(
+            "> ",
+            Color::Cyan,
+            prompt,
+            if app.composer.draft.text.is_empty() {
+                Color::DarkGrey
+            } else {
+                Color::White
+            },
+        ),
+    );
+    bottom_row = bottom_row.saturating_add(1);
+    set_frame_line(&mut frame, bottom_row, separator_line(width));
+    bottom_row = bottom_row.saturating_add(1);
+    set_frame_line(
+        &mut frame,
+        bottom_row,
+        StyledLine::with_marker(
+            "> ",
+            Color::Magenta,
+            if app.is_running() {
+                "working - ctrl+c interrupt - ctrl+t tasks"
+            } else {
+                "enter submit - ctrl+v paste - tab commands - ctrl+t tasks"
+            },
+            Color::DarkGrey,
+        ),
+    );
+    frame
+}
+
+fn transcript_lines(app: &AppState) -> Vec<StyledLine> {
+    let mut lines = Vec::new();
+    for entry in &app.transcript {
+        match entry {
+            TranscriptEntry::User(draft) => {
+                lines.push(StyledLine::with_marker(
+                    "> ",
+                    Color::Cyan,
+                    draft.text.replace('\n', " / "),
+                    Color::White,
+                ));
+                lines.extend(draft.attachments.iter().map(|attachment| {
+                    StyledLine::new(
+                        format!("  - {}", attachment_label(attachment)),
+                        Color::DarkGrey,
+                    )
+                }));
+            }
+            TranscriptEntry::Activity(activity) => lines.extend(activity_lines(activity)),
+            TranscriptEntry::System(message) => lines.push(system_line(message)),
+        }
+    }
+    lines
+}
+
+fn set_frame_line(frame: &mut [StyledLine], row: usize, line: StyledLine) {
+    if let Some(slot) = frame.get_mut(row) {
+        *slot = line;
+    }
+}
+
+fn separator_line(width: u16) -> StyledLine {
+    StyledLine::new("-".repeat(usize::from(width)), Color::DarkGrey)
+}
+
+fn draw_frame(
+    stdout: &mut io::Stdout,
+    width: u16,
+    frame: &[StyledLine],
+    previous: Option<&[StyledLine]>,
+) -> io::Result<()> {
+    for (row, line) in frame.iter().enumerate() {
+        if previous.is_some_and(|previous| previous.get(row) == Some(line)) {
+            continue;
+        }
+        line.print_at(stdout, width, u16::try_from(row).unwrap_or(u16::MAX))?;
+    }
+    Ok(())
+}
+
 fn spinner_marker(frame: u8) -> &'static str {
     match frame % 4 {
         0 => ". ",
@@ -745,6 +999,45 @@ fn model_modal_lines(model_modal: &app::ModelModal) -> Vec<StyledLine> {
     lines
 }
 
+fn question_modal_lines(question_modal: &app::QuestionModal) -> Vec<StyledLine> {
+    let mut lines = vec![StyledLine::new("Question", Color::Cyan)];
+    lines.extend(
+        question_modal
+            .question()
+            .lines()
+            .map(|line| StyledLine::new(line.trim(), Color::White)),
+    );
+    for (index, option) in question_modal.options().iter().enumerate() {
+        let selected = index == question_modal.selected_option();
+        lines.push(StyledLine::with_marker(
+            if selected { "> " } else { "  " },
+            if selected {
+                Color::Magenta
+            } else {
+                Color::DarkGrey
+            },
+            option,
+            if selected { Color::White } else { Color::Grey },
+        ));
+    }
+    let answer = question_modal.custom_answer();
+    lines.push(StyledLine::with_marker(
+        "> ",
+        Color::Cyan,
+        if answer.is_empty() {
+            "Type a custom answer...".to_owned()
+        } else {
+            answer.to_owned()
+        },
+        if answer.is_empty() {
+            Color::DarkGrey
+        } else {
+            Color::White
+        },
+    ));
+    lines
+}
+
 fn composer_prompt_text(text: &str) -> String {
     for prefix in ["/model key ", "/model api-key "] {
         if let Some(secret) = text.strip_prefix(prefix) {
@@ -802,6 +1095,34 @@ impl StyledLine {
             );
         }
         print_styled_line(stdout, width, &self.text, self.foreground, Attribute::Reset)
+    }
+
+    fn print_at(&self, stdout: &mut io::Stdout, width: u16, row: u16) -> io::Result<()> {
+        queue!(
+            stdout,
+            MoveTo(0, row),
+            Clear(ClearType::CurrentLine),
+            SetAttribute(Attribute::Reset),
+            ResetColor,
+        )?;
+        if let Some((marker, marker_color)) = &self.marker {
+            let marker = truncate(marker, width);
+            let remaining = width.saturating_sub(marker.chars().count() as u16);
+            queue!(
+                stdout,
+                SetForegroundColor(*marker_color),
+                Print(marker),
+                SetForegroundColor(self.foreground),
+                Print(truncate(&self.text, remaining)),
+            )?;
+        } else {
+            queue!(
+                stdout,
+                SetForegroundColor(self.foreground),
+                Print(truncate(&self.text, width)),
+            )?;
+        }
+        queue!(stdout, SetAttribute(Attribute::Reset), ResetColor)
     }
 }
 
@@ -1009,6 +1330,75 @@ mod tests {
         let running = portable_render_snapshot(&app, (80, 24));
         app.tick();
         assert_ne!(running, portable_render_snapshot(&app, (80, 24)));
+    }
+
+    #[test]
+    fn question_and_plan_are_rendered_in_the_bottom_panels() {
+        let directory = tempfile::tempdir().expect("tempdir");
+        let mut app = AppState::new(
+            directory.path().to_path_buf(),
+            "panel-test",
+            "",
+            Arc::new(UnsupportedClipboard),
+        )
+        .expect("app");
+        app.set_plan(app::TranscriptPlan {
+            steps: vec![app::TranscriptPlanStep {
+                title: "Inspect the repository".to_owned(),
+                state: app::TranscriptPlanStepState::Active,
+            }],
+        });
+        let plan_frame = render_frame(&UiIdentity::for_repo(directory.path()), &app, 80, 24);
+        assert!(
+            plan_frame
+                .iter()
+                .rev()
+                .take(6)
+                .any(|line| { line.text.contains("Inspect the repository") })
+        );
+
+        app.open_question(
+            "Which project should I use?".to_owned(),
+            vec!["Projects/site-a".to_owned()],
+        );
+        let question_frame = render_frame(&UiIdentity::for_repo(directory.path()), &app, 80, 24);
+        assert!(
+            question_frame
+                .iter()
+                .rev()
+                .take(8)
+                .any(|line| { line.text.contains("Which project should I use?") })
+        );
+        assert!(
+            !question_frame
+                .iter()
+                .any(|line| { line.text.contains("Describe a coding task") })
+        );
+    }
+
+    #[test]
+    fn spinner_changes_only_one_retained_frame_row() {
+        let directory = tempfile::tempdir().expect("tempdir");
+        let mut app = AppState::new(
+            directory.path().to_path_buf(),
+            "render-diff",
+            "",
+            Arc::new(UnsupportedClipboard),
+        )
+        .expect("app");
+        app.begin_run();
+        app.tick();
+        let before = render_frame(&UiIdentity::for_repo(directory.path()), &app, 80, 24);
+        app.tick();
+        let after = render_frame(&UiIdentity::for_repo(directory.path()), &app, 80, 24);
+        assert_eq!(
+            before
+                .iter()
+                .zip(after.iter())
+                .filter(|(left, right)| left != right)
+                .count(),
+            1
+        );
     }
 
     #[test]

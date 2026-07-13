@@ -64,10 +64,70 @@ pub enum AppAction {
     None,
     Redraw,
     Submit(PromptDraft),
+    AnswerQuestion(String),
     Command(SlashCommand),
     ConfigureModel(ModelConfiguration),
     Interrupt,
     Quit,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct QuestionModal {
+    question: String,
+    options: Vec<String>,
+    selected_option: usize,
+    custom_answer: String,
+}
+
+impl QuestionModal {
+    pub fn new(question: String, options: Vec<String>) -> Self {
+        Self {
+            question,
+            options,
+            selected_option: 0,
+            custom_answer: String::new(),
+        }
+    }
+
+    #[must_use]
+    pub fn question(&self) -> &str {
+        &self.question
+    }
+
+    #[must_use]
+    pub fn options(&self) -> &[String] {
+        &self.options
+    }
+
+    #[must_use]
+    pub const fn selected_option(&self) -> usize {
+        self.selected_option
+    }
+
+    #[must_use]
+    pub fn custom_answer(&self) -> &str {
+        &self.custom_answer
+    }
+
+    fn move_selection(&mut self, delta: isize) {
+        if !self.options.is_empty() {
+            self.selected_option = cycle_index(self.selected_option, self.options.len(), delta);
+        }
+    }
+
+    fn insert_answer(&mut self, text: &str) {
+        self.custom_answer.push_str(text);
+    }
+
+    fn delete_answer_character(&mut self) {
+        self.custom_answer.pop();
+    }
+
+    fn answer(&self) -> Option<String> {
+        (!self.custom_answer.trim().is_empty())
+            .then(|| self.custom_answer.trim().to_owned())
+            .or_else(|| self.options.get(self.selected_option).cloned())
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -268,9 +328,11 @@ pub struct AppState {
     pub model_label: Option<String>,
     pub effort_label: Option<String>,
     pub plan_mode: bool,
+    pub task_list_visible: bool,
     pub spinner_frame: u8,
     credential_configured: bool,
     model_modal: Option<ModelModal>,
+    question_modal: Option<QuestionModal>,
     run_started_at: Option<Instant>,
     draft_store: DraftStore,
     draft_key: String,
@@ -304,9 +366,11 @@ impl AppState {
             model_label: None,
             effort_label: None,
             plan_mode: false,
+            task_list_visible: true,
             spinner_frame: 0,
             credential_configured: false,
             model_modal: None,
+            question_modal: None,
             run_started_at: None,
             draft_store,
             draft_key,
@@ -315,6 +379,9 @@ impl AppState {
     }
 
     pub fn handle_event(&mut self, event: Event) -> Result<AppAction, AppError> {
+        if self.question_modal.is_some() {
+            return self.handle_question_modal_event(event);
+        }
         if self.model_modal.is_some() {
             return self.handle_model_modal_event(event);
         }
@@ -323,6 +390,10 @@ impl AppState {
         {
             if key.code == KeyCode::Esc {
                 return Ok(AppAction::Quit);
+            }
+            if key.code == KeyCode::Char('t') && key.modifiers.contains(KeyModifiers::CONTROL) {
+                self.task_list_visible = !self.task_list_visible;
+                return Ok(AppAction::Redraw);
             }
             if key.code == KeyCode::Char('v') && key.modifiers.contains(KeyModifiers::CONTROL) {
                 self.paste_from_clipboard()?;
@@ -394,6 +465,8 @@ impl AppState {
         self.active_turn = 0;
         self.status = "new session".to_owned();
         self.plan_mode = false;
+        self.task_list_visible = true;
+        self.question_modal = None;
     }
 
     pub fn compact_transcript(&mut self, message: String) {
@@ -418,6 +491,17 @@ impl AppState {
         self.effort_label = Some(effort);
         self.plan_mode = plan_mode;
         self.credential_configured = credential_configured;
+    }
+
+    pub fn set_plan(&mut self, plan: TranscriptPlan) {
+        self.plan = Some(plan);
+        self.task_list_visible = true;
+    }
+
+    pub fn open_question(&mut self, question: String, options: Vec<String>) {
+        self.question_modal = Some(QuestionModal::new(question, options));
+        self.status = "waiting for your answer".to_owned();
+        self.finish_run();
     }
 
     fn select_command(&mut self, direction: isize) -> Result<AppAction, AppError> {
@@ -541,6 +625,79 @@ impl AppState {
         }
     }
 
+    fn handle_question_modal_event(&mut self, event: Event) -> Result<AppAction, AppError> {
+        match event {
+            Event::Paste(text) => {
+                self.question_modal
+                    .as_mut()
+                    .expect("question modal exists")
+                    .insert_answer(&text);
+                Ok(AppAction::Redraw)
+            }
+            Event::Key(key) if key.kind == KeyEventKind::Press => match key.code {
+                KeyCode::Esc => {
+                    self.status = "waiting for your answer".to_owned();
+                    Ok(AppAction::Redraw)
+                }
+                KeyCode::Up | KeyCode::Left => {
+                    self.question_modal
+                        .as_mut()
+                        .expect("question modal exists")
+                        .move_selection(-1);
+                    Ok(AppAction::Redraw)
+                }
+                KeyCode::Down | KeyCode::Right => {
+                    self.question_modal
+                        .as_mut()
+                        .expect("question modal exists")
+                        .move_selection(1);
+                    Ok(AppAction::Redraw)
+                }
+                KeyCode::Backspace => {
+                    self.question_modal
+                        .as_mut()
+                        .expect("question modal exists")
+                        .delete_answer_character();
+                    Ok(AppAction::Redraw)
+                }
+                KeyCode::Char('v') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                    if let ClipboardContent::Text(text) = self.clipboard.read()? {
+                        self.question_modal
+                            .as_mut()
+                            .expect("question modal exists")
+                            .insert_answer(&text);
+                    }
+                    Ok(AppAction::Redraw)
+                }
+                KeyCode::Char(character)
+                    if key.modifiers.is_empty() || key.modifiers == KeyModifiers::SHIFT =>
+                {
+                    self.question_modal
+                        .as_mut()
+                        .expect("question modal exists")
+                        .insert_answer(&character.to_string());
+                    Ok(AppAction::Redraw)
+                }
+                KeyCode::Enter => {
+                    let answer = self.question_modal.as_ref().and_then(QuestionModal::answer);
+                    let Some(answer) = answer else {
+                        self.status = "choose or type an answer".to_owned();
+                        return Ok(AppAction::Redraw);
+                    };
+                    self.question_modal = None;
+                    self.transcript.push(TranscriptEntry::User(PromptDraft {
+                        text: answer.clone(),
+                        ..PromptDraft::default()
+                    }));
+                    self.status = "answer submitted".to_owned();
+                    Ok(AppAction::AnswerQuestion(answer))
+                }
+                _ => Ok(AppAction::None),
+            },
+            _ => Ok(AppAction::None),
+        }
+    }
+
     pub fn paste_from_clipboard(&mut self) -> Result<(), AppError> {
         match self.clipboard.read()? {
             ClipboardContent::Empty => {
@@ -604,6 +761,11 @@ impl AppState {
     #[must_use]
     pub fn model_modal(&self) -> Option<&ModelModal> {
         self.model_modal.as_ref()
+    }
+
+    #[must_use]
+    pub fn question_modal(&self) -> Option<&QuestionModal> {
+        self.question_modal.as_ref()
     }
 
     pub fn update_turn(&mut self, turn: u32) {
@@ -924,5 +1086,45 @@ mod tests {
                 .expect("load draft")
                 .is_none()
         );
+    }
+
+    #[test]
+    fn question_modal_submits_one_selected_answer_without_using_the_composer() {
+        let repository = tempdir().expect("temporary repository");
+        let mut app = AppState::new(
+            repository.path().to_path_buf(),
+            "question",
+            "draft text",
+            Arc::new(FakeClipboard(ClipboardContent::Empty)),
+        )
+        .expect("create app");
+        app.open_question(
+            "Which project should I use?".to_owned(),
+            vec![
+                "Projects/site-a".to_owned(),
+                "Create a new project".to_owned(),
+            ],
+        );
+        app.handle_event(Event::Key(crossterm::event::KeyEvent::new(
+            KeyCode::Down,
+            KeyModifiers::NONE,
+        )))
+        .expect("select option");
+        let action = app
+            .handle_event(Event::Key(crossterm::event::KeyEvent::new(
+                KeyCode::Enter,
+                KeyModifiers::NONE,
+            )))
+            .expect("submit answer");
+        assert_eq!(
+            action,
+            AppAction::AnswerQuestion("Create a new project".to_owned())
+        );
+        assert!(app.question_modal().is_none());
+        assert!(matches!(
+            app.transcript.last(),
+            Some(TranscriptEntry::User(draft)) if draft.text == "Create a new project"
+        ));
+        assert_eq!(app.composer.draft.text, "draft text");
     }
 }

@@ -133,6 +133,16 @@ pub(crate) fn built_in_tools() -> Vec<ToolDefinition> {
             }),
         ),
         tool(
+            "ask_user_question",
+            "Ask exactly one blocking clarification question. The session pauses until the user answers; never ask a blocking question in ordinary assistant text.",
+            json!({
+                "type": "object", "properties": {
+                    "question": {"type": "string"},
+                    "options": {"type": "array", "maxItems": 6, "items": {"type": "string"}}
+                }, "required": ["question"], "additionalProperties": false
+            }),
+        ),
+        tool(
             "git_checkpoint",
             "Stage all changes and create a Git checkpoint commit.",
             json!({

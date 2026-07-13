@@ -11,7 +11,7 @@ pub use engine::{
     AgentEngine, AgentUpdate, StepOutcome, compact_session, update_session_objective,
 };
 pub use policy::validate_shell_command;
-pub use session::{AgentPlanStep, AgentPlanStepStatus, AgentSession, bootstrap};
+pub use session::{AgentPlanStep, AgentPlanStepStatus, AgentQuestion, AgentSession, bootstrap};
 pub use verification::{VerificationResult, targeted_verification};
 
 #[cfg(test)]
@@ -250,6 +250,59 @@ mod tests {
             .load_session(directory.path(), session.id.as_str())
             .expect("restored session");
         assert_eq!(restored.plan, session.plan);
+    }
+
+    #[test]
+    fn a_model_question_pauses_the_session_until_one_answer_is_supplied() {
+        let directory = tempfile::tempdir().expect("temporary directory");
+        let engine = AgentEngine::new(
+            ScriptedProvider::new(vec![response(
+                vec![ResponseBlock::ToolUse {
+                    id: "question-1".into(),
+                    name: "ask_user_question".into(),
+                    input: json!({
+                        "question": "Which project should I use?",
+                        "options": ["Projects/site-a", "Create a new project"]
+                    }),
+                }],
+                "tool_use",
+            )]),
+            Config::default(),
+        );
+        let mut session = engine
+            .create_session(directory.path(), "build a website".to_owned())
+            .expect("session");
+        let mut updates = Vec::new();
+        assert_eq!(
+            engine
+                .step_with_observer(&mut session, |update| updates.push(update.clone()))
+                .expect("question step"),
+            StepOutcome::WaitingForUser
+        );
+        assert!(!session.completed);
+        assert!(session.pending_question.is_some());
+        assert!(updates.iter().any(|update| {
+            matches!(update, AgentUpdate::Question(question) if question.options.len() == 2)
+        }));
+        let restored = engine
+            .load_session(directory.path(), session.id.as_str())
+            .expect("restored pending question");
+        assert!(restored.pending_question.is_some());
+
+        engine
+            .answer_pending_question(
+                &mut session,
+                vec![medusa_provider::MessageBlock::Text {
+                    text: "Projects/site-a".to_owned(),
+                }],
+            )
+            .expect("answer question");
+        assert!(session.pending_question.is_none());
+        assert!(matches!(
+            session.messages.last().and_then(|message| message.content.first()),
+            Some(medusa_provider::MessageBlock::ToolResult { tool_use_id, content, .. })
+                if tool_use_id == "question-1" && content.contains("Projects/site-a")
+        ));
     }
 
     #[test]

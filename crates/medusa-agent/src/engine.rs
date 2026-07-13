@@ -11,19 +11,22 @@ use time::OffsetDateTime;
 
 use crate::{
     evidence::append_event,
-    session::{AgentPlanStep, AgentPlanStepStatus, AgentSession, bootstrap, load, persist},
+    session::{
+        AgentPlanStep, AgentPlanStepStatus, AgentQuestion, AgentSession, bootstrap, load, persist,
+    },
     tools::{available_skills, built_in_tools, execute_tool},
     verification::targeted_verification,
 };
 
-const SYSTEM_PROMPT: &str = "You are Medusa, an autonomous coding agent. Inspect the repository, make the smallest correct change, and verify it. Use tools rather than inventing repository contents. Use `fs_read` with path `.` to list repository files before reading a specific file. You have `web_search` for current public information and `web_fetch` for public pages; use them when the user requests current, external, or source-linked information. For work requiring more than one action, call `update_plan` before meaningful work and update its statuses as you progress. Never modify tests, verification scripts, snapshots, fixtures, or expected outputs unless the user explicitly asks for that exact change; fix the product code instead. Do not expose private chain-of-thought; provide concise decisions and evidence.";
-const PLAN_SYSTEM_PROMPT: &str = "You are Medusa in read-only planning mode. Inspect the repository and produce a concise, ordered implementation plan grounded in the files you examined. Use `update_plan` to maintain the visible plan as your understanding changes. You can use `web_search` and `web_fetch` for current public information. Do not modify files, create commits, or claim that work has been completed. Only read-only repository and web tools are available. Do not expose private chain-of-thought; provide concise decisions and evidence.";
+const SYSTEM_PROMPT: &str = "You are Medusa, an autonomous coding agent. Inspect the repository, make the smallest correct change, and verify it. Use tools rather than inventing repository contents. Use `fs_read` with path `.` to list repository files before reading a specific file. You have `web_search` for current public information and `web_fetch` for public pages; use them when the user requests current, external, or source-linked information. For work requiring more than one action, call `update_plan` before meaningful work and update its statuses as you progress. When information from the user is needed to proceed, call `ask_user_question` with exactly one concise question; do not put blocking questions in assistant text, do not ask multiple questions at once, and do not mark the plan or task complete while waiting. Never modify tests, verification scripts, snapshots, fixtures, or expected outputs unless the user explicitly asks for that exact change; fix the product code instead. Do not expose private chain-of-thought; provide concise decisions and evidence.";
+const PLAN_SYSTEM_PROMPT: &str = "You are Medusa in read-only planning mode. Inspect the repository and produce a concise, ordered implementation plan grounded in the files you examined. Use `update_plan` to maintain the visible plan as your understanding changes. When clarification is necessary, call `ask_user_question` with exactly one concise question and wait for its answer before producing a final plan. You can use `web_search` and `web_fetch` for current public information. Do not modify files, create commits, or claim that work has been completed. Only read-only repository and web tools are available. Do not expose private chain-of-thought; provide concise decisions and evidence.";
 const MAX_REPOSITORY_INSTRUCTIONS_BYTES: usize = 32_000;
 
 /// Result of one durable model/tool step.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum StepOutcome {
     Continue,
+    WaitingForUser,
     Completed,
 }
 
@@ -33,6 +36,7 @@ pub enum AgentUpdate {
     Event(EventPayload),
     AssistantText(String),
     Plan(Vec<AgentPlanStep>),
+    Question(AgentQuestion),
     ToolOutput {
         tool: String,
         output: String,
@@ -79,6 +83,7 @@ impl<P: ModelProvider> AgentEngine<P> {
             completed: false,
             turn: 0,
             plan: Vec::new(),
+            pending_question: None,
             messages: vec![Message {
                 role: Role::User,
                 content,
@@ -128,6 +133,55 @@ impl<P: ModelProvider> AgentEngine<P> {
         persist(session)
     }
 
+    /// Resolves a blocking question with a single user response and resumes the same session.
+    pub fn answer_pending_question(
+        &self,
+        session: &mut AgentSession,
+        content: Vec<MessageBlock>,
+    ) -> MedusaResult<()> {
+        let question = session.pending_question.take().ok_or_else(|| {
+            MedusaError::new(
+                ErrorCode::InvalidConfiguration,
+                ErrorCategory::Validation,
+                "there is no pending question to answer",
+            )
+        })?;
+        validate_user_content(&content, &self.provider.capabilities())?;
+        let answer = compact_message_text(&content);
+        if answer.trim().is_empty() {
+            session.pending_question = Some(question);
+            return Err(MedusaError::new(
+                ErrorCode::InvalidConfiguration,
+                ErrorCategory::Validation,
+                "a question response cannot be empty",
+            ));
+        }
+        session.completed = false;
+        session.turn = 0;
+        let content = match question.tool_use_id {
+            Some(tool_use_id) => vec![MessageBlock::ToolResult {
+                tool_use_id,
+                content: format!("User response: {answer}"),
+                is_error: false,
+            }],
+            None => vec![MessageBlock::Text {
+                text: format!("User response to the clarification question: {answer}"),
+            }],
+        };
+        session.messages.push(Message {
+            role: Role::User,
+            content,
+        });
+        append_event(
+            session,
+            Actor::User,
+            EventPayload::UserPromptReceived { text: answer },
+        )?;
+        append_event(session, Actor::Coordinator, EventPayload::SessionResumed)?;
+        session.updated_at = OffsetDateTime::now_utc();
+        persist(session)
+    }
+
     /// Updates the durable session objective without creating a new conversation.
     pub fn update_objective(
         &self,
@@ -148,7 +202,13 @@ impl<P: ModelProvider> AgentEngine<P> {
 
     pub fn run_to_completion(&self, session: &mut AgentSession) -> MedusaResult<()> {
         while !session.completed && session.turn < self.config.agent.max_turns {
-            self.step(session)?;
+            if self.step(session)? == StepOutcome::WaitingForUser {
+                return Err(MedusaError::new(
+                    ErrorCode::DependencyUnavailable,
+                    ErrorCategory::Execution,
+                    "agent is waiting for a user response",
+                ));
+            }
         }
         if session.completed {
             Ok(())
@@ -175,6 +235,9 @@ impl<P: ModelProvider> AgentEngine<P> {
     {
         if session.completed {
             return Ok(StepOutcome::Completed);
+        }
+        if session.pending_question.is_some() {
+            return Ok(StepOutcome::WaitingForUser);
         }
         validate_messages(&session.messages, &self.provider.capabilities())?;
         session.turn = session.turn.saturating_add(1);
@@ -227,8 +290,17 @@ impl<P: ModelProvider> AgentEngine<P> {
                 content: assistant_blocks,
             });
         }
-        if !assistant_text.is_empty() {
+        let fallback_question = calls
+            .is_empty()
+            .then(|| question_from_assistant_text(&assistant_text.join("\n")))
+            .flatten();
+        if fallback_question.is_none() && !assistant_text.is_empty() {
             observer(&AgentUpdate::AssistantText(assistant_text.join("\n")));
+        }
+
+        if let Some(question) = fallback_question {
+            pause_for_question(session, question, &mut observer)?;
+            return Ok(StepOutcome::WaitingForUser);
         }
 
         while let Some((id, name, input)) = calls.pop_front() {
@@ -245,6 +317,10 @@ impl<P: ModelProvider> AgentEngine<P> {
                 session.plan = plan.clone();
                 observer(&AgentUpdate::Plan(plan));
                 Ok("Visible task plan updated.".to_owned())
+            } else if name == "ask_user_question" {
+                let question = question_from_input(id, &input)?;
+                pause_for_question(session, question, &mut observer)?;
+                return Ok(StepOutcome::WaitingForUser);
             } else if tool_allowed(self.config.agent.mode, &name) {
                 execute_tool(&session.repo, &name, &input)
             } else {
@@ -416,7 +492,103 @@ fn tool_allowed(mode: Mode, tool: &str) -> bool {
                 | "web_fetch"
                 | "skill_read"
                 | "update_plan"
+                | "ask_user_question"
         )
+}
+
+fn question_from_input(
+    tool_use_id: String,
+    input: &serde_json::Value,
+) -> MedusaResult<AgentQuestion> {
+    let question = input
+        .get("question")
+        .and_then(serde_json::Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .filter(|value| value.chars().count() <= 500)
+        .ok_or_else(|| invalid_question("question must be between 1 and 500 characters"))?;
+    let options = input
+        .get("options")
+        .map(|value| {
+            value
+                .as_array()
+                .ok_or_else(|| invalid_question("options must be an array"))?
+                .iter()
+                .map(|value| {
+                    value
+                        .as_str()
+                        .map(str::trim)
+                        .filter(|option| !option.is_empty() && option.chars().count() <= 140)
+                        .map(str::to_owned)
+                        .ok_or_else(|| invalid_question("every option must be 1 to 140 characters"))
+                })
+                .collect::<MedusaResult<Vec<_>>>()
+        })
+        .transpose()?
+        .unwrap_or_default();
+    if options.len() > 6 {
+        return Err(invalid_question("a question can offer at most 6 options"));
+    }
+    Ok(AgentQuestion {
+        tool_use_id: Some(tool_use_id),
+        question: question.to_owned(),
+        options,
+    })
+}
+
+fn question_from_assistant_text(text: &str) -> Option<AgentQuestion> {
+    let question = text.lines().find_map(|line| {
+        let line = line.trim().trim_start_matches(|character: char| {
+            character.is_ascii_digit() || matches!(character, '-' | '*' | ' ' | '#' | '.' | ')')
+        });
+        let question_end = line.find('?')?;
+        let candidate = line[..=question_end]
+            .replace("**", "")
+            .replace("__", "")
+            .replace('`', "");
+        let normalized = candidate.to_ascii_lowercase();
+        let asks_for_input = [
+            "which ", "what ", "where ", "when ", "who ", "why ", "how ", "do you ", "does ",
+            "would ", "could ", "can you ", "should ", "please ", "provide ", "confirm ",
+        ]
+        .iter()
+        .any(|prefix| normalized.starts_with(prefix));
+        asks_for_input.then_some(candidate)
+    })?;
+    Some(AgentQuestion {
+        tool_use_id: None,
+        question,
+        options: Vec::new(),
+    })
+}
+
+fn pause_for_question<F>(
+    session: &mut AgentSession,
+    question: AgentQuestion,
+    observer: &mut F,
+) -> MedusaResult<()>
+where
+    F: FnMut(&AgentUpdate),
+{
+    session.pending_question = Some(question.clone());
+    append_observed(
+        session,
+        EventPayload::SessionPaused {
+            reason: "waiting for a user response".to_owned(),
+        },
+        observer,
+    )?;
+    observer(&AgentUpdate::Question(question));
+    session.updated_at = OffsetDateTime::now_utc();
+    persist(session)
+}
+
+fn invalid_question(message: impl Into<String>) -> MedusaError {
+    MedusaError::new(
+        ErrorCode::InvalidConfiguration,
+        ErrorCategory::Validation,
+        message,
+    )
 }
 
 fn plan_from_input(input: &serde_json::Value) -> MedusaResult<Vec<AgentPlanStep>> {
@@ -801,5 +973,15 @@ mod tests {
         assert!(prompt.contains("Run the focused test suite."));
         assert!(prompt.contains("release (project): Release preparation"));
         assert!(prompt.contains("call `skill_read`"));
+    }
+
+    #[test]
+    fn plain_text_clarification_falls_back_to_one_clean_question() {
+        let question = question_from_assistant_text(
+            "Please answer these:\n1. **What kind of website is it?**\n2. **Who is the audience?**",
+        )
+        .expect("question");
+        assert_eq!(question.tool_use_id, None);
+        assert_eq!(question.question, "What kind of website is it?");
     }
 }
