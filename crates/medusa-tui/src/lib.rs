@@ -16,7 +16,9 @@ use std::{
 #[cfg(unix)]
 use std::thread;
 
-use app::{AppAction, AppError, AppState, TranscriptEntry};
+use app::{
+    AppAction, AppError, AppState, TranscriptActivity, TranscriptActivityKind, TranscriptEntry,
+};
 use clipboard::{ClipboardService, PromptAttachment, PromptDraft, UnsupportedClipboard};
 use crossterm::{
     cursor::{Hide, MoveTo, Show},
@@ -25,9 +27,7 @@ use crossterm::{
         KeyModifiers,
     },
     execute, queue,
-    style::{
-        Attribute, Color, Print, ResetColor, SetAttribute, SetBackgroundColor, SetForegroundColor,
-    },
+    style::{Attribute, Color, Print, ResetColor, SetAttribute, SetForegroundColor},
     terminal::{
         Clear, ClearType, EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode,
         enable_raw_mode, size,
@@ -35,7 +35,7 @@ use crossterm::{
 };
 use medusa_config::Config;
 use native_clipboard::NativeClipboard;
-use runtime::{RuntimeController, RuntimeEvent};
+use runtime::{RuntimeActivityKind, RuntimeController, RuntimeEvent};
 
 const MEDUSA_LOGO: [&str; 3] = [
     "╭┬╮╭─╴╶┬╮╷ ╷╭─╮╭─╮",
@@ -252,41 +252,60 @@ fn drain_runtime_events(app: &mut AppState, runtime: &RuntimeController) -> io::
     while let Some(event) = runtime.try_event().map_err(runtime_error)? {
         match event {
             RuntimeEvent::Started => {
-                app.transcript
-                    .push(TranscriptEntry::System("step: agent started".to_owned()));
-                app.status = "agent running".to_owned();
+                app.begin_run();
+            }
+            RuntimeEvent::Activity(activity) => {
+                app.record_activity(TranscriptActivity {
+                    id: activity.id,
+                    kind: match activity.kind {
+                        RuntimeActivityKind::Assistant => TranscriptActivityKind::Assistant,
+                        RuntimeActivityKind::Done => TranscriptActivityKind::Done,
+                        RuntimeActivityKind::Error => TranscriptActivityKind::Error,
+                        RuntimeActivityKind::Tool => TranscriptActivityKind::Tool,
+                        RuntimeActivityKind::Verification => TranscriptActivityKind::Verification,
+                    },
+                    title: activity.title,
+                    details: activity.details,
+                });
+            }
+            RuntimeEvent::Plan(plan) => {
+                app.plan = Some(plan);
+            }
+            RuntimeEvent::Usage { output_tokens } => {
+                app.add_output_tokens(output_tokens);
             }
             RuntimeEvent::Progress { turn } => {
-                app.transcript
-                    .push(TranscriptEntry::System(format!("step: turn {turn}")));
-                app.status = running_status(turn);
+                app.update_turn(turn);
             }
-            RuntimeEvent::Completed {
-                session_id,
-                assistant_text,
-                evidence,
-            } => {
-                if !assistant_text.trim().is_empty() {
-                    app.transcript.push(TranscriptEntry::System(assistant_text));
-                }
-                for line in evidence {
-                    app.transcript
-                        .push(TranscriptEntry::System(format!("evidence: {line}")));
-                }
-                app.transcript.push(TranscriptEntry::System(format!(
-                    "session {session_id} completed"
-                )));
-                app.status = format!("session {session_id} completed");
+            RuntimeEvent::Completed { session_id } => {
+                app.record_activity(TranscriptActivity {
+                    id: None,
+                    kind: TranscriptActivityKind::Done,
+                    title: "Task completed".to_owned(),
+                    details: vec![format!("session {session_id}")],
+                });
+                app.status = "completed".to_owned();
+                app.finish_run();
             }
             RuntimeEvent::Cancelled => {
-                app.transcript
-                    .push(TranscriptEntry::System("task cancelled".to_owned()));
+                app.record_activity(TranscriptActivity {
+                    id: None,
+                    kind: TranscriptActivityKind::Done,
+                    title: "Task cancelled".to_owned(),
+                    details: Vec::new(),
+                });
                 app.status = "cancelled".to_owned();
+                app.finish_run();
             }
             RuntimeEvent::Failed(error) => {
-                app.transcript
-                    .push(TranscriptEntry::System(format!("error: {error}")));
+                app.record_activity(TranscriptActivity {
+                    id: None,
+                    kind: TranscriptActivityKind::Error,
+                    title: "Task failed".to_owned(),
+                    details: vec![error],
+                });
                 app.status = "agent failed".to_owned();
+                app.finish_run();
             }
         }
     }
@@ -308,44 +327,23 @@ fn ctrl_d_on_empty(event: &Event, app: &AppState) -> bool {
 #[cfg(unix)]
 fn draw(
     stdout: &mut io::Stdout,
-    options: &TuiOptions,
+    _options: &TuiOptions,
     identity: &UiIdentity,
     app: &AppState,
-    jobs: &[JobRecord],
-    daemon_status: &str,
+    _jobs: &[JobRecord],
+    _daemon_status: &str,
 ) -> io::Result<()> {
-    let job_lines = jobs
-        .iter()
-        .rev()
-        .take(3)
-        .map(|job| {
-            format!(
-                "job {} {:?} {} {}",
-                job.id,
-                job.state,
-                job.program,
-                job.args.join(" ")
-            )
-        })
-        .collect::<Vec<_>>();
-    draw_common(stdout, options, identity, app, &job_lines, daemon_status)
+    draw_common(stdout, identity, app)
 }
 
 #[cfg(not(unix))]
 fn draw_portable(
     stdout: &mut io::Stdout,
-    options: &TuiOptions,
+    _options: &TuiOptions,
     identity: &UiIdentity,
     app: &AppState,
 ) -> io::Result<()> {
-    draw_common(
-        stdout,
-        options,
-        identity,
-        app,
-        &[],
-        portable_daemon_status(),
-    )
+    draw_common(stdout, identity, app)
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -353,6 +351,9 @@ struct PortableRenderSnapshot {
     terminal_size: (u16, u16),
     status: String,
     transcript: Vec<TranscriptEntry>,
+    plan: Option<app::TranscriptPlan>,
+    token_count: u64,
+    elapsed_seconds: Option<u64>,
     draft: PromptDraft,
 }
 
@@ -361,16 +362,35 @@ fn portable_render_snapshot(app: &AppState, terminal_size: (u16, u16)) -> Portab
         terminal_size,
         status: app.status.clone(),
         transcript: app.transcript.clone(),
+        plan: app.plan.clone(),
+        token_count: app.token_count,
+        elapsed_seconds: app.elapsed_seconds(),
         draft: app.composer.draft.clone(),
     }
 }
 
-fn portable_daemon_status() -> &'static str {
-    "direct runtime (no daemon required)"
+fn running_status(app: &AppState) -> String {
+    format!(
+        "{} ({} · ↑ {} tokens)",
+        app.status,
+        format_elapsed(app.elapsed_seconds().unwrap_or_default()),
+        format_token_count(app.token_count)
+    )
 }
 
-fn running_status(turn: u32) -> String {
-    format!("agent running - turn {turn}; results appear when complete")
+fn format_elapsed(seconds: u64) -> String {
+    let minutes = seconds / 60;
+    if minutes == 0 {
+        return format!("{seconds}s");
+    }
+    format!("{minutes}m {}s", seconds % 60)
+}
+
+fn format_token_count(tokens: u64) -> String {
+    if tokens < 1_000 {
+        return tokens.to_string();
+    }
+    format!("{:.1}k", tokens as f64 / 1_000.0)
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -401,18 +421,11 @@ fn effort_label(max_turns: u32) -> &'static str {
     }
 }
 
-fn draw_common(
-    stdout: &mut io::Stdout,
-    options: &TuiOptions,
-    identity: &UiIdentity,
-    app: &AppState,
-    job_lines: &[String],
-    daemon_status: &str,
-) -> io::Result<()> {
+fn draw_common(stdout: &mut io::Stdout, identity: &UiIdentity, app: &AppState) -> io::Result<()> {
     let (width, height) = size()?;
     queue!(stdout, MoveTo(0, 0), Clear(ClearType::All))?;
     for logo_line in MEDUSA_LOGO {
-        print_styled_line(stdout, width, logo_line, Color::Cyan, None, Attribute::Bold)?;
+        print_styled_line(stdout, width, logo_line, Color::Cyan, Attribute::Bold)?;
     }
     queue!(
         stdout,
@@ -426,118 +439,133 @@ fn draw_common(
         ResetColor,
         Print("\r\n"),
     )?;
-    print_status_row(
-        stdout,
-        width,
-        "repo",
-        &options.repo.display().to_string(),
-        Color::DarkGrey,
-    )?;
-    print_status_row(stdout, width, "daemon", daemon_status, Color::Blue)?;
-    print_status_row(
-        stdout,
-        width,
-        "status",
-        &app.status,
-        status_color(&app.status),
-    )?;
-    print_separator(stdout, width)?;
-
-    let header_height = 8_u16;
-    let composer_height = 7_u16.min(height.saturating_sub(header_height));
+    let header_height = 5_u16;
+    let composer_height = 4_u16.min(height.saturating_sub(header_height));
     let content_rows = height.saturating_sub(composer_height + header_height) as usize;
     let mut lines = Vec::new();
     for entry in &app.transcript {
         match entry {
             TranscriptEntry::User(draft) => {
-                lines.push(StyledLine::user(format!(
-                    "● user {}",
-                    draft.text.replace('\n', " / ")
-                )));
+                lines.push(StyledLine::with_marker(
+                    "> ",
+                    Color::Cyan,
+                    draft.text.replace('\n', " / "),
+                    Color::White,
+                ));
                 lines.extend(draft.attachments.iter().map(|attachment| {
-                    StyledLine::user(format!("  {}", attachment_label(attachment)))
+                    StyledLine::new(
+                        format!("  └ {}", attachment_label(attachment)),
+                        Color::DarkGrey,
+                    )
                 }));
             }
+            TranscriptEntry::Activity(activity) => lines.extend(activity_lines(activity)),
             TranscriptEntry::System(message) => lines.push(system_line(message)),
         }
     }
-    lines.extend(
-        job_lines
-            .iter()
-            .map(|line| StyledLine::new(format!("● {line}"), Color::Magenta, None)),
-    );
+    if app.is_running() {
+        lines.push(StyledLine::with_marker(
+            "✻ ",
+            Color::Magenta,
+            running_status(app),
+            Color::Grey,
+        ));
+    }
+    if let Some(plan) = &app.plan {
+        lines.extend(plan_lines(plan));
+    }
     for line in lines.iter().rev().take(content_rows).rev() {
         line.print(stdout, width)?;
     }
 
-    let composer_top = height.saturating_sub(composer_height + 1);
+    let composer_top = height.saturating_sub(composer_height);
     queue!(
         stdout,
         MoveTo(0, composer_top),
         SetForegroundColor(Color::DarkGrey),
         Print("─".repeat(width as usize)),
         ResetColor,
-        MoveTo(0, composer_top.saturating_add(1)),
-        SetForegroundColor(Color::Cyan),
-        SetAttribute(Attribute::Bold),
-        Print("● Prompt"),
-        SetAttribute(Attribute::Reset),
-        ResetColor,
-        Print("  Ctrl+V paste | Enter submit | Ctrl+C cancel | Esc exit\r\n")
+        Print("\r\n")
     )?;
     let prompt = if app.composer.draft.text.is_empty() {
         "Describe a coding task...".to_owned()
     } else {
         app.composer.draft.text.replace('\n', " / ")
     };
-    print_styled_line(
-        stdout,
-        width,
-        &prompt,
-        Color::White,
-        Some(Color::DarkBlue),
-        Attribute::NoBold,
-    )?;
-    for attachment in app.composer.draft.attachments.iter().take(3) {
-        print_styled_line(
-            stdout,
-            width,
-            &attachment_label(attachment),
-            Color::White,
-            Some(Color::DarkBlue),
-            Attribute::NoBold,
-        )?;
-    }
+    StyledLine::with_marker(
+        "> ",
+        Color::Cyan,
+        prompt,
+        if app.composer.draft.text.is_empty() {
+            Color::DarkGrey
+        } else {
+            Color::White
+        },
+    )
+    .print(stdout, width)?;
+    print_separator(stdout, width)?;
+    StyledLine::with_marker(
+        "› ",
+        Color::Magenta,
+        if app.is_running() {
+            "working · ctrl+c to interrupt · esc to exit"
+        } else {
+            "enter to submit · ctrl+v to paste · esc to exit"
+        },
+        Color::DarkGrey,
+    )
+    .print(stdout, width)?;
     stdout.flush()
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 struct StyledLine {
+    marker: Option<(String, Color)>,
     text: String,
     foreground: Color,
-    background: Option<Color>,
 }
 
 impl StyledLine {
-    fn new(text: impl Into<String>, foreground: Color, background: Option<Color>) -> Self {
+    fn new(text: impl Into<String>, foreground: Color) -> Self {
         Self {
+            marker: None,
             text: text.into(),
             foreground,
-            background,
         }
     }
 
-    fn user(text: impl Into<String>) -> Self {
-        Self::new(text, Color::White, Some(Color::DarkBlue))
+    fn with_marker(
+        marker: impl Into<String>,
+        marker_color: Color,
+        text: impl Into<String>,
+        foreground: Color,
+    ) -> Self {
+        Self {
+            marker: Some((marker.into(), marker_color)),
+            text: text.into(),
+            foreground,
+        }
     }
 
     fn print(&self, stdout: &mut io::Stdout, width: u16) -> io::Result<()> {
+        if let Some((marker, marker_color)) = &self.marker {
+            let marker = truncate(marker, width);
+            let remaining = width.saturating_sub(marker.chars().count() as u16);
+            return queue!(
+                stdout,
+                SetForegroundColor(*marker_color),
+                Print(marker),
+                SetForegroundColor(self.foreground),
+                Print(truncate(&self.text, remaining)),
+                ResetColor,
+                Print("\r\n")
+            );
+        }
         print_styled_line(
             stdout,
             width,
             &self.text,
             self.foreground,
-            self.background,
             Attribute::NoBold,
         )
     }
@@ -545,51 +573,67 @@ impl StyledLine {
 
 fn system_line(message: &str) -> StyledLine {
     if message.starts_with("error:") {
-        StyledLine::new(format!("● {message}"), Color::Red, None)
+        StyledLine::new(format!("● {message}"), Color::Red)
     } else if message.starts_with("evidence:") {
-        StyledLine::new(format!("● {message}"), Color::Blue, None)
+        StyledLine::new(format!("● {message}"), Color::Blue)
     } else if message.starts_with("step:") {
-        StyledLine::new(format!("● {message}"), Color::Yellow, None)
+        StyledLine::new(format!("● {message}"), Color::Yellow)
     } else if message.contains("cancelled") {
-        StyledLine::new(format!("● {message}"), Color::DarkYellow, None)
+        StyledLine::new(format!("● {message}"), Color::DarkYellow)
     } else {
-        StyledLine::new(format!("● {message}"), Color::Green, None)
+        StyledLine::new(format!("● {message}"), Color::Green)
     }
 }
 
-fn status_color(status: &str) -> Color {
-    if status.contains("failed") || status.contains("error") || status.contains("rejected") {
-        Color::Red
-    } else if status.contains("running") || status.contains("turn") {
-        Color::Yellow
-    } else if status.contains("completed") {
-        Color::Green
+fn activity_lines(activity: &TranscriptActivity) -> Vec<StyledLine> {
+    let color = match activity.kind {
+        TranscriptActivityKind::Assistant => Color::Green,
+        TranscriptActivityKind::Done => Color::Green,
+        TranscriptActivityKind::Error => Color::Red,
+        TranscriptActivityKind::Progress => Color::Yellow,
+        TranscriptActivityKind::Tool => Color::Green,
+        TranscriptActivityKind::Verification => Color::Blue,
+    };
+    let foreground = if matches!(
+        activity.kind,
+        TranscriptActivityKind::Assistant | TranscriptActivityKind::Error
+    ) {
+        Color::White
     } else {
-        Color::Cyan
-    }
+        Color::Grey
+    };
+    let marker = if matches!(activity.kind, TranscriptActivityKind::Error) {
+        "✻"
+    } else {
+        "●"
+    };
+    let mut lines = vec![StyledLine::with_marker(
+        format!("{marker} "),
+        color,
+        &activity.title,
+        foreground,
+    )];
+    lines.extend(
+        activity
+            .details
+            .iter()
+            .map(|detail| StyledLine::new(format!("  └ {detail}"), Color::DarkGrey)),
+    );
+    lines
 }
 
-fn print_status_row(
-    stdout: &mut io::Stdout,
-    width: u16,
-    label: &str,
-    value: &str,
-    dot_color: Color,
-) -> io::Result<()> {
-    queue!(
-        stdout,
-        SetForegroundColor(dot_color),
-        Print("● "),
-        SetForegroundColor(Color::DarkGrey),
-        Print(label),
-        ResetColor,
-        Print(" "),
-        Print(truncate(
-            value,
-            width.saturating_sub(label.len() as u16 + 3)
-        )),
-        Print("\r\n")
-    )
+fn plan_lines(plan: &app::TranscriptPlan) -> Vec<StyledLine> {
+    use app::TranscriptPlanStepState::{Active, Completed, Failed, Pending};
+
+    plan.steps
+        .iter()
+        .map(|step| match step.state {
+            Active => StyledLine::with_marker("▪ ", Color::Yellow, &step.title, Color::White),
+            Completed => StyledLine::with_marker("✓ ", Color::Green, &step.title, Color::Grey),
+            Failed => StyledLine::with_marker("✻ ", Color::Red, &step.title, Color::White),
+            Pending => StyledLine::with_marker("□ ", Color::DarkGrey, &step.title, Color::DarkGrey),
+        })
+        .collect()
 }
 
 fn print_separator(stdout: &mut io::Stdout, width: u16) -> io::Result<()> {
@@ -607,7 +651,6 @@ fn print_styled_line(
     width: u16,
     text: &str,
     foreground: Color,
-    background: Option<Color>,
     attribute: Attribute,
 ) -> io::Result<()> {
     queue!(
@@ -615,9 +658,6 @@ fn print_styled_line(
         SetForegroundColor(foreground),
         SetAttribute(attribute)
     )?;
-    if let Some(background) = background {
-        queue!(stdout, SetBackgroundColor(background))?;
-    }
     queue!(
         stdout,
         Print(pad_to_width(&truncate(text, width), width)),
@@ -726,15 +766,18 @@ mod tests {
     }
 
     #[test]
-    fn portable_status_explains_direct_runtime_and_deferred_results() {
-        assert_eq!(
-            portable_daemon_status(),
-            "direct runtime (no daemon required)"
-        );
-        assert_eq!(
-            running_status(3),
-            "agent running - turn 3; results appear when complete"
-        );
+    fn running_status_includes_elapsed_time_and_tokens() {
+        let directory = tempfile::tempdir().expect("tempdir");
+        let mut app = AppState::new(
+            directory.path().to_path_buf(),
+            "status-test",
+            "",
+            Arc::new(UnsupportedClipboard),
+        )
+        .expect("app");
+        app.begin_run();
+        app.add_output_tokens(1_200);
+        assert_eq!(running_status(&app), "Working (0s · ↑ 1.2k tokens)");
     }
 
     #[test]

@@ -1,5 +1,5 @@
 use std::{
-    collections::BTreeMap,
+    collections::{BTreeMap, VecDeque},
     fs, io,
     path::{Path, PathBuf},
     sync::{
@@ -8,14 +8,20 @@ use std::{
         mpsc::{self, Receiver, Sender, TryRecvError},
     },
     thread,
+    time::Instant,
 };
 
 use base64::{Engine as _, engine::general_purpose::STANDARD};
-use medusa_agent::{AgentEngine, StepOutcome};
+use medusa_agent::{AgentEngine, AgentUpdate, StepOutcome};
 use medusa_config::Config;
-use medusa_provider::{ImageSource, MessageBlock, MiniMaxProvider, Role};
+use medusa_protocol::EventPayload;
+use medusa_provider::{ImageSource, MessageBlock, MiniMaxProvider};
+use serde_json::Value;
 
-use crate::clipboard::{ImageAttachment, PromptAttachment, PromptDraft};
+use crate::{
+    app::{TranscriptPlan, TranscriptPlanStep, TranscriptPlanStepState},
+    clipboard::{ImageAttachment, PromptAttachment, PromptDraft},
+};
 
 const MAX_FILE_CONTEXT_BYTES: usize = 2 * 1024 * 1024;
 
@@ -28,16 +34,30 @@ pub enum RuntimeCommand {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum RuntimeEvent {
     Started,
-    Progress {
-        turn: u32,
-    },
-    Completed {
-        session_id: String,
-        assistant_text: String,
-        evidence: Vec<String>,
-    },
+    Activity(RuntimeActivity),
+    Plan(TranscriptPlan),
+    Usage { output_tokens: u64 },
+    Progress { turn: u32 },
+    Completed { session_id: String },
     Cancelled,
     Failed(String),
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum RuntimeActivityKind {
+    Assistant,
+    Done,
+    Error,
+    Tool,
+    Verification,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct RuntimeActivity {
+    pub id: Option<String>,
+    pub kind: RuntimeActivityKind,
+    pub title: String,
+    pub details: Vec<String>,
 }
 
 pub struct RuntimeController {
@@ -154,12 +174,18 @@ fn run_prompt(
     let mut session = engine
         .create_session_with_content(repo, objective, content)
         .map_err(RuntimeError::agent)?;
+    let mut updates = UpdateState::default();
+    let _ = events.send(RuntimeEvent::Plan(plan_for(PlanPhase::Understand)));
 
     while !session.completed && session.turn < max_turns {
         if cancel.load(Ordering::SeqCst) {
             return Ok(RuntimeEvent::Cancelled);
         }
-        let outcome = engine.step(&mut session).map_err(RuntimeError::agent)?;
+        let outcome = engine
+            .step_with_observer(&mut session, |update| {
+                forward_update(update, events, &mut updates);
+            })
+            .map_err(RuntimeError::agent)?;
         let _ = events.send(RuntimeEvent::Progress { turn: session.turn });
         if outcome == StepOutcome::Completed {
             break;
@@ -173,23 +199,278 @@ fn run_prompt(
         return Err(RuntimeError::TurnLimit(max_turns));
     }
 
-    let assistant_text = session
-        .messages
-        .iter()
-        .filter(|message| message.role == Role::Assistant)
-        .flat_map(|message| &message.content)
-        .filter_map(|block| match block {
-            MessageBlock::Text { text } => Some(text.as_str()),
-            _ => None,
-        })
-        .collect::<Vec<_>>()
-        .join("\n");
-
     Ok(RuntimeEvent::Completed {
         session_id: session.id.to_string(),
-        assistant_text,
-        evidence: session.evidence,
     })
+}
+
+#[derive(Default)]
+struct UpdateState {
+    next_tool_id: u64,
+    pending_tools: VecDeque<PendingTool>,
+    plan_phase: PlanPhase,
+}
+
+struct PendingTool {
+    id: String,
+    tool: String,
+    title: String,
+    details: Vec<String>,
+    started_at: Instant,
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+enum PlanPhase {
+    #[default]
+    Understand,
+    Inspect,
+    Implement,
+    Verify,
+    Completed,
+    Failed,
+}
+
+fn forward_update(update: &AgentUpdate, events: &Sender<RuntimeEvent>, state: &mut UpdateState) {
+    match update {
+        AgentUpdate::Event(EventPayload::ModelResponseReceived { usage, .. }) => {
+            if let Some(output_tokens) = usage.get("output_tokens").and_then(Value::as_u64) {
+                let _ = events.send(RuntimeEvent::Usage { output_tokens });
+            }
+        }
+        AgentUpdate::Event(EventPayload::ToolCallRequested { tool, arguments }) => {
+            publish_plan(events, state, plan_phase_for_tool(tool));
+            state.next_tool_id = state.next_tool_id.saturating_add(1);
+            let pending = PendingTool {
+                id: format!("tool-{}", state.next_tool_id),
+                tool: tool.clone(),
+                title: tool_title(tool, arguments),
+                details: tool_details(arguments),
+                started_at: Instant::now(),
+            };
+            let _ = events.send(RuntimeEvent::Activity(RuntimeActivity {
+                id: Some(pending.id.clone()),
+                kind: RuntimeActivityKind::Tool,
+                title: pending.title.clone(),
+                details: pending.details.clone(),
+            }));
+            state.pending_tools.push_back(pending);
+        }
+        AgentUpdate::Event(EventPayload::VerificationStarted { .. }) => {
+            publish_plan(events, state, PlanPhase::Verify);
+        }
+        AgentUpdate::Event(EventPayload::VerificationCompleted { passed, evidence }) => {
+            publish_plan(
+                events,
+                state,
+                if *passed {
+                    PlanPhase::Completed
+                } else {
+                    PlanPhase::Failed
+                },
+            );
+            let _ = events.send(RuntimeEvent::Activity(RuntimeActivity {
+                id: None,
+                kind: RuntimeActivityKind::Verification,
+                title: if *passed {
+                    "Verify fixes".to_owned()
+                } else {
+                    "Verification failed".to_owned()
+                },
+                details: evidence.iter().map(|line| summarize(line)).collect(),
+            }));
+        }
+        AgentUpdate::AssistantText(text) => {
+            let mut lines = text.lines().map(str::trim).filter(|line| !line.is_empty());
+            if let Some(title) = lines.next() {
+                let _ = events.send(RuntimeEvent::Activity(RuntimeActivity {
+                    id: None,
+                    kind: RuntimeActivityKind::Assistant,
+                    title: summarize(title),
+                    details: lines.map(summarize).collect(),
+                }));
+            }
+        }
+        AgentUpdate::ToolOutput {
+            tool,
+            output,
+            is_error,
+        } => {
+            let pending = state
+                .pending_tools
+                .iter()
+                .position(|pending| pending.tool == *tool)
+                .and_then(|index| state.pending_tools.remove(index));
+            let mut activity = pending.map_or_else(
+                || RuntimeActivity {
+                    id: None,
+                    kind: RuntimeActivityKind::Tool,
+                    title: tool.clone(),
+                    details: Vec::new(),
+                },
+                |pending| {
+                    let mut details = pending.details;
+                    let elapsed = pending.started_at.elapsed().as_secs_f32();
+                    details.push(if *is_error {
+                        format!("failed after {elapsed:.1}s")
+                    } else {
+                        format!("completed in {elapsed:.1}s")
+                    });
+                    RuntimeActivity {
+                        id: Some(pending.id),
+                        kind: RuntimeActivityKind::Tool,
+                        title: pending.title,
+                        details,
+                    }
+                },
+            );
+            activity.details.extend(tool_output_details(output));
+            if *is_error {
+                activity.kind = RuntimeActivityKind::Error;
+            }
+            let _ = events.send(RuntimeEvent::Activity(activity));
+        }
+        _ => {}
+    }
+}
+
+fn publish_plan(events: &Sender<RuntimeEvent>, state: &mut UpdateState, phase: PlanPhase) {
+    if state.plan_phase != phase {
+        state.plan_phase = phase;
+        let _ = events.send(RuntimeEvent::Plan(plan_for(phase)));
+    }
+}
+
+fn plan_phase_for_tool(tool: &str) -> PlanPhase {
+    match tool {
+        "fs_read" | "search_text" | "code_index" => PlanPhase::Inspect,
+        _ => PlanPhase::Implement,
+    }
+}
+
+fn plan_for(phase: PlanPhase) -> TranscriptPlan {
+    use TranscriptPlanStepState::{Active, Completed, Failed, Pending};
+    let states = match phase {
+        PlanPhase::Understand => [Active, Pending, Pending, Pending],
+        PlanPhase::Inspect => [Completed, Active, Pending, Pending],
+        PlanPhase::Implement => [Completed, Completed, Active, Pending],
+        PlanPhase::Verify => [Completed, Completed, Completed, Active],
+        PlanPhase::Completed => [Completed, Completed, Completed, Completed],
+        PlanPhase::Failed => [Completed, Completed, Completed, Failed],
+    };
+    TranscriptPlan {
+        steps: [
+            "Understand the task",
+            "Inspect the codebase",
+            "Implement the change",
+            "Verify the result",
+        ]
+        .into_iter()
+        .zip(states)
+        .map(|(title, state)| TranscriptPlanStep {
+            title: title.to_owned(),
+            state,
+        })
+        .collect(),
+    }
+}
+
+fn tool_title(tool: &str, arguments: &Value) -> String {
+    match tool {
+        "fs_read" => format!("Read({})", json_string(arguments, "path")),
+        "fs_write" => format!("Write({})", json_string(arguments, "path")),
+        "search_text" => format!("Search({})", json_string(arguments, "query")),
+        "code_index" => {
+            let name = json_string(arguments, "name");
+            if name.is_empty() {
+                "Index repository".to_owned()
+            } else {
+                format!("Index({name})")
+            }
+        }
+        "patch_apply" => "Edit files".to_owned(),
+        "symbol_rename" => format!(
+            "Rename({} -> {})",
+            json_string(arguments, "old_name"),
+            json_string(arguments, "new_name")
+        ),
+        "shell_run" => format!("Bash({})", shell_command(arguments)),
+        "git_checkpoint" => format!("Checkpoint({})", json_string(arguments, "message")),
+        _ => tool.to_owned(),
+    }
+}
+
+fn tool_details(arguments: &Value) -> Vec<String> {
+    match arguments {
+        Value::Object(map) => map
+            .iter()
+            .filter_map(|(key, value)| {
+                if key == "content" || key == "replacement" || key == "expected" {
+                    None
+                } else {
+                    Some(format!("{key}: {}", summarize(&value_to_display(value))))
+                }
+            })
+            .take(3)
+            .collect(),
+        _ => Vec::new(),
+    }
+}
+
+fn tool_output_details(output: &str) -> Vec<String> {
+    let lines = output
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+        .map(summarize)
+        .collect::<Vec<_>>();
+    let mut preview = lines.iter().take(3).cloned().collect::<Vec<_>>();
+    if lines.len() > preview.len() {
+        preview.push(format!("... +{} lines", lines.len() - preview.len()));
+    }
+    preview
+}
+
+fn json_string(arguments: &Value, key: &str) -> String {
+    arguments
+        .get(key)
+        .and_then(Value::as_str)
+        .unwrap_or_default()
+        .to_owned()
+}
+
+fn shell_command(arguments: &Value) -> String {
+    let program = json_string(arguments, "program");
+    let args = arguments
+        .get("args")
+        .and_then(Value::as_array)
+        .map(|values| {
+            values
+                .iter()
+                .filter_map(Value::as_str)
+                .collect::<Vec<_>>()
+                .join(" ")
+        })
+        .unwrap_or_default();
+    if args.is_empty() {
+        program
+    } else {
+        format!("{program} {args}")
+    }
+}
+
+fn value_to_display(value: &Value) -> String {
+    match value {
+        Value::String(value) => value.clone(),
+        other => other.to_string(),
+    }
+}
+
+fn summarize(value: &str) -> String {
+    let compact = value.replace('\n', " ");
+    if compact.chars().count() <= 140 {
+        return compact;
+    }
+    compact.chars().take(137).chain("...".chars()).collect()
 }
 
 fn objective_for(draft: &PromptDraft) -> String {
@@ -324,6 +605,12 @@ impl From<io::Error> for RuntimeError {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::mpsc;
+
+    use medusa_agent::AgentUpdate;
+    use medusa_protocol::EventPayload;
+    use serde_json::json;
+
     use super::*;
     use crate::clipboard::{ImageAttachment, PromptAttachment};
     use tempfile::tempdir;
@@ -381,6 +668,52 @@ mod tests {
             &blocks[0],
             MessageBlock::Text { text } if text.contains("compiler error")
         ));
+    }
+
+    #[test]
+    fn tool_call_is_shown_before_its_result_updates_the_same_row() {
+        let (sender, receiver) = mpsc::channel();
+        let mut state = UpdateState::default();
+        forward_update(
+            &AgentUpdate::Event(EventPayload::ToolCallRequested {
+                tool: "fs_read".to_owned(),
+                arguments: json!({"path": "src/lib.rs"}),
+            }),
+            &sender,
+            &mut state,
+        );
+
+        assert!(matches!(
+            receiver.recv().expect("plan update"),
+            RuntimeEvent::Plan(_)
+        ));
+        let started = match receiver.recv().expect("tool start") {
+            RuntimeEvent::Activity(activity) => activity,
+            other => panic!("expected tool activity, received {other:?}"),
+        };
+
+        forward_update(
+            &AgentUpdate::ToolOutput {
+                tool: "fs_read".to_owned(),
+                output: "line one\nline two".to_owned(),
+                is_error: false,
+            },
+            &sender,
+            &mut state,
+        );
+
+        let completed = match receiver.recv().expect("tool result") {
+            RuntimeEvent::Activity(activity) => activity,
+            other => panic!("expected tool activity, received {other:?}"),
+        };
+        assert_eq!(started.id, completed.id);
+        assert!(
+            completed
+                .details
+                .iter()
+                .any(|detail| detail.contains("completed in"))
+        );
+        assert!(completed.details.iter().any(|detail| detail == "line one"));
     }
 
     #[test]

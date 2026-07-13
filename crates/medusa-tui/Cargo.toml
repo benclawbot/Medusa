@@ -19,6 +19,7 @@ hex.workspace = true
 medusa-agent = { path = "../medusa-agent" }
 medusa-config = { path = "../medusa-config" }
 medusa-daemon = { path = "../medusa-daemon" }
+medusa-protocol = { path = "../medusa-protocol" }
 medusa-provider = { path = "../medusa-provider" }
 png = "0.17"
 serde.workspace = true

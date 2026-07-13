@@ -1,4 +1,4 @@
-use std::{io, path::PathBuf, sync::Arc};
+use std::{io, path::PathBuf, sync::Arc, time::Instant};
 
 use crossterm::event::{Event, KeyCode, KeyEventKind, KeyModifiers};
 
@@ -14,7 +14,45 @@ use crate::{
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum TranscriptEntry {
     User(PromptDraft),
+    Activity(TranscriptActivity),
     System(String),
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum TranscriptActivityKind {
+    Assistant,
+    Done,
+    Error,
+    Progress,
+    Tool,
+    Verification,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct TranscriptActivity {
+    pub id: Option<String>,
+    pub kind: TranscriptActivityKind,
+    pub title: String,
+    pub details: Vec<String>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct TranscriptPlan {
+    pub steps: Vec<TranscriptPlanStep>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct TranscriptPlanStep {
+    pub title: String,
+    pub state: TranscriptPlanStepState,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum TranscriptPlanStepState {
+    Pending,
+    Active,
+    Completed,
+    Failed,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -29,7 +67,11 @@ pub enum AppAction {
 pub struct AppState {
     pub composer: ComposerState,
     pub transcript: Vec<TranscriptEntry>,
+    pub plan: Option<TranscriptPlan>,
     pub status: String,
+    pub token_count: u64,
+    pub active_turn: u32,
+    run_started_at: Option<Instant>,
     draft_store: DraftStore,
     draft_key: String,
     clipboard: Arc<dyn ClipboardService>,
@@ -54,7 +96,11 @@ impl AppState {
         Ok(Self {
             composer,
             transcript: Vec::new(),
+            plan: None,
             status: "ready".to_owned(),
+            token_count: 0,
+            active_turn: 0,
+            run_started_at: None,
             draft_store,
             draft_key,
             clipboard,
@@ -86,6 +132,7 @@ impl AppState {
                 let submitted = self.composer.draft.clone();
                 self.transcript
                     .push(TranscriptEntry::User(submitted.clone()));
+                self.plan = None;
                 self.composer = ComposerState::new("");
                 self.draft_store.delete(&self.draft_key)?;
                 self.status = "prompt submitted".to_owned();
@@ -131,6 +178,55 @@ impl AppState {
             }
         }
         Ok(())
+    }
+
+    pub fn begin_run(&mut self) {
+        self.status = "Working".to_owned();
+        self.token_count = 0;
+        self.active_turn = 0;
+        self.run_started_at = Some(Instant::now());
+    }
+
+    pub fn finish_run(&mut self) {
+        self.run_started_at = None;
+    }
+
+    pub fn update_turn(&mut self, turn: u32) {
+        self.active_turn = turn;
+    }
+
+    pub fn add_output_tokens(&mut self, tokens: u64) {
+        self.token_count = self.token_count.saturating_add(tokens);
+    }
+
+    #[must_use]
+    pub fn elapsed_seconds(&self) -> Option<u64> {
+        self.run_started_at
+            .map(|started_at| started_at.elapsed().as_secs())
+    }
+
+    #[must_use]
+    pub fn is_running(&self) -> bool {
+        self.run_started_at.is_some()
+    }
+
+    pub fn record_activity(&mut self, activity: TranscriptActivity) {
+        if let Some(id) = activity.id.as_deref()
+            && let Some(existing) = self
+                .transcript
+                .iter_mut()
+                .rev()
+                .find_map(|entry| match entry {
+                    TranscriptEntry::Activity(existing) if existing.id.as_deref() == Some(id) => {
+                        Some(existing)
+                    }
+                    _ => None,
+                })
+        {
+            *existing = activity;
+            return;
+        }
+        self.transcript.push(TranscriptEntry::Activity(activity));
     }
 
     fn persist_draft(&self) -> io::Result<()> {

@@ -1144,6 +1144,7 @@ dependencies = [
  "medusa-agent",
  "medusa-config",
  "medusa-daemon",
+ "medusa-protocol",
  "medusa-provider",
  "png 0.17.16",
  "serde",

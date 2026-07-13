@@ -25,6 +25,18 @@ pub enum StepOutcome {
     Completed,
 }
 
+/// A live update emitted while the engine executes one step.
+#[derive(Clone, Debug, PartialEq)]
+pub enum AgentUpdate {
+    Event(EventPayload),
+    AssistantText(String),
+    ToolOutput {
+        tool: String,
+        output: String,
+        is_error: bool,
+    },
+}
+
 /// Persistent single-agent engine.
 pub struct AgentEngine<P> {
     provider: P,
@@ -99,18 +111,29 @@ impl<P: ModelProvider> AgentEngine<P> {
     }
 
     pub fn step(&self, session: &mut AgentSession) -> MedusaResult<StepOutcome> {
+        self.step_with_observer(session, |_| {})
+    }
+
+    pub fn step_with_observer<F>(
+        &self,
+        session: &mut AgentSession,
+        mut observer: F,
+    ) -> MedusaResult<StepOutcome>
+    where
+        F: FnMut(&AgentUpdate),
+    {
         if session.completed {
             return Ok(StepOutcome::Completed);
         }
         validate_messages(&session.messages, &self.provider.capabilities())?;
         session.turn = session.turn.saturating_add(1);
-        append_event(
+        append_observed(
             session,
-            Actor::Coordinator,
             EventPayload::ModelRequestStarted {
                 provider: self.config.model.provider.clone(),
                 model: self.config.model.name.clone(),
             },
+            &mut observer,
         )?;
         let response = self.provider.complete(&ModelRequest {
             system: SYSTEM_PROMPT.into(),
@@ -119,20 +142,24 @@ impl<P: ModelProvider> AgentEngine<P> {
             max_tokens: self.config.model.max_output_tokens,
             temperature_milli: self.config.model.temperature_milli,
         })?;
-        append_event(
+        append_observed(
             session,
-            Actor::Coordinator,
             EventPayload::ModelResponseReceived {
                 response_id: response.response_id.clone(),
                 usage: serde_json::to_value(response.usage).map_err(json_error)?,
             },
+            &mut observer,
         )?;
 
         let mut assistant_blocks = Vec::new();
+        let mut assistant_text = Vec::new();
         let mut calls = VecDeque::new();
         for block in response.blocks {
             match block {
-                ResponseBlock::Text { text } => assistant_blocks.push(MessageBlock::Text { text }),
+                ResponseBlock::Text { text } => {
+                    assistant_text.push(text.clone());
+                    assistant_blocks.push(MessageBlock::Text { text });
+                }
                 ResponseBlock::ToolUse { id, name, input } => {
                     assistant_blocks.push(MessageBlock::ToolUse {
                         id: id.clone(),
@@ -149,29 +176,37 @@ impl<P: ModelProvider> AgentEngine<P> {
                 content: assistant_blocks,
             });
         }
+        if !assistant_text.is_empty() {
+            observer(&AgentUpdate::AssistantText(assistant_text.join("\n")));
+        }
 
         while let Some((id, name, input)) = calls.pop_front() {
-            append_event(
+            append_observed(
                 session,
-                Actor::Coordinator,
                 EventPayload::ToolCallRequested {
                     tool: name.clone(),
                     arguments: input.clone(),
                 },
+                &mut observer,
             )?;
             let result = execute_tool(&session.repo, &name, &input);
             let (content, is_error, exit_code) = match result {
                 Ok(output) => (output, false, Some(0)),
                 Err(error) => (error.to_string(), true, Some(1)),
             };
-            append_event(
+            append_observed(
                 session,
-                Actor::Coordinator,
                 EventPayload::ToolExecutionCompleted {
-                    tool: name,
+                    tool: name.clone(),
                     exit_code,
                 },
+                &mut observer,
             )?;
+            observer(&AgentUpdate::ToolOutput {
+                tool: name,
+                output: content.clone(),
+                is_error,
+            });
             session.messages.push(Message {
                 role: Role::User,
                 content: vec![MessageBlock::ToolResult {
@@ -191,24 +226,31 @@ impl<P: ModelProvider> AgentEngine<P> {
                 )
             })
         {
-            let verification = targeted_verification(&session.repo)?;
-            append_event(
+            append_observed(
                 session,
-                Actor::Coordinator,
+                EventPayload::VerificationStarted {
+                    commands: Vec::new(),
+                },
+                &mut observer,
+            )?;
+            let verification = targeted_verification(&session.repo)?;
+            append_observed(
+                session,
                 EventPayload::VerificationCompleted {
                     passed: verification.passed,
                     evidence: verification.evidence.clone(),
                 },
+                &mut observer,
             )?;
             session.evidence.extend(verification.evidence.clone());
             if verification.passed {
                 session.completed = true;
-                append_event(
+                append_observed(
                     session,
-                    Actor::Coordinator,
                     EventPayload::SessionCompleted {
                         report_ref: format!("session:{}.json", session.id),
                     },
+                    &mut observer,
                 )?;
             } else {
                 session.messages.push(Message {
@@ -230,6 +272,19 @@ impl<P: ModelProvider> AgentEngine<P> {
             StepOutcome::Continue
         })
     }
+}
+
+fn append_observed<F>(
+    session: &mut AgentSession,
+    payload: EventPayload,
+    observer: &mut F,
+) -> MedusaResult<()>
+where
+    F: FnMut(&AgentUpdate),
+{
+    append_event(session, Actor::Coordinator, payload.clone())?;
+    observer(&AgentUpdate::Event(payload));
+    Ok(())
 }
 
 fn validate_messages(

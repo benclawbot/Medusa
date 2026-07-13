@@ -7,7 +7,7 @@ mod session;
 mod tools;
 mod verification;
 
-pub use engine::{AgentEngine, StepOutcome};
+pub use engine::{AgentEngine, AgentUpdate, StepOutcome};
 pub use policy::validate_shell_command;
 pub use session::{AgentSession, bootstrap};
 pub use verification::{VerificationResult, targeted_verification};
@@ -21,6 +21,7 @@ mod tests {
 
     use medusa_config::Config;
     use medusa_core::{ErrorCategory, ErrorCode, MedusaError, MedusaResult};
+    use medusa_protocol::EventPayload;
     use medusa_provider::{ModelProvider, ModelRequest, ModelResponse, ResponseBlock, Usage};
     use serde_json::json;
 
@@ -88,10 +89,22 @@ mod tests {
         let mut session = first
             .create_session(directory.path(), "fix the off-by-one value".into())
             .expect("session");
+        let mut updates = Vec::new();
         assert_eq!(
-            first.step(&mut session).expect("inspect step"),
+            first
+                .step_with_observer(&mut session, |update| updates.push(update.clone()))
+                .expect("inspect step"),
             StepOutcome::Continue
         );
+        assert!(updates.iter().any(|update| {
+            matches!(
+                update,
+                AgentUpdate::Event(EventPayload::ToolCallRequested { tool, .. }) if tool == "fs_read"
+            )
+        }));
+        assert!(updates.iter().any(|update| {
+            matches!(update, AgentUpdate::ToolOutput { tool, .. } if tool == "fs_read")
+        }));
 
         let second = AgentEngine::new(
             ScriptedProvider::new(vec![
