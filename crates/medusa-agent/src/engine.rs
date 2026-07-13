@@ -320,14 +320,22 @@ impl<P: ModelProvider> AgentEngine<P> {
                 &mut observer,
             )?;
             let result = if name == "update_plan" {
-                let plan = plan_from_input(&input)?;
-                session.plan = plan.clone();
-                observer(&AgentUpdate::Plan(plan));
-                Ok("Visible task plan updated.".to_owned())
+                let plan = plan_from_input(&input);
+                if plan.is_empty() {
+                    Ok("Visible task plan update ignored because it was empty.".to_owned())
+                } else {
+                    session.plan = plan.clone();
+                    observer(&AgentUpdate::Plan(plan));
+                    Ok("Visible task plan updated.".to_owned())
+                }
             } else if name == "ask_user_question" {
-                let question = question_from_input(id, &input)?;
-                pause_for_question(session, question, &mut observer)?;
-                return Ok(StepOutcome::WaitingForUser);
+                match question_from_input(id.clone(), &input) {
+                    Ok(question) => {
+                        pause_for_question(session, question, &mut observer)?;
+                        return Ok(StepOutcome::WaitingForUser);
+                    }
+                    Err(error) => Err(error),
+                }
             } else if tool_allowed(self.config.agent.mode, &name) {
                 execute_tool(&session.repo, &name, &input)
             } else {
@@ -535,8 +543,9 @@ fn question_item_from_input(input: &serde_json::Value) -> MedusaResult<AgentQues
         .get("header")
         .and_then(serde_json::Value::as_str)
         .map(str::trim)
-        .filter(|value| !value.is_empty() && value.chars().count() <= 12)
-        .ok_or_else(|| invalid_question("every question header must be 1 to 12 characters"))?;
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| invalid_question("every question header must not be empty"))?;
+    let header = compact_question_header(header);
     let question = input
         .get("question")
         .and_then(serde_json::Value::as_str)
@@ -576,7 +585,7 @@ fn question_item_from_input(input: &serde_json::Value) -> MedusaResult<AgentQues
         })
         .collect::<MedusaResult<Vec<_>>>()?;
     Ok(AgentQuestionItem {
-        header: header.to_owned(),
+        header,
         question: question.to_owned(),
         options,
         multi_select: input
@@ -584,6 +593,33 @@ fn question_item_from_input(input: &serde_json::Value) -> MedusaResult<AgentQues
             .and_then(serde_json::Value::as_bool)
             .unwrap_or(false),
     })
+}
+
+fn compact_question_header(header: &str) -> String {
+    const MAX_HEADER_CHARS: usize = 12;
+
+    let normalized = header.split_whitespace().collect::<Vec<_>>().join(" ");
+    if normalized.chars().count() <= MAX_HEADER_CHARS {
+        return normalized;
+    }
+
+    let mut compact = String::new();
+    for word in normalized.split(' ') {
+        let candidate = if compact.is_empty() {
+            word.to_owned()
+        } else {
+            format!("{compact} {word}")
+        };
+        if candidate.chars().count() > MAX_HEADER_CHARS {
+            break;
+        }
+        compact = candidate;
+    }
+    if compact.is_empty() {
+        normalized.chars().take(MAX_HEADER_CHARS).collect()
+    } else {
+        compact
+    }
 }
 
 fn question_from_assistant_text(text: &str) -> Option<AgentQuestion> {
@@ -647,39 +683,42 @@ fn invalid_question(message: impl Into<String>) -> MedusaError {
     )
 }
 
-fn plan_from_input(input: &serde_json::Value) -> MedusaResult<Vec<AgentPlanStep>> {
-    let steps = input
-        .get("steps")
-        .and_then(serde_json::Value::as_array)
-        .ok_or_else(|| invalid_plan("steps must be an array"))?;
-    if steps.is_empty() || steps.len() > 8 {
-        return Err(invalid_plan("plan must contain between 1 and 8 steps"));
-    }
+fn plan_from_input(input: &serde_json::Value) -> Vec<AgentPlanStep> {
+    let Some(steps) = input.get("steps").and_then(serde_json::Value::as_array) else {
+        return Vec::new();
+    };
     steps
         .iter()
-        .map(|step| {
+        .take(8)
+        .enumerate()
+        .map(|(index, step)| {
             let title = step
                 .get("title")
                 .and_then(serde_json::Value::as_str)
                 .map(str::trim)
                 .filter(|title| !title.is_empty())
-                .filter(|title| title.chars().count() <= 140)
-                .ok_or_else(|| {
-                    invalid_plan("every plan step needs a title of at most 140 characters")
-                })?;
-            let status = match step.get("status").and_then(serde_json::Value::as_str) {
+                .map(compact_plan_title)
+                .unwrap_or_else(|| format!("Step {}", index.saturating_add(1)));
+            let status = match step
+                .get("status")
+                .and_then(serde_json::Value::as_str)
+                .map(|status| status.trim().to_ascii_lowercase())
+                .as_deref()
+            {
                 Some("pending") => AgentPlanStepStatus::Pending,
-                Some("in_progress") => AgentPlanStepStatus::InProgress,
+                Some("in_progress" | "in progress") => AgentPlanStepStatus::InProgress,
                 Some("completed") => AgentPlanStepStatus::Completed,
                 Some("failed") => AgentPlanStepStatus::Failed,
-                _ => return Err(invalid_plan("every plan step needs a valid status")),
+                _ => AgentPlanStepStatus::Pending,
             };
-            Ok(AgentPlanStep {
-                title: title.to_owned(),
-                status,
-            })
+            AgentPlanStep { title, status }
         })
         .collect()
+}
+
+fn compact_plan_title(title: &str) -> String {
+    const MAX_TITLE_CHARS: usize = 140;
+    title.chars().take(MAX_TITLE_CHARS).collect()
 }
 
 fn has_mutating_tool_result(session: &AgentSession) -> bool {
@@ -700,14 +739,6 @@ fn plan_is_complete(session: &AgentSession) -> bool {
             .plan
             .iter()
             .all(|step| step.status == AgentPlanStepStatus::Completed)
-}
-
-fn invalid_plan(message: impl Into<String>) -> MedusaError {
-    MedusaError::new(
-        ErrorCode::InvalidConfiguration,
-        ErrorCategory::Validation,
-        message,
-    )
 }
 
 fn repository_instructions(repo: &Path) -> String {

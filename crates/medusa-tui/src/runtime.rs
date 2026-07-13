@@ -8,7 +8,6 @@ use std::{
         mpsc::{self, Receiver, Sender, TryRecvError},
     },
     thread,
-    time::Instant,
 };
 
 use base64::{Engine as _, engine::general_purpose::STANDARD};
@@ -718,8 +717,6 @@ struct PendingTool {
     id: String,
     tool: String,
     title: String,
-    details: Vec<String>,
-    started_at: Instant,
 }
 
 fn forward_update(update: &AgentUpdate, events: &Sender<RuntimeEvent>, state: &mut UpdateState) {
@@ -738,14 +735,12 @@ fn forward_update(update: &AgentUpdate, events: &Sender<RuntimeEvent>, state: &m
                 id: format!("tool-{}", state.next_tool_id),
                 tool: tool.clone(),
                 title: tool_title(tool, arguments),
-                details: tool_details(arguments),
-                started_at: Instant::now(),
             };
             let _ = events.send(RuntimeEvent::Activity(RuntimeActivity {
                 id: Some(pending.id.clone()),
                 kind: RuntimeActivityKind::Tool,
                 title: pending.title.clone(),
-                details: pending.details.clone(),
+                details: Vec::new(),
             }));
             state.pending_tools.push_back(pending);
         }
@@ -761,14 +756,15 @@ fn forward_update(update: &AgentUpdate, events: &Sender<RuntimeEvent>, state: &m
                 details: evidence.iter().map(|line| summarize(line)).collect(),
             }));
         }
+        // Keep the assistant's milestone, but not the expanded narrative that follows it.
+        // Tool arguments and results remain in the durable session for the model.
         AgentUpdate::AssistantText(text) => {
-            let mut lines = markdown_lines(text).into_iter();
-            if let Some(title) = lines.next() {
+            if let Some(title) = assistant_title(text) {
                 let _ = events.send(RuntimeEvent::Activity(RuntimeActivity {
                     id: None,
                     kind: RuntimeActivityKind::Assistant,
-                    title: summarize(&title),
-                    details: lines.map(|line| summarize(&line)).collect(),
+                    title,
+                    details: Vec::new(),
                 }));
             }
         }
@@ -778,7 +774,7 @@ fn forward_update(update: &AgentUpdate, events: &Sender<RuntimeEvent>, state: &m
         AgentUpdate::Question(_) => {}
         AgentUpdate::ToolOutput {
             tool,
-            output,
+            output: _,
             is_error,
         } => {
             if is_internal_tool(tool) {
@@ -789,33 +785,36 @@ fn forward_update(update: &AgentUpdate, events: &Sender<RuntimeEvent>, state: &m
                 .iter()
                 .position(|pending| pending.tool == *tool)
                 .and_then(|index| state.pending_tools.remove(index));
-            let mut activity = pending.map_or_else(
+            let activity = pending.map_or_else(
                 || RuntimeActivity {
                     id: None,
-                    kind: RuntimeActivityKind::Tool,
-                    title: tool.clone(),
+                    kind: if *is_error {
+                        RuntimeActivityKind::Error
+                    } else {
+                        RuntimeActivityKind::Tool
+                    },
+                    title: if *is_error {
+                        format!("{tool} failed")
+                    } else {
+                        tool.clone()
+                    },
                     details: Vec::new(),
                 },
-                |pending| {
-                    let mut details = pending.details;
-                    let elapsed = pending.started_at.elapsed().as_secs_f32();
-                    details.push(if *is_error {
-                        format!("failed after {elapsed:.1}s")
+                |pending| RuntimeActivity {
+                    id: Some(pending.id),
+                    kind: if *is_error {
+                        RuntimeActivityKind::Error
                     } else {
-                        format!("completed in {elapsed:.1}s")
-                    });
-                    RuntimeActivity {
-                        id: Some(pending.id),
-                        kind: RuntimeActivityKind::Tool,
-                        title: pending.title,
-                        details,
-                    }
+                        RuntimeActivityKind::Tool
+                    },
+                    title: if *is_error {
+                        format!("{} failed", pending.title)
+                    } else {
+                        pending.title
+                    },
+                    details: Vec::new(),
                 },
             );
-            activity.details.extend(tool_output_details(output));
-            if *is_error {
-                activity.kind = RuntimeActivityKind::Error;
-            }
             let _ = events.send(RuntimeEvent::Activity(activity));
         }
         _ => {}
@@ -846,38 +845,6 @@ fn runtime_question(question: &AgentQuestion) -> RuntimeQuestion {
 
 fn is_internal_tool(tool: &str) -> bool {
     matches!(tool, "update_plan" | "ask_user_question")
-}
-
-fn markdown_lines(text: &str) -> Vec<String> {
-    let mut in_code_block = false;
-    text.lines()
-        .filter_map(|line| {
-            let trimmed = line.trim();
-            if trimmed.starts_with("```") {
-                in_code_block = !in_code_block;
-                return None;
-            }
-            if trimmed.is_empty() {
-                return None;
-            }
-            let line = trimmed.trim_start_matches('#').trim_start();
-            let line = if let Some(item) = line
-                .strip_prefix("- ")
-                .or_else(|| line.strip_prefix("* "))
-                .or_else(|| line.strip_prefix("+ "))
-            {
-                format!("- {item}")
-            } else {
-                line.to_owned()
-            };
-            let line = line.replace("**", "").replace("__", "").replace('`', "");
-            if in_code_block {
-                Some(format!("  {line}"))
-            } else {
-                Some(line)
-            }
-        })
-        .collect()
 }
 
 fn transcript_plan(steps: &[AgentPlanStep]) -> TranscriptPlan {
@@ -924,37 +891,6 @@ fn tool_title(tool: &str, arguments: &Value) -> String {
     }
 }
 
-fn tool_details(arguments: &Value) -> Vec<String> {
-    match arguments {
-        Value::Object(map) => map
-            .iter()
-            .filter_map(|(key, value)| {
-                if key == "content" || key == "replacement" || key == "expected" {
-                    None
-                } else {
-                    Some(format!("{key}: {}", summarize(&value_to_display(value))))
-                }
-            })
-            .take(3)
-            .collect(),
-        _ => Vec::new(),
-    }
-}
-
-fn tool_output_details(output: &str) -> Vec<String> {
-    let lines = output
-        .lines()
-        .map(str::trim)
-        .filter(|line| !line.is_empty())
-        .map(summarize)
-        .collect::<Vec<_>>();
-    let mut preview = lines.iter().take(3).cloned().collect::<Vec<_>>();
-    if lines.len() > preview.len() {
-        preview.push(format!("... +{} lines", lines.len() - preview.len()));
-    }
-    preview
-}
-
 fn json_string(arguments: &Value, key: &str) -> String {
     arguments
         .get(key)
@@ -983,19 +919,22 @@ fn shell_command(arguments: &Value) -> String {
     }
 }
 
-fn value_to_display(value: &Value) -> String {
-    match value {
-        Value::String(value) => value.clone(),
-        other => other.to_string(),
-    }
-}
-
 fn summarize(value: &str) -> String {
     let compact = value.replace('\n', " ");
     if compact.chars().count() <= 140 {
         return compact;
     }
     compact.chars().take(137).chain("...".chars()).collect()
+}
+
+fn assistant_title(text: &str) -> Option<String> {
+    let line = text.lines().map(str::trim).find(|line| !line.is_empty())?;
+    let title = line
+        .trim_start_matches(|character: char| {
+            character.is_ascii_whitespace() || matches!(character, '-' | '*' | '#' | '>')
+        })
+        .trim();
+    (!title.is_empty()).then(|| summarize(title))
 }
 
 fn objective_for(draft: &PromptDraft) -> String {
@@ -1198,7 +1137,7 @@ mod tests {
     }
 
     #[test]
-    fn tool_call_is_shown_before_its_result_updates_the_same_row() {
+    fn tool_call_is_shown_as_one_high_level_row() {
         let (sender, receiver) = mpsc::channel();
         let mut state = UpdateState::new();
         forward_update(
@@ -1230,13 +1169,9 @@ mod tests {
             other => panic!("expected tool activity, received {other:?}"),
         };
         assert_eq!(started.id, completed.id);
-        assert!(
-            completed
-                .details
-                .iter()
-                .any(|detail| detail.contains("completed in"))
-        );
-        assert!(completed.details.iter().any(|detail| detail == "line one"));
+        assert_eq!(completed.title, "Read(src/lib.rs)");
+        assert!(started.details.is_empty());
+        assert!(completed.details.is_empty());
     }
 
     #[test]
@@ -1386,7 +1321,7 @@ mod tests {
     }
 
     #[test]
-    fn internal_plan_transport_and_markdown_markers_do_not_leak_into_the_transcript() {
+    fn internal_plan_transport_is_hidden_and_assistant_narration_is_one_headline() {
         let (sender, receiver) = mpsc::channel();
         let mut state = UpdateState::new();
         forward_update(
@@ -1401,9 +1336,19 @@ mod tests {
             receiver.try_recv(),
             Err(mpsc::TryRecvError::Empty)
         ));
-        assert_eq!(
-            markdown_lines("**Heading**\n- `cargo test`"),
-            vec!["Heading".to_owned(), "- cargo test".to_owned()]
+        forward_update(
+            &AgentUpdate::AssistantText(
+                "Now I have a clear picture. Key findings:\n\n1. First detail\n2. Second detail"
+                    .to_owned(),
+            ),
+            &sender,
+            &mut state,
         );
+        let RuntimeEvent::Activity(activity) = receiver.recv().expect("assistant milestone") else {
+            panic!("expected assistant milestone");
+        };
+        assert_eq!(activity.kind, RuntimeActivityKind::Assistant);
+        assert_eq!(activity.title, "Now I have a clear picture. Key findings:");
+        assert!(activity.details.is_empty());
     }
 }

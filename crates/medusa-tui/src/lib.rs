@@ -1246,12 +1246,17 @@ fn activity_lines(activity: &TranscriptActivity) -> Vec<StyledLine> {
         &activity.title,
         foreground,
     )];
-    lines.extend(
-        activity
-            .details
-            .iter()
-            .map(|detail| StyledLine::new(format!("  └ {detail}"), Color::DarkGrey)),
-    );
+    if !matches!(
+        activity.kind,
+        TranscriptActivityKind::Assistant | TranscriptActivityKind::Tool
+    ) {
+        lines.extend(
+            activity
+                .details
+                .iter()
+                .map(|detail| StyledLine::new(format!("  └ {detail}"), Color::DarkGrey)),
+        );
+    }
     lines
 }
 
@@ -1484,6 +1489,23 @@ mod tests {
                 .any(|line| line.text.contains("Effort    high"))
         );
         assert!(frame.iter().any(|line| line.text == "Apply configuration"));
+    }
+
+    #[test]
+    fn tool_and_assistant_activities_render_without_detail_rows() {
+        for kind in [
+            TranscriptActivityKind::Tool,
+            TranscriptActivityKind::Assistant,
+        ] {
+            let lines = activity_lines(&TranscriptActivity {
+                id: None,
+                kind,
+                title: "High-level step".to_owned(),
+                details: vec!["argument: private detail".to_owned()],
+            });
+            assert_eq!(lines.len(), 1);
+            assert_eq!(lines[0].text, "High-level step");
+        }
     }
 
     #[test]

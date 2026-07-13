@@ -288,6 +288,107 @@ mod tests {
     }
 
     #[test]
+    fn oversized_model_plan_is_compacted_without_terminating_the_task() {
+        let directory = tempfile::tempdir().expect("temporary directory");
+        let steps = (1..=10)
+            .map(|number| {
+                json!({
+                    "title": format!("Step {number}"),
+                    "status": if number == 1 { "in progress" } else { "pending" }
+                })
+            })
+            .collect::<Vec<_>>();
+        let engine = AgentEngine::new(
+            ScriptedProvider::new(vec![response(
+                vec![ResponseBlock::ToolUse {
+                    id: "plan-oversized".into(),
+                    name: "update_plan".into(),
+                    input: json!({"steps": steps}),
+                }],
+                "tool_use",
+            )]),
+            Config::default(),
+        );
+        let mut session = engine
+            .create_session(directory.path(), "update the plan".to_owned())
+            .expect("session");
+
+        assert_eq!(
+            engine
+                .step(&mut session)
+                .expect("oversized plan is accepted"),
+            StepOutcome::Continue
+        );
+        assert_eq!(session.plan.len(), 8);
+        assert_eq!(session.plan[0].status, AgentPlanStepStatus::InProgress);
+    }
+
+    #[test]
+    fn empty_model_plan_preserves_the_last_visible_plan() {
+        let directory = tempfile::tempdir().expect("temporary directory");
+        let engine = AgentEngine::new(
+            ScriptedProvider::new(vec![response(
+                vec![ResponseBlock::ToolUse {
+                    id: "plan-empty".into(),
+                    name: "update_plan".into(),
+                    input: json!({"steps": []}),
+                }],
+                "tool_use",
+            )]),
+            Config::default(),
+        );
+        let mut session = engine
+            .create_session(directory.path(), "keep the plan".to_owned())
+            .expect("session");
+        session.plan = vec![AgentPlanStep {
+            title: "Keep this step".to_owned(),
+            status: AgentPlanStepStatus::InProgress,
+        }];
+
+        assert_eq!(
+            engine.step(&mut session).expect("empty plan is harmless"),
+            StepOutcome::Continue
+        );
+        assert_eq!(session.plan.len(), 1);
+        assert_eq!(session.plan[0].title, "Keep this step");
+    }
+
+    #[test]
+    fn malformed_question_tool_is_returned_to_the_model_without_terminating_the_task() {
+        let directory = tempfile::tempdir().expect("temporary directory");
+        let engine = AgentEngine::new(
+            ScriptedProvider::new(vec![response(
+                vec![ResponseBlock::ToolUse {
+                    id: "question-invalid".into(),
+                    name: "ask_user_question".into(),
+                    input: json!({"questions": []}),
+                }],
+                "tool_use",
+            )]),
+            Config::default(),
+        );
+        let mut session = engine
+            .create_session(directory.path(), "ask a question".to_owned())
+            .expect("session");
+        let mut updates = Vec::new();
+
+        assert_eq!(
+            engine
+                .step_with_observer(&mut session, |update| updates.push(update.clone()))
+                .expect("malformed question is a tool result"),
+            StepOutcome::Continue
+        );
+        assert!(session.pending_question.is_none());
+        assert!(updates.iter().any(|update| {
+            matches!(
+                update,
+                AgentUpdate::ToolOutput { tool, is_error: true, .. }
+                    if tool == "ask_user_question"
+            )
+        }));
+    }
+
+    #[test]
     fn a_model_question_set_pauses_the_session_until_confirmed_answers_are_supplied() {
         let directory = tempfile::tempdir().expect("temporary directory");
         let engine = AgentEngine::new(
@@ -298,7 +399,7 @@ mod tests {
                     input: json!({
                         "questions": [
                             {
-                                "header": "Project",
+                                "header": "Project location",
                                 "question": "Which project should I use?",
                                 "options": [
                                     {"label": "Projects/site-a", "description": "Use the existing site"},
@@ -334,7 +435,9 @@ mod tests {
         assert!(session.pending_question.is_some());
         assert!(updates.iter().any(|update| {
             matches!(update, AgentUpdate::Question(question)
-                if question.questions.len() == 2 && question.questions[0].options.len() == 2)
+                if question.questions.len() == 2
+                    && question.questions[0].header == "Project"
+                    && question.questions[0].options.len() == 2)
         }));
         let restored = engine
             .load_session(directory.path(), session.id.as_str())
