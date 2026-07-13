@@ -28,6 +28,14 @@ pub(crate) fn built_in_tools() -> Vec<ToolDefinition> {
             }),
         ),
         tool(
+            "fs_create_dir",
+            "Create a directory and any missing parent directories inside the repository. Use this instead of shell mkdir commands.",
+            json!({
+                "type": "object", "properties": {"path": {"type": "string"}},
+                "required": ["path"], "additionalProperties": false
+            }),
+        ),
+        tool(
             "fs_write",
             "Atomically write a UTF-8 file inside the repository.",
             json!({
@@ -79,7 +87,7 @@ pub(crate) fn built_in_tools() -> Vec<ToolDefinition> {
         ),
         tool(
             "shell_run",
-            "Run a non-destructive command in the repository and capture output.",
+            "Run an approved read-only executable directly in the repository and capture output. Never invoke bash, sh, cmd, PowerShell, or shell operators; use filesystem tools for writes and directory creation.",
             json!({
                 "type": "object", "properties": {
                     "program": {"type": "string"},
@@ -167,6 +175,7 @@ pub(crate) fn built_in_tools() -> Vec<ToolDefinition> {
 pub(crate) fn execute_tool(repo: &Path, name: &str, input: &Value) -> MedusaResult<String> {
     match name {
         "fs_read" => filesystem::read(repo, input_string(input, "path")?),
+        "fs_create_dir" => filesystem::create_dir(repo, input_string(input, "path")?),
         "fs_write" => filesystem::write(
             repo,
             input_string(input, "path")?,

@@ -508,6 +508,19 @@ mod tests {
         );
     }
 
+    #[test]
+    fn directory_tool_creates_nested_repository_directories() {
+        let directory = tempfile::tempdir().expect("tempdir");
+        let output = execute_tool(
+            directory.path(),
+            "fs_create_dir",
+            &json!({"path": "landing-page/assets"}),
+        )
+        .expect("create directory");
+        assert!(output.contains("landing-page"));
+        assert!(directory.path().join("landing-page/assets").is_dir());
+    }
+
     #[cfg(target_os = "linux")]
     #[test]
     fn sandbox_blocks_network_and_external_writes() {

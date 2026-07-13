@@ -867,6 +867,7 @@ fn transcript_plan(steps: &[AgentPlanStep]) -> TranscriptPlan {
 fn tool_title(tool: &str, arguments: &Value) -> String {
     match tool {
         "fs_read" => format!("Read({})", json_string(arguments, "path")),
+        "fs_create_dir" => format!("Mkdir({})", json_string(arguments, "path")),
         "fs_write" => format!("Write({})", json_string(arguments, "path")),
         "search_text" => format!("Search({})", json_string(arguments, "query")),
         "code_index" => {
@@ -883,7 +884,7 @@ fn tool_title(tool: &str, arguments: &Value) -> String {
             json_string(arguments, "old_name"),
             json_string(arguments, "new_name")
         ),
-        "shell_run" => format!("Bash({})", shell_command(arguments)),
+        "shell_run" => format!("Shell({})", shell_command(arguments)),
         "web_search" => format!("WebSearch({})", json_string(arguments, "query")),
         "web_fetch" => format!("WebFetch({})", json_string(arguments, "url")),
         "git_checkpoint" => format!("Checkpoint({})", json_string(arguments, "message")),
@@ -1172,6 +1173,18 @@ mod tests {
         assert_eq!(completed.title, "Read(src/lib.rs)");
         assert!(started.details.is_empty());
         assert!(completed.details.is_empty());
+    }
+
+    #[test]
+    fn portable_tool_titles_distinguish_shell_and_directory_operations() {
+        assert_eq!(
+            tool_title("shell_run", &json!({"program": "cargo", "args": ["test"]})),
+            "Shell(cargo test)"
+        );
+        assert_eq!(
+            tool_title("fs_create_dir", &json!({"path": "landing-page/assets"})),
+            "Mkdir(landing-page/assets)"
+        );
     }
 
     #[test]

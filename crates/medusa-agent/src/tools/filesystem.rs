@@ -69,6 +69,12 @@ pub(crate) fn write(repo: &Path, relative: &str, content: &str) -> MedusaResult<
     ))
 }
 
+pub(crate) fn create_dir(repo: &Path, relative: &str) -> MedusaResult<String> {
+    let path = safe_path(repo, relative)?;
+    fs::create_dir_all(&path)?;
+    Ok(format!("created directory {}", path.display()))
+}
+
 pub(crate) fn search(repo: &Path, query: &str) -> MedusaResult<String> {
     let mut results = Vec::new();
     for entry in WalkDir::new(repo).into_iter().filter_map(Result::ok) {
@@ -100,11 +106,15 @@ pub(crate) fn search(repo: &Path, query: &str) -> MedusaResult<String> {
 mod tests {
     use std::fs;
 
-    use super::{read, search, write};
+    use super::{create_dir, read, search, write};
 
     #[test]
     fn extracted_filesystem_tools_preserve_read_write_and_search_behavior() {
         let directory = tempfile::tempdir().expect("tempdir");
+        let directory_receipt =
+            create_dir(directory.path(), "nested/assets").expect("create nested directory");
+        assert!(directory_receipt.contains("nested"));
+        assert!(directory.path().join("nested/assets").is_dir());
         let receipt =
             write(directory.path(), "nested/value.txt", "alpha\nbeta\n").expect("atomic write");
         assert!(receipt.contains("11 bytes"));
@@ -129,5 +139,6 @@ mod tests {
         let directory = tempfile::tempdir().expect("tempdir");
         assert!(read(directory.path(), "../secret.txt").is_err());
         assert!(write(directory.path(), "../secret.txt", "nope").is_err());
+        assert!(create_dir(directory.path(), "../outside").is_err());
     }
 }
