@@ -88,6 +88,13 @@ pub enum EventPayload {
     UserPromptReceived {
         text: String,
     },
+    GoalUpdated {
+        objective: String,
+    },
+    ConversationCompacted {
+        original_messages: u32,
+        retained_messages: u32,
+    },
     AssumptionRecorded {
         assumption: String,
         rationale: String,

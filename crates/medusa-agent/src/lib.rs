@@ -7,7 +7,9 @@ mod session;
 mod tools;
 mod verification;
 
-pub use engine::{AgentEngine, AgentUpdate, StepOutcome};
+pub use engine::{
+    AgentEngine, AgentUpdate, StepOutcome, compact_session, update_session_objective,
+};
 pub use policy::validate_shell_command;
 pub use session::{AgentSession, bootstrap};
 pub use verification::{VerificationResult, targeted_verification};
@@ -19,7 +21,7 @@ mod tests {
     #[cfg(target_os = "linux")]
     use std::process::Command;
 
-    use medusa_config::Config;
+    use medusa_config::{Config, Mode};
     use medusa_core::{ErrorCategory, ErrorCode, MedusaError, MedusaResult};
     use medusa_protocol::EventPayload;
     use medusa_provider::{ModelProvider, ModelRequest, ModelResponse, ResponseBlock, Usage};
@@ -142,6 +144,74 @@ mod tests {
                 .iter()
                 .any(|line| line.contains("verified-value-42"))
         );
+    }
+
+    #[test]
+    fn compacting_and_updating_a_goal_changes_durable_session_context() {
+        let directory = tempfile::tempdir().expect("temporary directory");
+        let engine = AgentEngine::new(ScriptedProvider::new(Vec::new()), Config::default());
+        let mut session = engine
+            .create_session(directory.path(), "initial goal".to_owned())
+            .expect("session");
+        engine
+            .append_user_message(
+                &mut session,
+                vec![medusa_provider::MessageBlock::Text {
+                    text: "follow-up context".to_owned(),
+                }],
+            )
+            .expect("append follow-up");
+
+        update_session_objective(&mut session, "new durable goal".to_owned()).expect("update goal");
+        compact_session(&mut session, Some("keep the API decision")).expect("compact session");
+
+        assert_eq!(session.objective, "new durable goal");
+        assert_eq!(session.messages.len(), 1);
+        assert!(matches!(
+            &session.messages[0].content[0],
+            medusa_provider::MessageBlock::Text { text }
+                if text.contains("keep the API decision") && text.contains("follow-up context")
+        ));
+        assert!(
+            session.events.iter().any(|event| {
+                matches!(&event.payload, EventPayload::ConversationCompacted { .. })
+            })
+        );
+    }
+
+    #[test]
+    fn read_only_plan_mode_denies_file_writes_even_if_the_model_requests_one() {
+        let directory = tempfile::tempdir().expect("temporary directory");
+        let mut config = Config::default();
+        config.agent.mode = Mode::ReadOnly;
+        let engine = AgentEngine::new(
+            ScriptedProvider::new(vec![response(
+                vec![ResponseBlock::ToolUse {
+                    id: "write-1".into(),
+                    name: "fs_write".into(),
+                    input: json!({"path": "blocked.txt", "content": "nope"}),
+                }],
+                "tool_use",
+            )]),
+            config,
+        );
+        let mut session = engine
+            .create_session(directory.path(), "produce a plan".to_owned())
+            .expect("session");
+        let mut updates = Vec::new();
+        assert_eq!(
+            engine
+                .step_with_observer(&mut session, |update| updates.push(update.clone()))
+                .expect("read-only step"),
+            StepOutcome::Continue
+        );
+        assert!(!directory.path().join("blocked.txt").exists());
+        assert!(updates.iter().any(|update| {
+            matches!(
+                update,
+                AgentUpdate::Event(EventPayload::ToolCallDenied { tool, .. }) if tool == "fs_write"
+            )
+        }));
     }
 
     #[test]

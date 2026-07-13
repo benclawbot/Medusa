@@ -123,7 +123,7 @@ pub trait ModelProvider {
     }
 }
 
-/// MiniMax-M3 adapter using the Anthropic-compatible Messages API.
+/// Anthropic Messages API adapter for MiniMax, Anthropic, and compatible providers.
 pub struct MiniMaxProvider {
     client: Client,
     base_url: String,
@@ -136,15 +136,26 @@ pub struct MiniMaxProvider {
 impl MiniMaxProvider {
     /// Builds an adapter from typed model configuration and provider environment variables.
     pub fn from_config(config: &Config) -> MedusaResult<Self> {
-        let api_key = env::var("MINIMAX_API_KEY").map_err(|_| {
-            MedusaError::new(
-                ErrorCode::DependencyUnavailable,
-                ErrorCategory::Environment,
-                "missing provider credential in MINIMAX_API_KEY",
-            )
-        })?;
-        let base_url = env::var("MINIMAX_BASE_URL")
-            .unwrap_or_else(|_| "https://api.minimax.io/anthropic".into());
+        Self::from_config_with_api_key(config, None)
+    }
+
+    /// Builds an adapter with an optional session-only credential supplied by an interactive client.
+    pub fn from_config_with_api_key(
+        config: &Config,
+        session_api_key: Option<String>,
+    ) -> MedusaResult<Self> {
+        let settings = provider_settings(&config.model.provider)?;
+        let api_key = session_api_key
+            .or_else(|| env::var(settings.api_key_env).ok())
+            .ok_or_else(|| {
+                MedusaError::new(
+                    ErrorCode::DependencyUnavailable,
+                    ErrorCategory::Environment,
+                    format!("missing provider credential in {}", settings.api_key_env),
+                )
+            })?;
+        let base_url = env::var(settings.base_url_env)
+            .unwrap_or_else(|_| settings.default_base_url.to_owned());
         let client = Client::builder()
             .timeout(Duration::from_secs(600))
             .build()
@@ -155,7 +166,7 @@ impl MiniMaxProvider {
             api_key,
             model: config.model.name.clone(),
             max_retries: 5,
-            capabilities: minimax_capabilities_from_environment(),
+            capabilities: (settings.capabilities)(),
         })
     }
 
@@ -200,6 +211,43 @@ impl MiniMaxProvider {
             ));
         }
         Ok(())
+    }
+}
+
+struct ProviderSettings {
+    api_key_env: &'static str,
+    base_url_env: &'static str,
+    default_base_url: &'static str,
+    capabilities: fn() -> ProviderCapabilities,
+}
+
+fn provider_settings(provider: &str) -> MedusaResult<ProviderSettings> {
+    match provider.trim().to_ascii_lowercase().as_str() {
+        "minimax" => Ok(ProviderSettings {
+            api_key_env: "MINIMAX_API_KEY",
+            base_url_env: "MINIMAX_BASE_URL",
+            default_base_url: "https://api.minimax.io/anthropic",
+            capabilities: minimax_capabilities_from_environment,
+        }),
+        "anthropic" => Ok(ProviderSettings {
+            api_key_env: "ANTHROPIC_API_KEY",
+            base_url_env: "ANTHROPIC_BASE_URL",
+            default_base_url: "https://api.anthropic.com",
+            capabilities: anthropic_capabilities,
+        }),
+        "anthropic-compatible" => Ok(ProviderSettings {
+            api_key_env: "MEDUSA_API_KEY",
+            base_url_env: "MEDUSA_BASE_URL",
+            default_base_url: "https://api.minimax.io/anthropic",
+            capabilities: ProviderCapabilities::default,
+        }),
+        other => Err(MedusaError::new(
+            ErrorCode::InvalidConfiguration,
+            ErrorCategory::Validation,
+            format!(
+                "unsupported provider {other}; choose minimax, anthropic, or anthropic-compatible"
+            ),
+        )),
     }
 }
 
@@ -264,6 +312,20 @@ fn minimax_capabilities_from_environment() -> ProviderCapabilities {
         }
     } else {
         ProviderCapabilities::default()
+    }
+}
+
+fn anthropic_capabilities() -> ProviderCapabilities {
+    ProviderCapabilities {
+        image_input: true,
+        supported_image_media_types: vec![
+            "image/png".to_owned(),
+            "image/jpeg".to_owned(),
+            "image/webp".to_owned(),
+            "image/gif".to_owned(),
+        ],
+        max_image_bytes: Some(20 * 1024 * 1024),
+        max_images_per_request: Some(20),
     }
 }
 
@@ -419,5 +481,18 @@ mod tests {
     #[test]
     fn rate_limit_is_retryable() {
         assert!(classify_status(StatusCode::TOO_MANY_REQUESTS, "slow down".into()).retryable);
+    }
+
+    #[test]
+    fn session_credentials_support_provider_selection_without_environment_mutation() {
+        let mut config = Config::default();
+        config.model.provider = "anthropic".to_owned();
+        config.model.name = "claude-sonnet-test".to_owned();
+        let provider =
+            MiniMaxProvider::from_config_with_api_key(&config, Some("session-key".to_owned()))
+                .expect("build provider from session key");
+        assert!(provider.capabilities().image_input);
+        assert!(provider_settings("anthropic-compatible").is_ok());
+        assert!(provider_settings("unsupported").is_err());
     }
 }

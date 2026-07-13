@@ -1,5 +1,6 @@
 pub mod app;
 pub mod clipboard;
+pub mod commands;
 pub mod draft_store;
 pub mod input;
 pub mod native_clipboard;
@@ -20,6 +21,7 @@ use app::{
     AppAction, AppError, AppState, TranscriptActivity, TranscriptActivityKind, TranscriptEntry,
 };
 use clipboard::{ClipboardService, PromptAttachment, PromptDraft, UnsupportedClipboard};
+use commands::command_suggestions;
 use crossterm::{
     cursor::{Hide, MoveTo, Show},
     event::{
@@ -244,6 +246,19 @@ fn handle_app_action(
             }
             Ok(false)
         }
+        AppAction::Command(command) => {
+            match runtime.run_command(command) {
+                Ok(()) => {
+                    app.status = "command running".to_owned();
+                }
+                Err(error) => {
+                    app.transcript
+                        .push(TranscriptEntry::System(format!("error: {error}")));
+                    app.status = "command rejected".to_owned();
+                }
+            }
+            Ok(false)
+        }
         AppAction::None | AppAction::Redraw => Ok(false),
     }
 }
@@ -276,6 +291,29 @@ fn drain_runtime_events(app: &mut AppState, runtime: &RuntimeController) -> io::
             }
             RuntimeEvent::Progress { turn } => {
                 app.update_turn(turn);
+            }
+            RuntimeEvent::Settings {
+                model,
+                effort,
+                plan_mode,
+            } => {
+                app.set_runtime_settings(model, effort, plan_mode);
+            }
+            RuntimeEvent::Notice { title, details } => {
+                let status = title.to_ascii_lowercase();
+                app.record_activity(TranscriptActivity {
+                    id: None,
+                    kind: TranscriptActivityKind::Progress,
+                    title,
+                    details,
+                });
+                app.status = status;
+            }
+            RuntimeEvent::NewSession => {
+                app.clear_for_new_session();
+            }
+            RuntimeEvent::Compacted { message } => {
+                app.compact_transcript(message);
             }
             RuntimeEvent::Completed { session_id } => {
                 app.record_activity(TranscriptActivity {
@@ -355,6 +393,10 @@ struct PortableRenderSnapshot {
     token_count: u64,
     elapsed_seconds: Option<u64>,
     draft: PromptDraft,
+    command_selection: usize,
+    model_label: Option<String>,
+    effort_label: Option<String>,
+    plan_mode: bool,
 }
 
 fn portable_render_snapshot(app: &AppState, terminal_size: (u16, u16)) -> PortableRenderSnapshot {
@@ -366,6 +408,10 @@ fn portable_render_snapshot(app: &AppState, terminal_size: (u16, u16)) -> Portab
         token_count: app.token_count,
         elapsed_seconds: app.elapsed_seconds(),
         draft: app.composer.draft.clone(),
+        command_selection: app.command_selection,
+        model_label: app.model_label.clone(),
+        effort_label: app.effort_label.clone(),
+        plan_mode: app.plan_mode,
     }
 }
 
@@ -432,7 +478,11 @@ fn draw_common(stdout: &mut io::Stdout, identity: &UiIdentity, app: &AppState) -
         SetForegroundColor(Color::Magenta),
         SetAttribute(Attribute::Bold),
         Print(truncate(
-            &format!("{} {}", identity.model, identity.effort),
+            &format!(
+                "{} {}",
+                app.model_label.as_deref().unwrap_or(&identity.model),
+                app.effort_label.as_deref().unwrap_or(&identity.effort)
+            ),
             width
         )),
         SetAttribute(Attribute::Reset),
@@ -440,7 +490,15 @@ fn draw_common(stdout: &mut io::Stdout, identity: &UiIdentity, app: &AppState) -
         Print("\r\n"),
     )?;
     let header_height = 6_u16;
-    let composer_height = 4_u16.min(height.saturating_sub(header_height));
+    let suggestions = command_suggestions(&app.composer.draft.text);
+    let available_suggestion_rows = height.saturating_sub(header_height.saturating_add(4));
+    let visible_suggestions = suggestions
+        .iter()
+        .take(usize::from(available_suggestion_rows))
+        .collect::<Vec<_>>();
+    let composer_height = 4_u16
+        .saturating_add(u16::try_from(visible_suggestions.len()).unwrap_or(u16::MAX))
+        .min(height.saturating_sub(header_height));
     let content_rows = height.saturating_sub(composer_height + header_height) as usize;
     let mut lines = Vec::new();
     for entry in &app.transcript {
@@ -487,10 +545,24 @@ fn draw_common(stdout: &mut io::Stdout, identity: &UiIdentity, app: &AppState) -
         ResetColor,
         Print("\r\n")
     )?;
+    for (index, suggestion) in visible_suggestions.iter().enumerate() {
+        let selected = index == app.command_selection;
+        StyledLine::with_marker(
+            if selected { "> " } else { "  " },
+            if selected {
+                Color::Magenta
+            } else {
+                Color::DarkGrey
+            },
+            format!("{:<34} {}", suggestion.usage, suggestion.description),
+            if selected { Color::White } else { Color::Grey },
+        )
+        .print(stdout, width)?;
+    }
     let prompt = if app.composer.draft.text.is_empty() {
         "Describe a coding task...".to_owned()
     } else {
-        app.composer.draft.text.replace('\n', " / ")
+        composer_prompt_text(&app.composer.draft.text)
     };
     StyledLine::with_marker(
         "> ",
@@ -510,12 +582,21 @@ fn draw_common(stdout: &mut io::Stdout, identity: &UiIdentity, app: &AppState) -
         if app.is_running() {
             "working · ctrl+c to interrupt · esc to exit"
         } else {
-            "enter to submit · ctrl+v to paste · esc to exit"
+            "enter to submit · ctrl+v to paste · tab to complete commands · esc to exit"
         },
         Color::DarkGrey,
     )
     .print(stdout, width)?;
     stdout.flush()
+}
+
+fn composer_prompt_text(text: &str) -> String {
+    for prefix in ["/model key ", "/model api-key "] {
+        if let Some(secret) = text.strip_prefix(prefix) {
+            return format!("{prefix}{}", "*".repeat(secret.chars().count()));
+        }
+    }
+    text.replace('\n', " / ")
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]

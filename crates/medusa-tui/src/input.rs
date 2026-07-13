@@ -8,6 +8,9 @@ pub enum ComposerAction {
     Changed,
     Submit,
     Interrupt,
+    CommandPrevious,
+    CommandNext,
+    CompleteCommand,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -57,6 +60,9 @@ impl ComposerState {
             (KeyCode::Char('c'), modifiers) if modifiers.contains(KeyModifiers::CONTROL) => {
                 Ok(ComposerAction::Interrupt)
             }
+            (KeyCode::Up, _) => Ok(ComposerAction::CommandPrevious),
+            (KeyCode::Down, _) => Ok(ComposerAction::CommandNext),
+            (KeyCode::Tab, _) => Ok(ComposerAction::CompleteCommand),
             (KeyCode::Char(character), modifiers)
                 if modifiers.is_empty() || modifiers == KeyModifiers::SHIFT =>
             {
@@ -198,6 +204,23 @@ mod tests {
                 .expect("ctrl c"),
             ComposerAction::Interrupt
         );
+    }
+
+    #[test]
+    fn navigation_and_tab_are_forwarded_for_command_completion() {
+        let mut composer = ComposerState::new("/");
+        for (key, expected) in [
+            (KeyCode::Up, ComposerAction::CommandPrevious),
+            (KeyCode::Down, ComposerAction::CommandNext),
+            (KeyCode::Tab, ComposerAction::CompleteCommand),
+        ] {
+            assert_eq!(
+                composer
+                    .handle_event(Event::Key(KeyEvent::new(key, KeyModifiers::NONE)))
+                    .expect("handle command navigation"),
+                expected
+            );
+        }
     }
 
     #[test]

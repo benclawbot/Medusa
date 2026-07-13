@@ -1,6 +1,6 @@
 use std::{collections::VecDeque, path::Path};
 
-use medusa_config::Config;
+use medusa_config::{Config, Mode};
 use medusa_core::{ErrorCategory, ErrorCode, MedusaError, MedusaResult, SessionId};
 use medusa_protocol::{Actor, EventPayload};
 use medusa_provider::{
@@ -17,6 +17,7 @@ use crate::{
 };
 
 const SYSTEM_PROMPT: &str = "You are Medusa, an autonomous coding agent. Inspect the repository, make the smallest correct change, and verify it. Use tools rather than inventing repository contents. Use `fs_read` with path `.` to list repository files before reading a specific file. Never modify tests, verification scripts, snapshots, fixtures, or expected outputs unless the user explicitly asks for that exact change; fix the product code instead. Do not expose private chain-of-thought; provide concise decisions and evidence.";
+const PLAN_SYSTEM_PROMPT: &str = "You are Medusa in read-only planning mode. Inspect the repository and produce a concise, ordered implementation plan grounded in the files you examined. Do not modify files, create commits, or claim that work has been completed. Only the read-only repository tools are available. Do not expose private chain-of-thought; provide concise decisions and evidence.";
 
 /// Result of one durable model/tool step.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -95,6 +96,53 @@ impl<P: ModelProvider> AgentEngine<P> {
         load(repo, session)
     }
 
+    /// Adds a follow-up prompt to an existing session so later turns retain context.
+    pub fn append_user_message(
+        &self,
+        session: &mut AgentSession,
+        mut content: Vec<MessageBlock>,
+    ) -> MedusaResult<()> {
+        content.insert(
+            0,
+            MessageBlock::Text {
+                text: format!("Current session goal: {}", session.objective),
+            },
+        );
+        validate_user_content(&content, &self.provider.capabilities())?;
+        let text = compact_message_text(&content);
+        session.completed = false;
+        session.turn = 0;
+        session.messages.push(Message {
+            role: Role::User,
+            content,
+        });
+        append_event(
+            session,
+            Actor::User,
+            EventPayload::UserPromptReceived { text },
+        )?;
+        session.updated_at = OffsetDateTime::now_utc();
+        persist(session)
+    }
+
+    /// Updates the durable session objective without creating a new conversation.
+    pub fn update_objective(
+        &self,
+        session: &mut AgentSession,
+        objective: String,
+    ) -> MedusaResult<()> {
+        update_session_objective(session, objective)
+    }
+
+    /// Replaces prior message history with a bounded durable summary for the next model request.
+    pub fn compact_session(
+        &self,
+        session: &mut AgentSession,
+        focus: Option<&str>,
+    ) -> MedusaResult<()> {
+        compact_session(session, focus)
+    }
+
     pub fn run_to_completion(&self, session: &mut AgentSession) -> MedusaResult<()> {
         while !session.completed && session.turn < self.config.agent.max_turns {
             self.step(session)?;
@@ -136,9 +184,9 @@ impl<P: ModelProvider> AgentEngine<P> {
             &mut observer,
         )?;
         let response = self.provider.complete(&ModelRequest {
-            system: SYSTEM_PROMPT.into(),
+            system: system_prompt(self.config.agent.mode).into(),
             messages: session.messages.clone(),
-            tools: built_in_tools(),
+            tools: available_tools(self.config.agent.mode),
             max_tokens: self.config.model.max_output_tokens,
             temperature_milli: self.config.model.temperature_milli,
         })?;
@@ -189,7 +237,24 @@ impl<P: ModelProvider> AgentEngine<P> {
                 },
                 &mut observer,
             )?;
-            let result = execute_tool(&session.repo, &name, &input);
+            let result = if tool_allowed(self.config.agent.mode, &name) {
+                execute_tool(&session.repo, &name, &input)
+            } else {
+                let reason = "tool is unavailable in read-only planning mode".to_owned();
+                append_observed(
+                    session,
+                    EventPayload::ToolCallDenied {
+                        tool: name.clone(),
+                        reason: reason.clone(),
+                    },
+                    &mut observer,
+                )?;
+                Err(MedusaError::new(
+                    ErrorCode::PolicyDenied,
+                    ErrorCategory::Policy,
+                    reason,
+                ))
+            };
             let (content, is_error, exit_code) = match result {
                 Ok(output) => (output, false, Some(0)),
                 Err(error) => (error.to_string(), true, Some(1)),
@@ -226,6 +291,19 @@ impl<P: ModelProvider> AgentEngine<P> {
                 )
             })
         {
+            if self.config.agent.mode == Mode::ReadOnly {
+                session.completed = true;
+                append_observed(
+                    session,
+                    EventPayload::SessionCompleted {
+                        report_ref: format!("session:{}.json", session.id),
+                    },
+                    &mut observer,
+                )?;
+                session.updated_at = OffsetDateTime::now_utc();
+                persist(session)?;
+                return Ok(StepOutcome::Completed);
+            }
             append_observed(
                 session,
                 EventPayload::VerificationStarted {
@@ -271,6 +349,122 @@ impl<P: ModelProvider> AgentEngine<P> {
         } else {
             StepOutcome::Continue
         })
+    }
+}
+
+fn system_prompt(mode: Mode) -> &'static str {
+    if mode == Mode::ReadOnly {
+        PLAN_SYSTEM_PROMPT
+    } else {
+        SYSTEM_PROMPT
+    }
+}
+
+fn available_tools(mode: Mode) -> Vec<medusa_provider::ToolDefinition> {
+    built_in_tools()
+        .into_iter()
+        .filter(|tool| tool_allowed(mode, &tool.name))
+        .collect()
+}
+
+fn tool_allowed(mode: Mode, tool: &str) -> bool {
+    mode != Mode::ReadOnly || matches!(tool, "fs_read" | "search_text" | "code_index")
+}
+
+/// Updates a session goal without requiring a live model provider.
+pub fn update_session_objective(session: &mut AgentSession, objective: String) -> MedusaResult<()> {
+    session.objective = objective.clone();
+    append_event(
+        session,
+        Actor::User,
+        EventPayload::GoalUpdated { objective },
+    )?;
+    session.updated_at = OffsetDateTime::now_utc();
+    persist(session)
+}
+
+/// Compacts durable session history without requiring a live model provider.
+pub fn compact_session(session: &mut AgentSession, focus: Option<&str>) -> MedusaResult<()> {
+    let original_messages = session.messages.len();
+    let mut entries = session
+        .messages
+        .iter()
+        .flat_map(|message| {
+            message
+                .content
+                .iter()
+                .map(move |block| (message.role, block))
+        })
+        .map(|(role, block)| {
+            let speaker = match role {
+                Role::User => "User",
+                Role::Assistant => "Assistant",
+            };
+            format!("{speaker}: {}", compact_block_text(block))
+        })
+        .collect::<Vec<_>>();
+    const MAX_ENTRIES: usize = 24;
+    if entries.len() > MAX_ENTRIES {
+        entries = entries.split_off(entries.len() - MAX_ENTRIES);
+    }
+    let focus = focus
+        .filter(|value| !value.trim().is_empty())
+        .map(|value| format!("\nFocus for the next turn: {value}"))
+        .unwrap_or_default();
+    let summary = format!(
+        "This is a compacted Medusa session.\nCurrent goal: {}{}\n\nRecent durable context:\n{}",
+        session.objective,
+        focus,
+        entries.join("\n")
+    );
+    session.messages = vec![Message {
+        role: Role::User,
+        content: vec![MessageBlock::Text { text: summary }],
+    }];
+    append_event(
+        session,
+        Actor::Coordinator,
+        EventPayload::ConversationCompacted {
+            original_messages: u32::try_from(original_messages).unwrap_or(u32::MAX),
+            retained_messages: 1,
+        },
+    )?;
+    session.updated_at = OffsetDateTime::now_utc();
+    persist(session)
+}
+
+fn compact_message_text(content: &[MessageBlock]) -> String {
+    content
+        .iter()
+        .map(compact_block_text)
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+fn compact_block_text(block: &MessageBlock) -> String {
+    const MAX_BLOCK_CHARS: usize = 600;
+    let text = match block {
+        MessageBlock::Text { text } => text.clone(),
+        MessageBlock::Image { alt_text, .. } => {
+            format!("[image: {}]", alt_text.as_deref().unwrap_or("attachment"))
+        }
+        MessageBlock::ToolUse { name, input, .. } => format!("used {name} with {input}"),
+        MessageBlock::ToolResult {
+            content, is_error, ..
+        } => format!(
+            "tool {}: {content}",
+            if *is_error { "error" } else { "result" }
+        ),
+    };
+    let compact = text.replace('\n', " ");
+    if compact.chars().count() <= MAX_BLOCK_CHARS {
+        compact
+    } else {
+        compact
+            .chars()
+            .take(MAX_BLOCK_CHARS.saturating_sub(3))
+            .chain("...".chars())
+            .collect()
     }
 }
 
