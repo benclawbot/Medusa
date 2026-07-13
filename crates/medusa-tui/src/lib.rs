@@ -584,10 +584,11 @@ fn legacy_draw_common(
     let header_height = HEADER_TOP_PADDING + 4;
     let model_modal = app.model_modal();
     let modal_lines = model_modal.map(model_modal_lines).unwrap_or_default();
-    let suggestions = model_modal
-        .is_none()
-        .then(|| command_suggestions(&app.composer.draft.text))
-        .unwrap_or_default();
+    let suggestions = if model_modal.is_none() {
+        command_suggestions(&app.composer.draft.text)
+    } else {
+        Vec::new()
+    };
     let available_suggestion_rows = height.saturating_sub(header_height.saturating_add(4));
     let visible_suggestions = suggestions
         .iter()
@@ -743,14 +744,18 @@ fn render_frame(identity: &UiIdentity, app: &AppState, width: u16, height: u16) 
         .or_else(|| model_modal.map(model_modal_lines))
         .unwrap_or_default();
     let is_modal = question_modal.is_some() || model_modal.is_some();
-    let plan_panel = (!is_modal && app.task_list_visible)
-        .then(|| app.plan.as_ref().map(plan_lines).unwrap_or_default())
-        .unwrap_or_default();
+    let plan_panel = if !is_modal && app.task_list_visible {
+        app.plan.as_ref().map(plan_lines).unwrap_or_default()
+    } else {
+        Vec::new()
+    };
     let panel_rows = u16::try_from(plan_panel.len()).unwrap_or(u16::MAX);
     let base_composer_rows = 4_u16.saturating_add(panel_rows);
-    let suggestions = (!is_modal)
-        .then(|| command_suggestions(&app.composer.draft.text))
-        .unwrap_or_default();
+    let suggestions = if !is_modal {
+        command_suggestions(&app.composer.draft.text)
+    } else {
+        Vec::new()
+    };
     let available_suggestion_rows =
         height.saturating_sub(header_height.saturating_add(base_composer_rows));
     let visible_suggestions = suggestions

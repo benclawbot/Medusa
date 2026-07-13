@@ -128,10 +128,11 @@ pub(crate) fn load(repo: &Path, session: &str) -> MedusaResult<AgentSession> {
         )
     })?;
     let primary = session_path(repo, &id);
-    let path = primary
-        .is_file()
-        .then_some(primary)
-        .unwrap_or_else(|| fallback_session_path(repo, &id));
+    let path = if primary.is_file() {
+        primary
+    } else {
+        fallback_session_path(repo, &id)
+    };
     let session: AgentSession = serde_json::from_slice(&fs::read(path)?)?;
     verify_chain(&session.events)?;
     Ok(session)

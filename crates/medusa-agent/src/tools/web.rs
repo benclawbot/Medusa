@@ -78,8 +78,7 @@ pub(crate) fn fetch(url: &str, prompt: Option<&str>) -> MedusaResult<String> {
     let content = readable_text(&String::from_utf8_lossy(&body));
     if content.is_empty() {
         return Ok(format!(
-            "Fetched {} but it did not contain readable text.",
-            final_url
+            "Fetched {final_url} but it did not contain readable text."
         ));
     }
     let requested = prompt
@@ -132,8 +131,7 @@ fn request(mut url: Url) -> MedusaResult<(Url, Vec<u8>)> {
             .is_some_and(|length| length > MAX_RESPONSE_BYTES as u64)
         {
             return Err(web_error(format!(
-                "web response exceeds the {} byte limit",
-                MAX_RESPONSE_BYTES
+                "web response exceeds the {MAX_RESPONSE_BYTES} byte limit"
             )));
         }
         let body = read_limited(&mut response)?;
@@ -150,8 +148,7 @@ fn read_limited(response: &mut impl Read) -> MedusaResult<Vec<u8>> {
         .map_err(|error| web_error(format!("could not read web response: {error}")))?;
     if body.len() > MAX_RESPONSE_BYTES {
         return Err(web_error(format!(
-            "web response exceeds the {} byte limit",
-            MAX_RESPONSE_BYTES
+            "web response exceeds the {MAX_RESPONSE_BYTES} byte limit"
         )));
     }
     Ok(body)
