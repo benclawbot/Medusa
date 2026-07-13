@@ -1,0 +1,166 @@
+name: Apply first-load Medusa logo
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - .github/workflows/apply-first-load-medusa-logo.yml
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Integrate first-load ASCII portrait
+        shell: bash
+        run: |
+          python3 <<'PY'
+          from pathlib import Path
+
+          app_path = Path('crates/medusa-tui/src/app.rs')
+          lib_path = Path('crates/medusa-tui/src/lib.rs')
+          art_path = Path('crates/medusa-tui/src/medusa_logo_ascii.txt')
+
+          art_path.write_text('''
+                       :-++**+=:       .:=+**+=-.
+                    .=#@@@@@@@@@@+   .*@@@@@@@@@@#=
+                   -@@++@@#. .-#@@# .@@@#-. :@@@=*@#:
+                  .#@@@@#=     -@@@:-@@@:    .+#@@@@*
+                    ...      .=@@@@ .@@@#=.      ...
+               -+*@@@@@@####@@@@@*.  :#@@@@@####@@@@@#*+:
+             :#@@@@###@@@@@@##+=...  ..:=+##@@@@@@##@@@@@#:
+            .@@@@-      ..:::::=*@-  +@*-:::::..     .=@@@@
+            :@@@#    .+#@@@@@@@@@- =- =@@@@@@@@@#=.    @@@@.
+             +@@@*: -@@@@#++==-:.-#@@*:.:-=++*#@@@@: -#@@@=
+              :*@@= @@@@- -==+*@@@#:-#@@#*+==: =@@@# *@@*:
+       .=****+-..=: @@@@..@@@#*+-.    .-+*#@@@ :@@@* --..-+***+=.
+      +@*@@@@@@@*   @@@@..@+:..          .::*@ -@@@#  .*@@@@@@##@=
+    .#@@*@@+ :+==:-#@@@# +@@***#*-    =##***@@- @@@@*::==+..*@@*@@*
+     -===:.  :=+#@@@@@+ =@**+--=*@-  =@*=-=+*#@-.+@@@@@*+=:  .-===-
+           +@@@@@@#+-::*@@= .... :=  +. .:.. *@@*::-+#@@@@@@=
+          *@@@@=:  -*@@@@@#                 .@@@@@#+: .:+@@@@+
+          @@@@+   -@@@*=:@@+      ====      *@*:+*@@@.   *@@@@
+          +@@@@+:.:::.   :@@=    :=**=.    *@#.   .:::.-+@@@@=
+           =#@@@@@@@@@@#+:.+@*   -+==+:  .#@= :+#@@@@@@@@@@#-
+             :==++++**@@@@* .#@=. .::  .+@* .#@@@@*+++++=-:
+               .:-=-:. +@@@+  #@@*=--=*@@*  #@@@- .:-=-:.
+            .+@@@@@@@@##@@@-  *@@@@@@@@@@=  +@@@##@@@@@@@#=
+           -@@+*@@=:+#@@#+:  -@@@@@@@@@@@@:  -*#@@#+:*@@++@#.
+          .@@@@@*-           +#@@@@@@@@@@#=           =#@@@@#
+            ...                .=*@@@#+-.                ...
+                                   :.
+'''.lstrip('\n'))
+
+          app = app_path.read_text()
+          replacements = [
+              (
+                  '    pub spinner_frame: u8,\n    credential_configured: bool,',
+                  '    pub spinner_frame: u8,\n    pub welcome_visible: bool,\n    credential_configured: bool,',
+              ),
+              (
+                  '            spinner_frame: 0,\n            credential_configured: false,',
+                  '            spinner_frame: 0,\n            welcome_visible: true,\n            credential_configured: false,',
+              ),
+              (
+                  '                self.composer = ComposerState::new("");\n                self.draft_store.delete(&self.draft_key)?;',
+                  '                self.welcome_visible = false;\n                self.composer = ComposerState::new("");\n                self.draft_store.delete(&self.draft_key)?;',
+              ),
+          ]
+          for old, new in replacements:
+              count = app.count(old)
+              if count != 1:
+                  raise SystemExit(f'app.rs patch anchor count {count}: {old!r}')
+              app = app.replace(old, new, 1)
+          app_path.write_text(app)
+
+          lib = lib_path.read_text()
+          old = '''const MEDUSA_LOGO: [&str; 3] = [
+    "╭┬╮╭─╴╶┬╮╷ ╷╭─╮╭─╮",
+    "│││├╴  │││ │╰─╮├─┤",
+    "╵ ╵╰─╴╶┴╯╰─╯╰─╯╵ ╵",
+];
+const HEADER_TOP_PADDING: u16 = 1;
+'''
+          new = '''const MEDUSA_LOGO: [&str; 3] = [
+    "╭┬╮╭─╴╶┬╮╷ ╷╭─╮╭─╮",
+    "│││├╴  │││ │╰─╮├─┤",
+    "╵ ╵╰─╴╶┴╯╰─╯╰─╯╵ ╵",
+];
+const MEDUSA_WELCOME_ART: &str = include_str!("medusa_logo_ascii.txt");
+const HEADER_TOP_PADDING: u16 = 1;
+
+fn visible_logo_lines(app: &AppState, width: u16, height: u16) -> Vec<&'static str> {
+    let welcome = MEDUSA_WELCOME_ART.trim_matches('\\n').lines().collect::<Vec<_>>();
+    let welcome_width = welcome
+        .iter()
+        .map(|line| line.chars().count())
+        .max()
+        .unwrap_or_default();
+    let required_height = u16::try_from(welcome.len())
+        .unwrap_or(u16::MAX)
+        .saturating_add(8);
+    if app.welcome_visible && usize::from(width) >= welcome_width && height >= required_height {
+        welcome
+    } else {
+        MEDUSA_LOGO.to_vec()
+    }
+}
+'''
+          if lib.count(old) != 1:
+              raise SystemExit(f'lib.rs constant patch anchor count {lib.count(old)}')
+          lib = lib.replace(old, new, 1)
+
+          old = '''    let mut frame = vec![blank.clone(); usize::from(height)];
+    let mut row = usize::from(HEADER_TOP_PADDING);
+    for logo_line in MEDUSA_LOGO {
+        set_frame_line(&mut frame, row, StyledLine::new(logo_line, Color::Cyan));
+        row = row.saturating_add(1);
+    }
+'''
+          new = '''    let mut frame = vec![blank.clone(); usize::from(height)];
+    let mut row = usize::from(HEADER_TOP_PADDING);
+    let logo_lines = visible_logo_lines(app, width, height);
+    for logo_line in &logo_lines {
+        set_frame_line(&mut frame, row, StyledLine::new(*logo_line, Color::Cyan));
+        row = row.saturating_add(1);
+    }
+'''
+          if lib.count(old) != 1:
+              raise SystemExit(f'lib.rs render logo patch anchor count {lib.count(old)}')
+          lib = lib.replace(old, new, 1)
+
+          old = '    let header_height = HEADER_TOP_PADDING + 4;\n    let question_modal = app.question_modal();'
+          new = '''    let header_height = HEADER_TOP_PADDING
+        .saturating_add(u16::try_from(logo_lines.len()).unwrap_or(u16::MAX))
+        .saturating_add(1);
+    let question_modal = app.question_modal();'''
+          if lib.count(old) != 1:
+              raise SystemExit(f'lib.rs header patch anchor count {lib.count(old)}')
+          lib = lib.replace(old, new, 1)
+          lib_path.write_text(lib)
+          PY
+
+      - name: Format
+        run: cargo fmt --all
+
+      - name: Test Medusa TUI
+        run: cargo test -p medusa-tui
+
+      - name: Lint Medusa TUI
+        run: cargo clippy -p medusa-tui --all-targets -- -D warnings
+
+      - name: Commit integrated loading screen
+        shell: bash
+        run: |
+          rm .github/workflows/apply-first-load-medusa-logo.yml
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add crates/medusa-tui/src/app.rs crates/medusa-tui/src/lib.rs crates/medusa-tui/src/medusa_logo_ascii.txt .github/workflows/apply-first-load-medusa-logo.yml
+          git commit -m "Show Medusa ASCII portrait on first load"
+          git push origin HEAD:main
