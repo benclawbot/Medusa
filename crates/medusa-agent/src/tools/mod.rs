@@ -15,7 +15,7 @@ pub(crate) fn built_in_tools() -> Vec<ToolDefinition> {
     vec![
         tool(
             "fs_read",
-            "Read a UTF-8 file inside the repository.",
+            "Read a UTF-8 file inside the repository. Use path `.` to list repository files.",
             json!({
                 "type": "object", "properties": {"path": {"type": "string"}},
                 "required": ["path"], "additionalProperties": false

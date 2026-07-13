@@ -423,7 +423,7 @@ fn effort_label(max_turns: u32) -> &'static str {
 
 fn draw_common(stdout: &mut io::Stdout, identity: &UiIdentity, app: &AppState) -> io::Result<()> {
     let (width, height) = size()?;
-    queue!(stdout, MoveTo(0, 0), Clear(ClearType::All))?;
+    queue!(stdout, MoveTo(0, 0), Clear(ClearType::All), MoveTo(0, 1))?;
     for logo_line in MEDUSA_LOGO {
         print_styled_line(stdout, width, logo_line, Color::Cyan, Attribute::Bold)?;
     }
@@ -439,7 +439,7 @@ fn draw_common(stdout: &mut io::Stdout, identity: &UiIdentity, app: &AppState) -
         ResetColor,
         Print("\r\n"),
     )?;
-    let header_height = 5_u16;
+    let header_height = 6_u16;
     let composer_height = 4_u16.min(height.saturating_sub(header_height));
     let content_rows = height.saturating_sub(composer_height + header_height) as usize;
     let mut lines = Vec::new();
@@ -553,21 +553,18 @@ impl StyledLine {
             let remaining = width.saturating_sub(marker.chars().count() as u16);
             return queue!(
                 stdout,
+                SetAttribute(Attribute::Reset),
+                ResetColor,
                 SetForegroundColor(*marker_color),
                 Print(marker),
                 SetForegroundColor(self.foreground),
                 Print(truncate(&self.text, remaining)),
+                SetAttribute(Attribute::Reset),
                 ResetColor,
                 Print("\r\n")
             );
         }
-        print_styled_line(
-            stdout,
-            width,
-            &self.text,
-            self.foreground,
-            Attribute::NoBold,
-        )
+        print_styled_line(stdout, width, &self.text, self.foreground, Attribute::Reset)
     }
 }
 
@@ -639,6 +636,8 @@ fn plan_lines(plan: &app::TranscriptPlan) -> Vec<StyledLine> {
 fn print_separator(stdout: &mut io::Stdout, width: u16) -> io::Result<()> {
     queue!(
         stdout,
+        SetAttribute(Attribute::Reset),
+        ResetColor,
         SetForegroundColor(Color::DarkGrey),
         Print("─".repeat(width as usize)),
         ResetColor,
@@ -655,12 +654,14 @@ fn print_styled_line(
 ) -> io::Result<()> {
     queue!(
         stdout,
+        SetAttribute(Attribute::Reset),
+        ResetColor,
         SetForegroundColor(foreground),
         SetAttribute(attribute)
     )?;
     queue!(
         stdout,
-        Print(pad_to_width(&truncate(text, width), width)),
+        Print(truncate(text, width)),
         SetAttribute(Attribute::Reset),
         ResetColor,
         Print("\r\n")
@@ -695,15 +696,6 @@ fn truncate(value: &str, width: u16) -> String {
         .take(limit.saturating_sub(1))
         .chain(std::iter::once('~'))
         .collect()
-}
-
-fn pad_to_width(value: &str, width: u16) -> String {
-    let limit = usize::from(width);
-    let count = value.chars().count();
-    if count >= limit {
-        return value.to_owned();
-    }
-    format!("{value}{}", " ".repeat(limit - count))
 }
 
 fn app_error(error: AppError) -> io::Error {

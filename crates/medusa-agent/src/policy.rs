@@ -1,11 +1,8 @@
 use std::{
     fs,
     path::{Component, Path, PathBuf},
-    process::Output,
+    process::{Command, Output},
 };
-
-#[cfg(target_os = "linux")]
-use std::process::Command;
 
 use medusa_core::{ErrorCategory, ErrorCode, MedusaError, MedusaResult};
 
@@ -163,7 +160,34 @@ pub fn validate_shell_command(program: &str, args: &[String]) -> MedusaResult<()
             )));
         }
     }
+    #[cfg(not(target_os = "linux"))]
+    validate_portable_shell_command(&basename, args)?;
     Ok(())
+}
+
+#[cfg(not(target_os = "linux"))]
+fn validate_portable_shell_command(program: &str, args: &[String]) -> MedusaResult<()> {
+    let first = args.first().map(String::as_str).unwrap_or_default();
+    let allowed = match program {
+        "cargo" => matches!(
+            first,
+            "check" | "clippy" | "metadata" | "test" | "tree" | "--version" | "version"
+        ),
+        "git" => matches!(
+            first,
+            "branch" | "diff" | "log" | "ls-files" | "rev-parse" | "show" | "status"
+        ),
+        "fd" | "find" | "ls" | "rg" | "tree" => true,
+        _ => false,
+    };
+    if allowed {
+        Ok(())
+    } else {
+        Err(policy_denied(format!(
+            "portable shell command is not approved: {program} {}",
+            args.join(" ")
+        )))
+    }
 }
 
 pub(crate) fn sandboxed_command(
@@ -205,13 +229,30 @@ pub(crate) fn sandboxed_command(
     }
     #[cfg(not(target_os = "linux"))]
     {
-        let _ = (repo, program, args);
-        Err(MedusaError::new(
-            ErrorCode::DependencyUnavailable,
-            ErrorCategory::Environment,
-            "shell_run requires the Linux bubblewrap sandbox backend",
-        ))
+        let root = repo.canonicalize()?;
+        #[cfg(windows)]
+        if program.eq_ignore_ascii_case("ls") {
+            return Command::new("cmd")
+                .args(["/C", "dir"])
+                .current_dir(root)
+                .output()
+                .map_err(local_shell_error);
+        }
+        Command::new(program)
+            .args(args)
+            .current_dir(root)
+            .output()
+            .map_err(local_shell_error)
     }
+}
+
+#[cfg(not(target_os = "linux"))]
+fn local_shell_error(error: std::io::Error) -> MedusaError {
+    MedusaError::new(
+        ErrorCode::DependencyUnavailable,
+        ErrorCategory::Environment,
+        format!("local shell execution unavailable: {error}"),
+    )
 }
 
 fn policy_denied(message: impl Into<String>) -> MedusaError {

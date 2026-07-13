@@ -9,7 +9,43 @@ use walkdir::WalkDir;
 use crate::policy::safe_path;
 
 pub(crate) fn read(repo: &Path, relative: &str) -> MedusaResult<String> {
+    if relative == "." {
+        return Ok(repository_listing(repo));
+    }
     Ok(fs::read_to_string(safe_path(repo, relative)?)?)
+}
+
+fn repository_listing(repo: &Path) -> String {
+    const MAX_ENTRIES: usize = 80;
+    let mut entries = WalkDir::new(repo)
+        .min_depth(1)
+        .max_depth(2)
+        .into_iter()
+        .filter_map(Result::ok)
+        .filter(|entry| {
+            !entry.path().components().any(|part| {
+                matches!(part, Component::Normal(name) if name == ".git" || name == ".medusa")
+            })
+        })
+        .filter_map(|entry| {
+            let relative = entry.path().strip_prefix(repo).ok()?;
+            let mut display = relative
+                .components()
+                .map(|part| part.as_os_str().to_string_lossy())
+                .collect::<Vec<_>>()
+                .join("/");
+            if entry.file_type().is_dir() {
+                display.push('/');
+            }
+            Some(display)
+        })
+        .take(MAX_ENTRIES)
+        .collect::<Vec<_>>();
+    entries.sort();
+    if entries.len() == MAX_ENTRIES {
+        entries.push("... listing truncated".to_owned());
+    }
+    entries.join("\n")
 }
 
 pub(crate) fn write(repo: &Path, relative: &str, content: &str) -> MedusaResult<String> {
@@ -76,6 +112,10 @@ mod tests {
             read(directory.path(), "nested/value.txt").expect("read"),
             "alpha\nbeta\n"
         );
+
+        let listing = read(directory.path(), ".").expect("repository listing");
+        assert!(listing.contains("nested/"));
+        assert!(listing.contains("nested/value.txt"));
 
         fs::create_dir_all(directory.path().join(".medusa")).expect("medusa dir");
         fs::write(directory.path().join(".medusa/hidden.txt"), "alpha").expect("hidden fixture");

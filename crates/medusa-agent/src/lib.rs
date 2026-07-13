@@ -205,4 +205,17 @@ mod tests {
         );
         assert!(write.is_err());
     }
+
+    #[cfg(not(target_os = "linux"))]
+    #[test]
+    fn shell_tool_runs_in_the_repository_without_linux_bubblewrap() {
+        let directory = tempfile::tempdir().expect("temporary repository");
+        let output = execute_tool(
+            directory.path(),
+            "shell_run",
+            &json!({"program": "cargo", "args": ["--version"]}),
+        )
+        .expect("run allowed local command");
+        assert!(output.contains("cargo"));
+    }
 }
