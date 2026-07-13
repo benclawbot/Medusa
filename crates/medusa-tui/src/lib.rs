@@ -6,8 +6,9 @@ pub mod native_clipboard;
 pub mod runtime;
 
 use std::{
+    collections::BTreeMap,
     io::{self, IsTerminal, Write},
-    path::PathBuf,
+    path::{Path, PathBuf},
     sync::Arc,
     time::Duration,
 };
@@ -24,14 +25,23 @@ use crossterm::{
         KeyModifiers,
     },
     execute, queue,
-    style::{Attribute, Print, SetAttribute},
+    style::{
+        Attribute, Color, Print, ResetColor, SetAttribute, SetBackgroundColor, SetForegroundColor,
+    },
     terminal::{
         Clear, ClearType, EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode,
         enable_raw_mode, size,
     },
 };
+use medusa_config::Config;
 use native_clipboard::NativeClipboard;
 use runtime::{RuntimeController, RuntimeEvent};
+
+const MEDUSA_LOGO: [&str; 3] = [
+    "╭┬╮╭─╴╶┬╮╷ ╷╭─╮╭─╮",
+    "│││├╴  │││ │╰─╮├─┤",
+    "╵ ╵╰─╴╶┴╯╰─╯╰─╯╵ ╵",
+];
 
 #[cfg(unix)]
 use medusa_daemon::{DaemonClient, JobRecord, Request, Response};
@@ -92,9 +102,10 @@ pub fn run(options: TuiOptions) -> io::Result<ExitReason> {
         options.initial_prompt.clone().unwrap_or_default(),
         clipboard,
     )?;
+    let identity = UiIdentity::for_repo(&options.repo);
     let runtime = RuntimeController::start(options.repo.clone());
     let mut terminal = TerminalGuard::enter()?;
-    run_loop(terminal.stdout(), &options, &mut app, &runtime)
+    run_loop(terminal.stdout(), &options, &identity, &mut app, &runtime)
 }
 
 struct TerminalGuard {
@@ -145,6 +156,7 @@ impl Drop for TerminalGuard {
 fn run_loop(
     stdout: &mut io::Stdout,
     options: &TuiOptions,
+    identity: &UiIdentity,
     app: &mut AppState,
     runtime: &RuntimeController,
 ) -> io::Result<ExitReason> {
@@ -156,7 +168,7 @@ fn run_loop(
             Ok(other) => (Vec::new(), format!("unexpected response: {other:?}")),
             Err(error) => (Vec::new(), format!("disconnected: {error}")),
         };
-        draw(stdout, options, app, &jobs, &daemon_status)?;
+        draw(stdout, options, identity, app, &jobs, &daemon_status)?;
         if event::poll(Duration::from_millis(100))? {
             let terminal_event = event::read()?;
             if ctrl_d_on_empty(&terminal_event, app) {
@@ -174,6 +186,7 @@ fn run_loop(
 fn run_loop(
     stdout: &mut io::Stdout,
     options: &TuiOptions,
+    identity: &UiIdentity,
     app: &mut AppState,
     runtime: &RuntimeController,
 ) -> io::Result<ExitReason> {
@@ -182,7 +195,7 @@ fn run_loop(
         drain_runtime_events(app, runtime)?;
         let snapshot = portable_render_snapshot(app, size()?);
         if last_render.as_ref() != Some(&snapshot) {
-            draw_portable(stdout, options, app)?;
+            draw_portable(stdout, options, identity, app)?;
             last_render = Some(snapshot);
         }
         if event::poll(Duration::from_millis(100))? {
@@ -239,9 +252,13 @@ fn drain_runtime_events(app: &mut AppState, runtime: &RuntimeController) -> io::
     while let Some(event) = runtime.try_event().map_err(runtime_error)? {
         match event {
             RuntimeEvent::Started => {
+                app.transcript
+                    .push(TranscriptEntry::System("step: agent started".to_owned()));
                 app.status = "agent running".to_owned();
             }
             RuntimeEvent::Progress { turn } => {
+                app.transcript
+                    .push(TranscriptEntry::System(format!("step: turn {turn}")));
                 app.status = running_status(turn);
             }
             RuntimeEvent::Completed {
@@ -256,6 +273,9 @@ fn drain_runtime_events(app: &mut AppState, runtime: &RuntimeController) -> io::
                     app.transcript
                         .push(TranscriptEntry::System(format!("evidence: {line}")));
                 }
+                app.transcript.push(TranscriptEntry::System(format!(
+                    "session {session_id} completed"
+                )));
                 app.status = format!("session {session_id} completed");
             }
             RuntimeEvent::Cancelled => {
@@ -289,6 +309,7 @@ fn ctrl_d_on_empty(event: &Event, app: &AppState) -> bool {
 fn draw(
     stdout: &mut io::Stdout,
     options: &TuiOptions,
+    identity: &UiIdentity,
     app: &AppState,
     jobs: &[JobRecord],
     daemon_status: &str,
@@ -307,12 +328,24 @@ fn draw(
             )
         })
         .collect::<Vec<_>>();
-    draw_common(stdout, options, app, &job_lines, daemon_status)
+    draw_common(stdout, options, identity, app, &job_lines, daemon_status)
 }
 
 #[cfg(not(unix))]
-fn draw_portable(stdout: &mut io::Stdout, options: &TuiOptions, app: &AppState) -> io::Result<()> {
-    draw_common(stdout, options, app, &[], portable_daemon_status())
+fn draw_portable(
+    stdout: &mut io::Stdout,
+    options: &TuiOptions,
+    identity: &UiIdentity,
+    app: &AppState,
+) -> io::Result<()> {
+    draw_common(
+        stdout,
+        options,
+        identity,
+        app,
+        &[],
+        portable_daemon_status(),
+    )
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -340,53 +373,116 @@ fn running_status(turn: u32) -> String {
     format!("agent running - turn {turn}; results appear when complete")
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct UiIdentity {
+    model: String,
+    effort: String,
+}
+
+impl UiIdentity {
+    fn for_repo(repo: &Path) -> Self {
+        let project = repo.join(".medusa/config.toml");
+        let project = project.exists().then_some(project);
+        let config =
+            Config::load_layers(None, project.as_deref(), &BTreeMap::new(), &BTreeMap::new())
+                .unwrap_or_default();
+        Self {
+            model: config.model.name,
+            effort: effort_label(config.agent.max_turns).to_owned(),
+        }
+    }
+}
+
+fn effort_label(max_turns: u32) -> &'static str {
+    match max_turns {
+        0..=99 => "effort:low",
+        100..=299 => "effort:medium",
+        _ => "effort:high",
+    }
+}
+
 fn draw_common(
     stdout: &mut io::Stdout,
     options: &TuiOptions,
+    identity: &UiIdentity,
     app: &AppState,
     job_lines: &[String],
     daemon_status: &str,
 ) -> io::Result<()> {
     let (width, height) = size()?;
     queue!(stdout, MoveTo(0, 0), Clear(ClearType::All))?;
+    for logo_line in MEDUSA_LOGO {
+        print_styled_line(stdout, width, logo_line, Color::Cyan, None, Attribute::Bold)?;
+    }
     queue!(
         stdout,
+        SetForegroundColor(Color::Magenta),
         SetAttribute(Attribute::Bold),
-        Print("Medusa interactive"),
+        Print(truncate(
+            &format!("{} {}", identity.model, identity.effort),
+            width
+        )),
         SetAttribute(Attribute::Reset),
-        Print(format!("  {}\r\n", options.repo.display())),
-        Print(format!("daemon: {daemon_status}\r\n")),
-        Print(format!("status: {}\r\n", app.status)),
-        Print("-".repeat(width as usize)),
-        Print("\r\n")
+        ResetColor,
+        Print("\r\n"),
     )?;
+    print_status_row(
+        stdout,
+        width,
+        "repo",
+        &options.repo.display().to_string(),
+        Color::DarkGrey,
+    )?;
+    print_status_row(stdout, width, "daemon", daemon_status, Color::Blue)?;
+    print_status_row(
+        stdout,
+        width,
+        "status",
+        &app.status,
+        status_color(&app.status),
+    )?;
+    print_separator(stdout, width)?;
 
-    let composer_height = 7_u16.min(height.saturating_sub(5));
-    let content_rows = height.saturating_sub(composer_height + 5) as usize;
+    let header_height = 8_u16;
+    let composer_height = 7_u16.min(height.saturating_sub(header_height));
+    let content_rows = height.saturating_sub(composer_height + header_height) as usize;
     let mut lines = Vec::new();
     for entry in &app.transcript {
         match entry {
             TranscriptEntry::User(draft) => {
-                lines.push(format!("> {}", draft.text.replace('\n', " / ")));
-                lines.extend(draft.attachments.iter().map(attachment_label));
+                lines.push(StyledLine::user(format!(
+                    "● user {}",
+                    draft.text.replace('\n', " / ")
+                )));
+                lines.extend(draft.attachments.iter().map(|attachment| {
+                    StyledLine::user(format!("  {}", attachment_label(attachment)))
+                }));
             }
-            TranscriptEntry::System(message) => lines.push(format!("* {message}")),
+            TranscriptEntry::System(message) => lines.push(system_line(message)),
         }
     }
-    lines.extend(job_lines.iter().cloned());
+    lines.extend(
+        job_lines
+            .iter()
+            .map(|line| StyledLine::new(format!("● {line}"), Color::Magenta, None)),
+    );
     for line in lines.iter().rev().take(content_rows).rev() {
-        queue!(stdout, Print(truncate(line, width)), Print("\r\n"))?;
+        line.print(stdout, width)?;
     }
 
     let composer_top = height.saturating_sub(composer_height + 1);
     queue!(
         stdout,
         MoveTo(0, composer_top),
-        Print("-".repeat(width as usize)),
+        SetForegroundColor(Color::DarkGrey),
+        Print("─".repeat(width as usize)),
+        ResetColor,
         MoveTo(0, composer_top.saturating_add(1)),
+        SetForegroundColor(Color::Cyan),
         SetAttribute(Attribute::Bold),
-        Print("Prompt"),
+        Print("● Prompt"),
         SetAttribute(Attribute::Reset),
+        ResetColor,
         Print("  Ctrl+V paste | Enter submit | Ctrl+C cancel | Esc exit\r\n")
     )?;
     let prompt = if app.composer.draft.text.is_empty() {
@@ -394,15 +490,141 @@ fn draw_common(
     } else {
         app.composer.draft.text.replace('\n', " / ")
     };
-    queue!(stdout, Print(truncate(&prompt, width)), Print("\r\n"))?;
+    print_styled_line(
+        stdout,
+        width,
+        &prompt,
+        Color::White,
+        Some(Color::DarkBlue),
+        Attribute::NoBold,
+    )?;
     for attachment in app.composer.draft.attachments.iter().take(3) {
-        queue!(
+        print_styled_line(
             stdout,
-            Print(truncate(&attachment_label(attachment), width)),
-            Print("\r\n")
+            width,
+            &attachment_label(attachment),
+            Color::White,
+            Some(Color::DarkBlue),
+            Attribute::NoBold,
         )?;
     }
     stdout.flush()
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct StyledLine {
+    text: String,
+    foreground: Color,
+    background: Option<Color>,
+}
+
+impl StyledLine {
+    fn new(text: impl Into<String>, foreground: Color, background: Option<Color>) -> Self {
+        Self {
+            text: text.into(),
+            foreground,
+            background,
+        }
+    }
+
+    fn user(text: impl Into<String>) -> Self {
+        Self::new(text, Color::White, Some(Color::DarkBlue))
+    }
+
+    fn print(&self, stdout: &mut io::Stdout, width: u16) -> io::Result<()> {
+        print_styled_line(
+            stdout,
+            width,
+            &self.text,
+            self.foreground,
+            self.background,
+            Attribute::NoBold,
+        )
+    }
+}
+
+fn system_line(message: &str) -> StyledLine {
+    if message.starts_with("error:") {
+        StyledLine::new(format!("● {message}"), Color::Red, None)
+    } else if message.starts_with("evidence:") {
+        StyledLine::new(format!("● {message}"), Color::Blue, None)
+    } else if message.starts_with("step:") {
+        StyledLine::new(format!("● {message}"), Color::Yellow, None)
+    } else if message.contains("cancelled") {
+        StyledLine::new(format!("● {message}"), Color::DarkYellow, None)
+    } else {
+        StyledLine::new(format!("● {message}"), Color::Green, None)
+    }
+}
+
+fn status_color(status: &str) -> Color {
+    if status.contains("failed") || status.contains("error") || status.contains("rejected") {
+        Color::Red
+    } else if status.contains("running") || status.contains("turn") {
+        Color::Yellow
+    } else if status.contains("completed") {
+        Color::Green
+    } else {
+        Color::Cyan
+    }
+}
+
+fn print_status_row(
+    stdout: &mut io::Stdout,
+    width: u16,
+    label: &str,
+    value: &str,
+    dot_color: Color,
+) -> io::Result<()> {
+    queue!(
+        stdout,
+        SetForegroundColor(dot_color),
+        Print("● "),
+        SetForegroundColor(Color::DarkGrey),
+        Print(label),
+        ResetColor,
+        Print(" "),
+        Print(truncate(
+            value,
+            width.saturating_sub(label.len() as u16 + 3)
+        )),
+        Print("\r\n")
+    )
+}
+
+fn print_separator(stdout: &mut io::Stdout, width: u16) -> io::Result<()> {
+    queue!(
+        stdout,
+        SetForegroundColor(Color::DarkGrey),
+        Print("─".repeat(width as usize)),
+        ResetColor,
+        Print("\r\n")
+    )
+}
+
+fn print_styled_line(
+    stdout: &mut io::Stdout,
+    width: u16,
+    text: &str,
+    foreground: Color,
+    background: Option<Color>,
+    attribute: Attribute,
+) -> io::Result<()> {
+    queue!(
+        stdout,
+        SetForegroundColor(foreground),
+        SetAttribute(attribute)
+    )?;
+    if let Some(background) = background {
+        queue!(stdout, SetBackgroundColor(background))?;
+    }
+    queue!(
+        stdout,
+        Print(pad_to_width(&truncate(text, width), width)),
+        SetAttribute(Attribute::Reset),
+        ResetColor,
+        Print("\r\n")
+    )
 }
 
 fn attachment_label(attachment: &PromptAttachment) -> String {
@@ -433,6 +655,15 @@ fn truncate(value: &str, width: u16) -> String {
         .take(limit.saturating_sub(1))
         .chain(std::iter::once('~'))
         .collect()
+}
+
+fn pad_to_width(value: &str, width: u16) -> String {
+    let limit = usize::from(width);
+    let count = value.chars().count();
+    if count >= limit {
+        return value.to_owned();
+    }
+    format!("{value}{}", " ".repeat(limit - count))
 }
 
 fn app_error(error: AppError) -> io::Error {
@@ -504,5 +735,12 @@ mod tests {
             running_status(3),
             "agent running - turn 3; results appear when complete"
         );
+    }
+
+    #[test]
+    fn effort_label_tracks_turn_budget() {
+        assert_eq!(effort_label(50), "effort:low");
+        assert_eq!(effort_label(100), "effort:medium");
+        assert_eq!(effort_label(500), "effort:high");
     }
 }
