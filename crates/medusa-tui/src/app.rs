@@ -274,6 +274,7 @@ pub enum ModelModalFocus {
     Model,
     Effort,
     ApiKey,
+    Apply,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -375,16 +376,18 @@ impl ModelModal {
             ModelModalFocus::Provider => ModelModalFocus::Model,
             ModelModalFocus::Model => ModelModalFocus::Effort,
             ModelModalFocus::Effort => ModelModalFocus::ApiKey,
-            ModelModalFocus::ApiKey => ModelModalFocus::Provider,
+            ModelModalFocus::ApiKey => ModelModalFocus::Apply,
+            ModelModalFocus::Apply => ModelModalFocus::Provider,
         };
     }
 
     fn cycle_focus_back(&mut self) {
         self.focus = match self.focus {
-            ModelModalFocus::Provider => ModelModalFocus::ApiKey,
+            ModelModalFocus::Provider => ModelModalFocus::Apply,
             ModelModalFocus::Model => ModelModalFocus::Provider,
             ModelModalFocus::Effort => ModelModalFocus::Model,
             ModelModalFocus::ApiKey => ModelModalFocus::Effort,
+            ModelModalFocus::Apply => ModelModalFocus::ApiKey,
         };
     }
 
@@ -412,7 +415,7 @@ impl ModelModal {
                     .unwrap_or(2);
                 self.effort = EFFORTS[cycle_index(index, EFFORTS.len(), delta)];
             }
-            ModelModalFocus::ApiKey => {}
+            ModelModalFocus::ApiKey | ModelModalFocus::Apply => {}
         }
     }
 
@@ -692,12 +695,24 @@ impl AppState {
                     Ok(AppAction::Redraw)
                 }
                 KeyCode::Enter => {
-                    let configuration = self
+                    let submit = self
                         .model_modal
-                        .take()
-                        .expect("model modal exists")
-                        .configuration();
-                    Ok(AppAction::ConfigureModel(configuration))
+                        .as_ref()
+                        .is_some_and(|modal| modal.focus == ModelModalFocus::Apply);
+                    if submit {
+                        let configuration = self
+                            .model_modal
+                            .take()
+                            .expect("model modal exists")
+                            .configuration();
+                        Ok(AppAction::ConfigureModel(configuration))
+                    } else {
+                        self.model_modal
+                            .as_mut()
+                            .expect("model modal exists")
+                            .cycle_focus();
+                        Ok(AppAction::Redraw)
+                    }
                 }
                 KeyCode::BackTab => {
                     self.model_modal
@@ -755,8 +770,9 @@ impl AppState {
                 KeyCode::Char(character)
                     if key.modifiers.is_empty() || key.modifiers == KeyModifiers::SHIFT =>
                 {
-                    if let Some(modal) = self.model_modal.as_mut() {
-                        modal.focus_api_key();
+                    if let Some(modal) = self.model_modal.as_mut()
+                        && modal.focus == ModelModalFocus::ApiKey
+                    {
                         modal.insert_key_text(&character.to_string());
                     }
                     Ok(AppAction::Redraw)
@@ -1242,7 +1258,7 @@ mod tests {
     }
 
     #[test]
-    fn model_command_opens_a_picker_and_returns_a_redacted_configuration() {
+    fn model_form_requires_explicit_apply_and_updates_effort_and_session_key() {
         let repository = tempdir().expect("temporary repository");
         let mut app = AppState::new(
             repository.path().to_path_buf(),
@@ -1265,11 +1281,53 @@ mod tests {
             ModelModalFocus::Model
         );
 
+        assert_eq!(
+            app.handle_event(Event::Key(crossterm::event::KeyEvent::new(
+                KeyCode::Char('x'),
+                KeyModifiers::NONE,
+            )))
+            .expect("ignore key input outside the key field"),
+            AppAction::Redraw
+        );
+        assert_eq!(
+            app.model_modal().expect("model picker").focus(),
+            ModelModalFocus::Model
+        );
+
         app.handle_event(Event::Key(crossterm::event::KeyEvent::new(
-            KeyCode::Char('x'),
+            KeyCode::Enter,
             KeyModifiers::NONE,
         )))
-        .expect("enter api key without changing focus first");
+        .expect("advance to effort");
+        assert_eq!(
+            app.model_modal().expect("model picker").focus(),
+            ModelModalFocus::Effort
+        );
+        app.handle_event(Event::Key(crossterm::event::KeyEvent::new(
+            KeyCode::Up,
+            KeyModifiers::NONE,
+        )))
+        .expect("select medium effort");
+        app.handle_event(Event::Key(crossterm::event::KeyEvent::new(
+            KeyCode::Enter,
+            KeyModifiers::NONE,
+        )))
+        .expect("advance to api key");
+        assert_eq!(
+            app.model_modal().expect("model picker").focus(),
+            ModelModalFocus::ApiKey
+        );
+        app.handle_event(Event::Paste("replacement-key".to_owned()))
+            .expect("paste replacement api key");
+        app.handle_event(Event::Key(crossterm::event::KeyEvent::new(
+            KeyCode::Enter,
+            KeyModifiers::NONE,
+        )))
+        .expect("advance to apply");
+        assert_eq!(
+            app.model_modal().expect("model picker").focus(),
+            ModelModalFocus::Apply
+        );
 
         let action = app
             .handle_event(Event::Key(crossterm::event::KeyEvent::new(
@@ -1282,8 +1340,9 @@ mod tests {
         };
         assert_eq!(configuration.provider, "minimax");
         assert_eq!(configuration.model, "MiniMax-M3");
-        assert_eq!(configuration.api_key.as_deref(), Some("x"));
-        assert!(!format!("{configuration:?}").contains("api_key: Some(\"x\")"));
+        assert_eq!(configuration.effort, Effort::Medium);
+        assert_eq!(configuration.api_key.as_deref(), Some("replacement-key"));
+        assert!(!format!("{configuration:?}").contains("replacement-key"));
         assert!(app.transcript.is_empty());
     }
 

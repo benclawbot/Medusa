@@ -442,7 +442,10 @@ fn execute_slash_command(
                 }
                 let _ = events.send(RuntimeEvent::Notice {
                     title: "Goal updated".to_owned(),
-                    details: vec![objective],
+                    details: vec![
+                        objective,
+                        "The goal will be included in the next agent turn.".to_owned(),
+                    ],
                 });
             }
             None => {
@@ -1258,6 +1261,7 @@ mod tests {
     fn model_picker_configuration_updates_provider_model_effort_and_session_key() {
         let directory = tempdir().expect("temporary directory");
         let mut state = RuntimeState::load(directory.path().to_path_buf()).expect("runtime state");
+        state.session_api_key = Some("previous-session-secret".to_owned());
         let (sender, receiver) = mpsc::channel();
 
         configure_model(
@@ -1307,6 +1311,34 @@ mod tests {
         assert!(matches!(
             receiver.recv().expect("settings update"),
             RuntimeEvent::Settings { effort, .. } if effort == "effort:medium"
+        ));
+    }
+
+    #[test]
+    fn goal_command_is_durable_and_guides_the_next_agent_turn() {
+        let directory = tempdir().expect("temporary directory");
+        let mut state = RuntimeState::load(directory.path().to_path_buf()).expect("runtime state");
+        let (sender, receiver) = mpsc::channel();
+
+        execute_slash_command(
+            &mut state,
+            SlashCommand::Goal {
+                objective: Some("Build a responsive portfolio".to_owned()),
+            },
+            &sender,
+            &AtomicBool::new(false),
+        )
+        .expect("set goal");
+
+        assert_eq!(
+            state.pending_goal.as_deref(),
+            Some("Build a responsive portfolio")
+        );
+        assert!(matches!(
+            receiver.recv().expect("goal notice"),
+            RuntimeEvent::Notice { title, details }
+                if title == "Goal updated"
+                    && details.iter().any(|detail| detail.contains("next agent turn"))
         ));
     }
 

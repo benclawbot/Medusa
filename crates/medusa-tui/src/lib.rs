@@ -806,7 +806,7 @@ fn render_frame(identity: &UiIdentity, app: &AppState, width: u16, height: u16) 
                 "up/down choose - space multi-select - enter next - tab switch"
             }
         } else {
-            "up/down choose - tab focus - enter set - esc cancel"
+            "tab field - arrows choose - type or paste key - enter apply - esc cancel"
         };
         set_frame_line(
             &mut frame,
@@ -937,10 +937,10 @@ fn spinner_marker(frame: u8) -> &'static str {
 }
 
 fn model_modal_lines(model_modal: &app::ModelModal) -> Vec<StyledLine> {
-    use app::ModelModalFocus::{ApiKey, Effort, Model, Provider};
+    use app::ModelModalFocus::{ApiKey, Apply, Effort, Model, Provider};
 
     let focus = model_modal.focus();
-    let mut lines = vec![StyledLine::new("Select model", Color::Cyan)];
+    let mut lines = vec![StyledLine::new("Model configuration", Color::Cyan)];
     lines.push(StyledLine::with_marker(
         if focus == Provider { "› " } else { "  " },
         if focus == Provider {
@@ -955,27 +955,20 @@ fn model_modal_lines(model_modal: &app::ModelModal) -> Vec<StyledLine> {
             Color::Grey
         },
     ));
-    for (index, model) in model_modal.model_options().iter().enumerate() {
-        let selected = index == model_modal.selected_model_index();
-        lines.push(StyledLine::with_marker(
-            if selected && focus == Model {
-                "› "
-            } else {
-                "  "
-            },
-            if selected && focus == Model {
-                Color::Magenta
-            } else {
-                Color::DarkGrey
-            },
-            if selected {
-                format!("{model}  selected")
-            } else {
-                model.clone()
-            },
-            if selected { Color::Green } else { Color::Grey },
-        ));
-    }
+    lines.push(StyledLine::with_marker(
+        if focus == Model { "› " } else { "  " },
+        if focus == Model {
+            Color::Magenta
+        } else {
+            Color::DarkGrey
+        },
+        format!("Model     {}", model_modal.selected_model()),
+        if focus == Model {
+            Color::White
+        } else {
+            Color::Grey
+        },
+    ));
     lines.push(StyledLine::with_marker(
         if focus == Effort { "› " } else { "  " },
         if focus == Effort {
@@ -983,7 +976,7 @@ fn model_modal_lines(model_modal: &app::ModelModal) -> Vec<StyledLine> {
         } else {
             Color::DarkGrey
         },
-        format!("{} effort", model_modal.effort().label()),
+        format!("Effort    {}", model_modal.effort().label()),
         if focus == Effort {
             Color::White
         } else {
@@ -997,9 +990,29 @@ fn model_modal_lines(model_modal: &app::ModelModal) -> Vec<StyledLine> {
         } else {
             Color::DarkGrey
         },
-        format!("API key  {}", model_modal.api_key_mask()),
+        format!("API key   {}", model_modal.api_key_mask()),
         if focus == ApiKey {
             Color::White
+        } else {
+            Color::Grey
+        },
+    ));
+    if focus == ApiKey {
+        lines.push(StyledLine::new(
+            "Type or paste a replacement key (used only for this Medusa session).",
+            Color::DarkGrey,
+        ));
+    }
+    lines.push(StyledLine::with_marker(
+        if focus == Apply { "› " } else { "  " },
+        if focus == Apply {
+            Color::Magenta
+        } else {
+            Color::DarkGrey
+        },
+        "Apply configuration",
+        if focus == Apply {
+            Color::Green
         } else {
             Color::Grey
         },
@@ -1442,6 +1455,35 @@ mod tests {
                 .iter()
                 .any(|line| { line.text.contains("Describe a coding task") })
         );
+    }
+
+    #[test]
+    fn model_form_renders_effort_key_and_explicit_apply_action() {
+        let directory = tempfile::tempdir().expect("tempdir");
+        let mut app = AppState::new(
+            directory.path().to_path_buf(),
+            "model-form",
+            "/model",
+            Arc::new(UnsupportedClipboard),
+        )
+        .expect("app");
+        assert!(matches!(
+            app.handle_event(Event::Key(crossterm::event::KeyEvent::new(
+                KeyCode::Enter,
+                KeyModifiers::NONE,
+            )))
+            .expect("open model form"),
+            AppAction::Redraw
+        ));
+
+        let frame = render_frame(&UiIdentity::for_repo(directory.path()), &app, 80, 24);
+        assert!(frame.iter().any(|line| line.text == "Model configuration"));
+        assert!(
+            frame
+                .iter()
+                .any(|line| line.text.contains("Effort    high"))
+        );
+        assert!(frame.iter().any(|line| line.text == "Apply configuration"));
     }
 
     #[test]

@@ -72,6 +72,7 @@ impl<P: ModelProvider> AgentEngine<P> {
         objective: String,
         content: Vec<MessageBlock>,
     ) -> MedusaResult<AgentSession> {
+        let content = content_with_session_goal(content, &objective);
         validate_user_content(&content, &self.provider.capabilities())?;
         bootstrap(repo)?;
         let now = OffsetDateTime::now_utc();
@@ -434,6 +435,16 @@ impl<P: ModelProvider> AgentEngine<P> {
             StepOutcome::Continue
         })
     }
+}
+
+fn content_with_session_goal(mut content: Vec<MessageBlock>, objective: &str) -> Vec<MessageBlock> {
+    content.insert(
+        0,
+        MessageBlock::Text {
+            text: format!("Current session goal: {objective}"),
+        },
+    );
+    content
 }
 
 fn system_prompt(mode: Mode, repo: &Path) -> String {
@@ -993,6 +1004,24 @@ mod tests {
             assert!(tools.contains(&"skill_read".to_owned()));
             assert!(tools.contains(&"update_plan".to_owned()));
         }
+    }
+
+    #[test]
+    fn initial_model_turn_includes_the_durable_session_goal() {
+        let content = content_with_session_goal(
+            vec![MessageBlock::Text {
+                text: "Build the portfolio page".to_owned(),
+            }],
+            "Create a responsive portfolio",
+        );
+        assert!(matches!(
+            content.first(),
+            Some(MessageBlock::Text { text }) if text == "Current session goal: Create a responsive portfolio"
+        ));
+        assert!(matches!(
+            content.get(1),
+            Some(MessageBlock::Text { text }) if text == "Build the portfolio page"
+        ));
     }
 
     #[test]
