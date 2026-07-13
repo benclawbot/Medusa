@@ -471,6 +471,7 @@ pub struct AppState {
     pub plan_mode: bool,
     pub task_list_visible: bool,
     pub spinner_frame: u8,
+    welcome_visible: bool,
     credential_configured: bool,
     model_modal: Option<ModelModal>,
     question_modal: Option<QuestionModal>,
@@ -509,6 +510,7 @@ impl AppState {
             plan_mode: false,
             task_list_visible: true,
             spinner_frame: 0,
+            welcome_visible: true,
             credential_configured: false,
             model_modal: None,
             question_modal: None,
@@ -520,6 +522,7 @@ impl AppState {
     }
 
     pub fn handle_event(&mut self, event: Event) -> Result<AppAction, AppError> {
+        self.dismiss_welcome_for_event(&event);
         if self.question_modal.is_some() {
             return self.handle_question_modal_event(event);
         }
@@ -600,6 +603,19 @@ impl AppState {
                 self.status = "prompt submitted".to_owned();
                 Ok(AppAction::Submit(submitted))
             }
+        }
+    }
+
+    #[must_use]
+    pub fn welcome_visible(&self) -> bool {
+        self.welcome_visible
+    }
+
+    pub fn dismiss_welcome_for_event(&mut self, event: &Event) {
+        if matches!(event, Event::Key(key) if key.kind != KeyEventKind::Release)
+            || matches!(event, Event::Paste(_) | Event::Mouse(_))
+        {
+            self.welcome_visible = false;
         }
     }
 

@@ -44,6 +44,7 @@ const MEDUSA_LOGO: [&str; 3] = [
     "│││├╴  │││ │╰─╮├─┤",
     "╵ ╵╰─╴╶┴╯╰─╯╰─╯╵ ╵",
 ];
+const MEDUSA_LOADING_LOGO: &str = include_str!("medusa_logo_ascii.txt");
 const HEADER_TOP_PADDING: u16 = 1;
 
 #[cfg(unix)]
@@ -174,6 +175,7 @@ fn run_loop(
         draw(stdout, options, identity, app, &jobs, &daemon_status)?;
         if event::poll(Duration::from_millis(100))? {
             let terminal_event = event::read()?;
+            app.dismiss_welcome_for_event(&terminal_event);
             if ctrl_l_redraw(&terminal_event) {
                 continue;
             }
@@ -209,6 +211,7 @@ fn run_loop(
         }
         if event::poll(Duration::from_millis(100))? {
             let terminal_event = event::read()?;
+            app.dismiss_welcome_for_event(&terminal_event);
             if matches!(terminal_event, Event::Resize(_, _)) {
                 last_frame = None;
             }
@@ -467,6 +470,7 @@ struct PortableRenderSnapshot {
     plan_mode: bool,
     spinner_frame: u8,
     model_modal: Option<app::ModelModal>,
+    welcome_visible: bool,
 }
 
 #[cfg(test)]
@@ -485,6 +489,7 @@ fn portable_render_snapshot(app: &AppState, terminal_size: (u16, u16)) -> Portab
         plan_mode: app.plan_mode,
         spinner_frame: app.spinner_frame,
         model_modal: app.model_modal().cloned(),
+        welcome_visible: app.welcome_visible(),
     }
 }
 
@@ -718,6 +723,10 @@ fn legacy_draw_common(
 fn render_frame(identity: &UiIdentity, app: &AppState, width: u16, height: u16) -> Vec<StyledLine> {
     let blank = StyledLine::new("", Color::Reset);
     let mut frame = vec![blank.clone(); usize::from(height)];
+    if app.welcome_visible() {
+        render_loading_screen(&mut frame, width, height);
+        return frame;
+    }
     let mut row = usize::from(HEADER_TOP_PADDING);
     for logo_line in MEDUSA_LOGO {
         set_frame_line(&mut frame, row, StyledLine::new(logo_line, Color::Cyan));
@@ -880,6 +889,51 @@ fn render_frame(identity: &UiIdentity, app: &AppState, width: u16, height: u16) 
         ),
     );
     frame
+}
+
+fn render_loading_screen(frame: &mut [StyledLine], width: u16, height: u16) {
+    let logo = MEDUSA_LOADING_LOGO.trim().lines().collect::<Vec<_>>();
+    let block_width = logo
+        .iter()
+        .map(|line| line.chars().count())
+        .max()
+        .unwrap_or_default();
+    let available_rows = usize::from(height.saturating_sub(2));
+    let visible_rows = logo.len().min(available_rows);
+    let first_line = logo.len().saturating_sub(visible_rows) / 2;
+    let first_row = available_rows.saturating_sub(visible_rows) / 2;
+
+    for (offset, line) in logo.iter().skip(first_line).take(visible_rows).enumerate() {
+        set_frame_line(
+            frame,
+            first_row.saturating_add(offset),
+            StyledLine::new(center_or_crop(line, block_width, width), Color::Cyan),
+        );
+    }
+
+    if height > 0 {
+        let hint = "Start typing to begin";
+        set_frame_line(
+            frame,
+            usize::from(height.saturating_sub(1)),
+            StyledLine::new(
+                center_or_crop(hint, hint.chars().count(), width),
+                Color::DarkGrey,
+            ),
+        );
+    }
+}
+
+fn center_or_crop(line: &str, block_width: usize, width: u16) -> String {
+    let width = usize::from(width);
+    if width >= block_width {
+        return format!("{}{}", " ".repeat((width - block_width) / 2), line);
+    }
+
+    line.chars()
+        .skip((block_width - width) / 2)
+        .take(width)
+        .collect()
 }
 
 fn transcript_lines(app: &AppState) -> Vec<StyledLine> {
@@ -1419,6 +1473,40 @@ mod tests {
     }
 
     #[test]
+    fn loading_logo_disappears_after_first_user_input() {
+        let directory = tempfile::tempdir().expect("tempdir");
+        let mut app = AppState::new(
+            directory.path().to_path_buf(),
+            "loading-logo",
+            "",
+            Arc::new(UnsupportedClipboard),
+        )
+        .expect("app");
+
+        let initial = render_frame(&UiIdentity::for_repo(directory.path()), &app, 80, 40);
+        assert!(initial.iter().any(|line| line.text.contains("@@@@@@@@@@")));
+        assert!(
+            initial
+                .iter()
+                .any(|line| line.text.contains("Start typing to begin"))
+        );
+
+        app.handle_event(Event::Key(crossterm::event::KeyEvent::new(
+            KeyCode::Char('h'),
+            KeyModifiers::NONE,
+        )))
+        .expect("handle first input");
+
+        let after_input = render_frame(&UiIdentity::for_repo(directory.path()), &app, 80, 40);
+        assert!(
+            !after_input
+                .iter()
+                .any(|line| line.text.contains("@@@@@@@@@@"))
+        );
+        assert!(after_input.iter().any(|line| line.text.contains('h')));
+    }
+
+    #[test]
     fn question_and_plan_are_rendered_in_the_bottom_panels() {
         let directory = tempfile::tempdir().expect("tempdir");
         let mut app = AppState::new(
@@ -1428,6 +1516,7 @@ mod tests {
             Arc::new(UnsupportedClipboard),
         )
         .expect("app");
+        app.dismiss_welcome_for_event(&Event::Paste(String::new()));
         app.set_plan(app::TranscriptPlan {
             steps: vec![app::TranscriptPlanStep {
                 title: "Inspect the repository".to_owned(),
@@ -1523,6 +1612,7 @@ mod tests {
             Arc::new(UnsupportedClipboard),
         )
         .expect("app");
+        app.dismiss_welcome_for_event(&Event::Paste(String::new()));
         app.begin_run();
         app.tick();
         let before = render_frame(&UiIdentity::for_repo(directory.path()), &app, 80, 24);
