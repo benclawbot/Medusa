@@ -1,5 +1,6 @@
 //! Typed configuration with deterministic precedence.
 
+use std::path::PathBuf;
 use std::{collections::BTreeMap, fs, path::Path};
 
 use medusa_core::{ErrorCategory, ErrorCode, MedusaError, MedusaResult};
@@ -95,6 +96,71 @@ pub struct VerificationConfig {
     pub required: bool,
     pub independent_review: bool,
     pub browser_on_ui_change: bool,
+}
+
+/// Skill matcher mode.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum MatcherMode {
+    Keyword,
+    KeywordLlmRerank,
+}
+
+impl MatcherMode {
+    /// Parses a matcher mode from an environment string (case-insensitive).
+    pub fn from_env_string(s: &str) -> Self {
+        match s.to_ascii_lowercase().as_str() {
+            "keyword" => Self::Keyword,
+            _ => Self::KeywordLlmRerank,
+        }
+    }
+}
+
+/// Skill subsystem configuration, sourced from environment variables.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct SkillConfig {
+    pub enabled: bool,
+    pub bundle_path: Option<PathBuf>,
+    pub max_matches: usize,
+    pub max_chain_depth: usize,
+    pub matcher_mode: MatcherMode,
+}
+
+impl Default for SkillConfig {
+    fn default() -> Self {
+        Self::from_env()
+    }
+}
+
+impl SkillConfig {
+    /// Loads configuration from `MEDUSA_SKILLS_*` environment variables.
+    pub fn from_env() -> Self {
+        Self {
+            enabled: std::env::var("MEDUSA_SKILLS_ENABLED")
+                .ok()
+                .map(|s| {
+                    !matches!(
+                        s.to_ascii_lowercase().as_str(),
+                        "0" | "false" | "no" | "off"
+                    )
+                })
+                .unwrap_or(true),
+            bundle_path: std::env::var("MEDUSA_SKILLS_BUNDLE_PATH")
+                .ok()
+                .map(PathBuf::from),
+            max_matches: std::env::var("MEDUSA_SKILLS_MAX_MATCHES")
+                .ok()
+                .and_then(|s| s.parse().ok())
+                .unwrap_or(5),
+            max_chain_depth: std::env::var("MEDUSA_SKILLS_MAX_CHAIN_DEPTH")
+                .ok()
+                .and_then(|s| s.parse().ok())
+                .unwrap_or(4),
+            matcher_mode: std::env::var("MEDUSA_SKILLS_MATCHER_MODE")
+                .ok()
+                .map(|s| MatcherMode::from_env_string(&s))
+                .unwrap_or(MatcherMode::KeywordLlmRerank),
+        }
+    }
 }
 
 impl Default for Config {

@@ -7,8 +7,9 @@ rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
 
-[lints]
-workspace = true
+[lints.rust]
+# Tests need `unsafe` to mutate process environment (unsafe since Rust 1.86).
+unsafe_code = "deny"
 
 [dependencies]
 medusa-core.workspace = true
@@ -17,3 +18,4 @@ toml.workspace = true
 
 [dev-dependencies]
 tempfile.workspace = true
+serial_test.workspace = true

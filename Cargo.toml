@@ -39,6 +39,7 @@ sha2 = "0.10"
 hex = "0.4"
 proptest = "1.6"
 tempfile = "3.16"
+serial_test = "3"
 
 [workspace.lints.rust]
 unsafe_code = "forbid"
