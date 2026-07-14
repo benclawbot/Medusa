@@ -7,8 +7,10 @@ license.workspace = true
 repository.workspace = true
 
 [dependencies]
+medusa-browser-client = { path = "../medusa-browser-client" }
 medusa-config = { path = "../medusa-config" }
 medusa-core.workspace = true
+medusa-extensions = { path = "../medusa-extensions" }
 medusa-intelligence = { path = "../medusa-intelligence" }
 medusa-protocol.workspace = true
 medusa-provider = { path = "../medusa-provider" }

@@ -5,6 +5,7 @@ mod evidence;
 pub mod output_envelope;
 mod policy;
 mod session;
+pub mod session_browser;
 pub mod tools;
 mod verification;
 
