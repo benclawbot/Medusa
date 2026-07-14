@@ -47,6 +47,7 @@ pub enum SlashCommand {
     Model(ModelCommand),
     Effort { effort: Option<Effort> },
     Skills,
+    Skill { name: Option<String> },
     Plan { task: Option<String> },
 }
 
@@ -116,6 +117,11 @@ pub const COMMAND_SPECS: &[CommandSpec] = &[
         name: "skills",
         usage: "/skills",
         description: "list available project and user skills",
+    },
+    CommandSpec {
+        name: "skill",
+        usage: "/skill [name]",
+        description: "force-load a skill (bypassing the matcher)",
     },
     CommandSpec {
         name: "plan",
@@ -217,6 +223,9 @@ pub fn parse_slash_command(input: &str) -> Result<Option<SlashCommand>, String> 
             require_empty("skills")?;
             Ok(Some(SlashCommand::Skills))
         }
+        "skill" => Ok(Some(SlashCommand::Skill {
+            name: (!remainder.is_empty()).then(|| remainder.to_owned()),
+        })),
         "plan" => Ok(Some(SlashCommand::Plan {
             task: (!remainder.is_empty()).then(|| remainder.to_owned()),
         })),
@@ -266,6 +275,20 @@ mod tests {
             Ok(Some(SlashCommand::Effort {
                 effort: Some(Effort::High)
             }))
+        );
+    }
+
+    #[test]
+    fn parses_skill_command_with_and_without_name() {
+        assert_eq!(
+            parse_slash_command("/skill brainstorming"),
+            Ok(Some(SlashCommand::Skill {
+                name: Some("brainstorming".to_owned())
+            }))
+        );
+        assert_eq!(
+            parse_slash_command("/skill"),
+            Ok(Some(SlashCommand::Skill { name: None }))
         );
     }
 

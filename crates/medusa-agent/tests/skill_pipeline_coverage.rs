@@ -26,7 +26,9 @@ fn index_with(triggers: &[(&str, &[&str])]) -> SkillIndex {
                 triggers: ts.iter().map(|s| s.to_string()).collect(),
                 tools: vec![],
                 permissions: SkillPermissions::default(),
-                compatibility: SkillCompatibility { medusa: ">=1.0.0".into() },
+                compatibility: SkillCompatibility {
+                    medusa: ">=1.0.0".into(),
+                },
                 tests: vec![],
                 requires: vec![],
                 handoff: None,
@@ -42,16 +44,30 @@ fn index_with(triggers: &[(&str, &[&str])]) -> SkillIndex {
 #[test]
 fn keyword_filter_matches_one_skill() {
     let index = index_with(&[("brainstorming", &["brainstorm", "design"])]);
-    let matches = match_prompt("help me brainstorm a new feature", &index, &config(ConfigMatcherMode::Keyword, 5)).unwrap();
+    let matches = match_prompt(
+        "help me brainstorm a new feature",
+        &index,
+        &config(ConfigMatcherMode::Keyword, 5),
+    )
+    .unwrap();
     assert_eq!(matches.len(), 1);
     assert_eq!(matches[0].skill.name, "brainstorming");
-    assert!(matches[0].matched_triggers.contains(&"brainstorm".to_owned()));
+    assert!(
+        matches[0]
+            .matched_triggers
+            .contains(&"brainstorm".to_owned())
+    );
 }
 
 #[test]
 fn keyword_filter_returns_empty_for_no_match() {
     let index = index_with(&[("brainstorming", &["brainstorm"])]);
-    let matches = match_prompt("please run the tests", &index, &config(ConfigMatcherMode::Keyword, 5)).unwrap();
+    let matches = match_prompt(
+        "please run the tests",
+        &index,
+        &config(ConfigMatcherMode::Keyword, 5),
+    )
+    .unwrap();
     assert!(matches.is_empty());
 }
 
@@ -64,16 +80,18 @@ fn keyword_filter_caps_at_max_matches() {
         ("d", &["x"]),
         ("e", &["x"]),
     ]);
-    let matches = match_prompt("anything with x", &index, &config(ConfigMatcherMode::Keyword, 2)).unwrap();
+    let matches = match_prompt(
+        "anything with x",
+        &index,
+        &config(ConfigMatcherMode::Keyword, 2),
+    )
+    .unwrap();
     assert_eq!(matches.len(), 2);
 }
 
 #[test]
 fn keyword_filter_scores_by_trigger_count() {
-    let index = index_with(&[
-        ("a", &["x"]),
-        ("b", &["x", "y"]),
-    ]);
+    let index = index_with(&[("a", &["x"]), ("b", &["x", "y"])]);
     let matches = match_prompt("x and y", &index, &config(ConfigMatcherMode::Keyword, 5)).unwrap();
     assert_eq!(matches.len(), 2);
     assert_eq!(matches[0].skill.name, "b");
@@ -91,7 +109,9 @@ fn entry(name: &str, requires: &[&str], handoff: Option<&str>) -> medusa_skills:
             triggers: vec![],
             tools: vec![],
             permissions: SkillPermissions::default(),
-            compatibility: SkillCompatibility { medusa: ">=1.0.0".into() },
+            compatibility: SkillCompatibility {
+                medusa: ">=1.0.0".into(),
+            },
             tests: vec![],
             requires: vec![],
             handoff: None,
@@ -122,26 +142,24 @@ fn loader_resolves_chain_in_declaration_order() {
         entry("c", &[], None),
     ]);
     let bundle = load(&index, "a", 4).unwrap();
-    let names: Vec<&str> = bundle.entries.iter().map(|e| e.skill.name.as_str()).collect();
+    let names: Vec<&str> = bundle
+        .entries
+        .iter()
+        .map(|e| e.skill.name.as_str())
+        .collect();
     assert_eq!(names, vec!["a", "b", "c"]);
 }
 
 #[test]
 fn loader_detects_cycle() {
-    let index = make_index(vec![
-        entry("a", &["b"], None),
-        entry("b", &["a"], None),
-    ]);
+    let index = make_index(vec![entry("a", &["b"], None), entry("b", &["a"], None)]);
     let err = load(&index, "a", 4).unwrap_err();
     assert!(format!("{err}").contains("cycle"));
 }
 
 #[test]
 fn loader_enforces_depth_cap() {
-    let index = make_index(vec![
-        entry("a", &["b"], None),
-        entry("b", &["a"], None),
-    ]);
+    let index = make_index(vec![entry("a", &["b"], None), entry("b", &["a"], None)]);
     let err = load(&index, "a", 1).unwrap_err();
     assert!(format!("{err}").contains("depth"));
 }
@@ -199,7 +217,7 @@ fn handoff_outcome_records_skipped_when_handoff_target_missing() {
     assert_eq!(outcome.resolved, vec!["a".to_string()]);
 }
 
-use medusa_agent::engine::{build_user_turn_input, TurnInput};
+use medusa_agent::engine::{TurnInput, build_user_turn_input};
 
 #[test]
 fn build_user_turn_input_prepends_loaded_skills() {
@@ -242,4 +260,17 @@ fn session_load_skills_is_idempotent() {
     // Second call replaces nothing because there is no source. Still idempotent.
     session.load_skills(None, None).expect("repeated no-op");
     assert!(session.skill_index.is_none());
+}
+
+#[test]
+fn force_load_bypasses_matcher() {
+    use medusa_agent::engine::force_load;
+    let index = make_index(vec![entry("a", &[], None), entry("b", &[], None)]);
+    let bundle = force_load(&index, "b", 4).unwrap();
+    let names: Vec<&str> = bundle
+        .entries
+        .iter()
+        .map(|e| e.skill.name.as_str())
+        .collect();
+    assert_eq!(names, vec!["b"]);
 }

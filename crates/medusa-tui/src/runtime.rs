@@ -272,6 +272,7 @@ struct RuntimeState {
     config: Config,
     session: Option<AgentSession>,
     pending_goal: Option<String>,
+    pending_skill_load: Option<String>,
     session_api_key: Option<String>,
     effort: Effort,
     plan_mode: bool,
@@ -292,6 +293,7 @@ impl RuntimeState {
             config,
             session: None,
             pending_goal: None,
+            pending_skill_load: None,
             session_api_key: None,
         })
     }
@@ -535,6 +537,24 @@ fn execute_slash_command(
                     skills
                 },
             });
+        }
+        SlashCommand::Skill { name } => {
+            if let Some(skill_name) = name {
+                let _ = events.send(RuntimeEvent::Notice {
+                    title: "Skill queued".to_owned(),
+                    details: vec![format!(
+                        "'{skill_name}' will be force-loaded on the next turn."
+                    )],
+                });
+                state.pending_skill_load = Some(skill_name);
+            } else {
+                let _ = events.send(RuntimeEvent::Notice {
+                    title: "/skill".to_owned(),
+                    details: vec![
+                        "Usage: /skill <name> — force-load a skill on the next turn.".to_owned(),
+                    ],
+                });
+            }
         }
         SlashCommand::Plan { task } => {
             if task.as_deref().is_some_and(|value| {

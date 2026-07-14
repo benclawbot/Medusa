@@ -996,6 +996,18 @@ pub fn build_user_turn_input(user_prompt: &str, bundle: &SkillBundle) -> TurnInp
     }
 }
 
+/// Loads a skill by name (and its `requires` chain) without running the
+/// matcher. Used by the `/skill <name>` slash command to force-load a
+/// specific skill even when no trigger keyword matched the user prompt.
+#[must_use = "the resolved SkillBundle must be rendered into the system prompt"]
+pub fn force_load(
+    index: &medusa_skills::SkillIndex,
+    name: &str,
+    max_depth: usize,
+) -> MedusaResult<SkillBundle> {
+    crate::skill_loader::load(index, name, max_depth)
+}
+
 #[cfg(test)]
 mod tests {
     use std::fs;
