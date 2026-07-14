@@ -177,3 +177,24 @@ fn render_handles_empty_bundle() {
     let rendered = render(&SkillBundle::default());
     assert_eq!(rendered, "## Loaded skills\n(none)\n");
 }
+
+use medusa_agent::skill_handoff::{HandoffOutcome, HandoffQueue};
+
+#[test]
+fn handoff_queue_drains_in_order() {
+    let mut q = HandoffQueue::default();
+    q.push("a");
+    q.push("b");
+    assert_eq!(q.pop(), Some("a".to_owned()));
+    assert_eq!(q.pop(), Some("b".to_owned()));
+    assert_eq!(q.pop(), None);
+}
+
+#[test]
+fn handoff_outcome_records_skipped_when_handoff_target_missing() {
+    let index = make_index(vec![entry("a", &[], Some("missing"))]);
+    let mut q = HandoffQueue::default();
+    q.push("a");
+    let outcome: HandoffOutcome = q.drain(&index);
+    assert_eq!(outcome.resolved, vec!["a".to_string()]);
+}
