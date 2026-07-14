@@ -95,6 +95,8 @@ impl<P: ModelProvider> AgentEngine<P> {
             }],
             events: Vec::new(),
             evidence: Vec::new(),
+            skill_index: None,
+            skill_handoff: crate::skill_handoff::HandoffQueue::default(),
         };
         append_event(
             &mut session,

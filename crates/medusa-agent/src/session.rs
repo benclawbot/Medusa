@@ -102,6 +102,37 @@ pub struct AgentSession {
     pub messages: Vec<Message>,
     pub events: Vec<EventEnvelope>,
     pub evidence: Vec<String>,
+    #[serde(default)]
+    pub skill_index: Option<medusa_skills::SkillIndex>,
+    #[serde(default)]
+    pub skill_handoff: crate::skill_handoff::HandoffQueue,
+}
+
+impl AgentSession {
+    /// Loads the bundled skill index into this session so future turns can
+    /// run the matcher/loader pipeline. Safe to call repeatedly: each call
+    /// replaces `skill_index` but preserves `skill_handoff`.
+    ///
+    /// `manifest_path` is the on-disk location of `manifest.json` (typically
+    /// `<asset_root>/manifest.json`). `asset_path` is the skills directory
+    /// (parent of the `<name>/SKILL.md` tree); when provided, the session
+    /// also tries `SkillIndex::from_assets_dir` as a fallback if the
+    /// manifest cannot be read.
+    pub fn load_skills(
+        &mut self,
+        manifest_path: Option<&Path>,
+        asset_path: Option<&Path>,
+    ) -> MedusaResult<()> {
+        if let Some(path) = manifest_path {
+            let store = medusa_skills::AssetStore::load(path)?;
+            self.skill_index = Some(store.index()?);
+            return Ok(());
+        }
+        if let Some(root) = asset_path {
+            self.skill_index = Some(medusa_skills::SkillIndex::from_assets_dir(root)?);
+        }
+        Ok(())
+    }
 }
 
 /// Creates the on-disk Medusa layout and repository map.

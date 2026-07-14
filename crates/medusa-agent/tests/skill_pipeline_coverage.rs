@@ -208,3 +208,38 @@ fn build_user_turn_input_prepends_loaded_skills() {
     assert!(input.system_prompt_section.contains("## Loaded skills"));
     assert!(input.user_prompt == "help me design a feature");
 }
+
+#[test]
+fn session_load_skills_is_idempotent() {
+    use medusa_agent::AgentSession;
+    use medusa_agent::skill_handoff::HandoffQueue;
+    use medusa_core::SessionId;
+    use std::path::PathBuf;
+    use time::OffsetDateTime;
+
+    let now = OffsetDateTime::now_utc();
+    let mut session = AgentSession {
+        id: SessionId::new(),
+        objective: "test".into(),
+        repo: PathBuf::from("."),
+        created_at: now,
+        updated_at: now,
+        completed: false,
+        turn: 0,
+        plan: vec![],
+        pending_question: None,
+        messages: vec![],
+        events: vec![],
+        evidence: vec![],
+        skill_index: None,
+        skill_handoff: HandoffQueue::default(),
+    };
+
+    // First call with no paths is a no-op that must not error or change state.
+    session.load_skills(None, None).expect("no-op load");
+    assert!(session.skill_index.is_none());
+
+    // Second call replaces nothing because there is no source. Still idempotent.
+    session.load_skills(None, None).expect("repeated no-op");
+    assert!(session.skill_index.is_none());
+}

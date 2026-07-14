@@ -1,6 +1,7 @@
 use medusa_skills::SkillIndex;
+use serde::{Deserialize, Serialize};
 
-#[derive(Clone, Debug, Default, Eq, PartialEq)]
+#[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
 pub struct HandoffQueue {
     pub pending: Vec<String>,
 }
