@@ -16,6 +16,7 @@ Medusa is a production-grade autonomous coding agent written in Rust. It combine
 - **Persistent memory** — Markdown-first memory with validation, indexing, retrieval, lifecycle management, and provenance controls.
 - **Parallel workers** — isolated worktrees, deterministic merge behavior, conflict detection, and cleanup safeguards.
 - **Extensions and browser evidence** — skills, hooks, MCP isolation, Playwright-based browser verification, output redaction, and checksummed provenance.
+- **Request-driven skills** — 14 bundled superpowers skills (brainstorming, TDD, debugging, code review, planning, etc.) auto-trigger based on what you ask for. The engine matches your prompt, loads the right skill (and any skills it requires), and injects the instructions before the model responds. A skill can hand off to the next skill in a multi-turn flow.
 - **Production hardening** — migrations, rollback bundles, observability, archive safety, fuzzing, chaos recovery, dependency policy, package smoke tests, and live-provider validation.
 
 ## Requirements
@@ -265,6 +266,16 @@ medusa --continue
 | `Esc` | Exit the terminal interface |
 
 Prompt drafts and clipboard attachments are persisted under the repository's `.medusa` state directory until submission.
+
+### Skills
+
+Medusa ships 14 skills from the superpowers project. When you type a request, the engine matches it against the skill `triggers` and loads the best match into the system prompt. To force a specific skill, use the slash command:
+
+```
+/skill brainstorming
+```
+
+This bypasses the matcher and injects the `brainstorming` skill's instructions. Configuration knobs: `MEDUSA_SKILLS_ENABLED`, `MEDUSA_SKILLS_MAX_MATCHES` (default 5), `MEDUSA_SKILLS_MAX_CHAIN_DEPTH` (default 4), `MEDUSA_SKILLS_MATCHER_MODE` (default `keyword_llm_rerank`).
 
 ## Headless commands
 
