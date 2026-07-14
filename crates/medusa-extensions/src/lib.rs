@@ -4,7 +4,7 @@ mod browser;
 mod hooks;
 mod mcp;
 mod redaction;
-pub mod skills;
+mod skills;
 mod support;
 
 pub use browser::{BrowserEvidence, verify_browser};

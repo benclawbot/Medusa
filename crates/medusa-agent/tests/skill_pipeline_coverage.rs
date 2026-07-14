@@ -13,7 +13,7 @@ fn config(mode: ConfigMatcherMode, max: usize) -> SkillConfig {
 }
 
 fn index_with(triggers: &[(&str, &[&str])]) -> SkillIndex {
-    use medusa_extensions::skills::{SkillCompatibility, SkillManifest, SkillPermissions};
+    use medusa_extensions::{SkillCompatibility, SkillManifest, SkillPermissions};
     let skills = triggers
         .iter()
         .map(|(name, ts)| medusa_skills::SkillEntry {
