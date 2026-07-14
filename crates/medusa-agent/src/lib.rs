@@ -4,6 +4,7 @@ mod engine;
 mod evidence;
 mod policy;
 mod session;
+pub mod skill_matcher;
 mod tools;
 mod verification;
 
