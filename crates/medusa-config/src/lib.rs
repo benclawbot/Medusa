@@ -348,3 +348,55 @@ mod tests {
         assert!(Config::from_toml("version = 1\n[git]\nallow_force_push = true\n").is_err());
     }
 }
+
+/// Environment-variable overrides for browser and envelope configuration.
+///
+/// All functions are pure reads of the current process environment; tests
+/// are responsible for unsetting the variables they touch so they don't
+/// leak state between cases.
+pub mod env {
+    use std::path::PathBuf;
+    use std::time::Duration;
+
+    #[must_use]
+    pub fn browser_enabled() -> bool {
+        match std::env::var("MEDUSA_BROWSER_ENABLED") {
+            Ok(s) => matches!(s.to_ascii_lowercase().as_str(), "1" | "true" | "yes" | "on"),
+            Err(_) => false,
+        }
+    }
+
+    #[must_use]
+    pub fn browser_path() -> Option<PathBuf> {
+        std::env::var("MEDUSA_BROWSER_PATH").ok().map(PathBuf::from)
+    }
+
+    #[must_use]
+    pub fn browser_timeout() -> Duration {
+        Duration::from_millis(browser_timeout_ms())
+    }
+
+    #[must_use]
+    pub fn browser_timeout_ms() -> u64 {
+        std::env::var("MEDUSA_BROWSER_TIMEOUT_MS")
+            .ok()
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(30_000)
+    }
+
+    #[must_use]
+    pub fn envelope_head_bytes() -> usize {
+        std::env::var("MEDUSA_ENVELOPE_HEAD_BYTES")
+            .ok()
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(4_096)
+    }
+
+    #[must_use]
+    pub fn envelope_tail_bytes() -> usize {
+        std::env::var("MEDUSA_ENVELOPE_TAIL_BYTES")
+            .ok()
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(4_096)
+    }
+}
