@@ -189,8 +189,8 @@ fn execute_worker(mut worker: Worker, task: DelegatedTask) -> MedusaResult<Worke
         .args(&task.args)
         .current_dir(&worker.worktree)
         .output()?;
-    worker.stdout = bounded(&output.stdout);
-    worker.stderr = bounded(&output.stderr);
+    worker.stdout = String::from_utf8_lossy(&output.stdout).into_owned();
+    worker.stderr = String::from_utf8_lossy(&output.stderr).into_owned();
     if !output.status.success() {
         worker.state = WorkerState::Failed;
         return Ok(worker);
@@ -234,21 +234,17 @@ fn output_result(label: &str, output: Output) -> MedusaResult<String> {
             format!(
                 "{label} failed with {}\nstdout={}\nstderr={}",
                 output.status,
-                bounded(&output.stdout),
-                bounded(&output.stderr)
+                String::from_utf8_lossy(&output.stdout),
+                String::from_utf8_lossy(&output.stderr)
             ),
         ))
     }
 }
 
-fn bounded(bytes: &[u8]) -> String {
-    const LIMIT: usize = 1_000_000;
-    let mut value = String::from_utf8_lossy(bytes).into_owned();
-    if value.len() > LIMIT {
-        value.truncate(LIMIT);
-        value.push_str("\n[truncated]");
-    }
-    value
+fn _bounded_removed(_bytes: &[u8]) -> String {
+    // Stub kept to suppress accidental re-introduction. Workers no longer
+    // truncate output — the full body is persisted and surfaced verbatim.
+    String::new()
 }
 
 fn path_text(path: &Path) -> MedusaResult<&str> {

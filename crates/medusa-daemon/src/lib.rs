@@ -341,8 +341,8 @@ fn spawn_job(paths: DaemonPaths, jobs: Arc<Mutex<BTreeMap<String, JobRecord>>>, 
         match output {
             Ok(output) => {
                 job.exit_code = output.status.code();
-                job.stdout = truncate(String::from_utf8_lossy(&output.stdout).into_owned());
-                job.stderr = truncate(String::from_utf8_lossy(&output.stderr).into_owned());
+                job.stdout = String::from_utf8_lossy(&output.stdout).into_owned();
+                job.stderr = String::from_utf8_lossy(&output.stderr).into_owned();
                 job.state = if output.status.success() {
                     JobState::Succeeded
                 } else {
@@ -408,13 +408,11 @@ fn lock_jobs(
     })
 }
 
-fn truncate(mut value: String) -> String {
-    const LIMIT: usize = 1_000_000;
-    if value.len() > LIMIT {
-        value.truncate(LIMIT);
-        value.push_str("\n[truncated]");
-    }
-    value
+fn _truncate_removed(_value: String) -> String {
+    // Stub kept to suppress accidental re-introduction. The daemon no
+    // longer truncates job output — the full body is persisted on
+    // `JobRecord.stdout`/`stderr` and surfaced to clients verbatim.
+    String::new()
 }
 
 fn socket_error(error: impl std::fmt::Display) -> MedusaError {
