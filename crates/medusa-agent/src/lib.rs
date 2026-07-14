@@ -2,6 +2,7 @@
 
 mod engine;
 mod evidence;
+pub mod output_envelope;
 mod policy;
 mod session;
 mod tools;
