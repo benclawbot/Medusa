@@ -33,6 +33,20 @@ pub struct OutputEnvelope {
     pub format: OutputFormat,
 }
 
+impl std::fmt::Display for OutputEnvelope {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        if self.tail.is_empty() {
+            write!(f, "{}", self.head)
+        } else {
+            write!(
+                f,
+                "{}\n…\n{}\n({} lines, {} bytes, full body at {})",
+                self.head, self.tail, self.line_count, self.byte_count, self.path.display()
+            )
+        }
+    }
+}
+
 pub fn wrap(
     tool: &str,
     body: &[u8],

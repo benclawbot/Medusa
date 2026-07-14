@@ -102,6 +102,8 @@ pub struct AgentSession {
     pub messages: Vec<Message>,
     pub events: Vec<EventEnvelope>,
     pub evidence: Vec<String>,
+    #[serde(default)]
+    pub tool_artifacts: Vec<PathBuf>,
 }
 
 /// Creates the on-disk Medusa layout and repository map.

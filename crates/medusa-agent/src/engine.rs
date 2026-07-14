@@ -11,6 +11,7 @@ use time::OffsetDateTime;
 
 use crate::{
     evidence::append_event,
+    output_envelope::{EnvelopeConfig, OutputEnvelope, OutputFormat, wrap as wrap_envelope},
     session::{
         AgentPlanStep, AgentPlanStepStatus, AgentQuestion, AgentQuestionItem, AgentQuestionOption,
         AgentSession, bootstrap, load, persist,
@@ -93,6 +94,7 @@ impl<P: ModelProvider> AgentEngine<P> {
             }],
             events: Vec::new(),
             evidence: Vec::new(),
+            tool_artifacts: Vec::new(),
         };
         append_event(
             &mut session,
@@ -354,7 +356,7 @@ impl<P: ModelProvider> AgentEngine<P> {
                     reason,
                 ))
             };
-            let (content, is_error, exit_code) = match result {
+            let (raw_content, is_error, exit_code) = match result {
                 Ok(output) => (output, false, Some(0)),
                 Err(error) => (error.to_string(), true, Some(1)),
             };
@@ -366,16 +368,39 @@ impl<P: ModelProvider> AgentEngine<P> {
                 },
                 &mut observer,
             )?;
+            // The TUI sees the full body verbatim; the model sees the compact
+            // head/tail envelope with a pointer to the on-disk artifact.
             observer(&AgentUpdate::ToolOutput {
-                tool: name,
-                output: content.clone(),
+                tool: name.clone(),
+                output: raw_content.clone(),
                 is_error,
             });
+            let envelope_cfg = default_envelope_config(&session.repo);
+            let model_content = match wrap_envelope(
+                &name,
+                raw_content.as_bytes(),
+                OutputFormat::Plain,
+                &envelope_cfg,
+            ) {
+                Ok(env) => {
+                    let compact = compact_envelope_for_model(&env);
+                    // Persist the artifact path on the session for later
+                    // reference (cleanup, replay). Currently unused by
+                    // downstream consumers — Task 7 wires SessionBrowser on top.
+                    session.tool_artifacts.push(env.path.clone());
+                    if is_error { format!("[error]\n{compact}") } else { compact }
+                }
+                Err(_) => {
+                    // Envelope wrap failed (rare — disk full, perms). Fall back
+                    // to the raw body so the model still sees output.
+                    raw_content.clone()
+                }
+            };
             session.messages.push(Message {
                 role: Role::User,
                 content: vec![MessageBlock::ToolResult {
                     tool_use_id: id,
-                    content,
+                    content: model_content,
                     is_error,
                 }],
             });
@@ -719,6 +744,36 @@ fn plan_from_input(input: &serde_json::Value) -> Vec<AgentPlanStep> {
 fn compact_plan_title(title: &str) -> String {
     const MAX_TITLE_CHARS: usize = 140;
     title.chars().take(MAX_TITLE_CHARS).collect()
+}
+
+/// Default envelope configuration for a session. Artifact root lives inside
+/// the session's `.medusa/artifacts/` so the full body is recovered by path.
+/// `Task 11/12` will plumb real config knobs; these defaults keep the
+/// engine pipeline runnable before then.
+fn default_envelope_config(repo: &Path) -> EnvelopeConfig {
+    EnvelopeConfig {
+        head_bytes: 4 * 1024,
+        tail_bytes: 4 * 1024,
+        max_artifact_bytes: 8 * 1024 * 1024,
+        session_root: repo.join(".medusa"),
+    }
+}
+
+/// Render an `OutputEnvelope` for the model's tool message. The Display
+/// impl is full-fidelity; the compact form drops the path display and is
+/// used inside the JSON envelope the model sees.
+fn compact_envelope_for_model(envelope: &OutputEnvelope) -> String {
+    if envelope.tail.is_empty() {
+        return envelope.head.clone();
+    }
+    format!(
+        "{}\n…\n{}\n({} lines, {} bytes, full body at {})",
+        envelope.head,
+        envelope.tail,
+        envelope.line_count,
+        envelope.byte_count,
+        envelope.path.display()
+    )
 }
 
 fn has_mutating_tool_result(session: &AgentSession) -> bool {
