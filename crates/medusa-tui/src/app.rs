@@ -458,6 +458,23 @@ fn cycle_index(current: usize, length: usize, delta: isize) -> usize {
     (current as isize + delta).rem_euclid(length as isize) as usize
 }
 
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct Scrollback {
+    pub offset: usize,
+}
+
+impl Scrollback {
+    /// Increase the offset by `step`, capped by `max_offset`.
+    pub fn scroll_up(&mut self, step: usize, max_offset: usize) {
+        self.offset = self.offset.saturating_add(step).min(max_offset);
+    }
+
+    /// Decrease the offset by `step`, clamped at 0.
+    pub fn scroll_down(&mut self, step: usize) {
+        self.offset = self.offset.saturating_sub(step);
+    }
+}
+
 pub struct AppState {
     pub composer: ComposerState,
     pub transcript: Vec<TranscriptEntry>,
@@ -471,6 +488,7 @@ pub struct AppState {
     pub plan_mode: bool,
     pub task_list_visible: bool,
     pub spinner_frame: u8,
+    pub scrollback: Scrollback,
     welcome_visible: bool,
     credential_configured: bool,
     model_modal: Option<ModelModal>,
@@ -482,6 +500,23 @@ pub struct AppState {
 }
 
 impl AppState {
+    #[must_use]
+    pub fn scrollback_offset(&self) -> usize {
+        self.scrollback.offset
+    }
+
+    pub fn set_scrollback_offset(&mut self, offset: usize) {
+        self.scrollback.offset = offset;
+    }
+
+    pub fn scrollback_scroll_up(&mut self, step: usize, max_offset: usize) {
+        self.scrollback.scroll_up(step, max_offset);
+    }
+
+    pub fn scrollback_scroll_down(&mut self, step: usize) {
+        self.scrollback.scroll_down(step);
+    }
+
     pub fn new(
         repository: PathBuf,
         draft_key: impl Into<String>,
@@ -510,6 +545,7 @@ impl AppState {
             plan_mode: false,
             task_list_visible: true,
             spinner_frame: 0,
+            scrollback: Scrollback::default(),
             welcome_visible: true,
             credential_configured: false,
             model_modal: None,
