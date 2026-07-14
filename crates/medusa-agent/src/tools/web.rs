@@ -13,7 +13,6 @@ use reqwest::{
 };
 
 const MAX_RESPONSE_BYTES: usize = 750_000;
-const MAX_TEXT_CHARS: usize = 20_000;
 const MAX_REDIRECTS: usize = 4;
 const MAX_SEARCH_RESULTS: usize = 5;
 const USER_AGENT_VALUE: &str = "Medusa/1.0 (public web research)";
@@ -86,10 +85,7 @@ pub(crate) fn fetch(url: &str, prompt: Option<&str>) -> MedusaResult<String> {
         .filter(|prompt| !prompt.is_empty())
         .map(|prompt| format!("\nRequested extraction: {prompt}"))
         .unwrap_or_default();
-    Ok(format!(
-        "Fetched: {final_url}{requested}\n\n{}",
-        truncate_text(&content, MAX_TEXT_CHARS)
-    ))
+    Ok(format!("Fetched: {final_url}{requested}\n\n{content}"))
 }
 
 fn request(mut url: Url) -> MedusaResult<(Url, Vec<u8>)> {
@@ -123,7 +119,7 @@ fn request(mut url: Url) -> MedusaResult<(Url, Vec<u8>)> {
             let body = read_limited(&mut response).unwrap_or_default();
             return Err(web_error(format!(
                 "web request returned HTTP {status}: {}",
-                truncate_text(&String::from_utf8_lossy(&body), 400)
+                truncate_inline(&String::from_utf8_lossy(&body), 400)
             )));
         }
         if response
@@ -349,7 +345,11 @@ fn decode_entities(value: &str) -> String {
         .replace("&gt;", ">")
 }
 
-fn truncate_text(value: &str, max_chars: usize) -> String {
+/// Truncates an error-context string to `max_chars` bytes. Unlike the
+/// tool-result helper this stays local because HTTP error context is
+/// always short and only used for diagnostics — the full body lives in
+/// the envelope sidecar.
+fn truncate_inline(value: &str, max_chars: usize) -> String {
     if value.chars().count() <= max_chars {
         return value.to_owned();
     }

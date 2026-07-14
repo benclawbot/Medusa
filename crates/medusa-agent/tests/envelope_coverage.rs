@@ -50,3 +50,16 @@ fn utf8_boundaries_are_preserved() {
     assert!(env.head.chars().all(|c| c.is_alphabetic() || c == 'é'));
     assert!(env.tail.chars().all(|c| c.is_alphabetic() || c == 'é'));
 }
+
+#[test]
+fn shell_output_helper_no_longer_truncates() {
+    let mut stdout = Vec::new();
+    for i in 0..2_000 {
+        stdout.extend_from_slice(format!("line {i}\n").as_bytes());
+    }
+    let stderr = Vec::new();
+    let lines = medusa_agent::tools::format_command_output("cargo", &["test"], &stdout, &stderr);
+    assert!(lines.iter().any(|l| l.contains("line 0")));
+    assert!(lines.iter().any(|l| l.contains("line 1999")));
+    assert!(!lines.iter().any(|l| l.contains("[truncated]")));
+}

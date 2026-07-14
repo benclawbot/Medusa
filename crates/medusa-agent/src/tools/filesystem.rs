@@ -99,7 +99,7 @@ pub(crate) fn search(repo: &Path, query: &str) -> MedusaResult<String> {
             }
         }
     }
-    Ok(crate::tools::truncate(results.join("\n")))
+    Ok(results.join("\n"))
 }
 
 #[cfg(test)]
