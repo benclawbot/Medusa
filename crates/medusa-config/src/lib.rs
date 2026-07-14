@@ -400,3 +400,67 @@ pub mod env {
             .unwrap_or(4_096)
     }
 }
+
+/// Browser-sidecar configuration assembled from the environment.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct BrowserConfig {
+    pub enabled: bool,
+    pub path: Option<std::path::PathBuf>,
+    pub timeout_ms: u64,
+}
+
+impl Default for BrowserConfig {
+    fn default() -> Self {
+        Self {
+            enabled: env::browser_enabled(),
+            path: env::browser_path(),
+            timeout_ms: env::browser_timeout_ms(),
+        }
+    }
+}
+
+/// Output-envelope configuration assembled from the environment.
+///
+/// Note: this struct intentionally shadows nothing — `medusa-agent`
+/// defines its own `EnvelopeConfig` with additional fields (artifact cap,
+/// session root) used at the engine call site. This struct is the
+/// *configuration* shape derived from env vars.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct EnvelopeSettings {
+    pub head_bytes: usize,
+    pub tail_bytes: usize,
+}
+
+impl Default for EnvelopeSettings {
+    fn default() -> Self {
+        Self {
+            head_bytes: env::envelope_head_bytes(),
+            tail_bytes: env::envelope_tail_bytes(),
+        }
+    }
+}
+
+/// Top-level runtime configuration assembled from environment variables.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct MedusaConfig {
+    pub browser: BrowserConfig,
+    pub envelope: EnvelopeSettings,
+    pub daemon_max_artifact_bytes: usize,
+}
+
+impl MedusaConfig {
+    /// Read every supported environment variable and assemble the
+    /// runtime config. Returns `Ok` even when variables are missing —
+    /// each sub-config falls back to a documented default.
+    #[must_use]
+    pub fn from_env() -> Self {
+        Self {
+            browser: BrowserConfig::default(),
+            envelope: EnvelopeSettings::default(),
+            daemon_max_artifact_bytes: std::env::var("MEDUSA_DAEMON_MAX_ARTIFACT_BYTES")
+                .ok()
+                .and_then(|s| s.parse().ok())
+                .unwrap_or(256 * 1024 * 1024),
+        }
+    }
+}
