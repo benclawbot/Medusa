@@ -1,3 +1,4 @@
+use medusa_agent::skill_loader::{SkillBundle, load};
 use medusa_agent::skill_matcher::match_prompt;
 use medusa_config::{MatcherMode as ConfigMatcherMode, SkillConfig};
 use medusa_skills::SkillIndex;
@@ -77,4 +78,70 @@ fn keyword_filter_scores_by_trigger_count() {
     assert_eq!(matches.len(), 2);
     assert_eq!(matches[0].skill.name, "b");
     assert_eq!(matches[0].score, 2.0);
+}
+
+fn entry(name: &str, requires: &[&str], handoff: Option<&str>) -> medusa_skills::SkillEntry {
+    use medusa_extensions::{SkillCompatibility, SkillManifest, SkillPermissions};
+    medusa_skills::SkillEntry {
+        name: name.to_owned(),
+        manifest: SkillManifest {
+            name: name.to_owned(),
+            version: "1.0.0".into(),
+            description: format!("{name} skill"),
+            triggers: vec![],
+            tools: vec![],
+            permissions: SkillPermissions::default(),
+            compatibility: SkillCompatibility { medusa: ">=1.0.0".into() },
+            tests: vec![],
+            requires: vec![],
+            handoff: None,
+        },
+        body: format!("# {name}\n"),
+        requires: requires.iter().map(|s| s.to_string()).collect(),
+        handoff: handoff.map(str::to_owned),
+    }
+}
+
+fn make_index(entries: Vec<medusa_skills::SkillEntry>) -> SkillIndex {
+    SkillIndex { skills: entries }
+}
+
+#[test]
+fn loader_resolves_single_skill() {
+    let index = make_index(vec![entry("a", &[], None)]);
+    let bundle: SkillBundle = load(&index, "a", 4).unwrap();
+    assert_eq!(bundle.entries.len(), 1);
+    assert_eq!(bundle.entries[0].skill.name, "a");
+}
+
+#[test]
+fn loader_resolves_chain_in_declaration_order() {
+    let index = make_index(vec![
+        entry("a", &["b"], None),
+        entry("b", &["c"], None),
+        entry("c", &[], None),
+    ]);
+    let bundle = load(&index, "a", 4).unwrap();
+    let names: Vec<&str> = bundle.entries.iter().map(|e| e.skill.name.as_str()).collect();
+    assert_eq!(names, vec!["a", "b", "c"]);
+}
+
+#[test]
+fn loader_detects_cycle() {
+    let index = make_index(vec![
+        entry("a", &["b"], None),
+        entry("b", &["a"], None),
+    ]);
+    let err = load(&index, "a", 4).unwrap_err();
+    assert!(format!("{err}").contains("cycle"));
+}
+
+#[test]
+fn loader_enforces_depth_cap() {
+    let index = make_index(vec![
+        entry("a", &["b"], None),
+        entry("b", &["a"], None),
+    ]);
+    let err = load(&index, "a", 1).unwrap_err();
+    assert!(format!("{err}").contains("depth"));
 }
