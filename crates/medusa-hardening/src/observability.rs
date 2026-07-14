@@ -51,6 +51,21 @@ impl Observability {
         Ok(())
     }
 
+    pub fn record_skill_match(&self, skill_name: &str) -> MedusaResult<()> {
+        let metric = format!("skill.match.{}", skill_name.replace('-', "_"));
+        self.increment(&metric, 1)
+    }
+
+    pub fn record_skill_inject(&self, skill_name: &str) -> MedusaResult<()> {
+        let metric = format!("skill.inject.{}", skill_name.replace('-', "_"));
+        self.increment(&metric, 1)
+    }
+
+    pub fn record_skill_handoff(&self, skill_name: &str) -> MedusaResult<()> {
+        let metric = format!("skill.handoff.{}", skill_name.replace('-', "_"));
+        self.increment(&metric, 1)
+    }
+
     pub fn record_duration(&self, name: &str, started: Instant) -> MedusaResult<()> {
         validate_metric_name(name)?;
         self.durations_ms

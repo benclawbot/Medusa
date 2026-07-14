@@ -985,6 +985,7 @@ dependencies = [
  "medusa-config",
  "medusa-core",
  "medusa-extensions",
+ "medusa-hardening",
  "medusa-intelligence",
  "medusa-protocol",
  "medusa-provider",
