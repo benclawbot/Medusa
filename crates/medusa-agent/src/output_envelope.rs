@@ -52,15 +52,16 @@ pub fn wrap(
     }
 
     let dir = config.session_root.join("artifacts");
-    fs::create_dir_all(&dir).map_err(|e| io_err("create artifacts dir", e))?;
+    fs::create_dir_all(&dir)?;
     let id = Ulid::new();
     let ext = match format {
         OutputFormat::Plain | OutputFormat::JsonLines => "txt",
         OutputFormat::Binary => "bin",
     };
-    let path = dir.join(format!("{tool}_{id}.{ext}"));
-    let mut file = fs::File::create(&path).map_err(|e| io_err("create artifact", e))?;
-    file.write_all(body).map_err(|e| io_err("write artifact", e))?;
+    let safe_tool = sanitize_tool_name(tool)?;
+    let path = dir.join(format!("{safe_tool}_{id}.{ext}"));
+    let mut file = fs::File::create(&path)?;
+    file.write_all(body)?;
     file.sync_all().ok();
 
     let text = String::from_utf8_lossy(body);
@@ -107,10 +108,70 @@ fn ceil_char_boundary(text: &str, mut idx: usize) -> usize {
     idx
 }
 
-fn io_err(ctx: &str, e: std::io::Error) -> MedusaError {
-    MedusaError::new(
-        ErrorCode::ToolExecutionFailed,
-        ErrorCategory::Execution,
-        format!("{ctx}: {e}"),
-    )
+fn sanitize_tool_name(tool: &str) -> MedusaResult<String> {
+    if tool.is_empty() {
+        return Err(MedusaError::new(
+            ErrorCode::InvalidConfiguration,
+            ErrorCategory::Validation,
+            "tool name must not be empty",
+        ));
+    }
+    let sanitized: String = tool
+        .chars()
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || c == '_' || c == '-' {
+                c
+            } else {
+                '_'
+            }
+        })
+        .collect();
+    Ok(sanitize_truncate(&sanitized, 64))
+}
+
+fn sanitize_truncate(s: &str, max: usize) -> String {
+    if s.len() <= max {
+        return s.to_owned();
+    }
+    let mut end = max;
+    while end > 0 && !s.is_char_boundary(end) {
+        end -= 1;
+    }
+    s[..end].to_owned()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn sanitize_tool_name_rejects_empty() {
+        let err = sanitize_tool_name("").expect_err("empty name must fail");
+        assert_eq!(err.code, ErrorCode::InvalidConfiguration);
+        assert_eq!(err.category, ErrorCategory::Validation);
+    }
+
+    #[test]
+    fn sanitize_tool_name_replaces_unsafe_chars() {
+        assert_eq!(
+            sanitize_tool_name("shell_run").expect("safe input"),
+            "shell_run"
+        );
+        assert_eq!(
+            sanitize_tool_name("../../etc/passwd").expect("unsafe input"),
+            "______etc_passwd"
+        );
+        assert_eq!(
+            sanitize_tool_name("a b/c.d").expect("mixed input"),
+            "a_b_c_d"
+        );
+    }
+
+    #[test]
+    fn sanitize_tool_name_caps_length() {
+        let long = "a".repeat(200);
+        let out = sanitize_tool_name(&long).expect("long input");
+        assert_eq!(out.len(), 64);
+        assert!(out.chars().all(|c| c == 'a'));
+    }
 }
