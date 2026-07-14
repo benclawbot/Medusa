@@ -4,10 +4,10 @@ pub mod engine;
 mod evidence;
 mod policy;
 mod session;
+pub mod skill_handoff;
 pub mod skill_injector;
 pub mod skill_loader;
 pub mod skill_matcher;
-pub mod skill_handoff;
 mod tools;
 mod verification;
 
