@@ -198,3 +198,13 @@ fn handoff_outcome_records_skipped_when_handoff_target_missing() {
     let outcome: HandoffOutcome = q.drain(&index);
     assert_eq!(outcome.resolved, vec!["a".to_string()]);
 }
+
+use medusa_agent::engine::{build_user_turn_input, TurnInput};
+
+#[test]
+fn build_user_turn_input_prepends_loaded_skills() {
+    let bundle = bundle_chain();
+    let input: TurnInput = build_user_turn_input("help me design a feature", &bundle);
+    assert!(input.system_prompt_section.contains("## Loaded skills"));
+    assert!(input.user_prompt == "help me design a feature");
+}

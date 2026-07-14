@@ -1,6 +1,6 @@
 //! Persistent single-agent orchestration and built-in tools.
 
-mod engine;
+pub mod engine;
 mod evidence;
 mod policy;
 mod session;

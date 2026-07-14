@@ -15,6 +15,8 @@ use crate::{
         AgentPlanStep, AgentPlanStepStatus, AgentQuestion, AgentQuestionItem, AgentQuestionOption,
         AgentSession, bootstrap, load, persist,
     },
+    skill_injector,
+    skill_loader::SkillBundle,
     tools::{available_skills, built_in_tools, execute_tool},
     verification::targeted_verification,
 };
@@ -969,6 +971,27 @@ fn json_error(error: serde_json::Error) -> MedusaError {
         ErrorCategory::Internal,
         error.to_string(),
     )
+}
+
+/// Inputs assembled by [`build_user_turn_input`]: the original user prompt
+/// and a system-prompt section that lists the skills currently in scope.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct TurnInput {
+    pub user_prompt: String,
+    pub system_prompt_section: String,
+}
+
+/// Prepares the inputs for one user turn by rendering the loaded-skill
+/// banner into the system prompt section while leaving the user prompt
+/// untouched. The matcher/loader pipeline that produces `bundle` is wired
+/// into `AgentSession` in Task 11; this helper is intentionally a free
+/// function so it can be exercised independently.
+#[must_use]
+pub fn build_user_turn_input(user_prompt: &str, bundle: &SkillBundle) -> TurnInput {
+    TurnInput {
+        user_prompt: user_prompt.to_owned(),
+        system_prompt_section: skill_injector::render(bundle),
+    }
 }
 
 #[cfg(test)]
