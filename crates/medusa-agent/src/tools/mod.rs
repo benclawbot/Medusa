@@ -1,3 +1,5 @@
+mod browser;
+mod browser_dispatch;
 mod filesystem;
 mod git;
 mod intelligence;
@@ -166,6 +168,56 @@ pub(crate) fn built_in_tools() -> Vec<ToolDefinition> {
                 "type": "object", "properties": {"message": {"type": "string"}},
                 "required": ["message"], "additionalProperties": false
             }),
+        ),
+        tool(
+            "browser_navigate",
+            "Navigate the headless browser to a public HTTP(S) URL.",
+            json!({"type":"object","properties":{"url":{"type":"string"}},"required":["url"],"additionalProperties":false}),
+        ),
+        tool(
+            "browser_snapshot",
+            "Return the visible text of the current page and a list of element references.",
+            json!({"type":"object","properties":{},"additionalProperties":false}),
+        ),
+        tool(
+            "browser_click",
+            "Click an element by reference id or CSS selector.",
+            json!({"type":"object","properties":{"ref":{"type":"integer"},"selector":{"type":"string"}},"additionalProperties":false}),
+        ),
+        tool(
+            "browser_fill",
+            "Fill an input by reference id or CSS selector.",
+            json!({"type":"object","properties":{"ref":{"type":"integer"},"selector":{"type":"string"},"value":{"type":"string"}},"required":["value"],"additionalProperties":false}),
+        ),
+        tool(
+            "browser_press",
+            "Press a keyboard key on the current page (e.g. 'Enter', 'Escape').",
+            json!({"type":"object","properties":{"key":{"type":"string"}},"required":["key"],"additionalProperties":false}),
+        ),
+        tool(
+            "browser_screenshot",
+            "Capture a screenshot of the current page. Returns a PNG attachment.",
+            json!({"type":"object","properties":{"full_page":{"type":"boolean"}},"additionalProperties":false}),
+        ),
+        tool(
+            "browser_evaluate",
+            "Run a JavaScript expression on the current page and return the value.",
+            json!({"type":"object","properties":{"expression":{"type":"string"}},"required":["expression"],"additionalProperties":false}),
+        ),
+        tool(
+            "browser_tabs",
+            "List open browser tabs.",
+            json!({"type":"object","properties":{},"additionalProperties":false}),
+        ),
+        tool(
+            "browser_close",
+            "Close the headless browser and stop the sidecar.",
+            json!({"type":"object","properties":{},"additionalProperties":false}),
+        ),
+        tool(
+            "browser_ping",
+            "Ping the headless browser. Returns 'ok' if reachable.",
+            json!({"type":"object","properties":{},"additionalProperties":false}),
         ),
     ]
 }
