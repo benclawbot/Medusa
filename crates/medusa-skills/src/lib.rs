@@ -6,4 +6,4 @@ pub mod asset;
 pub mod index;
 
 pub use asset::AssetStore;
-pub use index::{SkillEntry, SkillIndex, SkillManifestExt};
+pub use index::{SkillEntry, SkillIndex};

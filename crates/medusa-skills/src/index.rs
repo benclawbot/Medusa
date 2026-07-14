@@ -45,6 +45,3 @@ impl SkillIndex {
     }
 }
 
-/// Re-export of the upstream manifest type so callers don't have to import
-/// from two crates.
-pub type SkillManifestExt = SkillManifest;

@@ -11,7 +11,7 @@ pub const MANIFEST_FILENAME: &str = "manifest.json";
 
 /// Reads the generated manifest from a directory.
 pub struct AssetStore {
-    pub manifest_path: PathBuf,
+    manifest_path: PathBuf,
 }
 
 impl AssetStore {
@@ -31,6 +31,11 @@ impl AssetStore {
         let index: SkillIndex = serde_json::from_slice(&bytes)
             .map_err(|e| MedusaError::new(ErrorCode::InvalidConfiguration, ErrorCategory::Validation, format!("parse manifest: {e}")))?;
         Ok(index)
+    }
+
+    /// Returns the path to the loaded manifest file.
+    pub fn path(&self) -> &Path {
+        &self.manifest_path
     }
 }
 
