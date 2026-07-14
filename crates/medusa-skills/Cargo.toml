@@ -1,0 +1,27 @@
+[package]
+name = "medusa-skills"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[lib]
+path = "src/lib.rs"
+
+[dependencies]
+medusa-core = { path = "../medusa-core" }
+medusa-extensions = { path = "../medusa-extensions" }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+
+[build-dependencies]
+serde_json = { workspace = true }
+serde_yaml = "0.9"
+
+[dev-dependencies]
+tempfile = { workspace = true }
+
+[lints]
+workspace = true

@@ -16,6 +16,7 @@ members = [
   "crates/medusa-improvement",
   "crates/medusa-hardening",
   "crates/medusa-cli",
+  "crates/medusa-skills",
 ]
 
 [workspace.package]

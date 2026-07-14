@@ -1125,6 +1125,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "medusa-skills"
+version = "1.0.0"
+dependencies = [
+ "medusa-core",
+ "medusa-extensions",
+ "serde",
+ "serde_json",
+ "serde_yaml",
+ "tempfile",
+ "thiserror",
+]
+
+[[package]]
 name = "medusa-testkit"
 version = "1.0.0"
 dependencies = [
