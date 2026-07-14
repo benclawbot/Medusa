@@ -578,7 +578,7 @@ fn legacy_draw_common(
         Clear(ClearType::UntilNewLine),
         SetForegroundColor(Color::Magenta),
         SetAttribute(Attribute::Bold),
-        Print(truncate(
+        Print(wrap_to_width(
             &format!(
                 "{} {}",
                 app.model_label.as_deref().unwrap_or(&identity.model),
@@ -1220,7 +1220,7 @@ impl StyledLine {
 
     fn print(&self, stdout: &mut io::Stdout, width: u16) -> io::Result<()> {
         if let Some((marker, marker_color)) = &self.marker {
-            let marker = truncate(marker, width);
+            let marker = wrap_to_width(marker, width);
             let remaining = width.saturating_sub(marker.chars().count() as u16);
             return queue!(
                 stdout,
@@ -1230,7 +1230,7 @@ impl StyledLine {
                 SetForegroundColor(*marker_color),
                 Print(marker),
                 SetForegroundColor(self.foreground),
-                Print(truncate(&self.text, remaining)),
+                Print(wrap_to_width(&self.text, remaining)),
                 SetAttribute(Attribute::Reset),
                 ResetColor,
                 Print("\r\n")
@@ -1248,20 +1248,20 @@ impl StyledLine {
             ResetColor,
         )?;
         if let Some((marker, marker_color)) = &self.marker {
-            let marker = truncate(marker, width);
+            let marker = wrap_to_width(marker, width);
             let remaining = width.saturating_sub(marker.chars().count() as u16);
             queue!(
                 stdout,
                 SetForegroundColor(*marker_color),
                 Print(marker),
                 SetForegroundColor(self.foreground),
-                Print(truncate(&self.text, remaining)),
+                Print(wrap_to_width(&self.text, remaining)),
             )?;
         } else {
             queue!(
                 stdout,
                 SetForegroundColor(self.foreground),
-                Print(truncate(&self.text, width)),
+                Print(wrap_to_width(&self.text, width)),
             )?;
         }
         queue!(stdout, SetAttribute(Attribute::Reset), ResetColor)
@@ -1370,7 +1370,7 @@ fn print_styled_line(
     )?;
     queue!(
         stdout,
-        Print(truncate(text, width)),
+        Print(wrap_to_width(text, width)),
         SetAttribute(Attribute::Reset),
         ResetColor,
         Print("\r\n")
@@ -1395,16 +1395,32 @@ fn attachment_label(attachment: &PromptAttachment) -> String {
     }
 }
 
-fn truncate(value: &str, width: u16) -> String {
+/// Render `value` to a string that fits within `width` columns. Unlike
+/// the previous `truncate`, this preserves the full content by wrapping
+/// onto multiple lines joined with `\n`. A 0 width is treated as "no
+/// limit" (the whole string is returned) so callers can pass through
+/// when they don't know the terminal width yet.
+pub fn wrap_to_width(value: &str, width: u16) -> String {
     let limit = usize::from(width);
-    if value.chars().count() <= limit {
+    if limit == 0 || value.chars().count() <= limit {
         return value.to_owned();
     }
-    value
-        .chars()
-        .take(limit.saturating_sub(1))
-        .chain(std::iter::once('~'))
-        .collect()
+    let mut out = String::with_capacity(value.len() + value.len() / limit + 1);
+    let mut col = 0usize;
+    for ch in value.chars() {
+        if ch == '\n' {
+            out.push('\n');
+            col = 0;
+            continue;
+        }
+        if col >= limit {
+            out.push('\n');
+            col = 0;
+        }
+        out.push(ch);
+        col += 1;
+    }
+    out
 }
 
 fn app_error(error: AppError) -> io::Error {

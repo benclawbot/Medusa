@@ -13,6 +13,8 @@ Medusa is a production-grade autonomous coding agent written in Rust. It combine
 - **Durable sessions and drafts** — resume work after interruption without losing prompt or execution state.
 - **Clipboard-native input** — paste text or screenshots with `Ctrl+V`; screenshots are encoded and submitted as image context when the configured provider supports it.
 - **Repository-aware tooling** — bounded file access, search, atomic writes, patch transactions, shell execution, Git checkpoints, and targeted verification.
+- **Browser and web interaction** — a persistent headless browser the agent can drive from tool calls (navigate, click, fill, press, screenshot, evaluate JS, list tabs).
+- **Full-content display** — every tool result, fetched page, and shell run is shown in full in the TUI; long content is paged with `Shift+Up` / `Shift+PgUp` instead of being truncated.
 - **Persistent memory** — Markdown-first memory with validation, indexing, retrieval, lifecycle management, and provenance controls.
 - **Parallel workers** — isolated worktrees, deterministic merge behavior, conflict detection, and cleanup safeguards.
 - **Extensions and browser evidence** — skills, hooks, MCP isolation, Playwright-based browser verification, output redaction, and checksummed provenance.
@@ -265,6 +267,10 @@ medusa --continue
 | `Esc` | Exit the terminal interface |
 
 Prompt drafts and clipboard attachments are persisted under the repository's `.medusa` state directory until submission.
+
+### Browser tools
+
+The agent can drive a headless browser via the `browser_*` tools (`browser_navigate`, `browser_snapshot`, `browser_click`, `browser_fill`, `browser_press`, `browser_screenshot`, `browser_evaluate`, `browser_tabs`, `browser_close`). The browser runs in a separate `medusa-browserd` sidecar process. Medusa auto-discovers it next to the agent binary or on `PATH`; set `MEDUSA_BROWSER_PATH` to override. The sidecar requires Node.js 22 and a Chromium install (the same prerequisites the verification flow uses).
 
 ## Headless commands
 

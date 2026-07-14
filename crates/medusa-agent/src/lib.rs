@@ -2,9 +2,11 @@
 
 mod engine;
 mod evidence;
+pub mod output_envelope;
 mod policy;
 mod session;
-mod tools;
+pub mod session_browser;
+pub mod tools;
 mod verification;
 
 pub use engine::{
