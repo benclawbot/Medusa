@@ -20,10 +20,15 @@ pub struct SkillManifest {
     pub triggers: Vec<String>,
     #[serde(default)]
     pub tools: Vec<String>,
+    #[serde(default)]
     pub permissions: SkillPermissions,
     pub compatibility: SkillCompatibility,
     #[serde(default)]
     pub tests: Vec<String>,
+    #[serde(default)]
+    pub requires: Vec<String>,
+    #[serde(default)]
+    pub handoff: Option<String>,
 }
 
 #[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
