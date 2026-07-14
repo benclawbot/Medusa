@@ -145,3 +145,35 @@ fn loader_enforces_depth_cap() {
     let err = load(&index, "a", 1).unwrap_err();
     assert!(format!("{err}").contains("depth"));
 }
+
+use medusa_agent::skill_injector::render;
+
+fn bundle_one() -> SkillBundle {
+    let index = make_index(vec![entry("a", &[], None)]);
+    load(&index, "a", 4).unwrap()
+}
+
+fn bundle_chain() -> SkillBundle {
+    let index = make_index(vec![entry("a", &["b"], None), entry("b", &[], None)]);
+    load(&index, "a", 4).unwrap()
+}
+
+#[test]
+fn render_marks_loaded_skills_section() {
+    let rendered = render(&bundle_one());
+    assert!(rendered.contains("## Loaded skills"));
+    assert!(rendered.contains("# a"));
+}
+
+#[test]
+fn render_marks_required_skills() {
+    let rendered = render(&bundle_chain());
+    assert!(rendered.contains("required by 'a'"));
+    assert!(rendered.contains("# b"));
+}
+
+#[test]
+fn render_handles_empty_bundle() {
+    let rendered = render(&SkillBundle::default());
+    assert_eq!(rendered, "## Loaded skills\n(none)\n");
+}
