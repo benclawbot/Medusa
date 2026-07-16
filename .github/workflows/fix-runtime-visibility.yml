@@ -1,0 +1,35 @@
+name: Fix runtime support visibility
+
+on:
+  pull_request:
+    branches:
+      - main
+
+permissions:
+  contents: write
+
+jobs:
+  fix:
+    if: github.head_ref == 'refactor/tui-runtime-modularization'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: refactor/tui-runtime-modularization
+      - uses: dtolnay/rust-toolchain@1.88.0
+      - name: Correct visibility and format
+        shell: bash
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          path = Path('crates/medusa-tui/src/runtime/support.rs')
+          text = path.read_text().replace('pub pub(super) fn message_blocks', 'pub(super) fn message_blocks')
+          path.write_text(text)
+          Path('.github/workflows/fix-runtime-visibility.yml').unlink()
+          PY
+          cargo fmt --all
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add -A
+          git commit -m "fix: correct runtime support visibility"
+          git push origin HEAD:refactor/tui-runtime-modularization
