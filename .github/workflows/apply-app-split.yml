@@ -1,0 +1,103 @@
+name: Apply app split
+
+on:
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: write
+
+jobs:
+  split:
+    if: github.head_ref == 'refactor/tui-app-modularization'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: refactor/tui-app-modularization
+      - uses: dtolnay/rust-toolchain@1.88.0
+      - name: Split application state and validate
+        shell: bash
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          path = Path('crates/medusa-tui/src/app.rs')
+          lines = path.read_text().splitlines()
+          if len(lines) != 1549:
+              raise SystemExit(f'unexpected app.rs line count: {len(lines)}')
+
+          imports = lines[0:16]
+          models = lines[17:459]
+          main = lines[460:1141]
+          tests = lines[1144:-1]
+
+          imports_text = '\n'.join(imports).replace(
+              '        Effort, ModelCommand, ModelConfiguration, SlashCommand, command_suggestions,\n',
+              '        ModelCommand, SlashCommand, command_suggestions,\n',
+          )
+          app = (
+              imports_text
+              + '\n\nmod models;\n#[cfg(test)]\nmod tests;\n\npub use models::*;\n\n'
+              + '\n'.join(main)
+              + '\n'
+          )
+          app = app.replace(
+              'modal.focus == ModelModalFocus::Apply',
+              'modal.focus() == ModelModalFocus::Apply',
+          ).replace(
+              'modal.focus == ModelModalFocus::ApiKey',
+              'modal.focus() == ModelModalFocus::ApiKey',
+          )
+          path.write_text(app)
+
+          module_dir = path.parent / 'app'
+          module_dir.mkdir(exist_ok=True)
+          model_text = (
+              'use crate::{\n'
+              '    clipboard::PromptDraft,\n'
+              '    commands::{Effort, ModelConfiguration, SlashCommand},\n'
+              '};\n\n'
+              + '\n'.join(models)
+              + '\n'
+          )
+          for name in [
+              'move_selection', 'move_question', 'advance_or_review',
+              'toggle_current_option', 'select_current_answer', 'insert_answer',
+              'delete_answer_character', 'answer_bundle', 'new', 'cycle_focus',
+              'cycle_focus_back', 'focus_api_key', 'insert_key_text',
+              'delete_key_character',
+          ]:
+              model_text = model_text.replace(
+                  f'    fn {name}(', f'    pub(super) fn {name}('
+              )
+          (module_dir / 'models.rs').write_text(model_text)
+          (module_dir / 'tests.rs').write_text(
+              'use super::*;\n'
+              'use crate::clipboard::ClipboardImage;\n'
+              'use tempfile::tempdir;\n\n'
+              + '\n'.join(tests[3:])
+              + '\n'
+          )
+
+          exceptions = Path('docs/source-size-exceptions.txt')
+          exception_lines = [
+              line for line in exceptions.read_text().splitlines()
+              if not line.startswith('crates/medusa-tui/src/app.rs|')
+          ]
+          exceptions.write_text('\n'.join(exception_lines) + '\n')
+
+          Path('.modularization-app-export').unlink()
+          Path('.github/workflows/export-app-source.yml').unlink()
+          Path('.github/workflows/apply-app-split.yml').unlink()
+          PY
+          cargo fmt --all
+          test "$(wc -l < crates/medusa-tui/src/app.rs)" -le 800
+          test "$(wc -l < crates/medusa-tui/src/app/models.rs)" -le 800
+          test "$(wc -l < crates/medusa-tui/src/app/tests.rs)" -le 800
+          cargo check -p medusa-tui --all-targets --all-features
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add -A
+          git commit -m "refactor: modularize TUI app state"
+          git push origin HEAD:refactor/tui-app-modularization
