@@ -1,6 +1,6 @@
 use std::{
     collections::BTreeMap,
-    io,
+    env, io,
     path::PathBuf,
     sync::{
         Arc,
@@ -10,14 +10,16 @@ use std::{
     thread,
 };
 
-use medusa_agent::{AgentEngine, AgentSession, StepOutcome};
+use medusa_agent::{
+    AgentEngine, AgentSession, StepOutcome, compact_session, update_session_objective,
+};
 use medusa_config::{Config, Mode};
 use medusa_provider::{MessageBlock, MiniMaxProvider};
 
 use crate::{
     app::{QuestionPrompt, TranscriptPlan},
     clipboard::PromptDraft,
-    commands::{Effort, ModelConfiguration, SlashCommand},
+    commands::{Effort, ModelCommand, ModelConfiguration, SlashCommand},
 };
 
 mod support;
@@ -26,8 +28,9 @@ mod support;
 mod tests;
 
 use support::{
-    UpdateState, configure_model, credential_environment, effort_for_turns, execute_slash_command,
-    forward_update, message_blocks, runtime_question, transcript_plan,
+    UpdateState, configure_model, credential_environment, discover_skills, effort_for_turns,
+    forward_update, is_supported_provider, message_blocks, model_configuration_details,
+    objective_for, runtime_question, transcript_plan, turns_for_effort,
 };
 
 #[derive(Debug)]

@@ -2,15 +2,11 @@ use std::{
     collections::{BTreeSet, VecDeque},
     env, fs,
     path::{Path, PathBuf},
-    sync::{atomic::AtomicBool, mpsc::Sender},
+    sync::mpsc::Sender,
 };
 
 use base64::{Engine as _, engine::general_purpose::STANDARD};
-use medusa_agent::{
-    AgentPlanStep, AgentPlanStepStatus, AgentQuestion, AgentUpdate, compact_session,
-    update_session_objective,
-};
-use medusa_config::Mode;
+use medusa_agent::{AgentPlanStep, AgentPlanStepStatus, AgentQuestion, AgentUpdate};
 use medusa_protocol::EventPayload;
 use medusa_provider::{ImageSource, MessageBlock};
 use serde_json::Value;
@@ -20,12 +16,11 @@ use crate::{
         QuestionOption, QuestionPrompt, TranscriptPlan, TranscriptPlanStep, TranscriptPlanStepState,
     },
     clipboard::{ImageAttachment, PromptAttachment, PromptDraft},
-    commands::{Effort, ModelCommand, ModelConfiguration, SlashCommand},
+    commands::{Effort, ModelConfiguration},
 };
 
 use super::{
-    RuntimeActivity, RuntimeActivityKind, RuntimeError, RuntimeEvent, RuntimeQuestion,
-    RuntimeState, run_prompt,
+    RuntimeActivity, RuntimeActivityKind, RuntimeError, RuntimeEvent, RuntimeQuestion, RuntimeState,
 };
 
 const MAX_FILE_CONTEXT_BYTES: usize = 2 * 1024 * 1024;
@@ -66,7 +61,7 @@ pub(super) fn effort_for_turns(max_turns: u32) -> Effort {
     }
 }
 
-fn turns_for_effort(effort: Effort) -> u32 {
+pub(super) fn turns_for_effort(effort: Effort) -> u32 {
     match effort {
         Effort::Low => 64,
         Effort::Medium => 200,
@@ -75,11 +70,11 @@ fn turns_for_effort(effort: Effort) -> u32 {
     }
 }
 
-fn is_supported_provider(provider: &str) -> bool {
+pub(super) fn is_supported_provider(provider: &str) -> bool {
     matches!(provider, "minimax" | "anthropic" | "anthropic-compatible")
 }
 
-fn model_configuration_details(state: &RuntimeState) -> Vec<String> {
+pub(super) fn model_configuration_details(state: &RuntimeState) -> Vec<String> {
     let credential = if state.session_api_key.is_some()
         || credential_environment(&state.config.model.provider)
             .is_some_and(|name| env::var(name).is_ok())
@@ -107,7 +102,7 @@ pub(super) fn credential_environment(provider: &str) -> Option<&'static str> {
     }
 }
 
-fn discover_skills(repo: &Path) -> Vec<String> {
+pub(super) fn discover_skills(repo: &Path) -> Vec<String> {
     let mut roots = vec![
         ("project", repo.join(".medusa/skills")),
         ("project", repo.join(".claude/skills")),
@@ -322,7 +317,7 @@ pub(super) fn transcript_plan(steps: &[AgentPlanStep]) -> TranscriptPlan {
     }
 }
 
-fn tool_title(tool: &str, arguments: &Value) -> String {
+pub(super) fn tool_title(tool: &str, arguments: &Value) -> String {
     match tool {
         "fs_read" => format!("Read({})", json_string(arguments, "path")),
         "fs_create_dir" => format!("Mkdir({})", json_string(arguments, "path")),
@@ -396,7 +391,7 @@ fn assistant_title(text: &str) -> Option<String> {
     (!title.is_empty()).then(|| summarize(title))
 }
 
-fn objective_for(draft: &PromptDraft) -> String {
+pub(super) fn objective_for(draft: &PromptDraft) -> String {
     let trimmed = draft.text.trim();
     if trimmed.is_empty() {
         format!(
