@@ -70,8 +70,8 @@ fn resolve_path(configured: Option<&Path>) -> MedusaResult<PathBuf> {
     } else {
         "medusa-browserd"
     };
-    let agent_exe = std::env::current_exe()
-        .map_err(|e| unavailable(format!("current_exe: {e}")))?;
+    let agent_exe =
+        std::env::current_exe().map_err(|e| unavailable(format!("current_exe: {e}")))?;
     let adjacent = agent_exe.parent().map(|p| p.join(exe_name));
     if let Some(adj) = &adjacent {
         if adj.exists() {
@@ -98,8 +98,12 @@ fn which(cmd: &str) -> Result<PathBuf, ()> {
 }
 
 fn unavailable(message: impl Into<String>) -> MedusaError {
-    MedusaError::new(ErrorCode::DependencyUnavailable, ErrorCategory::Transient, message)
-        .with_retryable(true)
+    MedusaError::new(
+        ErrorCode::DependencyUnavailable,
+        ErrorCategory::Transient,
+        message,
+    )
+    .with_retryable(true)
 }
 
 fn invalid(message: &'static str) -> MedusaError {

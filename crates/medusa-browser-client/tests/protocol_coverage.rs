@@ -10,7 +10,9 @@ struct Pipe {
 impl Pipe {
     fn new() -> (Box<dyn Write + Send>, Self) {
         let buf = Arc::new(Mutex::new(Vec::new()));
-        let writer = PipeWriter { buf: Arc::clone(&buf) };
+        let writer = PipeWriter {
+            buf: Arc::clone(&buf),
+        };
         (Box::new(writer), Self { rx: buf })
     }
 

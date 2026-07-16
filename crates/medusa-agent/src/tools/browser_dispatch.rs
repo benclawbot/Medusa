@@ -1,4 +1,4 @@
-use medusa_browser_client::protocol::{BrowserResponse, BrowserRequest, ElementRef, TabInfo};
+use medusa_browser_client::protocol::{BrowserRequest, BrowserResponse, ElementRef, TabInfo};
 use serde_json::Value;
 
 #[allow(dead_code)]
@@ -9,7 +9,9 @@ pub fn build(method: &str, input: &Value) -> Result<BrowserRequest, String> {
                 .get("url")
                 .and_then(Value::as_str)
                 .ok_or("url must be a string")?;
-            Ok(BrowserRequest::Navigate { url: url.to_owned() })
+            Ok(BrowserRequest::Navigate {
+                url: url.to_owned(),
+            })
         }
         "browser_snapshot" => Ok(BrowserRequest::Snapshot),
         "browser_click" => Ok(BrowserRequest::Click {
@@ -38,7 +40,9 @@ pub fn build(method: &str, input: &Value) -> Result<BrowserRequest, String> {
                 .get("key")
                 .and_then(Value::as_str)
                 .ok_or("key must be a string")?;
-            Ok(BrowserRequest::Press { key: key.to_owned() })
+            Ok(BrowserRequest::Press {
+                key: key.to_owned(),
+            })
         }
         "browser_screenshot" => Ok(BrowserRequest::Screenshot {
             full_page: input
@@ -80,7 +84,10 @@ pub fn format_response(response: BrowserResponse) -> (String, Vec<u8>) {
             bytes_base64,
         } => {
             let decoded = base64_decode(&bytes_base64);
-            (format!("screenshot {format} ({} bytes)", decoded.len()), decoded)
+            (
+                format!("screenshot {format} ({} bytes)", decoded.len()),
+                decoded,
+            )
         }
         BrowserResponse::Evaluate { value } => (
             serde_json::to_string_pretty(&value).unwrap_or_default(),
@@ -157,7 +164,9 @@ mod tests {
     #[test]
     fn build_navigate_extracts_url() {
         let req = build("browser_navigate", &json!({"url": "https://example.com"})).unwrap();
-        assert!(matches!(req, BrowserRequest::Navigate { ref url } if url == "https://example.com"));
+        assert!(
+            matches!(req, BrowserRequest::Navigate { ref url } if url == "https://example.com")
+        );
     }
 
     #[test]

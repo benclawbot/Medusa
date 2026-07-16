@@ -18,8 +18,8 @@ pub fn send_and_receive<T: Transport + ?Sized>(
     transport: &mut T,
     request: &BrowserRequest,
 ) -> MedusaResult<BrowserResponse> {
-    let mut json =
-        serde_json::to_string(request).map_err(|e| transport_err(format!("serialize request: {e}")))?;
+    let mut json = serde_json::to_string(request)
+        .map_err(|e| transport_err(format!("serialize request: {e}")))?;
     json.push('\n');
     transport
         .write_all(json.as_bytes())
@@ -38,6 +38,10 @@ pub fn send_and_receive<T: Transport + ?Sized>(
 }
 
 fn transport_err(message: String) -> MedusaError {
-    MedusaError::new(ErrorCode::DependencyUnavailable, ErrorCategory::Transient, message)
-        .with_retryable(true)
+    MedusaError::new(
+        ErrorCode::DependencyUnavailable,
+        ErrorCategory::Transient,
+        message,
+    )
+    .with_retryable(true)
 }
