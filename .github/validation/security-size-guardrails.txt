@@ -1,0 +1,1 @@
+Validates SECURITY.md authority cleanup and exact no-growth source-size exception caps tracked by issue #20.
