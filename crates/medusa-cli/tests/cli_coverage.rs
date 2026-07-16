@@ -18,13 +18,25 @@ fn version_and_help_are_available() {
 #[test]
 fn bootstrap_and_search_work_on_a_temporary_repository() {
     let directory = tempfile::tempdir().expect("tempdir");
-    fs::write(directory.path().join("notes.txt"), "alpha\nneedle here\nomega\n").expect("fixture");
+    fs::write(
+        directory.path().join("notes.txt"),
+        "alpha\nneedle here\nomega\n",
+    )
+    .expect("fixture");
 
     let bootstrap = medusa()
-        .args(["--repo", directory.path().to_str().expect("repo"), "bootstrap"])
+        .args([
+            "--repo",
+            directory.path().to_str().expect("repo"),
+            "bootstrap",
+        ])
         .output()
         .expect("bootstrap");
-    assert!(bootstrap.status.success(), "{}", String::from_utf8_lossy(&bootstrap.stderr));
+    assert!(
+        bootstrap.status.success(),
+        "{}",
+        String::from_utf8_lossy(&bootstrap.stderr)
+    );
     assert!(directory.path().join(".medusa").exists());
 
     let search = medusa()
@@ -45,10 +57,18 @@ fn bootstrap_and_search_work_on_a_temporary_repository() {
 fn migrate_produces_receipts_and_current_state() {
     let directory = tempfile::tempdir().expect("tempdir");
     let output = medusa()
-        .args(["--repo", directory.path().to_str().expect("repo"), "migrate"])
+        .args([
+            "--repo",
+            directory.path().to_str().expect("repo"),
+            "migrate",
+        ])
         .output()
         .expect("migrate");
-    assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
     assert!(String::from_utf8_lossy(&output.stdout).starts_with('['));
     assert!(directory.path().join(".medusa").exists());
 }
