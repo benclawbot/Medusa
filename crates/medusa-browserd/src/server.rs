@@ -65,7 +65,7 @@ pub fn run() -> io::Result<()> {
             }
         }
 
-        let response = forward_to_bridge(&mut bridge, &request);
+        let response = forward_to_bridge(&mut bridge.stdin, &mut bridge.stdout, &request);
         write_response(&mut stdout, &response)?;
     }
     let _ = bridge.child.kill();
@@ -95,37 +95,11 @@ fn spawn_bridge() -> io::Result<Bridge> {
     })
 }
 
-impl Write for Bridge {
-    fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
-        self.stdin.write(buf)
-    }
-
-    fn flush(&mut self) -> io::Result<()> {
-        self.stdin.flush()
-    }
-}
-
-impl BufRead for Bridge {
-    fn read_line(&mut self, buf: &mut String) -> io::Result<usize> {
-        self.stdout.read_line(buf)
-    }
-
-    fn fill_buf(&mut self) -> io::Result<&[u8]> {
-        self.stdout.fill_buf()
-    }
-
-    fn consume(&mut self, n: usize) {
-        self.stdout.consume(n);
-    }
-}
-
-impl io::Read for Bridge {
-    fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
-        io::Read::read(&mut self.stdout, buf)
-    }
-}
-
-fn forward_to_bridge(bridge: &mut Bridge, request: &BrowserRequest) -> BrowserResponse {
+fn forward_to_bridge<W: Write, R: BufRead>(
+    writer: &mut W,
+    reader: &mut R,
+    request: &BrowserRequest,
+) -> BrowserResponse {
     let mut line = match serde_json::to_string(request) {
         Ok(s) => s,
         Err(e) => {
@@ -136,20 +110,20 @@ fn forward_to_bridge(bridge: &mut Bridge, request: &BrowserRequest) -> BrowserRe
         }
     };
     line.push('\n');
-    if let Err(e) = bridge.write_all(line.as_bytes()) {
+    if let Err(e) = writer.write_all(line.as_bytes()) {
         return BrowserResponse::Error {
             code: "sidecar_write_failed".into(),
             message: e.to_string(),
         };
     }
-    if let Err(e) = bridge.flush() {
+    if let Err(e) = writer.flush() {
         return BrowserResponse::Error {
             code: "sidecar_flush_failed".into(),
             message: e.to_string(),
         };
     }
     let mut response = String::new();
-    if let Err(e) = bridge.read_line(&mut response) {
+    if let Err(e) = reader.read_line(&mut response) {
         return BrowserResponse::Error {
             code: "sidecar_read_failed".into(),
             message: e.to_string(),
@@ -169,4 +143,131 @@ fn write_response<W: Write>(out: &mut W, response: &BrowserResponse) -> io::Resu
     line.push('\n');
     out.write_all(line.as_bytes())?;
     out.flush()
+}
+
+#[cfg(test)]
+mod tests {
+    use std::io::{self, BufRead, Cursor, Read, Write};
+
+    use medusa_browser_client::protocol::{BrowserRequest, BrowserResponse};
+
+    use super::{forward_to_bridge, write_response};
+
+    #[derive(Default)]
+    struct FailingWriter {
+        fail_write: bool,
+        fail_flush: bool,
+        bytes: Vec<u8>,
+    }
+
+    impl Write for FailingWriter {
+        fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+            if self.fail_write {
+                return Err(io::Error::other("write failed"));
+            }
+            self.bytes.extend_from_slice(buf);
+            Ok(buf.len())
+        }
+
+        fn flush(&mut self) -> io::Result<()> {
+            if self.fail_flush {
+                return Err(io::Error::other("flush failed"));
+            }
+            Ok(())
+        }
+    }
+
+    struct FailingReader;
+
+    impl Read for FailingReader {
+        fn read(&mut self, _buf: &mut [u8]) -> io::Result<usize> {
+            Err(io::Error::other("read failed"))
+        }
+    }
+
+    impl BufRead for FailingReader {
+        fn fill_buf(&mut self) -> io::Result<&[u8]> {
+            Err(io::Error::other("read failed"))
+        }
+
+        fn consume(&mut self, _amount: usize) {}
+    }
+
+    fn error_code(response: BrowserResponse) -> String {
+        match response {
+            BrowserResponse::Error { code, .. } => code,
+            other => panic!("expected error response, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn successful_forward_writes_request_and_parses_response() {
+        let mut writer = FailingWriter::default();
+        let mut reader = Cursor::new(b"{\"kind\":\"ok\"}\n".to_vec());
+
+        let response = forward_to_bridge(&mut writer, &mut reader, &BrowserRequest::Ping);
+
+        assert!(matches!(response, BrowserResponse::Ok));
+        assert_eq!(writer.bytes, b"{\"method\":\"ping\"}\n");
+    }
+
+    #[test]
+    fn forward_reports_write_flush_read_and_parse_failures() {
+        let mut write_failure = FailingWriter {
+            fail_write: true,
+            ..FailingWriter::default()
+        };
+        let mut empty = Cursor::new(Vec::<u8>::new());
+        assert_eq!(
+            error_code(forward_to_bridge(
+                &mut write_failure,
+                &mut empty,
+                &BrowserRequest::Ping,
+            )),
+            "sidecar_write_failed"
+        );
+
+        let mut flush_failure = FailingWriter {
+            fail_flush: true,
+            ..FailingWriter::default()
+        };
+        assert_eq!(
+            error_code(forward_to_bridge(
+                &mut flush_failure,
+                &mut empty,
+                &BrowserRequest::Ping,
+            )),
+            "sidecar_flush_failed"
+        );
+
+        let mut writer = FailingWriter::default();
+        let mut read_failure = FailingReader;
+        assert_eq!(
+            error_code(forward_to_bridge(
+                &mut writer,
+                &mut read_failure,
+                &BrowserRequest::Ping,
+            )),
+            "sidecar_read_failed"
+        );
+
+        let mut malformed = Cursor::new(b"not-json\n".to_vec());
+        assert_eq!(
+            error_code(forward_to_bridge(
+                &mut writer,
+                &mut malformed,
+                &BrowserRequest::Ping,
+            )),
+            "sidecar_parse_failed"
+        );
+    }
+
+    #[test]
+    fn response_writer_emits_one_json_line() {
+        let mut output = Vec::new();
+
+        write_response(&mut output, &BrowserResponse::Ok).unwrap();
+
+        assert_eq!(output, b"{\"kind\":\"ok\"}\n");
+    }
 }

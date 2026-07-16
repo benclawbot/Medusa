@@ -12,7 +12,13 @@ fn cfg(root: &std::path::Path) -> EnvelopeConfig {
 #[test]
 fn small_body_round_trips_in_head() {
     let dir = tempfile::tempdir().unwrap();
-    let env = wrap("shell_run", b"hello world", OutputFormat::Plain, &cfg(dir.path())).unwrap();
+    let env = wrap(
+        "shell_run",
+        b"hello world",
+        OutputFormat::Plain,
+        &cfg(dir.path()),
+    )
+    .unwrap();
     assert_eq!(env.head, "hello world");
     assert_eq!(env.tail, "");
     assert_eq!(env.line_count, 1);
@@ -25,7 +31,13 @@ fn small_body_round_trips_in_head() {
 fn large_body_splits_head_and_tail() {
     let dir = tempfile::tempdir().unwrap();
     let body = (0..200).map(|i| format!("line {i}\n")).collect::<String>();
-    let env = wrap("shell_run", body.as_bytes(), OutputFormat::Plain, &cfg(dir.path())).unwrap();
+    let env = wrap(
+        "shell_run",
+        body.as_bytes(),
+        OutputFormat::Plain,
+        &cfg(dir.path()),
+    )
+    .unwrap();
     assert!(env.head.starts_with("line 0\n"));
     assert!(env.tail.ends_with("line 199\n"));
     assert_eq!(env.line_count, 200);
@@ -46,7 +58,13 @@ fn body_above_max_artifact_is_rejected() {
 fn utf8_boundaries_are_preserved() {
     let dir = tempfile::tempdir().unwrap();
     let body = "éééééééééééééééééééé".repeat(8);
-    let env = wrap("web_fetch", body.as_bytes(), OutputFormat::Plain, &cfg(dir.path())).unwrap();
+    let env = wrap(
+        "web_fetch",
+        body.as_bytes(),
+        OutputFormat::Plain,
+        &cfg(dir.path()),
+    )
+    .unwrap();
     assert!(env.head.chars().all(|c| c.is_alphabetic() || c == 'é'));
     assert!(env.tail.chars().all(|c| c.is_alphabetic() || c == 'é'));
 }

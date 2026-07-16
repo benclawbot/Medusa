@@ -1,8 +1,4 @@
-use std::{
-    fs,
-    io::Write,
-    path::PathBuf,
-};
+use std::{fs, io::Write, path::PathBuf};
 
 use medusa_core::{ErrorCategory, ErrorCode, MedusaError, MedusaResult};
 use serde::{Deserialize, Serialize};
@@ -41,7 +37,11 @@ impl std::fmt::Display for OutputEnvelope {
             write!(
                 f,
                 "{}\n…\n{}\n({} lines, {} bytes, full body at {})",
-                self.head, self.tail, self.line_count, self.byte_count, self.path.display()
+                self.head,
+                self.tail,
+                self.line_count,
+                self.byte_count,
+                self.path.display()
             )
         }
     }

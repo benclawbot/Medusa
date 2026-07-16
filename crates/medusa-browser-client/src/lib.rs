@@ -7,7 +7,7 @@ use std::process::{Child, ChildStdin, ChildStdout, Command, Stdio};
 use medusa_core::{ErrorCategory, ErrorCode, MedusaError, MedusaResult};
 
 pub use protocol::{BrowserRequest, BrowserResponse, ElementRef, TabInfo};
-use transport::{send_and_receive, Transport};
+use transport::{Transport, send_and_receive};
 
 pub struct BrowserClient {
     child: Child,
@@ -75,6 +75,10 @@ impl Transport for StdioPipe {
 }
 
 fn spawn_err(message: String) -> MedusaError {
-    MedusaError::new(ErrorCode::DependencyUnavailable, ErrorCategory::Transient, message)
-        .with_retryable(true)
+    MedusaError::new(
+        ErrorCode::DependencyUnavailable,
+        ErrorCategory::Transient,
+        message,
+    )
+    .with_retryable(true)
 }

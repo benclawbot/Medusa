@@ -388,7 +388,11 @@ impl<P: ModelProvider> AgentEngine<P> {
                     // reference (cleanup, replay). Currently unused by
                     // downstream consumers — Task 7 wires SessionBrowser on top.
                     session.tool_artifacts.push(env.path.clone());
-                    if is_error { format!("[error]\n{compact}") } else { compact }
+                    if is_error {
+                        format!("[error]\n{compact}")
+                    } else {
+                        compact
+                    }
                 }
                 Err(_) => {
                     // Envelope wrap failed (rare — disk full, perms). Fall back
