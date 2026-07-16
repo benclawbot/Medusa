@@ -358,7 +358,10 @@ mod tests {
             parse_slash_command("/model api-key secret"),
             Ok(Some(SlashCommand::Model(ModelCommand::SetApiKey(_))))
         ));
-        assert_eq!(parse_slash_command("/skills"), Ok(Some(SlashCommand::Skills)));
+        assert_eq!(
+            parse_slash_command("/skills"),
+            Ok(Some(SlashCommand::Skills))
+        );
         assert_eq!(
             parse_slash_command("/plan"),
             Ok(Some(SlashCommand::Plan { task: None }))
@@ -398,10 +401,12 @@ mod tests {
         assert!(!debug.contains("secret"));
         assert!(!SlashCommand::Help.runs_agent());
         assert!(!SlashCommand::Plan { task: None }.runs_agent());
-        assert!(SlashCommand::Plan {
-            task: Some("inspect".to_owned())
-        }
-        .runs_agent());
+        assert!(
+            SlashCommand::Plan {
+                task: Some("inspect".to_owned())
+            }
+            .runs_agent()
+        );
         assert_eq!(format!("{:?}", ModelCommand::Show), "Show");
         assert!(format!("{:?}", ModelCommand::SetModel("m".to_owned())).contains('m'));
         assert!(format!("{:?}", ModelCommand::SetProvider("p".to_owned())).contains('p'));
