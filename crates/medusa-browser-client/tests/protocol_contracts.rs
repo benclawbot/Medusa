@@ -81,7 +81,8 @@ fn every_browser_response_round_trips_and_reports_error_state() {
         let expected_ok = !matches!(response, BrowserResponse::Error { .. });
         assert_eq!(response.is_ok(), expected_ok);
         let encoded = serde_json::to_string(&response).expect("serialize response");
-        let decoded: BrowserResponse = serde_json::from_str(&encoded).expect("deserialize response");
+        let decoded: BrowserResponse =
+            serde_json::from_str(&encoded).expect("deserialize response");
         assert_eq!(decoded, response);
     }
 }
