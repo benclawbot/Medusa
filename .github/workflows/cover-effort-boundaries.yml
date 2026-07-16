@@ -1,15 +1,14 @@
 name: Cover runtime effort boundaries
 
 on:
-  pull_request:
-    branches: [main]
+  push:
+    branches: [refactor/tui-runtime-modularization]
 
 permissions:
   contents: write
 
 jobs:
   add-tests:
-    if: github.head_ref == 'refactor/tui-runtime-modularization'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
