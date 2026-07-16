@@ -1,9 +1,6 @@
 #![cfg(unix)]
 
-use std::{
-    fs,
-    os::unix::fs::PermissionsExt,
-};
+use std::{fs, os::unix::fs::PermissionsExt};
 
 use medusa_browser_client::{BrowserClient, BrowserRequest, BrowserResponse};
 use medusa_core::ErrorCode;
@@ -32,8 +29,10 @@ fn browser_client_spawns_stdio_sidecar_round_trips_and_terminates_it() {
 
 #[test]
 fn browser_client_reports_missing_sidecar_as_retryable_dependency_error() {
-    let error = BrowserClient::spawn("medusa-browser-sidecar-that-does-not-exist")
-        .expect_err("missing sidecar");
+    let error = match BrowserClient::spawn("medusa-browser-sidecar-that-does-not-exist") {
+        Ok(_) => panic!("missing sidecar unexpectedly launched"),
+        Err(error) => error,
+    };
     assert_eq!(error.code, ErrorCode::DependencyUnavailable);
     assert!(error.retryable);
     assert!(error.message.contains("could not launch"));
