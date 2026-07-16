@@ -1,0 +1,47 @@
+name: Fix runtime MessageBlock import
+
+on:
+  pull_request:
+    branches:
+      - main
+
+permissions:
+  contents: write
+
+jobs:
+  fix:
+    if: github.head_ref == 'refactor/tui-runtime-modularization'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: refactor/tui-runtime-modularization
+      - uses: dtolnay/rust-toolchain@1.88.0
+      - name: Correct import ownership and validate
+        shell: bash
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          runtime = Path('crates/medusa-tui/src/runtime.rs')
+          text = runtime.read_text()
+          old = 'use medusa_provider::{MessageBlock, MiniMaxProvider};'
+          if old not in text:
+              raise SystemExit('expected runtime import not found')
+          runtime.write_text(text.replace(old, 'use medusa_provider::MiniMaxProvider;', 1))
+
+          tests = Path('crates/medusa-tui/src/runtime/tests.rs')
+          text = tests.read_text()
+          anchor = 'use medusa_protocol::EventPayload;\n'
+          if anchor not in text:
+              raise SystemExit('expected tests import anchor not found')
+          tests.write_text(text.replace(anchor, anchor + 'use medusa_provider::MessageBlock;\n', 1))
+          PY
+          cargo fmt --all
+          cargo clippy -p medusa-tui --all-targets --all-features -- -D warnings
+          rm .github/workflows/fix-runtime-messageblock-import.yml
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add -A
+          git commit -m "fix: align runtime message block imports"
+          git push origin HEAD:refactor/tui-runtime-modularization
