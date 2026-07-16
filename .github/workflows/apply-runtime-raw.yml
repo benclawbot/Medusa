@@ -1,0 +1,42 @@
+name: Finalize runtime modularization
+
+on:
+  pull_request:
+    branches:
+      - main
+
+permissions:
+  contents: write
+
+jobs:
+  finalize:
+    if: github.head_ref == 'refactor/tui-runtime-modularization'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: refactor/tui-runtime-modularization
+      - uses: dtolnay/rust-toolchain@1.88.0
+      - name: Apply and commit split
+        shell: bash
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          workflow = Path('.github/workflows/export-runtime-source.yml').read_text()
+          start = workflow.index("          python - <<'PY'\n") + len("          python - <<'PY'\n")
+          end = workflow.index("          PY\n", start)
+          script = '\n'.join(
+              line[10:] if line.startswith('          ') else line
+              for line in workflow[start:end].splitlines()
+          )
+          Path('/tmp/apply_runtime.py').write_text(script + '\n')
+          PY
+          python /tmp/apply_runtime.py
+          cargo fmt --all || true
+          rm -f .github/workflows/apply-runtime-raw.yml
+          wc -l crates/medusa-tui/src/runtime.rs crates/medusa-tui/src/runtime/support.rs crates/medusa-tui/src/runtime/tests.rs
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add -A
+          git commit -m "refactor: split TUI runtime responsibilities"
+          git push origin HEAD:refactor/tui-runtime-modularization
