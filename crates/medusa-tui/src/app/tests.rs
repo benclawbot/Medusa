@@ -1,5 +1,5 @@
 use super::*;
-use crate::clipboard::ClipboardImage;
+use crate::{clipboard::ClipboardImage, commands::Effort};
 use tempfile::tempdir;
 
 struct FakeClipboard(ClipboardContent);
