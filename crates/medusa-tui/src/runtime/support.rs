@@ -465,3 +465,74 @@ fn image_block(image: &ImageAttachment) -> Result<MessageBlock, RuntimeError> {
         alt_text: Some(image.display_name.clone()),
     })
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn effort_and_provider_helpers_cover_all_variants() {
+        assert_eq!(turns_for_effort(Effort::Low), 64);
+        assert_eq!(turns_for_effort(Effort::Medium), 200);
+        assert_eq!(turns_for_effort(Effort::High), 500);
+        assert!(is_supported_provider("minimax"));
+        assert!(is_supported_provider("anthropic"));
+        assert!(is_supported_provider("anthropic-compatible"));
+        assert!(!is_supported_provider("other"));
+        assert_eq!(credential_environment("minimax"), Some("MINIMAX_API_KEY"));
+        assert_eq!(
+            credential_environment("anthropic"),
+            Some("ANTHROPIC_API_KEY")
+        );
+        assert_eq!(
+            credential_environment("anthropic-compatible"),
+            Some("MEDUSA_API_KEY")
+        );
+        assert_eq!(credential_environment("other"), None);
+    }
+
+    #[test]
+    fn formatting_helpers_cover_empty_and_non_empty_inputs() {
+        assert_eq!(
+            json_string(&json!({"path": "src/lib.rs"}), "path"),
+            "src/lib.rs"
+        );
+        assert_eq!(json_string(&json!({}), "path"), "");
+        assert_eq!(shell_command(&json!({"program": "cargo"})), "cargo");
+        assert_eq!(
+            shell_command(&json!({"program": "cargo", "args": ["test", "-q"]})),
+            "cargo test -q"
+        );
+        assert_eq!(summarize("short line"), "short line");
+        assert!(summarize(&"x".repeat(150)).ends_with("..."));
+        assert_eq!(
+            assistant_title("\n## Milestone reached\nmore"),
+            Some("Milestone reached".to_owned())
+        );
+        assert_eq!(assistant_title("   \n"), None);
+    }
+
+    #[test]
+    fn objective_helper_handles_text_and_attachment_only_prompts() {
+        let text = PromptDraft {
+            text: "  fix it  ".to_owned(),
+            ..PromptDraft::default()
+        };
+        assert_eq!(objective_for(&text), "fix it");
+        let attachments = PromptDraft {
+            attachments: vec![PromptAttachment::Image(ImageAttachment {
+                display_name: "screen.png".to_owned(),
+                width: 1,
+                height: 1,
+                rgba: vec![0, 0, 0, 255],
+                source_format: Some("image/rgba8".to_owned()),
+            })],
+            ..PromptDraft::default()
+        };
+        assert_eq!(
+            objective_for(&attachments),
+            "Use the 1 attached item(s) as context and complete the coding task."
+        );
+    }
+}
