@@ -1,6 +1,7 @@
 //! Persistent single-agent orchestration and built-in tools.
 
 mod engine;
+mod engine_support;
 mod evidence;
 pub mod output_envelope;
 mod policy;
@@ -9,9 +10,8 @@ pub mod session_browser;
 pub mod tools;
 mod verification;
 
-pub use engine::{
-    AgentEngine, AgentUpdate, StepOutcome, compact_session, update_session_objective,
-};
+pub use engine::{AgentEngine, AgentUpdate, StepOutcome};
+pub use engine_support::{compact_session, update_session_objective};
 pub use policy::validate_shell_command;
 pub use session::{
     AgentPlanStep, AgentPlanStepStatus, AgentQuestion, AgentQuestionItem, AgentQuestionOption,
