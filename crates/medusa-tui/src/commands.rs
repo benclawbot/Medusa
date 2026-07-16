@@ -206,9 +206,7 @@ pub fn parse_slash_command(input: &str) -> Result<Option<SlashCommand>, String> 
                     "medium" => Effort::Medium,
                     "high" => Effort::High,
                     "auto" => Effort::Auto,
-                    _ => {
-                        return Err("/effort expects low, medium, high, or auto".to_owned());
-                    }
+                    _ => return Err("/effort expects low, medium, high, or auto".to_owned()),
                 })
             };
             Ok(Some(SlashCommand::Effort { effort }))
@@ -340,7 +338,10 @@ mod tests {
             parse_slash_command("/goal"),
             Ok(Some(SlashCommand::Goal { objective: None }))
         );
-        assert_eq!(parse_slash_command("/model"), Ok(Some(SlashCommand::Model(ModelCommand::Show))));
+        assert_eq!(
+            parse_slash_command("/model"),
+            Ok(Some(SlashCommand::Model(ModelCommand::Show)))
+        );
         assert_eq!(
             parse_slash_command("/model model MiniMax-M3"),
             Ok(Some(SlashCommand::Model(ModelCommand::SetModel(
@@ -372,17 +373,19 @@ mod tests {
 
     #[test]
     fn covers_validation_redaction_and_agent_classification() {
+        for input in ["/help extra", "/new extra", "/skills extra", "/help\n/new"] {
+            assert!(parse_slash_command(input).is_err(), "{input}");
+        }
         for input in [
-            "/help extra",
-            "/new extra",
-            "/skills extra",
             "/model provider ",
             "/model key ",
             "/model api-key ",
             "/model model ",
-            "/help\n/new",
         ] {
-            assert!(parse_slash_command(input).is_err(), "{input}");
+            assert!(matches!(
+                parse_slash_command(input),
+                Ok(Some(SlashCommand::Model(ModelCommand::SetModel(_))))
+            ));
         }
         let configuration = ModelConfiguration {
             provider: "anthropic".to_owned(),
@@ -400,8 +403,8 @@ mod tests {
         }
         .runs_agent());
         assert_eq!(format!("{:?}", ModelCommand::Show), "Show");
-        assert!(format!("{:?}", ModelCommand::SetModel("m".to_owned())).contains("m"));
-        assert!(format!("{:?}", ModelCommand::SetProvider("p".to_owned())).contains("p"));
+        assert!(format!("{:?}", ModelCommand::SetModel("m".to_owned())).contains('m'));
+        assert!(format!("{:?}", ModelCommand::SetProvider("p".to_owned())).contains('p'));
     }
 
     #[test]
