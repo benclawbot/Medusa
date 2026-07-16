@@ -1,0 +1,23 @@
+name: Export runtime source
+
+on:
+  pull_request:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+jobs:
+  export:
+    if: github.head_ref == 'refactor/tui-runtime-modularization'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/upload-artifact@v4
+        with:
+          name: runtime-source
+          path: |
+            crates/medusa-tui/src/runtime.rs
+            crates/medusa-tui/src/lib.rs
+            docs/source-size-exceptions.txt
