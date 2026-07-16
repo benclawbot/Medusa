@@ -1035,6 +1035,7 @@ dependencies = [
  "medusa-tui",
  "serde",
  "serde_json",
+ "tempfile",
  "walkdir",
 ]
 
