@@ -82,11 +82,16 @@ fn shell_allows_safe_programs_and_rejects_dangerous_ones() {
             directory.path().to_str().expect("repo"),
             "shell",
             "git",
+            "--",
             "--version",
         ])
         .output()
         .expect("safe shell");
-    assert!(safe.status.success());
+    assert!(
+        safe.status.success(),
+        "{}",
+        String::from_utf8_lossy(&safe.stderr)
+    );
 
     let denied = medusa()
         .args([
