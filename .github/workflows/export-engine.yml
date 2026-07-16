@@ -1,0 +1,22 @@
+name: Export engine source
+
+on:
+  push:
+    branches:
+      - refactor/agent-engine-modularization
+
+permissions:
+  contents: read
+
+jobs:
+  export:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/upload-artifact@v4
+        with:
+          name: engine-source
+          path: |
+            crates/medusa-agent/src/engine.rs
+            crates/medusa-agent/src/lib.rs
+            docs/source-size-exceptions.txt
