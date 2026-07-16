@@ -1,0 +1,21 @@
+name: Export app source
+
+on:
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  export:
+    if: github.head_ref == 'refactor/tui-app-modularization'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/upload-artifact@v4
+        with:
+          name: app-source
+          path: |
+            crates/medusa-tui/src/app.rs
+            scripts/source-size-exceptions.txt
