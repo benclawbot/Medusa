@@ -297,4 +297,117 @@ mod tests {
         assert_eq!(complete_first_command("/mo"), Some("/model ".to_owned()));
         assert!(command_suggestions("/plan task").is_empty());
     }
+
+    #[test]
+    fn covers_all_effort_labels_and_parser_variants() {
+        assert_eq!(Effort::Low.label(), "low");
+        assert_eq!(Effort::Medium.label(), "medium");
+        assert_eq!(Effort::High.label(), "high");
+        assert_eq!(Effort::Auto.label(), "auto");
+        for (input, expected) in [
+            ("/effort low", Effort::Low),
+            ("/effort medium", Effort::Medium),
+            ("/effort auto", Effort::Auto),
+        ] {
+            assert_eq!(
+                parse_slash_command(input),
+                Ok(Some(SlashCommand::Effort {
+                    effort: Some(expected)
+                }))
+            );
+        }
+        assert_eq!(
+            parse_slash_command("/effort"),
+            Ok(Some(SlashCommand::Effort { effort: None }))
+        );
+    }
+
+    #[test]
+    fn covers_remaining_command_and_model_branches() {
+        assert_eq!(parse_slash_command("/help"), Ok(Some(SlashCommand::Help)));
+        assert_eq!(parse_slash_command("/clear"), Ok(Some(SlashCommand::New)));
+        assert_eq!(
+            parse_slash_command("/compact"),
+            Ok(Some(SlashCommand::Compact { focus: None }))
+        );
+        assert_eq!(
+            parse_slash_command("/compact tests only"),
+            Ok(Some(SlashCommand::Compact {
+                focus: Some("tests only".to_owned())
+            }))
+        );
+        assert_eq!(
+            parse_slash_command("/goal"),
+            Ok(Some(SlashCommand::Goal { objective: None }))
+        );
+        assert_eq!(parse_slash_command("/model"), Ok(Some(SlashCommand::Model(ModelCommand::Show))));
+        assert_eq!(
+            parse_slash_command("/model model MiniMax-M3"),
+            Ok(Some(SlashCommand::Model(ModelCommand::SetModel(
+                "MiniMax-M3".to_owned()
+            ))))
+        );
+        assert_eq!(
+            parse_slash_command("/model direct-model"),
+            Ok(Some(SlashCommand::Model(ModelCommand::SetModel(
+                "direct-model".to_owned()
+            ))))
+        );
+        assert!(matches!(
+            parse_slash_command("/model api-key secret"),
+            Ok(Some(SlashCommand::Model(ModelCommand::SetApiKey(_))))
+        ));
+        assert_eq!(parse_slash_command("/skills"), Ok(Some(SlashCommand::Skills)));
+        assert_eq!(
+            parse_slash_command("/plan"),
+            Ok(Some(SlashCommand::Plan { task: None }))
+        );
+        assert_eq!(
+            parse_slash_command("/plan inspect runtime"),
+            Ok(Some(SlashCommand::Plan {
+                task: Some("inspect runtime".to_owned())
+            }))
+        );
+    }
+
+    #[test]
+    fn covers_validation_redaction_and_agent_classification() {
+        for input in [
+            "/help extra",
+            "/new extra",
+            "/skills extra",
+            "/model provider ",
+            "/model key ",
+            "/model api-key ",
+            "/model model ",
+            "/help\n/new",
+        ] {
+            assert!(parse_slash_command(input).is_err(), "{input}");
+        }
+        let configuration = ModelConfiguration {
+            provider: "anthropic".to_owned(),
+            model: "claude".to_owned(),
+            effort: Effort::Medium,
+            api_key: Some("secret".to_owned()),
+        };
+        let debug = format!("{configuration:?}");
+        assert!(debug.contains("<redacted>"));
+        assert!(!debug.contains("secret"));
+        assert!(!SlashCommand::Help.runs_agent());
+        assert!(!SlashCommand::Plan { task: None }.runs_agent());
+        assert!(SlashCommand::Plan {
+            task: Some("inspect".to_owned())
+        }
+        .runs_agent());
+        assert_eq!(format!("{:?}", ModelCommand::Show), "Show");
+        assert!(format!("{:?}", ModelCommand::SetModel("m".to_owned())).contains("m"));
+        assert!(format!("{:?}", ModelCommand::SetProvider("p".to_owned())).contains("p"));
+    }
+
+    #[test]
+    fn completion_handles_case_whitespace_and_no_match() {
+        assert_eq!(command_suggestions("   /HE")[0].name, "help");
+        assert_eq!(complete_first_command("/zz"), None);
+        assert_eq!(command_suggestions("/").len(), 6);
+    }
 }
