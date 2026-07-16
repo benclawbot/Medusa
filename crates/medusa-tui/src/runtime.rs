@@ -14,7 +14,7 @@ use medusa_agent::{
     AgentEngine, AgentSession, StepOutcome, compact_session, update_session_objective,
 };
 use medusa_config::{Config, Mode};
-use medusa_provider::{MessageBlock, MiniMaxProvider};
+use medusa_provider::MiniMaxProvider;
 
 use crate::{
     app::{QuestionPrompt, TranscriptPlan},

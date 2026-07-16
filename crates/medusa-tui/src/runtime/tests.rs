@@ -3,6 +3,7 @@ use std::{fs, sync::mpsc};
 use medusa_agent::{AgentPlanStep, AgentPlanStepStatus, AgentUpdate};
 use medusa_protocol::EventPayload;
 use medusa_provider::ImageSource;
+use medusa_provider::MessageBlock;
 use serde_json::json;
 
 use super::support::{discover_skills, model_configuration_details, tool_title};
