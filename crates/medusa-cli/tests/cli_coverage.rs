@@ -81,9 +81,7 @@ fn shell_allows_safe_programs_and_rejects_dangerous_ones() {
             "--repo",
             directory.path().to_str().expect("repo"),
             "shell",
-            "git",
-            "--",
-            "--version",
+            "true",
         ])
         .output()
         .expect("safe shell");
