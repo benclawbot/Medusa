@@ -23,8 +23,13 @@ jobs:
           from pathlib import Path
           path = Path('crates/medusa-tui/src/runtime/support.rs')
           text = path.read_text()
-          needle = '''            assert_eq!(turns_for_effort(Effort::High), 500);\n'''
-          replacement = needle + '''            assert_eq!(effort_for_turns(0), Effort::Low);\n            assert_eq!(effort_for_turns(99), Effort::Low);\n            assert_eq!(effort_for_turns(100), Effort::Medium);\n            assert_eq!(effort_for_turns(299), Effort::Medium);\n            assert_eq!(effort_for_turns(300), Effort::High);\n'''
+          needle = '        assert_eq!(turns_for_effort(Effort::High), 500);\n'
+          replacement = needle + '''        assert!(matches!(effort_for_turns(0), Effort::Low));
+        assert!(matches!(effort_for_turns(99), Effort::Low));
+        assert!(matches!(effort_for_turns(100), Effort::Medium));
+        assert!(matches!(effort_for_turns(299), Effort::Medium));
+        assert!(matches!(effort_for_turns(300), Effort::High));
+'''
           if needle not in text:
               raise SystemExit('target assertion not found')
           path.write_text(text.replace(needle, replacement, 1))
