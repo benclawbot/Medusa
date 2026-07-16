@@ -1,0 +1,40 @@
+name: Cover runtime effort boundaries
+
+on:
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: write
+
+jobs:
+  add-tests:
+    if: github.head_ref == 'refactor/tui-runtime-modularization'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: refactor/tui-runtime-modularization
+      - uses: dtolnay/rust-toolchain@1.88.0
+      - name: Cover effort boundary mapping
+        shell: bash
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          path = Path('crates/medusa-tui/src/runtime/support.rs')
+          text = path.read_text()
+          needle = '''            assert_eq!(turns_for_effort(Effort::High), 500);\n'''
+          replacement = needle + '''            assert_eq!(effort_for_turns(0), Effort::Low);\n            assert_eq!(effort_for_turns(99), Effort::Low);\n            assert_eq!(effort_for_turns(100), Effort::Medium);\n            assert_eq!(effort_for_turns(299), Effort::Medium);\n            assert_eq!(effort_for_turns(300), Effort::High);\n'''
+          if needle not in text:
+              raise SystemExit('target assertion not found')
+          path.write_text(text.replace(needle, replacement, 1))
+          Path('.github/workflows/cover-effort-boundaries.yml').unlink()
+          PY
+          cargo fmt --all
+          cargo test -p medusa-tui runtime::support::tests::effort_and_provider_helpers_cover_all_variants --all-features
+          cargo clippy -p medusa-tui --all-targets --all-features -- -D warnings
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add -A
+          git commit -m "test: cover runtime effort boundaries"
+          git push origin HEAD:refactor/tui-runtime-modularization
