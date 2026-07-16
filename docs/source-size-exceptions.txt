@@ -1,4 +1,5 @@
 # path|max_lines|reason
+# Remove each exception in the same PR that brings its source file below the 800-line ceiling.
 crates/medusa-memory/src/lib.rs|1000|Legacy single-file implementation scheduled for extraction in modularization PR 5; growth beyond this cap is forbidden.
 crates/medusa-tui/src/runtime.rs|1367|Temporary exact no-growth cap tracked by issue #20; remove when runtime transport and session lifecycle are split below 800 lines.
 crates/medusa-tui/src/app.rs|1549|Temporary exact no-growth cap tracked by issue #20; remove when application state, actions, and view-model projection are split below 800 lines.
