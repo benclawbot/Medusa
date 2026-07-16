@@ -464,5 +464,3 @@ fn image_block(image: &ImageAttachment) -> Result<MessageBlock, RuntimeError> {
         alt_text: Some(image.display_name.clone()),
     })
 }
-
-#[derive(Debug)]

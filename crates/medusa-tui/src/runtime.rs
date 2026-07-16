@@ -577,6 +577,7 @@ fn execute_slash_command(
 }
 
 
+#[derive(Debug)]
 pub enum RuntimeError {
     Agent(String),
     Io(io::Error),
