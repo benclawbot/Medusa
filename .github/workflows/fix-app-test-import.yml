@@ -1,0 +1,39 @@
+name: Fix app test import
+
+on:
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: write
+
+jobs:
+  fix:
+    if: github.head_ref == 'refactor/tui-app-modularization'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: refactor/tui-app-modularization
+      - uses: dtolnay/rust-toolchain@1.88.0
+      - name: Add missing Effort test import
+        shell: bash
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          path = Path('crates/medusa-tui/src/app/tests.rs')
+          text = path.read_text()
+          old = 'use crate::clipboard::ClipboardImage;\n'
+          new = 'use crate::{clipboard::ClipboardImage, commands::Effort};\n'
+          if old not in text:
+              raise SystemExit('expected import not found')
+          path.write_text(text.replace(old, new, 1))
+          Path('.github/workflows/fix-app-test-import.yml').unlink()
+          PY
+          cargo fmt --all
+          cargo clippy -p medusa-tui --all-targets --all-features -- -D warnings
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add -A
+          git commit -m "fix: restore app test effort import"
+          git push origin HEAD:refactor/tui-app-modularization
