@@ -31,15 +31,23 @@ fn public_model_modal_flow_covers_provider_effort_and_key_boundaries() {
     )
     .expect("create app");
 
-    assert_eq!(app.handle_event(key(KeyCode::Enter)).expect("open modal"), AppAction::Redraw);
+    assert_eq!(
+        app.handle_event(key(KeyCode::Enter)).expect("open modal"),
+        AppAction::Redraw
+    );
     let modal = app.model_modal().expect("model modal");
     assert_eq!(modal.provider(), "minimax");
     assert_eq!(modal.selected_model(), "MiniMax-M3");
     assert_eq!(modal.api_key_mask(), "not configured");
 
-    app.handle_event(key(KeyCode::BackTab)).expect("focus provider");
-    assert_eq!(app.model_modal().expect("modal").focus(), ModelModalFocus::Provider);
-    app.handle_event(key(KeyCode::Right)).expect("select provider");
+    app.handle_event(key(KeyCode::BackTab))
+        .expect("focus provider");
+    assert_eq!(
+        app.model_modal().expect("modal").focus(),
+        ModelModalFocus::Provider
+    );
+    app.handle_event(key(KeyCode::Right))
+        .expect("select provider");
     assert_eq!(app.model_modal().expect("modal").provider(), "anthropic");
 
     app.handle_event(key(KeyCode::Tab)).expect("focus model");
@@ -50,14 +58,19 @@ fn public_model_modal_flow_covers_provider_effort_and_key_boundaries() {
     );
 
     app.handle_event(key(KeyCode::Tab)).expect("focus effort");
-    app.handle_event(key(KeyCode::Down)).expect("select auto effort");
+    app.handle_event(key(KeyCode::Down))
+        .expect("select auto effort");
     assert_eq!(app.model_modal().expect("modal").effort(), Effort::Auto);
 
     app.handle_event(key(KeyCode::Tab)).expect("focus key");
     app.handle_event(Event::Paste(" key with spaces ".to_owned()))
         .expect("paste key");
-    assert_eq!(app.model_modal().expect("modal").api_key_mask(), "*************");
-    app.handle_event(key(KeyCode::Backspace)).expect("delete key character");
+    assert_eq!(
+        app.model_modal().expect("modal").api_key_mask(),
+        "*************"
+    );
+    app.handle_event(key(KeyCode::Backspace))
+        .expect("delete key character");
     app.handle_event(key(KeyCode::Enter)).expect("focus apply");
 
     let action = app.handle_event(key(KeyCode::Enter)).expect("apply model");
@@ -100,17 +113,29 @@ fn public_question_modal_flow_covers_multiselect_custom_and_review_paths() {
     app.handle_event(key(KeyCode::Char(' '))).expect("select A");
     app.handle_event(key(KeyCode::Right)).expect("move to B");
     app.handle_event(key(KeyCode::Char(' '))).expect("select B");
-    assert_eq!(app.question_modal().expect("modal").answer_for(0).as_deref(), Some("A, B"));
+    assert_eq!(
+        app.question_modal()
+            .expect("modal")
+            .answer_for(0)
+            .as_deref(),
+        Some("A, B")
+    );
 
-    app.handle_event(key(KeyCode::Enter)).expect("review answers");
+    app.handle_event(key(KeyCode::Enter))
+        .expect("review answers");
     assert!(app.question_modal().expect("modal").is_reviewing());
-    app.handle_event(key(KeyCode::Esc)).expect("return to question");
+    app.handle_event(key(KeyCode::Esc))
+        .expect("return to question");
     assert!(!app.question_modal().expect("modal").is_reviewing());
 
     app.handle_event(Event::Paste("custom".to_owned()))
         .expect("enter custom answer");
-    app.handle_event(key(KeyCode::Backspace)).expect("delete character");
-    assert_eq!(app.question_modal().expect("modal").active_custom_answer(), "custo");
+    app.handle_event(key(KeyCode::Backspace))
+        .expect("delete character");
+    assert_eq!(
+        app.question_modal().expect("modal").active_custom_answer(),
+        "custo"
+    );
 }
 
 #[test]
