@@ -80,11 +80,8 @@ fn daemon_spawn_recovers_orphaned_job_and_rejects_second_owner() {
     };
     fs::write(
         &paths.state,
-        serde_json::to_vec_pretty(&std::collections::BTreeMap::from([(
-            job.id.clone(),
-            job,
-        )]))
-        .expect("serialize state"),
+        serde_json::to_vec_pretty(&std::collections::BTreeMap::from([(job.id.clone(), job)]))
+            .expect("serialize state"),
     )
     .expect("write state");
 
