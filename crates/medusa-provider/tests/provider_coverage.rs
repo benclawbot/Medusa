@@ -78,9 +78,11 @@ fn anthropic_declares_image_contract() {
     assert!(capabilities.image_input);
     assert_eq!(capabilities.max_images_per_request, Some(20));
     assert_eq!(capabilities.max_image_bytes, Some(20 * 1024 * 1024));
-    assert!(capabilities
-        .supported_image_media_types
-        .contains(&"image/png".to_owned()));
+    assert!(
+        capabilities
+            .supported_image_media_types
+            .contains(&"image/png".to_owned())
+    );
 }
 
 #[test]
@@ -93,7 +95,11 @@ fn text_only_provider_blocks_images_before_network_access() {
     let error = provider
         .complete(&image_request(1))
         .expect_err("image validation should fail");
-    assert!(error.to_string().contains("does not declare image-input support"));
+    assert!(
+        error
+            .to_string()
+            .contains("does not declare image-input support")
+    );
 }
 
 #[test]
@@ -174,10 +180,9 @@ fn response_blocks_usage_and_capabilities_round_trip() {
         cache_read_input_tokens: 3,
         cache_creation_input_tokens: 2,
     };
-    let decoded_usage: Usage = serde_json::from_value(
-        serde_json::to_value(usage).expect("serialize usage"),
-    )
-    .expect("deserialize usage");
+    let decoded_usage: Usage =
+        serde_json::from_value(serde_json::to_value(usage).expect("serialize usage"))
+            .expect("deserialize usage");
     assert_eq!(decoded_usage, usage);
 
     let capabilities = ProviderCapabilities {
