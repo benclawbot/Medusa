@@ -61,9 +61,12 @@ jobs:
                   let text = PromptDraft { text: "  fix it  ".to_owned(), ..PromptDraft::default() };
                   assert_eq!(objective_for(&text), "fix it");
                   let attachments = PromptDraft {
-                      attachments: vec![PromptAttachment::PastedText(crate::clipboard::PastedTextAttachment {
-                          display_name: "notes.txt".to_owned(),
-                          text: "context".to_owned(),
+                      attachments: vec![PromptAttachment::Image(ImageAttachment {
+                          display_name: "screen.png".to_owned(),
+                          width: 1,
+                          height: 1,
+                          rgba: vec![0, 0, 0, 255],
+                          source_format: Some("image/rgba8".to_owned()),
                       })],
                       ..PromptDraft::default()
                   };
