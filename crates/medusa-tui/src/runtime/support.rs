@@ -16,14 +16,16 @@ use medusa_provider::{ImageSource, MessageBlock};
 use serde_json::Value;
 
 use crate::{
-    app::{QuestionOption, QuestionPrompt, TranscriptPlan, TranscriptPlanStep, TranscriptPlanStepState},
+    app::{
+        QuestionOption, QuestionPrompt, TranscriptPlan, TranscriptPlanStep, TranscriptPlanStepState,
+    },
     clipboard::{ImageAttachment, PromptAttachment, PromptDraft},
     commands::{Effort, ModelCommand, ModelConfiguration, SlashCommand},
 };
 
 use super::{
-    RuntimeActivity, RuntimeActivityKind, RuntimeError, RuntimeEvent, RuntimeQuestion, RuntimeState,
-    run_prompt,
+    RuntimeActivity, RuntimeActivityKind, RuntimeError, RuntimeEvent, RuntimeQuestion,
+    RuntimeState, run_prompt,
 };
 
 const MAX_FILE_CONTEXT_BYTES: usize = 2 * 1024 * 1024;
@@ -171,7 +173,11 @@ struct PendingTool {
     title: String,
 }
 
-pub(super) fn forward_update(update: &AgentUpdate, events: &Sender<RuntimeEvent>, state: &mut UpdateState) {
+pub(super) fn forward_update(
+    update: &AgentUpdate,
+    events: &Sender<RuntimeEvent>,
+    state: &mut UpdateState,
+) {
     match update {
         AgentUpdate::Event(EventPayload::ModelResponseReceived { usage, .. }) => {
             if let Some(output_tokens) = usage.get("output_tokens").and_then(Value::as_u64) {
@@ -402,7 +408,7 @@ fn objective_for(draft: &PromptDraft) -> String {
     }
 }
 
-pub pub(super) fn message_blocks(draft: &PromptDraft) -> Result<Vec<MessageBlock>, RuntimeError> {
+pub(super) fn message_blocks(draft: &PromptDraft) -> Result<Vec<MessageBlock>, RuntimeError> {
     let mut blocks = Vec::new();
     if !draft.text.is_empty() {
         blocks.push(MessageBlock::Text {

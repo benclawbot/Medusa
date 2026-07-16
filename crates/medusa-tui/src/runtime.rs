@@ -26,8 +26,8 @@ mod support;
 mod tests;
 
 use support::{
-    UpdateState, configure_model, credential_environment, effort_for_turns,
-    execute_slash_command, forward_update, message_blocks, runtime_question, transcript_plan,
+    UpdateState, configure_model, credential_environment, effort_for_turns, execute_slash_command,
+    forward_update, message_blocks, runtime_question, transcript_plan,
 };
 
 #[derive(Debug)]
@@ -576,7 +576,6 @@ fn execute_slash_command(
     Ok(None)
 }
 
-
 #[derive(Debug)]
 pub enum RuntimeError {
     Agent(String),
@@ -633,4 +632,3 @@ impl From<io::Error> for RuntimeError {
         Self::Io(error)
     }
 }
-
