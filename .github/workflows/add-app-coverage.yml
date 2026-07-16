@@ -1,15 +1,14 @@
 name: Add app coverage
 
 on:
-  pull_request:
-    branches: [main]
+  push:
+    branches: [refactor/tui-app-modularization]
 
 permissions:
   contents: write
 
 jobs:
   cover:
-    if: github.head_ref == 'refactor/tui-app-modularization'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -108,8 +107,8 @@ fn question_modal_covers_multi_select_custom_and_review_paths() {
               path.write_text(text)
           PY
           cargo fmt --all
-          cargo test -p medusa-tui modal_and_scrollback_boundaries_are_covered -- --exact
-          cargo test -p medusa-tui question_modal_covers_multi_select_custom_and_review_paths -- --exact
+          cargo test -p medusa-tui modal_and_scrollback_boundaries_are_covered
+          cargo test -p medusa-tui question_modal_covers_multi_select_custom_and_review_paths
           cargo clippy -p medusa-tui --all-targets --all-features -- -D warnings
           rm .github/workflows/add-app-coverage.yml
           git config user.name github-actions[bot]
