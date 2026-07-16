@@ -1,1 +1,0 @@
-Extract runtime controller lifecycle, slash/model configuration, update projection, and prompt attachment conversion into focused modules while preserving the public runtime API.
