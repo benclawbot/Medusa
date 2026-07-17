@@ -42,12 +42,24 @@ impl std::fmt::Debug for ModelConfiguration {
 pub enum SlashCommand {
     Help,
     New,
-    Compact { focus: Option<String> },
-    Goal { objective: Option<String> },
+    Compact {
+        focus: Option<String>,
+    },
+    Goal {
+        objective: Option<String>,
+    },
     Model(ModelCommand),
-    Effort { effort: Option<Effort> },
+    Effort {
+        effort: Option<Effort>,
+    },
     Skills,
-    Plan { task: Option<String> },
+    Skill {
+        selector: String,
+        task: Option<String>,
+    },
+    Plan {
+        task: Option<String>,
+    },
 }
 
 #[derive(Clone, Eq, PartialEq)]
@@ -75,7 +87,10 @@ impl std::fmt::Debug for ModelCommand {
 impl SlashCommand {
     #[must_use]
     pub fn runs_agent(&self) -> bool {
-        matches!(self, Self::Plan { task: Some(_) })
+        matches!(
+            self,
+            Self::Plan { task: Some(_) } | Self::Skill { task: Some(_), .. }
+        )
     }
 }
 
@@ -114,8 +129,8 @@ pub const COMMAND_SPECS: &[CommandSpec] = &[
     },
     CommandSpec {
         name: "skills",
-        usage: "/skills",
-        description: "list available project and user skills",
+        usage: "/skills [name]",
+        description: "list skills or load one by name",
     },
     CommandSpec {
         name: "plan",
@@ -212,15 +227,25 @@ pub fn parse_slash_command(input: &str) -> Result<Option<SlashCommand>, String> 
             Ok(Some(SlashCommand::Effort { effort }))
         }
         "skills" => {
-            require_empty("skills")?;
-            Ok(Some(SlashCommand::Skills))
+            if remainder.is_empty() {
+                Ok(Some(SlashCommand::Skills))
+            } else {
+                let (selector, task) = remainder
+                    .split_once(char::is_whitespace)
+                    .map_or((remainder, ""), |(selector, task)| (selector, task.trim()));
+                Ok(Some(SlashCommand::Skill {
+                    selector: selector.to_owned(),
+                    task: (!task.is_empty()).then(|| task.to_owned()),
+                }))
+            }
         }
         "plan" => Ok(Some(SlashCommand::Plan {
             task: (!remainder.is_empty()).then(|| remainder.to_owned()),
         })),
-        _ => Err(format!(
-            "unknown command: /{name}. Type /help for commands."
-        )),
+        _ => Ok(Some(SlashCommand::Skill {
+            selector: name.to_owned(),
+            task: (!remainder.is_empty()).then(|| remainder.to_owned()),
+        })),
     }
 }
 
@@ -283,7 +308,13 @@ mod tests {
     fn reports_invalid_and_unknown_commands() {
         assert_eq!(parse_slash_command("/"), Ok(None));
         assert!(parse_slash_command("/effort extreme").is_err());
-        assert!(parse_slash_command("/mystery").is_err());
+        assert_eq!(
+            parse_slash_command("/mystery"),
+            Ok(Some(SlashCommand::Skill {
+                selector: "mystery".to_owned(),
+                task: None,
+            }))
+        );
         assert_eq!(parse_slash_command("fix tests"), Ok(None));
     }
 
@@ -363,6 +394,20 @@ mod tests {
             Ok(Some(SlashCommand::Skills))
         );
         assert_eq!(
+            parse_slash_command("/skills release"),
+            Ok(Some(SlashCommand::Skill {
+                selector: "release".to_owned(),
+                task: None,
+            }))
+        );
+        assert_eq!(
+            parse_slash_command("/release prepare version 1.0"),
+            Ok(Some(SlashCommand::Skill {
+                selector: "release".to_owned(),
+                task: Some("prepare version 1.0".to_owned()),
+            }))
+        );
+        assert_eq!(
             parse_slash_command("/plan"),
             Ok(Some(SlashCommand::Plan { task: None }))
         );
@@ -376,7 +421,7 @@ mod tests {
 
     #[test]
     fn covers_validation_redaction_and_agent_classification() {
-        for input in ["/help extra", "/new extra", "/skills extra", "/help\n/new"] {
+        for input in ["/help extra", "/new extra", "/help\n/new"] {
             assert!(parse_slash_command(input).is_err(), "{input}");
         }
         for input in [

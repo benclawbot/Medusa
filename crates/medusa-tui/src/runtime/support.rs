@@ -24,6 +24,27 @@ use super::{
 };
 
 const MAX_FILE_CONTEXT_BYTES: usize = 2 * 1024 * 1024;
+const MAX_SKILL_CONTEXT_BYTES: usize = 64_000;
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(super) struct SelectedSkill {
+    pub(super) name: String,
+    pub(super) scope: String,
+    pub(super) content: String,
+}
+
+impl SelectedSkill {
+    pub(super) fn label(&self) -> String {
+        format!("{} ({})", self.name, self.scope)
+    }
+
+    pub(super) fn prompt_context(&self) -> String {
+        format!(
+            "The user explicitly selected the following skill for this turn. Follow it unless it conflicts with system rules or the user's task.\n\n--- selected skill: {} ({}) ---\n{}\n--- end selected skill ---",
+            self.name, self.scope, self.content
+        )
+    }
+}
 
 pub(super) fn configure_model(
     state: &mut RuntimeState,
@@ -103,19 +124,8 @@ pub(super) fn credential_environment(provider: &str) -> Option<&'static str> {
 }
 
 pub(super) fn discover_skills(repo: &Path) -> Vec<String> {
-    let mut roots = vec![
-        ("project", repo.join(".medusa/skills")),
-        ("project", repo.join(".claude/skills")),
-    ];
-    if let Some(home) = env::var_os("HOME")
-        .or_else(|| env::var_os("USERPROFILE"))
-        .map(PathBuf::from)
-    {
-        roots.push(("user", home.join(".medusa/skills")));
-        roots.push(("user", home.join(".claude/skills")));
-    }
     let mut skills = BTreeSet::new();
-    for (scope, root) in roots {
+    for (scope, root) in skill_roots(repo) {
         let Ok(entries) = fs::read_dir(root) else {
             continue;
         };
@@ -135,6 +145,104 @@ pub(super) fn discover_skills(repo: &Path) -> Vec<String> {
         }
     }
     skills.into_iter().collect()
+}
+
+pub(super) fn load_selected_skill(
+    repo: &Path,
+    selector: &str,
+) -> Result<SelectedSkill, RuntimeError> {
+    let selector = selector.trim();
+    let (name, requested_scope) = selector
+        .rsplit_once('@')
+        .map_or((selector, None), |(name, scope)| (name, Some(scope)));
+    if name.is_empty()
+        || name == "."
+        || name == ".."
+        || name.contains(['/', '\\', '@'])
+        || name.contains("..")
+    {
+        return Err(RuntimeError::InvalidCommand(
+            "skill names must be single directory names".to_owned(),
+        ));
+    }
+    if requested_scope.is_some_and(|scope| !matches!(scope, "project" | "user")) {
+        return Err(RuntimeError::InvalidCommand(
+            "skill scope must be project or user".to_owned(),
+        ));
+    }
+
+    let mut matches = Vec::new();
+    for (scope, root) in skill_roots(repo) {
+        if requested_scope.is_some_and(|requested| requested != scope) {
+            continue;
+        }
+        let skill = root.join(name).join("SKILL.md");
+        if !skill.is_file() {
+            continue;
+        }
+        let canonical_root = fs::canonicalize(&root)?;
+        let canonical_skill = fs::canonicalize(&skill)?;
+        if !canonical_skill.starts_with(&canonical_root) {
+            return Err(RuntimeError::InvalidCommand(format!(
+                "skill {name} escapes its configured skill root"
+            )));
+        }
+        matches.push((scope, canonical_skill));
+    }
+
+    if matches.is_empty() {
+        return Err(RuntimeError::InvalidCommand(format!(
+            "skill {name} was not found; use /skills to list installed skills"
+        )));
+    }
+    if matches.len() > 1 {
+        let scopes = matches
+            .iter()
+            .map(|(scope, _)| *scope)
+            .collect::<BTreeSet<_>>();
+        let hint = if scopes.len() > 1 {
+            format!("use /{name}@project or /{name}@user")
+        } else {
+            format!(
+                "remove the duplicate {name} definitions in the {0} scope",
+                matches[0].0
+            )
+        };
+        return Err(RuntimeError::InvalidCommand(format!(
+            "skill {name} is ambiguous; {hint}"
+        )));
+    }
+
+    let (scope, path) = matches.pop().expect("one skill match");
+    let bytes = fs::read(&path)?;
+    if bytes.len() > MAX_SKILL_CONTEXT_BYTES {
+        return Err(RuntimeError::FileTooLarge {
+            path,
+            bytes: bytes.len(),
+        });
+    }
+    let content =
+        String::from_utf8(bytes).map_err(|_| RuntimeError::BinaryFile { path: path.clone() })?;
+    Ok(SelectedSkill {
+        name: name.to_owned(),
+        scope: scope.to_owned(),
+        content,
+    })
+}
+
+fn skill_roots(repo: &Path) -> Vec<(&'static str, PathBuf)> {
+    let mut roots = vec![
+        ("project", repo.join(".medusa/skills")),
+        ("project", repo.join(".claude/skills")),
+    ];
+    if let Some(home) = env::var_os("HOME")
+        .or_else(|| env::var_os("USERPROFILE"))
+        .map(PathBuf::from)
+    {
+        roots.push(("user", home.join(".medusa/skills")));
+        roots.push(("user", home.join(".claude/skills")));
+    }
+    roots
 }
 
 fn skill_description(path: &Path) -> Option<String> {

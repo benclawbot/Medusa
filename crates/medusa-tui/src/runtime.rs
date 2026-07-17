@@ -28,9 +28,10 @@ mod support;
 mod tests;
 
 use support::{
-    UpdateState, configure_model, credential_environment, discover_skills, effort_for_turns,
-    forward_update, is_supported_provider, message_blocks, model_configuration_details,
-    objective_for, runtime_question, transcript_plan, turns_for_effort,
+    SelectedSkill, UpdateState, configure_model, credential_environment, discover_skills,
+    effort_for_turns, forward_update, is_supported_provider, load_selected_skill, message_blocks,
+    model_configuration_details, objective_for, runtime_question, transcript_plan,
+    turns_for_effort,
 };
 
 #[derive(Debug)]
@@ -275,6 +276,7 @@ struct RuntimeState {
     config: Config,
     session: Option<AgentSession>,
     pending_goal: Option<String>,
+    pending_skill: Option<SelectedSkill>,
     session_api_key: Option<String>,
     effort: Effort,
     plan_mode: bool,
@@ -295,6 +297,7 @@ impl RuntimeState {
             config,
             session: None,
             pending_goal: None,
+            pending_skill: None,
             session_api_key: None,
         })
     }
@@ -326,7 +329,16 @@ fn run_prompt(
         MiniMaxProvider::from_config_with_api_key(&config, state.session_api_key.clone())
             .map_err(RuntimeError::agent)?;
     let engine = AgentEngine::new(provider, config);
-    let content = message_blocks(&draft)?;
+    let selected_skill = state.pending_skill.clone();
+    let mut content = message_blocks(&draft)?;
+    if let Some(skill) = &selected_skill {
+        content.insert(
+            0,
+            medusa_provider::MessageBlock::Text {
+                text: skill.prompt_context(),
+            },
+        );
+    }
     let mut session = match state.session.take() {
         Some(mut session) => {
             let update = if session.pending_question.is_some() {
@@ -350,6 +362,9 @@ fn run_prompt(
                 .map_err(RuntimeError::agent)?
         }
     };
+    if selected_skill.is_some() {
+        state.pending_skill = None;
+    }
     let mut updates = UpdateState::new();
     if !session.plan.is_empty() {
         let _ = events.send(RuntimeEvent::Plan(transcript_plan(&session.plan)));
@@ -413,6 +428,7 @@ fn execute_slash_command(
         SlashCommand::New => {
             state.session = None;
             state.pending_goal = None;
+            state.pending_skill = None;
             state.config.agent.mode = state.base_config.agent.mode;
             state.plan_mode = false;
             let _ = events.send(RuntimeEvent::NewSession);
@@ -535,8 +551,42 @@ fn execute_slash_command(
                             .to_owned(),
                     ]
                 } else {
-                    skills
+                    let mut details = vec![
+                        "Run /<name> to load a skill for the next prompt, or /<name> <task> to use it immediately."
+                            .to_owned(),
+                    ];
+                    details.extend(skills);
+                    details
                 },
+            });
+        }
+        SlashCommand::Skill { selector, task } => {
+            let skill = load_selected_skill(&state.repo, &selector)?;
+            let label = skill.label();
+            if let Some(task) = task {
+                state.pending_skill = Some(skill);
+                let result = run_prompt(
+                    state,
+                    PromptDraft {
+                        text: task,
+                        ..PromptDraft::default()
+                    },
+                    events,
+                    cancel,
+                )
+                .map(Some);
+                if result.is_err() {
+                    state.pending_skill = None;
+                }
+                return result;
+            }
+            state.pending_skill = Some(skill);
+            let _ = events.send(RuntimeEvent::Notice {
+                title: "Skill loaded".to_owned(),
+                details: vec![
+                    label,
+                    "The next prompt will use this skill once.".to_owned(),
+                ],
             });
         }
         SlashCommand::Plan { task } => {

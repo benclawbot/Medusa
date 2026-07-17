@@ -177,7 +177,14 @@ impl AppState {
                                 self.status = "model configuration".to_owned();
                                 return Ok(AppAction::Redraw);
                             }
-                            if let SlashCommand::Plan { task: Some(task) } = &command {
+                            let agent_task = match &command {
+                                SlashCommand::Plan { task: Some(task) }
+                                | SlashCommand::Skill {
+                                    task: Some(task), ..
+                                } => Some(task),
+                                _ => None,
+                            };
+                            if let Some(task) = agent_task {
                                 self.transcript.push(TranscriptEntry::User(PromptDraft {
                                     text: task.clone(),
                                     ..PromptDraft::default()

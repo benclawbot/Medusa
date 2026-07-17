@@ -6,7 +6,9 @@ use medusa_provider::ImageSource;
 use medusa_provider::MessageBlock;
 use serde_json::json;
 
-use super::support::{discover_skills, model_configuration_details, tool_title};
+use super::support::{
+    discover_skills, load_selected_skill, model_configuration_details, tool_title,
+};
 use super::*;
 use crate::{
     app::TranscriptPlanStepState,
@@ -220,6 +222,54 @@ fn goal_command_is_durable_and_guides_the_next_agent_turn() {
             if title == "Goal updated"
                 && details.iter().any(|detail| detail.contains("next agent turn"))
     ));
+}
+
+#[test]
+fn direct_skill_command_stages_validated_context_for_the_next_prompt() {
+    let directory = tempdir().expect("temporary directory");
+    let skill = directory.path().join(".medusa/skills/release/SKILL.md");
+    fs::create_dir_all(skill.parent().expect("skill directory")).expect("create skills");
+    fs::write(
+        &skill,
+        "---\nname: release\ndescription: Prepare a release\n---\nUse release steps.",
+    )
+    .expect("write skill");
+    let mut state = RuntimeState::load(directory.path().to_path_buf()).expect("runtime state");
+    let (sender, receiver) = mpsc::channel();
+
+    execute_slash_command(
+        &mut state,
+        SlashCommand::Skill {
+            selector: "release".to_owned(),
+            task: None,
+        },
+        &sender,
+        &AtomicBool::new(false),
+    )
+    .expect("load skill");
+
+    let selected = state.pending_skill.as_ref().expect("selected skill");
+    assert_eq!(selected.name, "release");
+    assert!(selected.prompt_context().contains("Use release steps."));
+    assert!(matches!(
+        receiver.recv().expect("skill notice"),
+        RuntimeEvent::Notice { title, details }
+            if title == "Skill loaded"
+                && details.iter().any(|detail| detail.contains("next prompt"))
+    ));
+}
+
+#[test]
+fn duplicate_skill_names_require_an_explicit_scope_or_cleanup() {
+    let directory = tempdir().expect("temporary directory");
+    for root in [".medusa/skills/release", ".claude/skills/release"] {
+        let skill = directory.path().join(root).join("SKILL.md");
+        fs::create_dir_all(skill.parent().expect("skill directory")).expect("create skills");
+        fs::write(skill, "---\ndescription: Release\n---\nBody").expect("write skill");
+    }
+    let error = load_selected_skill(directory.path(), "release")
+        .expect_err("duplicate project skills must be rejected");
+    assert!(error.to_string().contains("ambiguous"));
 }
 
 #[test]
