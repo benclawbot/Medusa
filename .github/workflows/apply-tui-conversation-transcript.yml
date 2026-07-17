@@ -32,6 +32,15 @@ jobs:
         shell: bash
         run: |
           set -o pipefail
+          python - <<'PY'
+          from pathlib import Path
+          path = Path('.github/scripts/apply_tui_conversation_transcript.py')
+          parts = path.read_text().split('"""')
+          fixed = parts[0]
+          for index, part in enumerate(parts[1:], 1):
+              fixed += ('r"""' if index % 2 == 1 else '"""') + part
+          path.write_text(fixed)
+          PY
           python .github/scripts/apply_tui_conversation_transcript.py 2>&1 | tee patch-diagnostic.log
       - name: Upload patch diagnostic
         if: steps.apply.outcome == 'failure'
