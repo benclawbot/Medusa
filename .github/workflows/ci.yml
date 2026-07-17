@@ -32,6 +32,17 @@ jobs:
           sed -n "/python3 - <<'PY'/,/^          PY$/p" .github/workflows/apply-dynamic-skill-autocomplete.yml \
             | sed '1d;$d;s/^          //' > /tmp/apply_dynamic_skill_autocomplete.py
           test -s /tmp/apply_dynamic_skill_autocomplete.py
+          python3 - <<'PY'
+          from pathlib import Path
+          path = Path('/tmp/apply_dynamic_skill_autocomplete.py')
+          text = path.read_text()
+          text = text.replace(
+              "if 'repository: PathBuf,' not in text:",
+              "if 'pub struct AppState {\\n    repository: PathBuf,' not in text:",
+              1,
+          )
+          path.write_text(text)
+          PY
           python3 /tmp/apply_dynamic_skill_autocomplete.py
           cargo fmt --all
           git diff --check
