@@ -183,7 +183,7 @@ pub(super) fn legacy_draw_common(
     let model_modal = app.model_modal();
     let modal_lines = model_modal.map(model_modal_lines).unwrap_or_default();
     let suggestions = if model_modal.is_none() {
-        command_suggestions(&app.composer.draft.text)
+        command_suggestions(&app.composer.draft.text, app.repository())
     } else {
         Vec::new()
     };
@@ -359,7 +359,7 @@ pub(super) fn render_frame(
     let panel_rows = u16::try_from(plan_panel.len()).unwrap_or(u16::MAX);
     let base_composer_rows = 4_u16.saturating_add(panel_rows);
     let suggestions = if !is_modal {
-        command_suggestions(&app.composer.draft.text)
+        command_suggestions(&app.composer.draft.text, app.repository())
     } else {
         Vec::new()
     };
