@@ -295,7 +295,7 @@ pub(super) fn composer_prompt_text(text: &str) -> String {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub(super) struct StyledLine {
+pub(crate) struct StyledLine {
     marker: Option<(String, Color)>,
     pub(crate) text: String,
     foreground: Color,
