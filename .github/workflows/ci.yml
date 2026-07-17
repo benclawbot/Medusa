@@ -28,13 +28,27 @@ jobs:
       - name: Apply guarded patch and focused tests
         shell: bash
         run: |
+          set -o pipefail
           sed -n "/python3 - <<'PY'/,/^          PY$/p" .github/workflows/apply-dynamic-skill-autocomplete.yml \
             | sed '1d;$d;s/^          //' > /tmp/apply_dynamic_skill_autocomplete.py
           test -s /tmp/apply_dynamic_skill_autocomplete.py
           python3 /tmp/apply_dynamic_skill_autocomplete.py
           cargo fmt --all
           git diff --check
-          cargo test -p medusa-tui
+          cargo test -p medusa-tui 2>&1 | tee autocomplete-tests.log
+      - name: Capture autocomplete diagnostics
+        if: failure()
+        shell: bash
+        run: git diff -- . ':!Cargo.lock' > autocomplete.patch
+      - name: Upload autocomplete diagnostics
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: autocomplete-diagnostics
+          path: |
+            autocomplete-tests.log
+            autocomplete.patch
+          if-no-files-found: error
       - name: Commit implementation when needed
         shell: bash
         run: |
