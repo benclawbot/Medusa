@@ -1,4 +1,5 @@
 use super::*;
+use crate::render::support::{app_error, runtime_error};
 
 pub fn run(options: TuiOptions) -> io::Result<ExitReason> {
     if !io::stdin().is_terminal() || !io::stdout().is_terminal() {

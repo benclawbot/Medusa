@@ -297,12 +297,12 @@ pub(super) fn composer_prompt_text(text: &str) -> String {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(super) struct StyledLine {
     marker: Option<(String, Color)>,
-    pub(super) text: String,
+    pub(crate) text: String,
     foreground: Color,
 }
 
 impl StyledLine {
-    fn new(text: impl Into<String>, foreground: Color) -> Self {
+    pub(super) fn new(text: impl Into<String>, foreground: Color) -> Self {
         Self {
             marker: None,
             text: text.into(),
@@ -310,7 +310,7 @@ impl StyledLine {
         }
     }
 
-    fn with_marker(
+    pub(super) fn with_marker(
         marker: impl Into<String>,
         marker_color: Color,
         text: impl Into<String>,
@@ -323,7 +323,7 @@ impl StyledLine {
         }
     }
 
-    fn print(&self, stdout: &mut io::Stdout, width: u16) -> io::Result<()> {
+    pub(super) fn print(&self, stdout: &mut io::Stdout, width: u16) -> io::Result<()> {
         if let Some((marker, marker_color)) = &self.marker {
             let marker = wrap_to_width(marker, width);
             let remaining = width.saturating_sub(marker.chars().count() as u16);
@@ -344,7 +344,7 @@ impl StyledLine {
         print_styled_line(stdout, width, &self.text, self.foreground, Attribute::Reset)
     }
 
-    fn print_at(&self, stdout: &mut io::Stdout, width: u16, row: u16) -> io::Result<()> {
+    pub(super) fn print_at(&self, stdout: &mut io::Stdout, width: u16, row: u16) -> io::Result<()> {
         queue!(
             stdout,
             MoveTo(0, row),

@@ -1,7 +1,7 @@
-mod support;
+pub(super) mod support;
 
 use super::*;
-use support::*;
+pub(super) use support::*;
 
 #[cfg(unix)]
 pub(super) fn draw(
