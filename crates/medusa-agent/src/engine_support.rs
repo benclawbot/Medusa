@@ -32,10 +32,6 @@ pub(crate) fn content_with_session_goal(
     content
 }
 
-pub(crate) fn system_prompt(mode: Mode, repo: &Path) -> String {
-    system_prompt_with_context(mode, repo, None)
-}
-
 pub(crate) fn system_prompt_with_context(
     mode: Mode,
     repo: &Path,
@@ -694,7 +690,7 @@ mod tests {
         )
         .expect("write skill");
 
-        let prompt = system_prompt(Mode::Yolo, directory.path());
+        let prompt = system_prompt_with_context(Mode::Yolo, directory.path(), None);
         assert!(prompt.contains("Run the focused test suite."));
         assert!(prompt.contains("release (project): Release preparation"));
         assert!(prompt.contains("call `skill_read`"));
