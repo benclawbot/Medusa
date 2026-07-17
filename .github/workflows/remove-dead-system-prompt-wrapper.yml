@@ -1,0 +1,54 @@
+name: Remove dead system prompt wrapper
+
+on:
+  push:
+    branches:
+      - feat/direct-skill-commands
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: feat/direct-skill-commands
+      - uses: dtolnay/rust-toolchain@1.88.0
+        with:
+          components: rustfmt
+      - name: Remove dead wrapper
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          path = Path('crates/medusa-agent/src/engine_support.rs')
+          text = path.read_text()
+          old = '''pub(crate) fn system_prompt(mode: Mode, repo: &Path) -> String {
+    system_prompt_with_context(mode, repo, None)
+}
+
+'''
+          if text.count(old) != 1:
+              raise SystemExit('expected one system_prompt wrapper')
+          text = text.replace(old, '', 1)
+          old_call = '        let prompt = system_prompt(Mode::Yolo, directory.path());\n'
+          new_call = '''        let prompt =
+            system_prompt_with_context(Mode::Yolo, directory.path(), None);
+'''
+          if text.count(old_call) != 1:
+              raise SystemExit('expected one system_prompt test call')
+          path.write_text(text.replace(old_call, new_call, 1))
+          PY
+          cargo fmt --all
+          git diff --check
+      - name: Commit Clippy fix
+        shell: bash
+        run: |
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add crates/medusa-agent/src/engine_support.rs
+          git commit -m "fix(agent): remove dead prompt wrapper"
+          git push origin HEAD:feat/direct-skill-commands
