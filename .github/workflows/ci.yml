@@ -13,62 +13,6 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  apply-question-transcript-test:
-    name: Apply question transcript test correction
-    if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository
-    permissions:
-      contents: write
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          ref: ${{ github.event.pull_request.head.ref }}
-          fetch-depth: 1
-          show-progress: false
-      - uses: dtolnay/rust-toolchain@1.88.0
-      - name: Update stale transcript expectations
-        shell: python
-        run: |
-          from pathlib import Path
-
-          path = Path('crates/medusa-tui/src/app/tests.rs')
-          text = path.read_text()
-          start = text.index('fn question_modal_tabs_answers_and_requires_confirmation_before_submission()')
-          end = text.index('\n#[test]\nfn clarification_question_and_confirmed_answer_stay_in_transcript()', start)
-          block = text[start:end]
-          stale = '    assert!(app.transcript.is_empty());'
-          first = '''    assert!(matches!(
-              app.transcript.as_slice(),
-              [TranscriptEntry::Assistant(text)]
-                  if text.contains("Which project should I use?")
-                      && text.contains("Who is this for?")
-          ));'''
-          second = '    assert_eq!(app.transcript.len(), 1);'
-          if first not in block:
-              if block.count(stale) != 2:
-                  raise SystemExit(f'expected two stale transcript assertions, found {block.count(stale)}')
-              block = block.replace(stale, first, 1).replace(stale, second, 1)
-              path.write_text(text[:start] + block + text[end:])
-          elif second not in block:
-              raise SystemExit('partially applied question transcript correction')
-      - name: Verify complete TUI suite
-        run: |
-          cargo fmt --all
-          cargo fmt --all -- --check
-          bash scripts/check-source-size.sh
-          cargo test -p medusa-tui
-      - name: Commit correction
-        run: |
-          if git diff --quiet; then
-            echo 'Test correction already applied and verified.'
-            exit 0
-          fi
-          git config user.name 'github-actions[bot]'
-          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git add crates/medusa-tui/src/app/tests.rs
-          git commit -m 'test(tui): retain clarification conversation'
-          git push origin HEAD:${{ github.event.pull_request.head.ref }}
-
   quality:
     name: Workspace quality
     runs-on: ubuntu-latest
