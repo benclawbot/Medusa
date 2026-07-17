@@ -90,6 +90,14 @@ mod session;
 
 use render::*;
 pub use session::run;
+
+/// Render `value` to a string that fits within `width` terminal columns.
+#[must_use]
+pub fn wrap_to_width(value: &str, width: u16) -> String {
+    render::support::wrap_to_width(value, width)
+}
+
+#[cfg(test)]
 use session::*;
 
 #[cfg(test)]
