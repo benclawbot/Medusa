@@ -134,7 +134,9 @@ jobs:
               !name.is_empty()
                   && name != "."
                   && name != ".."
-                  && !name.contains(['/', '\\', '@'])
+                  && !name.contains('/')
+                  && !name.as_bytes().contains(&92)
+                  && !name.contains('@')
                   && !name.contains("..")
           }
           '''
@@ -145,9 +147,9 @@ jobs:
           marker = '''    #[test]
               fn colliding_skills_receive_scope_suffixes_and_invalid_duplicates_are_hidden() {
           '''.replace('              fn', '    fn')
-          tests = '''    #[test]
+          tests = r'''    #[test]
           fn invalid_skill_names_are_never_suggested() {
-              for name in ["", ".", "..", "bad@name", "bad..name", "bad\\\\name"] {
+              for name in ["", ".", "..", "bad@name", "bad..name", "bad\\name"] {
                   assert!(!valid_skill_name(name), "{name}");
               }
               assert!(valid_skill_name("release-tools"));
