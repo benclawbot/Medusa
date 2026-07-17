@@ -1,0 +1,40 @@
+name: Apply skill rustfmt patch
+
+on:
+  push:
+    branches:
+      - feat/direct-skill-commands
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: feat/direct-skill-commands
+      - name: Apply rustfmt output
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          path = Path('crates/medusa-tui/src/runtime.rs')
+          text = path.read_text()
+          old = '                    "The next prompt will add this skill to the current session context.".to_owned(),\n'
+          new = '                    "The next prompt will add this skill to the current session context."\n                        .to_owned(),\n'
+          if text.count(old) != 1:
+              raise SystemExit('expected one rustfmt target')
+          path.write_text(text.replace(old, new, 1))
+          PY
+          git diff --check
+      - name: Commit rustfmt patch
+        shell: bash
+        run: |
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add crates/medusa-tui/src/runtime.rs
+          git commit -m "style(tui): apply rustfmt to skill notice"
+          git push origin HEAD:feat/direct-skill-commands
