@@ -1,0 +1,179 @@
+name: Harden TUI session metrics
+
+on:
+  pull_request:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+concurrency:
+  group: harden-tui-session-metrics-${{ github.head_ref }}
+  cancel-in-progress: true
+
+jobs:
+  apply:
+    if: github.head_ref == 'feat/tui-session-metrics'
+    permissions:
+      contents: write
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: feat/tui-session-metrics
+          fetch-depth: 0
+      - uses: dtolnay/rust-toolchain@1.88.0
+        with:
+          components: rustfmt
+      - name: Apply timing hardening and focused tests
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+
+          def replace_once(path, old, new, label):
+              text = path.read_text()
+              count = text.count(old)
+              if count != 1:
+                  raise SystemExit(f"{label}: expected exactly one match, found {count}")
+              path.write_text(text.replace(old, new, 1))
+
+          app = Path('crates/medusa-tui/src/app.rs')
+          replace_once(
+              app,
+              '''    pub output_tokens: u64,\n    pub cache_read_input_tokens: u64,\n''',
+              '''    pub output_tokens: u64,\n    pub timed_output_tokens: u64,\n    pub cache_read_input_tokens: u64,\n''',
+              'timed output field',
+          )
+          replace_once(
+              app,
+              '''    session_started_at: Instant,\n    run_started_at: Option<Instant>,\n''',
+              '''    session_started_at: Instant,\n    session_elapsed_seconds: u64,\n    run_started_at: Option<Instant>,\n''',
+              'cached session clock field',
+          )
+          replace_once(
+              app,
+              '''            output_tokens: 0,\n            cache_read_input_tokens: 0,\n''',
+              '''            output_tokens: 0,\n            timed_output_tokens: 0,\n            cache_read_input_tokens: 0,\n''',
+              'timed output initialization',
+          )
+          replace_once(
+              app,
+              '''            session_started_at: Instant::now(),\n            run_started_at: None,\n''',
+              '''            session_started_at: Instant::now(),\n            session_elapsed_seconds: 0,\n            run_started_at: None,\n''',
+              'cached session clock initialization',
+          )
+          replace_once(
+              app,
+              '''        self.output_tokens = 0;\n        self.cache_read_input_tokens = 0;\n''',
+              '''        self.output_tokens = 0;\n        self.timed_output_tokens = 0;\n        self.cache_read_input_tokens = 0;\n''',
+              'timed output reset',
+          )
+          replace_once(
+              app,
+              '''        self.session_started_at = Instant::now();\n        self.status = "new session".to_owned();\n''',
+              '''        self.session_started_at = Instant::now();\n        self.session_elapsed_seconds = 0;\n        self.status = "new session".to_owned();\n''',
+              'session clock reset',
+          )
+          replace_once(
+              app,
+              '''    pub fn tick(&mut self) -> bool {\n        if self.is_running() {\n            self.spinner_frame = self.spinner_frame.wrapping_add(1);\n            true\n        } else {\n            false\n        }\n    }\n''',
+              '''    pub fn tick(&mut self) -> bool {\n        let elapsed = self.session_started_at.elapsed().as_secs();\n        let session_changed = elapsed != self.session_elapsed_seconds;\n        self.session_elapsed_seconds = elapsed;\n        let spinner_changed = self.is_running();\n        if spinner_changed {\n            self.spinner_frame = self.spinner_frame.wrapping_add(1);\n        }\n        session_changed || spinner_changed\n    }\n''',
+              'tick session clock',
+          )
+          replace_once(
+              app,
+              '''        self.output_tokens = self.output_tokens.saturating_add(output_tokens);\n        self.cache_read_input_tokens = self\n''',
+              '''        self.output_tokens = self.output_tokens.saturating_add(output_tokens);\n        if model_elapsed_millis > 0 {\n            self.timed_output_tokens = self.timed_output_tokens.saturating_add(output_tokens);\n        }\n        self.cache_read_input_tokens = self\n''',
+              'timed output accounting',
+          )
+          replace_once(
+              app,
+              '''        (self.model_elapsed_millis > 0)\n            .then(|| self.output_tokens as f64 * 1_000.0 / self.model_elapsed_millis as f64)\n''',
+              '''        (self.model_elapsed_millis > 0).then(|| {\n            self.timed_output_tokens as f64 * 1_000.0 / self.model_elapsed_millis as f64\n        })\n''',
+              'rate numerator',
+          )
+          replace_once(
+              app,
+              '''    pub fn session_elapsed_seconds(&self) -> u64 {\n        self.session_started_at.elapsed().as_secs()\n    }\n''',
+              '''    pub fn session_elapsed_seconds(&self) -> u64 {\n        self.session_elapsed_seconds\n    }\n''',
+              'stable session clock accessor',
+          )
+
+          session = Path('crates/medusa-tui/src/session.rs')
+          replace_once(
+              session,
+              '''    loop {\n        drain_runtime_events(app, runtime)?;\n        let (jobs, daemon_status) = match client.request(Request::List) {\n''',
+              '''    loop {\n        drain_runtime_events(app, runtime)?;\n        app.tick();\n        let (jobs, daemon_status) = match client.request(Request::List) {\n''',
+              'unix tick loop',
+          )
+
+          render = Path('crates/medusa-tui/src/render.rs')
+          replace_once(
+              render,
+              '''    output_tokens: u64,\n    cache_read_input_tokens: u64,\n''',
+              '''    output_tokens: u64,\n    timed_output_tokens: u64,\n    cache_read_input_tokens: u64,\n''',
+              'snapshot timed output field',
+          )
+          replace_once(
+              render,
+              '''        output_tokens: app.output_tokens,\n        cache_read_input_tokens: app.cache_read_input_tokens,\n''',
+              '''        output_tokens: app.output_tokens,\n        timed_output_tokens: app.timed_output_tokens,\n        cache_read_input_tokens: app.cache_read_input_tokens,\n''',
+              'snapshot timed output value',
+          )
+
+          lib = Path('crates/medusa-tui/src/lib.rs')
+          replace_once(
+              lib,
+              '''        app.begin_run();\n        app.update_turn(3);\n        app.record_usage(700, 1_200, 200, 100, 2_000);\n        assert_eq!(running_status(&app), "Working (0s · turn 3)");\n        assert_eq!(\n            session_metrics_line(&app),\n            "session 0s · in 1.0k · out 1.2k · cached 200 (20%) · 600.0 tok/s"\n        );\n''',
+              '''        app.begin_run();\n        app.update_turn(3);\n        app.record_usage(0, 300, 0, 0, 0);\n        app.record_usage(700, 1_200, 200, 100, 2_000);\n        assert_eq!(running_status(&app), "Working (0s · turn 3)");\n        assert_eq!(\n            session_metrics_line(&app),\n            "session 0s · in 1.0k · out 1.5k · cached 200 (20%) · 600.0 tok/s"\n        );\n''',
+              'untimed output rate regression',
+          )
+          replace_once(
+              lib,
+              '''        assert_eq!(app.output_tokens, 0);\n        assert_eq!(app.cache_read_input_tokens, 0);\n''',
+              '''        assert_eq!(app.output_tokens, 0);\n        assert_eq!(app.timed_output_tokens, 0);\n        assert_eq!(app.cache_read_input_tokens, 0);\n''',
+              'timed output reset assertion',
+          )
+          replace_once(
+              lib,
+              '''        app.begin_run();\n        app.tick();\n        let before = render_frame(&UiIdentity::for_repo(directory.path()), &app, 80, 24);\n        app.tick();\n        let after = render_frame(&UiIdentity::for_repo(directory.path()), &app, 80, 24);\n''',
+              '''        app.begin_run();\n        app.spinner_frame = 1;\n        let before = render_frame(&UiIdentity::for_repo(directory.path()), &app, 80, 24);\n        app.spinner_frame = 2;\n        let after = render_frame(&UiIdentity::for_repo(directory.path()), &app, 80, 24);\n''',
+              'deterministic spinner diff test',
+          )
+
+          runtime_tests = Path('crates/medusa-tui/src/runtime/tests.rs')
+          marker = '''    assert!(matches!(\n        receiver.recv().expect("usage event"),\n        RuntimeEvent::Usage {\n            input_tokens: 120,\n            output_tokens: 30,\n            cache_read_input_tokens: 80,\n            cache_creation_input_tokens: 20,\n            model_elapsed_millis,\n        } if model_elapsed_millis >= 1\n    ));\n}\n'''
+          replacement = '''    assert!(matches!(\n        receiver.recv().expect("usage event"),\n        RuntimeEvent::Usage {\n            input_tokens: 120,\n            output_tokens: 30,\n            cache_read_input_tokens: 80,\n            cache_creation_input_tokens: 20,\n            model_elapsed_millis,\n        } if model_elapsed_millis >= 1\n    ));\n\n    forward_update(\n        &AgentUpdate::Event(EventPayload::ModelResponseReceived {\n            response_id: Some("unpaired-response".to_owned()),\n            usage: json!({"output_tokens": 5}),\n        }),\n        &sender,\n        &mut state,\n    );\n    assert!(matches!(\n        receiver.recv().expect("unpaired usage event"),\n        RuntimeEvent::Usage {\n            output_tokens: 5,\n            model_elapsed_millis: 0,\n            ..\n        }\n    ));\n}\n'''
+          replace_once(runtime_tests, marker, replacement, 'unpaired timing test')
+          PY
+          cargo fmt --all
+          git diff --check
+          cargo test -p medusa-tui runtime::tests::provider_usage_forwards_input_output_cache_and_model_time -- --exact --nocapture
+          cargo test -p medusa-tui tests::running_status_and_header_metrics_use_real_accounting -- --exact --nocapture
+          cargo test -p medusa-tui tests::portable_render_snapshot_changes_only_with_visible_state -- --exact --nocapture
+          cargo test -p medusa-tui tests::spinner_changes_only_one_retained_frame_row -- --exact --nocapture
+      - name: Capture diagnostics
+        if: failure()
+        shell: bash
+        run: |
+          git diff > tui-session-metrics-hardening.patch
+          cargo test -p medusa-tui 2>&1 | tee tui-session-metrics-hardening-tests.log || true
+      - name: Upload diagnostics
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: tui-session-metrics-hardening-diagnostics
+          path: |
+            tui-session-metrics-hardening.patch
+            tui-session-metrics-hardening-tests.log
+          if-no-files-found: error
+      - name: Commit hardening
+        shell: bash
+        run: |
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add crates/medusa-tui/src/app.rs crates/medusa-tui/src/lib.rs crates/medusa-tui/src/render.rs crates/medusa-tui/src/runtime/tests.rs crates/medusa-tui/src/session.rs
+          git commit -m "fix(tui): make session metrics timing precise"
+          git push origin HEAD:feat/tui-session-metrics
