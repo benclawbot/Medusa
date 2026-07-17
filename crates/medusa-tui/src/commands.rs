@@ -1,8 +1,11 @@
 use std::{
     collections::BTreeMap,
     env, fs,
+    io::Read,
     path::{Path, PathBuf},
 };
+
+const MAX_SKILL_DESCRIPTION_BYTES: u64 = 8 * 1024;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Effort {
@@ -311,18 +314,28 @@ fn skill_command_suggestions(repo: &Path) -> Vec<CommandSuggestion> {
 fn discover_skills(repo: &Path) -> Vec<DiscoveredSkill> {
     let mut skills = Vec::new();
     for (scope, root) in skill_roots(repo) {
-        let Ok(entries) = fs::read_dir(root) else {
+        let Ok(canonical_root) = fs::canonicalize(&root) else {
+            continue;
+        };
+        let Ok(entries) = fs::read_dir(&canonical_root) else {
             continue;
         };
         for entry in entries.flatten() {
+            let name = entry.file_name().to_string_lossy().into_owned();
+            if !valid_skill_name(&name) {
+                continue;
+            }
             let skill = entry.path().join("SKILL.md");
-            if !skill.is_file() {
+            let Ok(canonical_skill) = fs::canonicalize(&skill) else {
+                continue;
+            };
+            if !canonical_skill.starts_with(&canonical_root) || !canonical_skill.is_file() {
                 continue;
             }
             skills.push(DiscoveredSkill {
-                name: entry.file_name().to_string_lossy().into_owned(),
+                name,
                 scope: scope.to_owned(),
-                description: skill_description(&skill),
+                description: skill_description(&canonical_skill),
             });
         }
     }
@@ -345,14 +358,25 @@ fn skill_roots(repo: &Path) -> Vec<(&'static str, PathBuf)> {
 }
 
 fn skill_description(path: &Path) -> Option<String> {
-    fs::read_to_string(path).ok().and_then(|text| {
-        text.lines().find_map(|line| {
-            line.strip_prefix("description:")
-                .map(str::trim)
-                .filter(|value| !value.is_empty())
-                .map(|value| value.trim_matches('"').to_owned())
-        })
+    let mut reader = fs::File::open(path).ok()?.take(MAX_SKILL_DESCRIPTION_BYTES);
+    let mut text = String::new();
+    reader.read_to_string(&mut text).ok()?;
+    text.lines().find_map(|line| {
+        line.strip_prefix("description:")
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(|value| value.trim_matches('"').to_owned())
     })
+}
+
+fn valid_skill_name(name: &str) -> bool {
+    !name.is_empty()
+        && name != "."
+        && name != ".."
+        && !name.contains('/')
+        && !name.as_bytes().contains(&92)
+        && !name.contains('@')
+        && !name.contains("..")
 }
 
 fn suggestions_for_discovered_skills(skills: Vec<DiscoveredSkill>) -> Vec<CommandSuggestion> {
@@ -611,6 +635,35 @@ Use the checklist.",
             complete_first_command("/rel", directory.path()),
             Some("/release ".to_owned())
         );
+    }
+
+    #[test]
+    fn invalid_skill_names_are_never_suggested() {
+        for name in ["", ".", "..", "bad@name", "bad..name", "bad\\name"] {
+            assert!(!valid_skill_name(name), "{name}");
+        }
+        assert!(valid_skill_name("release-tools"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn escaped_skill_symlink_is_not_suggested() {
+        use std::os::unix::fs::symlink;
+
+        let repository = tempfile::tempdir().expect("repository");
+        let outside = tempfile::tempdir().expect("outside directory");
+        let outside_skill = outside.path().join("escaped");
+        std::fs::create_dir_all(&outside_skill).expect("outside skill directory");
+        std::fs::write(
+            outside_skill.join("SKILL.md"),
+            "description: Escaped instructions",
+        )
+        .expect("outside skill");
+        let root = repository.path().join(".medusa/skills");
+        std::fs::create_dir_all(&root).expect("skill root");
+        symlink(&outside_skill, root.join("escaped")).expect("skill symlink");
+
+        assert!(command_suggestions("/esc", repository.path()).is_empty());
     }
 
     #[test]
