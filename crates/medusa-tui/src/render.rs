@@ -233,27 +233,7 @@ pub(super) fn legacy_draw_common(
     };
     let composer_height = requested_composer_height.min(height.saturating_sub(header_height));
     let content_rows = height.saturating_sub(composer_height + header_height) as usize;
-    let mut lines = Vec::new();
-    for entry in &app.transcript {
-        match entry {
-            TranscriptEntry::User(draft) => {
-                lines.push(StyledLine::with_marker(
-                    "> ",
-                    Color::Cyan,
-                    draft.text.replace('\n', " / "),
-                    Color::White,
-                ));
-                lines.extend(draft.attachments.iter().map(|attachment| {
-                    StyledLine::new(
-                        format!("  └ {}", attachment_label(attachment)),
-                        Color::DarkGrey,
-                    )
-                }));
-            }
-            TranscriptEntry::Activity(activity) => lines.extend(activity_lines(activity)),
-            TranscriptEntry::System(message) => lines.push(system_line(message)),
-        }
-    }
+    let mut lines = transcript_lines(app, width);
     if app.is_running() {
         lines.push(StyledLine::with_marker(
             spinner_marker(app.spinner_frame),
@@ -417,7 +397,7 @@ pub(super) fn render_frame(
     };
     let composer_height = requested_composer_height.min(height.saturating_sub(header_height));
     let content_rows = usize::from(height.saturating_sub(composer_height + header_height));
-    let mut content = transcript_lines(app);
+    let mut content = transcript_lines(app, width);
     if app.is_running() {
         content.push(StyledLine::with_marker(
             spinner_marker(app.spinner_frame),

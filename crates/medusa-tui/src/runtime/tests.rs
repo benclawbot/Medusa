@@ -371,7 +371,7 @@ fn model_plan_update_maps_each_status_to_the_transcript() {
 }
 
 #[test]
-fn internal_plan_transport_is_hidden_and_assistant_narration_is_one_headline() {
+fn internal_plan_transport_is_hidden_and_assistant_text_is_forwarded_verbatim() {
     let (sender, receiver) = mpsc::channel();
     let mut state = UpdateState::new();
     forward_update(
@@ -394,10 +394,11 @@ fn internal_plan_transport_is_hidden_and_assistant_narration_is_one_headline() {
         &sender,
         &mut state,
     );
-    let RuntimeEvent::Activity(activity) = receiver.recv().expect("assistant milestone") else {
-        panic!("expected assistant milestone");
-    };
-    assert_eq!(activity.kind, RuntimeActivityKind::Assistant);
-    assert_eq!(activity.title, "Now I have a clear picture. Key findings:");
-    assert!(activity.details.is_empty());
+    assert_eq!(
+        receiver.recv().expect("assistant text"),
+        RuntimeEvent::AssistantText(
+            "Now I have a clear picture. Key findings:\n\n1. First detail\n2. Second detail"
+                .to_owned()
+        )
+    );
 }

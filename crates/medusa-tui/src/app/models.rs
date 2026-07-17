@@ -6,6 +6,7 @@ use crate::{
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum TranscriptEntry {
     User(PromptDraft),
+    Assistant(String),
     Activity(TranscriptActivity),
     System(String),
 }
