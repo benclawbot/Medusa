@@ -231,6 +231,18 @@ impl<P: ModelProvider> AgentEngine<P> {
     pub fn step_with_observer<F>(
         &self,
         session: &mut AgentSession,
+        observer: F,
+    ) -> MedusaResult<StepOutcome>
+    where
+        F: FnMut(&AgentUpdate),
+    {
+        self.step_with_observer_and_context(session, None, observer)
+    }
+
+    pub fn step_with_observer_and_context<F>(
+        &self,
+        session: &mut AgentSession,
+        additional_system_context: Option<&str>,
         mut observer: F,
     ) -> MedusaResult<StepOutcome>
     where
@@ -253,7 +265,11 @@ impl<P: ModelProvider> AgentEngine<P> {
             &mut observer,
         )?;
         let response = self.provider.complete(&ModelRequest {
-            system: system_prompt(self.config.agent.mode, &session.repo),
+            system: system_prompt_with_context(
+                self.config.agent.mode,
+                &session.repo,
+                additional_system_context,
+            ),
             messages: session.messages.clone(),
             tools: available_tools(self.config.agent.mode),
             max_tokens: self.config.model.max_output_tokens,

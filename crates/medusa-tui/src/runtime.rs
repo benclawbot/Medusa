@@ -330,15 +330,8 @@ fn run_prompt(
             .map_err(RuntimeError::agent)?;
     let engine = AgentEngine::new(provider, config);
     let selected_skill = state.pending_skill.clone();
-    let mut content = message_blocks(&draft)?;
-    if let Some(skill) = &selected_skill {
-        content.insert(
-            0,
-            medusa_provider::MessageBlock::Text {
-                text: skill.prompt_context(),
-            },
-        );
-    }
+    let skill_context = selected_skill.as_ref().map(SelectedSkill::prompt_context);
+    let content = message_blocks(&draft)?;
     let mut session = match state.session.take() {
         Some(mut session) => {
             let update = if session.pending_question.is_some() {
@@ -362,9 +355,6 @@ fn run_prompt(
                 .map_err(RuntimeError::agent)?
         }
     };
-    if selected_skill.is_some() {
-        state.pending_skill = None;
-    }
     let mut updates = UpdateState::new();
     if !session.plan.is_empty() {
         let _ = events.send(RuntimeEvent::Plan(transcript_plan(&session.plan)));
@@ -376,7 +366,7 @@ fn run_prompt(
                 return Ok(RuntimeEvent::Cancelled);
             }
             let outcome = engine
-                .step_with_observer(&mut session, |update| {
+                .step_with_observer_and_context(&mut session, skill_context.as_deref(), |update| {
                     forward_update(update, events, &mut updates);
                 })
                 .map_err(RuntimeError::agent)?;
@@ -405,6 +395,10 @@ fn run_prompt(
             session_id: session.id.to_string(),
         })
     })();
+    let waiting_for_user = matches!(&result, Ok(RuntimeEvent::Question(_)));
+    if selected_skill.is_some() && !waiting_for_user {
+        state.pending_skill = None;
+    }
     state.session = Some(session);
     result
 }
@@ -585,7 +579,7 @@ fn execute_slash_command(
                 title: "Skill loaded".to_owned(),
                 details: vec![
                     label,
-                    "The next prompt will add this skill to the current session context."
+                    "The next prompt will use this skill without persisting its instructions."
                         .to_owned(),
                 ],
             });

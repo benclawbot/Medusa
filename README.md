@@ -272,10 +272,12 @@ Installed skills are directly invokable by name. Built-in commands take preceden
 
 ```text
 /skills                         # list installed skills
-/release                        # add the release skill on the next prompt
+/release                        # use the release skill on the next prompt
 /release prepare version 1.0    # run a task with the release skill immediately
 /release@user                   # select a scoped definition when names collide
 ```
+
+Selected skill instructions are applied as ephemeral system context for the active task and are not written into durable session messages.
 
 ### Browser tools
 

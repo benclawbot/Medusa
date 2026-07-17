@@ -33,6 +33,14 @@ pub(crate) fn content_with_session_goal(
 }
 
 pub(crate) fn system_prompt(mode: Mode, repo: &Path) -> String {
+    system_prompt_with_context(mode, repo, None)
+}
+
+pub(crate) fn system_prompt_with_context(
+    mode: Mode,
+    repo: &Path,
+    additional_context: Option<&str>,
+) -> String {
     let base = if mode == Mode::ReadOnly {
         PLAN_SYSTEM_PROMPT
     } else {
@@ -64,6 +72,13 @@ pub(crate) fn system_prompt(mode: Mode, repo: &Path) -> String {
                     .unwrap_or_default()
             ));
         }
+    }
+    if let Some(context) = additional_context
+        .map(str::trim)
+        .filter(|context| !context.is_empty())
+    {
+        prompt.push_str("\n\nExplicit user-selected context for the current agent turn:\n");
+        prompt.push_str(context);
     }
     prompt
 }
