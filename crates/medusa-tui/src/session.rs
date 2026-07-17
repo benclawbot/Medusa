@@ -298,6 +298,9 @@ pub(super) fn drain_runtime_events(
             RuntimeEvent::Started => {
                 app.begin_run();
             }
+            RuntimeEvent::AssistantText(text) => {
+                app.record_assistant_text(text);
+            }
             RuntimeEvent::Activity(activity) => {
                 app.record_activity(TranscriptActivity {
                     id: activity.id,

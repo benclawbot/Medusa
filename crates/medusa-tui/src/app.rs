@@ -300,7 +300,34 @@ impl AppState {
         self.task_list_visible = true;
     }
 
+    pub fn record_assistant_text(&mut self, text: String) {
+        let text = text.trim_end().to_owned();
+        if !text.trim().is_empty() {
+            self.transcript.push(TranscriptEntry::Assistant(text));
+        }
+    }
+
     pub fn open_question(&mut self, questions: Vec<QuestionPrompt>) {
+        let question_text = questions
+            .iter()
+            .map(|prompt| {
+                let mut lines = vec![format!("{}: {}", prompt.header, prompt.question)];
+                if !prompt.options.is_empty() {
+                    lines.push(format!(
+                        "Options: {}",
+                        prompt
+                            .options
+                            .iter()
+                            .map(|option| option.label.as_str())
+                            .collect::<Vec<_>>()
+                            .join(" · ")
+                    ));
+                }
+                lines.join("\n")
+            })
+            .collect::<Vec<_>>()
+            .join("\n\n");
+        self.record_assistant_text(question_text);
         self.question_modal = Some(QuestionModal::new(questions));
         self.status = "waiting for your answer".to_owned();
         self.finish_run();

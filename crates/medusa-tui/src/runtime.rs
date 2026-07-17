@@ -45,6 +45,7 @@ pub enum RuntimeCommand {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum RuntimeEvent {
     Started,
+    AssistantText(String),
     Activity(RuntimeActivity),
     Plan(TranscriptPlan),
     Question(RuntimeQuestion),

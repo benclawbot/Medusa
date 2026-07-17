@@ -311,4 +311,22 @@ mod tests {
         assert_eq!(composer.draft.text, "a");
         assert_eq!(composer.cursor, 1);
     }
+
+    #[test]
+    fn spacebar_is_inserted_as_regular_text() {
+        let mut composer = ComposerState::new("hello");
+        composer
+            .handle_event(Event::Key(KeyEvent::new(
+                KeyCode::Char(' '),
+                KeyModifiers::NONE,
+            )))
+            .expect("spacebar");
+        composer
+            .handle_event(Event::Key(KeyEvent::new(
+                KeyCode::Char('w'),
+                KeyModifiers::NONE,
+            )))
+            .expect("word");
+        assert_eq!(composer.draft.text, "hello w");
+    }
 }

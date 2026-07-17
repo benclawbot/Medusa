@@ -402,3 +402,51 @@ fn question_modal_tabs_answers_and_requires_confirmation_before_submission() {
     ));
     assert_eq!(app.composer.draft.text, "draft text");
 }
+
+#[test]
+fn clarification_question_and_confirmed_answer_stay_in_transcript() {
+    let repository = tempdir().expect("temporary repository");
+    let mut app = AppState::new(
+        repository.path().to_path_buf(),
+        "question-transcript",
+        "",
+        Arc::new(FakeClipboard(ClipboardContent::Empty)),
+    )
+    .expect("create app");
+    app.open_question(vec![QuestionPrompt {
+        header: "Audience".to_owned(),
+        question: "Who is this for?".to_owned(),
+        options: vec![QuestionOption {
+            label: "Customers".to_owned(),
+            description: "Public visitors".to_owned(),
+        }],
+        multi_select: false,
+    }]);
+    assert!(matches!(
+        app.transcript.first(),
+        Some(TranscriptEntry::Assistant(text))
+            if text.contains("Who is this for?") && text.contains("Customers")
+    ));
+    assert_eq!(
+        app.handle_event(Event::Key(crossterm::event::KeyEvent::new(
+            KeyCode::Enter,
+            KeyModifiers::NONE,
+        )))
+        .expect("select answer"),
+        AppAction::Redraw
+    );
+    let action = app
+        .handle_event(Event::Key(crossterm::event::KeyEvent::new(
+            KeyCode::Enter,
+            KeyModifiers::NONE,
+        )))
+        .expect("confirm answer");
+    assert_eq!(
+        action,
+        AppAction::AnswerQuestion("Audience: Customers".to_owned())
+    );
+    assert!(matches!(
+        app.transcript.last(),
+        Some(TranscriptEntry::User(draft)) if draft.text == "Audience: Customers"
+    ));
+}

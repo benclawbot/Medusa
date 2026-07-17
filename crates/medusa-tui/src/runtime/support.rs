@@ -344,16 +344,9 @@ pub(super) fn forward_update(
                 details: evidence.iter().map(|line| summarize(line)).collect(),
             }));
         }
-        // Keep the assistant's milestone, but not the expanded narrative that follows it.
-        // Tool arguments and results remain in the durable session for the model.
         AgentUpdate::AssistantText(text) => {
-            if let Some(title) = assistant_title(text) {
-                let _ = events.send(RuntimeEvent::Activity(RuntimeActivity {
-                    id: None,
-                    kind: RuntimeActivityKind::Assistant,
-                    title,
-                    details: Vec::new(),
-                }));
+            if !text.trim().is_empty() {
+                let _ = events.send(RuntimeEvent::AssistantText(text.clone()));
             }
         }
         AgentUpdate::Plan(steps) => {
@@ -516,16 +509,6 @@ fn summarize(value: &str) -> String {
     compact.chars().take(137).chain("...".chars()).collect()
 }
 
-fn assistant_title(text: &str) -> Option<String> {
-    let line = text.lines().map(str::trim).find(|line| !line.is_empty())?;
-    let title = line
-        .trim_start_matches(|character: char| {
-            character.is_ascii_whitespace() || matches!(character, '-' | '*' | '#' | '>')
-        })
-        .trim();
-    (!title.is_empty()).then(|| summarize(title))
-}
-
 pub(super) fn objective_for(draft: &PromptDraft) -> String {
     let trimmed = draft.text.trim();
     if trimmed.is_empty() {
@@ -641,11 +624,6 @@ mod tests {
         );
         assert_eq!(summarize("short line"), "short line");
         assert!(summarize(&"x".repeat(150)).ends_with("..."));
-        assert_eq!(
-            assistant_title("\n## Milestone reached\nmore"),
-            Some("Milestone reached".to_owned())
-        );
-        assert_eq!(assistant_title("   \n"), None);
     }
 
     #[test]

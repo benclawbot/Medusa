@@ -48,29 +48,89 @@ pub(super) fn center_or_crop(line: &str, block_width: usize, width: u16) -> Stri
         .collect()
 }
 
-pub(super) fn transcript_lines(app: &AppState) -> Vec<StyledLine> {
+pub(crate) fn transcript_lines(app: &AppState, width: u16) -> Vec<StyledLine> {
     let mut lines = Vec::new();
     for entry in &app.transcript {
         match entry {
             TranscriptEntry::User(draft) => {
-                lines.push(StyledLine::with_marker(
-                    "> ",
+                let text = if draft.text.is_empty() {
+                    "(attachment-only prompt)"
+                } else {
+                    &draft.text
+                };
+                lines.extend(conversation_block_lines(
+                    "You     ",
                     Color::Cyan,
-                    draft.text.replace('\n', " / "),
-                    Color::White,
+                    text,
+                    Color::Grey,
+                    width,
                 ));
-                lines.extend(draft.attachments.iter().map(|attachment| {
-                    StyledLine::new(
-                        format!("  - {}", attachment_label(attachment)),
+                for attachment in &draft.attachments {
+                    lines.extend(conversation_block_lines(
+                        "        ",
                         Color::DarkGrey,
-                    )
-                }));
+                        &format!("[attachment] {}", attachment_label(attachment)),
+                        Color::DarkGrey,
+                        width,
+                    ));
+                }
             }
+            TranscriptEntry::Assistant(text) => lines.extend(conversation_block_lines(
+                "Medusa  ",
+                Color::Magenta,
+                text,
+                Color::White,
+                width,
+            )),
             TranscriptEntry::Activity(activity) => lines.extend(activity_lines(activity)),
             TranscriptEntry::System(message) => lines.push(system_line(message)),
         }
     }
     lines
+}
+
+fn conversation_block_lines(
+    first_marker: &str,
+    marker_color: Color,
+    text: &str,
+    foreground: Color,
+    width: u16,
+) -> Vec<StyledLine> {
+    let marker_width = first_marker.chars().count();
+    let content_width = usize::from(width).saturating_sub(marker_width).max(1);
+    let continuation = " ".repeat(marker_width);
+    let mut visual_rows = Vec::new();
+    for source_line in text.split('\n') {
+        if source_line.is_empty() {
+            visual_rows.push(String::new());
+            continue;
+        }
+        let characters = source_line.chars().collect::<Vec<_>>();
+        visual_rows.extend(
+            characters
+                .chunks(content_width)
+                .map(|chunk| chunk.iter().collect::<String>()),
+        );
+    }
+    if visual_rows.is_empty() {
+        visual_rows.push(String::new());
+    }
+    visual_rows
+        .into_iter()
+        .enumerate()
+        .map(|(index, row)| {
+            StyledLine::with_marker(
+                if index == 0 {
+                    first_marker.to_owned()
+                } else {
+                    continuation.clone()
+                },
+                marker_color,
+                row,
+                foreground,
+            )
+        })
+        .collect()
 }
 
 pub(super) fn set_frame_line(frame: &mut [StyledLine], row: usize, line: StyledLine) {

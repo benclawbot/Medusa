@@ -379,4 +379,31 @@ mod tests {
         assert_eq!(effort_label(100), "effort:medium");
         assert_eq!(effort_label(500), "effort:high");
     }
+
+    #[test]
+    fn conversation_preserves_user_and_medusa_multiline_text() {
+        let directory = tempfile::tempdir().expect("tempdir");
+        let mut app = AppState::new(
+            directory.path().to_path_buf(),
+            "conversation",
+            "",
+            Arc::new(UnsupportedClipboard),
+        )
+        .expect("app");
+        app.transcript.push(TranscriptEntry::User(PromptDraft {
+            text: "first user line\nsecond user line".to_owned(),
+            ..PromptDraft::default()
+        }));
+        app.record_assistant_text("first answer line\n\nsecond answer line".to_owned());
+        let lines = transcript_lines(&app, 80);
+        let text = lines
+            .iter()
+            .map(|line| line.text.as_str())
+            .collect::<Vec<_>>();
+        assert!(text.contains(&"first user line"));
+        assert!(text.contains(&"second user line"));
+        assert!(text.contains(&"first answer line"));
+        assert!(text.contains(&""));
+        assert!(text.contains(&"second answer line"));
+    }
 }
