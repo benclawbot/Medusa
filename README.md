@@ -262,9 +262,9 @@ medusa --continue
 | `Enter` | Submit the current prompt |
 | `Shift+Enter` | Insert a new line |
 | `Ctrl+V` | Paste clipboard text or attach a screenshot |
-| `Ctrl+C` | Cancel the active agent task |
+| `Ctrl+C` | Cancel the active agent task; press twice within 1 second to exit |
 | `Ctrl+D` | Exit when the composer is empty |
-| `Esc` | Exit the terminal interface |
+| `Esc` | Cancel the active agent task or close the current modal |
 
 Prompt drafts and clipboard attachments are persisted under the repository's `.medusa` state directory until submission.
 
