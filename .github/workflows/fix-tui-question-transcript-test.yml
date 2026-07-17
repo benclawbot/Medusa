@@ -1,11 +1,6 @@
 name: Fix TUI question transcript test
 
-on:
-  pull_request:
-    branches: [main]
-    paths:
-      - '.github/workflows/fix-tui-question-transcript-test.yml'
-      - 'crates/medusa-tui/src/app/tests.rs'
+on: pull_request
 
 permissions:
   contents: write
