@@ -25,12 +25,18 @@ pub(super) fn draw_portable(
     app: &AppState,
 ) -> io::Result<()> {
     let (width, height) = size()?;
-    draw_frame(
-        stdout,
-        width,
-        &render_frame(identity, app, width, height),
-        None,
-    )?;
+    let frame = render_frame(identity, app, width, height);
+    draw_portable_frame(stdout, width, &frame, None)
+}
+
+#[cfg(not(unix))]
+pub(super) fn draw_portable_frame(
+    stdout: &mut io::Stdout,
+    width: u16,
+    frame: &[StyledLine],
+    previous: Option<&[StyledLine]>,
+) -> io::Result<()> {
+    draw_frame(stdout, width, frame, previous)?;
     stdout.flush()
 }
 
