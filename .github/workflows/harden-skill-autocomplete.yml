@@ -25,6 +25,7 @@ jobs:
       - name: Apply bounded and contained discovery
         shell: bash
         run: |
+          set -o pipefail
           python3 - <<'PY'
           from pathlib import Path
 
@@ -143,48 +144,58 @@ jobs:
 
           marker = '''    #[test]
               fn colliding_skills_receive_scope_suffixes_and_invalid_duplicates_are_hidden() {
-          '''
-          replacement = '''    #[test]
-              fn invalid_skill_names_are_never_suggested() {
-                  for name in ["", ".", "..", "bad@name", "bad..name", "bad\\\\name"] {
-                      assert!(!valid_skill_name(name), "{name}");
-                  }
-                  assert!(valid_skill_name("release-tools"));
+          '''.replace('              fn', '    fn')
+          tests = '''    #[test]
+          fn invalid_skill_names_are_never_suggested() {
+              for name in ["", ".", "..", "bad@name", "bad..name", "bad\\\\name"] {
+                  assert!(!valid_skill_name(name), "{name}");
               }
+              assert!(valid_skill_name("release-tools"));
+          }
 
-              #[cfg(unix)]
-              #[test]
-              fn escaped_skill_symlink_is_not_suggested() {
-                  use std::os::unix::fs::symlink;
+          #[cfg(unix)]
+          #[test]
+          fn escaped_skill_symlink_is_not_suggested() {
+              use std::os::unix::fs::symlink;
 
-                  let repository = tempfile::tempdir().expect("repository");
-                  let outside = tempfile::tempdir().expect("outside directory");
-                  let outside_skill = outside.path().join("escaped");
-                  std::fs::create_dir_all(&outside_skill).expect("outside skill directory");
-                  std::fs::write(
-                      outside_skill.join("SKILL.md"),
-                      "description: Escaped instructions",
-                  )
-                  .expect("outside skill");
-                  let root = repository.path().join(".medusa/skills");
-                  std::fs::create_dir_all(&root).expect("skill root");
-                  symlink(&outside_skill, root.join("escaped")).expect("skill symlink");
+              let repository = tempfile::tempdir().expect("repository");
+              let outside = tempfile::tempdir().expect("outside directory");
+              let outside_skill = outside.path().join("escaped");
+              std::fs::create_dir_all(&outside_skill).expect("outside skill directory");
+              std::fs::write(
+                  outside_skill.join("SKILL.md"),
+                  "description: Escaped instructions",
+              )
+              .expect("outside skill");
+              let root = repository.path().join(".medusa/skills");
+              std::fs::create_dir_all(&root).expect("skill root");
+              symlink(&outside_skill, root.join("escaped")).expect("skill symlink");
 
-                  assert!(command_suggestions("/esc", repository.path()).is_empty());
-              }
+              assert!(command_suggestions("/esc", repository.path()).is_empty());
+          }
 
-              #[test]
-              fn colliding_skills_receive_scope_suffixes_and_invalid_duplicates_are_hidden() {
           '''
           if text.count(marker) != 1:
               raise SystemExit('expected collision test marker')
-          text = text.replace(marker, replacement, 1)
-
+          text = text.replace(marker, tests + marker, 1)
           path.write_text(text)
           PY
           cargo fmt --all
           git diff --check
-          cargo test -p medusa-tui commands::tests -- --nocapture
+          cargo test -p medusa-tui commands::tests -- --nocapture 2>&1 | tee hardening-tests.log
+      - name: Capture diagnostics
+        if: failure()
+        shell: bash
+        run: git diff -- . ':!Cargo.lock' > hardening.patch
+      - name: Upload diagnostics
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: skill-autocomplete-hardening-diagnostics
+          path: |
+            hardening-tests.log
+            hardening.patch
+          if-no-files-found: ignore
       - name: Commit hardening
         shell: bash
         run: |
