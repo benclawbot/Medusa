@@ -6,72 +6,13 @@ on:
   pull_request:
 
 permissions:
-  contents: write
+  contents: read
 
 concurrency:
   group: ci-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
-  apply-dynamic-skill-autocomplete:
-    if: github.head_ref == 'feat/dynamic-skill-autocomplete'
-    name: Apply dynamic skill autocomplete
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          ref: feat/dynamic-skill-autocomplete
-          fetch-depth: 0
-      - uses: dtolnay/rust-toolchain@1.88.0
-        with:
-          components: rustfmt
-      - name: Apply guarded patch and focused tests
-        shell: bash
-        run: |
-          set -o pipefail
-          sed -n "/python3 - <<'PY'/,/^          PY$/p" .github/workflows/apply-dynamic-skill-autocomplete.yml \
-            | sed '1d;$d;s/^          //' > /tmp/apply_dynamic_skill_autocomplete.py
-          test -s /tmp/apply_dynamic_skill_autocomplete.py
-          python3 - <<'PY'
-          from pathlib import Path
-          path = Path('/tmp/apply_dynamic_skill_autocomplete.py')
-          text = path.read_text()
-          text = text.replace(
-              "if 'repository: PathBuf,' not in text:",
-              "if 'pub struct AppState {\\n    repository: PathBuf,' not in text:",
-              1,
-          )
-          path.write_text(text)
-          PY
-          python3 /tmp/apply_dynamic_skill_autocomplete.py
-          cargo fmt --all
-          git diff --check
-          cargo test -p medusa-tui 2>&1 | tee autocomplete-tests.log
-      - name: Capture autocomplete diagnostics
-        if: failure()
-        shell: bash
-        run: git diff -- . ':!Cargo.lock' > autocomplete.patch
-      - name: Upload autocomplete diagnostics
-        if: failure()
-        uses: actions/upload-artifact@v4
-        with:
-          name: autocomplete-diagnostics
-          path: |
-            autocomplete-tests.log
-            autocomplete.patch
-          if-no-files-found: error
-      - name: Commit implementation when needed
-        shell: bash
-        run: |
-          if git diff --quiet; then
-            exit 0
-          fi
-          git config user.name github-actions[bot]
-          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
-          git add README.md crates/medusa-tui/src/commands.rs crates/medusa-tui/src/app.rs crates/medusa-tui/src/render.rs
-          git commit -m "feat(tui): autocomplete installed skills"
-          git push origin HEAD:feat/dynamic-skill-autocomplete
-
   quality:
     name: Workspace quality
     runs-on: ubuntu-latest
