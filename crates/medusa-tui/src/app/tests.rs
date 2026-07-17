@@ -373,7 +373,12 @@ fn question_modal_tabs_answers_and_requires_confirmation_before_submission() {
             .active_question(),
         1
     );
-    assert!(app.transcript.is_empty());
+    assert!(matches!(
+        app.transcript.as_slice(),
+        [TranscriptEntry::Assistant(text)]
+            if text.contains("Which project should I use?")
+                && text.contains("Who is this for?")
+    ));
     assert_eq!(
         app.handle_event(Event::Key(crossterm::event::KeyEvent::new(
             KeyCode::Enter,
@@ -383,7 +388,7 @@ fn question_modal_tabs_answers_and_requires_confirmation_before_submission() {
         AppAction::Redraw
     );
     assert!(app.question_modal().expect("review answers").is_reviewing());
-    assert!(app.transcript.is_empty());
+    assert_eq!(app.transcript.len(), 1);
     let action = app
         .handle_event(Event::Key(crossterm::event::KeyEvent::new(
             KeyCode::Enter,
