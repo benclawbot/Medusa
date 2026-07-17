@@ -585,7 +585,8 @@ fn execute_slash_command(
                 title: "Skill loaded".to_owned(),
                 details: vec![
                     label,
-                    "The next prompt will add this skill to the current session context.".to_owned(),
+                    "The next prompt will add this skill to the current session context."
+                        .to_owned(),
                 ],
             });
         }
