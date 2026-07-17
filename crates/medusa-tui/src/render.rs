@@ -1,6 +1,7 @@
 pub(super) mod support;
 
 use super::*;
+use support::wrap_to_width;
 pub(crate) use support::*;
 
 #[cfg(unix)]
