@@ -1,0 +1,182 @@
+name: Apply TUI conversation transcript
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - '.github/workflows/apply-tui-conversation-transcript.yml'
+      - 'crates/medusa-tui/**'
+
+permissions:
+  contents: write
+
+concurrency:
+  group: apply-tui-conversation-transcript-${{ github.event.pull_request.number }}
+  cancel-in-progress: false
+
+jobs:
+  apply:
+    if: github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.ref }}
+          fetch-depth: 0
+      - uses: dtolnay/rust-toolchain@1.88.0
+      - name: Apply idempotent transcript patch
+        shell: python
+        run: |
+          from pathlib import Path
+
+          def replace_once(path: str, old: str, new: str) -> None:
+              target = Path(path)
+              text = target.read_text()
+              if new in text:
+                  return
+              count = text.count(old)
+              if count != 1:
+                  raise SystemExit(f"{path}: expected one old snippet, found {count}")
+              target.write_text(text.replace(old, new, 1))
+
+          replace_once(
+              "crates/medusa-tui/src/app/models.rs",
+              """pub enum TranscriptEntry {\n    User(PromptDraft),\n    Activity(TranscriptActivity),\n    System(String),\n}""",
+              """pub enum TranscriptEntry {\n    User(PromptDraft),\n    Assistant(String),\n    Activity(TranscriptActivity),\n    System(String),\n}""",
+          )
+
+          replace_once(
+              "crates/medusa-tui/src/runtime.rs",
+              """pub enum RuntimeEvent {\n    Started,\n    Activity(RuntimeActivity),\n    Plan(TranscriptPlan),""",
+              """pub enum RuntimeEvent {\n    Started,\n    AssistantText(String),\n    Activity(RuntimeActivity),\n    Plan(TranscriptPlan),""",
+          )
+
+          replace_once(
+              "crates/medusa-tui/src/runtime/support.rs",
+              """        // Keep the assistant's milestone, but not the expanded narrative that follows it.\n        // Tool arguments and results remain in the durable session for the model.\n        AgentUpdate::AssistantText(text) => {\n            if let Some(title) = assistant_title(text) {\n                let _ = events.send(RuntimeEvent::Activity(RuntimeActivity {\n                    id: None,\n                    kind: RuntimeActivityKind::Assistant,\n                    title,\n                    details: Vec::new(),\n                }));\n            }\n        }""",
+              """        AgentUpdate::AssistantText(text) => {\n            if !text.trim().is_empty() {\n                let _ = events.send(RuntimeEvent::AssistantText(text.clone()));\n            }\n        }""",
+          )
+
+          replace_once(
+              "crates/medusa-tui/src/runtime/support.rs",
+              """fn assistant_title(text: &str) -> Option<String> {\n    let line = text.lines().map(str::trim).find(|line| !line.is_empty())?;\n    let title = line\n        .trim_start_matches(|character: char| {\n            character.is_ascii_whitespace() || matches!(character, '-' | '*' | '#' | '>')\n        })\n        .trim();\n    (!title.is_empty()).then(|| summarize(title))\n}\n\n""",
+              """""",
+          )
+
+          replace_once(
+              "crates/medusa-tui/src/runtime/support.rs",
+              """        assert_eq!(\n            assistant_title(\"\\n## Milestone reached\\nmore\"),\n            Some(\"Milestone reached\".to_owned())\n        );\n        assert_eq!(assistant_title(\"   \\n\"), None);\n""",
+              """""",
+          )
+
+          replace_once(
+              "crates/medusa-tui/src/app.rs",
+              """    pub fn open_question(&mut self, questions: Vec<QuestionPrompt>) {\n        self.question_modal = Some(QuestionModal::new(questions));\n        self.status = \"waiting for your answer\".to_owned();\n        self.finish_run();\n    }""",
+              """    pub fn record_assistant_text(&mut self, text: String) {\n        let text = text.trim_end().to_owned();\n        if !text.trim().is_empty() {\n            self.transcript.push(TranscriptEntry::Assistant(text));\n        }\n    }\n\n    pub fn open_question(&mut self, questions: Vec<QuestionPrompt>) {\n        let question_text = questions\n            .iter()\n            .map(|prompt| {\n                let mut lines = vec![format!(\"{}: {}\", prompt.header, prompt.question)];\n                if !prompt.options.is_empty() {\n                    lines.push(format!(\n                        \"Options: {}\",\n                        prompt\n                            .options\n                            .iter()\n                            .map(|option| option.label.as_str())\n                            .collect::<Vec<_>>()\n                            .join(\" · \")\n                    ));\n                }\n                lines.join(\"\\n\")\n            })\n            .collect::<Vec<_>>()\n            .join(\"\\n\\n\");\n        self.record_assistant_text(question_text);\n        self.question_modal = Some(QuestionModal::new(questions));\n        self.status = \"waiting for your answer\".to_owned();\n        self.finish_run();\n    }""",
+          )
+
+          replace_once(
+              "crates/medusa-tui/src/session.rs",
+              """            RuntimeEvent::Activity(activity) => {\n                app.record_activity(TranscriptActivity {""",
+              """            RuntimeEvent::AssistantText(text) => {\n                app.record_assistant_text(text);\n            }\n            RuntimeEvent::Activity(activity) => {\n                app.record_activity(TranscriptActivity {""",
+          )
+
+          replace_once(
+              "crates/medusa-tui/src/render.rs",
+              """    let mut lines = Vec::new();\n    for entry in &app.transcript {\n        match entry {\n            TranscriptEntry::User(draft) => {\n                lines.push(StyledLine::with_marker(\n                    \"> \",\n                    Color::Cyan,\n                    draft.text.replace('\\n', \" / \"),\n                    Color::White,\n                ));\n                lines.extend(draft.attachments.iter().map(|attachment| {\n                    StyledLine::new(\n                        format!(\"  └ {}\", attachment_label(attachment)),\n                        Color::DarkGrey,\n                    )\n                }));\n            }\n            TranscriptEntry::Activity(activity) => lines.extend(activity_lines(activity)),\n            TranscriptEntry::System(message) => lines.push(system_line(message)),\n        }\n    }""",
+              """    let mut lines = transcript_lines(app, width);""",
+          )
+
+          replace_once(
+              "crates/medusa-tui/src/render.rs",
+              "let mut content = transcript_lines(app);",
+              "let mut content = transcript_lines(app, width);",
+          )
+
+          replace_once(
+              "crates/medusa-tui/src/render/support.rs",
+              """pub(super) fn transcript_lines(app: &AppState) -> Vec<StyledLine> {\n    let mut lines = Vec::new();\n    for entry in &app.transcript {\n        match entry {\n            TranscriptEntry::User(draft) => {\n                lines.push(StyledLine::with_marker(\n                    \"> \",\n                    Color::Cyan,\n                    draft.text.replace('\\n', \" / \"),\n                    Color::White,\n                ));\n                lines.extend(draft.attachments.iter().map(|attachment| {\n                    StyledLine::new(\n                        format!(\"  - {}\", attachment_label(attachment)),\n                        Color::DarkGrey,\n                    )\n                }));\n            }\n            TranscriptEntry::Activity(activity) => lines.extend(activity_lines(activity)),\n            TranscriptEntry::System(message) => lines.push(system_line(message)),\n        }\n    }\n    lines\n}""",
+              """pub(super) fn transcript_lines(app: &AppState, width: u16) -> Vec<StyledLine> {\n    let mut lines = Vec::new();\n    for entry in &app.transcript {\n        match entry {\n            TranscriptEntry::User(draft) => {\n                let text = if draft.text.is_empty() {\n                    \"(attachment-only prompt)\"\n                } else {\n                    &draft.text\n                };\n                lines.extend(conversation_block_lines(\n                    \"You     \",\n                    Color::Cyan,\n                    text,\n                    Color::Grey,\n                    width,\n                ));\n                for attachment in &draft.attachments {\n                    lines.extend(conversation_block_lines(\n                        \"        \",\n                        Color::DarkGrey,\n                        &format!(\"[attachment] {}\", attachment_label(attachment)),\n                        Color::DarkGrey,\n                        width,\n                    ));\n                }\n            }\n            TranscriptEntry::Assistant(text) => lines.extend(conversation_block_lines(\n                \"Medusa  \",\n                Color::Magenta,\n                text,\n                Color::White,\n                width,\n            )),\n            TranscriptEntry::Activity(activity) => lines.extend(activity_lines(activity)),\n            TranscriptEntry::System(message) => lines.push(system_line(message)),\n        }\n    }\n    lines\n}\n\nfn conversation_block_lines(\n    first_marker: &str,\n    marker_color: Color,\n    text: &str,\n    foreground: Color,\n    width: u16,\n) -> Vec<StyledLine> {\n    let marker_width = first_marker.chars().count();\n    let content_width = usize::from(width).saturating_sub(marker_width).max(1);\n    let continuation = \" \".repeat(marker_width);\n    let mut visual_rows = Vec::new();\n    for source_line in text.split('\\n') {\n        if source_line.is_empty() {\n            visual_rows.push(String::new());\n            continue;\n        }\n        let characters = source_line.chars().collect::<Vec<_>>();\n        visual_rows.extend(\n            characters\n                .chunks(content_width)\n                .map(|chunk| chunk.iter().collect::<String>()),\n        );\n    }\n    if visual_rows.is_empty() {\n        visual_rows.push(String::new());\n    }\n    visual_rows\n        .into_iter()\n        .enumerate()\n        .map(|(index, row)| {\n            StyledLine::with_marker(\n                if index == 0 {\n                    first_marker.to_owned()\n                } else {\n                    continuation.clone()\n                },\n                marker_color,\n                row,\n                foreground,\n            )\n        })\n        .collect()\n}""",
+          )
+
+          replace_once(
+              "crates/medusa-tui/src/runtime/tests.rs",
+              "fn internal_plan_transport_is_hidden_and_assistant_narration_is_one_headline() {",
+              "fn internal_plan_transport_is_hidden_and_assistant_text_is_forwarded_verbatim() {",
+          )
+
+          replace_once(
+              "crates/medusa-tui/src/runtime/tests.rs",
+              """    let RuntimeEvent::Activity(activity) = receiver.recv().expect(\"assistant milestone\") else {\n        panic!(\"expected assistant milestone\");\n    };\n    assert_eq!(activity.kind, RuntimeActivityKind::Assistant);\n    assert_eq!(activity.title, \"Now I have a clear picture. Key findings:\");\n    assert!(activity.details.is_empty());""",
+              """    assert_eq!(\n        receiver.recv().expect(\"assistant text\"),\n        RuntimeEvent::AssistantText(\n            \"Now I have a clear picture. Key findings:\\n\\n1. First detail\\n2. Second detail\"\n                .to_owned()\n        )\n    );""",
+          )
+
+          replace_once(
+              "crates/medusa-tui/src/input.rs",
+              """    #[test]\n    fn unicode_backspace_removes_one_scalar() {""",
+              """    #[test]\n    fn spacebar_is_inserted_as_regular_text() {\n        let mut composer = ComposerState::new(\"hello\");\n        composer\n            .handle_event(Event::Key(KeyEvent::new(\n                KeyCode::Char(' '),\n                KeyModifiers::NONE,\n            )))\n            .expect(\"spacebar\");\n        composer\n            .handle_event(Event::Key(KeyEvent::new(\n                KeyCode::Char('w'),\n                KeyModifiers::NONE,\n            )))\n            .expect(\"word\");\n        assert_eq!(composer.draft.text, \"hello w\");\n    }\n\n    #[test]\n    fn unicode_backspace_removes_one_scalar() {""",
+          )
+
+          replace_once(
+              "crates/medusa-tui/src/lib.rs",
+              """    #[test]\n    fn tool_and_assistant_activities_render_without_detail_rows() {\n        for kind in [\n            TranscriptActivityKind::Tool,\n            TranscriptActivityKind::Assistant,\n        ] {\n            let lines = activity_lines(&TranscriptActivity {\n                id: None,\n                kind,\n                title: \"High-level step\".to_owned(),\n                details: vec![\"argument: private detail\".to_owned()],\n            });\n            assert_eq!(lines.len(), 1);\n            assert_eq!(lines[0].text, \"High-level step\");\n        }\n    }""",
+              """    #[test]\n    fn tool_activity_stays_compact_while_conversation_preserves_multiline_text() {\n        let tool_lines = activity_lines(&TranscriptActivity {\n            id: None,\n            kind: TranscriptActivityKind::Tool,\n            title: \"Read(src/lib.rs)\".to_owned(),\n            details: vec![\"argument: private detail\".to_owned()],\n        });\n        assert_eq!(tool_lines.len(), 1);\n        assert_eq!(tool_lines[0].text, \"Read(src/lib.rs)\");\n\n        let directory = tempfile::tempdir().expect(\"tempdir\");\n        let mut app = AppState::new(\n            directory.path().to_path_buf(),\n            \"conversation\",\n            \"\",\n            Arc::new(UnsupportedClipboard),\n        )\n        .expect(\"app\");\n        app.transcript.push(TranscriptEntry::User(PromptDraft {\n            text: \"first user line\\nsecond user line\".to_owned(),\n            ..PromptDraft::default()\n        }));\n        app.record_assistant_text(\"first answer line\\n\\nsecond answer line\".to_owned());\n        let lines = transcript_lines(&app, 80);\n        let text = lines\n            .iter()\n            .map(|line| line.text.as_str())\n            .collect::<Vec<_>>();\n        assert!(text.contains(&\"first user line\"));\n        assert!(text.contains(&\"second user line\"));\n        assert!(text.contains(&\"first answer line\"));\n        assert!(text.contains(&\"\"));\n        assert!(text.contains(&\"second answer line\"));\n    }""",
+          )
+
+          replace_once(
+              "crates/medusa-tui/src/app/tests.rs",
+              """    assert_eq!(\n        app.handle_event(Event::Key(crossterm::event::KeyEvent::new(\n            KeyCode::Enter,\n            KeyModifiers::NONE,\n        )))\n        .expect(\"answer first question\"),\n        AppAction::Redraw\n    );""",
+              """    assert!(matches!(\n        app.transcript.first(),\n        Some(TranscriptEntry::Assistant(text))\n            if text.contains(\"Which project should I use?\")\n                && text.contains(\"Who is this for?\")\n    ));\n    assert_eq!(\n        app.handle_event(Event::Key(crossterm::event::KeyEvent::new(\n            KeyCode::Enter,\n            KeyModifiers::NONE,\n        )))\n        .expect(\"answer first question\"),\n        AppAction::Redraw\n    );""",
+          )
+
+          replace_once(
+              "crates/medusa-tui/src/app/tests.rs",
+              """    assert!(app.transcript.is_empty());\n    assert_eq!(\n        app.handle_event(Event::Key(crossterm::event::KeyEvent::new(\n            KeyCode::Enter,\n            KeyModifiers::NONE,\n        )))\n        .expect(\"answer second question\"),""",
+              """    assert_eq!(app.transcript.len(), 1);\n    assert_eq!(\n        app.handle_event(Event::Key(crossterm::event::KeyEvent::new(\n            KeyCode::Enter,\n            KeyModifiers::NONE,\n        )))\n        .expect(\"answer second question\"),""",
+          )
+
+          replace_once(
+              "crates/medusa-tui/src/app/tests.rs",
+              """    assert!(app.question_modal().expect(\"review answers\").is_reviewing());\n    assert!(app.transcript.is_empty());\n    let action = app""",
+              """    assert!(app.question_modal().expect(\"review answers\").is_reviewing());\n    assert_eq!(app.transcript.len(), 1);\n    let action = app""",
+          )
+
+          replace_once(
+              "crates/medusa-tui/src/app/tests.rs",
+              """    let AppAction::AnswerQuestion(answer) = action else {\n        panic!(\"expected answer action\");\n    };""",
+              """    let AppAction::AnswerQuestion(answer) = action else {\n        panic!(\"expected answer action\");\n    };\n    assert!(matches!(\n        app.transcript.last(),\n        Some(TranscriptEntry::User(draft))\n            if draft.text.contains(\"Project: Projects/site-a\")\n                && draft.text.contains(\"Audience: Customers\")\n    ));""",
+          )
+
+          stale = [
+              "assistant_narration_is_one_headline",
+              "assistant_title(",
+              "draft.text.replace('\\n', \" / \")",
+          ]
+          for needle in stale:
+              for path in [
+                  Path("crates/medusa-tui/src/runtime/tests.rs"),
+                  Path("crates/medusa-tui/src/runtime/support.rs"),
+                  Path("crates/medusa-tui/src/render/support.rs"),
+              ]:
+                  if needle in path.read_text():
+                      raise SystemExit(f"stale contract {needle!r} remains in {path}")
+      - name: Format
+        run: cargo fmt --all -- --check || (cargo fmt --all && cargo fmt --all -- --check)
+      - name: Focused transcript tests
+        run: |
+          cargo test -p medusa-tui internal_plan_transport_is_hidden_and_assistant_text_is_forwarded_verbatim -- --exact
+          cargo test -p medusa-tui tool_activity_stays_compact_while_conversation_preserves_multiline_text -- --exact
+          cargo test -p medusa-tui question_modal_tabs_answers_and_requires_confirmation_before_submission -- --exact
+          cargo test -p medusa-tui spacebar_is_inserted_as_regular_text -- --exact
+          cargo test -p medusa-tui ctrl_v_pastes_clipboard_content -- --exact
+      - name: Commit production changes
+        run: |
+          if git diff --quiet; then
+            echo "Patch already applied and tests passed."
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add crates/medusa-tui
+          git commit -m "feat(tui): preserve full conversation transcript"
+          git push origin HEAD:${{ github.event.pull_request.head.ref }}
