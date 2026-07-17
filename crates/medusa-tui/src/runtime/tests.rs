@@ -72,6 +72,61 @@ fn attached_utf8_file_is_bounded_and_included() {
 }
 
 #[test]
+fn provider_usage_forwards_input_output_cache_and_model_time() {
+    let (sender, receiver) = mpsc::channel();
+    let mut state = UpdateState::new();
+    forward_update(
+        &AgentUpdate::Event(EventPayload::ModelRequestStarted {
+            provider: "minimax".to_owned(),
+            model: "MiniMax-M3".to_owned(),
+        }),
+        &sender,
+        &mut state,
+    );
+    forward_update(
+        &AgentUpdate::Event(EventPayload::ModelResponseReceived {
+            response_id: Some("response-1".to_owned()),
+            usage: json!({
+                "input_tokens": 120,
+                "output_tokens": 30,
+                "cache_read_input_tokens": 80,
+                "cache_creation_input_tokens": 20
+            }),
+        }),
+        &sender,
+        &mut state,
+    );
+
+    assert!(matches!(
+        receiver.recv().expect("usage event"),
+        RuntimeEvent::Usage {
+            input_tokens: 120,
+            output_tokens: 30,
+            cache_read_input_tokens: 80,
+            cache_creation_input_tokens: 20,
+            model_elapsed_millis,
+        } if model_elapsed_millis >= 1
+    ));
+
+    forward_update(
+        &AgentUpdate::Event(EventPayload::ModelResponseReceived {
+            response_id: Some("unpaired-response".to_owned()),
+            usage: json!({"output_tokens": 5}),
+        }),
+        &sender,
+        &mut state,
+    );
+    assert!(matches!(
+        receiver.recv().expect("unpaired usage event"),
+        RuntimeEvent::Usage {
+            output_tokens: 5,
+            model_elapsed_millis: 0,
+            ..
+        }
+    ));
+}
+
+#[test]
 fn tool_call_is_shown_as_one_high_level_row() {
     let (sender, receiver) = mpsc::channel();
     let mut state = UpdateState::new();

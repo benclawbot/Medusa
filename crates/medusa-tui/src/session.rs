@@ -87,6 +87,7 @@ pub(super) fn run_loop(
     let mut last_ctrl_c = None;
     loop {
         drain_runtime_events(app, runtime)?;
+        app.tick();
         let (jobs, daemon_status) = match client.request(Request::List) {
             Ok(Response::Jobs { jobs }) => (jobs, "connected".to_owned()),
             Ok(other) => (Vec::new(), format!("unexpected response: {other:?}")),
@@ -317,8 +318,20 @@ pub(super) fn drain_runtime_events(
             RuntimeEvent::Question(question) => {
                 app.open_question(question.questions);
             }
-            RuntimeEvent::Usage { output_tokens } => {
-                app.add_output_tokens(output_tokens);
+            RuntimeEvent::Usage {
+                input_tokens,
+                output_tokens,
+                cache_read_input_tokens,
+                cache_creation_input_tokens,
+                model_elapsed_millis,
+            } => {
+                app.record_usage(
+                    input_tokens,
+                    output_tokens,
+                    cache_read_input_tokens,
+                    cache_creation_input_tokens,
+                    model_elapsed_millis,
+                );
             }
             RuntimeEvent::Progress { turn } => {
                 app.update_turn(turn);

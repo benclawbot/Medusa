@@ -47,8 +47,14 @@ pub(super) struct PortableRenderSnapshot {
     status: String,
     transcript: Vec<TranscriptEntry>,
     plan: Option<app::TranscriptPlan>,
-    token_count: u64,
-    elapsed_seconds: Option<u64>,
+    input_tokens: u64,
+    output_tokens: u64,
+    timed_output_tokens: u64,
+    cache_read_input_tokens: u64,
+    cache_creation_input_tokens: u64,
+    model_elapsed_millis: u64,
+    run_elapsed_seconds: Option<u64>,
+    session_elapsed_seconds: u64,
     draft: PromptDraft,
     command_selection: usize,
     model_label: Option<String>,
@@ -69,8 +75,14 @@ pub(super) fn portable_render_snapshot(
         status: app.status.clone(),
         transcript: app.transcript.clone(),
         plan: app.plan.clone(),
-        token_count: app.token_count,
-        elapsed_seconds: app.elapsed_seconds(),
+        input_tokens: app.input_tokens,
+        output_tokens: app.output_tokens,
+        timed_output_tokens: app.timed_output_tokens,
+        cache_read_input_tokens: app.cache_read_input_tokens,
+        cache_creation_input_tokens: app.cache_creation_input_tokens,
+        model_elapsed_millis: app.model_elapsed_millis,
+        run_elapsed_seconds: app.elapsed_seconds(),
+        session_elapsed_seconds: app.session_elapsed_seconds(),
         draft: app.composer.draft.clone(),
         command_selection: app.command_selection,
         model_label: app.model_label.clone(),
@@ -84,11 +96,32 @@ pub(super) fn portable_render_snapshot(
 
 pub(super) fn running_status(app: &AppState) -> String {
     format!(
-        "{} ({} · ↑ {} tokens)",
+        "{} ({} · turn {})",
         app.status,
         format_elapsed(app.elapsed_seconds().unwrap_or_default()),
-        format_token_count(app.token_count)
+        app.active_turn
     )
+}
+
+pub(super) fn session_metrics_line(app: &AppState) -> String {
+    let rate = app
+        .output_tokens_per_second()
+        .map_or_else(|| "—".to_owned(), format_token_rate);
+    format!(
+        "session {} · in {} · out {} · cached {} ({:.0}%) · {rate} tok/s",
+        format_elapsed(app.session_elapsed_seconds()),
+        format_token_count(app.total_input_tokens()),
+        format_token_count(app.output_tokens),
+        format_token_count(app.cache_read_input_tokens),
+        app.cache_read_percentage(),
+    )
+}
+
+fn format_token_rate(tokens_per_second: f64) -> String {
+    if tokens_per_second < 1_000.0 {
+        return format!("{tokens_per_second:.1}");
+    }
+    format!("{:.1}k", tokens_per_second / 1_000.0)
 }
 
 pub(super) fn format_elapsed(seconds: u64) -> String {
@@ -179,7 +212,8 @@ pub(super) fn legacy_draw_common(
         ResetColor,
         Print("\r\n"),
     )?;
-    let header_height = HEADER_TOP_PADDING + 4;
+    StyledLine::new(session_metrics_line(app), Color::DarkGrey).print(stdout, width)?;
+    let header_height = HEADER_TOP_PADDING + 5;
     let model_modal = app.model_modal();
     let modal_lines = model_modal.map(model_modal_lines).unwrap_or_default();
     let suggestions = if model_modal.is_none() {
@@ -342,8 +376,14 @@ pub(super) fn render_frame(
             Color::Magenta,
         ),
     );
+    row = row.saturating_add(1);
+    set_frame_line(
+        &mut frame,
+        row,
+        StyledLine::new(session_metrics_line(app), Color::DarkGrey),
+    );
 
-    let header_height = HEADER_TOP_PADDING + 4;
+    let header_height = HEADER_TOP_PADDING + 5;
     let question_modal = app.question_modal();
     let model_modal = app.model_modal();
     let modal_lines = question_modal

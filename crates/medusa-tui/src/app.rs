@@ -49,7 +49,12 @@ pub struct AppState {
     pub transcript: Vec<TranscriptEntry>,
     pub plan: Option<TranscriptPlan>,
     pub status: String,
-    pub token_count: u64,
+    pub input_tokens: u64,
+    pub output_tokens: u64,
+    pub timed_output_tokens: u64,
+    pub cache_read_input_tokens: u64,
+    pub cache_creation_input_tokens: u64,
+    pub model_elapsed_millis: u64,
     pub active_turn: u32,
     pub command_selection: usize,
     pub model_label: Option<String>,
@@ -62,6 +67,8 @@ pub struct AppState {
     credential_configured: bool,
     model_modal: Option<ModelModal>,
     question_modal: Option<QuestionModal>,
+    session_started_at: Instant,
+    session_elapsed_seconds: u64,
     run_started_at: Option<Instant>,
     draft_store: DraftStore,
     draft_key: String,
@@ -112,7 +119,12 @@ impl AppState {
             transcript: Vec::new(),
             plan: None,
             status: "ready".to_owned(),
-            token_count: 0,
+            input_tokens: 0,
+            output_tokens: 0,
+            timed_output_tokens: 0,
+            cache_read_input_tokens: 0,
+            cache_creation_input_tokens: 0,
+            model_elapsed_millis: 0,
             active_turn: 0,
             command_selection: 0,
             model_label: None,
@@ -125,6 +137,8 @@ impl AppState {
             credential_configured: false,
             model_modal: None,
             question_modal: None,
+            session_started_at: Instant::now(),
+            session_elapsed_seconds: 0,
             run_started_at: None,
             draft_store,
             draft_key,
@@ -242,8 +256,15 @@ impl AppState {
     pub fn clear_for_new_session(&mut self) {
         self.transcript.clear();
         self.plan = None;
-        self.token_count = 0;
+        self.input_tokens = 0;
+        self.output_tokens = 0;
+        self.timed_output_tokens = 0;
+        self.cache_read_input_tokens = 0;
+        self.cache_creation_input_tokens = 0;
+        self.model_elapsed_millis = 0;
         self.active_turn = 0;
+        self.session_started_at = Instant::now();
+        self.session_elapsed_seconds = 0;
         self.status = "new session".to_owned();
         self.plan_mode = false;
         self.task_list_visible = true;
@@ -611,7 +632,6 @@ impl AppState {
 
     pub fn begin_run(&mut self) {
         self.status = "Working".to_owned();
-        self.token_count = 0;
         self.active_turn = 0;
         self.spinner_frame = 0;
         self.run_started_at = Some(Instant::now());
@@ -622,12 +642,14 @@ impl AppState {
     }
 
     pub fn tick(&mut self) -> bool {
-        if self.is_running() {
+        let elapsed = self.session_started_at.elapsed().as_secs();
+        let session_changed = elapsed != self.session_elapsed_seconds;
+        self.session_elapsed_seconds = elapsed;
+        let spinner_changed = self.is_running();
+        if spinner_changed {
             self.spinner_frame = self.spinner_frame.wrapping_add(1);
-            true
-        } else {
-            false
         }
+        session_changed || spinner_changed
     }
 
     #[must_use]
@@ -644,8 +666,55 @@ impl AppState {
         self.active_turn = turn;
     }
 
-    pub fn add_output_tokens(&mut self, tokens: u64) {
-        self.token_count = self.token_count.saturating_add(tokens);
+    pub fn record_usage(
+        &mut self,
+        input_tokens: u64,
+        output_tokens: u64,
+        cache_read_input_tokens: u64,
+        cache_creation_input_tokens: u64,
+        model_elapsed_millis: u64,
+    ) {
+        self.input_tokens = self.input_tokens.saturating_add(input_tokens);
+        self.output_tokens = self.output_tokens.saturating_add(output_tokens);
+        if model_elapsed_millis > 0 {
+            self.timed_output_tokens = self.timed_output_tokens.saturating_add(output_tokens);
+        }
+        self.cache_read_input_tokens = self
+            .cache_read_input_tokens
+            .saturating_add(cache_read_input_tokens);
+        self.cache_creation_input_tokens = self
+            .cache_creation_input_tokens
+            .saturating_add(cache_creation_input_tokens);
+        self.model_elapsed_millis = self
+            .model_elapsed_millis
+            .saturating_add(model_elapsed_millis);
+    }
+
+    #[must_use]
+    pub fn total_input_tokens(&self) -> u64 {
+        self.input_tokens
+            .saturating_add(self.cache_read_input_tokens)
+            .saturating_add(self.cache_creation_input_tokens)
+    }
+
+    #[must_use]
+    pub fn cache_read_percentage(&self) -> f64 {
+        let total = self.total_input_tokens();
+        if total == 0 {
+            return 0.0;
+        }
+        self.cache_read_input_tokens as f64 * 100.0 / total as f64
+    }
+
+    #[must_use]
+    pub fn output_tokens_per_second(&self) -> Option<f64> {
+        (self.model_elapsed_millis > 0)
+            .then(|| self.timed_output_tokens as f64 * 1_000.0 / self.model_elapsed_millis as f64)
+    }
+
+    #[must_use]
+    pub fn session_elapsed_seconds(&self) -> u64 {
+        self.session_elapsed_seconds
     }
 
     #[must_use]

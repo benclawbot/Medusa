@@ -49,7 +49,11 @@ pub enum RuntimeEvent {
     Plan(TranscriptPlan),
     Question(RuntimeQuestion),
     Usage {
+        input_tokens: u64,
         output_tokens: u64,
+        cache_read_input_tokens: u64,
+        cache_creation_input_tokens: u64,
+        model_elapsed_millis: u64,
     },
     Progress {
         turn: u32,
