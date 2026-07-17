@@ -317,8 +317,20 @@ pub(super) fn drain_runtime_events(
             RuntimeEvent::Question(question) => {
                 app.open_question(question.questions);
             }
-            RuntimeEvent::Usage { output_tokens } => {
-                app.add_output_tokens(output_tokens);
+            RuntimeEvent::Usage {
+                input_tokens,
+                output_tokens,
+                cache_read_input_tokens,
+                cache_creation_input_tokens,
+                model_elapsed_millis,
+            } => {
+                app.record_usage(
+                    input_tokens,
+                    output_tokens,
+                    cache_read_input_tokens,
+                    cache_creation_input_tokens,
+                    model_elapsed_millis,
+                );
             }
             RuntimeEvent::Progress { turn } => {
                 app.update_turn(turn);

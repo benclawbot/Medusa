@@ -3,6 +3,7 @@ use std::{
     env, fs,
     path::{Path, PathBuf},
     sync::mpsc::Sender,
+    time::Instant,
 };
 
 use base64::{Engine as _, engine::general_purpose::STANDARD};
@@ -259,6 +260,7 @@ fn skill_description(path: &Path) -> Option<String> {
 pub(super) struct UpdateState {
     next_tool_id: u64,
     pending_tools: VecDeque<PendingTool>,
+    model_started_at: Option<Instant>,
 }
 
 impl UpdateState {
@@ -266,6 +268,7 @@ impl UpdateState {
         Self {
             next_tool_id: 0,
             pending_tools: VecDeque::new(),
+            model_started_at: None,
         }
     }
 }
@@ -282,10 +285,34 @@ pub(super) fn forward_update(
     state: &mut UpdateState,
 ) {
     match update {
+        AgentUpdate::Event(EventPayload::ModelRequestStarted { .. }) => {
+            state.model_started_at = Some(Instant::now());
+        }
         AgentUpdate::Event(EventPayload::ModelResponseReceived { usage, .. }) => {
-            if let Some(output_tokens) = usage.get("output_tokens").and_then(Value::as_u64) {
-                let _ = events.send(RuntimeEvent::Usage { output_tokens });
-            }
+            let model_elapsed_millis = state.model_started_at.take().map_or(0, |started_at| {
+                u64::try_from(started_at.elapsed().as_millis())
+                    .unwrap_or(u64::MAX)
+                    .max(1)
+            });
+            let _ = events.send(RuntimeEvent::Usage {
+                input_tokens: usage
+                    .get("input_tokens")
+                    .and_then(Value::as_u64)
+                    .unwrap_or_default(),
+                output_tokens: usage
+                    .get("output_tokens")
+                    .and_then(Value::as_u64)
+                    .unwrap_or_default(),
+                cache_read_input_tokens: usage
+                    .get("cache_read_input_tokens")
+                    .and_then(Value::as_u64)
+                    .unwrap_or_default(),
+                cache_creation_input_tokens: usage
+                    .get("cache_creation_input_tokens")
+                    .and_then(Value::as_u64)
+                    .unwrap_or_default(),
+                model_elapsed_millis,
+            });
         }
         AgentUpdate::Event(EventPayload::ToolCallRequested { tool, arguments }) => {
             if is_internal_tool(tool) {

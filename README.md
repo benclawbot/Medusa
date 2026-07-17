@@ -280,6 +280,8 @@ Installed skills are directly invokable by name. Built-in commands take preceden
 Selected skill instructions are applied as ephemeral system context for the active task and are not written into durable session messages.
 Typing `/` filters both built-in commands and installed skills; Tab completes the selected entry, and newly installed skills appear without restarting Medusa.
 
+The TUI header reports live session duration, cumulative input/output tokens, cache-read tokens and hit percentage, and output throughput. Input totals include uncached, cache-read, and cache-creation tokens; throughput is based only on measured provider response time. `/new` resets the session metrics.
+
 ### Browser tools
 
 The agent can drive a headless browser via the `browser_*` tools (`browser_navigate`, `browser_snapshot`, `browser_click`, `browser_fill`, `browser_press`, `browser_screenshot`, `browser_evaluate`, `browser_tabs`, `browser_close`). The browser runs in a separate `medusa-browserd` sidecar process. Medusa auto-discovers it next to the agent binary or on `PATH`; set `MEDUSA_BROWSER_PATH` to override. The sidecar requires Node.js 22 and a Chromium install (the same prerequisites the verification flow uses).
