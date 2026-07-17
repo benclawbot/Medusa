@@ -99,11 +99,9 @@ pub(super) fn run_loop(
                 continue;
             }
             let modal_open = app.model_modal().is_some() || app.question_modal().is_some();
-            if let Some(action) = session_control_action(
-                &terminal_event,
-                modal_open,
-                &mut last_ctrl_c,
-            ) {
+            if let Some(action) =
+                session_control_action(&terminal_event, modal_open, &mut last_ctrl_c)
+            {
                 if handle_action(app, runtime, action)? {
                     return Ok(ExitReason::UserQuit);
                 }
@@ -148,11 +146,9 @@ pub(super) fn run_loop(
                 continue;
             }
             let modal_open = app.model_modal().is_some() || app.question_modal().is_some();
-            if let Some(action) = session_control_action(
-                &terminal_event,
-                modal_open,
-                &mut last_ctrl_c,
-            ) {
+            if let Some(action) =
+                session_control_action(&terminal_event, modal_open, &mut last_ctrl_c)
+            {
                 if handle_action(app, runtime, action)? {
                     return Ok(ExitReason::UserQuit);
                 }
@@ -460,9 +456,8 @@ mod tests {
 
     #[test]
     fn expired_ctrl_c_window_starts_a_new_interrupt_sequence() {
-        let mut last_ctrl_c = Some(
-            Instant::now() - DOUBLE_CTRL_C_WINDOW - Duration::from_millis(1),
-        );
+        let mut last_ctrl_c =
+            Some(Instant::now() - DOUBLE_CTRL_C_WINDOW - Duration::from_millis(1));
         assert_eq!(
             session_control_action(
                 &key(KeyCode::Char('c'), KeyModifiers::CONTROL),
