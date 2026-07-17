@@ -317,9 +317,9 @@ mod tests {
         .expect("app");
         app.dismiss_welcome_for_event(&Event::Paste(String::new()));
         app.begin_run();
-        app.tick();
+        app.spinner_frame = 1;
         let before = render_frame(&UiIdentity::for_repo(directory.path()), &app, 80, 24);
-        app.tick();
+        app.spinner_frame = 2;
         let after = render_frame(&UiIdentity::for_repo(directory.path()), &app, 80, 24);
         assert_eq!(
             before
@@ -343,11 +343,12 @@ mod tests {
         .expect("app");
         app.begin_run();
         app.update_turn(3);
+        app.record_usage(0, 300, 0, 0, 0);
         app.record_usage(700, 1_200, 200, 100, 2_000);
         assert_eq!(running_status(&app), "Working (0s · turn 3)");
         assert_eq!(
             session_metrics_line(&app),
-            "session 0s · in 1.0k · out 1.2k · cached 200 (20%) · 600.0 tok/s"
+            "session 0s · in 1.0k · out 1.5k · cached 200 (20%) · 600.0 tok/s"
         );
     }
 
@@ -365,6 +366,7 @@ mod tests {
         app.clear_for_new_session();
         assert_eq!(app.total_input_tokens(), 0);
         assert_eq!(app.output_tokens, 0);
+        assert_eq!(app.timed_output_tokens, 0);
         assert_eq!(app.cache_read_input_tokens, 0);
         assert_eq!(app.cache_creation_input_tokens, 0);
         assert_eq!(app.model_elapsed_millis, 0);

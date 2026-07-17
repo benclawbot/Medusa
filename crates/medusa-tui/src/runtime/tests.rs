@@ -107,6 +107,23 @@ fn provider_usage_forwards_input_output_cache_and_model_time() {
             model_elapsed_millis,
         } if model_elapsed_millis >= 1
     ));
+
+    forward_update(
+        &AgentUpdate::Event(EventPayload::ModelResponseReceived {
+            response_id: Some("unpaired-response".to_owned()),
+            usage: json!({"output_tokens": 5}),
+        }),
+        &sender,
+        &mut state,
+    );
+    assert!(matches!(
+        receiver.recv().expect("unpaired usage event"),
+        RuntimeEvent::Usage {
+            output_tokens: 5,
+            model_elapsed_millis: 0,
+            ..
+        }
+    ));
 }
 
 #[test]

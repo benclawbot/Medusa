@@ -87,6 +87,7 @@ pub(super) fn run_loop(
     let mut last_ctrl_c = None;
     loop {
         drain_runtime_events(app, runtime)?;
+        app.tick();
         let (jobs, daemon_status) = match client.request(Request::List) {
             Ok(Response::Jobs { jobs }) => (jobs, "connected".to_owned()),
             Ok(other) => (Vec::new(), format!("unexpected response: {other:?}")),

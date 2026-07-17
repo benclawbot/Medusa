@@ -51,6 +51,7 @@ pub struct AppState {
     pub status: String,
     pub input_tokens: u64,
     pub output_tokens: u64,
+    pub timed_output_tokens: u64,
     pub cache_read_input_tokens: u64,
     pub cache_creation_input_tokens: u64,
     pub model_elapsed_millis: u64,
@@ -67,6 +68,7 @@ pub struct AppState {
     model_modal: Option<ModelModal>,
     question_modal: Option<QuestionModal>,
     session_started_at: Instant,
+    session_elapsed_seconds: u64,
     run_started_at: Option<Instant>,
     draft_store: DraftStore,
     draft_key: String,
@@ -119,6 +121,7 @@ impl AppState {
             status: "ready".to_owned(),
             input_tokens: 0,
             output_tokens: 0,
+            timed_output_tokens: 0,
             cache_read_input_tokens: 0,
             cache_creation_input_tokens: 0,
             model_elapsed_millis: 0,
@@ -135,6 +138,7 @@ impl AppState {
             model_modal: None,
             question_modal: None,
             session_started_at: Instant::now(),
+            session_elapsed_seconds: 0,
             run_started_at: None,
             draft_store,
             draft_key,
@@ -254,11 +258,13 @@ impl AppState {
         self.plan = None;
         self.input_tokens = 0;
         self.output_tokens = 0;
+        self.timed_output_tokens = 0;
         self.cache_read_input_tokens = 0;
         self.cache_creation_input_tokens = 0;
         self.model_elapsed_millis = 0;
         self.active_turn = 0;
         self.session_started_at = Instant::now();
+        self.session_elapsed_seconds = 0;
         self.status = "new session".to_owned();
         self.plan_mode = false;
         self.task_list_visible = true;
@@ -636,12 +642,14 @@ impl AppState {
     }
 
     pub fn tick(&mut self) -> bool {
-        if self.is_running() {
+        let elapsed = self.session_started_at.elapsed().as_secs();
+        let session_changed = elapsed != self.session_elapsed_seconds;
+        self.session_elapsed_seconds = elapsed;
+        let spinner_changed = self.is_running();
+        if spinner_changed {
             self.spinner_frame = self.spinner_frame.wrapping_add(1);
-            true
-        } else {
-            false
         }
+        session_changed || spinner_changed
     }
 
     #[must_use]
@@ -668,6 +676,9 @@ impl AppState {
     ) {
         self.input_tokens = self.input_tokens.saturating_add(input_tokens);
         self.output_tokens = self.output_tokens.saturating_add(output_tokens);
+        if model_elapsed_millis > 0 {
+            self.timed_output_tokens = self.timed_output_tokens.saturating_add(output_tokens);
+        }
         self.cache_read_input_tokens = self
             .cache_read_input_tokens
             .saturating_add(cache_read_input_tokens);
@@ -698,12 +709,12 @@ impl AppState {
     #[must_use]
     pub fn output_tokens_per_second(&self) -> Option<f64> {
         (self.model_elapsed_millis > 0)
-            .then(|| self.output_tokens as f64 * 1_000.0 / self.model_elapsed_millis as f64)
+            .then(|| self.timed_output_tokens as f64 * 1_000.0 / self.model_elapsed_millis as f64)
     }
 
     #[must_use]
     pub fn session_elapsed_seconds(&self) -> u64 {
-        self.session_started_at.elapsed().as_secs()
+        self.session_elapsed_seconds
     }
 
     #[must_use]
