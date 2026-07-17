@@ -387,7 +387,7 @@ pub(super) fn system_line(message: &str) -> StyledLine {
     }
 }
 
-pub(super) fn activity_lines(activity: &TranscriptActivity) -> Vec<StyledLine> {
+pub(crate) fn activity_lines(activity: &TranscriptActivity) -> Vec<StyledLine> {
     let color = match activity.kind {
         TranscriptActivityKind::Assistant => Color::Green,
         TranscriptActivityKind::Done => Color::Green,
@@ -482,7 +482,7 @@ pub(super) fn print_styled_line(
     )
 }
 
-pub(super) fn attachment_label(attachment: &PromptAttachment) -> String {
+pub(crate) fn attachment_label(attachment: &PromptAttachment) -> String {
     match attachment {
         PromptAttachment::PastedText(text) => {
             format!("[text] {} | {} bytes", text.display_name, text.text.len())
@@ -528,10 +528,10 @@ pub fn wrap_to_width(value: &str, width: u16) -> String {
     out
 }
 
-pub(super) fn app_error(error: AppError) -> io::Error {
+pub(crate) fn app_error(error: AppError) -> io::Error {
     io::Error::other(error)
 }
 
-pub(super) fn runtime_error(error: runtime::RuntimeError) -> io::Error {
+pub(crate) fn runtime_error(error: runtime::RuntimeError) -> io::Error {
     io::Error::other(error)
 }
