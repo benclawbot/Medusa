@@ -123,8 +123,7 @@ pub(super) fn run_loop(
         let (width, height) = size()?;
         let frame = render_frame(identity, app, width, height);
         if last_frame.as_ref() != Some(&frame) {
-            draw_frame(stdout, width, &frame, last_frame.as_deref())?;
-            stdout.flush()?;
+            draw_portable(stdout, _options, identity, app)?;
             last_frame = Some(frame);
         }
         if event::poll(Duration::from_millis(100))? {
