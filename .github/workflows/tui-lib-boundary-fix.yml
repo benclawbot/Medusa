@@ -16,7 +16,7 @@ jobs:
         with:
           ref: refactor/tui-lib-modularization
       - uses: dtolnay/rust-toolchain@1.88.0
-      - name: Repair module boundaries
+      - name: Repair remaining module boundaries
         shell: bash
         run: |
           python - <<'PY'
@@ -24,28 +24,20 @@ jobs:
 
           render = Path('crates/medusa-tui/src/render.rs')
           text = render.read_text()
-          text = text.replace('mod support;\n\nuse super::*;\nuse support::*;', 'pub(super) mod support;\n\nuse super::*;\npub(super) use support::*;')
+          text = text.replace('pub(super) use support::*;', 'pub(crate) use support::*;')
           render.write_text(text)
 
           support = Path('crates/medusa-tui/src/render/support.rs')
           text = support.read_text()
-          text = text.replace('    pub(super) text: String,', '    pub(crate) text: String,')
-          text = text.replace('    fn new(', '    pub(super) fn new(')
-          text = text.replace('    fn with_marker(', '    pub(super) fn with_marker(')
-          text = text.replace('    fn print(&self,', '    pub(super) fn print(&self,')
-          text = text.replace('    fn print_at(&self,', '    pub(super) fn print_at(&self,')
+          for name in ['attachment_label', 'activity_lines', 'app_error', 'runtime_error']:
+              text = text.replace(f'pub(super) fn {name}', f'pub(crate) fn {name}')
           support.write_text(text)
-
-          session = Path('crates/medusa-tui/src/session.rs')
-          text = session.read_text()
-          text = text.replace('use super::*;\n', 'use super::*;\nuse crate::render::support::{app_error, runtime_error};\n', 1)
-          session.write_text(text)
           PY
-          rm -f .github/workflows/tui-lib-boundary-fix.yml
+          rm -f .github/workflows/tui-lib-boundary-fix.yml .github/tui-lib-boundary-trigger
           cargo fmt --all
           cargo clippy -p medusa-tui --all-targets --all-features -- -D warnings
           git config user.name github-actions[bot]
           git config user.email 41898282+github-actions[bot]@users.noreply.github.com
           git add -A
-          git commit -m 'fix: repair TUI module boundaries'
+          git commit -m 'fix: expose shared TUI rendering helpers'
           git push origin HEAD:refactor/tui-lib-modularization
