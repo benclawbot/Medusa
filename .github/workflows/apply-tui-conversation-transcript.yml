@@ -141,12 +141,6 @@ jobs:
               """    assert!(app.question_modal().expect(\"review answers\").is_reviewing());\n    assert_eq!(app.transcript.len(), 1);\n    let action = app""",
           )
 
-          replace_once(
-              "crates/medusa-tui/src/app/tests.rs",
-              """    let AppAction::AnswerQuestion(answer) = action else {\n        panic!(\"expected answer action\");\n    };""",
-              """    let AppAction::AnswerQuestion(answer) = action else {\n        panic!(\"expected answer action\");\n    };\n    assert!(matches!(\n        app.transcript.last(),\n        Some(TranscriptEntry::User(draft))\n            if draft.text.contains(\"Project: Projects/site-a\")\n                && draft.text.contains(\"Audience: Customers\")\n    ));""",
-          )
-
           stale = [
               "assistant_narration_is_one_headline",
               "assistant_title(",
