@@ -1,0 +1,81 @@
+name: TUI lib refactor helper
+
+on:
+  push:
+    branches: [refactor/tui-lib-modularization]
+
+permissions:
+  contents: write
+
+jobs:
+  split:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: refactor/tui-lib-modularization
+      - uses: dtolnay/rust-toolchain@1.88.0
+      - name: Split TUI composition modules
+        shell: bash
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          import re
+
+          path = Path('crates/medusa-tui/src/lib.rs')
+          text = path.read_text()
+          run_start = text.index('pub fn run(')
+          draw_start = text.index('#[cfg(unix)]\nfn draw(')
+          support_start = text.index('fn render_loading_screen(')
+          tests_start = text.index('#[cfg(test)]\nmod tests {')
+
+          prefix = text[:run_start]
+          session = text[run_start:draw_start]
+          render = text[draw_start:support_start]
+          support = text[support_start:tests_start]
+          tests = text[tests_start:]
+
+          session = 'use super::*;\n\n' + session
+          session = re.sub(r'(?m)^fn (ctrl_[a-z_]+|handle_app_action|drain_runtime_events|run_loop)\(', r'pub(super) fn \1(', session)
+
+          render = 'mod support;\n\nuse super::*;\nuse support::*;\n\n' + render
+          render = re.sub(r'(?m)^fn ', 'pub(super) fn ', render)
+          render = render.replace('struct PortableRenderSnapshot', 'pub(super) struct PortableRenderSnapshot')
+          render = render.replace('struct UiIdentity', 'pub(super) struct UiIdentity')
+          render = render.replace('    fn for_repo(', '    pub(super) fn for_repo(')
+
+          support = 'use super::*;\n\n' + support
+          support = re.sub(r'(?m)^fn ', 'pub(super) fn ', support)
+          support = support.replace('struct StyledLine', 'pub(super) struct StyledLine')
+          support = support.replace('    text: String,', '    pub(super) text: String,')
+
+          facade = prefix
+          facade += 'mod render;\nmod session;\n\npub use session::run;\nuse render::*;\nuse session::*;\n\n'
+          facade += tests
+
+          path.write_text(facade)
+          Path('crates/medusa-tui/src/session.rs').write_text(session)
+          Path('crates/medusa-tui/src/render.rs').write_text(render)
+          Path('crates/medusa-tui/src/render').mkdir(exist_ok=True)
+          Path('crates/medusa-tui/src/render/support.rs').write_text(support)
+
+          registry = Path('docs/source-size-exceptions.txt')
+          registry.write_text('\n'.join(
+              line for line in registry.read_text().splitlines()
+              if not line.startswith('crates/medusa-tui/src/lib.rs|')
+          ) + '\n')
+          PY
+          rm -f .github/lib-split-marker .github/lib-split-marker-2
+          cargo fmt --all
+          wc -l crates/medusa-tui/src/lib.rs crates/medusa-tui/src/session.rs crates/medusa-tui/src/render.rs crates/medusa-tui/src/render/support.rs
+          test $(wc -l < crates/medusa-tui/src/lib.rs) -le 800
+          test $(wc -l < crates/medusa-tui/src/session.rs) -le 800
+          test $(wc -l < crates/medusa-tui/src/render.rs) -le 800
+          test $(wc -l < crates/medusa-tui/src/render/support.rs) -le 800
+          cargo check -p medusa-tui --all-targets --all-features || true
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add -A
+          git commit -m 'refactor: split TUI composition modules'
+          git push origin HEAD:refactor/tui-lib-modularization
