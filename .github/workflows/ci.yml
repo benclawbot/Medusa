@@ -33,51 +33,24 @@ jobs:
 
           path = Path('crates/medusa-tui/src/app/tests.rs')
           text = path.read_text()
-          old = '''    assert_eq!(
-              app.question_modal()
-                  .expect("question modal")
-                  .active_question(),
-              1
-          );
-          assert!(app.transcript.is_empty());
-          assert_eq!(
-              app.handle_event(Event::Key(crossterm::event::KeyEvent::new(
-                  KeyCode::Enter,
-                  KeyModifiers::NONE,
-              )))
-              .expect("answer second question"),
-              AppAction::Redraw
-          );
-          assert!(app.question_modal().expect("review answers").is_reviewing());
-          assert!(app.transcript.is_empty());
-          '''
-          new = '''    assert_eq!(
-              app.question_modal()
-                  .expect("question modal")
-                  .active_question(),
-              1
-          );
-          assert!(matches!(
+          start = text.index('fn question_modal_tabs_answers_and_requires_confirmation_before_submission()')
+          end = text.index('\n#[test]\nfn clarification_question_and_confirmed_answer_stay_in_transcript()', start)
+          block = text[start:end]
+          stale = '    assert!(app.transcript.is_empty());'
+          first = '''    assert!(matches!(
               app.transcript.as_slice(),
               [TranscriptEntry::Assistant(text)]
                   if text.contains("Which project should I use?")
                       && text.contains("Who is this for?")
-          ));
-          assert_eq!(
-              app.handle_event(Event::Key(crossterm::event::KeyEvent::new(
-                  KeyCode::Enter,
-                  KeyModifiers::NONE,
-              )))
-              .expect("answer second question"),
-              AppAction::Redraw
-          );
-          assert!(app.question_modal().expect("review answers").is_reviewing());
-          assert_eq!(app.transcript.len(), 1);
-          '''
-          if new not in text:
-              if text.count(old) != 1:
-                  raise SystemExit(f'expected one stale question transcript block, found {text.count(old)}')
-              path.write_text(text.replace(old, new, 1))
+          ));'''
+          second = '    assert_eq!(app.transcript.len(), 1);'
+          if first not in block:
+              if block.count(stale) != 2:
+                  raise SystemExit(f'expected two stale transcript assertions, found {block.count(stale)}')
+              block = block.replace(stale, first, 1).replace(stale, second, 1)
+              path.write_text(text[:start] + block + text[end:])
+          elif second not in block:
+              raise SystemExit('partially applied question transcript correction')
       - name: Verify complete TUI suite
         run: |
           cargo fmt --all
