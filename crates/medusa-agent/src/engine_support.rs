@@ -32,7 +32,11 @@ pub(crate) fn content_with_session_goal(
     content
 }
 
-pub(crate) fn system_prompt(mode: Mode, repo: &Path) -> String {
+pub(crate) fn system_prompt_with_context(
+    mode: Mode,
+    repo: &Path,
+    additional_context: Option<&str>,
+) -> String {
     let base = if mode == Mode::ReadOnly {
         PLAN_SYSTEM_PROMPT
     } else {
@@ -64,6 +68,13 @@ pub(crate) fn system_prompt(mode: Mode, repo: &Path) -> String {
                     .unwrap_or_default()
             ));
         }
+    }
+    if let Some(context) = additional_context
+        .map(str::trim)
+        .filter(|context| !context.is_empty())
+    {
+        prompt.push_str("\n\nExplicit user-selected context for the current agent turn:\n");
+        prompt.push_str(context);
     }
     prompt
 }
@@ -679,7 +690,7 @@ mod tests {
         )
         .expect("write skill");
 
-        let prompt = system_prompt(Mode::Yolo, directory.path());
+        let prompt = system_prompt_with_context(Mode::Yolo, directory.path(), None);
         assert!(prompt.contains("Run the focused test suite."));
         assert!(prompt.contains("release (project): Release preparation"));
         assert!(prompt.contains("call `skill_read`"));

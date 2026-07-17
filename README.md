@@ -268,6 +268,17 @@ medusa --continue
 
 Prompt drafts and clipboard attachments are persisted under the repository's `.medusa` state directory until submission.
 
+Installed skills are directly invokable by name. Built-in commands take precedence over same-named skills:
+
+```text
+/skills                         # list installed skills
+/release                        # use the release skill on the next prompt
+/release prepare version 1.0    # run a task with the release skill immediately
+/release@user                   # select a scoped definition when names collide
+```
+
+Selected skill instructions are applied as ephemeral system context for the active task and are not written into durable session messages.
+
 ### Browser tools
 
 The agent can drive a headless browser via the `browser_*` tools (`browser_navigate`, `browser_snapshot`, `browser_click`, `browser_fill`, `browser_press`, `browser_screenshot`, `browser_evaluate`, `browser_tabs`, `browser_close`). The browser runs in a separate `medusa-browserd` sidecar process. Medusa auto-discovers it next to the agent binary or on `PATH`; set `MEDUSA_BROWSER_PATH` to override. The sidecar requires Node.js 22 and a Chromium install (the same prerequisites the verification flow uses).

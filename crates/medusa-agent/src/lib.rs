@@ -21,7 +21,11 @@ pub use verification::{VerificationResult, targeted_verification};
 
 #[cfg(test)]
 mod tests {
-    use std::{collections::VecDeque, fs, sync::Mutex};
+    use std::{
+        collections::VecDeque,
+        fs,
+        sync::{Arc, Mutex},
+    };
 
     #[cfg(target_os = "linux")]
     use std::process::Command;
@@ -60,6 +64,25 @@ mod tests {
                         "scripted response exhausted",
                     )
                 })
+        }
+    }
+
+    struct CapturingProvider {
+        systems: Arc<Mutex<Vec<String>>>,
+    }
+
+    impl ModelProvider for CapturingProvider {
+        fn complete(&self, request: &ModelRequest) -> MedusaResult<ModelResponse> {
+            self.systems
+                .lock()
+                .expect("captured systems lock")
+                .push(request.system.clone());
+            Ok(response(
+                vec![ResponseBlock::Text {
+                    text: "Task acknowledged.".to_owned(),
+                }],
+                "end_turn",
+            ))
         }
     }
 
@@ -149,6 +172,39 @@ mod tests {
                 .iter()
                 .any(|line| line.contains("verified-value-42"))
         );
+    }
+
+    #[test]
+    fn ephemeral_system_context_is_sent_but_never_persisted_in_session_messages() {
+        let directory = tempfile::tempdir().expect("temporary directory");
+        let systems = Arc::new(Mutex::new(Vec::new()));
+        let engine = AgentEngine::new(
+            CapturingProvider {
+                systems: Arc::clone(&systems),
+            },
+            Config::default(),
+        );
+        let mut session = engine
+            .create_session(directory.path(), "prepare a release".to_owned())
+            .expect("session");
+
+        assert_eq!(
+            engine
+                .step_with_observer_and_context(
+                    &mut session,
+                    Some("Use the selected release checklist."),
+                    |_| {},
+                )
+                .expect("ephemeral context step"),
+            StepOutcome::TurnComplete
+        );
+
+        let captured = systems.lock().expect("captured systems");
+        assert_eq!(captured.len(), 1);
+        assert!(captured[0].contains("Use the selected release checklist."));
+        let durable_messages =
+            serde_json::to_string(&session.messages).expect("serialize messages");
+        assert!(!durable_messages.contains("Use the selected release checklist."));
     }
 
     #[test]
