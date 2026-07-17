@@ -39,6 +39,7 @@ jobs:
           fixed = parts[0]
           for index, part in enumerate(parts[1:], 1):
               fixed += ('r"""' if index % 2 == 1 else '"""') + part
+          fixed = fixed.replace('if new in text:', 'if new and new in text:')
           path.write_text(fixed)
           PY
           python .github/scripts/apply_tui_conversation_transcript.py 2>&1 | tee patch-diagnostic.log
