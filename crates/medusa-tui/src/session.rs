@@ -1,5 +1,8 @@
 use super::*;
 use crate::render::support::{app_error, runtime_error};
+use std::time::Instant;
+
+const DOUBLE_CTRL_C_WINDOW: Duration = Duration::from_secs(1);
 
 pub fn run(options: TuiOptions) -> io::Result<ExitReason> {
     if !io::stdin().is_terminal() || !io::stdout().is_terminal() {
@@ -81,6 +84,7 @@ pub(super) fn run_loop(
     runtime: &RuntimeController,
 ) -> io::Result<ExitReason> {
     let client = DaemonClient::new(options.socket_path());
+    let mut last_ctrl_c = None;
     loop {
         drain_runtime_events(app, runtime)?;
         let (jobs, daemon_status) = match client.request(Request::List) {
@@ -92,6 +96,17 @@ pub(super) fn run_loop(
         if event::poll(Duration::from_millis(100))? {
             let terminal_event = event::read()?;
             if app.dismiss_welcome_for_event(&terminal_event) {
+                continue;
+            }
+            let modal_open = app.model_modal().is_some() || app.question_modal().is_some();
+            if let Some(action) = session_control_action(
+                &terminal_event,
+                modal_open,
+                &mut last_ctrl_c,
+            ) {
+                if handle_action(app, runtime, action)? {
+                    return Ok(ExitReason::UserQuit);
+                }
                 continue;
             }
             if ctrl_l_redraw(&terminal_event) {
@@ -117,6 +132,7 @@ pub(super) fn run_loop(
     runtime: &RuntimeController,
 ) -> io::Result<ExitReason> {
     let mut last_frame: Option<Vec<StyledLine>> = None;
+    let mut last_ctrl_c = None;
     loop {
         drain_runtime_events(app, runtime)?;
         app.tick();
@@ -129,6 +145,17 @@ pub(super) fn run_loop(
         if event::poll(Duration::from_millis(100))? {
             let terminal_event = event::read()?;
             if app.dismiss_welcome_for_event(&terminal_event) {
+                continue;
+            }
+            let modal_open = app.model_modal().is_some() || app.question_modal().is_some();
+            if let Some(action) = session_control_action(
+                &terminal_event,
+                modal_open,
+                &mut last_ctrl_c,
+            ) {
+                if handle_action(app, runtime, action)? {
+                    return Ok(ExitReason::UserQuit);
+                }
                 continue;
             }
             if matches!(terminal_event, Event::Resize(_, _)) {
@@ -148,12 +175,51 @@ pub(super) fn run_loop(
     }
 }
 
+fn session_control_action(
+    terminal_event: &Event,
+    modal_open: bool,
+    last_ctrl_c: &mut Option<Instant>,
+) -> Option<AppAction> {
+    let Event::Key(key) = terminal_event else {
+        return None;
+    };
+    if key.kind != KeyEventKind::Press {
+        return None;
+    }
+    if key.code == KeyCode::Char('c') && key.modifiers.contains(KeyModifiers::CONTROL) {
+        let now = Instant::now();
+        if last_ctrl_c
+            .take()
+            .is_some_and(|previous| now.saturating_duration_since(previous) <= DOUBLE_CTRL_C_WINDOW)
+        {
+            return Some(AppAction::Quit);
+        }
+        *last_ctrl_c = Some(now);
+        return Some(AppAction::Interrupt);
+    }
+
+    *last_ctrl_c = None;
+    if key.code == KeyCode::Esc && !modal_open {
+        return Some(AppAction::Interrupt);
+    }
+    None
+}
+
 pub(super) fn handle_app_action(
     app: &mut AppState,
     runtime: &RuntimeController,
     terminal_event: Event,
 ) -> io::Result<bool> {
-    match app.handle_event(terminal_event).map_err(app_error)? {
+    let action = app.handle_event(terminal_event).map_err(app_error)?;
+    handle_action(app, runtime, action)
+}
+
+fn handle_action(
+    app: &mut AppState,
+    runtime: &RuntimeController,
+    action: AppAction,
+) -> io::Result<bool> {
+    match action {
         AppAction::Quit => Ok(true),
         AppAction::Interrupt => {
             app.status = if runtime.cancel() {
@@ -344,4 +410,81 @@ pub(super) fn ctrl_l_redraw(event: &Event) -> bool {
                 && key.code == KeyCode::Char('l')
                 && key.modifiers.contains(KeyModifiers::CONTROL)
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crossterm::event::KeyEvent;
+
+    fn key(code: KeyCode, modifiers: KeyModifiers) -> Event {
+        Event::Key(KeyEvent::new(code, modifiers))
+    }
+
+    #[test]
+    fn escape_interrupts_at_top_level_but_remains_available_to_modals() {
+        let mut last_ctrl_c = None;
+        assert_eq!(
+            session_control_action(
+                &key(KeyCode::Esc, KeyModifiers::NONE),
+                false,
+                &mut last_ctrl_c,
+            ),
+            Some(AppAction::Interrupt)
+        );
+        assert_eq!(
+            session_control_action(
+                &key(KeyCode::Esc, KeyModifiers::NONE),
+                true,
+                &mut last_ctrl_c,
+            ),
+            None
+        );
+    }
+
+    #[test]
+    fn second_ctrl_c_within_one_second_quits() {
+        let mut last_ctrl_c = None;
+        let ctrl_c = key(KeyCode::Char('c'), KeyModifiers::CONTROL);
+        assert_eq!(
+            session_control_action(&ctrl_c, false, &mut last_ctrl_c),
+            Some(AppAction::Interrupt)
+        );
+        assert!(last_ctrl_c.is_some());
+        assert_eq!(
+            session_control_action(&ctrl_c, false, &mut last_ctrl_c),
+            Some(AppAction::Quit)
+        );
+        assert!(last_ctrl_c.is_none());
+    }
+
+    #[test]
+    fn expired_ctrl_c_window_starts_a_new_interrupt_sequence() {
+        let mut last_ctrl_c = Some(
+            Instant::now() - DOUBLE_CTRL_C_WINDOW - Duration::from_millis(1),
+        );
+        assert_eq!(
+            session_control_action(
+                &key(KeyCode::Char('c'), KeyModifiers::CONTROL),
+                false,
+                &mut last_ctrl_c,
+            ),
+            Some(AppAction::Interrupt)
+        );
+        assert!(last_ctrl_c.is_some());
+    }
+
+    #[test]
+    fn another_key_resets_the_double_ctrl_c_window() {
+        let mut last_ctrl_c = Some(Instant::now());
+        assert_eq!(
+            session_control_action(
+                &key(KeyCode::Char('x'), KeyModifiers::NONE),
+                false,
+                &mut last_ctrl_c,
+            ),
+            None
+        );
+        assert!(last_ctrl_c.is_none());
+    }
 }
