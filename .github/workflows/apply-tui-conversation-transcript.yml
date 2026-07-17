@@ -23,13 +23,30 @@ jobs:
       - uses: actions/checkout@v4
         with:
           ref: ${{ github.event.pull_request.head.ref }}
-          fetch-depth: 0
+          fetch-depth: 1
+          show-progress: false
       - uses: dtolnay/rust-toolchain@1.88.0
       - name: Apply guarded transcript patch
-        run: python .github/scripts/apply_tui_conversation_transcript.py
+        id: apply
+        continue-on-error: true
+        shell: bash
+        run: |
+          set -o pipefail
+          python .github/scripts/apply_tui_conversation_transcript.py 2>&1 | tee patch-diagnostic.log
+      - name: Upload patch diagnostic
+        if: steps.apply.outcome == 'failure'
+        uses: actions/upload-artifact@v4
+        with:
+          name: transcript-patch-diagnostic
+          path: patch-diagnostic.log
+      - name: Stop after patch failure
+        if: steps.apply.outcome == 'failure'
+        run: exit 1
       - name: Format
+        if: steps.apply.outcome == 'success'
         run: cargo fmt --all -- --check || (cargo fmt --all && cargo fmt --all -- --check)
       - name: Focused transcript tests
+        if: steps.apply.outcome == 'success'
         run: |
           cargo test -p medusa-tui internal_plan_transport_is_hidden_and_assistant_text_is_forwarded_verbatim -- --exact
           cargo test -p medusa-tui conversation_preserves_user_and_medusa_multiline_text -- --exact
@@ -38,6 +55,7 @@ jobs:
           cargo test -p medusa-tui ctrl_v_pastes_clipboard_content -- --exact
           cargo test -p medusa-tui tool_call_is_shown_as_one_high_level_row -- --exact
       - name: Commit production changes
+        if: steps.apply.outcome == 'success'
         run: |
           if git diff --quiet; then
             echo "Patch already applied and tests passed."
