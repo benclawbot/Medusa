@@ -40,6 +40,17 @@ jobs:
           for index, part in enumerate(parts[1:], 1):
               fixed += ('r"""' if index % 2 == 1 else '"""') + part
           fixed = fixed.replace('if new in text:', 'if new and new in text:')
+          fixed = fixed.replace(
+              'pub(super) fn transcript_lines(app: &AppState, width: u16)',
+              'pub(crate) fn transcript_lines(app: &AppState, width: u16)',
+          )
+          append_marker = '    closing = text.rfind("\\n}")\n'
+          external_file_guard = (
+              '    if path.endswith("app/tests.rs"):\n'
+              '        target.write_text(text.rstrip() + "\\n\\n" + test_source.rstrip() + "\\n")\n'
+              '        return\n'
+          )
+          fixed = fixed.replace(append_marker, external_file_guard + append_marker)
           path.write_text(fixed)
           PY
           python .github/scripts/apply_tui_conversation_transcript.py 2>&1 | tee patch-diagnostic.log
