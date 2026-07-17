@@ -278,6 +278,7 @@ Installed skills are directly invokable by name. Built-in commands take preceden
 ```
 
 Selected skill instructions are applied as ephemeral system context for the active task and are not written into durable session messages.
+Typing `/` filters both built-in commands and installed skills; Tab completes the selected entry, and newly installed skills appear without restarting Medusa.
 
 ### Browser tools
 

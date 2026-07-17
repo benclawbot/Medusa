@@ -1,3 +1,9 @@
+use std::{
+    collections::BTreeMap,
+    env, fs,
+    path::{Path, PathBuf},
+};
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Effort {
     Low,
@@ -99,6 +105,20 @@ pub struct CommandSpec {
     pub name: &'static str,
     pub usage: &'static str,
     pub description: &'static str,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct CommandSuggestion {
+    pub name: String,
+    pub usage: String,
+    pub description: String,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct DiscoveredSkill {
+    name: String,
+    scope: String,
+    description: Option<String>,
 }
 
 pub const COMMAND_SPECS: &[CommandSpec] = &[
@@ -250,25 +270,133 @@ pub fn parse_slash_command(input: &str) -> Result<Option<SlashCommand>, String> 
 }
 
 #[must_use]
-pub fn command_suggestions(input: &str) -> Vec<CommandSpec> {
+pub fn command_suggestions(input: &str, repo: &Path) -> Vec<CommandSuggestion> {
     let Some(prefix) = input.trim_start().strip_prefix('/') else {
         return Vec::new();
     };
     if prefix.contains(char::is_whitespace) {
         return Vec::new();
     }
-    COMMAND_SPECS
+    let prefix = prefix.to_ascii_lowercase();
+    let mut suggestions = COMMAND_SPECS
         .iter()
-        .copied()
-        .filter(|spec| spec.name.starts_with(&prefix.to_ascii_lowercase()))
+        .filter(|spec| spec.name.starts_with(&prefix))
+        .map(|spec| CommandSuggestion {
+            name: spec.name.to_owned(),
+            usage: spec.usage.to_owned(),
+            description: spec.description.to_owned(),
+        })
         .take(6)
-        .collect()
+        .collect::<Vec<_>>();
+    let remaining = 6_usize.saturating_sub(suggestions.len());
+    suggestions.extend(
+        skill_command_suggestions(repo)
+            .into_iter()
+            .filter(|spec| spec.name.to_ascii_lowercase().starts_with(&prefix))
+            .take(remaining),
+    );
+    suggestions
 }
 
 #[must_use]
-pub fn complete_first_command(input: &str) -> Option<String> {
-    let suggestion = command_suggestions(input).into_iter().next()?;
+pub fn complete_first_command(input: &str, repo: &Path) -> Option<String> {
+    let suggestion = command_suggestions(input, repo).into_iter().next()?;
     Some(format!("/{} ", suggestion.name))
+}
+
+fn skill_command_suggestions(repo: &Path) -> Vec<CommandSuggestion> {
+    suggestions_for_discovered_skills(discover_skills(repo))
+}
+
+fn discover_skills(repo: &Path) -> Vec<DiscoveredSkill> {
+    let mut skills = Vec::new();
+    for (scope, root) in skill_roots(repo) {
+        let Ok(entries) = fs::read_dir(root) else {
+            continue;
+        };
+        for entry in entries.flatten() {
+            let skill = entry.path().join("SKILL.md");
+            if !skill.is_file() {
+                continue;
+            }
+            skills.push(DiscoveredSkill {
+                name: entry.file_name().to_string_lossy().into_owned(),
+                scope: scope.to_owned(),
+                description: skill_description(&skill),
+            });
+        }
+    }
+    skills
+}
+
+fn skill_roots(repo: &Path) -> Vec<(&'static str, PathBuf)> {
+    let mut roots = vec![
+        ("project", repo.join(".medusa/skills")),
+        ("project", repo.join(".claude/skills")),
+    ];
+    if let Some(home) = env::var_os("HOME")
+        .or_else(|| env::var_os("USERPROFILE"))
+        .map(PathBuf::from)
+    {
+        roots.push(("user", home.join(".medusa/skills")));
+        roots.push(("user", home.join(".claude/skills")));
+    }
+    roots
+}
+
+fn skill_description(path: &Path) -> Option<String> {
+    fs::read_to_string(path).ok().and_then(|text| {
+        text.lines().find_map(|line| {
+            line.strip_prefix("description:")
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .map(|value| value.trim_matches('"').to_owned())
+        })
+    })
+}
+
+fn suggestions_for_discovered_skills(skills: Vec<DiscoveredSkill>) -> Vec<CommandSuggestion> {
+    let mut by_name = BTreeMap::<String, Vec<DiscoveredSkill>>::new();
+    for skill in skills {
+        by_name.entry(skill.name.clone()).or_default().push(skill);
+    }
+    let built_in_names = COMMAND_SPECS
+        .iter()
+        .map(|spec| spec.name)
+        .collect::<Vec<_>>();
+    let mut suggestions = Vec::new();
+    for (name, named_skills) in by_name {
+        let built_in_collision = built_in_names.contains(&name.as_str());
+        if named_skills.len() == 1 && !built_in_collision {
+            let skill = &named_skills[0];
+            suggestions.push(skill_suggestion(name, skill));
+            continue;
+        }
+        let mut by_scope = BTreeMap::<String, Vec<DiscoveredSkill>>::new();
+        for skill in named_skills {
+            by_scope.entry(skill.scope.clone()).or_default().push(skill);
+        }
+        for (scope, scoped_skills) in by_scope {
+            if scoped_skills.len() != 1 {
+                continue;
+            }
+            let selector = format!("{name}@{scope}");
+            suggestions.push(skill_suggestion(selector, &scoped_skills[0]));
+        }
+    }
+    suggestions
+}
+
+fn skill_suggestion(selector: String, skill: &DiscoveredSkill) -> CommandSuggestion {
+    let description = skill.description.as_deref().map_or_else(
+        || format!("installed {} skill", skill.scope),
+        |description| format!("{} skill - {description}", skill.scope),
+    );
+    CommandSuggestion {
+        usage: format!("/{selector} [task]"),
+        name: selector,
+        description,
+    }
 }
 
 #[cfg(test)]
@@ -320,11 +448,15 @@ mod tests {
 
     #[test]
     fn suggestions_and_tab_completion_are_prefix_aware() {
-        assert!(command_suggestions("").is_empty());
-        assert!(command_suggestions("fix tests").is_empty());
-        assert_eq!(command_suggestions("/pl")[0].name, "plan");
-        assert_eq!(complete_first_command("/mo"), Some("/model ".to_owned()));
-        assert!(command_suggestions("/plan task").is_empty());
+        let directory = tempfile::tempdir().expect("temporary directory");
+        assert!(command_suggestions("", directory.path()).is_empty());
+        assert!(command_suggestions("fix tests", directory.path()).is_empty());
+        assert_eq!(command_suggestions("/pl", directory.path())[0].name, "plan");
+        assert_eq!(
+            complete_first_command("/mo", directory.path()),
+            Some("/model ".to_owned())
+        );
+        assert!(command_suggestions("/plan task", directory.path()).is_empty());
     }
 
     #[test]
@@ -458,9 +590,80 @@ mod tests {
     }
 
     #[test]
+    fn installed_skills_are_discovered_live_and_completed() {
+        let directory = tempfile::tempdir().expect("temporary directory");
+        assert!(command_suggestions("/rel", directory.path()).is_empty());
+        let skill = directory.path().join(".medusa/skills/release/SKILL.md");
+        std::fs::create_dir_all(skill.parent().expect("skill directory"))
+            .expect("create skill directory");
+        std::fs::write(
+            &skill,
+            "description: Prepare a release
+Use the checklist.",
+        )
+        .expect("write skill");
+
+        let suggestions = command_suggestions("/rel", directory.path());
+        assert_eq!(suggestions[0].name, "release");
+        assert_eq!(suggestions[0].usage, "/release [task]");
+        assert!(suggestions[0].description.contains("Prepare a release"));
+        assert_eq!(
+            complete_first_command("/rel", directory.path()),
+            Some("/release ".to_owned())
+        );
+    }
+
+    #[test]
+    fn colliding_skills_receive_scope_suffixes_and_invalid_duplicates_are_hidden() {
+        let scoped = suggestions_for_discovered_skills(vec![
+            DiscoveredSkill {
+                name: "release".to_owned(),
+                scope: "project".to_owned(),
+                description: None,
+            },
+            DiscoveredSkill {
+                name: "release".to_owned(),
+                scope: "user".to_owned(),
+                description: None,
+            },
+            DiscoveredSkill {
+                name: "plan".to_owned(),
+                scope: "project".to_owned(),
+                description: None,
+            },
+        ]);
+        let names = scoped
+            .iter()
+            .map(|spec| spec.name.as_str())
+            .collect::<Vec<_>>();
+        assert_eq!(
+            names,
+            vec!["plan@project", "release@project", "release@user"]
+        );
+
+        let ambiguous = suggestions_for_discovered_skills(vec![
+            DiscoveredSkill {
+                name: "release".to_owned(),
+                scope: "project".to_owned(),
+                description: None,
+            },
+            DiscoveredSkill {
+                name: "release".to_owned(),
+                scope: "project".to_owned(),
+                description: None,
+            },
+        ]);
+        assert!(ambiguous.is_empty());
+    }
+
+    #[test]
     fn completion_handles_case_whitespace_and_no_match() {
-        assert_eq!(command_suggestions("   /HE")[0].name, "help");
-        assert_eq!(complete_first_command("/zz"), None);
-        assert_eq!(command_suggestions("/").len(), 6);
+        let directory = tempfile::tempdir().expect("temporary directory");
+        assert_eq!(
+            command_suggestions("   /HE", directory.path())[0].name,
+            "help"
+        );
+        assert_eq!(complete_first_command("/zz", directory.path()), None);
+        assert_eq!(command_suggestions("/", directory.path()).len(), 6);
     }
 }

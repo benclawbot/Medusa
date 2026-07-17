@@ -1,4 +1,9 @@
-use std::{io, path::PathBuf, sync::Arc, time::Instant};
+use std::{
+    io,
+    path::{Path, PathBuf},
+    sync::Arc,
+    time::Instant,
+};
 
 use crossterm::event::{Event, KeyCode, KeyEventKind, KeyModifiers};
 
@@ -39,6 +44,7 @@ impl Scrollback {
 }
 
 pub struct AppState {
+    repository: PathBuf,
     pub composer: ComposerState,
     pub transcript: Vec<TranscriptEntry>,
     pub plan: Option<TranscriptPlan>,
@@ -63,6 +69,11 @@ pub struct AppState {
 }
 
 impl AppState {
+    #[must_use]
+    pub(crate) fn repository(&self) -> &Path {
+        &self.repository
+    }
+
     #[must_use]
     pub fn scrollback_offset(&self) -> usize {
         self.scrollback.offset
@@ -96,6 +107,7 @@ impl AppState {
             None => ComposerState::new(initial_text),
         };
         Ok(Self {
+            repository,
             composer,
             transcript: Vec::new(),
             plan: None,
@@ -274,7 +286,7 @@ impl AppState {
     }
 
     fn select_command(&mut self, direction: isize) -> Result<AppAction, AppError> {
-        let suggestions = command_suggestions(&self.composer.draft.text);
+        let suggestions = command_suggestions(&self.composer.draft.text, &self.repository);
         if suggestions.is_empty() {
             return Ok(AppAction::None);
         }
@@ -285,12 +297,12 @@ impl AppState {
     }
 
     fn complete_command(&mut self) -> Result<AppAction, AppError> {
-        let suggestions = command_suggestions(&self.composer.draft.text);
+        let suggestions = command_suggestions(&self.composer.draft.text, &self.repository);
         let Some(selected) = suggestions.get(self.command_selection) else {
             return Ok(AppAction::None);
         };
         let completed = if self.command_selection == 0 {
-            complete_first_command(&self.composer.draft.text)
+            complete_first_command(&self.composer.draft.text, &self.repository)
         } else {
             Some(format!("/{} ", selected.name))
         };
