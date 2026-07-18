@@ -1,0 +1,58 @@
+name: Daemon
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: daemon-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  daemon:
+    name: daemon (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-2022]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@1.88.0
+        with:
+          components: rustfmt,clippy
+      - name: Check workspace formatting
+        id: formatting
+        run: cargo fmt --all -- --check
+      - name: Capture rustfmt patch
+        if: failure() && steps.formatting.outcome == 'failure'
+        shell: bash
+        run: |
+          cargo fmt --all
+          git diff -- . ':!Cargo.lock' > daemon-rustfmt.patch
+      - name: Upload rustfmt diagnostics
+        if: failure() && steps.formatting.outcome == 'failure'
+        uses: actions/upload-artifact@v4
+        with:
+          name: daemon-rustfmt-${{ matrix.os }}
+          path: daemon-rustfmt.patch
+          if-no-files-found: error
+      - name: Lint daemon
+        run: cargo clippy -p medusa-daemon --all-targets --locked -- -D warnings
+      - name: Test daemon reconnect and recovery
+        id: daemon_tests
+        shell: bash
+        run: |
+          set -o pipefail
+          cargo test -p medusa-daemon --locked -- --nocapture 2>&1 | tee daemon-tests.log
+      - name: Upload daemon test diagnostics
+        if: failure() && steps.daemon_tests.outcome == 'failure'
+        uses: actions/upload-artifact@v4
+        with:
+          name: daemon-tests-${{ matrix.os }}
+          path: daemon-tests.log
+          if-no-files-found: error
