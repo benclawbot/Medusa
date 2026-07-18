@@ -13,35 +13,6 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  finalize-desktop-commander:
-    if: github.event_name == 'pull_request' && github.head_ref == 'feat/desktop-commander-mcp' && github.actor != 'github-actions[bot]'
-    runs-on: ubuntu-latest
-    permissions:
-      contents: write
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          ref: feat/desktop-commander-mcp
-          fetch-depth: 0
-      - run: python3 .github/scripts/finalize_desktop_commander.py
-      - uses: dtolnay/rust-toolchain@1.88.0
-        with:
-          components: rustfmt,clippy
-      - run: cargo generate-lockfile
-      - run: cargo fmt --all
-      - run: bash scripts/check-source-size.sh
-      - run: cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
-      - run: cargo test -p medusa-extensions -p medusa-agent -p medusa-cli --locked
-      - name: Commit final protocol fixes
-        shell: bash
-        run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add README.md crates/medusa-extensions/src/desktop_commander.rs crates/medusa-cli/src/main.rs
-          git diff --cached --check
-          git commit -m "fix(mcp): validate Desktop Commander protocol outcomes"
-          git push origin HEAD:feat/desktop-commander-mcp
-
   quality:
     name: Workspace quality
     runs-on: ubuntu-latest
