@@ -1,5 +1,7 @@
 mod dto;
 mod runtime;
+#[cfg(test)]
+mod tempfile;
 
 use runtime::{
     RuntimeRegistry, runtime_cancel, runtime_close, runtime_command, runtime_configure_model,
