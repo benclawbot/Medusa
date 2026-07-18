@@ -22,6 +22,16 @@ jobs:
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
+      - name: Capture TUI daemon source context
+        if: matrix.os == 'ubuntu-latest'
+        uses: actions/upload-artifact@v4
+        with:
+          name: tui-daemon-source-context
+          path: |
+            crates/medusa-tui/Cargo.toml
+            crates/medusa-tui/src/lib.rs
+            crates/medusa-tui/src/session.rs
+          if-no-files-found: error
       - uses: dtolnay/rust-toolchain@1.88.0
         with:
           components: rustfmt,clippy
