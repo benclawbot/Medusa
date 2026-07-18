@@ -130,6 +130,19 @@ runtime.write_text(text)
 app = Path("apps/medusa-desktop/src/App.tsx")
 text = app.read_text()
 old = """  useEffect(() => {
+    transcriptRef.current?.scrollTo({ top: transcriptRef.current.scrollHeight, behavior: "smooth" });
+  }, [messages, activities]);
+"""
+new = """  useEffect(() => {
+    const transcript = transcriptRef.current;
+    if (transcript && typeof transcript.scrollTo === "function") {
+      transcript.scrollTo({ top: transcript.scrollHeight, behavior: "smooth" });
+    }
+  }, [messages, activities]);
+"""
+assert old in text
+text = text.replace(old, new, 1)
+old = """  useEffect(() => {
     const previous = window.localStorage.getItem("medusa.desktop.repo");
     if (!previous) return;
     void startRuntime(previous)
