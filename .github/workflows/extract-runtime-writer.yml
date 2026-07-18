@@ -26,7 +26,7 @@ jobs:
         with:
           components: rustfmt,clippy
 
-      - name: Extract frontend-neutral runtime
+      - name: Generate frontend-neutral runtime
         shell: bash
         run: |
           set -euo pipefail
@@ -41,12 +41,23 @@ jobs:
           if [ -f .github/extract-runtime-fix.py ]; then
             python3 .github/extract-runtime-fix.py
           fi
+
+      - name: Format and resolve workspace graph
+        run: |
           cargo fmt --all
           cargo check --workspace --all-features
-          cargo fmt --all -- --check
-          bash scripts/check-source-size.sh
-          cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
-          cargo test --workspace --all-features --locked
+
+      - name: Verify formatting
+        run: cargo fmt --all -- --check
+
+      - name: Verify source-size ceiling
+        run: bash scripts/check-source-size.sh
+
+      - name: Verify Clippy
+        run: cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
+
+      - name: Verify workspace tests
+        run: cargo test --workspace --all-features --locked
 
       - name: Commit extraction and remove temporary automation
         shell: bash
