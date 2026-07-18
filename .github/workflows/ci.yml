@@ -2,95 +2,106 @@ name: CI
 
 on:
   push:
-    branches: [feat/tui-markdown-io-consistency]
+    branches: [main]
+  pull_request:
 
 permissions:
   contents: read
 
 concurrency:
-  group: tui-review-fixes-${{ github.ref }}
-  cancel-in-progress: false
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
-  apply-reviewed-tui-fixes:
-    name: Apply reviewed TUI fixes
+  quality:
+    name: Workspace quality
     runs-on: ubuntu-latest
-    permissions:
-      contents: write
     steps:
       - uses: actions/checkout@v4
-        with:
-          ref: feat/tui-markdown-io-consistency
-          fetch-depth: 0
-      - name: Apply idempotent review fixes
-        shell: bash
-        run: |
-          python3 - <<'PY'
-          from pathlib import Path
-
-          changed = False
-
-          runtime = Path('crates/medusa-tui/src/runtime.rs')
-          text = runtime.read_text()
-          if 'fn cancel_requested(' not in text:
-              raise SystemExit('cancellation helper is missing')
-          if text.count('if cancel_requested(cancel, submission) {') < 2:
-              raise SystemExit('both cancellation boundaries are required')
-
-          tests = Path('crates/medusa-tui/src/runtime/tests.rs')
-          text = tests.read_text()
-          test_name = 'cancellation_clears_queued_followups_before_the_next_turn_boundary'
-          if test_name not in text:
-              text += '''
-
-#[test]
-fn cancellation_clears_queued_followups_before_the_next_turn_boundary() {
-    let submission = Arc::new(Mutex::new(SubmissionState {
-        busy: true,
-        followups: VecDeque::from([PromptDraft {
-            text: "do not persist this after cancellation".to_owned(),
-            ..PromptDraft::default()
-        }]),
-    }));
-    let cancel = AtomicBool::new(true);
-
-    assert!(cancel_requested(&cancel, &submission));
-    let state = submission.lock().expect("submission state");
-    assert!(!state.busy);
-    assert!(state.followups.is_empty());
-}
-'''
-              tests.write_text(text)
-              changed = True
-
-          readme = Path('README.md')
-          text = readme.read_text()
-          old_license = 'This repository currently has no declared software license. Add one before distributing or accepting external contributions.'
-          new_license = 'Medusa is licensed under the [MIT License](LICENSE).'
-          if old_license in text:
-              readme.write_text(text.replace(old_license, new_license, 1))
-              changed = True
-          elif new_license not in text:
-              raise SystemExit('README license statement not found')
-
-          Path('/tmp/review-fixes-changed').write_text('1' if changed else '0')
-          PY
       - uses: dtolnay/rust-toolchain@1.88.0
         with:
           components: rustfmt,clippy
-      - run: cargo fmt --all
-      - run: cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
-      - run: cargo test -p medusa-tui --locked
-      - run: bash scripts/check-source-size.sh
-      - name: Commit reviewed fixes
+      - name: Refresh dependency lock for the merged PR graph
+        run: cargo generate-lockfile
+      - name: Check formatting
         shell: bash
         run: |
-          if [ "$(cat /tmp/review-fixes-changed)" != "1" ]; then
-            exit 0
-          fi
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add README.md crates/medusa-tui/src/runtime/tests.rs
-          git diff --cached --check
-          git commit -m "fix(tui): discard queued follow-ups on cancellation"
-          git push origin HEAD:feat/tui-markdown-io-consistency
+          set -o pipefail
+          cargo fmt --all -- --check 2>&1 | tee rustfmt.log
+      - name: Capture rustfmt patch
+        if: failure()
+        shell: bash
+        run: |
+          cargo fmt --all
+          git diff -- . ':!Cargo.lock' > rustfmt.patch
+      - name: Upload rustfmt diagnostics
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: rustfmt-diagnostics
+          path: |
+            rustfmt.log
+            rustfmt.patch
+          if-no-files-found: ignore
+      - name: Clippy
+        shell: bash
+        run: |
+          set -o pipefail
+          cargo clippy --workspace --all-targets --all-features --locked -- -D warnings 2>&1 | tee clippy.log
+      - name: Upload Clippy diagnostics
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: clippy-diagnostics
+          path: clippy.log
+          if-no-files-found: ignore
+      - name: Full workspace tests
+        shell: bash
+        run: |
+          set -o pipefail
+          cargo test --workspace --all-features --locked -- --nocapture 2>&1 | tee workspace-tests.log
+      - name: Upload workspace test diagnostics
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: workspace-test-diagnostics
+          path: workspace-tests.log
+          if-no-files-found: error
+      - name: Documentation
+        env:
+          RUSTDOCFLAGS: -D warnings
+        run: cargo doc --workspace --all-features --locked --no-deps
+
+  supply-chain:
+    name: Dependency policy
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@1.88.0
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-deny,cargo-audit
+      - name: Cargo deny
+        shell: bash
+        run: |
+          set -o pipefail
+          cargo deny check advisories sources 2>&1 | tee cargo-deny.log
+      - name: Upload cargo-deny diagnostics
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: cargo-deny-diagnostics
+          path: cargo-deny.log
+          if-no-files-found: error
+      - name: Cargo audit
+        shell: bash
+        run: |
+          set -o pipefail
+          cargo audit 2>&1 | tee cargo-audit.log
+      - name: Upload cargo-audit diagnostics
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: cargo-audit-diagnostics
+          path: cargo-audit.log
+          if-no-files-found: error
