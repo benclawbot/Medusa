@@ -44,4 +44,15 @@ jobs:
       - name: Lint daemon
         run: cargo clippy -p medusa-daemon --all-targets --locked -- -D warnings
       - name: Test daemon reconnect and recovery
-        run: cargo test -p medusa-daemon --locked -- --nocapture
+        id: daemon_tests
+        shell: bash
+        run: |
+          set -o pipefail
+          cargo test -p medusa-daemon --locked -- --nocapture 2>&1 | tee daemon-tests.log
+      - name: Upload daemon test diagnostics
+        if: failure() && steps.daemon_tests.outcome == 'failure'
+        uses: actions/upload-artifact@v4
+        with:
+          name: daemon-tests-${{ matrix.os }}
+          path: daemon-tests.log
+          if-no-files-found: error
