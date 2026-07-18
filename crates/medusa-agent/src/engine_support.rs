@@ -2,6 +2,7 @@ use std::{fs, path::Path};
 
 use medusa_config::Mode;
 use medusa_core::{ErrorCategory, ErrorCode, MedusaError, MedusaResult};
+use medusa_extensions::{DesktopCommanderSettings, desktop_commander_tool_is_mutating};
 use medusa_protocol::{Actor, EventPayload};
 use medusa_provider::{ImageSource, Message, MessageBlock, ProviderCapabilities, Role};
 use time::OffsetDateTime;
@@ -79,8 +80,11 @@ pub(crate) fn system_prompt_with_context(
     prompt
 }
 
-pub(crate) fn available_tools(mode: Mode) -> Vec<medusa_provider::ToolDefinition> {
-    built_in_tools()
+pub(crate) fn available_tools(
+    mode: Mode,
+    desktop_commander: &DesktopCommanderSettings,
+) -> Vec<medusa_provider::ToolDefinition> {
+    built_in_tools(desktop_commander)
         .into_iter()
         .filter(|tool| tool_allowed(mode, &tool.name))
         .collect()
@@ -98,6 +102,7 @@ pub(crate) fn tool_allowed(mode: Mode, tool: &str) -> bool {
                 | "skill_read"
                 | "update_plan"
                 | "ask_user_question"
+                | "desktop_commander"
         )
 }
 
@@ -347,6 +352,9 @@ pub(crate) fn has_mutating_tool_result(session: &AgentSession) -> bool {
                 tool,
                 exit_code: Some(0)
             } if matches!(tool.as_str(), "fs_create_dir" | "fs_write" | "patch_apply" | "symbol_rename" | "git_checkpoint")
+                || tool
+                    .strip_prefix("desktop_commander:")
+                    .is_some_and(desktop_commander_tool_is_mutating)
         )
     })
 }
@@ -644,7 +652,7 @@ mod tests {
     #[test]
     fn web_tools_are_available_in_standard_and_planning_modes() {
         for mode in [Mode::Yolo, Mode::ReadOnly] {
-            let tools = available_tools(mode)
+            let tools = available_tools(mode, &DesktopCommanderSettings::default())
                 .into_iter()
                 .map(|tool| tool.name)
                 .collect::<Vec<_>>();

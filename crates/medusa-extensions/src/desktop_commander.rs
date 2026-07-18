@@ -89,8 +89,10 @@ impl Default for DesktopCommanderSettings {
 impl DesktopCommanderSettings {
     #[must_use]
     pub fn from_env() -> Self {
-        let mut settings = Self::default();
-        settings.enabled = env_flag("MEDUSA_DESKTOP_COMMANDER_ENABLED");
+        let mut settings = Self {
+            enabled: env_flag("MEDUSA_DESKTOP_COMMANDER_ENABLED"),
+            ..Self::default()
+        };
         if let Ok(command) = env::var("MEDUSA_DESKTOP_COMMANDER_COMMAND") {
             if !command.trim().is_empty() {
                 settings.command = PathBuf::from(command);
@@ -120,15 +122,10 @@ impl DesktopCommanderSettings {
         }
         settings.allow_write = env_flag("MEDUSA_DESKTOP_COMMANDER_ALLOW_WRITE");
         settings.allow_process = env_flag("MEDUSA_DESKTOP_COMMANDER_ALLOW_PROCESS");
-        settings.timeout = Duration::from_millis(env_u64(
-            "MEDUSA_DESKTOP_COMMANDER_TIMEOUT_MS",
-            30_000,
-        ));
-        settings.max_output_bytes = env_usize(
-            "MEDUSA_DESKTOP_COMMANDER_MAX_OUTPUT_BYTES",
-            256 * 1024,
-        )
-        .max(1024);
+        settings.timeout =
+            Duration::from_millis(env_u64("MEDUSA_DESKTOP_COMMANDER_TIMEOUT_MS", 30_000));
+        settings.max_output_bytes =
+            env_usize("MEDUSA_DESKTOP_COMMANDER_MAX_OUTPUT_BYTES", 256 * 1024).max(1024);
         settings
     }
 
@@ -287,10 +284,8 @@ impl DesktopCommanderClient {
             validate_process_request(tool, arguments)?;
         }
         let arguments = sanitize_arguments(repo, arguments)?;
-        let mut result = self.request(
-            "tools/call",
-            json!({"name": tool, "arguments": arguments}),
-        )?;
+        let mut result =
+            self.request("tools/call", json!({"name": tool, "arguments": arguments}))?;
         redact_value(&mut result);
         validate_mcp_output(&result)?;
         Ok(result)
@@ -362,10 +357,9 @@ impl DesktopCommanderClient {
                     "Desktop Commander {method} failed: {error}"
                 )));
             }
-            return message
-                .get("result")
-                .cloned()
-                .ok_or_else(|| execution(format!("Desktop Commander {method} returned no result")));
+            return message.get("result").cloned().ok_or_else(|| {
+                execution(format!("Desktop Commander {method} returned no result"))
+            });
         }
     }
 
@@ -432,9 +426,7 @@ fn spawn_reader(
                     }
                 }
                 Err(error) => {
-                    let _ = sender.send(Err(format!(
-                        "read Desktop Commander output: {error}"
-                    )));
+                    let _ = sender.send(Err(format!("read Desktop Commander output: {error}")));
                     break;
                 }
             }
@@ -684,12 +676,13 @@ mod tests {
 
     #[test]
     fn process_and_meta_tools_fail_closed() {
-        let mut settings = DesktopCommanderSettings::default();
-        settings.enabled = true;
-        settings.allowed_tools.extend([
-            "start_process".to_owned(),
-            "set_config_value".to_owned(),
-        ]);
+        let mut settings = DesktopCommanderSettings {
+            enabled: true,
+            ..DesktopCommanderSettings::default()
+        };
+        settings
+            .allowed_tools
+            .extend(["start_process".to_owned(), "set_config_value".to_owned()]);
         assert!(!settings.tool_allowed("start_process", false));
         assert!(!settings.tool_allowed("set_config_value", false));
         settings.allow_process = true;

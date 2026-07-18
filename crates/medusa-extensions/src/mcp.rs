@@ -120,7 +120,7 @@ fn validate_mcp_entry(entry: &McpRegistryEntry, executable: &Path) -> MedusaResu
     Ok(())
 }
 
-fn validate_mcp_output(payload: &Value) -> MedusaResult<()> {
+pub(crate) fn validate_mcp_output(payload: &Value) -> MedusaResult<()> {
     let serialized = serde_json::to_string(payload)?.to_ascii_lowercase();
     for forbidden in [
         "ignore previous instructions",

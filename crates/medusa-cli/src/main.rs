@@ -9,6 +9,7 @@ use clap::{Parser, Subcommand};
 use medusa_agent::{AgentEngine, bootstrap};
 use medusa_config::Config;
 use medusa_core::{ErrorCategory, ErrorCode, MedusaError, MedusaResult};
+use medusa_extensions::DesktopCommanderSettings;
 use medusa_hardening::{CURRENT_SCHEMA_VERSION, Migrator};
 use medusa_provider::MiniMaxProvider;
 use medusa_tui::{TuiOptions, run as run_tui};
@@ -129,7 +130,7 @@ fn run() -> MedusaResult<()> {
 }
 
 fn doctor(repo: &Path, config: &Config) -> MedusaResult<()> {
-    let checks = vec![
+    let mut checks = vec![
         command_check("git", "git", &["--version"]),
         command_check("node", "node", &["--version"]),
         command_check("cargo", "cargo", &["--version"]),
@@ -166,6 +167,9 @@ fn doctor(repo: &Path, config: &Config) -> MedusaResult<()> {
             detail: format!("supported schema <= {CURRENT_SCHEMA_VERSION}"),
         },
     ];
+    checks.push(desktop_commander_check(
+        &DesktopCommanderSettings::from_env(),
+    ));
     println!("{}", serde_json::to_string_pretty(&checks)?);
     if checks.iter().all(|check| check.ok) {
         Ok(())
@@ -198,6 +202,54 @@ fn command_check(name: &'static str, program: &str, args: &[&str]) -> DoctorChec
             detail: error.to_string(),
         },
     }
+}
+
+fn desktop_commander_check(settings: &DesktopCommanderSettings) -> DoctorCheck {
+    if !settings.requested() {
+        return DoctorCheck {
+            name: "desktop_commander_mcp",
+            ok: true,
+            detail: "disabled; set MEDUSA_DESKTOP_COMMANDER_ENABLED=true to opt in".to_owned(),
+        };
+    }
+    if let Some(error) = settings.configuration_error() {
+        return DoctorCheck {
+            name: "desktop_commander_mcp",
+            ok: false,
+            detail: error.to_owned(),
+        };
+    }
+    let available = executable_available(settings.command());
+    DoctorCheck {
+        name: "desktop_commander_mcp",
+        ok: available,
+        detail: if available {
+            format!(
+                "{} via {}",
+                settings.package_label(),
+                settings.command().display()
+            )
+        } else {
+            format!("{} was not found on PATH", settings.command().display())
+        },
+    }
+}
+
+fn executable_available(program: &Path) -> bool {
+    if program.components().count() > 1 {
+        return program.is_file();
+    }
+    let Some(path) = std::env::var_os("PATH") else {
+        return false;
+    };
+    std::env::split_paths(&path).any(|directory| {
+        let candidate = directory.join(program);
+        candidate.is_file()
+            || (cfg!(windows)
+                && ["exe", "cmd", "bat"]
+                    .iter()
+                    .any(|extension| candidate.with_extension(extension).is_file()))
+    })
 }
 
 fn writable_directory(path: &Path) -> bool {
