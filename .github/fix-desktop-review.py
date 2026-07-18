@@ -112,7 +112,8 @@ fn validate_image_dimensions(name: &str, width: u32, height: u32) -> Result<(), 
 '''
 text = text[:start] + safe_image + text[end:]
 
-test_marker = """    fn repository_file_attachment_keeps_canonical_path_and_size() {
+test_marker = """    #[test]
+    fn repository_file_attachment_keeps_canonical_path_and_size() {
 """
 test = """    #[test]
     fn oversized_image_dimensions_are_rejected_before_decode() {
@@ -121,7 +122,6 @@ test = """    #[test]
         assert!(error.contains("pixels"));
     }
 
-    #[test]
 """ + test_marker
 assert test_marker in text
 text = text.replace(test_marker, test, 1)
