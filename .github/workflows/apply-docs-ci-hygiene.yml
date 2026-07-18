@@ -1,0 +1,47 @@
+name: Apply Documentation and CI Hygiene
+
+on:
+  push:
+    branches: [agent/docs-ci-hygiene]
+    paths: [.github/docs-ci-hygiene-trigger]
+
+permissions:
+  contents: write
+
+concurrency:
+  group: docs-ci-hygiene-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  apply:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: agent/docs-ci-hygiene
+          fetch-depth: 0
+
+      - name: Apply deterministic documentation and workflow changes
+        run: python3 .github/apply-docs-ci-hygiene.py
+
+      - name: Validate generated changes
+        shell: bash
+        run: |
+          set -euo pipefail
+          git diff --check
+          ruby -e "require 'yaml'; Dir['.github/workflows/*.{yml,yaml}'].each { |f| YAML.load_file(f); puts \"yaml-ok #{f}\" }"
+          grep -q '## Current status and evidence' README.md
+          grep -q 'Draft pull requests skip these expensive jobs' docs/CAPABILITY-EVIDENCE.md
+          grep -q "github.event.pull_request.draft == false" .github/workflows/release-gates.yml
+          bash scripts/check-source-size.sh
+
+      - name: Commit durable changes and remove temporary writer
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add README.md docs/CAPABILITY-EVIDENCE.md .github/workflows/release-gates.yml .github/workflows/refactor-guardrails.yml
+          git rm .github/apply-docs-ci-hygiene.py .github/docs-ci-hygiene-trigger .github/workflows/apply-docs-ci-hygiene.yml
+          git commit -m "docs(ci): align evidence and reduce draft PR cost"
+          git push origin HEAD:agent/docs-ci-hygiene
