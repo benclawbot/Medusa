@@ -1,0 +1,33 @@
+name: Daemon
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: daemon-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  daemon:
+    name: daemon (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-2022]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@1.88.0
+        with:
+          components: rustfmt,clippy
+      - name: Check workspace formatting
+        run: cargo fmt --all -- --check
+      - name: Lint daemon
+        run: cargo clippy -p medusa-daemon --all-targets --locked -- -D warnings
+      - name: Test daemon reconnect and recovery
+        run: cargo test -p medusa-daemon --locked -- --nocapture
