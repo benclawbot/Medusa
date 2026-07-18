@@ -1,5 +1,6 @@
 [package]
 name = "medusa-runtime"
+description = "Frontend-neutral interactive session runtime for Medusa"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
