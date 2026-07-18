@@ -3,7 +3,7 @@ use std::{
     fs::{self, File, OpenOptions},
     io::{BufRead, BufReader, Write},
     path::{Path, PathBuf},
-    process::{Command, Stdio},
+    process::Command,
     sync::{
         Arc, Mutex,
         atomic::{AtomicBool, Ordering},
@@ -11,6 +11,9 @@ use std::{
     thread,
     time::Duration,
 };
+
+#[cfg(unix)]
+use std::process::Stdio;
 
 use medusa_core::{ErrorCategory, ErrorCode, MedusaError, MedusaResult};
 use time::OffsetDateTime;
@@ -109,12 +112,7 @@ pub fn spawn(
                 persist_jobs(&paths, &jobs)?;
             }
             let listener = LocalListener::bind(&paths.socket).map_err(transport_error)?;
-            run_loop(
-                listener,
-                paths,
-                Arc::new(Mutex::new(jobs)),
-                server_shutdown,
-            )
+            run_loop(listener, paths, Arc::new(Mutex::new(jobs)), server_shutdown)
         })
         .map_err(|error| {
             MedusaError::new(
