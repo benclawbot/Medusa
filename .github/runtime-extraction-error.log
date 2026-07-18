@@ -1,0 +1,300 @@
+[0m[1m[38;5;9merror[E0252][0m[0m[1m: the name `SlashCommand` is defined multiple times[0m
+[0m  [0m[0m[1m[38;5;12m--> [0m[0mcrates/medusa-runtime/src/lib.rs:31:62[0m
+[0m   [0m[0m[1m[38;5;12m|[0m
+[0m[1m[38;5;12m21[0m[0m [0m[0m[1m[38;5;12m|[0m[0m [0m[0m    commands::{Effort, ModelCommand, ModelConfiguration, SlashCommand},[0m
+[0m   [0m[0m[1m[38;5;12m|[0m[0m                                                          [0m[0m[1m[38;5;12m------------[0m[0m [0m[0m[1m[38;5;12mprevious import of the type `SlashCommand` here[0m
+[0m[1m[38;5;12m...[0m
+[0m[1m[38;5;12m31[0m[0m [0m[0m[1m[38;5;12m|[0m[0m [0m[0mpub use commands::{Effort, ModelCommand, ModelConfiguration, SlashCommand};[0m
+[0m   [0m[0m[1m[38;5;12m|[0m[0m                                                              [0m[0m[1m[38;5;9m^^^^^^^^^^^^[0m[0m [0m[0m[1m[38;5;9m`SlashCommand` reimported here[0m
+[0m   [0m[0m[1m[38;5;12m|[0m
+[0m   [0m[0m[1m[38;5;12m= [0m[0m[1mnote[0m[0m: `SlashCommand` must be defined only once in the type namespace of this module[0m
+
+[0m[1m[38;5;9merror[E0252][0m[0m[1m: the name `PromptDraft` is defined multiple times[0m
+[0m  [0m[0m[1m[38;5;12m--> [0m[0mcrates/medusa-runtime/src/lib.rs:35:23[0m
+[0m   [0m[0m[1m[38;5;12m|[0m
+[0m[1m[38;5;12m22[0m[0m [0m[0m[1m[38;5;12m|[0m[0m [0m[0m    prompt::PromptDraft,[0m
+[0m   [0m[0m[1m[38;5;12m|[0m[0m     [0m[0m[1m[38;5;12m-------------------[0m[0m [0m[0m[1m[38;5;12mprevious import of the type `PromptDraft` here[0m
+[0m[1m[38;5;12m...[0m
+[0m[1m[38;5;12m35[0m[0m [0m[0m[1m[38;5;12m|[0m[0m [0m[0m    PromptAttachment, PromptDraft, TextAttachment,[0m
+[0m   [0m[0m[1m[38;5;12m|[0m[0m                       [0m[0m[1m[38;5;9m^^^^^^^^^^^[0m[0m[1m[38;5;12m--[0m
+[0m   [0m[0m[1m[38;5;12m|[0m[0m                       [0m[0m[1m[38;5;12m|[0m
+[0m   [0m[0m[1m[38;5;12m|[0m[0m                       [0m[0m[1m[38;5;9m`PromptDraft` reimported here[0m
+[0m   [0m[0m[1m[38;5;12m|[0m[0m                       [0m[0m[1m[38;5;12mhelp: remove unnecessary import[0m
+[0m   [0m[0m[1m[38;5;12m|[0m
+[0m   [0m[0m[1m[38;5;12m= [0m[0m[1mnote[0m[0m: `PromptDraft` must be defined only once in the type namespace of this module[0m
+
+[0m[1m[38;5;9merror[0m[0m[1m: unused imports: `Effort`, `ModelCommand`, `ModelConfiguration`, and `SlashCommand`[0m
+[0m  [0m[0m[1m[38;5;12m--> [0m[0mcrates/medusa-runtime/src/lib.rs:31:20[0m
+[0m   [0m[0m[1m[38;5;12m|[0m
+[0m[1m[38;5;12m31[0m[0m [0m[0m[1m[38;5;12m|[0m[0m [0m[0mpub use commands::{Effort, ModelCommand, ModelConfiguration, SlashCommand};[0m
+[0m   [0m[0m[1m[38;5;12m|[0m[0m                    [0m[0m[1m[38;5;9m^^^^^^[0m[0m  [0m[0m[1m[38;5;9m^^^^^^^^^^^^[0m[0m  [0m[0m[1m[38;5;9m^^^^^^^^^^^^^^^^^^[0m[0m  [0m[0m[1m[38;5;9m^^^^^^^^^^^^[0m
+[0m   [0m[0m[1m[38;5;12m|[0m
+[0m   [0m[0m[1m[38;5;12m= [0m[0m[1mnote[0m[0m: `-D unused-imports` implied by `-D warnings`[0m
+[0m   [0m[0m[1m[38;5;12m= [0m[0m[1mhelp[0m[0m: to override `-D warnings` add `#[allow(unused_imports)]`[0m
+
+[0m[1m[38;5;9merror[0m[0m[1m: unused import: `PromptDraft`[0m
+[0m  [0m[0m[1m[38;5;12m--> [0m[0mcrates/medusa-runtime/src/lib.rs:35:23[0m
+[0m   [0m[0m[1m[38;5;12m|[0m
+[0m[1m[38;5;12m35[0m[0m [0m[0m[1m[38;5;12m|[0m[0m [0m[0m    PromptAttachment, PromptDraft, TextAttachment,[0m
+[0m   [0m[0m[1m[38;5;12m|[0m[0m                       [0m[0m[1m[38;5;9m^^^^^^^^^^^[0m
+
+[0m[1mFor more information about this error, try `rustc --explain E0252`.[0m
+[1m[31merror[0m[1m:[0m could not compile `medusa-runtime` (lib test) due to 7 previous errors
+[1m[33mwarning[0m[1m:[0m build failed, waiting for other jobs to finish...
+[1m[31merror[0m[1m:[0m could not compile `medusa-runtime` (lib) due to 7 previous errors
+[1m[32m   Compiling[0m cfg-if v1.0.4
+[1m[32m   Compiling[0m libc v0.2.186
+[1m[32m   Compiling[0m memchr v2.8.3
+[1m[32m   Compiling[0m serde_core v1.0.228
+[1m[32m   Compiling[0m itoa v1.0.18
+[1m[32m   Compiling[0m zerocopy v0.8.54
+[1m[32m   Compiling[0m zmij v1.0.21
+[1m[32m   Compiling[0m thiserror v2.0.18
+[1m[32m   Compiling[0m once_cell v1.21.4
+[1m[32m   Compiling[0m getrandom v0.3.4
+[1m[32m   Compiling[0m bitflags v2.13.0
+[1m[32m   Compiling[0m rand_core v0.9.5
+[1m[32m   Compiling[0m linux-raw-sys v0.12.1
+[1m[32m   Compiling[0m smallvec v1.15.2
+[1m[32m   Compiling[0m typenum v1.20.1
+[1m[32m   Compiling[0m generic-array v0.14.7
+[1m[32m   Compiling[0m serde v1.0.228
+[1m[32m   Compiling[0m serde_json v1.0.150
+[1m[32m   Compiling[0m rustix v1.1.4
+[1m[32m   Compiling[0m getrandom v0.4.3
+[1m[32m   Compiling[0m fastrand v2.4.1
+[1m[32m   Compiling[0m num-conv v0.2.2
+[1m[32m   Compiling[0m time-core v0.1.8
+[1m[32m   Compiling[0m powerfmt v0.2.0
+[1m[32m   Compiling[0m deranged v0.5.8
+[1m[32m   Compiling[0m ppv-lite86 v0.2.21
+[1m[32m   Compiling[0m time-macros v0.2.27
+[1m[32m   Compiling[0m rand_chacha v0.9.0
+[1m[32m   Compiling[0m rand v0.9.5
+[1m[32m   Compiling[0m block-buffer v0.10.4
+[1m[32m   Compiling[0m crypto-common v0.1.7
+[1m[32m   Compiling[0m digest v0.10.7
+[1m[32m   Compiling[0m zerofrom v0.1.8
+[1m[32m   Compiling[0m stable_deref_trait v1.2.1
+[1m[32m   Compiling[0m cpufeatures v0.2.17
+[1m[32m   Compiling[0m sha2 v0.10.9
+[1m[32m   Compiling[0m ulid v1.2.1
+[1m[32m   Compiling[0m medusa-core v1.0.0 (/home/runner/work/Medusa/Medusa/crates/medusa-core)
+[1m[32m   Compiling[0m time v0.3.47
+[1m[32m   Compiling[0m yoke v0.8.3
+[1m[32m   Compiling[0m pin-project-lite v0.2.17
+[1m[32m   Compiling[0m log v0.4.33
+[1m[32m   Compiling[0m futures-core v0.3.32
+[1m[32m   Compiling[0m zerovec v0.11.6
+[1m[32m   Compiling[0m futures-sink v0.3.32
+[1m[32m   Compiling[0m slab v0.4.12
+[1m[32m   Compiling[0m tempfile v3.27.0
+[1m[32m   Compiling[0m tinystr v0.8.3
+[1m[32m   Compiling[0m hashbrown v0.17.1
+[1m[32m   Compiling[0m futures-io v0.3.32
+[1m[32m   Compiling[0m equivalent v1.0.2
+[1m[32m   Compiling[0m writeable v0.6.3
+[1m[32m   Compiling[0m litemap v0.8.2
+[1m[32m   Compiling[0m futures-task v0.3.32
+[1m[32m   Compiling[0m icu_locale_core v2.2.0
+[1m[32m   Compiling[0m futures-util v0.3.32
+[1m[32m   Compiling[0m indexmap v2.14.0
+[1m[32m   Compiling[0m potential_utf v0.1.5
+[1m[32m   Compiling[0m zerotrie v0.2.4
+[1m[32m   Compiling[0m bytes v1.12.1
+[1m[32m   Compiling[0m percent-encoding v2.3.2
+[1m[32m   Compiling[0m utf8_iter v1.0.4
+[1m[32m   Compiling[0m icu_collections v2.2.0
+[1m[32m   Compiling[0m icu_provider v2.2.0
+[1m[32m   Compiling[0m mio v1.2.1
+[1m[32m   Compiling[0m icu_normalizer_data v2.2.0
+[1m[32m   Compiling[0m icu_properties_data v2.2.0
+[1m[32m   Compiling[0m icu_normalizer v2.2.0
+[1m[32m   Compiling[0m icu_properties v2.2.0
+[1m[32m   Compiling[0m socket2 v0.6.4
+[1m[32m   Compiling[0m tokio v1.52.3
+[1m[32m   Compiling[0m http v1.4.2
+[1m[32m   Compiling[0m form_urlencoded v1.2.2
+[1m[32m   Compiling[0m serde_spanned v0.6.9
+[1m[32m   Compiling[0m idna_adapter v1.2.2
+[1m[32m   Compiling[0m toml_datetime v0.6.11
+[1m[32m   Compiling[0m toml_write v0.1.2
+[1m[32m   Compiling[0m winnow v0.7.15
+[1m[32m   Compiling[0m zeroize v1.9.0
+[1m[32m   Compiling[0m regex-syntax v0.8.11
+[1m[32m   Compiling[0m rustls-pki-types v1.15.0
+[1m[32m   Compiling[0m http-body v1.0.1
+[1m[32m   Compiling[0m idna v1.1.0
+[1m[32m   Compiling[0m toml_edit v0.22.27
+[1m[32m   Compiling[0m getrandom v0.2.17
+[1m[32m   Compiling[0m ryu v1.0.23
+[1m[32m   Compiling[0m untrusted v0.9.0
+[1m[32m   Compiling[0m ring v0.17.14
+[1m[32m   Compiling[0m url v2.5.8
+[1m[32m   Compiling[0m toml v0.8.23
+[1m[32m   Compiling[0m tower-service v0.3.3
+[1m[32m   Compiling[0m try-lock v0.2.5
+[1m[32m   Compiling[0m want v0.3.1
+[1m[32m   Compiling[0m rustls-webpki v0.103.13
+[1m[32m   Compiling[0m httparse v1.10.1
+[1m[32m   Compiling[0m futures-channel v0.3.32
+[1m[32m   Compiling[0m tracing-core v0.1.36
+[1m[32m   Compiling[0m subtle v2.6.1
+[1m[32m   Compiling[0m atomic-waker v1.1.2
+[1m[32m   Compiling[0m hyper v1.10.1
+[1m[32m   Compiling[0m tracing v0.1.44
+[1m[32m   Compiling[0m rustls v0.23.41
+[1m[32m   Compiling[0m medusa-config v1.0.0 (/home/runner/work/Medusa/Medusa/crates/medusa-config)
+[1m[32m   Compiling[0m sync_wrapper v1.0.2
+[1m[32m   Compiling[0m medusa-browser-client v1.0.0 (/home/runner/work/Medusa/Medusa/crates/medusa-browser-client)
+[1m[32m   Compiling[0m same-file v1.0.6
+[1m[32m   Compiling[0m tower-layer v0.3.3
+[1m[32m   Compiling[0m base64 v0.22.1
+[1m[32m   Compiling[0m ipnet v2.12.0
+[1m[32m   Compiling[0m tower v0.5.3
+[1m[32m   Compiling[0m walkdir v2.5.0
+[1m[32m   Compiling[0m hyper-util v0.1.20
+[1m[32m   Compiling[0m webpki-roots v1.0.8
+[1m[32m   Compiling[0m aho-corasick v1.1.4
+[1m[32m   Compiling[0m hex v0.4.3
+[1m[32m   Compiling[0m tower-http v0.6.11
+[1m[32m   Compiling[0m tree-sitter-language v0.1.7
+[1m[32m   Compiling[0m serde_urlencoded v0.7.1
+[1m[32m   Compiling[0m http-body-util v0.1.3
+[1m[32m   Compiling[0m regex-automata v0.4.15
+[1m[32m   Compiling[0m medusa-protocol v1.0.0 (/home/runner/work/Medusa/Medusa/crates/medusa-protocol)
+[1m[32m   Compiling[0m tokio-rustls v0.26.4
+[1m[32m   Compiling[0m hyper-rustls v0.27.9
+[1m[32m   Compiling[0m streaming-iterator v0.1.9
+[1m[32m   Compiling[0m reqwest v0.12.28
+[1m[32m   Compiling[0m unsafe-libyaml v0.2.11
+[1m[32m   Compiling[0m regex v1.13.0
+[1m[32m   Compiling[0m tree-sitter v0.24.7
+[1m[32m   Compiling[0m serde_yaml v0.9.34+deprecated
+[1m[32m   Compiling[0m tree-sitter-rust v0.23.3
+[1m[32m   Compiling[0m simd-adler32 v0.3.9
+[1m[32m   Compiling[0m medusa-provider v1.0.0 (/home/runner/work/Medusa/Medusa/crates/medusa-provider)
+[1m[32m   Compiling[0m adler2 v2.0.1
+[1m[32m   Compiling[0m scopeguard v1.2.0
+[1m[32m   Compiling[0m lock_api v0.4.14
+[1m[32m   Compiling[0m miniz_oxide v0.8.9
+[1m[32m   Compiling[0m medusa-extensions v1.0.0 (/home/runner/work/Medusa/Medusa/crates/medusa-extensions)
+[1m[32m   Compiling[0m num-traits v0.2.19
+[1m[32m   Compiling[0m parking_lot_core v0.9.12
+[1m[32m   Compiling[0m crc32fast v1.5.0
+[1m[32m   Compiling[0m medusa-intelligence v1.0.0 (/home/runner/work/Medusa/Medusa/crates/medusa-intelligence)
+[1m[32m   Compiling[0m flate2 v1.1.9
+[1m[32m   Compiling[0m parking_lot v0.12.5
+[1m[32m   Compiling[0m fdeflate v0.3.7
+[1m[32m   Compiling[0m medusa-agent v1.0.0 (/home/runner/work/Medusa/Medusa/crates/medusa-agent)
+[1m[32m   Compiling[0m errno v0.3.14
+[1m[32m   Compiling[0m bitflags v1.3.2
+[1m[32m   Compiling[0m utf8parse v0.2.2
+[1m[32m   Compiling[0m anstyle-parse v1.0.0
+[1m[32m   Compiling[0m png v0.17.16
+[1m[32m   Compiling[0m signal-hook-registry v1.4.8
+[1m[32m   Compiling[0m medusa-daemon v1.0.0 (/home/runner/work/Medusa/Medusa/crates/medusa-daemon)
+[1m[32m   Compiling[0m colorchoice v1.0.5
+[1m[32m   Compiling[0m anstyle-query v1.1.5
+[1m[32m   Compiling[0m pxfm v0.1.30
+[1m[32m   Compiling[0m anstyle v1.0.14
+[1m[32m   Compiling[0m is_terminal_polyfill v1.70.2
+[1m[32m   Compiling[0m anstream v1.0.0
+[1m[32m   Compiling[0m signal-hook v0.3.18
+[1m[32m   Compiling[0m png v0.18.1
+[1m[32m   Compiling[0m gethostname v1.1.0
+[1m[32m   Compiling[0m clap_lex v1.1.0
+[1m[32m   Compiling[0m x11rb-protocol v0.13.2
+[1m[32m   Compiling[0m moxcms v0.8.1
+[1m[32m   Compiling[0m byteorder-lite v0.1.0
+[1m[32m   Compiling[0m bytemuck v1.25.1
+[1m[32m   Compiling[0m strsim v0.11.1
+[1m[32m   Compiling[0m clap_builder v4.6.0
+[1m[32m   Compiling[0m signal-hook-mio v0.2.5
+[1m[32m   Compiling[0m derive_more v2.1.1
+[1m[32m   Compiling[0m medusa-runtime v1.0.0 (/home/runner/work/Medusa/Medusa/crates/medusa-runtime)
+[0m[1m[38;5;9merror[E0252][0m[0m[1m: the name `Effort` is defined multiple times[0m
+[0m  [0m[0m[1m[38;5;12m--> [0m[0mcrates/medusa-runtime/src/lib.rs:31:20[0m
+[0m   [0m[0m[1m[38;5;12m|[0m
+[0m[1m[38;5;12m21[0m[0m [0m[0m[1m[38;5;12m|[0m[0m [0m[0m    commands::{Effort, ModelCommand, ModelConfiguration, SlashCommand},[0m
+[0m   [0m[0m[1m[38;5;12m|[0m[0m                [0m[0m[1m[38;5;12m------[0m[0m [0m[0m[1m[38;5;12mprevious import of the type `Effort` here[0m
+[0m[1m[38;5;12m...[0m
+[0m[1m[38;5;12m31[0m[0m [0m[0m[1m[38;5;12m|[0m[0m [0m[0mpub use commands::{Effort, ModelCommand, ModelConfiguration, SlashCommand};[0m
+[0m   [0m[0m[1m[38;5;12m|[0m[0m                    [0m[0m[1m[38;5;9m^^^^^^[0m[0m[1m[38;5;12m--[0m
+[0m   [0m[0m[1m[38;5;12m|[0m[0m                    [0m[0m[1m[38;5;12m|[0m
+[0m   [0m[0m[1m[38;5;12m|[0m[0m                    [0m[0m[1m[38;5;9m`Effort` reimported here[0m
+[0m   [0m[0m[1m[38;5;12m|[0m[0m                    [0m[0m[1m[38;5;12mhelp: remove unnecessary import[0m
+[0m   [0m[0m[1m[38;5;12m|[0m
+[0m   [0m[0m[1m[38;5;12m= [0m[0m[1mnote[0m[0m: `Effort` must be defined only once in the type namespace of this module[0m
+
+[0m[1m[38;5;9merror[E0252][0m[0m[1m: the name `ModelCommand` is defined multiple times[0m
+[0m  [0m[0m[1m[38;5;12m--> [0m[0mcrates/medusa-runtime/src/lib.rs:31:28[0m
+[0m   [0m[0m[1m[38;5;12m|[0m
+[0m[1m[38;5;12m21[0m[0m [0m[0m[1m[38;5;12m|[0m[0m [0m[0m    commands::{Effort, ModelCommand, ModelConfiguration, SlashCommand},[0m
+[0m   [0m[0m[1m[38;5;12m|[0m[0m                        [0m[0m[1m[38;5;12m------------[0m[0m [0m[0m[1m[38;5;12mprevious import of the type `ModelCommand` here[0m
+[0m[1m[38;5;12m...[0m
+[0m[1m[38;5;12m31[0m[0m [0m[0m[1m[38;5;12m|[0m[0m [0m[0mpub use commands::{Effort, ModelCommand, ModelConfiguration, SlashCommand};[0m
+[0m   [0m[0m[1m[38;5;12m|[0m[0m                            [0m[0m[1m[38;5;9m^^^^^^^^^^^^[0m[0m[1m[38;5;12m--[0m
+[0m   [0m[0m[1m[38;5;12m|[0m[0m                            [0m[0m[1m[38;5;12m|[0m
+[0m   [0m[0m[1m[38;5;12m|[0m[0m                            [0m[0m[1m[38;5;9m`ModelCommand` reimported here[0m
+[0m   [0m[0m[1m[38;5;12m|[0m[0m                            [0m[0m[1m[38;5;12mhelp: remove unnecessary import[0m
+[0m   [0m[0m[1m[38;5;12m|[0m
+[0m   [0m[0m[1m[38;5;12m= [0m[0m[1mnote[0m[0m: `ModelCommand` must be defined only once in the type namespace of this module[0m
+
+[0m[1m[38;5;9merror[E0252][0m[0m[1m: the name `ModelConfiguration` is defined multiple times[0m
+[0m  [0m[0m[1m[38;5;12m--> [0m[0mcrates/medusa-runtime/src/lib.rs:31:42[0m
+[0m   [0m[0m[1m[38;5;12m|[0m
+[0m[1m[38;5;12m21[0m[0m [0m[0m[1m[38;5;12m|[0m[0m [0m[0m    commands::{Effort, ModelCommand, ModelConfiguration, SlashCommand},[0m
+[0m   [0m[0m[1m[38;5;12m|[0m[0m                                      [0m[0m[1m[38;5;12m------------------[0m[0m [0m[0m[1m[38;5;12mprevious import of the type `ModelConfiguration` here[0m
+[0m[1m[38;5;12m...[0m
+[0m[1m[38;5;12m31[0m[0m [0m[0m[1m[38;5;12m|[0m[0m [0m[0mpub use commands::{Effort, ModelCommand, ModelConfiguration, SlashCommand};[0m
+[0m   [0m[0m[1m[38;5;12m|[0m[0m                                          [0m[0m[1m[38;5;9m^^^^^^^^^^^^^^^^^^[0m[0m[1m[38;5;12m--[0m
+[0m   [0m[0m[1m[38;5;12m|[0m[0m                                          [0m[0m[1m[38;5;12m|[0m
+[0m   [0m[0m[1m[38;5;12m|[0m[0m                                          [0m[0m[1m[38;5;9m`ModelConfiguration` reimported here[0m
+[0m   [0m[0m[1m[38;5;12m|[0m[0m                                          [0m[0m[1m[38;5;12mhelp: remove unnecessary import[0m
+[0m   [0m[0m[1m[38;5;12m|[0m
+[0m   [0m[0m[1m[38;5;12m= [0m[0m[1mnote[0m[0m: `ModelConfiguration` must be defined only once in the type namespace of this module[0m
+
+[0m[1m[38;5;9merror[E0252][0m[0m[1m: the name `SlashCommand` is defined multiple times[0m
+[0m  [0m[0m[1m[38;5;12m--> [0m[0mcrates/medusa-runtime/src/lib.rs:31:62[0m
+[0m   [0m[0m[1m[38;5;12m|[0m
+[0m[1m[38;5;12m21[0m[0m [0m[0m[1m[38;5;12m|[0m[0m [0m[0m    commands::{Effort, ModelCommand, ModelConfiguration, SlashCommand},[0m
+[0m   [0m[0m[1m[38;5;12m|[0m[0m                                                          [0m[0m[1m[38;5;12m------------[0m[0m [0m[0m[1m[38;5;12mprevious import of the type `SlashCommand` here[0m
+[0m[1m[38;5;12m...[0m
+[0m[1m[38;5;12m31[0m[0m [0m[0m[1m[38;5;12m|[0m[0m [0m[0mpub use commands::{Effort, ModelCommand, ModelConfiguration, SlashCommand};[0m
+[0m   [0m[0m[1m[38;5;12m|[0m[0m                                                              [0m[0m[1m[38;5;9m^^^^^^^^^^^^[0m[0m [0m[0m[1m[38;5;9m`SlashCommand` reimported here[0m
+[0m   [0m[0m[1m[38;5;12m|[0m
+[0m   [0m[0m[1m[38;5;12m= [0m[0m[1mnote[0m[0m: `SlashCommand` must be defined only once in the type namespace of this module[0m
+
+[0m[1m[38;5;9merror[E0252][0m[0m[1m: the name `PromptDraft` is defined multiple times[0m
+[0m  [0m[0m[1m[38;5;12m--> [0m[0mcrates/medusa-runtime/src/lib.rs:35:23[0m
+[0m   [0m[0m[1m[38;5;12m|[0m
+[0m[1m[38;5;12m22[0m[0m [0m[0m[1m[38;5;12m|[0m[0m [0m[0m    prompt::PromptDraft,[0m
+[0m   [0m[0m[1m[38;5;12m|[0m[0m     [0m[0m[1m[38;5;12m-------------------[0m[0m [0m[0m[1m[38;5;12mprevious import of the type `PromptDraft` here[0m
+[0m[1m[38;5;12m...[0m
+[0m[1m[38;5;12m35[0m[0m [0m[0m[1m[38;5;12m|[0m[0m [0m[0m    PromptAttachment, PromptDraft, TextAttachment,[0m
+[0m   [0m[0m[1m[38;5;12m|[0m[0m                       [0m[0m[1m[38;5;9m^^^^^^^^^^^[0m[0m[1m[38;5;12m--[0m
+[0m   [0m[0m[1m[38;5;12m|[0m[0m                       [0m[0m[1m[38;5;12m|[0m
+[0m   [0m[0m[1m[38;5;12m|[0m[0m                       [0m[0m[1m[38;5;9m`PromptDraft` reimported here[0m
+[0m   [0m[0m[1m[38;5;12m|[0m[0m                       [0m[0m[1m[38;5;12mhelp: remove unnecessary import[0m
+[0m   [0m[0m[1m[38;5;12m|[0m
+[0m   [0m[0m[1m[38;5;12m= [0m[0m[1mnote[0m[0m: `PromptDraft` must be defined only once in the type namespace of this module[0m
+
+[0m[1m[33mwarning[0m[0m[1m: unused imports: `Effort`, `ModelCommand`, `ModelConfiguration`, and `SlashCommand`[0m
+[0m  [0m[0m[1m[38;5;12m--> [0m[0mcrates/medusa-runtime/src/lib.rs:31:20[0m
+[0m   [0m[0m[1m[38;5;12m|[0m
+[0m[1m[38;5;12m31[0m[0m [0m[0m[1m[38;5;12m|[0m[0m [0m[0mpub use commands::{Effort, ModelCommand, ModelConfiguration, SlashCommand};[0m
+[0m   [0m[0m[1m[38;5;12m|[0m[0m                    [0m[0m[1m[33m^^^^^^[0m[0m  [0m[0m[1m[33m^^^^^^^^^^^^[0m[0m  [0m[0m[1m[33m^^^^^^^^^^^^^^^^^^[0m[0m  [0m[0m[1m[33m^^^^^^^^^^^^[0m
+[0m   [0m[0m[1m[38;5;12m|[0m
+[0m   [0m[0m[1m[38;5;12m= [0m[0m[1mnote[0m[0m: `#[warn(unused_imports)]` on by default[0m
+
+[0m[1m[33mwarning[0m[0m[1m: unused import: `PromptDraft`[0m
+[0m  [0m[0m[1m[38;5;12m--> [0m[0mcrates/medusa-runtime/src/lib.rs:35:23[0m
+[0m   [0m[0m[1m[38;5;12m|[0m
+[0m[1m[38;5;12m35[0m[0m [0m[0m[1m[38;5;12m|[0m[0m [0m[0m    PromptAttachment, PromptDraft, TextAttachment,[0m
+[0m   [0m[0m[1m[38;5;12m|[0m[0m                       [0m[0m[1m[33m^^^^^^^^^^^[0m
+
+[0m[1mFor more information about this error, try `rustc --explain E0252`.[0m
+[1m[33mwarning[0m[1m:[0m `medusa-runtime` (lib) generated 2 warnings
+[1m[31merror[0m[1m:[0m could not compile `medusa-runtime` (lib) due to 5 previous errors; 2 warnings emitted
+[1m[33mwarning[0m[1m:[0m build failed, waiting for other jobs to finish...
