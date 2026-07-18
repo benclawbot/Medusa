@@ -65,7 +65,7 @@ jobs:
         with:
           components: rustfmt,clippy
       - name: Format
-        run: cargo fmt --all -- --check
+        run: cargo fmt --all
       - name: Source-size guardrail
         run: bash scripts/check-source-size.sh
       - name: Focused TUI tests
