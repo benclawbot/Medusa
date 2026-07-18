@@ -2,8 +2,26 @@ name: Refactor Guardrails
 
 on:
   pull_request:
+    paths:
+      - 'Cargo.toml'
+      - 'crates/**'
+      - 'scripts/check-source-size.sh'
+      - 'docs/REFACTOR-BASELINE.md'
+      - 'docs/PUBLIC-API-BASELINE.md'
+      - 'docs/BENCHMARKS.md'
+      - 'docs/source-size-exceptions.txt'
+      - '.github/workflows/refactor-guardrails.yml'
   push:
     branches: [main]
+    paths:
+      - 'Cargo.toml'
+      - 'crates/**'
+      - 'scripts/check-source-size.sh'
+      - 'docs/REFACTOR-BASELINE.md'
+      - 'docs/PUBLIC-API-BASELINE.md'
+      - 'docs/BENCHMARKS.md'
+      - 'docs/source-size-exceptions.txt'
+      - '.github/workflows/refactor-guardrails.yml'
 
 permissions:
   contents: read
