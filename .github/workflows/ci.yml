@@ -13,35 +13,6 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  fix-desktop-commander-review:
-    if: github.event_name == 'pull_request' && github.head_ref == 'feat/desktop-commander-mcp' && github.actor != 'github-actions[bot]'
-    runs-on: ubuntu-latest
-    permissions:
-      contents: write
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          ref: feat/desktop-commander-mcp
-          fetch-depth: 0
-      - run: python3 .github/scripts/fix_desktop_commander_review.py
-      - uses: dtolnay/rust-toolchain@1.88.0
-        with:
-          components: rustfmt,clippy
-      - run: cargo generate-lockfile
-      - run: cargo fmt --all
-      - run: bash scripts/check-source-size.sh
-      - run: cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
-      - run: cargo test -p medusa-extensions -p medusa-agent -p medusa-cli --locked
-      - name: Commit review fixes
-        shell: bash
-        run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add crates/medusa-extensions/src/desktop_commander.rs crates/medusa-agent/src/tools/mod.rs crates/medusa-agent/src/engine_support.rs
-          git diff --cached --check
-          git commit -m "fix(mcp): enforce read-only Desktop Commander policy"
-          git push origin HEAD:feat/desktop-commander-mcp
-
   quality:
     name: Workspace quality
     runs-on: ubuntu-latest
