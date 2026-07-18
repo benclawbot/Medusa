@@ -13,6 +13,49 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  apply-markdown-io:
+    if: github.event_name == 'pull_request' && github.head_ref == 'feat/tui-markdown-io-consistency'
+    name: Apply guarded Markdown and I/O patch
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: feat/tui-markdown-io-consistency
+          fetch-depth: 0
+      - name: Execute guarded patch from helper
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          workflow = Path('.github/workflows/apply-tui-markdown-io.yml').read_text().splitlines()
+          start = next(index for index, line in enumerate(workflow) if "python3 - <<'PY'" in line) + 1
+          end = next(index for index in range(start, len(workflow)) if workflow[index].strip() == 'PY')
+          script = '\n'.join(line[10:] if line.startswith('          ') else line for line in workflow[start:end])
+          exec(compile(script, 'apply-tui-markdown-io.py', 'exec'))
+          PY
+      - uses: dtolnay/rust-toolchain@1.88.0
+        with:
+          components: rustfmt,clippy
+      - name: Format
+        run: cargo fmt --all -- --check
+      - name: Source-size guardrail
+        run: bash scripts/check-source-size.sh
+      - name: Focused TUI tests
+        run: cargo test -p medusa-tui --locked
+      - name: Workspace compile check
+        run: cargo check --workspace --all-targets --all-features --locked
+      - name: Commit guarded patch
+        shell: bash
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add README.md crates/medusa-tui
+          git diff --cached --check
+          git commit -m "feat(tui): render markdown and accept mid-turn follow-ups"
+          git push origin HEAD:feat/tui-markdown-io-consistency
+
   quality:
     name: Workspace quality
     runs-on: ubuntu-latest
