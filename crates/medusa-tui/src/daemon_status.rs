@@ -11,10 +11,7 @@ enum DaemonConnectionKind {
     Disconnected,
 }
 
-pub(crate) struct DaemonSnapshot {
-    pub jobs: Vec<JobRecord>,
-    pub status: String,
-}
+pub(crate) type DaemonSnapshot = (Vec<JobRecord>, String);
 
 pub(crate) struct DaemonMonitor {
     client: DaemonClient,
@@ -39,10 +36,7 @@ impl DaemonMonitor {
                 );
                 (
                     DaemonConnectionKind::Connected,
-                    DaemonSnapshot {
-                        jobs,
-                        status: "connected".to_owned(),
-                    },
+                    (jobs, "connected".to_owned()),
                     transition,
                 )
             }
@@ -50,10 +44,7 @@ impl DaemonMonitor {
                 let details = format!("unexpected response: {other:?}");
                 (
                     DaemonConnectionKind::Unexpected,
-                    DaemonSnapshot {
-                        jobs: Vec::new(),
-                        status: details.clone(),
-                    },
+                    (Vec::new(), details.clone()),
                     format!("daemon returned an {details}"),
                 )
             }
@@ -61,10 +52,7 @@ impl DaemonMonitor {
                 let details = format!("disconnected: {error}");
                 (
                     DaemonConnectionKind::Disconnected,
-                    DaemonSnapshot {
-                        jobs: Vec::new(),
-                        status: details.clone(),
-                    },
+                    (Vec::new(), details.clone()),
                     format!("daemon {details}"),
                 )
             }
@@ -116,8 +104,8 @@ mod tests {
         let first = monitor.poll(&mut app);
         let second = monitor.poll(&mut app);
 
-        assert!(first.status.starts_with("disconnected:"));
-        assert!(second.status.starts_with("disconnected:"));
+        assert!(first.1.starts_with("disconnected:"));
+        assert!(second.1.starts_with("disconnected:"));
         assert_eq!(app.transcript.len(), 1);
         assert!(matches!(
             app.transcript.first(),
@@ -136,8 +124,8 @@ mod tests {
 
         let snapshot = monitor.poll(&mut app);
 
-        assert_eq!(snapshot.status, "connected");
-        assert!(snapshot.jobs.is_empty());
+        assert_eq!(snapshot.1, "connected");
+        assert!(snapshot.0.is_empty());
         assert!(matches!(
             app.transcript.last(),
             Some(TranscriptEntry::System(message)) if message == "daemon connected · 0 background jobs"
