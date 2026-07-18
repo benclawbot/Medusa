@@ -392,11 +392,7 @@ mod tests {
             .iter()
             .map(|line| line.text.as_str())
             .collect::<Vec<_>>();
-        assert!(
-            rendered
-                .iter()
-                .any(|line| *line == "│     print(\"a  b\")")
-        );
+        assert!(rendered.iter().any(|line| *line == "│     print(\"a  b\")"));
     }
 
     #[test]
