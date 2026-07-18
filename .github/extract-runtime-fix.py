@@ -1,4 +1,5 @@
 from pathlib import Path
+import re
 
 runtime = Path("crates/medusa-runtime/src/lib.rs")
 text = runtime.read_text()
@@ -23,6 +24,14 @@ text = text.replace(
     "",
     1,
 )
+text, count = re.subn(
+    r"\n#\[cfg\(test\)\]\nfn execute_slash_command\(.*?\n\}\n\nfn execute_slash_command_with_submission",
+    "\nfn execute_slash_command_with_submission",
+    text,
+    count=1,
+    flags=re.S,
+)
+assert count == 1, "obsolete execute_slash_command test wrapper was not found"
 runtime.write_text(text)
 
 tests = Path("crates/medusa-runtime/src/tests.rs")
