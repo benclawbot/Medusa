@@ -129,12 +129,23 @@ impl RuntimeController {
         let submission = Arc::new(Mutex::new(SubmissionState::default()));
         let worker_cancel = Arc::clone(&cancel);
         let worker_submission = Arc::clone(&submission);
-        thread::Builder::new()
+        let worker_events = event_tx.clone();
+        if let Err(error) = thread::Builder::new()
             .name("medusa-runtime".to_owned())
             .spawn(move || {
-                worker_loop(repo, command_rx, event_tx, worker_cancel, worker_submission);
+                worker_loop(
+                    repo,
+                    command_rx,
+                    worker_events,
+                    worker_cancel,
+                    worker_submission,
+                );
             })
-            .expect("spawn TUI runtime worker");
+        {
+            let _ = event_tx.send(RuntimeEvent::Failed(format!(
+                "failed to spawn agent runtime worker: {error}"
+            )));
+        }
         Self {
             commands: command_tx,
             events: event_rx,
@@ -144,7 +155,7 @@ impl RuntimeController {
     }
 
     pub fn submit(&self, draft: PromptDraft) -> Result<SubmitDisposition, RuntimeError> {
-        let mut submission = self.submission.lock().expect("submission state lock");
+        let mut submission = lock_submission(&self.submission);
         if submission.busy {
             submission.followups.push_back(draft);
             return Ok(SubmitDisposition::Queued);
@@ -159,7 +170,7 @@ impl RuntimeController {
     }
 
     pub fn run_command(&self, command: SlashCommand) -> Result<(), RuntimeError> {
-        let mut submission = self.submission.lock().expect("submission state lock");
+        let mut submission = lock_submission(&self.submission);
         if submission.busy {
             return Err(RuntimeError::Busy);
         }
@@ -175,7 +186,7 @@ impl RuntimeController {
     }
 
     pub fn configure_model(&self, configuration: ModelConfiguration) -> Result<(), RuntimeError> {
-        if self.submission.lock().expect("submission state lock").busy {
+        if lock_submission(&self.submission).busy {
             return Err(RuntimeError::Busy);
         }
         self.commands
@@ -184,7 +195,7 @@ impl RuntimeController {
     }
 
     pub fn cancel(&self) -> bool {
-        if self.submission.lock().expect("submission state lock").busy {
+        if lock_submission(&self.submission).busy {
             self.cancel.store(true, Ordering::SeqCst);
             true
         } else {
@@ -194,7 +205,7 @@ impl RuntimeController {
 
     #[must_use]
     pub fn is_busy(&self) -> bool {
-        self.submission.lock().expect("submission state lock").busy
+        lock_submission(&self.submission).busy
     }
 
     pub fn try_event(&self) -> Result<Option<RuntimeEvent>, RuntimeError> {
@@ -203,6 +214,15 @@ impl RuntimeController {
             Err(TryRecvError::Empty) => Ok(None),
             Err(TryRecvError::Disconnected) => Err(RuntimeError::WorkerStopped),
         }
+    }
+}
+
+fn lock_submission(
+    submission: &Mutex<SubmissionState>,
+) -> std::sync::MutexGuard<'_, SubmissionState> {
+    match submission.lock() {
+        Ok(state) => state,
+        Err(poisoned) => poisoned.into_inner(),
     }
 }
 
@@ -306,7 +326,7 @@ fn cancel_requested(cancel: &AtomicBool, submission: &Arc<Mutex<SubmissionState>
 }
 
 fn mark_idle(submission: &Arc<Mutex<SubmissionState>>, clear_followups: bool) {
-    let mut state = submission.lock().expect("submission state lock");
+    let mut state = lock_submission(submission);
     state.busy = false;
     if clear_followups {
         state.followups.clear();
@@ -314,16 +334,14 @@ fn mark_idle(submission: &Arc<Mutex<SubmissionState>>, clear_followups: bool) {
 }
 
 fn take_followups(submission: &Arc<Mutex<SubmissionState>>) -> Vec<PromptDraft> {
-    submission
-        .lock()
-        .expect("submission state lock")
+    lock_submission(submission)
         .followups
         .drain(..)
         .collect()
 }
 
 fn finish_or_take_followups(submission: &Arc<Mutex<SubmissionState>>) -> Vec<PromptDraft> {
-    let mut state = submission.lock().expect("submission state lock");
+    let mut state = lock_submission(submission);
     if state.followups.is_empty() {
         state.busy = false;
         Vec::new()
@@ -469,7 +487,11 @@ fn run_prompt(
                 }
                 StepOutcome::TurnComplete => return Ok(RuntimeEvent::TurnFinished),
                 StepOutcome::Continue => {}
-                StepOutcome::WaitingForUser => unreachable!("handled above"),
+                StepOutcome::WaitingForUser => {
+                    return Err(RuntimeError::agent(
+                        "agent remained paused after its pending question was handled",
+                    ));
+                }
             }
         }
     })();
