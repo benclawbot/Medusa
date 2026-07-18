@@ -29,12 +29,14 @@ jobs:
         shell: bash
         run: |
           set -o pipefail
-          ruby -ryaml -e '
-            workflow = YAML.load_file(ARGV.fetch(0), aliases: true)
-            step = workflow.fetch("jobs").fetch("apply").fetch("steps").find { |entry| entry["name"] == "Apply guarded source changes" }
-            File.write("/tmp/apply-tui-markdown-io.sh", step.fetch("run"))
-          ' .github/workflows/apply-tui-markdown-io.yml
-          bash /tmp/apply-tui-markdown-io.sh 2>&1 | tee apply-markdown-io.log
+          {
+            ruby -ryaml -e '
+              workflow = YAML.load_file(ARGV.fetch(0), aliases: true)
+              step = workflow.fetch("jobs").fetch("apply").fetch("steps").find { |entry| entry["name"] == "Apply guarded source changes" }
+              File.write("/tmp/apply-tui-markdown-io.sh", step.fetch("run"))
+            ' .github/workflows/apply-tui-markdown-io.yml
+            bash /tmp/apply-tui-markdown-io.sh
+          } 2>&1 | tee apply-markdown-io.log
       - name: Upload guarded patch diagnostics
         if: failure()
         uses: actions/upload-artifact@v4
