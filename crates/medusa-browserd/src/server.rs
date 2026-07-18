@@ -86,13 +86,26 @@ fn spawn_bridge() -> io::Result<Bridge> {
         .stdout(Stdio::piped())
         .stderr(Stdio::inherit())
         .spawn()?;
-    let stdin = child.stdin.take().expect("stdin");
-    let stdout = BufReader::new(child.stdout.take().expect("stdout"));
+    let (stdin, stdout) = take_bridge_stdio(&mut child)?;
     Ok(Bridge {
         child,
         stdin,
         stdout,
     })
+}
+
+fn take_bridge_stdio(child: &mut Child) -> io::Result<(ChildStdin, BufReader<ChildStdout>)> {
+    match (child.stdin.take(), child.stdout.take()) {
+        (Some(stdin), Some(stdout)) => Ok((stdin, BufReader::new(stdout))),
+        _ => {
+            let _ = child.kill();
+            let _ = child.wait();
+            Err(io::Error::new(
+                io::ErrorKind::BrokenPipe,
+                "Playwright bridge launched without the required stdin/stdout pipes",
+            ))
+        }
+    }
 }
 
 fn forward_to_bridge<W: Write, R: BufRead>(
@@ -148,10 +161,11 @@ fn write_response<W: Write>(out: &mut W, response: &BrowserResponse) -> io::Resu
 #[cfg(test)]
 mod tests {
     use std::io::{self, BufRead, Cursor, Read, Write};
+    use std::process::{Command, Stdio};
 
     use medusa_browser_client::protocol::{BrowserRequest, BrowserResponse};
 
-    use super::{forward_to_bridge, write_response};
+    use super::{forward_to_bridge, take_bridge_stdio, write_response};
 
     #[derive(Default)]
     struct FailingWriter {
@@ -198,6 +212,22 @@ mod tests {
             BrowserResponse::Error { code, .. } => code,
             other => panic!("expected error response, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn missing_bridge_pipes_return_broken_pipe_error() {
+        let executable = std::env::current_exe().expect("current test executable");
+        let mut child = Command::new(executable)
+            .arg("--list")
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .spawn()
+            .expect("spawn pipe-less child");
+
+        let error = take_bridge_stdio(&mut child).expect_err("missing bridge pipes must fail");
+
+        assert_eq!(error.kind(), io::ErrorKind::BrokenPipe);
+        assert!(error.to_string().contains("required stdin/stdout pipes"));
     }
 
     #[test]

@@ -96,15 +96,19 @@ impl<P: ModelProvider> AgentEngine<P> {
                 self.desktop_commander_settings.clone(),
             )?);
         }
-        let result = client
-            .as_mut()
-            .expect("Desktop Commander client initialized")
-            .call_tool(
-                repo,
-                tool,
-                arguments,
-                self.config.agent.mode == Mode::ReadOnly,
-            );
+        let initialized = client.as_mut().ok_or_else(|| {
+            MedusaError::new(
+                ErrorCode::InternalInvariant,
+                ErrorCategory::Internal,
+                "Desktop Commander client was not initialized after a successful connection",
+            )
+        })?;
+        let result = initialized.call_tool(
+            repo,
+            tool,
+            arguments,
+            self.config.agent.mode == Mode::ReadOnly,
+        );
         if result.is_err() {
             client.take();
         }

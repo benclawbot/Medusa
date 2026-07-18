@@ -1,6 +1,6 @@
 use std::{
     collections::{BTreeMap, VecDeque},
-    env, io,
+    env,
     path::PathBuf,
     sync::{
         Arc, Mutex,
@@ -23,11 +23,13 @@ use crate::{
 };
 
 pub mod commands;
+mod error;
 pub mod prompt;
 mod support;
 #[cfg(test)]
 mod tests;
 
+pub use error::RuntimeError;
 pub use medusa_agent::{
     AgentPlanStep as RuntimePlanStep, AgentPlanStepStatus, AgentQuestionItem, AgentQuestionOption,
 };
@@ -129,12 +131,23 @@ impl RuntimeController {
         let submission = Arc::new(Mutex::new(SubmissionState::default()));
         let worker_cancel = Arc::clone(&cancel);
         let worker_submission = Arc::clone(&submission);
-        thread::Builder::new()
+        let worker_events = event_tx.clone();
+        if let Err(error) = thread::Builder::new()
             .name("medusa-runtime".to_owned())
             .spawn(move || {
-                worker_loop(repo, command_rx, event_tx, worker_cancel, worker_submission);
+                worker_loop(
+                    repo,
+                    command_rx,
+                    worker_events,
+                    worker_cancel,
+                    worker_submission,
+                );
             })
-            .expect("spawn TUI runtime worker");
+        {
+            let _ = event_tx.send(RuntimeEvent::Failed(format!(
+                "failed to spawn agent runtime worker: {error}"
+            )));
+        }
         Self {
             commands: command_tx,
             events: event_rx,
@@ -144,7 +157,7 @@ impl RuntimeController {
     }
 
     pub fn submit(&self, draft: PromptDraft) -> Result<SubmitDisposition, RuntimeError> {
-        let mut submission = self.submission.lock().expect("submission state lock");
+        let mut submission = lock_submission(&self.submission);
         if submission.busy {
             submission.followups.push_back(draft);
             return Ok(SubmitDisposition::Queued);
@@ -159,7 +172,7 @@ impl RuntimeController {
     }
 
     pub fn run_command(&self, command: SlashCommand) -> Result<(), RuntimeError> {
-        let mut submission = self.submission.lock().expect("submission state lock");
+        let mut submission = lock_submission(&self.submission);
         if submission.busy {
             return Err(RuntimeError::Busy);
         }
@@ -175,7 +188,7 @@ impl RuntimeController {
     }
 
     pub fn configure_model(&self, configuration: ModelConfiguration) -> Result<(), RuntimeError> {
-        if self.submission.lock().expect("submission state lock").busy {
+        if lock_submission(&self.submission).busy {
             return Err(RuntimeError::Busy);
         }
         self.commands
@@ -184,7 +197,7 @@ impl RuntimeController {
     }
 
     pub fn cancel(&self) -> bool {
-        if self.submission.lock().expect("submission state lock").busy {
+        if lock_submission(&self.submission).busy {
             self.cancel.store(true, Ordering::SeqCst);
             true
         } else {
@@ -194,7 +207,7 @@ impl RuntimeController {
 
     #[must_use]
     pub fn is_busy(&self) -> bool {
-        self.submission.lock().expect("submission state lock").busy
+        lock_submission(&self.submission).busy
     }
 
     pub fn try_event(&self) -> Result<Option<RuntimeEvent>, RuntimeError> {
@@ -203,6 +216,15 @@ impl RuntimeController {
             Err(TryRecvError::Empty) => Ok(None),
             Err(TryRecvError::Disconnected) => Err(RuntimeError::WorkerStopped),
         }
+    }
+}
+
+fn lock_submission(
+    submission: &Mutex<SubmissionState>,
+) -> std::sync::MutexGuard<'_, SubmissionState> {
+    match submission.lock() {
+        Ok(state) => state,
+        Err(poisoned) => poisoned.into_inner(),
     }
 }
 
@@ -306,7 +328,7 @@ fn cancel_requested(cancel: &AtomicBool, submission: &Arc<Mutex<SubmissionState>
 }
 
 fn mark_idle(submission: &Arc<Mutex<SubmissionState>>, clear_followups: bool) {
-    let mut state = submission.lock().expect("submission state lock");
+    let mut state = lock_submission(submission);
     state.busy = false;
     if clear_followups {
         state.followups.clear();
@@ -314,16 +336,11 @@ fn mark_idle(submission: &Arc<Mutex<SubmissionState>>, clear_followups: bool) {
 }
 
 fn take_followups(submission: &Arc<Mutex<SubmissionState>>) -> Vec<PromptDraft> {
-    submission
-        .lock()
-        .expect("submission state lock")
-        .followups
-        .drain(..)
-        .collect()
+    lock_submission(submission).followups.drain(..).collect()
 }
 
 fn finish_or_take_followups(submission: &Arc<Mutex<SubmissionState>>) -> Vec<PromptDraft> {
-    let mut state = submission.lock().expect("submission state lock");
+    let mut state = lock_submission(submission);
     if state.followups.is_empty() {
         state.busy = false;
         Vec::new()
@@ -469,7 +486,11 @@ fn run_prompt(
                 }
                 StepOutcome::TurnComplete => return Ok(RuntimeEvent::TurnFinished),
                 StepOutcome::Continue => {}
-                StepOutcome::WaitingForUser => unreachable!("handled above"),
+                StepOutcome::WaitingForUser => {
+                    return Err(RuntimeError::agent(
+                        "agent remained paused after its pending question was handled",
+                    ));
+                }
             }
         }
     })();
@@ -730,61 +751,4 @@ fn execute_slash_command_with_submission(
         }
     }
     Ok(None)
-}
-
-#[derive(Debug)]
-pub enum RuntimeError {
-    Agent(String),
-    Io(io::Error),
-    Png(String),
-    WorkerStopped,
-    Busy,
-    EmptyPrompt,
-    TurnLimit(u32),
-    InvalidCommand(String),
-    BinaryFile { path: PathBuf },
-    FileTooLarge { path: PathBuf, bytes: usize },
-}
-
-impl RuntimeError {
-    fn agent(error: impl std::fmt::Display) -> Self {
-        Self::Agent(error.to_string())
-    }
-
-    fn png(error: impl std::fmt::Display) -> Self {
-        Self::Png(error.to_string())
-    }
-}
-
-impl std::fmt::Display for RuntimeError {
-    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::Agent(error) => write!(formatter, "agent runtime failed: {error}"),
-            Self::Io(error) => write!(formatter, "runtime I/O failed: {error}"),
-            Self::Png(error) => write!(formatter, "screenshot encoding failed: {error}"),
-            Self::WorkerStopped => formatter.write_str("agent runtime worker stopped"),
-            Self::Busy => formatter.write_str("an agent task is already running"),
-            Self::EmptyPrompt => formatter.write_str("prompt and attachments are empty"),
-            Self::TurnLimit(limit) => write!(formatter, "agent reached the {limit}-turn limit"),
-            Self::InvalidCommand(error) => formatter.write_str(error),
-            Self::BinaryFile { path } => write!(
-                formatter,
-                "attached file is not UTF-8 text: {}",
-                path.display()
-            ),
-            Self::FileTooLarge { path, bytes } => write!(
-                formatter,
-                "attached file is too large for prompt context: {} ({bytes} bytes)",
-                path.display()
-            ),
-        }
-    }
-}
-
-impl std::error::Error for RuntimeError {}
-
-impl From<io::Error> for RuntimeError {
-    fn from(error: io::Error) -> Self {
-        Self::Io(error)
-    }
 }

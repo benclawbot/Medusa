@@ -77,14 +77,14 @@ fn run() -> MedusaResult<()> {
     let cli = Cli::parse();
     let repo = cli.repo.canonicalize().unwrap_or(cli.repo);
 
-    if cli.command.is_none() {
+    let Some(command) = cli.command else {
         let mut options = TuiOptions::for_repo(repo);
         options.initial_prompt = cli.prompt;
         options.resume_session = cli.resume_session;
         options.continue_latest = cli.r#continue;
         let _ = run_tui(options)?;
         return Ok(());
-    }
+    };
 
     if cli.prompt.is_some() || cli.r#continue || cli.resume_session.is_some() {
         return Err(MedusaError::new(
@@ -97,7 +97,7 @@ fn run() -> MedusaResult<()> {
     let overrides = cli.overrides.into_iter().collect::<BTreeMap<_, _>>();
     let config = Config::load_layers(None, None, &BTreeMap::new(), &overrides)?;
 
-    match cli.command.expect("subcommand checked above") {
+    match command {
         CommandKind::Bootstrap => {
             bootstrap(&repo)?;
             println!("bootstrapped {}", repo.display());
