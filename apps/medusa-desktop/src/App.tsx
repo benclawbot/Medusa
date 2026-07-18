@@ -220,7 +220,10 @@ export function App() {
   }, []);
 
   useEffect(() => {
-    transcriptRef.current?.scrollTo({ top: transcriptRef.current.scrollHeight, behavior: "smooth" });
+    const transcript = transcriptRef.current;
+    if (transcript && typeof transcript.scrollTo === "function") {
+      transcript.scrollTo({ top: transcript.scrollHeight, behavior: "smooth" });
+    }
   }, [messages, activities]);
 
   useEffect(() => {
@@ -247,12 +250,22 @@ export function App() {
   useEffect(() => {
     const previous = window.localStorage.getItem("medusa.desktop.repo");
     if (!previous) return;
+    let disposed = false;
     void startRuntime(previous)
       .then((started) => {
+        if (disposed) {
+          void closeRuntime(started.runtimeId);
+          return;
+        }
         setRuntimeId(started.runtimeId);
         setRepo(started.repo);
       })
-      .catch(() => window.localStorage.removeItem("medusa.desktop.repo"));
+      .catch(() => {
+        if (!disposed) window.localStorage.removeItem("medusa.desktop.repo");
+      });
+    return () => {
+      disposed = true;
+    };
   }, []);
 
   useEffect(() => () => {
@@ -263,7 +276,6 @@ export function App() {
     const selected = await open({ directory: true, multiple: false, title: "Open a Medusa project" });
     if (typeof selected !== "string") return;
     try {
-      if (runtimeId) await closeRuntime(runtimeId);
       const started = await startRuntime(selected);
       setRuntimeId(started.runtimeId);
       setRepo(started.repo);

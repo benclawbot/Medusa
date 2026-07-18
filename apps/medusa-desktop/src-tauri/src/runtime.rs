@@ -14,8 +14,9 @@ use medusa_runtime::{
     RuntimeController, SubmitDisposition,
     commands::{Effort, ModelConfiguration, parse_slash_command},
     prompt::{
-        ClipboardImage, FileAttachment, MAX_CLIPBOARD_TEXT_BYTES, MAX_TOTAL_ATTACHMENT_BYTES,
-        PromptAttachment, PromptDraft, TextAttachment,
+        ClipboardImage, FileAttachment, MAX_CLIPBOARD_TEXT_BYTES, MAX_IMAGE_BYTES,
+        MAX_IMAGE_PIXELS, MAX_TOTAL_ATTACHMENT_BYTES, PromptAttachment, PromptDraft,
+        TextAttachment,
     },
 };
 use tauri::State;
@@ -28,6 +29,12 @@ use crate::dto::{
 struct RuntimeEntry {
     repo: PathBuf,
     controller: RuntimeController,
+}
+
+impl Drop for RuntimeEntry {
+    fn drop(&mut self) {
+        self.controller.cancel();
+    }
 }
 
 #[derive(Default)]
@@ -269,9 +276,30 @@ fn attach_image(draft: &mut PromptDraft, name: &str, data_url: &str) -> Result<(
             "image attachment {name} must be a base64 image data URL"
         ));
     }
+    let max_encoded_bytes = MAX_IMAGE_BYTES
+        .saturating_mul(4)
+        .div_ceil(3)
+        .saturating_add(4);
+    if encoded.len() > max_encoded_bytes {
+        return Err(format!(
+            "encoded image attachment {name} exceeds the {MAX_IMAGE_BYTES}-byte image limit"
+        ));
+    }
     let bytes = STANDARD
         .decode(encoded)
         .map_err(|error| format!("cannot decode image attachment {name}: {error}"))?;
+    if bytes.len() > MAX_IMAGE_BYTES {
+        return Err(format!(
+            "image attachment {name} is {} bytes; limit is {MAX_IMAGE_BYTES}",
+            bytes.len()
+        ));
+    }
+    let dimensions = ImageReader::new(std::io::Cursor::new(bytes.as_slice()))
+        .with_guessed_format()
+        .map_err(|error| format!("cannot detect image attachment {name}: {error}"))?
+        .into_dimensions()
+        .map_err(|error| format!("cannot inspect image attachment {name}: {error}"))?;
+    validate_image_dimensions(name, dimensions.0, dimensions.1)?;
     let image = ImageReader::new(std::io::Cursor::new(bytes))
         .with_guessed_format()
         .map_err(|error| format!("cannot detect image attachment {name}: {error}"))?
@@ -293,6 +321,29 @@ fn attach_image(draft: &mut PromptDraft, name: &str, data_url: &str) -> Result<(
         .map_err(|error| error.to_string())?;
     if let Some(PromptAttachment::Image(image)) = draft.attachments.last_mut() {
         image.display_name = name.to_owned();
+    }
+    Ok(())
+}
+
+fn validate_image_dimensions(name: &str, width: u32, height: u32) -> Result<(), String> {
+    if width == 0 || height == 0 {
+        return Err(format!("image attachment {name} has zero dimensions"));
+    }
+    let pixels = u64::from(width)
+        .checked_mul(u64::from(height))
+        .ok_or_else(|| format!("image attachment {name} dimensions overflow"))?;
+    if pixels > MAX_IMAGE_PIXELS {
+        return Err(format!(
+            "image attachment {name} has {pixels} pixels; limit is {MAX_IMAGE_PIXELS}"
+        ));
+    }
+    let rgba_bytes = pixels
+        .checked_mul(4)
+        .ok_or_else(|| format!("image attachment {name} byte count overflow"))?;
+    if rgba_bytes > MAX_IMAGE_BYTES as u64 {
+        return Err(format!(
+            "image attachment {name} requires {rgba_bytes} RGBA bytes; limit is {MAX_IMAGE_BYTES}"
+        ));
     }
     Ok(())
 }
@@ -330,6 +381,13 @@ mod tests {
         )
         .expect_err("outside attachment must fail");
         assert!(error.contains("outside the selected repository"));
+    }
+
+    #[test]
+    fn oversized_image_dimensions_are_rejected_before_decode() {
+        let error = validate_image_dimensions("bomb.png", 10_000, 10_000)
+            .expect_err("oversized dimensions must fail");
+        assert!(error.contains("pixels"));
     }
 
     #[test]
