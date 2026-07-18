@@ -11,6 +11,7 @@ members = [
   "crates/medusa-browser-client",
   "crates/medusa-browserd",
   "crates/medusa-daemon",
+  "crates/medusa-runtime",
   "crates/medusa-tui",
   "crates/medusa-workers",
   "crates/medusa-memory",

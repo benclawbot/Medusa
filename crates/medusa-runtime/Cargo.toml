@@ -1,0 +1,22 @@
+[package]
+name = "medusa-runtime"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+base64 = "0.22"
+medusa-agent = { path = "../medusa-agent" }
+medusa-config = { path = "../medusa-config" }
+medusa-protocol = { path = "../medusa-protocol" }
+medusa-provider = { path = "../medusa-provider" }
+png = "0.17"
+serde_json.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
+
+[lints]
+workspace = true

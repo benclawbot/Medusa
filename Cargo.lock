@@ -1166,6 +1166,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "medusa-runtime"
+version = "1.0.0"
+dependencies = [
+ "base64",
+ "medusa-agent",
+ "medusa-config",
+ "medusa-protocol",
+ "medusa-provider",
+ "png 0.17.16",
+ "serde_json",
+ "tempfile",
+]
+
+[[package]]
 name = "medusa-testkit"
 version = "1.0.0"
 dependencies = [
@@ -1179,16 +1193,12 @@ name = "medusa-tui"
 version = "1.0.0"
 dependencies = [
  "arboard",
- "base64",
  "clap",
  "crossterm",
  "hex",
- "medusa-agent",
  "medusa-config",
  "medusa-daemon",
- "medusa-protocol",
- "medusa-provider",
- "png 0.17.16",
+ "medusa-runtime",
  "serde",
  "serde_json",
  "sha2",

@@ -367,7 +367,8 @@ See [Security hardening](docs/SECURITY-HARDENING.md) for the release-enforced co
 | Crate | Responsibility |
 |---|---|
 | `medusa-cli` | User-facing command entry point |
-| `medusa-tui` | Interactive terminal interface, composer, clipboard, drafts, and runtime bridge |
+| `medusa-runtime` | Frontend-neutral interactive session controller, commands, events, cancellation, follow-ups, and provider orchestration |
+| `medusa-tui` | Terminal presentation adapter, composer, clipboard access, drafts, and rendering |
 | `medusa-agent` | Session lifecycle, orchestration, tools, policy, and verification |
 | `medusa-provider` | Provider-neutral model interface and MiniMax integration |
 | `medusa-intelligence` | Parsing, indexing, patching, and conflict-aware transactions |
