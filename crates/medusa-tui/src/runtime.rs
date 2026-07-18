@@ -181,14 +181,39 @@ mod tests {
     use super::*;
 
     #[test]
-    fn maps_agent_plan_statuses_into_terminal_presentation_states() {
-        let event = medusa_runtime::RuntimeEvent::Plan(vec![medusa_runtime::RuntimePlanStep {
-            title: "Inspect".to_owned(),
-            status: medusa_runtime::AgentPlanStepStatus::Completed,
-        }]);
+    fn maps_all_agent_plan_statuses_into_terminal_presentation_states() {
+        let event = medusa_runtime::RuntimeEvent::Plan(vec![
+            medusa_runtime::RuntimePlanStep {
+                title: "Pending".to_owned(),
+                status: medusa_runtime::AgentPlanStepStatus::Pending,
+            },
+            medusa_runtime::RuntimePlanStep {
+                title: "Active".to_owned(),
+                status: medusa_runtime::AgentPlanStepStatus::InProgress,
+            },
+            medusa_runtime::RuntimePlanStep {
+                title: "Done".to_owned(),
+                status: medusa_runtime::AgentPlanStepStatus::Completed,
+            },
+            medusa_runtime::RuntimePlanStep {
+                title: "Failed".to_owned(),
+                status: medusa_runtime::AgentPlanStepStatus::Failed,
+            },
+        ]);
         let RuntimeEvent::Plan(plan) = map_event(event) else {
             panic!("expected plan event");
         };
-        assert_eq!(plan.steps[0].state, TranscriptPlanStepState::Completed);
+        assert_eq!(
+            plan.steps
+                .iter()
+                .map(|step| step.state)
+                .collect::<Vec<_>>(),
+            vec![
+                TranscriptPlanStepState::Pending,
+                TranscriptPlanStepState::Active,
+                TranscriptPlanStepState::Completed,
+                TranscriptPlanStepState::Failed,
+            ]
+        );
     }
 }
