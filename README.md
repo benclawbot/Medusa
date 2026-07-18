@@ -19,18 +19,18 @@ Medusa is a production-grade autonomous coding agent written in Rust. It combine
 - **Persistent memory** — Markdown-first memory with validation, indexing, retrieval, lifecycle management, and provenance controls.
 - **Parallel workers** — isolated worktrees, deterministic merge behavior, conflict detection, and cleanup safeguards.
 - **Extensions and browser evidence** — skills, hooks, MCP isolation, Playwright-based browser verification, output redaction, and checksummed provenance.
-- **Production hardening** — migrations, rollback bundles, observability, archive safety, fuzzing, chaos recovery, dependency policy, package smoke tests, and live-provider validation.
+- **Production hardening** — migrations, rollback bundles, observability, archive safety, panic-free production targets, workflow hygiene, fuzzing, chaos recovery, dependency policy, package smoke tests, and live-provider validation.
 
 ## Current status and evidence
 
-The original phase labels are historical planning shorthand, not the current source of truth. As of July 18, 2026, the repository evidence through PR #41 includes the Rust agent core, interactive TUI, frontend-neutral runtime, Zeus-derived React/Tauri desktop entry point, durable sessions and memory, guarded repository tools, browser verification, parallel workers, release hardening, Markdown rendering, mid-turn follow-ups, and the optional Desktop Commander MCP integration.
+The original phase labels are historical planning shorthand, not the current source of truth. As of July 18, 2026, the repository evidence through PR #45 includes the Rust agent core, interactive TUI, frontend-neutral runtime, Zeus-derived React/Tauri desktop entry point, durable sessions and memory, guarded repository tools, browser verification, parallel workers, release hardening, Markdown rendering, mid-turn follow-ups, the optional Desktop Commander MCP integration, workflow-write guardrails, and panic-free production targets.
 
 | Area | Current evidence |
 |---|---|
 | Interactive product surface | `medusa` launches the TUI; transcript preservation, Markdown rendering, clipboard input, cancellation, usage metrics, skills, and queued follow-ups are implemented in `medusa-tui`. |
 | Agent and repository runtime | `medusa-runtime` owns frontend-neutral interactive session control, while planning, tools, policy, verification, intelligence, and persistence remain implemented across `medusa-agent`, `medusa-intelligence`, `medusa-memory`, and related crates. |
 | Extensions and MCP | Skills, hooks, MCP isolation, and the pinned Desktop Commander adapter are implemented in `medusa-extensions` and documented below. |
-| Release evidence | `CI`, `Refactor Guardrails`, and `Release Gates` enforce formatting, Clippy, workspace tests, documentation, dependency policy, source-size limits, coverage, adversarial tests, package smoke tests, and live-provider scenarios. |
+| Release evidence | `CI`, `Refactor Guardrails`, and `Release Gates` enforce formatting, standard Clippy, a production-only panic audit, workspace tests, documentation, dependency policy, source-size limits, workflow hygiene, coverage, adversarial tests, package smoke tests, and live-provider scenarios. |
 | Shared frontend runtime and desktop | `medusa-runtime` owns commands, prompt attachments, session control, cancellation, follow-up queuing, provider setup, skills, and core events; `medusa-tui` is the terminal adapter and `apps/medusa-desktop` is the Zeus-derived React/Tauri adapter over the same runtime, without a duplicate backend stack. |
 
 See [Capability evidence](docs/CAPABILITY-EVIDENCE.md) for the auditable mapping from shipped capabilities to code and gates. Historical completion summaries should not override the current repository, merged pull requests, or required checks.
@@ -413,11 +413,13 @@ Use the same checks enforced by CI:
 ```bash
 cargo fmt --all -- --check
 cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
+cargo clippy --workspace --all-features --locked --lib --bins --examples -- -D clippy::unwrap_used -D clippy::expect_used -D clippy::panic
 cargo test --workspace --all-features --locked
 RUSTDOCFLAGS='-D warnings' cargo doc --workspace --all-features --locked --no-deps
 cargo deny check advisories sources
 cargo audit
 bash scripts/check-source-size.sh
+bash scripts/check-workflow-hygiene.sh
 ```
 
 Release gates additionally run complete workspace coverage with a 75% line threshold, adversarial regressions, fuzz and chaos smoke tests, cross-platform release package smoke tests, and three live MiniMax autonomous coding scenarios.
