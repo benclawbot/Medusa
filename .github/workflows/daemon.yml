@@ -42,7 +42,18 @@ jobs:
           path: daemon-rustfmt.patch
           if-no-files-found: error
       - name: Lint daemon and TUI
-        run: cargo clippy -p medusa-daemon -p medusa-tui --all-targets --locked -- -D warnings
+        id: daemon_clippy
+        shell: bash
+        run: |
+          set -o pipefail
+          cargo clippy -p medusa-daemon -p medusa-tui --all-targets --locked -- -D warnings 2>&1 | tee daemon-clippy.log
+      - name: Upload daemon Clippy diagnostics
+        if: failure() && steps.daemon_clippy.outcome == 'failure'
+        uses: actions/upload-artifact@v4
+        with:
+          name: daemon-clippy-${{ matrix.os }}
+          path: daemon-clippy.log
+          if-no-files-found: error
       - name: Test daemon and TUI integration
         id: daemon_tests
         shell: bash
