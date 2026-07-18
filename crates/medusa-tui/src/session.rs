@@ -1,5 +1,8 @@
 use super::*;
-use crate::render::support::{app_error, runtime_error};
+use crate::{
+    daemon_status::DaemonMonitor,
+    render::support::{app_error, runtime_error},
+};
 use std::time::Instant;
 
 const DOUBLE_CTRL_C_WINDOW: Duration = Duration::from_secs(1);
@@ -83,17 +86,13 @@ pub(super) fn run_loop(
     app: &mut AppState,
     runtime: &RuntimeController,
 ) -> io::Result<ExitReason> {
-    let client = DaemonClient::new(options.socket_path());
+    let mut daemon = DaemonMonitor::new(options.socket_path());
     let mut last_ctrl_c = None;
     loop {
         drain_runtime_events(app, runtime)?;
         app.tick();
-        let (jobs, daemon_status) = match client.request(Request::List) {
-            Ok(Response::Jobs { jobs }) => (jobs, "connected".to_owned()),
-            Ok(other) => (Vec::new(), format!("unexpected response: {other:?}")),
-            Err(error) => (Vec::new(), format!("disconnected: {error}")),
-        };
-        draw(stdout, options, identity, app, &jobs, &daemon_status)?;
+        let (daemon_jobs, daemon_status) = daemon.poll(app);
+        draw(stdout, options, identity, app, &daemon_jobs, &daemon_status)?;
         if event::poll(Duration::from_millis(100))? {
             let terminal_event = event::read()?;
             if app.dismiss_welcome_for_event(&terminal_event) {
@@ -125,16 +124,18 @@ pub(super) fn run_loop(
 #[cfg(not(unix))]
 pub(super) fn run_loop(
     stdout: &mut io::Stdout,
-    _options: &TuiOptions,
+    options: &TuiOptions,
     identity: &UiIdentity,
     app: &mut AppState,
     runtime: &RuntimeController,
 ) -> io::Result<ExitReason> {
     let mut last_frame: Option<Vec<StyledLine>> = None;
     let mut last_ctrl_c = None;
+    let mut daemon = DaemonMonitor::new(options.socket_path());
     loop {
         drain_runtime_events(app, runtime)?;
         app.tick();
+        let _ = daemon.poll(app);
         let (width, height) = size()?;
         let frame = render_frame(identity, app, width, height);
         if last_frame.as_ref() != Some(&frame) {
@@ -169,6 +170,7 @@ pub(super) fn run_loop(
                 return Ok(ExitReason::UserQuit);
             }
         }
+        thread::sleep(Duration::from_millis(25));
     }
 }
 

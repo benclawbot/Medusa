@@ -14,7 +14,6 @@ use std::{
     time::Duration,
 };
 
-#[cfg(unix)]
 use std::thread;
 
 use app::{
@@ -38,6 +37,8 @@ use crossterm::{
     },
 };
 use medusa_config::Config;
+#[cfg(unix)]
+use medusa_daemon::JobRecord;
 use native_clipboard::NativeClipboard;
 use runtime::{RuntimeActivityKind, RuntimeController, RuntimeEvent, SubmitDisposition};
 
@@ -48,9 +49,6 @@ const MEDUSA_LOGO: [&str; 3] = [
 ];
 const MEDUSA_LOADING_LOGO: &str = include_str!("medusa_logo_ascii.txt");
 const HEADER_TOP_PADDING: u16 = 1;
-
-#[cfg(unix)]
-use medusa_daemon::{DaemonClient, JobRecord, Request, Response};
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct TuiOptions {
@@ -87,6 +85,7 @@ pub enum ExitReason {
     InputClosed,
 }
 
+mod daemon_status;
 // Renderer helpers intentionally keep explicit style parameters, and renderer tests compare
 // exact row membership. Keep these allowances scoped to the private presentation module.
 #[allow(clippy::manual_contains, clippy::too_many_arguments)]

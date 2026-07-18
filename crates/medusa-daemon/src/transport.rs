@@ -28,7 +28,9 @@ mod platform {
         }
 
         pub fn accept(&self) -> io::Result<LocalStream> {
-            self.inner.accept().map(|(stream, _)| LocalStream(stream))
+            let (stream, _) = self.inner.accept()?;
+            stream.set_nonblocking(false)?;
+            Ok(LocalStream(stream))
         }
 
         pub fn cleanup(&self) {
@@ -118,7 +120,9 @@ mod platform {
         }
 
         pub fn accept(&self) -> io::Result<LocalStream> {
-            self.inner.accept().map(|(stream, _)| LocalStream(stream))
+            let (stream, _) = self.inner.accept()?;
+            stream.set_nonblocking(false)?;
+            Ok(LocalStream(stream))
         }
 
         pub fn cleanup(&self) {
