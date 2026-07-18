@@ -1,0 +1,6 @@
+# Workflow files that require `contents: write`.
+# Format: repository-relative workflow path|specific justification
+#
+# Keep this registry empty unless a retained workflow has a reviewed,
+# non-self-modifying reason to write repository contents. Direct `git push`
+# and workflow self-deletion are forbidden even for registered entries.
