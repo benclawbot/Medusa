@@ -9,7 +9,7 @@ use clap::{Parser, Subcommand};
 use medusa_agent::{AgentEngine, bootstrap};
 use medusa_config::Config;
 use medusa_core::{ErrorCategory, ErrorCode, MedusaError, MedusaResult};
-use medusa_extensions::DesktopCommanderSettings;
+use medusa_extensions::{DesktopCommanderClient, DesktopCommanderSettings};
 use medusa_hardening::{CURRENT_SCHEMA_VERSION, Migrator};
 use medusa_provider::MiniMaxProvider;
 use medusa_tui::{TuiOptions, run as run_tui};
@@ -168,6 +168,7 @@ fn doctor(repo: &Path, config: &Config) -> MedusaResult<()> {
         },
     ];
     checks.push(desktop_commander_check(
+        repo,
         &DesktopCommanderSettings::from_env(),
     ));
     println!("{}", serde_json::to_string_pretty(&checks)?);
@@ -204,7 +205,7 @@ fn command_check(name: &'static str, program: &str, args: &[&str]) -> DoctorChec
     }
 }
 
-fn desktop_commander_check(settings: &DesktopCommanderSettings) -> DoctorCheck {
+fn desktop_commander_check(repo: &Path, settings: &DesktopCommanderSettings) -> DoctorCheck {
     if !settings.requested() {
         return DoctorCheck {
             name: "desktop_commander_mcp",
@@ -219,18 +220,27 @@ fn desktop_commander_check(settings: &DesktopCommanderSettings) -> DoctorCheck {
             detail: error.to_owned(),
         };
     }
-    let available = executable_available(settings.command());
-    DoctorCheck {
-        name: "desktop_commander_mcp",
-        ok: available,
-        detail: if available {
-            format!(
-                "{} via {}",
+    if !executable_available(settings.command()) {
+        return DoctorCheck {
+            name: "desktop_commander_mcp",
+            ok: false,
+            detail: format!("{} was not found on PATH", settings.command().display()),
+        };
+    }
+    match DesktopCommanderClient::connect(repo, settings.clone()) {
+        Ok(_) => DoctorCheck {
+            name: "desktop_commander_mcp",
+            ok: true,
+            detail: format!(
+                "MCP handshake ready: {} via {}",
                 settings.package_label(),
                 settings.command().display()
-            )
-        } else {
-            format!("{} was not found on PATH", settings.command().display())
+            ),
+        },
+        Err(error) => DoctorCheck {
+            name: "desktop_commander_mcp",
+            ok: false,
+            detail: format!("MCP handshake failed: {error}"),
         },
     }
 }

@@ -293,8 +293,7 @@ impl DesktopCommanderClient {
         let arguments = sanitize_arguments(repo, arguments)?;
         let mut result =
             self.request("tools/call", json!({"name": tool, "arguments": arguments}))?;
-        redact_value(&mut result);
-        validate_mcp_output(&result)?;
+        validate_tool_result(tool, &mut result)?;
         Ok(result)
     }
 
@@ -392,6 +391,17 @@ pub fn desktop_commander_tool_is_mutating(tool: &str) -> bool {
 
 fn is_process_tool(tool: &str) -> bool {
     PROCESS_TOOLS.contains(&tool)
+}
+
+fn validate_tool_result(tool: &str, result: &mut Value) -> MedusaResult<()> {
+    redact_value(result);
+    validate_mcp_output(result)?;
+    if result.get("isError").and_then(Value::as_bool) == Some(true) {
+        return Err(execution(format!(
+            "Desktop Commander tool {tool} reported an error: {result}"
+        )));
+    }
+    Ok(())
 }
 
 fn spawn_reader(
@@ -678,6 +688,15 @@ mod tests {
         assert!(!settings.tool_allowed("start_process", false));
         assert!(!settings.tool_allowed("set_config_value", false));
         assert!(!settings.tool_allowed("future_mutating_tool", false));
+    }
+
+    #[test]
+    fn mcp_error_result_is_not_recorded_as_success() {
+        let mut result = json!({
+            "isError": true,
+            "content": [{"type": "text", "text": "permission denied"}]
+        });
+        assert!(validate_tool_result("write_file", &mut result).is_err());
     }
 
     #[cfg(unix)]

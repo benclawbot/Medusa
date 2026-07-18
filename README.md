@@ -297,7 +297,7 @@ medusa doctor
 medusa
 ```
 
-The integration uses a Medusa-owned isolated home under `.medusa/extensions/desktop-commander`, writes a Desktop Commander profile with telemetry and onboarding disabled, clears inherited credentials, and limits `allowedDirectories` to the active repository. Medusa independently rewrites and validates path arguments, rejects parent traversal and symlink escapes, caps/redacts MCP output, and treats all returned content as untrusted.
+When the integration is enabled, `medusa doctor` performs the real MCP initialize and tool-discovery handshake. The integration uses a Medusa-owned isolated home under `.medusa/extensions/desktop-commander`, writes a Desktop Commander profile with telemetry and onboarding disabled, clears inherited credentials, and limits `allowedDirectories` to the active repository. Medusa independently rewrites and validates path arguments, rejects parent traversal and symlink escapes, caps/redacts MCP output, and treats all returned content as untrusted.
 
 The default capability set is read-only. Enable additional groups explicitly:
 
