@@ -1,7 +1,8 @@
-use std::{collections::VecDeque, path::Path};
+use std::{collections::VecDeque, path::Path, sync::Mutex};
 
 use medusa_config::{Config, Mode};
 use medusa_core::{ErrorCategory, ErrorCode, MedusaError, MedusaResult, SessionId};
+use medusa_extensions::{DesktopCommanderClient, DesktopCommanderSettings};
 use medusa_protocol::{Actor, EventPayload};
 use medusa_provider::{Message, MessageBlock, ModelProvider, ModelRequest, ResponseBlock, Role};
 use time::OffsetDateTime;
@@ -11,7 +12,7 @@ use crate::{
     evidence::append_event,
     output_envelope::{OutputFormat, wrap as wrap_envelope},
     session::{AgentPlanStep, AgentQuestion, AgentSession, bootstrap, load, persist},
-    tools::execute_tool,
+    tools::{execute_tool, input_string},
     verification::targeted_verification,
 };
 
@@ -45,12 +46,69 @@ pub enum AgentUpdate {
 pub struct AgentEngine<P> {
     provider: P,
     config: Config,
+    desktop_commander_settings: DesktopCommanderSettings,
+    desktop_commander: Mutex<Option<DesktopCommanderClient>>,
+}
+
+fn audited_tool_name(name: &str, input: &serde_json::Value) -> String {
+    if name == "desktop_commander" {
+        if let Some(tool) = input.get("tool").and_then(serde_json::Value::as_str) {
+            return format!("desktop_commander:{tool}");
+        }
+    }
+    name.to_owned()
 }
 
 impl<P: ModelProvider> AgentEngine<P> {
     #[must_use]
     pub fn new(provider: P, config: Config) -> Self {
-        Self { provider, config }
+        Self {
+            provider,
+            config,
+            desktop_commander_settings: DesktopCommanderSettings::from_env(),
+            desktop_commander: Mutex::new(None),
+        }
+    }
+
+    fn execute_desktop_commander(
+        &self,
+        repo: &Path,
+        input: &serde_json::Value,
+    ) -> MedusaResult<String> {
+        let tool = input_string(input, "tool")?;
+        let arguments = input.get("arguments").ok_or_else(|| {
+            MedusaError::new(
+                ErrorCode::InvalidConfiguration,
+                ErrorCategory::Validation,
+                "desktop_commander.arguments must be an object",
+            )
+        })?;
+        let mut client = self.desktop_commander.lock().map_err(|_| {
+            MedusaError::new(
+                ErrorCode::InternalInvariant,
+                ErrorCategory::Internal,
+                "Desktop Commander client lock was poisoned",
+            )
+        })?;
+        if client.is_none() {
+            *client = Some(DesktopCommanderClient::connect(
+                repo,
+                self.desktop_commander_settings.clone(),
+            )?);
+        }
+        let result = client
+            .as_mut()
+            .expect("Desktop Commander client initialized")
+            .call_tool(
+                repo,
+                tool,
+                arguments,
+                self.config.agent.mode == Mode::ReadOnly,
+            );
+        if result.is_err() {
+            client.take();
+        }
+        serde_json::to_string_pretty(&result?).map_err(Into::into)
     }
 
     pub fn create_session(&self, repo: &Path, objective: String) -> MedusaResult<AgentSession> {
@@ -271,7 +329,7 @@ impl<P: ModelProvider> AgentEngine<P> {
                 additional_system_context,
             ),
             messages: session.messages.clone(),
-            tools: available_tools(self.config.agent.mode),
+            tools: available_tools(self.config.agent.mode, &self.desktop_commander_settings),
             max_tokens: self.config.model.max_output_tokens,
             temperature_milli: self.config.model.temperature_milli,
         })?;
@@ -323,10 +381,11 @@ impl<P: ModelProvider> AgentEngine<P> {
         }
 
         while let Some((id, name, input)) = calls.pop_front() {
+            let event_tool = audited_tool_name(&name, &input);
             append_observed(
                 session,
                 EventPayload::ToolCallRequested {
-                    tool: name.clone(),
+                    tool: event_tool.clone(),
                     arguments: input.clone(),
                 },
                 &mut observer,
@@ -348,6 +407,8 @@ impl<P: ModelProvider> AgentEngine<P> {
                     }
                     Err(error) => Err(error),
                 }
+            } else if name == "desktop_commander" && tool_allowed(self.config.agent.mode, &name) {
+                self.execute_desktop_commander(&session.repo, &input)
             } else if tool_allowed(self.config.agent.mode, &name) {
                 execute_tool(&session.repo, &name, &input)
             } else {
@@ -355,7 +416,7 @@ impl<P: ModelProvider> AgentEngine<P> {
                 append_observed(
                     session,
                     EventPayload::ToolCallDenied {
-                        tool: name.clone(),
+                        tool: event_tool.clone(),
                         reason: reason.clone(),
                     },
                     &mut observer,
@@ -373,7 +434,7 @@ impl<P: ModelProvider> AgentEngine<P> {
             append_observed(
                 session,
                 EventPayload::ToolExecutionCompleted {
-                    tool: name.clone(),
+                    tool: event_tool,
                     exit_code,
                 },
                 &mut observer,

@@ -287,6 +287,36 @@ The TUI header reports live session duration, cumulative input/output tokens, ca
 
 The agent can drive a headless browser via the `browser_*` tools (`browser_navigate`, `browser_snapshot`, `browser_click`, `browser_fill`, `browser_press`, `browser_screenshot`, `browser_evaluate`, `browser_tabs`, `browser_close`). The browser runs in a separate `medusa-browserd` sidecar process. Medusa auto-discovers it next to the agent binary or on `PATH`; set `MEDUSA_BROWSER_PATH` to override. The sidecar requires Node.js 22 and a Chromium install (the same prerequisites the verification flow uses).
 
+### Desktop Commander MCP
+
+Desktop Commander access is optional and disabled by default. Medusa launches a pinned `@wonderwhy-er/desktop-commander@0.2.46` stdio server through `npx`, performs the MCP initialize/list/call lifecycle, and keeps the process alive for the agent session.
+
+```bash
+export MEDUSA_DESKTOP_COMMANDER_ENABLED=true
+medusa doctor
+medusa
+```
+
+When the integration is enabled, `medusa doctor` performs the real MCP initialize and tool-discovery handshake. The integration uses a Medusa-owned isolated home under `.medusa/extensions/desktop-commander`, writes a Desktop Commander profile with telemetry and onboarding disabled, clears inherited credentials, and limits `allowedDirectories` to the active repository. Medusa independently rewrites and validates path arguments, rejects parent traversal and symlink escapes, caps/redacts MCP output, and treats all returned content as untrusted.
+
+The default capability set is read-only. Enable additional groups explicitly:
+
+```bash
+export MEDUSA_DESKTOP_COMMANDER_ALLOW_WRITE=true
+```
+
+Desktop Commander process and terminal tools are never exposed because its own command blocklist and directory restrictions are advisory guardrails rather than a security sandbox. Use Medusa’s native `shell_run` tool instead; it remains subject to Medusa’s command policy and sandbox controls. The MCP adapter also denies unknown future tools, configuration mutation, telemetry/feedback, `.medusa` state access, and paths outside the repository.
+
+Advanced overrides:
+
+```bash
+export MEDUSA_DESKTOP_COMMANDER_ALLOWED_TOOLS='read_file,list_directory,start_search,get_more_search_results,write_file'
+export MEDUSA_DESKTOP_COMMANDER_COMMAND='npx'
+export MEDUSA_DESKTOP_COMMANDER_ARGS='["-y","@wonderwhy-er/desktop-commander@0.2.46","--no-onboarding"]'
+export MEDUSA_DESKTOP_COMMANDER_TIMEOUT_MS=30000
+export MEDUSA_DESKTOP_COMMANDER_MAX_OUTPUT_BYTES=262144
+```
+
 ## Headless commands
 
 The interactive interface is the default, while automation-oriented commands remain available:

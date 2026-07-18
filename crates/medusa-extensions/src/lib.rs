@@ -1,6 +1,7 @@
 //! Audited skills, hooks, MCP subprocesses, and browser evidence contracts.
 
 mod browser;
+mod desktop_commander;
 mod hooks;
 mod mcp;
 mod redaction;
@@ -8,6 +9,9 @@ mod skills;
 mod support;
 
 pub use browser::{BrowserEvidence, verify_browser};
+pub use desktop_commander::{
+    DesktopCommanderClient, DesktopCommanderSettings, desktop_commander_tool_is_mutating,
+};
 pub use hooks::{CommandHook, HookDecision, HookEvent, HookFailurePolicy, run_command_hook};
 pub use mcp::{McpRegistryEntry, McpRequest, McpResponse, call_mcp_stdio};
 pub use skills::{LoadedSkill, SkillCompatibility, SkillManifest, SkillPermissions, load_skill};
