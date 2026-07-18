@@ -204,10 +204,7 @@ mod tests {
             panic!("expected plan event");
         };
         assert_eq!(
-            plan.steps
-                .iter()
-                .map(|step| step.state)
-                .collect::<Vec<_>>(),
+            plan.steps.iter().map(|step| step.state).collect::<Vec<_>>(),
             vec![
                 TranscriptPlanStepState::Pending,
                 TranscriptPlanStepState::Active,
