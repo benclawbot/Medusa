@@ -334,10 +334,7 @@ fn mark_idle(submission: &Arc<Mutex<SubmissionState>>, clear_followups: bool) {
 }
 
 fn take_followups(submission: &Arc<Mutex<SubmissionState>>) -> Vec<PromptDraft> {
-    lock_submission(submission)
-        .followups
-        .drain(..)
-        .collect()
+    lock_submission(submission).followups.drain(..).collect()
 }
 
 fn finish_or_take_followups(submission: &Arc<Mutex<SubmissionState>>) -> Vec<PromptDraft> {
