@@ -83,7 +83,7 @@ pub(super) fn turns_for_effort(effort: Effort) -> u32 {
         Effort::Low => 64,
         Effort::Medium => 200,
         Effort::High => 500,
-        Effort::Auto => unreachable!("auto resolves to the configured default"),
+        Effort::Auto => 200,
     }
 }
 
@@ -209,7 +209,11 @@ pub(super) fn load_selected_skill(
         )));
     }
 
-    let (scope, path) = matches.pop().expect("one skill match");
+    let Some((scope, path)) = matches.pop() else {
+        return Err(RuntimeError::InvalidCommand(format!(
+            "skill {name} disappeared while resolving its path"
+        )));
+    };
     let bytes = fs::read(&path)?;
     if bytes.len() > MAX_SKILL_CONTEXT_BYTES {
         return Err(RuntimeError::FileTooLarge {
