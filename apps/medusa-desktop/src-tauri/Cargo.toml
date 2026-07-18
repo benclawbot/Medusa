@@ -23,7 +23,4 @@ serde = { version = "1", features = ["derive"] }
 tauri = { version = "2", features = [] }
 tauri-plugin-dialog = "2"
 
-[dev-dependencies]
-tempfile = "3"
-
 [workspace]
