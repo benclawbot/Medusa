@@ -21,22 +21,11 @@ jobs:
         with:
           ref: feat/desktop-commander-mcp
           fetch-depth: 0
-      - name: Apply integration patch
-        id: patch
+      - name: Apply hardening and regression coverage
         shell: bash
         run: |
-          set -o pipefail
-          python3 .github/scripts/fix_desktop_commander_patch_script.py
-          python3 .github/scripts/apply_desktop_commander_integration.py 2>&1 | tee desktop-commander-patch.log
           python3 .github/scripts/fix_desktop_commander_clippy.py
           python3 .github/scripts/harden_desktop_commander.py
-      - name: Upload patch diagnostics
-        if: failure()
-        uses: actions/upload-artifact@v4
-        with:
-          name: desktop-commander-patch-diagnostics
-          path: desktop-commander-patch.log
-          if-no-files-found: error
       - uses: dtolnay/rust-toolchain@1.88.0
         with:
           components: rustfmt,clippy
