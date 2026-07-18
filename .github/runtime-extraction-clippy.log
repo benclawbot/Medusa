@@ -1,0 +1,25 @@
+[0m[1m[38;5;9merror[E0433][0m[0m[1m: failed to resolve: use of undeclared type `PromptAttachment`[0m
+[0m  [0m[0m[1m[38;5;12m--> [0m[0mcrates/medusa-runtime/src/tests.rs:26:27[0m
+[0m   [0m[0m[1m[38;5;12m|[0m
+[0m[1m[38;5;12m26[0m[0m [0m[0m[1m[38;5;12m|[0m[0m [0m[0m        attachments: vec![PromptAttachment::Image(ImageAttachment {[0m
+[0m   [0m[0m[1m[38;5;12m|[0m[0m                           [0m[0m[1m[38;5;9m^^^^^^^^^^^^^^^^[0m[0m [0m[0m[1m[38;5;9muse of undeclared type `PromptAttachment`[0m
+[0m   [0m[0m[1m[38;5;12m|[0m
+[0m[1m[38;5;14mhelp[0m[0m: consider importing this enum[0m
+[0m   [0m[0m[1m[38;5;12m|[0m
+[0m[1m[38;5;12m1[0m[0m  [0m[0m[38;5;10m+ use crate::prompt::PromptAttachment;[0m
+[0m   [0m[0m[1m[38;5;12m|[0m
+
+[0m[1m[38;5;9merror[E0422][0m[0m[1m: cannot find struct, variant or union type `ImageAttachment` in this scope[0m
+[0m  [0m[0m[1m[38;5;12m--> [0m[0mcrates/medusa-runtime/src/tests.rs:26:51[0m
+[0m   [0m[0m[1m[38;5;12m|[0m
+[0m[1m[38;5;12m26[0m[0m [0m[0m[1m[38;5;12m|[0m[0m [0m[0m        attachments: vec![PromptAttachment::Image(ImageAttachment {[0m
+[0m   [0m[0m[1m[38;5;12m|[0m[0m                                                   [0m[0m[1m[38;5;9m^^^^^^^^^^^^^^^[0m[0m [0m[0m[1m[38;5;9mnot found in this scope[0m
+[0m   [0m[0m[1m[38;5;12m|[0m
+[0m[1m[38;5;14mhelp[0m[0m: consider importing this struct[0m
+[0m   [0m[0m[1m[38;5;12m|[0m
+[0m[1m[38;5;12m1[0m[0m  [0m[0m[38;5;10m+ use crate::prompt::ImageAttachment;[0m
+[0m   [0m[0m[1m[38;5;12m|[0m
+
+[0m[1mSome errors have detailed explanations: E0422, E0433.[0m
+[0m[1mFor more information about an error, try `rustc --explain E0422`.[0m
+[1m[31merror[0m[1m:[0m could not compile `medusa-runtime` (lib test) due to 2 previous errors
