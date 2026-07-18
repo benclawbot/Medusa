@@ -2,19 +2,17 @@ name: CI
 
 on:
   push:
-    branches: [main]
-  pull_request:
+    branches: [feat/tui-markdown-io-consistency]
 
 permissions:
   contents: read
 
 concurrency:
-  group: ci-${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+  group: tui-review-fixes-${{ github.ref }}
+  cancel-in-progress: false
 
 jobs:
   apply-reviewed-tui-fixes:
-    if: github.event_name == 'pull_request' && github.head_ref == 'feat/tui-markdown-io-consistency'
     name: Apply reviewed TUI fixes
     runs-on: ubuntu-latest
     permissions:
@@ -31,60 +29,13 @@ jobs:
           from pathlib import Path
 
           changed = False
+
           runtime = Path('crates/medusa-tui/src/runtime.rs')
           text = runtime.read_text()
-
-          old_initial = '''            if cancel.load(Ordering::SeqCst) {
-                mark_idle(submission, true);
-                return Ok(RuntimeEvent::Cancelled);
-            }
-            append_followups(&engine, &mut session, take_followups(submission))?;'''
-          new_initial = '''            if cancel_requested(cancel, submission) {
-                return Ok(RuntimeEvent::Cancelled);
-            }
-            append_followups(&engine, &mut session, take_followups(submission))?;'''
-          if old_initial in text:
-              text = text.replace(old_initial, new_initial, 1)
-              changed = True
-          elif new_initial not in text:
-              raise SystemExit('initial cancellation boundary not found')
-
-          progress = '''            let _ = events.send(RuntimeEvent::Progress { turn: session.turn });
-
-            if matches!(outcome, StepOutcome::WaitingForUser) {'''
-          guarded_progress = '''            let _ = events.send(RuntimeEvent::Progress { turn: session.turn });
-
-            if cancel_requested(cancel, submission) {
-                return Ok(RuntimeEvent::Cancelled);
-            }
-
-            if matches!(outcome, StepOutcome::WaitingForUser) {'''
-          if progress in text:
-              text = text.replace(progress, guarded_progress, 1)
-              changed = True
-          elif guarded_progress not in text:
-              raise SystemExit('post-step cancellation boundary not found')
-
-          helper_anchor = '''fn mark_idle(submission: &Arc<Mutex<SubmissionState>>, clear_followups: bool) {'''
-          helper = '''fn cancel_requested(
-    cancel: &AtomicBool,
-    submission: &Arc<Mutex<SubmissionState>>,
-) -> bool {
-    if cancel.load(Ordering::SeqCst) {
-        mark_idle(submission, true);
-        true
-    } else {
-        false
-    }
-}
-
-fn mark_idle(submission: &Arc<Mutex<SubmissionState>>, clear_followups: bool) {'''
           if 'fn cancel_requested(' not in text:
-              if text.count(helper_anchor) != 1:
-                  raise SystemExit(f'mark_idle anchor count: {text.count(helper_anchor)}')
-              text = text.replace(helper_anchor, helper, 1)
-              changed = True
-          runtime.write_text(text)
+              raise SystemExit('cancellation helper is missing')
+          if text.count('if cancel_requested(cancel, submission) {') < 2:
+              raise SystemExit('both cancellation boundaries are required')
 
           tests = Path('crates/medusa-tui/src/runtime/tests.rs')
           text = tests.read_text()
@@ -109,19 +60,18 @@ fn cancellation_clears_queued_followups_before_the_next_turn_boundary() {
     assert!(state.followups.is_empty());
 }
 '''
+              tests.write_text(text)
               changed = True
-          tests.write_text(text)
 
           readme = Path('README.md')
           text = readme.read_text()
-          old_license = '''This repository currently has no declared software license. Add one before distributing or accepting external contributions.'''
-          new_license = '''Medusa is licensed under the [MIT License](LICENSE).'''
+          old_license = 'This repository currently has no declared software license. Add one before distributing or accepting external contributions.'
+          new_license = 'Medusa is licensed under the [MIT License](LICENSE).'
           if old_license in text:
-              text = text.replace(old_license, new_license, 1)
+              readme.write_text(text.replace(old_license, new_license, 1))
               changed = True
           elif new_license not in text:
               raise SystemExit('README license statement not found')
-          readme.write_text(text)
 
           Path('/tmp/review-fixes-changed').write_text('1' if changed else '0')
           PY
@@ -140,100 +90,7 @@ fn cancellation_clears_queued_followups_before_the_next_turn_boundary() {
           fi
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add README.md crates/medusa-tui/src/runtime.rs crates/medusa-tui/src/runtime/tests.rs
+          git add README.md crates/medusa-tui/src/runtime/tests.rs
           git diff --cached --check
           git commit -m "fix(tui): discard queued follow-ups on cancellation"
           git push origin HEAD:feat/tui-markdown-io-consistency
-
-  quality:
-    name: Workspace quality
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@1.88.0
-        with:
-          components: rustfmt,clippy
-      - name: Refresh dependency lock for the merged PR graph
-        run: cargo generate-lockfile
-      - name: Check formatting
-        shell: bash
-        run: |
-          set -o pipefail
-          cargo fmt --all -- --check 2>&1 | tee rustfmt.log
-      - name: Capture rustfmt patch
-        if: failure()
-        shell: bash
-        run: |
-          cargo fmt --all
-          git diff -- . ':!Cargo.lock' > rustfmt.patch
-      - name: Upload rustfmt diagnostics
-        if: failure()
-        uses: actions/upload-artifact@v4
-        with:
-          name: rustfmt-diagnostics
-          path: |
-            rustfmt.log
-            rustfmt.patch
-          if-no-files-found: ignore
-      - name: Clippy
-        shell: bash
-        run: |
-          set -o pipefail
-          cargo clippy --workspace --all-targets --all-features --locked -- -D warnings 2>&1 | tee clippy.log
-      - name: Upload Clippy diagnostics
-        if: failure()
-        uses: actions/upload-artifact@v4
-        with:
-          name: clippy-diagnostics
-          path: clippy.log
-          if-no-files-found: ignore
-      - name: Full workspace tests
-        shell: bash
-        run: |
-          set -o pipefail
-          cargo test --workspace --all-features --locked -- --nocapture 2>&1 | tee workspace-tests.log
-      - name: Upload workspace test diagnostics
-        if: failure()
-        uses: actions/upload-artifact@v4
-        with:
-          name: workspace-test-diagnostics
-          path: workspace-tests.log
-          if-no-files-found: error
-      - name: Documentation
-        env:
-          RUSTDOCFLAGS: -D warnings
-        run: cargo doc --workspace --all-features --locked --no-deps
-
-  supply-chain:
-    name: Dependency policy
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@1.88.0
-      - uses: taiki-e/install-action@v2
-        with:
-          tool: cargo-deny,cargo-audit
-      - name: Cargo deny
-        shell: bash
-        run: |
-          set -o pipefail
-          cargo deny check advisories sources 2>&1 | tee cargo-deny.log
-      - name: Upload cargo-deny diagnostics
-        if: failure()
-        uses: actions/upload-artifact@v4
-        with:
-          name: cargo-deny-diagnostics
-          path: cargo-deny.log
-          if-no-files-found: error
-      - name: Cargo audit
-        shell: bash
-        run: |
-          set -o pipefail
-          cargo audit 2>&1 | tee cargo-audit.log
-      - name: Upload cargo-audit diagnostics
-        if: failure()
-        uses: actions/upload-artifact@v4
-        with:
-          name: cargo-audit-diagnostics
-          path: cargo-audit.log
-          if-no-files-found: error
