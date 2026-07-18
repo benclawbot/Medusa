@@ -91,14 +91,14 @@ pub(super) fn run_loop(
     loop {
         drain_runtime_events(app, runtime)?;
         app.tick();
-        let daemon_snapshot = daemon.poll(app);
+        let (daemon_jobs, daemon_status) = daemon.poll(app);
         draw(
             stdout,
             options,
             identity,
             app,
-            &daemon_snapshot.jobs,
-            &daemon_snapshot.status,
+            &daemon_jobs,
+            &daemon_status,
         )?;
         if event::poll(Duration::from_millis(100))? {
             let terminal_event = event::read()?;
@@ -142,7 +142,7 @@ pub(super) fn run_loop(
     loop {
         drain_runtime_events(app, runtime)?;
         app.tick();
-        let _daemon_snapshot = daemon.poll(app);
+        let _ = daemon.poll(app);
         let (width, height) = size()?;
         let frame = render_frame(identity, app, width, height);
         if last_frame.as_ref() != Some(&frame) {
