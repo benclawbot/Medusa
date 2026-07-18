@@ -24,10 +24,12 @@ jobs:
         with:
           ref: feat/tui-markdown-io-consistency
           fetch-depth: 0
+          show-progress: false
       - name: Execute guarded patch from helper
         shell: bash
         run: |
-          python3 - <<'PY'
+          set -o pipefail
+          python3 - <<'PY' 2>&1 | tee apply-markdown-io.log
           from pathlib import Path
           workflow = Path('.github/workflows/apply-tui-markdown-io.yml').read_text().splitlines()
           start = next(index for index, line in enumerate(workflow) if "python3 - <<'PY'" in line) + 1
@@ -35,6 +37,13 @@ jobs:
           script = '\n'.join(line[10:] if line.startswith('          ') else line for line in workflow[start:end])
           exec(compile(script, 'apply-tui-markdown-io.py', 'exec'))
           PY
+      - name: Upload guarded patch diagnostics
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: apply-markdown-io-diagnostics
+          path: apply-markdown-io.log
+          if-no-files-found: error
       - uses: dtolnay/rust-toolchain@1.88.0
         with:
           components: rustfmt,clippy
