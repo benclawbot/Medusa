@@ -385,13 +385,11 @@ fn internal_plan_transport_is_hidden_and_assistant_text_is_forwarded_verbatim() 
         &sender,
         &mut state,
     );
-    assert_eq!(
+    assert!(matches!(
         receiver.recv().expect("assistant text"),
-        RuntimeEvent::AssistantText(
-            "Now I have a clear picture. Key findings:\n\n1. First detail\n2. Second detail"
-                .to_owned()
-        )
-    );
+        RuntimeEvent::AssistantText(text)
+            if text == "Now I have a clear picture. Key findings:\n\n1. First detail\n2. Second detail"
+    ));
 }
 
 #[test]
