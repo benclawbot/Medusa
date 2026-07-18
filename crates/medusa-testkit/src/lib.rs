@@ -1,8 +1,6 @@
 //! Deterministic fixtures for Medusa tests.
 
-use medusa_core::{
-    CorrelationId, ErrorCategory, ErrorCode, MedusaError, MedusaResult, SessionId,
-};
+use medusa_core::{CorrelationId, ErrorCategory, ErrorCode, MedusaError, MedusaResult, SessionId};
 use medusa_protocol::{Actor, EventEnvelope, EventPayload};
 use time::OffsetDateTime;
 
