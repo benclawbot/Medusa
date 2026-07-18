@@ -1,20 +1,20 @@
 name: Extract Runtime
 
 on:
-  push:
-    branches: [agent/extract-frontend-neutral-runtime]
-    paths: [.github/runtime-extraction-trigger]
-  workflow_dispatch:
+  pull_request:
+    branches: [main]
+    types: [opened, synchronize, reopened]
 
 permissions:
   contents: write
 
 concurrency:
-  group: extract-runtime-${{ github.ref }}
+  group: extract-runtime-${{ github.event.pull_request.number }}
   cancel-in-progress: true
 
 jobs:
   extract:
+    if: github.head_ref == 'agent/extract-frontend-neutral-runtime'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
