@@ -14,7 +14,8 @@ Medusa is a production-grade autonomous coding agent written in Rust. It combine
 - **Clipboard-native input** — paste text or screenshots with `Ctrl+V`; screenshots are encoded and submitted as image context when the configured provider supports it.
 - **Repository-aware tooling** — bounded file access, search, atomic writes, patch transactions, shell execution, Git checkpoints, and targeted verification.
 - **Browser and web interaction** — a persistent headless browser the agent can drive from tool calls (navigate, click, fill, press, screenshot, evaluate JS, list tabs).
-- **Full-content display** — every tool result, fetched page, and shell run is shown in full in the TUI; long content is paged with `Shift+Up` / `Shift+PgUp` instead of being truncated.
+- **Markdown conversation display** — Medusa responses render headings, lists, task boxes, quotes, links, rules, and fenced code blocks directly in the terminal while tool activity remains compact.
+- **Mid-turn guidance** — submit extra detail while Medusa is working; the user turn stays visible and is injected at the next safe agent-turn boundary.
 - **Persistent memory** — Markdown-first memory with validation, indexing, retrieval, lifecycle management, and provenance controls.
 - **Parallel workers** — isolated worktrees, deterministic merge behavior, conflict detection, and cleanup safeguards.
 - **Extensions and browser evidence** — skills, hooks, MCP isolation, Playwright-based browser verification, output redaction, and checksummed provenance.
@@ -259,14 +260,14 @@ medusa --continue
 
 | Key | Action |
 |---|---|
-| `Enter` | Submit the current prompt |
+| `Enter` | Submit the current prompt, or queue a follow-up while Medusa is working |
 | `Shift+Enter` | Insert a new line |
 | `Ctrl+V` | Paste clipboard text or attach a screenshot |
 | `Ctrl+C` | Cancel the active agent task; press twice within 1 second to exit |
 | `Ctrl+D` | Exit when the composer is empty |
 | `Esc` | Cancel the active agent task or close the current modal |
 
-Prompt drafts and clipboard attachments are persisted under the repository's `.medusa` state directory until submission.
+Prompt drafts and clipboard attachments are persisted under the repository's `.medusa` state directory until submission. If the runtime rejects a submission, the draft is restored instead of being discarded. Mid-turn follow-ups remain visible immediately and are applied before the next model turn.
 
 Installed skills are directly invokable by name. Built-in commands take precedence over same-named skills:
 

@@ -62,7 +62,10 @@ pub(crate) fn transcript_lines(app: &AppState, width: u16) -> Vec<StyledLine> {
                     "You     ",
                     Color::Cyan,
                     text,
-                    Color::Grey,
+                    Color::Black,
+                    Some(Color::Grey),
+                    true,
+                    Attribute::Reset,
                     width,
                 ));
                 for attachment in &draft.attachments {
@@ -70,18 +73,17 @@ pub(crate) fn transcript_lines(app: &AppState, width: u16) -> Vec<StyledLine> {
                         "        ",
                         Color::DarkGrey,
                         &format!("[attachment] {}", attachment_label(attachment)),
-                        Color::DarkGrey,
+                        Color::Black,
+                        Some(Color::Grey),
+                        true,
+                        Attribute::Reset,
                         width,
                     ));
                 }
             }
-            TranscriptEntry::Assistant(text) => lines.extend(conversation_block_lines(
-                "Medusa  ",
-                Color::Magenta,
-                text,
-                Color::White,
-                width,
-            )),
+            TranscriptEntry::Assistant(text) => lines.extend(
+                super::markdown::markdown_block_lines("Medusa  ", Color::Magenta, text, width),
+            ),
             TranscriptEntry::Activity(activity) => lines.extend(activity_lines(activity)),
             TranscriptEntry::System(message) => lines.push(system_line(message)),
         }
@@ -94,6 +96,9 @@ fn conversation_block_lines(
     marker_color: Color,
     text: &str,
     foreground: Color,
+    background: Option<Color>,
+    fill_background: bool,
+    attribute: Attribute,
     width: u16,
 ) -> Vec<StyledLine> {
     let marker_width = first_marker.chars().count();
@@ -119,7 +124,7 @@ fn conversation_block_lines(
         .into_iter()
         .enumerate()
         .map(|(index, row)| {
-            StyledLine::with_marker(
+            StyledLine::with_marker_style(
                 if index == 0 {
                     first_marker.to_owned()
                 } else {
@@ -128,6 +133,9 @@ fn conversation_block_lines(
                 marker_color,
                 row,
                 foreground,
+                background,
+                attribute,
+                fill_background,
             )
         })
         .collect()
@@ -356,17 +364,33 @@ pub(super) fn composer_prompt_text(text: &str) -> String {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct StyledLine {
-    marker: Option<(String, Color)>,
+    pub(crate) marker: Option<(String, Color)>,
     pub(crate) text: String,
     foreground: Color,
+    background: Option<Color>,
+    attribute: Attribute,
+    fill_background: bool,
 }
 
 impl StyledLine {
     pub(super) fn new(text: impl Into<String>, foreground: Color) -> Self {
+        Self::styled(text, foreground, None, Attribute::Reset, false)
+    }
+
+    pub(super) fn styled(
+        text: impl Into<String>,
+        foreground: Color,
+        background: Option<Color>,
+        attribute: Attribute,
+        fill_background: bool,
+    ) -> Self {
         Self {
             marker: None,
             text: text.into(),
             foreground,
+            background,
+            attribute,
+            fill_background,
         }
     }
 
@@ -376,32 +400,85 @@ impl StyledLine {
         text: impl Into<String>,
         foreground: Color,
     ) -> Self {
+        Self::with_marker_style(
+            marker,
+            marker_color,
+            text,
+            foreground,
+            None,
+            Attribute::Reset,
+            false,
+        )
+    }
+
+    pub(super) fn with_marker_style(
+        marker: impl Into<String>,
+        marker_color: Color,
+        text: impl Into<String>,
+        foreground: Color,
+        background: Option<Color>,
+        attribute: Attribute,
+        fill_background: bool,
+    ) -> Self {
         Self {
             marker: Some((marker.into(), marker_color)),
             text: text.into(),
             foreground,
+            background,
+            attribute,
+            fill_background,
         }
     }
 
-    pub(super) fn print(&self, stdout: &mut io::Stdout, width: u16) -> io::Result<()> {
+    fn print_content(&self, stdout: &mut io::Stdout, width: u16) -> io::Result<()> {
+        if let Some(background) = self.background {
+            queue!(stdout, SetBackgroundColor(background))?;
+        }
+        queue!(stdout, SetAttribute(self.attribute))?;
+        let used;
         if let Some((marker, marker_color)) = &self.marker {
             let marker = wrap_to_width(marker, width);
             let remaining = width.saturating_sub(marker.chars().count() as u16);
-            return queue!(
+            let body = wrap_to_width(&self.text, remaining);
+            used = marker.chars().count().saturating_add(body.chars().count());
+            queue!(
                 stdout,
-                Clear(ClearType::UntilNewLine),
-                SetAttribute(Attribute::Reset),
-                ResetColor,
                 SetForegroundColor(*marker_color),
                 Print(marker),
                 SetForegroundColor(self.foreground),
-                Print(wrap_to_width(&self.text, remaining)),
-                SetAttribute(Attribute::Reset),
-                ResetColor,
-                Print("\r\n")
-            );
+                Print(body),
+            )?;
+        } else {
+            let body = wrap_to_width(&self.text, width);
+            used = body.chars().count();
+            queue!(stdout, SetForegroundColor(self.foreground), Print(body))?;
         }
-        print_styled_line(stdout, width, &self.text, self.foreground, Attribute::Reset)
+        if self.fill_background {
+            queue!(
+                stdout,
+                Print(" ".repeat(usize::from(width).saturating_sub(used)))
+            )?;
+        }
+        Ok(())
+    }
+
+    pub(super) fn print(&self, stdout: &mut io::Stdout, width: u16) -> io::Result<()> {
+        queue!(
+            stdout,
+            Clear(ClearType::UntilNewLine),
+            SetAttribute(Attribute::Reset),
+            ResetColor,
+        )?;
+        self.print_content(stdout, width)?;
+        queue!(
+            stdout,
+            SetAttribute(Attribute::Reset),
+            ResetColor,
+            Print(
+                "
+"
+            )
+        )
     }
 
     pub(super) fn print_at(&self, stdout: &mut io::Stdout, width: u16, row: u16) -> io::Result<()> {
@@ -412,23 +489,7 @@ impl StyledLine {
             SetAttribute(Attribute::Reset),
             ResetColor,
         )?;
-        if let Some((marker, marker_color)) = &self.marker {
-            let marker = wrap_to_width(marker, width);
-            let remaining = width.saturating_sub(marker.chars().count() as u16);
-            queue!(
-                stdout,
-                SetForegroundColor(*marker_color),
-                Print(marker),
-                SetForegroundColor(self.foreground),
-                Print(wrap_to_width(&self.text, remaining)),
-            )?;
-        } else {
-            queue!(
-                stdout,
-                SetForegroundColor(self.foreground),
-                Print(wrap_to_width(&self.text, width)),
-            )?;
-        }
+        self.print_content(stdout, width)?;
         queue!(stdout, SetAttribute(Attribute::Reset), ResetColor)
     }
 }
