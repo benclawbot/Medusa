@@ -29,5 +29,6 @@ pub(crate) fn tempdir() -> io::Result<TempDir> {
         std::process::id()
     ));
     fs::create_dir(&path)?;
+    let path = fs::canonicalize(path)?;
     Ok(TempDir { path })
 }
