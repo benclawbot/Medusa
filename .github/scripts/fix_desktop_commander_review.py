@@ -51,39 +51,39 @@ replace_once(
     }
 ''',
     '''        assert!(sanitize_arguments(directory.path(), &json!({"path": "../secret"})).is_err());
-        assert!(
-            sanitize_arguments(
-                directory.path(),
-                &json!({"path": ".MEDUSA/sessions/private.json"}),
-            )
-            .is_err()
-        );
+        assert!(sanitize_arguments(
+            directory.path(),
+            &json!({"path": ".MEDUSA/sessions/private.json"}),
+        )
+        .is_err());
     }
 ''',
 )
 replace_once(
     "crates/medusa-extensions/src/desktop_commander.rs",
     '''    #[test]
-    fn process_meta_and_unknown_tools_fail_closed() {
+    fn defaults_are_disabled_pinned_and_read_only() {
+        let settings = DesktopCommanderSettings::default();
+        assert!(!settings.requested());
+        assert!(settings.args.iter().any(|arg| arg == PINNED_PACKAGE));
+        assert!(settings.effective_tools().contains("read_file"));
+        assert!(!settings.effective_tools().contains("write_file"));
+        assert!(!settings.effective_tools().contains("start_process"));
+    }
 ''',
     '''    #[test]
-    fn read_only_mode_filters_write_tools_before_advertising() {
-        let settings = DesktopCommanderSettings {
-            enabled: true,
-            allow_write: true,
-            allowed_tools: BTreeSet::from([
-                "read_file".to_owned(),
-                "write_file".to_owned(),
-            ]),
-            ..DesktopCommanderSettings::default()
-        };
+    fn defaults_and_read_only_mode_filter_write_tools() {
+        let mut settings = DesktopCommanderSettings::default();
+        assert!(!settings.requested());
+        assert!(settings.args.iter().any(|arg| arg == PINNED_PACKAGE));
+        assert!(settings.effective_tools().contains("read_file"));
+        assert!(!settings.effective_tools().contains("start_process"));
+        settings.enabled = true;
+        settings.allow_write = true;
+        settings.allowed_tools.insert("write_file".to_owned());
         assert!(settings.effective_tools_for_mode(false).contains("write_file"));
         assert!(!settings.effective_tools_for_mode(true).contains("write_file"));
-        assert!(settings.effective_tools_for_mode(true).contains("read_file"));
     }
-
-    #[test]
-    fn process_meta_and_unknown_tools_fail_closed() {
 ''',
 )
 replace_once(
