@@ -6,22 +6,28 @@ on:
       - 'Cargo.toml'
       - 'crates/**'
       - 'scripts/check-source-size.sh'
+      - 'scripts/check-workflow-hygiene.sh'
+      - 'scripts/test-workflow-hygiene.sh'
       - 'docs/REFACTOR-BASELINE.md'
       - 'docs/PUBLIC-API-BASELINE.md'
       - 'docs/BENCHMARKS.md'
       - 'docs/source-size-exceptions.txt'
-      - '.github/workflows/refactor-guardrails.yml'
+      - 'docs/workflow-write-allowlist.txt'
+      - '.github/workflows/**'
   push:
     branches: [main]
     paths:
       - 'Cargo.toml'
       - 'crates/**'
       - 'scripts/check-source-size.sh'
+      - 'scripts/check-workflow-hygiene.sh'
+      - 'scripts/test-workflow-hygiene.sh'
       - 'docs/REFACTOR-BASELINE.md'
       - 'docs/PUBLIC-API-BASELINE.md'
       - 'docs/BENCHMARKS.md'
       - 'docs/source-size-exceptions.txt'
-      - '.github/workflows/refactor-guardrails.yml'
+      - 'docs/workflow-write-allowlist.txt'
+      - '.github/workflows/**'
 
 permissions:
   contents: read
@@ -38,6 +44,16 @@ jobs:
       - uses: actions/checkout@v4
       - name: Enforce source-size ceiling and exception registry
         run: bash scripts/check-source-size.sh
+
+  workflow-hygiene:
+    name: Workflows are read-only or explicitly justified
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Test workflow hygiene guard
+        run: bash scripts/test-workflow-hygiene.sh
+      - name: Audit repository workflows
+        run: bash scripts/check-workflow-hygiene.sh
 
   compatibility-baseline:
     name: Public API and benchmark baseline present
