@@ -393,6 +393,19 @@ See [Security hardening](docs/SECURITY-HARDENING.md) for the release-enforced co
 | `medusa-browser` | Browser sidecar client and protocol |
 | `medusa-browserd` | Node.js + Playwright sidecar process |
 
+
+## Desktop interface
+
+`apps/medusa-desktop` is the Zeus-derived alternative entry point. It keeps the three-panel desktop shell and interaction model while replacing Zeus's separate agent implementation with a thin Tauri adapter over `medusa-runtime`.
+
+```bash
+cd apps/medusa-desktop
+npm install
+npm run tauri:dev
+```
+
+The desktop app opens a repository explicitly, then uses the same session controller, provider configuration, skills, cancellation, follow-up queue, plans, questions, tools, memory, and policy as the terminal entry point. File attachments are confined to the selected repository; pasted images are decoded and validated by the Rust adapter before entering the runtime.
+
 ## Development and verification
 
 Use the same checks enforced by CI:
