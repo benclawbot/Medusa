@@ -23,8 +23,7 @@ impl BrowserClient {
             .stderr(Stdio::inherit())
             .spawn()
             .map_err(|e| spawn_err(format!("could not launch {command}: {e}")))?;
-        let stdin = child.stdin.take().expect("stdin");
-        let stdout = child.stdout.take().expect("stdout");
+        let (stdin, stdout) = take_stdio(&mut child, command)?;
         let pipe = StdioPipe::new(stdout, stdin);
         Ok(Self {
             child,
@@ -41,6 +40,19 @@ impl Drop for BrowserClient {
     fn drop(&mut self) {
         let _ = self.child.kill();
         let _ = self.child.wait();
+    }
+}
+
+fn take_stdio(child: &mut Child, command: &str) -> MedusaResult<(ChildStdin, ChildStdout)> {
+    match (child.stdin.take(), child.stdout.take()) {
+        (Some(stdin), Some(stdout)) => Ok((stdin, stdout)),
+        _ => {
+            let _ = child.kill();
+            let _ = child.wait();
+            Err(spawn_err(format!(
+                "launched {command} without the required stdin/stdout pipes"
+            )))
+        }
     }
 }
 
@@ -81,4 +93,29 @@ fn spawn_err(message: String) -> MedusaError {
         message,
     )
     .with_retryable(true)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn missing_stdio_pipes_return_a_retryable_dependency_error() {
+        let executable = std::env::current_exe().expect("current test executable");
+        let mut child = Command::new(executable)
+            .arg("--list")
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .spawn()
+            .expect("spawn pipe-less child");
+
+        let error = take_stdio(&mut child, "test-browser")
+            .err()
+            .expect("missing pipes must fail");
+
+        assert_eq!(error.code, ErrorCode::DependencyUnavailable);
+        assert_eq!(error.category, ErrorCategory::Transient);
+        assert!(error.retryable);
+        assert!(error.message.contains("required stdin/stdout pipes"));
+    }
 }
