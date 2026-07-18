@@ -24,10 +24,12 @@ fn delayed_command() -> (String, Vec<String>) {
 #[cfg(windows)]
 fn delayed_command() -> (String, Vec<String>) {
     (
-        "cmd".to_owned(),
+        "powershell.exe".to_owned(),
         vec![
-            "/C".to_owned(),
-            "ping -n 2 127.0.0.1 >NUL & echo|set /p=done>finished.txt & echo|set /p=verified-daemon-reconnect"
+            "-NoProfile".to_owned(),
+            "-NonInteractive".to_owned(),
+            "-Command".to_owned(),
+            "Start-Sleep -Milliseconds 300; Set-Content -NoNewline -Path finished.txt -Value done; [Console]::Write('verified-daemon-reconnect')"
                 .to_owned(),
         ],
     )
@@ -68,7 +70,12 @@ fn client_reconnects_while_job_continues() {
         }
     });
     let completed = completed.expect("job completion after reconnect");
-    assert_eq!(completed.state, JobState::Succeeded);
+    assert_eq!(
+        completed.state,
+        JobState::Succeeded,
+        "daemon job stderr: {}",
+        completed.stderr
+    );
     assert!(completed.stdout.contains("verified-daemon-reconnect"));
     assert_eq!(
         fs::read_to_string(directory.path().join("finished.txt")).expect("finished file"),
