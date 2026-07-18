@@ -57,7 +57,6 @@ pub struct DesktopCommanderSettings {
     args: Vec<String>,
     allowed_tools: BTreeSet<String>,
     allow_write: bool,
-    allow_process: bool,
     timeout: Duration,
     max_output_bytes: usize,
     configuration_error: Option<String>,
@@ -78,7 +77,6 @@ impl Default for DesktopCommanderSettings {
                 .map(|tool| (*tool).to_owned())
                 .collect(),
             allow_write: false,
-            allow_process: false,
             timeout: Duration::from_secs(30),
             max_output_bytes: 256 * 1024,
             configuration_error: None,
@@ -121,11 +119,19 @@ impl DesktopCommanderSettings {
             }
         }
         settings.allow_write = env_flag("MEDUSA_DESKTOP_COMMANDER_ALLOW_WRITE");
-        settings.allow_process = env_flag("MEDUSA_DESKTOP_COMMANDER_ALLOW_PROCESS");
         settings.timeout =
             Duration::from_millis(env_u64("MEDUSA_DESKTOP_COMMANDER_TIMEOUT_MS", 30_000));
         settings.max_output_bytes =
             env_usize("MEDUSA_DESKTOP_COMMANDER_MAX_OUTPUT_BYTES", 256 * 1024).max(1024);
+        if settings.enabled
+            && settings.configuration_error.is_none()
+            && settings.effective_tools().is_empty()
+        {
+            settings.configuration_error = Some(
+                "Desktop Commander is enabled but no policy-approved tools are available"
+                    .to_owned(),
+            );
+        }
         settings
     }
 
@@ -179,10 +185,10 @@ impl DesktopCommanderSettings {
         if desktop_commander_tool_is_mutating(tool) && (!self.allow_write || read_only) {
             return false;
         }
-        if is_process_tool(tool) && (!self.allow_process || read_only) {
+        if is_process_tool(tool) {
             return false;
         }
-        true
+        DEFAULT_READ_TOOLS.contains(&tool) || WRITE_TOOLS.contains(&tool)
     }
 }
 
@@ -228,6 +234,10 @@ impl DesktopCommanderClient {
             .env("APPDATA", &app_data)
             .env("LOCALAPPDATA", &app_data)
             .env("npm_config_cache", &cache)
+            .env("npm_config_ignore_scripts", "true")
+            .env("npm_config_audit", "false")
+            .env("npm_config_fund", "false")
+            .env("DO_NOT_TRACK", "1")
             .env("NO_COLOR", "1")
             .env("CI", "1");
 
@@ -279,9 +289,6 @@ impl DesktopCommanderClient {
             return Err(policy(format!(
                 "Desktop Commander tool {tool} is outside Medusa's configured capability policy"
             )));
-        }
-        if is_process_tool(tool) {
-            validate_process_request(tool, arguments)?;
         }
         let arguments = sanitize_arguments(repo, arguments)?;
         let mut result =
@@ -533,6 +540,14 @@ fn secure_path(root: &Path, raw: &str) -> MedusaResult<PathBuf> {
     {
         return Err(policy("Desktop Commander parent path traversal is denied"));
     }
+    if path.components().any(|component| {
+        matches!(
+            component,
+            Component::Normal(value) if value == std::ffi::OsStr::new(".medusa")
+        )
+    }) {
+        return Err(policy("Desktop Commander access to Medusa state is denied"));
+    }
     let candidate = if path.is_absolute() {
         path.to_path_buf()
     } else {
@@ -564,31 +579,6 @@ fn secure_path(root: &Path, raw: &str) -> MedusaResult<PathBuf> {
         )));
     }
     Ok(candidate)
-}
-
-fn validate_process_request(tool: &str, arguments: &Value) -> MedusaResult<()> {
-    if tool != "start_process" {
-        return Ok(());
-    }
-    if arguments.get("shell").is_some() {
-        return Err(policy("Desktop Commander custom shells are denied"));
-    }
-    let command = arguments
-        .get("command")
-        .and_then(Value::as_str)
-        .ok_or_else(|| invalid("Desktop Commander start_process.command must be a string"))?;
-    let normalized = command.trim().to_ascii_lowercase();
-    if command.contains(['\n', '\r', ';', '&', '|', '`', '>', '<'])
-        || command.contains("$(")
-        || ["bash", "sh", "zsh", "fish", "cmd", "powershell", "pwsh"]
-            .iter()
-            .any(|shell| normalized == *shell || normalized.starts_with(&format!("{shell} ")))
-    {
-        return Err(policy(
-            "Desktop Commander shell wrappers and shell operators are denied",
-        ));
-    }
-    Ok(())
 }
 
 fn env_flag(key: &str) -> bool {
@@ -675,18 +665,83 @@ mod tests {
     }
 
     #[test]
-    fn process_and_meta_tools_fail_closed() {
+    fn process_meta_and_unknown_tools_fail_closed() {
         let mut settings = DesktopCommanderSettings {
             enabled: true,
             ..DesktopCommanderSettings::default()
         };
-        settings
-            .allowed_tools
-            .extend(["start_process".to_owned(), "set_config_value".to_owned()]);
+        settings.allowed_tools.extend([
+            "start_process".to_owned(),
+            "set_config_value".to_owned(),
+            "future_mutating_tool".to_owned(),
+        ]);
         assert!(!settings.tool_allowed("start_process", false));
         assert!(!settings.tool_allowed("set_config_value", false));
-        settings.allow_process = true;
-        assert!(settings.tool_allowed("start_process", false));
-        assert!(!settings.tool_allowed("start_process", true));
+        assert!(!settings.tool_allowed("future_mutating_tool", false));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn persistent_stdio_client_initializes_discovers_and_calls() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let directory = tempfile::tempdir().expect("tempdir");
+        let server = directory.path().join("fake-desktop-commander.sh");
+        fs::write(
+            &server,
+            r#"#!/bin/sh
+while IFS= read -r line; do
+  case "$line" in
+    *'"method":"initialize"'*)
+      printf '%s\n' '{"jsonrpc":"2.0","id":1,"result":{"protocolVersion":"2025-06-18","capabilities":{},"serverInfo":{"name":"fake-desktop-commander","version":"1.0.0"}}}'
+      ;;
+    *'"method":"tools/list"'*)
+      printf '%s\n' '{"jsonrpc":"2.0","id":2,"result":{"tools":[{"name":"read_file","description":"read fixture","inputSchema":{"type":"object"}}]}}'
+      ;;
+    *'"method":"tools/call"'*)
+      printf '%s\n' '{"jsonrpc":"2.0","id":3,"result":{"content":[{"type":"text","text":"fixture-ok"}]}}'
+      ;;
+  esac
+done
+"#,
+        )
+        .expect("write fake server");
+        let mut permissions = fs::metadata(&server).expect("metadata").permissions();
+        permissions.set_mode(0o700);
+        fs::set_permissions(&server, permissions).expect("set executable");
+        fs::write(directory.path().join("value.txt"), "42").expect("write fixture");
+
+        let settings = DesktopCommanderSettings {
+            enabled: true,
+            command: server,
+            args: Vec::new(),
+            allowed_tools: BTreeSet::from(["read_file".to_owned()]),
+            allow_write: false,
+            timeout: Duration::from_secs(2),
+            max_output_bytes: 16 * 1024,
+            configuration_error: None,
+        };
+        let mut client =
+            DesktopCommanderClient::connect(directory.path(), settings).expect("connect fake MCP");
+        let result = client
+            .call_tool(
+                directory.path(),
+                "read_file",
+                &json!({"path": "value.txt"}),
+                false,
+            )
+            .expect("call fake MCP tool");
+        assert_eq!(result["content"][0]["text"], "fixture-ok");
+
+        let profile = directory
+            .path()
+            .join(".medusa/extensions/desktop-commander/home/.claude-server-commander/config.json");
+        let profile: Value = serde_json::from_slice(&fs::read(profile).expect("read profile"))
+            .expect("profile JSON");
+        assert_eq!(profile["telemetryEnabled"], false);
+        assert_eq!(
+            profile["allowedDirectories"][0],
+            directory.path().display().to_string()
+        );
     }
 }

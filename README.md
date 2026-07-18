@@ -303,10 +303,9 @@ The default capability set is read-only. Enable additional groups explicitly:
 
 ```bash
 export MEDUSA_DESKTOP_COMMANDER_ALLOW_WRITE=true
-export MEDUSA_DESKTOP_COMMANDER_ALLOW_PROCESS=true
 ```
 
-Process control remains disabled unless explicitly enabled because Desktop Commander documents its own command blocklist and directory restrictions as advisory guardrails rather than a security sandbox. Even when enabled, Medusa denies custom shell selection, shell wrappers, shell operators, configuration mutation, telemetry/feedback, and access outside the repository.
+Desktop Commander process and terminal tools are never exposed because its own command blocklist and directory restrictions are advisory guardrails rather than a security sandbox. Use Medusa’s native `shell_run` tool instead; it remains subject to Medusa’s command policy and sandbox controls. The MCP adapter also denies unknown future tools, configuration mutation, telemetry/feedback, `.medusa` state access, and paths outside the repository.
 
 Advanced overrides:
 
