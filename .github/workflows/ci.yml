@@ -13,6 +13,122 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  apply-final-tui-cleanup:
+    if: github.event_name == 'pull_request' && github.head_ref == 'feat/tui-markdown-io-consistency'
+    name: Apply final TUI cleanup
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: feat/tui-markdown-io-consistency
+          fetch-depth: 0
+      - name: Apply idempotent source cleanup
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+
+          changed = False
+          support = Path('crates/medusa-tui/src/render/support.rs')
+          text = support.read_text()
+          old_user = '''                lines.extend(conversation_block_lines(
+                    "You     ",
+                    Color::Cyan,
+                    text,
+                    Color::Black,
+                    Some(Color::Grey),
+                    true,
+                    Attribute::Reset,
+                    width,
+                ));'''
+          new_user = '''                lines.extend(user_block_lines("You     ", Color::Cyan, text, width));'''
+          if old_user in text:
+              text = text.replace(old_user, new_user, 1)
+              changed = True
+
+          old_attachment = '''                    lines.extend(conversation_block_lines(
+                        "        ",
+                        Color::DarkGrey,
+                        &format!("[attachment] {}", attachment_label(attachment)),
+                        Color::Black,
+                        Some(Color::Grey),
+                        true,
+                        Attribute::Reset,
+                        width,
+                    ));'''
+          new_attachment = '''                    lines.extend(user_block_lines(
+                        "        ",
+                        Color::DarkGrey,
+                        &format!("[attachment] {}", attachment_label(attachment)),
+                        width,
+                    ));'''
+          if old_attachment in text:
+              text = text.replace(old_attachment, new_attachment, 1)
+              changed = True
+
+          old_signature = '''fn conversation_block_lines(
+    first_marker: &str,
+    marker_color: Color,
+    text: &str,
+    foreground: Color,
+    background: Option<Color>,
+    fill_background: bool,
+    attribute: Attribute,
+    width: u16,
+) -> Vec<StyledLine> {'''
+          new_signature = '''fn user_block_lines(
+    first_marker: &str,
+    marker_color: Color,
+    text: &str,
+    width: u16,
+) -> Vec<StyledLine> {'''
+          if old_signature in text:
+              text = text.replace(old_signature, new_signature, 1)
+              text = text.replace(
+                  '''                foreground,
+                background,
+                attribute,
+                fill_background,''',
+                  '''                Color::Black,
+                Some(Color::Grey),
+                Attribute::Reset,
+                true,''',
+                  1,
+              )
+              changed = True
+          support.write_text(text)
+
+          markdown = Path('crates/medusa-tui/src/render/markdown.rs')
+          text = markdown.read_text()
+          old = '        assert!(rendered.iter().any(|line| line == &"└─"));'
+          if old in text:
+              markdown.write_text(text.replace(old, '        assert!(rendered.contains(&"└─"));', 1))
+              changed = True
+
+          Path('/tmp/changed').write_text('1' if changed else '0')
+          PY
+      - uses: dtolnay/rust-toolchain@1.88.0
+        with:
+          components: rustfmt,clippy
+      - run: cargo fmt --all
+      - run: cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
+      - run: cargo test -p medusa-tui --locked
+      - run: bash scripts/check-source-size.sh
+      - name: Commit source cleanup
+        shell: bash
+        run: |
+          if [ "$(cat /tmp/changed)" != "1" ]; then
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add crates/medusa-tui/src/render/support.rs crates/medusa-tui/src/render/markdown.rs
+          git diff --cached --check
+          git commit -m "refactor(tui): simplify user transcript styling"
+          git push origin HEAD:feat/tui-markdown-io-consistency
+
   quality:
     name: Workspace quality
     runs-on: ubuntu-latest
