@@ -109,9 +109,8 @@ mod tests {
             .spawn()
             .expect("spawn pipe-less child");
 
-        let error = take_stdio(&mut child, "test-browser")
-            .err()
-            .expect("missing pipes must fail");
+        let error =
+            take_stdio(&mut child, "test-browser").expect_err("missing pipes must fail");
 
         assert_eq!(error.code, ErrorCode::DependencyUnavailable);
         assert_eq!(error.category, ErrorCategory::Transient);
