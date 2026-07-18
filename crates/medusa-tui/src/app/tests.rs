@@ -455,3 +455,24 @@ fn clarification_question_and_confirmed_answer_stay_in_transcript() {
         Some(TranscriptEntry::User(draft)) if draft.text == "Audience: Customers"
     ));
 }
+
+#[test]
+fn rejected_submission_restores_the_visible_user_draft() {
+    let directory = tempfile::tempdir().expect("temporary directory");
+    let mut app = AppState::new(
+        directory.path().to_path_buf(),
+        "restore-rejected",
+        "",
+        std::sync::Arc::new(crate::clipboard::UnsupportedClipboard),
+    )
+    .expect("app");
+    let draft = PromptDraft {
+        text: "additional detail".to_owned(),
+        ..PromptDraft::default()
+    };
+    app.transcript.push(TranscriptEntry::User(draft.clone()));
+    app.restore_rejected_submission(draft.clone())
+        .expect("restore submission");
+    assert_eq!(app.composer.draft, draft);
+    assert!(app.transcript.is_empty());
+}

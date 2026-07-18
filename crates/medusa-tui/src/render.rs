@@ -1,3 +1,4 @@
+pub(super) mod markdown;
 pub(super) mod support;
 
 use super::*;
@@ -297,7 +298,11 @@ pub(super) fn legacy_draw_common(
         .print(stdout, width)?;
     }
     let prompt = if app.composer.draft.text.is_empty() {
-        "Describe a coding task...".to_owned()
+        if app.is_running() {
+            "Add a follow-up for the next turn...".to_owned()
+        } else {
+            "Describe a coding task...".to_owned()
+        }
     } else {
         composer_prompt_text(&app.composer.draft.text)
     };
@@ -317,7 +322,7 @@ pub(super) fn legacy_draw_common(
         "› ",
         Color::Magenta,
         if app.is_running() {
-            "working · ctrl+c to interrupt · esc to exit"
+            "enter queues a follow-up · ctrl+c interrupt · esc exit"
         } else {
             "enter to submit · ctrl+v to paste · tab to complete commands · esc to exit"
         },
@@ -471,7 +476,11 @@ pub(super) fn render_frame(
         bottom_row = bottom_row.saturating_add(1);
     }
     let prompt = if app.composer.draft.text.is_empty() {
-        "Describe a coding task...".to_owned()
+        if app.is_running() {
+            "Add a follow-up for the next turn...".to_owned()
+        } else {
+            "Describe a coding task...".to_owned()
+        }
     } else {
         composer_prompt_text(&app.composer.draft.text)
     };
@@ -499,7 +508,7 @@ pub(super) fn render_frame(
             "> ",
             Color::Magenta,
             if app.is_running() {
-                "working - ctrl+c interrupt - ctrl+t tasks"
+                "enter queue follow-up - ctrl+c interrupt - ctrl+t tasks"
             } else {
                 "enter submit - ctrl+v paste - tab commands - ctrl+t tasks"
             },

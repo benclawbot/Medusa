@@ -229,15 +229,19 @@ fn handle_action(
         AppAction::Submit(draft) => {
             let bytes = draft.text.len();
             let attachments = draft.attachments.len();
-            match runtime.submit(draft) {
-                Ok(()) => {
+            match runtime.submit(draft.clone()) {
+                Ok(SubmitDisposition::Started) => {
                     app.status =
                         format!("running prompt: {bytes} bytes, {attachments} attachment(s)");
                 }
+                Ok(SubmitDisposition::Queued) => {
+                    app.status = "follow-up queued for the next agent turn".to_owned();
+                }
                 Err(error) => {
+                    app.restore_rejected_submission(draft)?;
                     app.transcript
                         .push(TranscriptEntry::System(format!("error: {error}")));
-                    app.status = "submission rejected".to_owned();
+                    app.status = "submission rejected; draft restored".to_owned();
                 }
             }
             Ok(false)
@@ -248,7 +252,7 @@ fn handle_action(
                 ..PromptDraft::default()
             };
             match runtime.submit(draft) {
-                Ok(()) => {
+                Ok(_) => {
                     app.status = "continuing with your answer".to_owned();
                 }
                 Err(error) => {

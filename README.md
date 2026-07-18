@@ -14,7 +14,8 @@ Medusa is a production-grade autonomous coding agent written in Rust. It combine
 - **Clipboard-native input** — paste text or screenshots with `Ctrl+V`; screenshots are encoded and submitted as image context when the configured provider supports it.
 - **Repository-aware tooling** — bounded file access, search, atomic writes, patch transactions, shell execution, Git checkpoints, and targeted verification.
 - **Browser and web interaction** — a persistent headless browser the agent can drive from tool calls (navigate, click, fill, press, screenshot, evaluate JS, list tabs).
-- **Full-content display** — every tool result, fetched page, and shell run is shown in full in the TUI; long content is paged with `Shift+Up` / `Shift+PgUp` instead of being truncated.
+- **Markdown conversation display** — Medusa responses render headings, lists, task boxes, quotes, links, rules, and fenced code blocks directly in the terminal. Fenced code preserves indentation and repeated spaces, while tool activity remains compact.
+- **Mid-turn guidance** — submit extra detail while Medusa is working; the user turn stays visible immediately and is injected at the next safe agent-turn boundary.
 - **Persistent memory** — Markdown-first memory with validation, indexing, retrieval, lifecycle management, and provenance controls.
 - **Parallel workers** — isolated worktrees, deterministic merge behavior, conflict detection, and cleanup safeguards.
 - **Extensions and browser evidence** — skills, hooks, MCP isolation, Playwright-based browser verification, output redaction, and checksummed provenance.
@@ -259,14 +260,14 @@ medusa --continue
 
 | Key | Action |
 |---|---|
-| `Enter` | Submit the current prompt |
+| `Enter` | Submit the current prompt, or queue a follow-up while Medusa is working |
 | `Shift+Enter` | Insert a new line |
 | `Ctrl+V` | Paste clipboard text or attach a screenshot |
 | `Ctrl+C` | Cancel the active agent task; press twice within 1 second to exit |
 | `Ctrl+D` | Exit when the composer is empty |
 | `Esc` | Cancel the active agent task or close the current modal |
 
-Prompt drafts and clipboard attachments are persisted under the repository's `.medusa` state directory until submission.
+Prompt drafts and clipboard attachments are persisted under the repository's `.medusa` state directory until submission. If the runtime rejects a submission, the draft is restored instead of being discarded. Mid-turn follow-ups remain visible immediately and are applied before the next model turn.
 
 Installed skills are directly invokable by name. Built-in commands take precedence over same-named skills:
 
@@ -339,50 +340,36 @@ See [Security hardening](docs/SECURITY-HARDENING.md) for the release-enforced co
 | `medusa-tui` | Interactive terminal interface, composer, clipboard, drafts, and runtime bridge |
 | `medusa-agent` | Session lifecycle, orchestration, tools, policy, and verification |
 | `medusa-provider` | Provider-neutral model interface and MiniMax integration |
-| `medusa-intelligence` | Parsing, indexing, patching, formatting, and test-impact analysis |
-| `medusa-memory` | Markdown memory, validation, indexing, retrieval, and lifecycle |
-| `medusa-workers` | Parallel worktrees, merge coordination, and conflict handling |
-| `medusa-extensions` | Skills, hooks, MCP, browser integration, and redaction |
-| `medusa-hardening` | Migrations, observability, release validation, archives, and chaos recovery |
-| `medusa-daemon` | Persistent local job runtime and transport |
-| `medusa-protocol` | Versioned events and cross-component contracts |
-| `medusa-config` | Typed layered configuration |
-| `medusa-core` | Shared identifiers and structured errors |
+| `medusa-intelligence` | Parsing, indexing, patching, and conflict-aware transactions |
+| `medusa-memory` | Markdown storage, retrieval, provenance, and lifecycle |
+| `medusa-workers` | Parallel worktrees and deterministic merge coordination |
+| `medusa-extensions` | Skills, hooks, and MCP execution |
+| `medusa-hardening` | Observability, migrations, archives, chaos recovery, and release evidence |
+| `medusa-browser` | Browser sidecar client and protocol |
+| `medusa-browserd` | Node.js + Playwright sidecar process |
 
-## Quality and release gates
+## Development and verification
 
-Every pull request is checked with:
-
-- formatting, Clippy, workspace tests, and documentation
-- a **75% minimum workspace line-coverage gate**
-- named adversarial security regressions
-- dependency policy and vulnerability audit
-- fuzz, migration, chaos, and rollback scenarios
-- Linux, macOS, and Windows package smoke tests
-- credential-gated live MiniMax autonomous coding scenarios
-
-Coverage and adversarial tests are independent requirements: line execution does not replace explicit containment, rollback, conflict, or credential-protection assertions.
-
-## Development
+Use the same checks enforced by CI:
 
 ```bash
 cargo fmt --all -- --check
 cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
 cargo test --workspace --all-features --locked
-RUSTDOCFLAGS="-D warnings" cargo doc --workspace --all-features --locked --no-deps
+RUSTDOCFLAGS='-D warnings' cargo doc --workspace --all-features --locked --no-deps
 cargo deny check advisories sources
 cargo audit
+bash scripts/check-source-size.sh
 ```
 
-Release-level checks are defined in [`.github/workflows/release-gates.yml`](.github/workflows/release-gates.yml).
+Release gates additionally run complete workspace coverage with a 75% line threshold, adversarial regressions, fuzz and chaos smoke tests, cross-platform release package smoke tests, and three live MiniMax autonomous coding scenarios.
 
 ## Documentation
 
-- [Release and installation](docs/RELEASE.md)
-- [Security hardening](docs/SECURITY-HARDENING.md)
-- [Observability](docs/OBSERVABILITY.md)
-- [Compatibility](docs/compatibility.md)
 - [Contributing](CONTRIBUTING.md)
+- [Release process](docs/RELEASE.md)
+- [Observability](docs/OBSERVABILITY.md)
+- [Security hardening](docs/SECURITY-HARDENING.md)
 
 ## License
 

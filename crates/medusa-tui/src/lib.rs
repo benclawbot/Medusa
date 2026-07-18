@@ -29,7 +29,9 @@ use crossterm::{
         KeyModifiers,
     },
     execute, queue,
-    style::{Attribute, Color, Print, ResetColor, SetAttribute, SetForegroundColor},
+    style::{
+        Attribute, Color, Print, ResetColor, SetAttribute, SetBackgroundColor, SetForegroundColor,
+    },
     terminal::{
         Clear, ClearType, EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode,
         enable_raw_mode, size,
@@ -37,7 +39,7 @@ use crossterm::{
 };
 use medusa_config::Config;
 use native_clipboard::NativeClipboard;
-use runtime::{RuntimeActivityKind, RuntimeController, RuntimeEvent};
+use runtime::{RuntimeActivityKind, RuntimeController, RuntimeEvent, SubmitDisposition};
 
 const MEDUSA_LOGO: [&str; 3] = [
     "╭┬╮╭─╴╶┬╮╷ ╷╭─╮╭─╮",
@@ -85,6 +87,9 @@ pub enum ExitReason {
     InputClosed,
 }
 
+// Renderer helpers intentionally keep explicit style parameters, and renderer tests compare
+// exact row membership. Keep these allowances scoped to the private presentation module.
+#[allow(clippy::manual_contains, clippy::too_many_arguments)]
 mod render;
 mod session;
 

@@ -308,6 +308,16 @@ impl AppState {
         }
     }
 
+    pub fn restore_rejected_submission(&mut self, draft: PromptDraft) -> io::Result<()> {
+        if matches!(self.transcript.last(), Some(TranscriptEntry::User(existing)) if existing == &draft)
+        {
+            self.transcript.pop();
+        }
+        let cursor = draft.text.len();
+        self.composer = ComposerState { draft, cursor };
+        self.persist_draft()
+    }
+
     pub fn open_question(&mut self, questions: Vec<QuestionPrompt>) {
         let question_text = questions
             .iter()

@@ -1,9 +1,9 @@
 use std::{
-    collections::BTreeMap,
+    collections::{BTreeMap, VecDeque},
     env, io,
     path::PathBuf,
     sync::{
-        Arc,
+        Arc, Mutex,
         atomic::{AtomicBool, Ordering},
         mpsc::{self, Receiver, Sender, TryRecvError},
     },
@@ -14,7 +14,7 @@ use medusa_agent::{
     AgentEngine, AgentSession, StepOutcome, compact_session, update_session_objective,
 };
 use medusa_config::{Config, Mode};
-use medusa_provider::MiniMaxProvider;
+use medusa_provider::{MiniMaxProvider, ModelProvider};
 
 use crate::{
     app::{QuestionPrompt, TranscriptPlan},
@@ -103,11 +103,23 @@ pub struct RuntimeQuestion {
     pub questions: Vec<QuestionPrompt>,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum SubmitDisposition {
+    Started,
+    Queued,
+}
+
+#[derive(Default)]
+struct SubmissionState {
+    busy: bool,
+    followups: VecDeque<PromptDraft>,
+}
+
 pub struct RuntimeController {
     commands: Sender<RuntimeCommand>,
     events: Receiver<RuntimeEvent>,
     cancel: Arc<AtomicBool>,
-    busy: Arc<AtomicBool>,
+    submission: Arc<Mutex<SubmissionState>>,
 }
 
 impl RuntimeController {
@@ -115,54 +127,56 @@ impl RuntimeController {
         let (command_tx, command_rx) = mpsc::channel();
         let (event_tx, event_rx) = mpsc::channel();
         let cancel = Arc::new(AtomicBool::new(false));
-        let busy = Arc::new(AtomicBool::new(false));
+        let submission = Arc::new(Mutex::new(SubmissionState::default()));
         let worker_cancel = Arc::clone(&cancel);
-        let worker_busy = Arc::clone(&busy);
+        let worker_submission = Arc::clone(&submission);
         thread::Builder::new()
             .name("medusa-tui-runtime".to_owned())
             .spawn(move || {
-                worker_loop(repo, command_rx, event_tx, worker_cancel, worker_busy);
+                worker_loop(repo, command_rx, event_tx, worker_cancel, worker_submission);
             })
             .expect("spawn TUI runtime worker");
         Self {
             commands: command_tx,
             events: event_rx,
             cancel,
-            busy,
+            submission,
         }
     }
 
-    pub fn submit(&self, draft: PromptDraft) -> Result<(), RuntimeError> {
-        self.busy
-            .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
-            .map_err(|_| RuntimeError::Busy)?;
+    pub fn submit(&self, draft: PromptDraft) -> Result<SubmitDisposition, RuntimeError> {
+        let mut submission = self.submission.lock().expect("submission state lock");
+        if submission.busy {
+            submission.followups.push_back(draft);
+            return Ok(SubmitDisposition::Queued);
+        }
+        submission.busy = true;
         self.cancel.store(false, Ordering::SeqCst);
         if self.commands.send(RuntimeCommand::Submit(draft)).is_err() {
-            self.busy.store(false, Ordering::SeqCst);
+            submission.busy = false;
             return Err(RuntimeError::WorkerStopped);
         }
-        Ok(())
+        Ok(SubmitDisposition::Started)
     }
 
     pub fn run_command(&self, command: SlashCommand) -> Result<(), RuntimeError> {
-        if self.busy.load(Ordering::SeqCst) {
+        let mut submission = self.submission.lock().expect("submission state lock");
+        if submission.busy {
             return Err(RuntimeError::Busy);
         }
         if command.runs_agent() {
-            self.busy
-                .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
-                .map_err(|_| RuntimeError::Busy)?;
+            submission.busy = true;
             self.cancel.store(false, Ordering::SeqCst);
         }
         if self.commands.send(RuntimeCommand::Slash(command)).is_err() {
-            self.busy.store(false, Ordering::SeqCst);
+            submission.busy = false;
             return Err(RuntimeError::WorkerStopped);
         }
         Ok(())
     }
 
     pub fn configure_model(&self, configuration: ModelConfiguration) -> Result<(), RuntimeError> {
-        if self.busy.load(Ordering::SeqCst) {
+        if self.submission.lock().expect("submission state lock").busy {
             return Err(RuntimeError::Busy);
         }
         self.commands
@@ -171,7 +185,7 @@ impl RuntimeController {
     }
 
     pub fn cancel(&self) -> bool {
-        if self.busy.load(Ordering::SeqCst) {
+        if self.submission.lock().expect("submission state lock").busy {
             self.cancel.store(true, Ordering::SeqCst);
             true
         } else {
@@ -181,7 +195,7 @@ impl RuntimeController {
 
     #[must_use]
     pub fn is_busy(&self) -> bool {
-        self.busy.load(Ordering::SeqCst)
+        self.submission.lock().expect("submission state lock").busy
     }
 
     pub fn try_event(&self) -> Result<Option<RuntimeEvent>, RuntimeError> {
@@ -205,13 +219,13 @@ fn worker_loop(
     commands: Receiver<RuntimeCommand>,
     events: Sender<RuntimeEvent>,
     cancel: Arc<AtomicBool>,
-    busy: Arc<AtomicBool>,
+    submission: Arc<Mutex<SubmissionState>>,
 ) {
     let mut state = match RuntimeState::load(repo) {
         Ok(state) => state,
         Err(error) => {
             let _ = events.send(RuntimeEvent::Failed(error.to_string()));
-            busy.store(false, Ordering::SeqCst);
+            mark_idle(&submission, true);
             return;
         }
     };
@@ -220,12 +234,14 @@ fn worker_loop(
         match command {
             RuntimeCommand::Submit(draft) => {
                 let _ = events.send(RuntimeEvent::Started);
-                let outcome = run_prompt(&mut state, draft, &events, &cancel);
+                let outcome = run_prompt(&mut state, draft, &events, &cancel, &submission);
                 let event = match outcome {
                     Ok(completed) => completed,
-                    Err(error) => RuntimeEvent::Failed(error.to_string()),
+                    Err(error) => {
+                        mark_idle(&submission, true);
+                        RuntimeEvent::Failed(error.to_string())
+                    }
                 };
-                busy.store(false, Ordering::SeqCst);
                 let _ = events.send(event);
             }
             RuntimeCommand::Slash(command) => {
@@ -233,21 +249,27 @@ fn worker_loop(
                 if runs_agent {
                     let _ = events.send(RuntimeEvent::Started);
                 }
-                match execute_slash_command(&mut state, command, &events, &cancel) {
+                match execute_slash_command_with_submission(
+                    &mut state,
+                    command,
+                    &events,
+                    &cancel,
+                    &submission,
+                ) {
                     Ok(Some(event)) => {
-                        if runs_agent {
-                            busy.store(false, Ordering::SeqCst);
+                        if !runs_agent {
+                            mark_idle(&submission, false);
                         }
                         let _ = events.send(event);
                     }
                     Ok(None) => {
                         if runs_agent {
-                            busy.store(false, Ordering::SeqCst);
+                            mark_idle(&submission, false);
                         }
                     }
                     Err(error) => {
                         if runs_agent {
-                            busy.store(false, Ordering::SeqCst);
+                            mark_idle(&submission, true);
                         }
                         let event = if runs_agent {
                             RuntimeEvent::Failed(error.to_string())
@@ -272,7 +294,43 @@ fn worker_loop(
             RuntimeCommand::Shutdown => break,
         }
     }
-    busy.store(false, Ordering::SeqCst);
+    mark_idle(&submission, true);
+}
+
+fn cancel_requested(cancel: &AtomicBool, submission: &Arc<Mutex<SubmissionState>>) -> bool {
+    if cancel.load(Ordering::SeqCst) {
+        mark_idle(submission, true);
+        true
+    } else {
+        false
+    }
+}
+
+fn mark_idle(submission: &Arc<Mutex<SubmissionState>>, clear_followups: bool) {
+    let mut state = submission.lock().expect("submission state lock");
+    state.busy = false;
+    if clear_followups {
+        state.followups.clear();
+    }
+}
+
+fn take_followups(submission: &Arc<Mutex<SubmissionState>>) -> Vec<PromptDraft> {
+    submission
+        .lock()
+        .expect("submission state lock")
+        .followups
+        .drain(..)
+        .collect()
+}
+
+fn finish_or_take_followups(submission: &Arc<Mutex<SubmissionState>>) -> Vec<PromptDraft> {
+    let mut state = submission.lock().expect("submission state lock");
+    if state.followups.is_empty() {
+        state.busy = false;
+        Vec::new()
+    } else {
+        state.followups.drain(..).collect()
+    }
 }
 
 struct RuntimeState {
@@ -327,6 +385,7 @@ fn run_prompt(
     draft: PromptDraft,
     events: &Sender<RuntimeEvent>,
     cancel: &AtomicBool,
+    submission: &Arc<Mutex<SubmissionState>>,
 ) -> Result<RuntimeEvent, RuntimeError> {
     let config = state.config.clone();
     let max_turns = config.agent.max_turns;
@@ -366,9 +425,13 @@ fn run_prompt(
     }
 
     let result = (|| {
-        while !session.completed && session.turn < max_turns {
-            if cancel.load(Ordering::SeqCst) {
+        loop {
+            if cancel_requested(cancel, submission) {
                 return Ok(RuntimeEvent::Cancelled);
+            }
+            append_followups(&engine, &mut session, take_followups(submission))?;
+            if session.turn >= max_turns {
+                return Err(RuntimeError::TurnLimit(max_turns));
             }
             let outcome = engine
                 .step_with_observer_and_context(&mut session, skill_context.as_deref(), |update| {
@@ -376,29 +439,40 @@ fn run_prompt(
                 })
                 .map_err(RuntimeError::agent)?;
             let _ = events.send(RuntimeEvent::Progress { turn: session.turn });
+
+            if cancel_requested(cancel, submission) {
+                return Ok(RuntimeEvent::Cancelled);
+            }
+
+            if matches!(outcome, StepOutcome::WaitingForUser) {
+                mark_idle(submission, false);
+                let question = session.pending_question.as_ref().ok_or_else(|| {
+                    RuntimeError::agent("agent paused without a pending question")
+                })?;
+                return Ok(RuntimeEvent::Question(runtime_question(question)));
+            }
+
+            let queued = if matches!(outcome, StepOutcome::Completed | StepOutcome::TurnComplete) {
+                finish_or_take_followups(submission)
+            } else {
+                take_followups(submission)
+            };
+            if !queued.is_empty() {
+                append_followups(&engine, &mut session, queued)?;
+                continue;
+            }
+
             match outcome {
-                StepOutcome::Completed => break,
-                StepOutcome::TurnComplete => return Ok(RuntimeEvent::TurnFinished),
-                StepOutcome::WaitingForUser => {
-                    let question = session.pending_question.as_ref().ok_or_else(|| {
-                        RuntimeError::agent("agent paused without a pending question")
-                    })?;
-                    return Ok(RuntimeEvent::Question(runtime_question(question)));
+                StepOutcome::Completed => {
+                    return Ok(RuntimeEvent::Completed {
+                        session_id: session.id.to_string(),
+                    });
                 }
+                StepOutcome::TurnComplete => return Ok(RuntimeEvent::TurnFinished),
                 StepOutcome::Continue => {}
+                StepOutcome::WaitingForUser => unreachable!("handled above"),
             }
         }
-
-        if cancel.load(Ordering::SeqCst) {
-            return Ok(RuntimeEvent::Cancelled);
-        }
-        if !session.completed {
-            return Err(RuntimeError::TurnLimit(max_turns));
-        }
-
-        Ok(RuntimeEvent::Completed {
-            session_id: session.id.to_string(),
-        })
     })();
     let waiting_for_user = matches!(&result, Ok(RuntimeEvent::Question(_)));
     if selected_skill.is_some() && !waiting_for_user {
@@ -408,11 +482,39 @@ fn run_prompt(
     result
 }
 
+fn append_followups<P: ModelProvider>(
+    engine: &AgentEngine<P>,
+    session: &mut AgentSession,
+    drafts: Vec<PromptDraft>,
+) -> Result<(), RuntimeError> {
+    for draft in drafts {
+        engine
+            .append_user_message(session, message_blocks(&draft)?)
+            .map_err(RuntimeError::agent)?;
+    }
+    Ok(())
+}
+
+#[cfg(test)]
 fn execute_slash_command(
     state: &mut RuntimeState,
     command: SlashCommand,
     events: &Sender<RuntimeEvent>,
     cancel: &AtomicBool,
+) -> Result<Option<RuntimeEvent>, RuntimeError> {
+    let submission = Arc::new(Mutex::new(SubmissionState {
+        busy: true,
+        followups: VecDeque::new(),
+    }));
+    execute_slash_command_with_submission(state, command, events, cancel, &submission)
+}
+
+fn execute_slash_command_with_submission(
+    state: &mut RuntimeState,
+    command: SlashCommand,
+    events: &Sender<RuntimeEvent>,
+    cancel: &AtomicBool,
+    submission: &Arc<Mutex<SubmissionState>>,
 ) -> Result<Option<RuntimeEvent>, RuntimeError> {
     match command {
         SlashCommand::Help => {
@@ -510,12 +612,12 @@ fn execute_slash_command(
             ModelCommand::SetApiKey(key) => {
                 state.session_api_key = Some(key);
                 let _ = events.send(RuntimeEvent::Notice {
-                        title: "API key updated".to_owned(),
-                        details: vec![
-                            "The key is applied only to this Medusa process and is not shown, logged, or written to disk."
-                                .to_owned(),
-                        ],
-                    });
+                    title: "API key updated".to_owned(),
+                    details: vec![
+                        "The key is applied only to this Medusa process and is not shown, logged, or written to disk."
+                            .to_owned(),
+                    ],
+                });
             }
         },
         SlashCommand::Effort { effort } => match effort {
@@ -572,6 +674,7 @@ fn execute_slash_command(
                     },
                     events,
                     cancel,
+                    submission,
                 )
                 .map(Some);
                 if result.is_err() {
@@ -613,6 +716,7 @@ fn execute_slash_command(
                         },
                         events,
                         cancel,
+                        submission,
                     )
                     .map(Some);
                 }

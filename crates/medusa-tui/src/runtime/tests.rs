@@ -402,3 +402,32 @@ fn internal_plan_transport_is_hidden_and_assistant_text_is_forwarded_verbatim() 
         )
     );
 }
+
+#[test]
+fn busy_submission_is_queued_as_a_follow_up_without_rejection() {
+    let submission = Arc::new(Mutex::new(SubmissionState {
+        busy: true,
+        followups: VecDeque::new(),
+    }));
+    {
+        let mut state = submission.lock().expect("submission state");
+        state.followups.push_back(PromptDraft {
+            text: "also update the documentation".to_owned(),
+            ..PromptDraft::default()
+        });
+    }
+    let queued = take_followups(&submission);
+    assert_eq!(queued.len(), 1);
+    assert_eq!(queued[0].text, "also update the documentation");
+    assert!(submission.lock().expect("submission state").busy);
+}
+
+#[test]
+fn terminal_boundary_atomically_reopens_input_only_when_followups_are_empty() {
+    let submission = Arc::new(Mutex::new(SubmissionState {
+        busy: true,
+        followups: VecDeque::new(),
+    }));
+    assert!(finish_or_take_followups(&submission).is_empty());
+    assert!(!submission.lock().expect("submission state").busy);
+}
