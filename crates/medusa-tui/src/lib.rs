@@ -14,7 +14,6 @@ use std::{
     time::Duration,
 };
 
-#[cfg(unix)]
 use std::thread;
 
 use app::{
@@ -48,9 +47,6 @@ const MEDUSA_LOGO: [&str; 3] = [
 ];
 const MEDUSA_LOADING_LOGO: &str = include_str!("medusa_logo_ascii.txt");
 const HEADER_TOP_PADDING: u16 = 1;
-
-#[cfg(unix)]
-use medusa_daemon::{DaemonClient, JobRecord, Request, Response};
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct TuiOptions {
@@ -90,6 +86,7 @@ pub enum ExitReason {
 // Renderer helpers intentionally keep explicit style parameters, and renderer tests compare
 // exact row membership. Keep these allowances scoped to the private presentation module.
 #[allow(clippy::manual_contains, clippy::too_many_arguments)]
+mod daemon_status;
 mod render;
 mod session;
 
