@@ -29,14 +29,31 @@ jobs:
         shell: bash
         run: |
           set -o pipefail
-          {
-            ruby -ryaml -e '
-              workflow = YAML.load_file(ARGV.fetch(0), aliases: true)
-              step = workflow.fetch("jobs").fetch("apply").fetch("steps").find { |entry| entry["name"] == "Apply guarded source changes" }
-              File.write("/tmp/apply-tui-markdown-io.sh", step.fetch("run"))
-            ' .github/workflows/apply-tui-markdown-io.yml
-            bash /tmp/apply-tui-markdown-io.sh
-          } 2>&1 | tee apply-markdown-io.log
+          python3 - <<'PY' 2>&1 | tee apply-markdown-io.log
+          from pathlib import Path
+
+          workflow = Path('.github/workflows/apply-tui-markdown-io.yml').read_text().splitlines()
+          start = next(index for index, line in enumerate(workflow) if "python3 - <<'PY'" in line) + 1
+          end = next(index for index in range(start, len(workflow)) if workflow[index].strip() == 'PY')
+          extracted = []
+          in_triple = False
+          for raw in workflow[start:end]:
+              if not in_triple:
+                  line = raw[10:] if raw.startswith('          ') else raw
+                  extracted.append(line)
+                  if line.count("'''") % 2 == 1:
+                      in_triple = True
+                  continue
+              if raw.strip() == "'''":
+                  extracted.append(raw[10:] if raw.startswith('          ') else raw)
+                  in_triple = False
+                  continue
+              extracted.append(raw)
+              if raw.count("'''") % 2 == 1:
+                  in_triple = False
+          script = '\n'.join(extracted)
+          exec(compile(script, 'apply-tui-markdown-io.py', 'exec'))
+          PY
       - name: Upload guarded patch diagnostics
         if: failure()
         uses: actions/upload-artifact@v4
