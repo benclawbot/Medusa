@@ -92,14 +92,7 @@ pub(super) fn run_loop(
         drain_runtime_events(app, runtime)?;
         app.tick();
         let (daemon_jobs, daemon_status) = daemon.poll(app);
-        draw(
-            stdout,
-            options,
-            identity,
-            app,
-            &daemon_jobs,
-            &daemon_status,
-        )?;
+        draw(stdout, options, identity, app, &daemon_jobs, &daemon_status)?;
         if event::poll(Duration::from_millis(100))? {
             let terminal_event = event::read()?;
             if app.dismiss_welcome_for_event(&terminal_event) {
