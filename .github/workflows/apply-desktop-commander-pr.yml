@@ -40,7 +40,19 @@ jobs:
           components: rustfmt,clippy
       - run: cargo fmt --all
       - run: bash scripts/check-source-size.sh
-      - run: cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
+      - name: Clippy
+        id: clippy
+        shell: bash
+        run: |
+          set -o pipefail
+          cargo clippy --workspace --all-targets --all-features --locked -- -D warnings 2>&1 | tee desktop-commander-clippy.log
+      - name: Upload Clippy diagnostics
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: desktop-commander-clippy-diagnostics
+          path: desktop-commander-clippy.log
+          if-no-files-found: error
       - run: cargo test -p medusa-extensions -p medusa-agent -p medusa-cli --locked
       - name: Commit integration
         shell: bash
