@@ -12,16 +12,12 @@ path = "src/main.rs"
 
 [dependencies]
 arboard = "3.6.1"
-base64 = "0.22"
 clap = { version = "4.5", features = ["derive"] }
 crossterm = "0.29"
 hex.workspace = true
-medusa-agent = { path = "../medusa-agent" }
 medusa-config = { path = "../medusa-config" }
 medusa-daemon = { path = "../medusa-daemon" }
-medusa-protocol = { path = "../medusa-protocol" }
-medusa-provider = { path = "../medusa-provider" }
-png = "0.17"
+medusa-runtime = { path = "../medusa-runtime" }
 serde.workspace = true
 serde_json.workspace = true
 sha2.workspace = true

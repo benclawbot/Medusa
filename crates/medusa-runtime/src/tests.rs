@@ -2,19 +2,17 @@ use std::{fs, sync::mpsc};
 
 use medusa_agent::{AgentPlanStep, AgentPlanStepStatus, AgentUpdate};
 use medusa_protocol::EventPayload;
-use medusa_provider::ImageSource;
-use medusa_provider::MessageBlock;
+use medusa_provider::{ImageSource, MessageBlock};
 use serde_json::json;
+use tempfile::tempdir;
+
+use crate::prompt::{FileAttachment, ImageAttachment, PromptAttachment};
 
 use super::support::{
-    discover_skills, load_selected_skill, model_configuration_details, tool_title,
+    UpdateState, discover_skills, forward_update, load_selected_skill, message_blocks,
+    model_configuration_details, tool_title,
 };
 use super::*;
-use crate::{
-    app::TranscriptPlanStepState,
-    clipboard::{ImageAttachment, PromptAttachment},
-};
-use tempfile::tempdir;
 
 #[test]
 fn text_prompt_becomes_user_message_block() {
@@ -25,7 +23,7 @@ fn text_prompt_becomes_user_message_block() {
     assert_eq!(
         message_blocks(&draft).expect("message blocks"),
         vec![MessageBlock::Text {
-            text: "fix the failing test".to_owned()
+            text: "fix the failing test".to_owned(),
         }]
     );
 }
@@ -58,7 +56,7 @@ fn attached_utf8_file_is_bounded_and_included() {
     let path = directory.path().join("error.txt");
     fs::write(&path, "compiler error").expect("write fixture");
     let draft = PromptDraft {
-        attachments: vec![PromptAttachment::File(crate::clipboard::FileAttachment {
+        attachments: vec![PromptAttachment::File(FileAttachment {
             path,
             byte_len: 14,
         })],
@@ -127,6 +125,25 @@ fn provider_usage_forwards_input_output_cache_and_model_time() {
 }
 
 #[test]
+fn runtime_events_preserve_agent_plan_contracts() {
+    let (sender, receiver) = mpsc::channel();
+    let mut state = UpdateState::new();
+    forward_update(
+        &AgentUpdate::Plan(vec![AgentPlanStep {
+            title: "Extract runtime".to_owned(),
+            status: AgentPlanStepStatus::InProgress,
+        }]),
+        &sender,
+        &mut state,
+    );
+    let RuntimeEvent::Plan(plan) = receiver.recv().expect("plan event") else {
+        panic!("expected plan event");
+    };
+    assert_eq!(plan[0].title, "Extract runtime");
+    assert_eq!(plan[0].status, AgentPlanStepStatus::InProgress);
+}
+
+#[test]
 fn tool_call_is_shown_as_one_high_level_row() {
     let (sender, receiver) = mpsc::channel();
     let mut state = UpdateState::new();
@@ -177,11 +194,11 @@ fn portable_tool_titles_distinguish_shell_and_directory_operations() {
 }
 
 #[test]
-fn idle_runtime_cancel_is_a_noop() {
+fn controller_exposes_shared_busy_and_cancel_semantics() {
     let directory = tempdir().expect("temporary directory");
     let runtime = RuntimeController::start(directory.path().to_path_buf());
-    assert!(!runtime.cancel());
     assert!(!runtime.is_busy());
+    assert!(!runtime.cancel());
 }
 
 #[test]
@@ -231,7 +248,7 @@ fn model_picker_configuration_updates_provider_model_effort_and_session_key() {
 }
 
 #[test]
-fn effort_command_updates_the_real_turn_budget() {
+fn effort_command_updates_the_runtime_turn_budget() {
     let directory = tempdir().expect("temporary directory");
     let mut state = RuntimeState::load(directory.path().to_path_buf()).expect("runtime state");
     let (sender, receiver) = mpsc::channel();
@@ -345,32 +362,6 @@ fn skills_command_discovers_project_skill_metadata() {
 }
 
 #[test]
-fn model_plan_update_maps_each_status_to_the_transcript() {
-    let (sender, receiver) = mpsc::channel();
-    let mut state = UpdateState::new();
-    forward_update(
-        &AgentUpdate::Plan(vec![
-            AgentPlanStep {
-                title: "Inspect the repository".to_owned(),
-                status: AgentPlanStepStatus::Completed,
-            },
-            AgentPlanStep {
-                title: "Implement the change".to_owned(),
-                status: AgentPlanStepStatus::InProgress,
-            },
-        ]),
-        &sender,
-        &mut state,
-    );
-
-    let RuntimeEvent::Plan(plan) = receiver.recv().expect("model plan") else {
-        panic!("expected plan event");
-    };
-    assert_eq!(plan.steps[0].state, TranscriptPlanStepState::Completed);
-    assert_eq!(plan.steps[1].state, TranscriptPlanStepState::Active);
-}
-
-#[test]
 fn internal_plan_transport_is_hidden_and_assistant_text_is_forwarded_verbatim() {
     let (sender, receiver) = mpsc::channel();
     let mut state = UpdateState::new();
@@ -394,13 +385,11 @@ fn internal_plan_transport_is_hidden_and_assistant_text_is_forwarded_verbatim() 
         &sender,
         &mut state,
     );
-    assert_eq!(
+    assert!(matches!(
         receiver.recv().expect("assistant text"),
-        RuntimeEvent::AssistantText(
-            "Now I have a clear picture. Key findings:\n\n1. First detail\n2. Second detail"
-                .to_owned()
-        )
-    );
+        RuntimeEvent::AssistantText(text)
+            if text == "Now I have a clear picture. Key findings:\n\n1. First detail\n2. Second detail"
+    ));
 }
 
 #[test]
@@ -423,7 +412,7 @@ fn busy_submission_is_queued_as_a_follow_up_without_rejection() {
 }
 
 #[test]
-fn terminal_boundary_atomically_reopens_input_only_when_followups_are_empty() {
+fn runtime_atomically_reopens_input_only_when_followups_are_empty() {
     let submission = Arc::new(Mutex::new(SubmissionState {
         busy: true,
         followups: VecDeque::new(),
