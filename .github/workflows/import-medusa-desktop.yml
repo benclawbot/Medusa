@@ -37,9 +37,12 @@ jobs:
         id: validate
         shell: bash
         run: |
+          if [ -d apps/medusa-desktop ]; then
+            echo "status=already" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
           set +e
           {
-            test ! -d apps/medusa-desktop
             git clone --depth 1 https://github.com/benclawbot/Zeus.git /tmp/Zeus
             python3 .github/desktop-import.py /tmp/Zeus
             cd apps/medusa-desktop
@@ -64,7 +67,7 @@ jobs:
           fi
 
       - name: Commit diagnostics
-        if: steps.validate.outputs.status != '0'
+        if: steps.validate.outputs.status != '0' && steps.validate.outputs.status != 'already'
         shell: bash
         run: |
           git config user.name "github-actions[bot]"
@@ -74,10 +77,10 @@ jobs:
           git push origin HEAD:feat/medusa-desktop-runtime-entrypoint
 
       - name: Stop after validation failure
-        if: steps.validate.outputs.status != '0'
+        if: steps.validate.outputs.status != '0' && steps.validate.outputs.status != 'already'
         run: exit 1
 
-      - name: Commit production desktop integration
+      - name: Commit production desktop source
         id: publish
         if: steps.validate.outputs.status == '0'
         continue-on-error: true
@@ -87,10 +90,8 @@ jobs:
           {
             git config user.name "github-actions[bot]"
             git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-            git status --short
-            git add .gitignore README.md docs/CAPABILITY-EVIDENCE.md apps/medusa-desktop .github/workflows/desktop.yml
-            git rm .github/desktop-import.py .github/workflows/import-medusa-desktop.yml
-            git status --short
+            git add .gitignore README.md docs/CAPABILITY-EVIDENCE.md apps/medusa-desktop
+            git rm .github/desktop-import.py
             git commit -m "feat(desktop): add Zeus-derived Medusa entry point"
             git fetch origin feat/medusa-desktop-runtime-entrypoint
             git rebase origin/feat/medusa-desktop-runtime-entrypoint
