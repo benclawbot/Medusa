@@ -23,15 +23,15 @@ Medusa is a production-grade autonomous coding agent written in Rust. It combine
 
 ## Current status and evidence
 
-The original phase labels are historical planning shorthand, not the current source of truth. As of July 18, 2026, `main` includes the work merged through PR #38: the Rust agent core, interactive TUI, durable sessions and memory, guarded repository tools, browser verification, parallel workers, release hardening, Markdown rendering, mid-turn follow-ups, and the optional Desktop Commander MCP integration.
+The original phase labels are historical planning shorthand, not the current source of truth. As of July 18, 2026, the repository evidence through PR #39 includes the Rust agent core, interactive TUI, frontend-neutral runtime, durable sessions and memory, guarded repository tools, browser verification, parallel workers, release hardening, Markdown rendering, mid-turn follow-ups, and the optional Desktop Commander MCP integration.
 
 | Area | Current evidence |
 |---|---|
 | Interactive product surface | `medusa` launches the TUI; transcript preservation, Markdown rendering, clipboard input, cancellation, usage metrics, skills, and queued follow-ups are implemented in `medusa-tui`. |
-| Agent and repository runtime | Session orchestration, planning, tools, policy, verification, and persistence are implemented across `medusa-agent`, `medusa-intelligence`, `medusa-memory`, and related crates. |
+| Agent and repository runtime | `medusa-runtime` owns frontend-neutral interactive session control, while planning, tools, policy, verification, intelligence, and persistence remain implemented across `medusa-agent`, `medusa-intelligence`, `medusa-memory`, and related crates. |
 | Extensions and MCP | Skills, hooks, MCP isolation, and the pinned Desktop Commander adapter are implemented in `medusa-extensions` and documented below. |
 | Release evidence | `CI`, `Refactor Guardrails`, and `Release Gates` enforce formatting, Clippy, workspace tests, documentation, dependency policy, source-size limits, coverage, adversarial tests, package smoke tests, and live-provider scenarios. |
-| Active architecture work | PR #39 is extracting a frontend-neutral `medusa-runtime` before the Zeus-derived desktop interface is wired to the same core. This work is not claimed as shipped until it merges and its canonical gates pass. |
+| Shared frontend runtime | `medusa-runtime` now owns commands, prompt attachments, session control, cancellation, follow-up queuing, provider setup, skills, and core events; `medusa-tui` is the terminal presentation adapter. The Zeus-derived desktop interface remains the next integration step. |
 
 See [Capability evidence](docs/CAPABILITY-EVIDENCE.md) for the auditable mapping from shipped capabilities to code and gates. Historical completion summaries should not override the current repository, merged pull requests, or required checks.
 

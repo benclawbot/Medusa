@@ -1,6 +1,6 @@
 # Medusa Capability Evidence
 
-Status snapshot: **July 18, 2026**, based on `main` through merged PR #38. This document is an evidence ledger, not a promise that every long-term product goal is complete.
+Status snapshot: **July 18, 2026**, based on `main` through merged PR #39. This document is an evidence ledger, not a promise that every long-term product goal is complete.
 
 ## Evidence rules
 
@@ -20,8 +20,9 @@ The authoritative order is:
 |---|---|---|
 | CLI and interactive entry point | `crates/medusa-cli`, `crates/medusa-tui` | Workspace build, Clippy, tests, docs, and package smoke jobs |
 | Full conversation transcript and distinct user/assistant presentation | `crates/medusa-tui` | TUI tests in the workspace suite; merged before PR #34 |
-| Markdown rendering and mid-turn follow-up queueing | `crates/medusa-tui`; merged in PR #34 | Workspace tests and source-size guardrail |
-| Clipboard text and screenshot prompts | `crates/medusa-tui` | Workspace tests and cross-platform package smoke |
+| Markdown rendering and mid-turn follow-up queueing | `crates/medusa-runtime`, `crates/medusa-tui`; introduced in PR #34 and moved behind the shared runtime in PR #39 | Workspace tests and source-size guardrail |
+| Clipboard text and screenshot prompts | Frontend-neutral prompt types in `crates/medusa-runtime`; OS clipboard access in `crates/medusa-tui` | Runtime/TUI tests and cross-platform package smoke |
+| Shared frontend-neutral interactive runtime | `crates/medusa-runtime`; extracted in PR #39, with `crates/medusa-tui` reduced to a terminal adapter | Runtime behavior tests, TUI mapping tests, workspace Clippy/tests, coverage, and package smoke |
 | Agent loop, planning, cancellation, tools, and verification | `crates/medusa-agent`, `crates/medusa-protocol`, `crates/medusa-provider` | Workspace tests plus named adversarial regressions |
 | Repository parsing, patching, and guarded transactions | `crates/medusa-intelligence`, `crates/medusa-agent` | Patch-transaction regression and workspace tests |
 | Durable Markdown memory and lifecycle controls | `crates/medusa-memory` | Workspace tests and migration/rollback checks |
@@ -39,9 +40,9 @@ The authoritative order is:
 
 Skipping expensive release jobs on drafts changes scheduling, not acceptance criteria: merge readiness still requires the full configured gate set.
 
-## Active work, not yet shipped
+## Next architecture work
 
-PR #39, `refactor: extract frontend-neutral runtime`, is moving interactive session control from the TUI into a reusable `medusa-runtime` crate. Its purpose is to let the terminal interface and the planned Zeus-derived desktop interface share one application core. Until that pull request merges and passes canonical validation, the runtime extraction and desktop entry point remain **in progress**.
+The frontend-neutral runtime extraction is shipped in PR #39. The Zeus-derived desktop interface is still **not shipped**; it must consume `medusa-runtime` rather than duplicate session, provider, cancellation, follow-up, or event logic, and it requires its own canonical validation before the evidence ledger can claim a desktop entry point.
 
 ## Documentation policy
 
