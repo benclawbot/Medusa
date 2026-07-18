@@ -28,6 +28,7 @@ jobs:
           set -o pipefail
           python3 .github/scripts/fix_desktop_commander_patch_script.py
           python3 .github/scripts/apply_desktop_commander_integration.py 2>&1 | tee desktop-commander-patch.log
+          python3 .github/scripts/fix_desktop_commander_clippy.py
       - name: Upload patch diagnostics
         if: failure()
         uses: actions/upload-artifact@v4
