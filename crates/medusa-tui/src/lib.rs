@@ -84,10 +84,10 @@ pub enum ExitReason {
     InputClosed,
 }
 
+mod daemon_status;
 // Renderer helpers intentionally keep explicit style parameters, and renderer tests compare
 // exact row membership. Keep these allowances scoped to the private presentation module.
 #[allow(clippy::manual_contains, clippy::too_many_arguments)]
-mod daemon_status;
 mod render;
 mod session;
 
