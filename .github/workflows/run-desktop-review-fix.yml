@@ -14,7 +14,7 @@ concurrency:
 
 jobs:
   fix:
-    if: github.head_ref == 'feat/medusa-desktop-runtime-entrypoint'
+    if: github.head_ref == 'feat/medusa-desktop-runtime-entrypoint' && github.actor != 'github-actions[bot]'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -38,26 +38,37 @@ jobs:
       - name: Apply review fixes
         run: python3 .github/fix-desktop-review.py
 
-      - name: Validate review fixes
+      - name: Validate and capture exact output
         shell: bash
         run: |
+          set +e
+          diagnostics="$GITHUB_WORKSPACE/.github/desktop-ci-diagnostics.txt"
+          : > "$diagnostics"
           cd apps/medusa-desktop
-          npm ci
-          npm run typecheck
-          npm test
-          npm run build
-          cargo fmt --manifest-path src-tauri/Cargo.toml
-          cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets --locked -- -D warnings
-          cargo test --manifest-path src-tauri/Cargo.toml --locked
+          for command in \
+            "npm ci" \
+            "npm run typecheck" \
+            "npm test" \
+            "npm run build" \
+            "cargo fmt --manifest-path src-tauri/Cargo.toml -- --check" \
+            "cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets --locked -- -D warnings" \
+            "cargo test --manifest-path src-tauri/Cargo.toml --locked"; do
+            echo "=== $command ===" >> "$diagnostics"
+            bash -lc "$command" >> "$diagnostics" 2>&1
+            echo "EXIT=$?" >> "$diagnostics"
+            echo >> "$diagnostics"
+          done
           cd ../..
-          bash scripts/check-source-size.sh
+          echo "=== bash scripts/check-source-size.sh ===" >> "$diagnostics"
+          bash scripts/check-source-size.sh >> "$diagnostics" 2>&1
+          echo "EXIT=$?" >> "$diagnostics"
 
-      - name: Commit review fixes
+      - name: Commit review fixes and diagnostics
         shell: bash
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add apps/medusa-desktop/src/App.tsx apps/medusa-desktop/src-tauri/src/runtime.rs
+          git add apps/medusa-desktop/src/App.tsx apps/medusa-desktop/src-tauri/src/runtime.rs .github/desktop-ci-diagnostics.txt
           git commit -m "fix(desktop): harden runtime lifecycle and image intake"
           git fetch origin feat/medusa-desktop-runtime-entrypoint
           git rebase origin/feat/medusa-desktop-runtime-entrypoint
