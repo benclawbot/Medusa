@@ -54,10 +54,22 @@ jobs:
         run: bash scripts/check-source-size.sh
 
       - name: Verify Clippy
-        run: cargo clippy --quiet --workspace --all-targets --all-features --locked -- -D warnings
+        shell: bash
+        run: |
+          set -euo pipefail
+          if ! cargo clippy --quiet --workspace --all-targets --all-features --locked -- -D warnings > clippy.log 2>&1; then
+            tail -n 160 clippy.log
+            exit 1
+          fi
 
       - name: Verify workspace tests
-        run: cargo test --quiet --workspace --all-features --locked
+        shell: bash
+        run: |
+          set -euo pipefail
+          if ! cargo test --quiet --workspace --all-features --locked > workspace-tests.log 2>&1; then
+            tail -n 160 workspace-tests.log
+            exit 1
+          fi
 
       - name: Commit extraction and remove temporary automation
         shell: bash
