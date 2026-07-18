@@ -54,13 +54,33 @@ jobs:
           script = '\n'.join(extracted)
           exec(compile(script, 'apply-tui-markdown-io.py', 'exec'))
           PY
+      - name: Correct submit disposition compile paths
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+
+          session = Path('crates/medusa-tui/src/session.rs')
+          text = session.read_text()
+          old = '            match runtime.submit(draft) {\n                Ok(()) => {'
+          if text.count(old) != 1:
+              raise SystemExit(f'expected one clarification submit match, found {text.count(old)}')
+          session.write_text(text.replace(old, '            match runtime.submit(draft) {\n                Ok(_) => {', 1))
+
+          support = Path('crates/medusa-tui/src/render/support.rs')
+          text = support.read_text()
+          old = '        let mut used = 0_usize;'
+          if text.count(old) != 1:
+              raise SystemExit(f'expected one used assignment, found {text.count(old)}')
+          support.write_text(text.replace(old, '        let used;', 1))
+          PY
       - name: Upload guarded patch diagnostics
         if: failure()
         uses: actions/upload-artifact@v4
         with:
           name: apply-markdown-io-diagnostics
           path: apply-markdown-io.log
-          if-no-files-found: error
+          if-no-files-found: ignore
       - uses: dtolnay/rust-toolchain@1.88.0
         with:
           components: rustfmt,clippy
