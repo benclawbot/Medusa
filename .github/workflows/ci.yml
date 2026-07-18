@@ -72,13 +72,6 @@ jobs:
           name: production-panic-audit-diagnostics
           path: production-panic-audit.log
           if-no-files-found: error
-      - name: Upload production panic source context
-        if: failure() && steps.production_panic_audit.outcome == 'failure'
-        uses: actions/upload-artifact@v4
-        with:
-          name: production-panic-source-context
-          path: crates/**/src/**/*.rs
-          if-no-files-found: error
       - name: Full workspace tests
         id: workspace_tests
         shell: bash
