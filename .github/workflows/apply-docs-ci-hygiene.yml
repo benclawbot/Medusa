@@ -1,19 +1,20 @@
 name: Apply Documentation and CI Hygiene
 
 on:
-  push:
-    branches: [agent/docs-ci-hygiene]
-    paths: [.github/docs-ci-hygiene-trigger]
+  pull_request:
+    branches: [main]
+    types: [opened, synchronize, reopened]
 
 permissions:
   contents: write
 
 concurrency:
-  group: docs-ci-hygiene-${{ github.ref }}
+  group: docs-ci-hygiene-${{ github.event.pull_request.number }}
   cancel-in-progress: true
 
 jobs:
   apply:
+    if: github.head_ref == 'agent/docs-ci-hygiene'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
