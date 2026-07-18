@@ -45,7 +45,7 @@ jobs:
       - name: Format and resolve workspace graph
         run: |
           cargo fmt --all
-          cargo check --workspace --all-features
+          cargo check --quiet --workspace --all-features
 
       - name: Verify formatting
         run: cargo fmt --all -- --check
@@ -54,10 +54,10 @@ jobs:
         run: bash scripts/check-source-size.sh
 
       - name: Verify Clippy
-        run: cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
+        run: cargo clippy --quiet --workspace --all-targets --all-features --locked -- -D warnings
 
       - name: Verify workspace tests
-        run: cargo test --workspace --all-features --locked
+        run: cargo test --quiet --workspace --all-features --locked
 
       - name: Commit extraction and remove temporary automation
         shell: bash
