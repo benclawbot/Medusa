@@ -69,7 +69,17 @@ jobs:
       - name: Source-size guardrail
         run: bash scripts/check-source-size.sh
       - name: Focused TUI tests
-        run: cargo test -p medusa-tui --locked
+        shell: bash
+        run: |
+          set -o pipefail
+          cargo test -p medusa-tui --locked -- --nocapture 2>&1 | tee focused-tui-tests.log
+      - name: Upload focused TUI diagnostics
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: focused-tui-test-diagnostics
+          path: focused-tui-tests.log
+          if-no-files-found: error
       - name: Workspace compile check
         run: cargo check --workspace --all-targets --all-features --locked
       - name: Commit guarded patch
