@@ -37,6 +37,7 @@ use crossterm::{
     },
 };
 use medusa_config::Config;
+use medusa_daemon::JobRecord;
 use native_clipboard::NativeClipboard;
 use runtime::{RuntimeActivityKind, RuntimeController, RuntimeEvent, SubmitDisposition};
 
