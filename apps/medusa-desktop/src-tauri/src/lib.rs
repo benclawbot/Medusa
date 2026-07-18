@@ -1,7 +1,11 @@
 mod dto;
 mod runtime;
 #[cfg(test)]
-mod tempfile;
+mod test_tempfile;
+#[cfg(test)]
+extern crate self as tempfile;
+#[cfg(test)]
+pub(crate) use test_tempfile::tempdir;
 
 use runtime::{
     RuntimeRegistry, runtime_cancel, runtime_close, runtime_command, runtime_configure_model,
