@@ -1,0 +1,64 @@
+name: Run Desktop Review Fix
+
+on:
+  pull_request:
+    branches: [main]
+    types: [opened, synchronize, reopened]
+
+permissions:
+  contents: write
+
+concurrency:
+  group: run-desktop-review-fix-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  fix:
+    if: github.head_ref == 'feat/medusa-desktop-runtime-entrypoint'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: feat/medusa-desktop-runtime-entrypoint
+          fetch-depth: 0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: apps/medusa-desktop/package-lock.json
+
+      - uses: dtolnay/rust-toolchain@1.88.0
+        with:
+          components: rustfmt,clippy
+
+      - name: Install Tauri build dependencies
+        run: sudo apt-get update && sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf
+
+      - name: Apply review fixes
+        run: python3 .github/fix-desktop-review.py
+
+      - name: Validate review fixes
+        shell: bash
+        run: |
+          cd apps/medusa-desktop
+          npm ci
+          npm run typecheck
+          npm test
+          npm run build
+          cargo fmt --manifest-path src-tauri/Cargo.toml
+          cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets --locked -- -D warnings
+          cargo test --manifest-path src-tauri/Cargo.toml --locked
+          cd ../..
+          bash scripts/check-source-size.sh
+
+      - name: Commit review fixes
+        shell: bash
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add apps/medusa-desktop/src/App.tsx apps/medusa-desktop/src-tauri/src/runtime.rs
+          git commit -m "fix(desktop): harden runtime lifecycle and image intake"
+          git fetch origin feat/medusa-desktop-runtime-entrypoint
+          git rebase origin/feat/medusa-desktop-runtime-entrypoint
+          git push origin HEAD:feat/medusa-desktop-runtime-entrypoint
