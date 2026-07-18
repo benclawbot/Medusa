@@ -78,13 +78,45 @@ jobs:
         run: exit 1
 
       - name: Commit production desktop integration
+        id: publish
         if: steps.validate.outputs.status == '0'
+        continue-on-error: true
+        shell: bash
+        run: |
+          set +e
+          {
+            git config user.name "github-actions[bot]"
+            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+            git status --short
+            git add .gitignore README.md docs/CAPABILITY-EVIDENCE.md apps/medusa-desktop .github/workflows/desktop.yml
+            git rm .github/desktop-import.py .github/workflows/import-medusa-desktop.yml
+            git status --short
+            git commit -m "feat(desktop): add Zeus-derived Medusa entry point"
+            git fetch origin feat/medusa-desktop-runtime-entrypoint
+            git rebase origin/feat/medusa-desktop-runtime-entrypoint
+            git push origin HEAD:feat/medusa-desktop-runtime-entrypoint
+          } > /tmp/desktop-publish.log 2>&1
+          status=$?
+          set -e
+          echo "status=$status" >> "$GITHUB_OUTPUT"
+          exit "$status"
+
+      - name: Capture publish diagnostics
+        if: steps.validate.outputs.status == '0' && steps.publish.outcome == 'failure'
         shell: bash
         run: |
           set -euo pipefail
+          cp /tmp/desktop-publish.log /tmp/desktop-publish-copy.log
+          git rebase --abort 2>/dev/null || true
+          git reset --hard origin/feat/medusa-desktop-runtime-entrypoint
+          git clean -fdx apps/medusa-desktop || true
+          tail -n 250 /tmp/desktop-publish-copy.log > .github/desktop-publish-error.log
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add .gitignore README.md docs/CAPABILITY-EVIDENCE.md apps/medusa-desktop .github/workflows/desktop.yml
-          git rm .github/desktop-import.py .github/workflows/import-medusa-desktop.yml
-          git commit -m "feat(desktop): add Zeus-derived Medusa entry point"
+          git add .github/desktop-publish-error.log
+          git commit -m "chore: capture desktop publish diagnostics"
           git push origin HEAD:feat/medusa-desktop-runtime-entrypoint
+
+      - name: Stop after publish failure
+        if: steps.validate.outputs.status == '0' && steps.publish.outcome == 'failure'
+        run: exit 1
