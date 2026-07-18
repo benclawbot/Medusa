@@ -1,6 +1,6 @@
 # Medusa Capability Evidence
 
-Status snapshot: **July 18, 2026**, based on `main` through merged PR #39. This document is an evidence ledger, not a promise that every long-term product goal is complete.
+Status snapshot: **July 18, 2026**, based on `main` through merged PR #41. This document is an evidence ledger, not a promise that every long-term product goal is complete.
 
 ## Evidence rules
 
@@ -46,6 +46,8 @@ Skipping expensive release jobs on drafts changes scheduling, not acceptance cri
 ## Next architecture work
 
 The frontend-neutral runtime extraction and the first Zeus-derived desktop entry point are shipped. Remaining desktop work should deepen parity—session discovery, richer diffs, approvals, memory browsing, installers, and accessibility—without reintroducing a separate agent engine or provider stack.
+
+The panic audit, Windows daemon parity, concurrency review, workflow hygiene, and dependency-pruning work is tracked separately in issue #42.
 
 ## Documentation policy
 
