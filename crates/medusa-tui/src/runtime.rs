@@ -297,6 +297,15 @@ fn worker_loop(
     mark_idle(&submission, true);
 }
 
+fn cancel_requested(cancel: &AtomicBool, submission: &Arc<Mutex<SubmissionState>>) -> bool {
+    if cancel.load(Ordering::SeqCst) {
+        mark_idle(submission, true);
+        true
+    } else {
+        false
+    }
+}
+
 fn mark_idle(submission: &Arc<Mutex<SubmissionState>>, clear_followups: bool) {
     let mut state = submission.lock().expect("submission state lock");
     state.busy = false;
@@ -417,8 +426,7 @@ fn run_prompt(
 
     let result = (|| {
         loop {
-            if cancel.load(Ordering::SeqCst) {
-                mark_idle(submission, true);
+            if cancel_requested(cancel, submission) {
                 return Ok(RuntimeEvent::Cancelled);
             }
             append_followups(&engine, &mut session, take_followups(submission))?;
@@ -431,6 +439,10 @@ fn run_prompt(
                 })
                 .map_err(RuntimeError::agent)?;
             let _ = events.send(RuntimeEvent::Progress { turn: session.turn });
+
+            if cancel_requested(cancel, submission) {
+                return Ok(RuntimeEvent::Cancelled);
+            }
 
             if matches!(outcome, StepOutcome::WaitingForUser) {
                 mark_idle(submission, false);
@@ -600,12 +612,12 @@ fn execute_slash_command_with_submission(
             ModelCommand::SetApiKey(key) => {
                 state.session_api_key = Some(key);
                 let _ = events.send(RuntimeEvent::Notice {
-                        title: "API key updated".to_owned(),
-                        details: vec![
-                            "The key is applied only to this Medusa process and is not shown, logged, or written to disk."
-                                .to_owned(),
-                        ],
-                    });
+                    title: "API key updated".to_owned(),
+                    details: vec![
+                        "The key is applied only to this Medusa process and is not shown, logged, or written to disk."
+                            .to_owned(),
+                    ],
+                });
             }
         },
         SlashCommand::Effort { effort } => match effort {
