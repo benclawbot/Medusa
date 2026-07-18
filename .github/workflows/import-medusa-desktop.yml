@@ -33,28 +33,52 @@ jobs:
       - name: Install Tauri build dependencies
         run: sudo apt-get update && sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf
 
-      - name: Generate Zeus-derived desktop entry point
+      - name: Generate and validate Zeus-derived desktop entry point
+        id: validate
         shell: bash
         run: |
-          set -euo pipefail
-          test ! -d apps/medusa-desktop
-          git clone --depth 1 https://github.com/benclawbot/Zeus.git /tmp/Zeus
-          python3 .github/desktop-import.py /tmp/Zeus
-          cd apps/medusa-desktop
-          npm install --package-lock-only
-          npm ci
-          npm run typecheck
-          npm test
-          npm run build
-          cargo generate-lockfile --manifest-path src-tauri/Cargo.toml
-          cargo fmt --manifest-path src-tauri/Cargo.toml
-          cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets --locked -- -D warnings
-          cargo test --manifest-path src-tauri/Cargo.toml --locked
-          cd ../..
-          cargo fmt --all -- --check
-          bash scripts/check-source-size.sh
+          set +e
+          {
+            test ! -d apps/medusa-desktop
+            git clone --depth 1 https://github.com/benclawbot/Zeus.git /tmp/Zeus
+            python3 .github/desktop-import.py /tmp/Zeus
+            cd apps/medusa-desktop
+            npm install --package-lock-only
+            npm ci
+            npm run typecheck
+            npm test
+            npm run build
+            cargo generate-lockfile --manifest-path src-tauri/Cargo.toml
+            cargo fmt --manifest-path src-tauri/Cargo.toml
+            cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets --locked -- -D warnings
+            cargo test --manifest-path src-tauri/Cargo.toml --locked
+            cd ../..
+            cargo fmt --all -- --check
+            bash scripts/check-source-size.sh
+          } > /tmp/desktop-import.log 2>&1
+          status=$?
+          set -e
+          echo "status=$status" >> "$GITHUB_OUTPUT"
+          if [ "$status" -ne 0 ]; then
+            tail -n 400 /tmp/desktop-import.log > .github/desktop-import-error.log
+          fi
+
+      - name: Commit diagnostics
+        if: steps.validate.outputs.status != '0'
+        shell: bash
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add .github/desktop-import-error.log
+          git commit -m "chore: capture desktop import diagnostics"
+          git push origin HEAD:feat/medusa-desktop-runtime-entrypoint
+
+      - name: Stop after validation failure
+        if: steps.validate.outputs.status != '0'
+        run: exit 1
 
       - name: Commit production desktop integration
+        if: steps.validate.outputs.status == '0'
         shell: bash
         run: |
           set -euo pipefail
