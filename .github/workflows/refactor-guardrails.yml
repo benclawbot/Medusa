@@ -1,18 +1,20 @@
 name: Refactor Guardrails
 
 on:
-  pull_request:
+  push:
+    branches:
+      - ci/tui-cleanup-runner
 
 permissions:
   contents: read
 
 concurrency:
-  group: refactor-guardrails-${{ github.ref }}
+  group: tui-cleanup-runner
   cancel-in-progress: true
 
 jobs:
   apply-tui-cleanup:
-    if: github.head_ref == 'ci/tui-cleanup-runner'
+    if: github.repository == 'benclawbot/Medusa' && github.ref == 'refs/heads/ci/tui-cleanup-runner'
     runs-on: ubuntu-latest
     permissions:
       contents: write
