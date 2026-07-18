@@ -84,7 +84,7 @@ pub(crate) fn available_tools(
     mode: Mode,
     desktop_commander: &DesktopCommanderSettings,
 ) -> Vec<medusa_provider::ToolDefinition> {
-    built_in_tools(desktop_commander)
+    built_in_tools(desktop_commander, mode == Mode::ReadOnly)
         .into_iter()
         .filter(|tool| tool_allowed(mode, &tool.name))
         .collect()

@@ -18,7 +18,10 @@ pub(crate) fn available_skills(repo: &Path) -> Vec<skills::SkillSummary> {
     skills::summaries(repo)
 }
 
-pub(crate) fn built_in_tools(desktop_commander: &DesktopCommanderSettings) -> Vec<ToolDefinition> {
+pub(crate) fn built_in_tools(
+    desktop_commander: &DesktopCommanderSettings,
+    read_only: bool,
+) -> Vec<ToolDefinition> {
     let mut tools = vec![
         tool(
             "fs_read",
@@ -223,7 +226,7 @@ pub(crate) fn built_in_tools(desktop_commander: &DesktopCommanderSettings) -> Ve
     ];
     if desktop_commander.enabled() {
         let allowed = desktop_commander
-            .effective_tools()
+            .effective_tools_for_mode(read_only)
             .into_iter()
             .map(Value::String)
             .collect::<Vec<_>>();
