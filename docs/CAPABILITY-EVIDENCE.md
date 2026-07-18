@@ -6,6 +6,8 @@ Status snapshot: **July 18, 2026**, based on `main` through merged PR #39. This 
 
 A capability is listed as **shipped** only when its production code is on `main` and covered by the repository's normal validation. Open pull requests, temporary writer workflows, branch-only diagnostics, and design intentions are listed separately and do not count as shipped.
 
+When a production boundary moves, its behavior tests must move with it or be replaced at the correct layer; orphaned test files and coverage percentages alone are not completion evidence.
+
 The authoritative order is:
 
 1. production code and tests on `main`;
