@@ -1,17 +1,44 @@
 from pathlib import Path
 
-path = Path('crates/medusa-extensions/src/desktop_commander.rs')
-text = path.read_text()
-old = '''        let mut settings = Self::default();
+
+def replace_once(path: str, old: str, new: str) -> None:
+    file = Path(path)
+    text = file.read_text()
+    if new in text:
+        return
+    if text.count(old) != 1:
+        raise SystemExit(f'{path}: expected one match, found {text.count(old)}')
+    file.write_text(text.replace(old, new, 1))
+
+
+replace_once(
+    'crates/medusa-extensions/src/desktop_commander.rs',
+    '''        let mut settings = Self::default();
         settings.enabled = env_flag("MEDUSA_DESKTOP_COMMANDER_ENABLED");
-'''
-new = '''        let mut settings = Self {
+''',
+    '''        let mut settings = Self {
             enabled: env_flag("MEDUSA_DESKTOP_COMMANDER_ENABLED"),
             ..Self::default()
         };
-'''
-if new in text:
-    raise SystemExit(0)
-if text.count(old) != 1:
-    raise SystemExit(f'expected one settings initialization, found {text.count(old)}')
-path.write_text(text.replace(old, new, 1))
+''',
+)
+
+replace_once(
+    'crates/medusa-extensions/src/desktop_commander.rs',
+    '''        let mut settings = DesktopCommanderSettings::default();
+        settings.enabled = true;
+''',
+    '''        let mut settings = DesktopCommanderSettings {
+            enabled: true,
+            ..DesktopCommanderSettings::default()
+        };
+''',
+)
+
+replace_once(
+    'crates/medusa-agent/src/engine_support.rs',
+    '''            let tools = available_tools(mode)
+''',
+    '''            let tools = available_tools(mode, &DesktopCommanderSettings::default())
+''',
+)
