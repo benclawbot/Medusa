@@ -55,6 +55,22 @@ jobs:
           name: clippy-diagnostics
           path: clippy.log
           if-no-files-found: ignore
+      - name: Production panic audit
+        shell: bash
+        run: |
+          set -o pipefail
+          cargo clippy --workspace --all-features --locked --lib --bins --examples -- \
+            -D clippy::unwrap_used \
+            -D clippy::expect_used \
+            -D clippy::panic \
+            2>&1 | tee production-panic-audit.log
+      - name: Upload production panic diagnostics
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: production-panic-audit-diagnostics
+          path: production-panic-audit.log
+          if-no-files-found: error
       - name: Full workspace tests
         shell: bash
         run: |
