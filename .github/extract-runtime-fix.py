@@ -25,6 +25,15 @@ text = text.replace(
 )
 runtime.write_text(text)
 
+tests = Path("crates/medusa-runtime/src/tests.rs")
+text = tests.read_text()
+needle = "use super::support::{UpdateState, forward_update, message_blocks};\n"
+imports = "use crate::prompt::{ImageAttachment, PromptAttachment};\n\n"
+assert needle in text
+if imports not in text:
+    text = text.replace(needle, imports + needle, 1)
+tests.write_text(text)
+
 adapter = Path("crates/medusa-tui/src/runtime.rs")
 text = adapter.read_text().replace(
     "medusa_runtime::AgentPlanStep {",
