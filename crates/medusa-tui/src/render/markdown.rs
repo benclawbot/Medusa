@@ -127,11 +127,7 @@ fn markdown_line(source: &str, width: usize) -> (String, Color, Attribute) {
         );
     }
     if is_rule(source) {
-        return (
-            "─".repeat(width.min(48)),
-            Color::DarkGrey,
-            Attribute::Reset,
-        );
+        return ("─".repeat(width.min(48)), Color::DarkGrey, Attribute::Reset);
     }
     if let Some(quote) = source.strip_prefix('>') {
         return (
@@ -396,7 +392,11 @@ mod tests {
             .iter()
             .map(|line| line.text.as_str())
             .collect::<Vec<_>>();
-        assert!(rendered.iter().any(|line| *line == "│     print(\"a  b\")"));
+        assert!(
+            rendered
+                .iter()
+                .any(|line| *line == "│     print(\"a  b\")")
+        );
     }
 
     #[test]
