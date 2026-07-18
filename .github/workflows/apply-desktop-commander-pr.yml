@@ -21,7 +21,19 @@ jobs:
         with:
           ref: feat/desktop-commander-mcp
           fetch-depth: 0
-      - run: python3 .github/scripts/apply_desktop_commander_integration.py
+      - name: Apply integration patch
+        id: patch
+        shell: bash
+        run: |
+          set -o pipefail
+          python3 .github/scripts/apply_desktop_commander_integration.py 2>&1 | tee desktop-commander-patch.log
+      - name: Upload patch diagnostics
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: desktop-commander-patch-diagnostics
+          path: desktop-commander-patch.log
+          if-no-files-found: error
       - uses: dtolnay/rust-toolchain@1.88.0
         with:
           components: rustfmt,clippy
