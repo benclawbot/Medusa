@@ -61,11 +61,19 @@ mod platform {
     }
 
     pub fn connect(endpoint: &Path) -> io::Result<LocalStream> {
-        UnixStream::connect(endpoint).map(LocalStream)
+        UnixStream::connect(endpoint)
+            .map(LocalStream)
+            .map_err(socket_error)
     }
 
     pub fn wake(endpoint: &Path) -> io::Result<()> {
-        UnixStream::connect(endpoint).map(|_| ())
+        UnixStream::connect(endpoint)
+            .map(|_| ())
+            .map_err(socket_error)
+    }
+
+    fn socket_error(error: io::Error) -> io::Error {
+        io::Error::new(error.kind(), format!("daemon socket error: {error}"))
     }
 }
 
@@ -143,13 +151,17 @@ mod platform {
     }
 
     pub fn connect(endpoint: &Path) -> io::Result<LocalStream> {
-        let address = read_address(endpoint)?;
-        TcpStream::connect(address).map(LocalStream)
+        let address = read_address(endpoint).map_err(socket_error)?;
+        TcpStream::connect(address)
+            .map(LocalStream)
+            .map_err(socket_error)
     }
 
     pub fn wake(endpoint: &Path) -> io::Result<()> {
-        let address = read_address(endpoint)?;
-        TcpStream::connect(address).map(|_| ())
+        let address = read_address(endpoint).map_err(socket_error)?;
+        TcpStream::connect(address)
+            .map(|_| ())
+            .map_err(socket_error)
     }
 
     fn read_address(endpoint: &Path) -> io::Result<SocketAddr> {
@@ -167,6 +179,10 @@ mod platform {
             ));
         }
         Ok(address)
+    }
+
+    fn socket_error(error: io::Error) -> io::Error {
+        io::Error::new(error.kind(), format!("daemon socket error: {error}"))
     }
 }
 
