@@ -1,6 +1,6 @@
 # Medusa Capability Evidence
 
-Status snapshot: **July 18, 2026**, based on `main` through merged PR #39. This document is an evidence ledger, not a promise that every long-term product goal is complete.
+Status snapshot: **July 18, 2026**, based on `main` through merged PR #41. This document is an evidence ledger, not a promise that every long-term product goal is complete.
 
 ## Evidence rules
 
@@ -25,6 +25,7 @@ The authoritative order is:
 | Markdown rendering and mid-turn follow-up queueing | `crates/medusa-runtime`, `crates/medusa-tui`; introduced in PR #34 and moved behind the shared runtime in PR #39 | Workspace tests and source-size guardrail |
 | Clipboard text and screenshot prompts | Frontend-neutral prompt types in `crates/medusa-runtime`; OS clipboard access in `crates/medusa-tui` | Runtime/TUI tests and cross-platform package smoke |
 | Shared frontend-neutral interactive runtime | `crates/medusa-runtime`; extracted in PR #39, with `crates/medusa-tui` reduced to a terminal adapter | Runtime behavior tests, TUI mapping tests, workspace Clippy/tests, coverage, and package smoke |
+| Zeus-derived desktop entry point | `apps/medusa-desktop`; React/Tauri shell connected directly to `medusa-runtime` | Desktop frontend tests/build plus cross-platform Rust adapter Clippy/tests |
 | Agent loop, planning, cancellation, tools, and verification | `crates/medusa-agent`, `crates/medusa-protocol`, `crates/medusa-provider` | Workspace tests plus named adversarial regressions |
 | Repository parsing, patching, and guarded transactions | `crates/medusa-intelligence`, `crates/medusa-agent` | Patch-transaction regression and workspace tests |
 | Durable Markdown memory and lifecycle controls | `crates/medusa-memory` | Workspace tests and migration/rollback checks |
@@ -44,7 +45,9 @@ Skipping expensive release jobs on drafts changes scheduling, not acceptance cri
 
 ## Next architecture work
 
-The frontend-neutral runtime extraction is shipped in PR #39. The Zeus-derived desktop interface is still **not shipped**; it must consume `medusa-runtime` rather than duplicate session, provider, cancellation, follow-up, or event logic, and it requires its own canonical validation before the evidence ledger can claim a desktop entry point.
+The frontend-neutral runtime extraction and the first Zeus-derived desktop entry point are shipped. Remaining desktop work should deepen parity—session discovery, richer diffs, approvals, memory browsing, installers, and accessibility—without reintroducing a separate agent engine or provider stack.
+
+The panic audit, Windows daemon parity, concurrency review, workflow hygiene, and dependency-pruning work is tracked separately in issue #42.
 
 ## Documentation policy
 
