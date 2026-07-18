@@ -26,7 +26,21 @@ jobs:
         with:
           components: rustfmt,clippy
       - name: Check workspace formatting
+        id: formatting
         run: cargo fmt --all -- --check
+      - name: Capture rustfmt patch
+        if: failure() && steps.formatting.outcome == 'failure'
+        shell: bash
+        run: |
+          cargo fmt --all
+          git diff -- . ':!Cargo.lock' > daemon-rustfmt.patch
+      - name: Upload rustfmt diagnostics
+        if: failure() && steps.formatting.outcome == 'failure'
+        uses: actions/upload-artifact@v4
+        with:
+          name: daemon-rustfmt-${{ matrix.os }}
+          path: daemon-rustfmt.patch
+          if-no-files-found: error
       - name: Lint daemon
         run: cargo clippy -p medusa-daemon --all-targets --locked -- -D warnings
       - name: Test daemon reconnect and recovery
