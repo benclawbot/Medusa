@@ -29,6 +29,7 @@ jobs:
           python3 .github/scripts/fix_desktop_commander_patch_script.py
           python3 .github/scripts/apply_desktop_commander_integration.py 2>&1 | tee desktop-commander-patch.log
           python3 .github/scripts/fix_desktop_commander_clippy.py
+          python3 .github/scripts/harden_desktop_commander.py
       - name: Upload patch diagnostics
         if: failure()
         uses: actions/upload-artifact@v4
@@ -66,5 +67,5 @@ jobs:
             exit 0
           fi
           git diff --cached --check
-          git commit -m "feat(mcp): wire Desktop Commander into the agent"
+          git commit -m "feat(mcp): harden Desktop Commander integration"
           git push origin HEAD:feat/desktop-commander-mcp
