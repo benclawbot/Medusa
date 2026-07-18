@@ -373,4 +373,4 @@ Release gates additionally run complete workspace coverage with a 75% line thres
 
 ## License
 
-This repository currently has no declared software license. Add one before distributing or accepting external contributions.
+Medusa is licensed under the [MIT License](LICENSE).
