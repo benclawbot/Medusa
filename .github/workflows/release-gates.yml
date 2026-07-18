@@ -2,6 +2,7 @@ name: Release Gates
 
 on:
   pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
   workflow_dispatch:
 
 permissions:
@@ -13,6 +14,7 @@ concurrency:
 
 jobs:
   coverage:
+    if: ${{ github.event_name == 'workflow_dispatch' || github.event.pull_request.draft == false }}
     name: Workspace coverage >= 75%
     runs-on: ubuntu-latest
     steps:
@@ -40,6 +42,7 @@ jobs:
           if-no-files-found: warn
 
   adversarial-regression:
+    if: ${{ github.event_name == 'workflow_dispatch' || github.event.pull_request.draft == false }}
     name: Named adversarial regressions
     runs-on: ubuntu-latest
     steps:
@@ -71,6 +74,7 @@ jobs:
         run: cargo test -p medusa-hardening arbitrary_archive_paths_never_escape --locked -- --nocapture
 
   fuzz-smoke:
+    if: ${{ github.event_name == 'workflow_dispatch' || github.event.pull_request.draft == false }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -78,6 +82,7 @@ jobs:
       - run: bash scripts/fuzz-smoke.sh
 
   chaos-and-migrations:
+    if: ${{ github.event_name == 'workflow_dispatch' || github.event.pull_request.draft == false }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -86,6 +91,7 @@ jobs:
       - run: cargo test -p medusa-hardening clean_install_upgrade_and_rollback_are_byte_exact -- --exact
 
   package-smoke:
+    if: ${{ github.event_name == 'workflow_dispatch' || github.event.pull_request.draft == false }}
     strategy:
       fail-fast: false
       matrix:
@@ -111,6 +117,7 @@ jobs:
           & $binary --help | Select-String 'Autonomous coding agent'
 
   security:
+    if: ${{ github.event_name == 'workflow_dispatch' || github.event.pull_request.draft == false }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -124,6 +131,7 @@ jobs:
       - run: cargo test -p medusa-hardening operational_events_redact_credentials -- --exact
 
   docs-and-schema:
+    if: ${{ github.event_name == 'workflow_dispatch' || github.event.pull_request.draft == false }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -136,6 +144,7 @@ jobs:
       - run: test -s docs/SECURITY-HARDENING.md
 
   live-minimax-coding-e2e:
+    if: ${{ github.event_name == 'workflow_dispatch' || github.event.pull_request.draft == false }}
     runs-on: ubuntu-latest
     timeout-minutes: 45
     env:
