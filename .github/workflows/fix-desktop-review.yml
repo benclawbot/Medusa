@@ -6,6 +6,7 @@ on:
       - feat/medusa-desktop-runtime-entrypoint
     paths:
       - .github/workflows/fix-desktop-review.yml
+      - .github/fix-desktop-review-trigger
 
 permissions:
   contents: write
