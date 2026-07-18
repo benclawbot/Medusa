@@ -26,9 +26,9 @@ pub(super) fn markdown_block_lines(
                     marker_color,
                     "└─",
                     Color::DarkGrey,
-                    None,
+                    Some(Color::DarkGrey),
                     Attribute::Reset,
-                    false,
+                    true,
                     content_width,
                 );
             } else {
@@ -57,17 +57,13 @@ pub(super) fn markdown_block_lines(
         }
 
         if in_code {
-            push_wrapped(
+            push_code_line(
                 &mut rendered,
                 &mut first,
                 first_marker,
                 &continuation,
                 marker_color,
-                &format!("│ {source}"),
-                Color::White,
-                Some(Color::DarkGrey),
-                Attribute::Reset,
-                true,
+                source,
                 content_width,
             );
             continue;
@@ -131,7 +127,11 @@ fn markdown_line(source: &str, width: usize) -> (String, Color, Attribute) {
         );
     }
     if is_rule(source) {
-        return ("─".repeat(width.min(48)), Color::DarkGrey, Attribute::Reset);
+        return (
+            "─".repeat(width.min(48)),
+            Color::DarkGrey,
+            Attribute::Reset,
+        );
     }
     if let Some(quote) = source.strip_prefix('>') {
         return (
@@ -242,6 +242,67 @@ fn push_wrapped(
     width: usize,
 ) {
     let rows = wrap_words(text, width);
+    push_rows(
+        rendered,
+        first,
+        first_marker,
+        continuation,
+        marker_color,
+        rows,
+        foreground,
+        background,
+        attribute,
+        fill_background,
+    );
+}
+
+fn push_code_line(
+    rendered: &mut Vec<StyledLine>,
+    first: &mut bool,
+    first_marker: &str,
+    continuation: &str,
+    marker_color: Color,
+    source: &str,
+    width: usize,
+) {
+    let code_width = width.saturating_sub(2).max(1);
+    let rows = if source.is_empty() {
+        vec!["│ ".to_owned()]
+    } else {
+        source
+            .chars()
+            .collect::<Vec<_>>()
+            .chunks(code_width)
+            .map(|chunk| format!("│ {}", chunk.iter().collect::<String>()))
+            .collect()
+    };
+    push_rows(
+        rendered,
+        first,
+        first_marker,
+        continuation,
+        marker_color,
+        rows,
+        Color::White,
+        Some(Color::DarkGrey),
+        Attribute::Reset,
+        true,
+    );
+}
+
+#[allow(clippy::too_many_arguments)]
+fn push_rows(
+    rendered: &mut Vec<StyledLine>,
+    first: &mut bool,
+    first_marker: &str,
+    continuation: &str,
+    marker_color: Color,
+    rows: Vec<String>,
+    foreground: Color,
+    background: Option<Color>,
+    attribute: Attribute,
+    fill_background: bool,
+) {
     for row in rows {
         rendered.push(StyledLine::with_marker_style(
             if *first { first_marker } else { continuation },
@@ -321,6 +382,21 @@ mod tests {
         assert!(rendered.iter().any(|line| line.contains("┌─ rust")));
         assert!(rendered.iter().any(|line| line.contains("│ fn main() {}")));
         assert!(rendered.iter().any(|line| line == &"└─"));
+    }
+
+    #[test]
+    fn fenced_code_preserves_indentation_and_repeated_spaces() {
+        let lines = markdown_block_lines(
+            "Medusa  ",
+            Color::Magenta,
+            "```python\nif ready:\n    print(\"a  b\")\n```",
+            80,
+        );
+        let rendered = lines
+            .iter()
+            .map(|line| line.text.as_str())
+            .collect::<Vec<_>>();
+        assert!(rendered.iter().any(|line| *line == "│     print(\"a  b\")"));
     }
 
     #[test]
