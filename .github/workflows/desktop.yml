@@ -96,7 +96,6 @@ jobs:
           if-no-files-found: warn
 
   bundle-smoke:
-    if: ${{ github.event_name != 'pull_request' || github.event.pull_request.draft == false }}
     timeout-minutes: 75
     strategy:
       fail-fast: false
