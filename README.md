@@ -11,6 +11,7 @@ Medusa is a production-grade autonomous coding agent written in Rust. It combine
 - **Interactive by default** — run `medusa` in a repository to open the terminal interface.
 - **Autonomous coding loop** — inspect, plan, edit, verify, and iterate until completion evidence is available.
 - **Shared frontend runtime** — the TUI and Zeus-derived desktop entry point use the same `medusa-runtime` controller instead of separate agent stacks.
+- **Validated desktop packages** — CI builds unsigned Linux DEB/AppImage, macOS app/DMG, and Windows NSIS artifacts with synchronized version metadata and SHA-256 evidence.
 - **Visible user conversation** — user prompts, assistant responses, Markdown, tool activity, questions, and queued follow-ups remain in one transcript.
 - **Mid-turn guidance** — submit extra detail while Medusa is working; it is preserved immediately and injected at the next safe agent-turn boundary.
 - **Clipboard-native input** — paste text or screenshots with `Ctrl+V`; supported providers receive screenshots as image context.
@@ -24,7 +25,7 @@ Medusa is a production-grade autonomous coding agent written in Rust. It combine
 
 ## Current status and evidence
 
-The original phase labels are historical planning shorthand, not the current source of truth. As of July 19, 2026, repository evidence through merged PR #59 includes:
+The original phase labels are historical planning shorthand, not the current source of truth. As of July 19, 2026, repository evidence through merged PR #63 includes:
 
 - the Rust agent core, TUI, and frontend-neutral runtime
 - the Zeus-derived React/Tauri desktop entry point
@@ -37,15 +38,16 @@ The original phase labels are historical planning shorthand, not the current sou
 - bounded daemon workers and queues with explicit overload backpressure
 - graceful drain semantics plus race-safe per-job cancellation and immediate process-tree shutdown
 - evidence-based dependency pruning with permanent base/current graph metrics
+- validated unsigned desktop bundles for Linux, macOS, and Windows with version synchronization and SHA-256 manifests
 
 | Area | Current evidence |
 |---|---|
 | Interactive product surface | `medusa` launches the TUI; transcript preservation, Markdown rendering, clipboard input, cancellation, metrics, skills, queued follow-ups, questions, plans, and daemon lifecycle transitions are implemented in `medusa-tui`. |
 | Agent and repository runtime | `medusa-runtime` owns frontend-neutral interactive session control. Planning, tools, policy, verification, intelligence, memory, and persistence remain implemented across the Rust workspace. |
 | Background daemon | `medusa-daemon` provides one durable contract on Linux, macOS, and Windows. It has four fixed workers and a 32-job queue by default, `daemon_busy` backpressure, finite IPC limits, shared frontend supervision, graceful draining, per-job cancellation, and immediate process-tree shutdown. |
-| Desktop | `apps/medusa-desktop` adapts the same runtime commands, events, plans, questions, cancellation, follow-ups, skills, provider settings, policy, and daemon lifecycle as the TUI. |
+| Desktop | `apps/medusa-desktop` adapts the same runtime commands, events, plans, questions, cancellation, follow-ups, skills, provider settings, policy, and daemon lifecycle as the TUI. CI builds and validates unsigned DEB/AppImage, app/DMG, and NSIS artifacts. |
 | Dependency hygiene | PR #52 removed five proven-unused direct dependency edges while preserving the resolved package graph. Read-only base/current metrics run in CI. |
-| Release evidence | `CI`, `Daemon`, `Desktop`, `Refactor Guardrails`, and `Release Gates` enforce formatting, Clippy, panic-free production targets, tests, docs, source-size limits, workflow hygiene, dependency policy, security checks, three-platform integration, coverage, adversarial tests, packages, and live MiniMax scenarios. |
+| Release evidence | `CI`, `Daemon`, `Desktop`, `Refactor Guardrails`, and `Release Gates` enforce formatting, Clippy, panic-free production targets, tests, docs, source-size limits, workflow hygiene, dependency policy, security checks, three-platform integration, desktop bundle validation, coverage, adversarial tests, packages, and live MiniMax scenarios. |
 
 See [Capability evidence](docs/CAPABILITY-EVIDENCE.md) for the auditable mapping from shipped capabilities to code and gates.
 
@@ -54,7 +56,7 @@ See [Capability evidence](docs/CAPABILITY-EVIDENCE.md) for the auditable mapping
 - Git
 - Rust 1.88 or newer and Cargo; the repository pins Rust 1.88.0
 - `MINIMAX_API_KEY` for live MiniMax execution
-- Node.js 22 only when browser verification or Desktop Commander is enabled
+- Node.js 22 when browser verification, Desktop Commander, desktop development, or desktop packaging is used
 
 ## Installation
 
@@ -271,9 +273,11 @@ See [Security hardening](docs/SECURITY-HARDENING.md) for release-enforced contro
 
 ```bash
 cd apps/medusa-desktop
-npm install
+npm ci
 npm run tauri:dev
 ```
+
+Build the validated unsigned package targets for the current platform with `npm run tauri:build -- --bundles <targets>`. Linux uses `deb,appimage`, macOS uses `app,dmg`, and Windows uses `nsis`. See [Desktop distribution](docs/DESKTOP-DISTRIBUTION.md) for package validation, CI artifacts, local commands, and signing limitations.
 
 The desktop app uses the same session controller, provider configuration, skills, cancellation, follow-up queue, plans, questions, tools, memory, policy, and repository-scoped daemon supervisor as the TUI.
 
@@ -289,6 +293,8 @@ cargo test --workspace --all-features --locked
 cargo clippy -p medusa-daemon -p medusa-tui --all-targets --locked -- -D warnings
 cargo test -p medusa-daemon -p medusa-tui --locked -- --nocapture
 python3 scripts/dependency-metrics.py measure --root . --output dependency-current.json
+python3 scripts/check-desktop-version-sync.py --root . --self-test
+python3 scripts/desktop-package-smoke.py --self-test
 RUSTDOCFLAGS='-D warnings' cargo doc --workspace --all-features --locked --no-deps
 cargo deny check advisories sources
 cargo audit
@@ -296,12 +302,13 @@ bash scripts/check-source-size.sh
 bash scripts/check-workflow-hygiene.sh
 ```
 
-Release Gates additionally run workspace coverage with a 75% threshold, named adversarial regressions, fuzz and chaos checks, cross-platform release packages, documentation/schema validation, security gates, and three live MiniMax autonomous coding scenarios.
+Release Gates additionally run workspace coverage with a 75% threshold, named adversarial regressions, fuzz and chaos checks, cross-platform release packages, documentation/schema validation, security gates, and three live MiniMax autonomous coding scenarios. The Desktop workflow separately builds and smoke-validates unsigned application bundles on Linux, macOS, and Windows.
 
 ## Documentation
 
 - [Contributing](CONTRIBUTING.md)
 - [Release process](docs/RELEASE.md)
+- [Desktop distribution](docs/DESKTOP-DISTRIBUTION.md)
 - [Observability](docs/OBSERVABILITY.md)
 - [Security hardening](docs/SECURITY-HARDENING.md)
 - [Capability evidence](docs/CAPABILITY-EVIDENCE.md)
