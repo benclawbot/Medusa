@@ -1,7 +1,7 @@
 use std::{
     collections::BTreeMap,
     fs::{self, File, OpenOptions},
-    io::{BufRead, BufReader, Write},
+    io::{BufRead, BufReader, Read, Write},
     path::{Path, PathBuf},
     process::Command,
     sync::{
@@ -25,16 +25,21 @@ use crate::{
         DAEMON_PROTOCOL_VERSION, JobRecord, JobState, Request, RequestEnvelope, Response,
         ResponseEnvelope,
     },
+    scheduler::{DaemonLimits, JobRunner, JobScheduler, SubmitError},
     transport::{LocalListener, LocalStream, connect, wake},
 };
 
-/// Handle used to request daemon shutdown from tests or embedding code.
+const MAX_REQUEST_BYTES: usize = 64 * 1024;
+const REQUEST_IO_TIMEOUT: Duration = Duration::from_secs(5);
+
+/// Handle used to request graceful daemon shutdown from tests or embedding code.
 pub struct ServerHandle {
     shutdown: Arc<AtomicBool>,
     socket: PathBuf,
 }
 
 impl ServerHandle {
+    /// Stops accepting requests, wakes the listener, and lets accepted jobs drain.
     pub fn shutdown(&self) {
         self.shutdown.store(true, Ordering::SeqCst);
         let _ = wake(&self.socket);
@@ -57,6 +62,12 @@ impl DaemonClient {
 
     pub fn request(&self, request: Request) -> MedusaResult<Response> {
         let mut stream = connect(&self.socket).map_err(transport_error)?;
+        stream
+            .set_read_timeout(Some(REQUEST_IO_TIMEOUT))
+            .map_err(transport_error)?;
+        stream
+            .set_write_timeout(Some(REQUEST_IO_TIMEOUT))
+            .map_err(transport_error)?;
         let envelope = RequestEnvelope {
             version: DAEMON_PROTOCOL_VERSION,
             request,
@@ -78,28 +89,51 @@ impl DaemonClient {
     }
 }
 
-/// Starts a daemon loop and blocks until shutdown.
+/// Starts a daemon loop with production limits and blocks until graceful shutdown.
 pub fn serve(paths: DaemonPaths) -> MedusaResult<()> {
+    serve_with_limits(paths, DaemonLimits::default())
+}
+
+/// Starts a daemon loop with explicit worker and queue limits.
+pub fn serve_with_limits(paths: DaemonPaths, limits: DaemonLimits) -> MedusaResult<()> {
     fs::create_dir_all(&paths.directory)?;
     let _ownership = Ownership::acquire(&paths)?;
     let (jobs, recovered) = load_and_recover(&paths)?;
     if recovered {
         persist_jobs(&paths, &jobs)?;
     }
+    let jobs = Arc::new(Mutex::new(jobs));
     let listener = LocalListener::bind(&paths.socket).map_err(transport_error)?;
+    let scheduler = match start_scheduler(&paths, &jobs, limits) {
+        Ok(scheduler) => scheduler,
+        Err(error) => {
+            listener.cleanup();
+            return Err(error);
+        }
+    };
     run_loop(
         listener,
         paths,
-        Arc::new(Mutex::new(jobs)),
+        jobs,
         Arc::new(AtomicBool::new(false)),
+        scheduler,
     )
 }
 
-/// Starts the server in a dedicated thread.
+/// Starts the server in a dedicated thread with production limits.
 pub fn spawn(
     paths: DaemonPaths,
 ) -> MedusaResult<(ServerHandle, thread::JoinHandle<MedusaResult<()>>)> {
+    spawn_with_limits(paths, DaemonLimits::default())
+}
+
+/// Starts the server in a dedicated thread with explicit worker and queue limits.
+pub fn spawn_with_limits(
+    paths: DaemonPaths,
+    limits: DaemonLimits,
+) -> MedusaResult<(ServerHandle, thread::JoinHandle<MedusaResult<()>>)> {
     fs::create_dir_all(&paths.directory)?;
+    limits.validate()?;
     let shutdown = Arc::new(AtomicBool::new(false));
     let server_shutdown = Arc::clone(&shutdown);
     let socket = paths.socket.clone();
@@ -111,8 +145,16 @@ pub fn spawn(
             if recovered {
                 persist_jobs(&paths, &jobs)?;
             }
+            let jobs = Arc::new(Mutex::new(jobs));
             let listener = LocalListener::bind(&paths.socket).map_err(transport_error)?;
-            run_loop(listener, paths, Arc::new(Mutex::new(jobs)), server_shutdown)
+            let scheduler = match start_scheduler(&paths, &jobs, limits) {
+                Ok(scheduler) => scheduler,
+                Err(error) => {
+                    listener.cleanup();
+                    return Err(error);
+                }
+            };
+            run_loop(listener, paths, jobs, server_shutdown, scheduler)
         })
         .map_err(|error| {
             MedusaError::new(
@@ -124,17 +166,31 @@ pub fn spawn(
     Ok((ServerHandle { shutdown, socket }, handle))
 }
 
+fn start_scheduler(
+    paths: &DaemonPaths,
+    jobs: &Arc<Mutex<BTreeMap<String, JobRecord>>>,
+    limits: DaemonLimits,
+) -> MedusaResult<JobScheduler> {
+    let worker_paths = paths.clone();
+    let worker_jobs = Arc::clone(jobs);
+    let runner: JobRunner = Arc::new(move |job_id| {
+        run_job(&worker_paths, &worker_jobs, &job_id);
+    });
+    JobScheduler::start(limits, runner)
+}
+
 fn run_loop(
     listener: LocalListener,
     paths: DaemonPaths,
     jobs: Arc<Mutex<BTreeMap<String, JobRecord>>>,
     shutdown: Arc<AtomicBool>,
+    mut scheduler: JobScheduler,
 ) -> MedusaResult<()> {
     let result = (|| {
         while !shutdown.load(Ordering::SeqCst) {
             match listener.accept() {
                 Ok(stream) => {
-                    let _ = handle_connection(stream, &paths, &jobs, &shutdown);
+                    let _ = handle_connection(stream, &paths, &jobs, &shutdown, &scheduler);
                 }
                 Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
                     thread::sleep(Duration::from_millis(20));
@@ -144,8 +200,12 @@ fn run_loop(
         }
         Ok(())
     })();
+    let scheduler_result = scheduler.shutdown();
     listener.cleanup();
-    result
+    match (result, scheduler_result) {
+        (Err(error), _) | (Ok(()), Err(error)) => Err(error),
+        (Ok(()), Ok(())) => Ok(()),
+    }
 }
 
 fn handle_connection(
@@ -153,11 +213,29 @@ fn handle_connection(
     paths: &DaemonPaths,
     jobs: &Arc<Mutex<BTreeMap<String, JobRecord>>>,
     shutdown: &Arc<AtomicBool>,
+    scheduler: &JobScheduler,
 ) -> MedusaResult<()> {
+    stream
+        .set_read_timeout(Some(REQUEST_IO_TIMEOUT))
+        .map_err(transport_error)?;
+    stream
+        .set_write_timeout(Some(REQUEST_IO_TIMEOUT))
+        .map_err(transport_error)?;
+    let reader_stream = stream.try_clone().map_err(transport_error)?;
+    let mut reader = BufReader::new(reader_stream).take((MAX_REQUEST_BYTES + 1) as u64);
     let mut line = String::new();
-    BufReader::new(stream.try_clone().map_err(transport_error)?).read_line(&mut line)?;
+    reader.read_line(&mut line)?;
     if line.trim().is_empty() {
         return Ok(());
+    }
+    if line.len() > MAX_REQUEST_BYTES {
+        return write_response(
+            &mut stream,
+            Response::Error {
+                code: "request_too_large".into(),
+                message: format!("daemon request exceeds {MAX_REQUEST_BYTES} bytes"),
+            },
+        );
     }
     let envelope: RequestEnvelope = serde_json::from_str(&line)?;
     let response = if envelope.version != DAEMON_PROTOCOL_VERSION {
@@ -166,10 +244,14 @@ fn handle_connection(
             message: format!("unsupported protocol {}", envelope.version),
         }
     } else {
-        dispatch(envelope.request, paths, jobs, shutdown)?
+        dispatch(envelope.request, paths, jobs, shutdown, scheduler)?
     };
+    write_response(&mut stream, response)
+}
+
+fn write_response(stream: &mut LocalStream, response: Response) -> MedusaResult<()> {
     serde_json::to_writer(
-        &mut stream,
+        &mut *stream,
         &ResponseEnvelope {
             version: DAEMON_PROTOCOL_VERSION,
             response,
@@ -185,6 +267,7 @@ fn dispatch(
     paths: &DaemonPaths,
     jobs: &Arc<Mutex<BTreeMap<String, JobRecord>>>,
     shutdown: &Arc<AtomicBool>,
+    scheduler: &JobScheduler,
 ) -> MedusaResult<Response> {
     match request {
         Request::Ping => Ok(Response::Pong),
@@ -208,8 +291,23 @@ fn dispatch(
                 locked.insert(job.id.clone(), job.clone());
                 persist_jobs(paths, &locked)?;
             }
-            spawn_job(paths.clone(), Arc::clone(jobs), job.id.clone());
-            Ok(Response::Submitted { job })
+            match scheduler.enqueue(job.id.clone()) {
+                Ok(()) => Ok(Response::Submitted { job }),
+                Err(SubmitError::Busy) => {
+                    discard_rejected_job(paths, jobs, &job.id)?;
+                    Ok(Response::Error {
+                        code: "daemon_busy".into(),
+                        message: "daemon job queue is at capacity; retry later".into(),
+                    })
+                }
+                Err(SubmitError::Stopped) => {
+                    discard_rejected_job(paths, jobs, &job.id)?;
+                    Ok(Response::Error {
+                        code: "daemon_stopping".into(),
+                        message: "daemon is shutting down and no longer accepts jobs".into(),
+                    })
+                }
+            }
         }
         Request::Status { job_id } => {
             let locked = lock_jobs(jobs)?;
@@ -230,68 +328,95 @@ fn dispatch(
     }
 }
 
-fn spawn_job(paths: DaemonPaths, jobs: Arc<Mutex<BTreeMap<String, JobRecord>>>, job_id: String) {
-    let worker_job_id = job_id.clone();
-    let worker_jobs = Arc::clone(&jobs);
-    let worker_paths = paths.clone();
-    let result = thread::Builder::new()
-        .name(format!("medusa-job-{job_id}"))
-        .spawn(move || {
-            let command = {
-                let mut locked = match lock_jobs(&worker_jobs) {
-                    Ok(locked) => locked,
-                    Err(_) => return,
-                };
-                let Some(job) = locked.get_mut(&worker_job_id) else {
-                    return;
-                };
-                job.state = JobState::Running;
-                job.started_at = Some(OffsetDateTime::now_utc());
-                let command = (job.program.clone(), job.args.clone());
-                let _ = persist_jobs(&worker_paths, &locked);
-                command
-            };
+fn discard_rejected_job(
+    paths: &DaemonPaths,
+    jobs: &Arc<Mutex<BTreeMap<String, JobRecord>>>,
+    job_id: &str,
+) -> MedusaResult<()> {
+    let mut locked = lock_jobs(jobs)?;
+    locked.remove(job_id);
+    persist_jobs(paths, &locked)
+}
 
-            let output = Command::new(&command.0)
-                .args(&command.1)
-                .current_dir(&worker_paths.repo)
-                .output();
-            let mut locked = match lock_jobs(&worker_jobs) {
-                Ok(locked) => locked,
-                Err(_) => return,
+fn run_job(
+    paths: &DaemonPaths,
+    jobs: &Arc<Mutex<BTreeMap<String, JobRecord>>>,
+    job_id: &str,
+) {
+    if let Err(error) = run_job_inner(paths, jobs, job_id) {
+        mark_job_failed(paths, jobs, job_id, format!("daemon worker failed: {error}"));
+    }
+}
+
+fn run_job_inner(
+    paths: &DaemonPaths,
+    jobs: &Arc<Mutex<BTreeMap<String, JobRecord>>>,
+    job_id: &str,
+) -> MedusaResult<()> {
+    let command = {
+        let mut locked = lock_jobs(jobs)?;
+        let Some(job) = locked.get_mut(job_id) else {
+            return Err(MedusaError::new(
+                ErrorCode::InternalInvariant,
+                ErrorCategory::Internal,
+                format!("daemon queued job disappeared before execution: {job_id}"),
+            ));
+        };
+        job.state = JobState::Running;
+        job.started_at = Some(OffsetDateTime::now_utc());
+        let command = (job.program.clone(), job.args.clone());
+        persist_jobs(paths, &locked)?;
+        command
+    };
+
+    let output = Command::new(&command.0)
+        .args(&command.1)
+        .current_dir(&paths.repo)
+        .output();
+    let mut locked = lock_jobs(jobs)?;
+    let Some(job) = locked.get_mut(job_id) else {
+        return Err(MedusaError::new(
+            ErrorCode::InternalInvariant,
+            ErrorCategory::Internal,
+            format!("daemon running job disappeared before completion: {job_id}"),
+        ));
+    };
+    job.finished_at = Some(OffsetDateTime::now_utc());
+    match output {
+        Ok(output) => {
+            job.exit_code = output.status.code();
+            job.stdout = String::from_utf8_lossy(&output.stdout).into_owned();
+            job.stderr = String::from_utf8_lossy(&output.stderr).into_owned();
+            job.state = if output.status.success() {
+                JobState::Succeeded
+            } else {
+                JobState::Failed
             };
-            let Some(job) = locked.get_mut(&worker_job_id) else {
-                return;
-            };
-            job.finished_at = Some(OffsetDateTime::now_utc());
-            match output {
-                Ok(output) => {
-                    job.exit_code = output.status.code();
-                    job.stdout = String::from_utf8_lossy(&output.stdout).into_owned();
-                    job.stderr = String::from_utf8_lossy(&output.stderr).into_owned();
-                    job.state = if output.status.success() {
-                        JobState::Succeeded
-                    } else {
-                        JobState::Failed
-                    };
-                }
-                Err(error) => {
-                    job.stderr = error.to_string();
-                    job.state = JobState::Failed;
-                }
-            }
-            let _ = persist_jobs(&worker_paths, &locked);
-        });
-    if let Err(error) = result {
-        if let Ok(mut locked) = lock_jobs(&jobs) {
-            if let Some(job) = locked.get_mut(&job_id) {
-                job.state = JobState::Failed;
-                job.finished_at = Some(OffsetDateTime::now_utc());
-                job.stderr = format!("failed to spawn daemon job worker: {error}");
-            }
-            let _ = persist_jobs(&paths, &locked);
+        }
+        Err(error) => {
+            job.stderr = error.to_string();
+            job.state = JobState::Failed;
         }
     }
+    persist_jobs(paths, &locked)
+}
+
+fn mark_job_failed(
+    paths: &DaemonPaths,
+    jobs: &Arc<Mutex<BTreeMap<String, JobRecord>>>,
+    job_id: &str,
+    message: String,
+) {
+    let Ok(mut locked) = lock_jobs(jobs) else {
+        return;
+    };
+    let Some(job) = locked.get_mut(job_id) else {
+        return;
+    };
+    job.state = JobState::Failed;
+    job.finished_at = Some(OffsetDateTime::now_utc());
+    job.stderr = message;
+    let _ = persist_jobs(paths, &locked);
 }
 
 fn load_and_recover(paths: &DaemonPaths) -> MedusaResult<(BTreeMap<String, JobRecord>, bool)> {
