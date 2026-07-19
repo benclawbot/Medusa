@@ -314,11 +314,7 @@ fn process_group_alive(pid: u32) -> bool {
         return process_group_signal_alive(pid);
     };
     entries.filter_map(Result::ok).any(|entry| {
-        entry
-            .file_name()
-            .to_string_lossy()
-            .parse::<u32>()
-            .is_ok()
+        entry.file_name().to_string_lossy().parse::<u32>().is_ok()
             && linux_process_is_live_group_member(&entry.path().join("stat"), pid)
     })
 }
