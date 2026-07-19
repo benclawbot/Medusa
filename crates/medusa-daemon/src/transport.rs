@@ -7,6 +7,7 @@ mod platform {
         io::{self, Read, Write},
         os::unix::net::{UnixListener, UnixStream},
         path::{Path, PathBuf},
+        time::Duration,
     };
 
     pub struct LocalListener {
@@ -43,6 +44,14 @@ mod platform {
     impl LocalStream {
         pub fn try_clone(&self) -> io::Result<Self> {
             self.0.try_clone().map(Self)
+        }
+
+        pub fn set_read_timeout(&self, timeout: Option<Duration>) -> io::Result<()> {
+            self.0.set_read_timeout(timeout)
+        }
+
+        pub fn set_write_timeout(&self, timeout: Option<Duration>) -> io::Result<()> {
+            self.0.set_write_timeout(timeout)
         }
     }
 
@@ -86,6 +95,7 @@ mod platform {
         io::{self, Read, Write},
         net::{Ipv4Addr, SocketAddr, TcpListener, TcpStream},
         path::{Path, PathBuf},
+        time::Duration,
     };
 
     pub struct LocalListener {
@@ -135,6 +145,14 @@ mod platform {
     impl LocalStream {
         pub fn try_clone(&self) -> io::Result<Self> {
             self.0.try_clone().map(Self)
+        }
+
+        pub fn set_read_timeout(&self, timeout: Option<Duration>) -> io::Result<()> {
+            self.0.set_read_timeout(timeout)
+        }
+
+        pub fn set_write_timeout(&self, timeout: Option<Duration>) -> io::Result<()> {
+            self.0.set_write_timeout(timeout)
         }
     }
 
