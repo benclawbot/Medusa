@@ -1006,8 +1006,6 @@ dependencies = [
  "serde",
  "serde_json",
  "tempfile",
- "thiserror",
- "ulid",
 ]
 
 [[package]]
@@ -1015,10 +1013,7 @@ name = "medusa-browserd"
 version = "1.0.0"
 dependencies = [
  "medusa-browser-client",
- "medusa-core",
- "serde",
  "serde_json",
- "thiserror",
  "url",
 ]
 
