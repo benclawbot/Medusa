@@ -8,7 +8,9 @@ on:
       - "crates/medusa-runtime/**"
       - "scripts/check-desktop-version-sync.py"
       - "scripts/desktop-package-smoke.py"
+      - "scripts/release-evidence.py"
       - ".github/workflows/desktop.yml"
+      - ".github/workflows/publish-release.yml"
   push:
     branches: [main]
     paths:
@@ -17,7 +19,9 @@ on:
       - "crates/medusa-runtime/**"
       - "scripts/check-desktop-version-sync.py"
       - "scripts/desktop-package-smoke.py"
+      - "scripts/release-evidence.py"
       - ".github/workflows/desktop.yml"
+      - ".github/workflows/publish-release.yml"
   workflow_dispatch:
 
 permissions:
@@ -49,6 +53,9 @@ jobs:
       - name: Exercise desktop package validation failures
         working-directory: .
         run: python scripts/desktop-package-smoke.py --self-test
+      - name: Exercise release evidence validation
+        working-directory: .
+        run: python scripts/release-evidence.py self-test
       - run: npm ci
       - run: npm run typecheck
       - run: npm test
