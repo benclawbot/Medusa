@@ -1,0 +1,32 @@
+name: Trigger TUI fix application
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    if: github.event.pull_request.head.ref == 'agent/tui-markdown-scrollback-terse-chat'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.ref }}
+          fetch-depth: 0
+      - name: Apply embedded verified patch
+        shell: bash
+        run: |
+          sed -n "/PATCH_EOF'/,/^[[:space:]]*PATCH_EOF$/p" .github/workflows/apply-tui-fixes.yml \
+            | sed '1d;$d;s/^[[:space:]]*//' > /tmp/tui.patch.b64
+          base64 -d /tmp/tui.patch.b64 > /tmp/tui.patch
+          git apply --check /tmp/tui.patch
+          git apply /tmp/tui.patch
+          rm .github/workflows/apply-tui-fixes.yml .github/workflows/trigger-tui-fix-apply.yml
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add -A
+          git commit -m "tui: fix markdown scrollback and concise chat"
+          git push origin HEAD
