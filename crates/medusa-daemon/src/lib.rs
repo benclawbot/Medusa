@@ -12,6 +12,4 @@ pub use protocol::{
     ResponseEnvelope,
 };
 pub use scheduler::DaemonLimits;
-pub use server::{
-    DaemonClient, ServerHandle, serve, serve_with_limits, spawn, spawn_with_limits,
-};
+pub use server::{DaemonClient, ServerHandle, serve, serve_with_limits, spawn, spawn_with_limits};
