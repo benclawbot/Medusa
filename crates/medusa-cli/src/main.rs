@@ -44,11 +44,22 @@ enum CommandKind {
     Bootstrap,
     Doctor,
     Migrate,
-    Search { pattern: String },
-    Shell { program: String, args: Vec<String> },
-    Checkpoint { message: String },
-    Run { objective: String },
-    Resume { session: String },
+    Search {
+        pattern: String,
+    },
+    Shell {
+        program: String,
+        args: Vec<String>,
+    },
+    Checkpoint {
+        message: String,
+    },
+    Run {
+        objective: String,
+    },
+    Resume {
+        session: String,
+    },
     #[command(name = "__daemon-serve", hide = true)]
     DaemonServe,
 }
