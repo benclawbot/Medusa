@@ -108,6 +108,8 @@ jobs:
         run: |
           python3 scripts/release-evidence.py self-test
           python3 scripts/release-evidence.py sbom --root . --output release-sbom-ci.json
+      - name: Parse tag-only release workflow YAML
+        run: ruby -e 'require "yaml"; YAML.safe_load_file(".github/workflows/publish-release.yml", aliases: true)'
       - name: Measure current dependency graph
         id: dependency_metrics_current
         shell: bash
