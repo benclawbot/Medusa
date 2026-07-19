@@ -308,8 +308,49 @@ fn send_group_signal(signal: &str, pid: u32) -> MedusaResult<()> {
     ))
 }
 
-#[cfg(unix)]
+#[cfg(target_os = "linux")]
 fn process_group_alive(pid: u32) -> bool {
+    let Ok(entries) = fs::read_dir("/proc") else {
+        return process_group_signal_alive(pid);
+    };
+    entries.filter_map(Result::ok).any(|entry| {
+        entry
+            .file_name()
+            .to_string_lossy()
+            .parse::<u32>()
+            .is_ok()
+            && linux_process_is_live_group_member(&entry.path().join("stat"), pid)
+    })
+}
+
+#[cfg(target_os = "linux")]
+fn linux_process_is_live_group_member(stat_path: &Path, group_id: u32) -> bool {
+    let Ok(stat) = fs::read_to_string(stat_path) else {
+        return false;
+    };
+    let Some(command_end) = stat.rfind(')') else {
+        return false;
+    };
+    let mut fields = stat[command_end + 1..].split_whitespace();
+    let Some(state) = fields.next() else {
+        return false;
+    };
+    let Some(_parent_pid) = fields.next() else {
+        return false;
+    };
+    let Some(process_group) = fields.next() else {
+        return false;
+    };
+    process_group.parse::<u32>() == Ok(group_id) && !matches!(state, "Z" | "X" | "x")
+}
+
+#[cfg(all(unix, not(target_os = "linux")))]
+fn process_group_alive(pid: u32) -> bool {
+    process_group_signal_alive(pid)
+}
+
+#[cfg(unix)]
+fn process_group_signal_alive(pid: u32) -> bool {
     let group = format!("-{pid}");
     Command::new("kill")
         .args(["-0", group.as_str()])
