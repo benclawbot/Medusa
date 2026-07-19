@@ -13,7 +13,7 @@ medusa doctor
 
 ## Draft release publication
 
-The permanent `Publish Draft Release` workflow runs only for an existing `v*` tag or an explicit manual request naming an existing tag. Before packaging, it requires:
+The permanent `Publish Draft Release` workflow runs only when an existing `v*` tag is pushed. The workflow event SHA, checked-out commit, and remote tag target must remain identical throughout the run. Before packaging, it requires:
 
 - an exact `v<workspace-version>` tag;
 - synchronized version metadata across the Rust workspace, desktop Cargo package, desktop `package.json`, and Tauri configuration;
