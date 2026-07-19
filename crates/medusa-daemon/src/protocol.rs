@@ -47,8 +47,10 @@ pub enum Request {
     Ping,
     Submit { program: String, args: Vec<String> },
     Status { job_id: String },
+    Cancel { job_id: String },
     List,
     Shutdown,
+    ShutdownNow,
 }
 
 /// Server response envelope.
@@ -65,6 +67,7 @@ pub enum Response {
     Pong,
     Submitted { job: JobRecord },
     Status { job: Option<JobRecord> },
+    Cancelled { job: Option<JobRecord> },
     Jobs { jobs: Vec<JobRecord> },
     Ack,
     Error { code: String, message: String },
