@@ -11,9 +11,6 @@ name = "medusa-browserd"
 path = "src/main.rs"
 
 [dependencies]
-medusa-core = { path = "../medusa-core" }
 medusa-browser-client = { path = "../medusa-browser-client" }
-serde = { workspace = true }
 serde_json = { workspace = true }
-thiserror = { workspace = true }
 url = "2.5"
