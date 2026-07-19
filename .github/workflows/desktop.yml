@@ -4,12 +4,14 @@ on:
   pull_request:
     paths:
       - "apps/medusa-desktop/**"
+      - "crates/medusa-daemon/**"
       - "crates/medusa-runtime/**"
       - ".github/workflows/desktop.yml"
   push:
     branches: [main]
     paths:
       - "apps/medusa-desktop/**"
+      - "crates/medusa-daemon/**"
       - "crates/medusa-runtime/**"
       - ".github/workflows/desktop.yml"
 
