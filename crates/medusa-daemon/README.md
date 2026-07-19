@@ -1,15 +1,16 @@
 # medusa-daemon
 
-`medusa-daemon` owns repository-scoped background jobs, reconnectable local IPC, durable job state, process ownership, restart recovery, bounded execution, and graceful shutdown.
+`medusa-daemon` owns repository-scoped background jobs, reconnectable local IPC, durable job state, process ownership, restart recovery, bounded execution, per-job cancellation, graceful draining, and immediate process-tree shutdown.
 
-## Transport
+## Transport and lifecycle ownership
 
 The public `DaemonClient` and wire protocol are the same on every supported platform.
 
 - **Linux and macOS:** `.medusa/daemon/medusa.sock` is a Unix-domain socket.
-- **Windows:** `.medusa/daemon/medusa.sock` is an endpoint descriptor containing an ephemeral loopback TCP address. The server binds only to the local loopback interface, and clients reject descriptors that resolve to a non-loopback address.
-
-Every request uses a new connection. A client can disconnect and reconnect while a daemon-owned job continues running. Local reads and writes have a five-second timeout, and request bodies are capped at 64 KiB.
+- **Windows:** the same path is an endpoint descriptor containing an ephemeral loopback TCP address. The server binds only to loopback, and clients reject non-loopback descriptors.
+- The TUI and desktop use the same repository-scoped `DaemonSupervisor`, startup lock, hidden host mode, readiness check, and bounded restart backoff.
+- Every request uses a new connection, so clients may disconnect while daemon-owned jobs continue.
+- Local reads and writes have a five-second timeout, and requests are capped at 64 KiB.
 
 ## Bounded execution
 
@@ -17,26 +18,43 @@ The daemon uses a synchronous standard-library worker design rather than an asyn
 
 - four concurrent job workers by default
 - 32 queued jobs by default
-- `daemon_busy` response when the queue is full
-- `serve_with_limits` and `spawn_with_limits` for deterministic test or embedding limits
+- `daemon_busy` when the queue is full
+- `serve_with_limits` and `spawn_with_limits` for deterministic embedding and tests
 - no new operating-system thread per submission
 
-The permanent cross-platform load suite starts 64 simultaneous ping clients, verifies exact one-worker/one-queue backpressure, and confirms graceful shutdown drains accepted jobs. See [Daemon concurrency and backpressure](../../docs/DAEMON-CONCURRENCY.md).
+The cross-platform load suite starts 64 simultaneous clients, verifies exact one-worker/one-queue backpressure, and confirms graceful shutdown drains accepted jobs. See [Daemon concurrency and backpressure](../../docs/DAEMON-CONCURRENCY.md).
+
+## Cancellation and shutdown
+
+The protocol keeps two intentionally different shutdown contracts:
+
+- `Shutdown` is graceful: stop accepting requests, drain queued and running accepted jobs, join workers, then release endpoint ownership.
+- `ShutdownNow` is immediate: remove queued jobs, terminate running process trees, persist interrupted state, then join workers.
+- `Cancel { job_id }` removes queued work before execution or terminates the running job's process tree. Repeating cancellation for an already interrupted job is safe.
+
+Every accepted job receives one process control before queue insertion, closing the race between queue removal, worker pickup, process spawn, and cancellation.
+
+Process-tree handling is platform-specific without introducing unsafe Rust:
+
+- Unix jobs start in isolated process groups and receive TERM followed by KILL escalation when needed.
+- GNU/Linux commands delimit negative process-group IDs with `--`; `/proc` state inspection distinguishes terminated zombies from live descendants.
+- macOS uses the same isolated process-group contract with native signal verification.
+- Windows jobs start in isolated process groups and terminate through `taskkill /T /F`.
+- If descendant termination fails, Medusa reports the platform error and does not silently claim success. Immediate-child kill is only a fallback.
+
+Cancelled jobs remain persisted as `interrupted`, which keeps job history readable after rollback to binaries predating the additive cancellation requests.
 
 ## Durable lifecycle
 
 - Job records are persisted in `.medusa/daemon/jobs.json`.
-- Queued or running jobs found after a daemon restart are marked `interrupted` with recovery evidence.
+- Queued or running jobs found after an ungraceful restart are marked `interrupted` with recovery evidence.
 - The daemon records its PID in `.medusa/daemon/owner.pid` and reclaims stale ownership only when the recorded process is no longer alive.
 - State replacement remains atomic on Unix. Windows uses a backup-and-restore swap because replacing an existing file with `rename` is not portable there.
-- Graceful shutdown stops new request acceptance, drains accepted queued and running jobs, joins the fixed workers, then removes the endpoint and owner record.
 
 ## Validation
 
-The `Daemon` workflow runs formatting, Clippy, daemon/TUI integration, reconnect/recovery, concurrent-client, backpressure, and shutdown tests on Ubuntu, macOS, and Windows. The tests exercise the same `DaemonClient` API and durable state semantics on all three systems.
+The permanent `Daemon` workflow runs formatting, Clippy, daemon/TUI integration, reconnect and recovery, concurrent-client load, queue backpressure, queued cancellation, running descendant cancellation, unrelated-process isolation, and forced-shutdown tests on Ubuntu, macOS, and Windows.
 
-## Remaining integration work
+The `Desktop` workflow validates the shared lifecycle adapter on all three platforms. Full Release Gates additionally enforce workspace coverage, adversarial regressions, fuzz and chaos checks, security policy, package smoke tests, and live MiniMax scenarios.
 
-The daemon transport, recovery, bounded job execution, and TUI observation paths are cross-platform. One shared external lifecycle owner for TUI and desktop is still required, including executable discovery, startup race handling, restart policy, coordinated shutdown, and visible degraded/recovery states.
-
-Graceful shutdown currently waits for running child processes to finish. Medusa does not yet forcibly terminate a hung process tree because cross-platform descendant-safe cancellation requires a separate lifecycle and process-group design. The request loop also remains synchronous, bounded by the five-second I/O timeout; a connection worker pool or async runtime should be considered only if measured frontend load exceeds the current 64-client acceptance threshold.
+The request loop remains synchronous and bounded by the five-second I/O timeout. A connection-worker pool or async runtime should be considered only if measured frontend load exceeds the current 64-client acceptance threshold.
