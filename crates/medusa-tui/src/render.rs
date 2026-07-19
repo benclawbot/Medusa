@@ -249,6 +249,7 @@ pub(super) fn legacy_draw_common(
     let visible_content = lines
         .iter()
         .rev()
+        .skip(app.scrollback_offset().min(lines.len().saturating_sub(content_rows)))
         .take(content_rows)
         .rev()
         .collect::<Vec<_>>();
@@ -414,6 +415,7 @@ pub(super) fn render_frame(
     let visible_content = content
         .iter()
         .rev()
+        .skip(app.scrollback_offset().min(content.len().saturating_sub(content_rows)))
         .take(content_rows)
         .rev()
         .collect::<Vec<_>>();

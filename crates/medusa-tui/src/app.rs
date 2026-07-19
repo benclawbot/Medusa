@@ -5,7 +5,7 @@ use std::{
     time::Instant,
 };
 
-use crossterm::event::{Event, KeyCode, KeyEventKind, KeyModifiers};
+use crossterm::event::{Event, KeyCode, KeyEventKind, KeyModifiers, MouseEventKind};
 
 use crate::{
     clipboard::{
@@ -158,8 +158,25 @@ impl AppState {
         if let Event::Key(key) = &event
             && key.kind == KeyEventKind::Press
         {
-            if key.code == KeyCode::Esc {
-                return Ok(AppAction::Quit);
+            match key.code {
+                KeyCode::PageUp => {
+                    self.scrollback_scroll_up(10, usize::MAX);
+                    return Ok(AppAction::Redraw);
+                }
+                KeyCode::PageDown => {
+                    self.scrollback_scroll_down(10);
+                    return Ok(AppAction::Redraw);
+                }
+                KeyCode::Home if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                    self.set_scrollback_offset(usize::MAX);
+                    return Ok(AppAction::Redraw);
+                }
+                KeyCode::End if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                    self.set_scrollback_offset(0);
+                    return Ok(AppAction::Redraw);
+                }
+                KeyCode::Esc => return Ok(AppAction::Quit),
+                _ => {}
             }
             if key.code == KeyCode::Char('t') && key.modifiers.contains(KeyModifiers::CONTROL) {
                 self.task_list_visible = !self.task_list_visible;
@@ -169,6 +186,20 @@ impl AppState {
                 self.paste_from_clipboard()?;
                 self.persist_draft()?;
                 return Ok(AppAction::Redraw);
+            }
+        }
+
+        if let Event::Mouse(mouse) = event {
+            match mouse.kind {
+                MouseEventKind::ScrollUp => {
+                    self.scrollback_scroll_up(3, usize::MAX);
+                    return Ok(AppAction::Redraw);
+                }
+                MouseEventKind::ScrollDown => {
+                    self.scrollback_scroll_down(3);
+                    return Ok(AppAction::Redraw);
+                }
+                _ => return Ok(AppAction::None),
             }
         }
 
@@ -232,6 +263,7 @@ impl AppState {
                 }
                 self.transcript
                     .push(TranscriptEntry::User(submitted.clone()));
+                self.set_scrollback_offset(0);
                 self.plan = None;
                 self.status = "prompt submitted".to_owned();
                 Ok(AppAction::Submit(submitted))
