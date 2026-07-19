@@ -338,13 +338,14 @@ fn discard_rejected_job(
     persist_jobs(paths, &locked)
 }
 
-fn run_job(
-    paths: &DaemonPaths,
-    jobs: &Arc<Mutex<BTreeMap<String, JobRecord>>>,
-    job_id: &str,
-) {
+fn run_job(paths: &DaemonPaths, jobs: &Arc<Mutex<BTreeMap<String, JobRecord>>>, job_id: &str) {
     if let Err(error) = run_job_inner(paths, jobs, job_id) {
-        mark_job_failed(paths, jobs, job_id, format!("daemon worker failed: {error}"));
+        mark_job_failed(
+            paths,
+            jobs,
+            job_id,
+            format!("daemon worker failed: {error}"),
+        );
     }
 }
 
