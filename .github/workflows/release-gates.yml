@@ -135,11 +135,17 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
       - uses: dtolnay/rust-toolchain@1.88.0
       - run: RUSTDOCFLAGS='-D warnings' cargo doc --workspace --all-features --no-deps
+      - run: python3 scripts/release-evidence.py self-test
       - run: test -s README.md
       - run: test -s CONTRIBUTING.md
       - run: test -s docs/RELEASE.md
+      - run: test -s docs/COMPATIBILITY.md
+      - run: test -s docs/DESKTOP-DISTRIBUTION.md
       - run: test -s docs/OBSERVABILITY.md
       - run: test -s docs/SECURITY-HARDENING.md
 
