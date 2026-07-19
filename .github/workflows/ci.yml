@@ -95,10 +95,37 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 2
       - uses: dtolnay/rust-toolchain@1.88.0
       - uses: taiki-e/install-action@v2
         with:
           tool: cargo-deny,cargo-audit
+      - name: Measure current dependency graph
+        run: python3 scripts/dependency-metrics.py measure --root . --output dependency-current.json
+      - name: Compare pull request dependency graph with base
+        if: github.event_name == 'pull_request'
+        shell: bash
+        run: |
+          git fetch --no-tags --depth=1 origin "${{ github.base_ref }}"
+          git worktree add ../dependency-base FETCH_HEAD
+          python3 scripts/dependency-metrics.py measure \
+            --root ../dependency-base \
+            --output dependency-base.json
+          python3 scripts/dependency-metrics.py compare \
+            --base dependency-base.json \
+            --current dependency-current.json \
+            --output dependency-comparison.md
+          cat dependency-comparison.md >> "$GITHUB_STEP_SUMMARY"
+      - name: Upload dependency metrics
+        uses: actions/upload-artifact@v4
+        with:
+          name: dependency-metrics
+          path: |
+            dependency-base.json
+            dependency-current.json
+            dependency-comparison.md
+          if-no-files-found: ignore
       - name: Cargo deny
         shell: bash
         run: |
