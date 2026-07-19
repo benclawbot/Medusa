@@ -97,10 +97,17 @@ jobs:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 2
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
       - uses: dtolnay/rust-toolchain@1.88.0
       - uses: taiki-e/install-action@v2
         with:
           tool: cargo-deny,cargo-audit
+      - name: Validate deterministic release evidence
+        run: |
+          python3 scripts/release-evidence.py self-test
+          python3 scripts/release-evidence.py sbom --root . --output release-sbom-ci.json
       - name: Measure current dependency graph
         id: dependency_metrics_current
         shell: bash
@@ -137,6 +144,7 @@ jobs:
             dependency-base.json
             dependency-current.json
             dependency-comparison.md
+            release-sbom-ci.json
           if-no-files-found: ignore
       - name: Upload dependency metrics diagnostics
         if: failure() && (steps.dependency_metrics_current.outcome == 'failure' || steps.dependency_metrics_compare.outcome == 'failure')
