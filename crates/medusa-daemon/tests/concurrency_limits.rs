@@ -66,8 +66,8 @@ fn delayed_command(label: &str, milliseconds: u64) -> (String, Vec<String>) {
 fn sixty_four_concurrent_ping_clients_complete_without_async_runtime() {
     let directory = tempfile::tempdir().expect("tempdir");
     let paths = DaemonPaths::for_repo(directory.path());
-    let (handle, server) = spawn_with_limits(paths.clone(), DaemonLimits::default())
-        .expect("spawn bounded daemon");
+    let (handle, server) =
+        spawn_with_limits(paths.clone(), DaemonLimits::default()).expect("spawn bounded daemon");
     wait_for_endpoint(&paths.socket);
 
     let barrier = Arc::new(Barrier::new(CONCURRENT_PING_CLIENTS + 1));
@@ -102,8 +102,7 @@ fn bounded_workers_apply_backpressure_and_shutdown_drains_accepted_jobs() {
         max_concurrent_jobs: 1,
         max_queued_jobs: 1,
     };
-    let (_handle, server) =
-        spawn_with_limits(paths.clone(), limits).expect("spawn bounded daemon");
+    let (_handle, server) = spawn_with_limits(paths.clone(), limits).expect("spawn bounded daemon");
     wait_for_endpoint(&paths.socket);
     let client = DaemonClient::new(&paths.socket);
 
