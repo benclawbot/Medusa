@@ -449,7 +449,10 @@ mod tests {
             "| Area | Result |\n| --- | --- |\n| TUI | `fixed` |",
             80,
         );
-        let rendered = lines.iter().map(|line| line.text.as_str()).collect::<Vec<_>>();
+        let rendered = lines
+            .iter()
+            .map(|line| line.text.as_str())
+            .collect::<Vec<_>>();
         assert!(rendered.iter().any(|line| *line == "│ Area │ Result │"));
         assert!(rendered.iter().any(|line| *line == "│ TUI │ ‹fixed› │"));
         assert!(!rendered.iter().any(|line| line.contains("---")));

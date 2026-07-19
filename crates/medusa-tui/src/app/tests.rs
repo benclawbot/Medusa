@@ -489,14 +489,20 @@ fn page_and_mouse_scrolling_update_scrollback() {
     .expect("app");
     assert_eq!(app.scrollback_offset(), 0);
     assert_eq!(
-        app.handle_event(Event::Key(KeyEvent::new(KeyCode::PageUp, KeyModifiers::NONE)))
-            .expect("page up"),
+        app.handle_event(Event::Key(KeyEvent::new(
+            KeyCode::PageUp,
+            KeyModifiers::NONE
+        )))
+        .expect("page up"),
         AppAction::Redraw
     );
     assert_eq!(app.scrollback_offset(), 10);
     assert_eq!(
-        app.handle_event(Event::Key(KeyEvent::new(KeyCode::PageDown, KeyModifiers::NONE)))
-            .expect("page down"),
+        app.handle_event(Event::Key(KeyEvent::new(
+            KeyCode::PageDown,
+            KeyModifiers::NONE
+        )))
+        .expect("page down"),
         AppAction::Redraw
     );
     assert_eq!(app.scrollback_offset(), 0);
