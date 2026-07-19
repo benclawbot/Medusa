@@ -1,0 +1,45 @@
+name: Refresh lifecycle branch
+
+on:
+  push:
+    branches: [hardening/shared-daemon-lifecycle]
+
+permissions:
+  contents: write
+
+jobs:
+  refresh:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: hardening/shared-daemon-lifecycle
+      - uses: dtolnay/rust-toolchain@1.88.0
+        with:
+          components: rustfmt
+      - name: Apply workspace formatting
+        run: cargo fmt --all
+      - name: Apply desktop formatting
+        run: cargo fmt --manifest-path apps/medusa-desktop/src-tauri/Cargo.toml
+      - name: Refresh root lock minimally
+        run: cargo metadata --format-version 1 > /dev/null
+      - name: Refresh desktop lock minimally
+        run: cargo metadata --manifest-path apps/medusa-desktop/src-tauri/Cargo.toml --format-version 1 > /dev/null
+      - name: Commit generated files
+        shell: bash
+        run: |
+          set -euo pipefail
+          git diff --check
+          if git diff --quiet; then
+            exit 0
+          fi
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add Cargo.lock apps/medusa-desktop/src-tauri/Cargo.lock \
+            crates/medusa-cli/src/main.rs crates/medusa-daemon/src/lib.rs \
+            crates/medusa-daemon/src/lifecycle.rs crates/medusa-tui/src/daemon_status.rs \
+            crates/medusa-tui/src/main.rs apps/medusa-desktop/src-tauri/src/main.rs \
+            apps/medusa-desktop/src-tauri/src/runtime.rs
+          git commit -m 'chore: refresh lifecycle formatting and locks'
+          git push origin HEAD:hardening/shared-daemon-lifecycle
