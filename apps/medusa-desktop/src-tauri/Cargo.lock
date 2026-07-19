@@ -1810,8 +1810,6 @@ dependencies = [
  "medusa-core",
  "serde",
  "serde_json",
- "thiserror 2.0.18",
- "ulid",
 ]
 
 [[package]]
@@ -1834,11 +1832,23 @@ dependencies = [
 ]
 
 [[package]]
+name = "medusa-daemon"
+version = "1.0.0"
+dependencies = [
+ "medusa-core",
+ "serde",
+ "serde_json",
+ "time",
+ "ulid",
+]
+
+[[package]]
 name = "medusa-desktop"
 version = "1.0.0"
 dependencies = [
  "base64 0.22.1",
  "image",
+ "medusa-daemon",
  "medusa-runtime",
  "serde",
  "tauri",

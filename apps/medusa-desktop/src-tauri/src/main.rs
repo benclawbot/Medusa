@@ -11,7 +11,10 @@ fn main() -> Result<(), Box<dyn Error>> {
         if flag != "--repo" {
             return Err(format!("expected --repo for daemon host, got {flag:?}").into());
         }
-        let repo = PathBuf::from(args.next().ok_or("missing repository path for daemon host")?);
+        let repo = PathBuf::from(
+            args.next()
+                .ok_or("missing repository path for daemon host")?,
+        );
         if args.next().is_some() {
             return Err("unexpected extra daemon host arguments".into());
         }

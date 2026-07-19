@@ -1025,6 +1025,7 @@ dependencies = [
  "medusa-agent",
  "medusa-config",
  "medusa-core",
+ "medusa-daemon",
  "medusa-extensions",
  "medusa-hardening",
  "medusa-provider",
