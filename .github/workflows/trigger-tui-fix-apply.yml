@@ -31,19 +31,33 @@ jobs:
           Path('/tmp/tui.patch').write_bytes(patch)
           print(f'extracted {len(patch)} patch bytes')
       - name: Apply and publish code changes
+        id: publish
         shell: bash
         run: |
-          set -euxo pipefail
-          patch --batch --forward -p1 < /tmp/tui.patch
-          git config user.name github-actions[bot]
-          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
-          git add crates/medusa-agent/src/engine.rs \
-            crates/medusa-tui/src/app.rs \
-            crates/medusa-tui/src/app/tests.rs \
-            crates/medusa-tui/src/lib.rs \
-            crates/medusa-tui/src/render.rs \
-            crates/medusa-tui/src/render/markdown.rs \
-            crates/medusa-tui/src/session.rs
-          git diff --cached --stat
-          git commit -m "tui: fix markdown scrollback and concise chat"
-          git push origin HEAD
+          set +e
+          {
+            set -x
+            patch --batch --forward -p1 < /tmp/tui.patch
+            git config user.name github-actions[bot]
+            git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+            git add crates/medusa-agent/src/engine.rs \
+              crates/medusa-tui/src/app.rs \
+              crates/medusa-tui/src/app/tests.rs \
+              crates/medusa-tui/src/lib.rs \
+              crates/medusa-tui/src/render.rs \
+              crates/medusa-tui/src/render/markdown.rs \
+              crates/medusa-tui/src/session.rs
+            git diff --cached --stat
+            git commit -m "tui: fix markdown scrollback and concise chat"
+            git push origin HEAD
+          } > /tmp/tui-bootstrap-diagnostic.txt 2>&1
+          status=$?
+          cat /tmp/tui-bootstrap-diagnostic.txt
+          exit $status
+      - name: Upload bootstrap diagnostic
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: tui-bootstrap-diagnostic
+          path: /tmp/tui-bootstrap-diagnostic.txt
+          if-no-files-found: error
