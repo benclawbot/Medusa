@@ -2,6 +2,7 @@
 
 mod paths;
 mod protocol;
+mod scheduler;
 mod server;
 mod transport;
 
@@ -10,4 +11,5 @@ pub use protocol::{
     DAEMON_PROTOCOL_VERSION, JobRecord, JobState, Request, RequestEnvelope, Response,
     ResponseEnvelope,
 };
-pub use server::{DaemonClient, ServerHandle, serve, spawn};
+pub use scheduler::DaemonLimits;
+pub use server::{DaemonClient, ServerHandle, serve, serve_with_limits, spawn, spawn_with_limits};
