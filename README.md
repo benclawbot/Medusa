@@ -25,14 +25,14 @@ Medusa is a production-grade autonomous coding agent written in Rust. It combine
 
 ## Current status and evidence
 
-The original phase labels are historical planning shorthand, not the current source of truth. As of July 19, 2026, repository evidence through PR #52 includes the Rust agent core, interactive TUI, frontend-neutral runtime, Zeus-derived React/Tauri desktop entry point, durable sessions and memory, guarded repository tools, browser verification, parallel workers, Markdown rendering, mid-turn follow-ups, optional Desktop Commander MCP integration, panic-free production targets, workflow-write guardrails, cross-platform daemon transport and recovery, TUI connection visibility, bounded daemon workers and queues, explicit overload backpressure, graceful draining, cross-platform load evidence, and evidence-based dependency pruning with permanent base/current graph metrics.
+The original phase labels are historical planning shorthand, not the current source of truth. As of July 19, 2026, repository evidence through PR #54 includes the Rust agent core, interactive TUI, frontend-neutral runtime, Zeus-derived React/Tauri desktop entry point, durable sessions and memory, guarded repository tools, browser verification, parallel workers, Markdown rendering, mid-turn follow-ups, optional Desktop Commander MCP integration, panic-free production targets, workflow-write guardrails, cross-platform daemon transport and recovery, shared terminal/desktop lifecycle supervision, startup-race serialization, bounded restart backoff, visible degraded/recovery states, bounded daemon workers and queues, explicit overload backpressure, graceful draining, cross-platform load evidence, and evidence-based dependency pruning with permanent base/current graph metrics.
 
 | Area | Current evidence |
 |---|---|
 | Interactive product surface | `medusa` launches the TUI; transcript preservation, Markdown rendering, clipboard input, cancellation, usage metrics, skills, queued follow-ups, and daemon connection transitions are implemented in `medusa-tui`. |
 | Agent and repository runtime | `medusa-runtime` owns frontend-neutral interactive session control, while planning, tools, policy, verification, intelligence, and persistence remain implemented across `medusa-agent`, `medusa-intelligence`, `medusa-memory`, and related crates. |
-| Background daemon | `medusa-daemon` provides one protocol and durable lifecycle across Linux, macOS, and Windows. It uses four fixed job workers and a 32-job queue by default, returns `daemon_busy` under overload, bounds local I/O and request size, and drains accepted work during graceful shutdown. Reconnect, ownership, recovery, a 64-client burst, exact queue backpressure, and shutdown persistence are tested on all three platforms. |
-| Shared frontend runtime and desktop | `medusa-tui` and `apps/medusa-desktop` adapt the same `medusa-runtime` commands, events, plans, questions, cancellation, follow-ups, skills, provider settings, and policy. |
+| Background daemon | `medusa-daemon` provides one protocol and durable lifecycle across Linux, macOS, and Windows. The terminal and desktop use one repository-scoped supervisor with a startup lock, hidden host mode, readiness checks, and bounded restart backoff. The daemon uses four fixed job workers and a 32-job queue by default, returns `daemon_busy` under overload, bounds local I/O and request size, and drains accepted work during graceful shutdown. Reconnect, ownership, recovery, concurrent frontend startup, a 64-client burst, exact queue backpressure, and shutdown persistence are tested on all three platforms. |
+| Shared frontend runtime and desktop | `medusa-tui` and `apps/medusa-desktop` adapt the same `medusa-runtime` commands, events, plans, questions, cancellation, follow-ups, skills, provider settings, and policy. Both frontends use the same `medusa-daemon` lifecycle supervisor and surface started, connected, recovered, or degraded states. |
 | Extensions and MCP | Skills, hooks, MCP isolation, and the pinned Desktop Commander adapter are implemented in `medusa-extensions`. |
 | Dependency hygiene | Locked Cargo metadata is compared against the PR base in the read-only dependency-policy job. PR #52 removed five proven-unused direct edges while keeping locked/resolved packages at 297, duplicate counts unchanged, and enabled feature selections unchanged; no unsupported build-speed claim is made. |
 | Release evidence | `CI`, `Daemon`, `Desktop`, `Refactor Guardrails`, and `Release Gates` enforce formatting, Clippy, panic-free production targets, workspace tests, documentation, source-size limits, workflow hygiene, dependency base/current metrics, cargo-deny, cargo-audit, three-platform daemon/TUI and desktop checks, bounded-load evidence, coverage, adversarial tests, package smoke tests, and live-provider scenarios. |
@@ -232,11 +232,11 @@ The TUI header reports session duration, cumulative input/output tokens, cache-r
 - Graceful shutdown stops new request acceptance, drains queued and running accepted jobs, joins workers, and then releases endpoint ownership.
 - Queued or running jobs found after an ungraceful restart are marked `interrupted` with recovery evidence.
 - Stale ownership is reclaimed only when the recorded process is no longer alive.
-- The TUI reports daemon connection-state transitions on Linux, macOS, and Windows without flooding the transcript.
+- The TUI and desktop report started, connected, recovered, and degraded lifecycle transitions without flooding their event streams.
 
-The permanent `Daemon` workflow validates the daemon/TUI contract on Ubuntu, macOS, and Windows. Its acceptance evidence includes 64 simultaneous reconnecting clients, exact one-worker/one-queue backpressure, and persisted graceful draining. See [the daemon operations guide](crates/medusa-daemon/README.md) and [the concurrency decision](docs/DAEMON-CONCURRENCY.md).
+The permanent `Daemon` workflow validates the daemon/TUI contract on Ubuntu, macOS, and Windows. The `Desktop` workflow validates the same lifecycle integration in the Tauri adapter on all three platforms. Acceptance evidence includes eight concurrent frontend supervisors launching exactly one daemon, restart after disconnection, 64 simultaneous reconnecting clients, exact one-worker/one-queue backpressure, and persisted graceful draining. See [the daemon operations guide](crates/medusa-daemon/README.md) and [the concurrency decision](docs/DAEMON-CONCURRENCY.md).
 
-**Current limitation:** one shared external lifecycle owner for TUI and desktop has not yet been selected. Automatic executable discovery, startup race handling, restart policy, process-tree cancellation, coordinated shutdown, and visible degraded/recovery states remain issue #42 work. Graceful shutdown currently waits for running children to finish, so a hung child process tree can delay completion. The TUI observes an available daemon; it does not silently create an in-process substitute that would die with the frontend.
+**Current limitation:** graceful shutdown waits for running child processes to finish. Forcefully terminating complete descendant trees requires Unix process-group signaling and Windows Job Objects; killing only the immediate child could leave orphaned work and is intentionally not implemented.
 
 ## Browser tools
 
@@ -323,8 +323,8 @@ See [Security hardening](docs/SECURITY-HARDENING.md) for release-enforced contro
 |---|---|
 | `medusa-cli` | User-facing command entry point |
 | `medusa-runtime` | Frontend-neutral interactive session controller, commands, events, cancellation, follow-ups, and provider orchestration |
-| `medusa-tui` | Terminal presentation, composer, clipboard, drafts, rendering, and daemon connection-state observation |
-| `medusa-daemon` | Cross-platform local IPC, bounded background-job scheduling, overload backpressure, ownership, reconnect, persistence, restart recovery, and graceful draining |
+| `medusa-tui` | Terminal presentation, composer, clipboard, drafts, rendering, and shared daemon lifecycle visibility |
+| `medusa-daemon` | Cross-platform local IPC, shared frontend lifecycle supervision, startup-race serialization, bounded restart backoff, background-job scheduling, overload backpressure, ownership, reconnect, persistence, recovery, and graceful draining |
 | `medusa-agent` | Session lifecycle, orchestration, tools, policy, and verification |
 | `medusa-provider` | Provider-neutral model interface and MiniMax integration |
 | `medusa-intelligence` | Parsing, indexing, patching, and conflict-aware transactions |
@@ -347,7 +347,7 @@ npm run tauri:dev
 
 The desktop app opens a repository explicitly and uses the same session controller, provider configuration, skills, cancellation, follow-up queue, plans, questions, tools, memory, and policy as the terminal entry point. Attachments are confined to the selected repository; pasted images are decoded and validated by the Rust adapter before entering the runtime.
 
-Desktop daemon lifecycle ownership is not yet wired. That work will use the same `medusa-daemon` contract rather than introduce another backend.
+The desktop adapter owns the same repository-scoped `medusa-daemon` supervisor as the terminal. It launches the desktop executable in hidden host mode when needed, coordinates concurrent startup through `.medusa/daemon/startup.lock`, retries disconnected owners with bounded backoff, and emits lifecycle changes through the existing runtime notice stream.
 
 ## Development and verification
 
