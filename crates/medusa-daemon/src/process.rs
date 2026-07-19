@@ -167,13 +167,13 @@ impl ProcessControl {
             thread::sleep(PROCESS_POLL_INTERVAL);
         };
 
-        let stdout = fs::read(&stdout_path).unwrap_or_default();
-        let stderr = fs::read(&stderr_path).unwrap_or_default();
+        let stdout = fs::read(&stdout_path);
+        let stderr = fs::read(&stderr_path);
         cleanup_output_files(&stdout_path, &stderr_path);
         Ok(ProcessResult {
             status,
-            stdout,
-            stderr,
+            stdout: stdout?,
+            stderr: stderr?,
             cancelled: self.cancelled.load(Ordering::SeqCst),
         })
     }
@@ -312,13 +312,13 @@ fn terminate_process_tree(pid: u32) -> MedusaResult<()> {
     if !process_alive(pid) {
         return Ok(());
     }
-    let pid = pid.to_string();
+    let pid_text = pid.to_string();
     let output = Command::new("taskkill")
-        .args(["/PID", pid.as_str(), "/T", "/F"])
+        .args(["/PID", pid_text.as_str(), "/T", "/F"])
         .stdout(Stdio::null())
         .stderr(Stdio::piped())
         .output()?;
-    if output.status.success() || !process_alive(pid.parse().unwrap_or_default()) {
+    if output.status.success() || !process_alive(pid) {
         return Ok(());
     }
     Err(MedusaError::new(
