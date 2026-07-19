@@ -7,9 +7,7 @@ mod scheduler;
 mod server;
 mod transport;
 
-pub use lifecycle::{
-    DaemonLaunch, DaemonLifecycle, DaemonLifecycleState, DaemonSupervisor,
-};
+pub use lifecycle::{DaemonLaunch, DaemonLifecycle, DaemonLifecycleState, DaemonSupervisor};
 pub use paths::DaemonPaths;
 pub use protocol::{
     DAEMON_PROTOCOL_VERSION, JobRecord, JobState, Request, RequestEnvelope, Response,
