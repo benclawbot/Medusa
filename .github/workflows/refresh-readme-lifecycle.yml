@@ -1,0 +1,59 @@
+name: Refresh lifecycle README
+
+on:
+  push:
+    branches: [docs/shared-daemon-lifecycle-status]
+
+permissions:
+  contents: write
+
+jobs:
+  refresh:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: docs/shared-daemon-lifecycle-status
+      - name: Align public lifecycle evidence
+        shell: python
+        run: |
+          from pathlib import Path
+
+          path = Path('README.md')
+          text = path.read_text()
+          replacements = {
+              'repository evidence through PR #52 includes the Rust agent core, interactive TUI, frontend-neutral runtime, Zeus-derived React/Tauri desktop entry point, durable sessions and memory, guarded repository tools, browser verification, parallel workers, Markdown rendering, mid-turn follow-ups, optional Desktop Commander MCP integration, panic-free production targets, workflow-write guardrails, cross-platform daemon transport and recovery, TUI connection visibility, bounded daemon workers and queues, explicit overload backpressure, graceful draining, cross-platform load evidence, and evidence-based dependency pruning with permanent base/current graph metrics.':
+              'repository evidence through PR #54 includes the Rust agent core, interactive TUI, frontend-neutral runtime, Zeus-derived React/Tauri desktop entry point, durable sessions and memory, guarded repository tools, browser verification, parallel workers, Markdown rendering, mid-turn follow-ups, optional Desktop Commander MCP integration, panic-free production targets, workflow-write guardrails, cross-platform daemon transport and recovery, shared terminal/desktop lifecycle supervision, startup-race serialization, bounded restart backoff, visible degraded/recovery states, bounded daemon workers and queues, explicit overload backpressure, graceful draining, cross-platform load evidence, and evidence-based dependency pruning with permanent base/current graph metrics.',
+              '| Background daemon | `medusa-daemon` provides one protocol and durable lifecycle across Linux, macOS, and Windows. It uses four fixed job workers and a 32-job queue by default, returns `daemon_busy` under overload, bounds local I/O and request size, and drains accepted work during graceful shutdown. Reconnect, ownership, recovery, a 64-client burst, exact queue backpressure, and shutdown persistence are tested on all three platforms. |':
+              '| Background daemon | `medusa-daemon` provides one protocol and durable lifecycle across Linux, macOS, and Windows. The terminal and desktop use one repository-scoped supervisor with a startup lock, hidden host mode, readiness checks, and bounded restart backoff. The daemon uses four fixed job workers and a 32-job queue by default, returns `daemon_busy` under overload, bounds local I/O and request size, and drains accepted work during graceful shutdown. Reconnect, ownership, recovery, concurrent frontend startup, a 64-client burst, exact queue backpressure, and shutdown persistence are tested on all three platforms. |',
+              '| Shared frontend runtime and desktop | `medusa-tui` and `apps/medusa-desktop` adapt the same `medusa-runtime` commands, events, plans, questions, cancellation, follow-ups, skills, provider settings, and policy. |':
+              '| Shared frontend runtime and desktop | `medusa-tui` and `apps/medusa-desktop` adapt the same `medusa-runtime` commands, events, plans, questions, cancellation, follow-ups, skills, provider settings, and policy. Both frontends use the same `medusa-daemon` lifecycle supervisor and surface started, connected, recovered, or degraded states. |',
+              '- The TUI reports daemon connection-state transitions on Linux, macOS, and Windows without flooding the transcript.':
+              '- The TUI and desktop report started, connected, recovered, and degraded lifecycle transitions without flooding their event streams.',
+              'The permanent `Daemon` workflow validates the daemon/TUI contract on Ubuntu, macOS, and Windows. Its acceptance evidence includes 64 simultaneous reconnecting clients, exact one-worker/one-queue backpressure, and persisted graceful draining. See [the daemon operations guide](crates/medusa-daemon/README.md) and [the concurrency decision](docs/DAEMON-CONCURRENCY.md).':
+              'The permanent `Daemon` workflow validates the daemon/TUI contract on Ubuntu, macOS, and Windows. The `Desktop` workflow validates the same lifecycle integration in the Tauri adapter on all three platforms. Acceptance evidence includes eight concurrent frontend supervisors launching exactly one daemon, restart after disconnection, 64 simultaneous reconnecting clients, exact one-worker/one-queue backpressure, and persisted graceful draining. See [the daemon operations guide](crates/medusa-daemon/README.md) and [the concurrency decision](docs/DAEMON-CONCURRENCY.md).',
+              '**Current limitation:** one shared external lifecycle owner for TUI and desktop has not yet been selected. Automatic executable discovery, startup race handling, restart policy, process-tree cancellation, coordinated shutdown, and visible degraded/recovery states remain issue #42 work. Graceful shutdown currently waits for running children to finish, so a hung child process tree can delay completion. The TUI observes an available daemon; it does not silently create an in-process substitute that would die with the frontend.':
+              '**Current limitation:** graceful shutdown waits for running child processes to finish. Forcefully terminating complete descendant trees requires Unix process-group signaling and Windows Job Objects; killing only the immediate child could leave orphaned work and is intentionally not implemented.',
+              '| `medusa-tui` | Terminal presentation, composer, clipboard, drafts, rendering, and daemon connection-state observation |':
+              '| `medusa-tui` | Terminal presentation, composer, clipboard, drafts, rendering, and shared daemon lifecycle visibility |',
+              '| `medusa-daemon` | Cross-platform local IPC, bounded background-job scheduling, overload backpressure, ownership, reconnect, persistence, restart recovery, and graceful draining |':
+              '| `medusa-daemon` | Cross-platform local IPC, shared frontend lifecycle supervision, startup-race serialization, bounded restart backoff, background-job scheduling, overload backpressure, ownership, reconnect, persistence, recovery, and graceful draining |',
+              'Desktop daemon lifecycle ownership is not yet wired. That work will use the same `medusa-daemon` contract rather than introduce another backend.':
+              'The desktop adapter owns the same repository-scoped `medusa-daemon` supervisor as the terminal. It launches the desktop executable in hidden host mode when needed, coordinates concurrent startup through `.medusa/daemon/startup.lock`, retries disconnected owners with bounded backoff, and emits lifecycle changes through the existing runtime notice stream.'
+          }
+          for old, new in replacements.items():
+              if old not in text:
+                  raise SystemExit(f'missing README text: {old[:100]}')
+              text = text.replace(old, new, 1)
+          path.write_text(text)
+      - name: Commit README
+        shell: bash
+        run: |
+          set -euo pipefail
+          git diff --check
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add README.md
+          git commit -m 'docs: reflect shared daemon lifecycle ownership'
+          git push origin HEAD:docs/shared-daemon-lifecycle-status
