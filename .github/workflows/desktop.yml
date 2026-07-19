@@ -54,6 +54,29 @@ jobs:
       - uses: dtolnay/rust-toolchain@1.88.0
         with:
           components: rustfmt,clippy
-      - run: cargo fmt --manifest-path apps/medusa-desktop/src-tauri/Cargo.toml -- --check
-      - run: cargo clippy --manifest-path apps/medusa-desktop/src-tauri/Cargo.toml --all-targets --locked -- -D warnings
-      - run: cargo test --manifest-path apps/medusa-desktop/src-tauri/Cargo.toml --locked
+      - name: Check desktop formatting
+        run: cargo fmt --manifest-path apps/medusa-desktop/src-tauri/Cargo.toml -- --check
+      - name: Lint desktop adapter
+        shell: bash
+        run: |
+          set -o pipefail
+          cargo clippy --manifest-path apps/medusa-desktop/src-tauri/Cargo.toml --all-targets --locked -- -D warnings 2>&1 | tee desktop-clippy.log
+      - name: Upload desktop Clippy diagnostics
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: desktop-clippy-${{ runner.os }}
+          path: desktop-clippy.log
+          if-no-files-found: warn
+      - name: Test desktop adapter
+        shell: bash
+        run: |
+          set -o pipefail
+          cargo test --manifest-path apps/medusa-desktop/src-tauri/Cargo.toml --locked 2>&1 | tee desktop-tests.log
+      - name: Upload desktop test diagnostics
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: desktop-tests-${{ runner.os }}
+          path: desktop-tests.log
+          if-no-files-found: warn
