@@ -6,6 +6,8 @@ on:
       - "apps/medusa-desktop/**"
       - "crates/medusa-daemon/**"
       - "crates/medusa-runtime/**"
+      - "scripts/check-desktop-version-sync.py"
+      - "scripts/desktop-package-smoke.py"
       - ".github/workflows/desktop.yml"
   push:
     branches: [main]
@@ -13,7 +15,10 @@ on:
       - "apps/medusa-desktop/**"
       - "crates/medusa-daemon/**"
       - "crates/medusa-runtime/**"
+      - "scripts/check-desktop-version-sync.py"
+      - "scripts/desktop-package-smoke.py"
       - ".github/workflows/desktop.yml"
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -35,6 +40,15 @@ jobs:
           node-version: "22"
           cache: npm
           cache-dependency-path: apps/medusa-desktop/package-lock.json
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Validate synchronized desktop versions
+        working-directory: .
+        run: python scripts/check-desktop-version-sync.py --root . --self-test
+      - name: Exercise desktop package validation failures
+        working-directory: .
+        run: python scripts/desktop-package-smoke.py --self-test
       - run: npm ci
       - run: npm run typecheck
       - run: npm test
@@ -80,3 +94,58 @@ jobs:
           name: desktop-tests-${{ runner.os }}
           path: desktop-tests.log
           if-no-files-found: warn
+
+  bundle-smoke:
+    if: ${{ github.event_name != 'pull_request' || github.event.pull_request.draft == false }}
+    timeout-minutes: 75
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            platform: linux
+            bundles: deb,appimage
+          - os: macos-latest
+            platform: macos
+            bundles: app,dmg
+          - os: windows-2022
+            platform: windows
+            bundles: nsis
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Linux Tauri dependencies
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: apps/medusa-desktop/package-lock.json
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - uses: dtolnay/rust-toolchain@1.88.0
+      - name: Install desktop dependencies
+        working-directory: apps/medusa-desktop
+        run: npm ci
+      - name: Build unsigned desktop bundles
+        working-directory: apps/medusa-desktop
+        env:
+          APPIMAGE_EXTRACT_AND_RUN: "1"
+        run: npm run tauri:build -- --bundles ${{ matrix.bundles }}
+      - name: Validate bundles and emit SHA-256 evidence
+        run: >-
+          python scripts/desktop-package-smoke.py
+          --root apps/medusa-desktop/src-tauri/target/release/bundle
+          --platform ${{ matrix.platform }}
+          --manifest desktop-package-${{ matrix.platform }}.json
+      - name: Upload unsigned desktop packages
+        uses: actions/upload-artifact@v4
+        with:
+          name: medusa-desktop-${{ matrix.platform }}-${{ github.sha }}
+          path: |
+            apps/medusa-desktop/src-tauri/target/release/bundle
+            desktop-package-${{ matrix.platform }}.json
+          if-no-files-found: error
+          retention-days: 14
