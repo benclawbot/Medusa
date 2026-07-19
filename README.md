@@ -21,11 +21,11 @@ Medusa is a production-grade autonomous coding agent written in Rust. It combine
 - **Persistent memory** — Markdown-first storage with validation, indexing, retrieval, lifecycle management, and provenance controls.
 - **Parallel workers** — isolated worktrees, deterministic merge behavior, conflict detection, and cleanup safeguards.
 - **Extensions and MCP** — skills, hooks, MCP isolation, the optional Desktop Commander adapter, redaction, and checksummed provenance.
-- **Production hardening** — panic-free production targets, least-privilege workflow guards, migrations, rollback bundles, archive safety, fuzzing, chaos recovery, dependency policy, package smoke tests, and live-provider validation.
+- **Production hardening** — panic-free production targets, least-privilege workflow guards, bounded-load evidence, dependency graph metrics, migrations, rollback bundles, archive safety, fuzzing, chaos recovery, package smoke tests, and live-provider validation.
 
 ## Current status and evidence
 
-The original phase labels are historical planning shorthand, not the current source of truth. As of July 19, 2026, repository evidence through PR #50 includes the Rust agent core, interactive TUI, frontend-neutral runtime, Zeus-derived React/Tauri desktop entry point, durable sessions and memory, guarded repository tools, browser verification, parallel workers, Markdown rendering, mid-turn follow-ups, optional Desktop Commander MCP integration, panic-free production targets, workflow-write guardrails, cross-platform daemon transport and recovery, TUI connection visibility, bounded daemon workers and queues, explicit overload backpressure, graceful draining, and cross-platform load evidence.
+The original phase labels are historical planning shorthand, not the current source of truth. As of July 19, 2026, repository evidence through PR #52 includes the Rust agent core, interactive TUI, frontend-neutral runtime, Zeus-derived React/Tauri desktop entry point, durable sessions and memory, guarded repository tools, browser verification, parallel workers, Markdown rendering, mid-turn follow-ups, optional Desktop Commander MCP integration, panic-free production targets, workflow-write guardrails, cross-platform daemon transport and recovery, TUI connection visibility, bounded daemon workers and queues, explicit overload backpressure, graceful draining, cross-platform load evidence, and evidence-based dependency pruning with permanent base/current graph metrics.
 
 | Area | Current evidence |
 |---|---|
@@ -34,7 +34,8 @@ The original phase labels are historical planning shorthand, not the current sou
 | Background daemon | `medusa-daemon` provides one protocol and durable lifecycle across Linux, macOS, and Windows. It uses four fixed job workers and a 32-job queue by default, returns `daemon_busy` under overload, bounds local I/O and request size, and drains accepted work during graceful shutdown. Reconnect, ownership, recovery, a 64-client burst, exact queue backpressure, and shutdown persistence are tested on all three platforms. |
 | Shared frontend runtime and desktop | `medusa-tui` and `apps/medusa-desktop` adapt the same `medusa-runtime` commands, events, plans, questions, cancellation, follow-ups, skills, provider settings, and policy. |
 | Extensions and MCP | Skills, hooks, MCP isolation, and the pinned Desktop Commander adapter are implemented in `medusa-extensions`. |
-| Release evidence | `CI`, `Daemon`, `Desktop`, `Refactor Guardrails`, and `Release Gates` enforce formatting, Clippy, panic-free production targets, workspace tests, documentation, dependency policy, source-size limits, workflow hygiene, three-platform daemon/TUI and desktop checks, bounded-load evidence, coverage, adversarial tests, package smoke tests, and live-provider scenarios. |
+| Dependency hygiene | Locked Cargo metadata is compared against the PR base in the read-only dependency-policy job. PR #52 removed five proven-unused direct edges while keeping locked/resolved packages at 297, duplicate counts unchanged, and enabled feature selections unchanged; no unsupported build-speed claim is made. |
+| Release evidence | `CI`, `Daemon`, `Desktop`, `Refactor Guardrails`, and `Release Gates` enforce formatting, Clippy, panic-free production targets, workspace tests, documentation, source-size limits, workflow hygiene, dependency base/current metrics, cargo-deny, cargo-audit, three-platform daemon/TUI and desktop checks, bounded-load evidence, coverage, adversarial tests, package smoke tests, and live-provider scenarios. |
 
 See [Capability evidence](docs/CAPABILITY-EVIDENCE.md) for the auditable mapping from shipped capabilities to code and gates. Historical completion summaries should not override the current repository, merged pull requests, or required checks.
 
@@ -359,6 +360,7 @@ cargo clippy --workspace --all-features --locked --lib --bins --examples -- -D c
 cargo test --workspace --all-features --locked
 cargo clippy -p medusa-daemon -p medusa-tui --all-targets --locked -- -D warnings
 cargo test -p medusa-daemon -p medusa-tui --locked -- --nocapture
+python3 scripts/dependency-metrics.py measure --root . --output dependency-current.json
 RUSTDOCFLAGS='-D warnings' cargo doc --workspace --all-features --locked --no-deps
 cargo deny check advisories sources
 cargo audit
@@ -377,6 +379,7 @@ Release Gates additionally run complete workspace coverage with a 75% line thres
 - [Capability evidence](docs/CAPABILITY-EVIDENCE.md)
 - [Daemon operations](crates/medusa-daemon/README.md)
 - [Daemon concurrency and backpressure](docs/DAEMON-CONCURRENCY.md)
+- [Dependency hygiene evidence](docs/DEPENDENCY-HYGIENE.md)
 
 ## License
 
