@@ -273,11 +273,7 @@ fn terminate_process_tree(process: &mut Child) -> MedusaResult<()> {
 }
 
 #[cfg(unix)]
-fn wait_for_unix_tree_exit(
-    process: &mut Child,
-    pid: u32,
-    timeout: Duration,
-) -> MedusaResult<bool> {
+fn wait_for_unix_tree_exit(process: &mut Child, pid: u32, timeout: Duration) -> MedusaResult<bool> {
     let deadline = Instant::now() + timeout;
     loop {
         let leader_exited = process.try_wait()?.is_some();
