@@ -1,44 +1,76 @@
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
-use medusa_daemon::{DaemonClient, JobRecord, Request, Response};
+use medusa_daemon::{
+    DaemonClient, DaemonLaunch, DaemonLifecycleState, DaemonSupervisor, JobRecord, Request,
+    Response,
+};
 
 use crate::app::{AppState, TranscriptEntry};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum DaemonConnectionKind {
     Connected,
+    Started,
+    Recovered,
     Unexpected,
-    Disconnected,
+    Degraded,
 }
 
 pub(crate) type DaemonSnapshot = (Vec<JobRecord>, String);
 
 pub(crate) struct DaemonMonitor {
+    supervisor: Option<DaemonSupervisor>,
     client: DaemonClient,
     last_kind: Option<DaemonConnectionKind>,
 }
 
 impl DaemonMonitor {
     pub fn new(endpoint: PathBuf) -> Self {
+        if let Some(repo) = repository_for_default_endpoint(&endpoint) {
+            let supervisor = DaemonLaunch::for_current_executable()
+                .ok()
+                .map(|launch| DaemonSupervisor::new(&repo, launch))
+                .unwrap_or_else(|| DaemonSupervisor::observe_only(&repo));
+            let client = supervisor.client();
+            return Self {
+                supervisor: Some(supervisor),
+                client,
+                last_kind: None,
+            };
+        }
         Self {
+            supervisor: None,
             client: DaemonClient::new(endpoint),
             last_kind: None,
         }
     }
 
     pub fn poll(&mut self, app: &mut AppState) -> DaemonSnapshot {
+        let lifecycle = self.supervisor.as_mut().map(DaemonSupervisor::poll);
         let (kind, snapshot, transition) = match self.client.request(Request::List) {
             Ok(Response::Jobs { jobs }) => {
+                let state = lifecycle
+                    .as_ref()
+                    .map(|value| value.state)
+                    .unwrap_or(DaemonLifecycleState::Connected);
+                let kind = match state {
+                    DaemonLifecycleState::Started => DaemonConnectionKind::Started,
+                    DaemonLifecycleState::Recovered => DaemonConnectionKind::Recovered,
+                    DaemonLifecycleState::Connected | DaemonLifecycleState::Degraded => {
+                        DaemonConnectionKind::Connected
+                    }
+                };
+                let label = match kind {
+                    DaemonConnectionKind::Started => "daemon started",
+                    DaemonConnectionKind::Recovered => "daemon recovered",
+                    _ => "daemon connected",
+                };
                 let transition = format!(
-                    "daemon connected · {} background job{}",
+                    "{label} · {} background job{}",
                     jobs.len(),
                     if jobs.len() == 1 { "" } else { "s" }
                 );
-                (
-                    DaemonConnectionKind::Connected,
-                    (jobs, "connected".to_owned()),
-                    transition,
-                )
+                (kind, (jobs, state.as_str().to_owned()), transition)
             }
             Ok(other) => {
                 let details = format!("unexpected response: {other:?}");
@@ -49,21 +81,55 @@ impl DaemonMonitor {
                 )
             }
             Err(error) => {
-                let details = format!("disconnected: {error}");
+                let lifecycle_detail = lifecycle
+                    .as_ref()
+                    .filter(|value| value.state == DaemonLifecycleState::Degraded)
+                    .map(|value| value.detail.as_str());
+                let details = match lifecycle_detail {
+                    Some(detail) => format!("degraded: {detail}; connection error: {error}"),
+                    None => format!("degraded: {error}"),
+                };
                 (
-                    DaemonConnectionKind::Disconnected,
+                    DaemonConnectionKind::Degraded,
                     (Vec::new(), details.clone()),
                     format!("daemon {details}"),
                 )
             }
         };
 
-        if self.last_kind != Some(kind) {
+        if self.should_record(kind) {
             app.transcript.push(TranscriptEntry::System(transition));
-            self.last_kind = Some(kind);
         }
         snapshot
     }
+
+    fn should_record(&mut self, kind: DaemonConnectionKind) -> bool {
+        let suppress_connected_after_start = matches!(
+            (self.last_kind, kind),
+            (
+                Some(DaemonConnectionKind::Started | DaemonConnectionKind::Recovered),
+                DaemonConnectionKind::Connected
+            )
+        );
+        let changed = self.last_kind != Some(kind);
+        self.last_kind = Some(kind);
+        changed && !suppress_connected_after_start
+    }
+}
+
+fn repository_for_default_endpoint(endpoint: &Path) -> Option<PathBuf> {
+    if endpoint.file_name()?.to_str()? != "medusa.sock" {
+        return None;
+    }
+    let daemon = endpoint.parent()?;
+    if daemon.file_name()?.to_str()? != "daemon" {
+        return None;
+    }
+    let medusa = daemon.parent()?;
+    if medusa.file_name()?.to_str()? != ".medusa" {
+        return None;
+    }
+    Some(medusa.parent()?.to_path_buf())
 }
 
 #[cfg(test)]
@@ -104,12 +170,12 @@ mod tests {
         let first = monitor.poll(&mut app);
         let second = monitor.poll(&mut app);
 
-        assert!(first.1.starts_with("disconnected:"));
-        assert!(second.1.starts_with("disconnected:"));
+        assert!(first.1.starts_with("degraded:"));
+        assert!(second.1.starts_with("degraded:"));
         assert_eq!(app.transcript.len(), 1);
         assert!(matches!(
             app.transcript.first(),
-            Some(TranscriptEntry::System(message)) if message.starts_with("daemon disconnected:")
+            Some(TranscriptEntry::System(message)) if message.starts_with("daemon degraded:")
         ));
     }
 
@@ -132,5 +198,11 @@ mod tests {
         ));
         handle.shutdown();
         server.join().expect("join daemon").expect("daemon result");
+    }
+
+    #[test]
+    fn custom_socket_does_not_infer_repository_ownership() {
+        let endpoint = PathBuf::from("/tmp/custom.sock");
+        assert!(repository_for_default_endpoint(&endpoint).is_none());
     }
 }
