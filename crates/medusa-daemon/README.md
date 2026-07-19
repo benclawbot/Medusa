@@ -7,7 +7,7 @@
 The public `DaemonClient` and wire protocol are the same on every supported platform.
 
 - **Linux and macOS:** `.medusa/daemon/medusa.sock` is a Unix-domain socket.
-- **Windows:** the same path is an endpoint descriptor containing an ephemeral loopback TCP address. The server binds only to loopback, and clients reject non-loopback descriptors.
+- **Windows:** the same path is an endpoint descriptor containing an ephemeral loopback TCP address and a fresh 256-bit launch capability. The server binds only to loopback, clients reject non-loopback descriptors, and every connection must present the capability before a request is read.
 - The TUI and desktop use the same repository-scoped `DaemonSupervisor`, startup lock, hidden host mode, readiness check, and bounded restart backoff.
 - Every request uses a new connection, so clients may disconnect while daemon-owned jobs continue.
 - Local reads and writes have a five-second timeout, and requests are capped at 64 KiB.

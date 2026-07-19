@@ -23,6 +23,6 @@ fn main() -> Result<(), Box<dyn Error>> {
         return Ok(());
     }
 
-    medusa_desktop_lib::run();
+    medusa_desktop_lib::run()?;
     Ok(())
 }

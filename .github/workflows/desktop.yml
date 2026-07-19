@@ -82,12 +82,19 @@ jobs:
         run: |
           set -o pipefail
           cargo clippy --manifest-path apps/medusa-desktop/src-tauri/Cargo.toml --all-targets --locked -- -D warnings 2>&1 | tee desktop-clippy.log
+      - name: Audit desktop production panic paths
+        shell: bash
+        run: |
+          set -o pipefail
+          cargo clippy --manifest-path apps/medusa-desktop/src-tauri/Cargo.toml --lib --bins --locked -- -D warnings -D clippy::unwrap_used -D clippy::expect_used -D clippy::panic 2>&1 | tee desktop-panic-audit.log
       - name: Upload desktop Clippy diagnostics
         if: failure()
         uses: actions/upload-artifact@v4
         with:
           name: desktop-clippy-${{ runner.os }}
-          path: desktop-clippy.log
+          path: |
+            desktop-clippy.log
+            desktop-panic-audit.log
           if-no-files-found: warn
       - name: Test desktop adapter
         shell: bash

@@ -42,7 +42,7 @@ The release workflow also enforces:
 - Never commit provider credentials, generated `.medusa` state, build outputs, or local test artifacts.
 - Update user-facing documentation when commands, configuration, behavior, or compatibility changes.
 
-Protocol and configuration changes must follow [`docs/compatibility.md`](docs/compatibility.md).
+Protocol and configuration changes must follow [`docs/PROTOCOL-VERSIONING.md`](docs/PROTOCOL-VERSIONING.md).
 
 ## Pull requests
 

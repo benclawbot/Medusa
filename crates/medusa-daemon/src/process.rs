@@ -367,7 +367,7 @@ fn process_group_signal_alive(pid: u32) -> bool {
 #[cfg(windows)]
 fn terminate_process_tree(process: &mut Child) -> MedusaResult<()> {
     let pid = process.id();
-    if process.try_wait()?.is_some() || !process_alive(pid) {
+    if process.try_wait()?.is_some() {
         return Ok(());
     }
     let pid_text = pid.to_string();
@@ -378,7 +378,7 @@ fn terminate_process_tree(process: &mut Child) -> MedusaResult<()> {
         .output()?;
     let deadline = Instant::now() + TERMINATION_GRACE;
     loop {
-        if process.try_wait()?.is_some() || !process_alive(pid) {
+        if process.try_wait()?.is_some() {
             return Ok(());
         }
         if Instant::now() >= deadline {
@@ -394,16 +394,4 @@ fn terminate_process_tree(process: &mut Child) -> MedusaResult<()> {
             String::from_utf8_lossy(&output.stderr).trim()
         ),
     ))
-}
-
-#[cfg(windows)]
-fn process_alive(pid: u32) -> bool {
-    let filter = format!("PID eq {pid}");
-    Command::new("tasklist")
-        .args(["/FI", filter.as_str(), "/FO", "CSV", "/NH"])
-        .output()
-        .is_ok_and(|output| {
-            output.status.success()
-                && String::from_utf8_lossy(&output.stdout).contains(&format!("\"{pid}\""))
-        })
 }

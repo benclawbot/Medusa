@@ -94,8 +94,8 @@ export interface ModelConfiguration {
   apiKey?: string;
 }
 
-export async function startRuntime(repo: string): Promise<RuntimeStartResponse> {
-  return invoke<RuntimeStartResponse>("runtime_start", { repo });
+export async function startRuntime(repo?: string): Promise<RuntimeStartResponse> {
+  return invoke<RuntimeStartResponse>("runtime_start", repo ? { repo } : {});
 }
 
 export async function closeRuntime(runtimeId: string): Promise<void> {

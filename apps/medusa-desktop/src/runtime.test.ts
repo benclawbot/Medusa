@@ -14,6 +14,12 @@ describe("desktop runtime adapter", () => {
     expect(mockedInvoke).toHaveBeenCalledWith("runtime_start", { repo: "/repo" });
   });
 
+  it("starts the shared runtime without a repository", async () => {
+    mockedInvoke.mockResolvedValueOnce({ runtimeId: "runtime-general", repo: "" });
+    await expect(startRuntime()).resolves.toEqual({ runtimeId: "runtime-general", repo: "" });
+    expect(mockedInvoke).toHaveBeenCalledWith("runtime_start", {});
+  });
+
   it("submits prompts and polls typed events", async () => {
     mockedInvoke.mockResolvedValueOnce("queued");
     await expect(submitRuntime("runtime-1", { text: "more detail", attachments: [], revision: 2 })).resolves.toBe("queued");

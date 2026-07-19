@@ -44,7 +44,11 @@ pub enum DesktopSubmitDisposition {
 }
 
 #[derive(Debug, Serialize)]
-#[serde(tag = "type", rename_all = "camelCase")]
+#[serde(
+    tag = "type",
+    rename_all = "camelCase",
+    rename_all_fields = "camelCase"
+)]
 pub enum DesktopRuntimeEvent {
     Started,
     AssistantText {
@@ -256,5 +260,34 @@ mod tests {
         assert!(
             matches!(activity, DesktopRuntimeEvent::Activity { activity } if activity.id.as_deref() == Some("tool-1"))
         );
+    }
+
+    #[test]
+    fn serializes_runtime_event_fields_for_the_typescript_contract() {
+        let usage = serde_json::to_value(DesktopRuntimeEvent::Usage {
+            input_tokens: 11,
+            output_tokens: 7,
+            cache_read_input_tokens: 3,
+            cache_creation_input_tokens: 2,
+            model_elapsed_millis: 900,
+        })
+        .expect("serialize usage event");
+        assert_eq!(usage["inputTokens"], 11);
+        assert_eq!(usage["outputTokens"], 7);
+        assert_eq!(usage["cacheReadInputTokens"], 3);
+        assert_eq!(usage["cacheCreationInputTokens"], 2);
+        assert_eq!(usage["modelElapsedMillis"], 900);
+        assert!(usage.get("input_tokens").is_none());
+
+        let settings = serde_json::to_value(DesktopRuntimeEvent::Settings {
+            model: "MiniMax-M2.5".to_owned(),
+            effort: "effort:auto".to_owned(),
+            plan_mode: false,
+            credential_configured: true,
+        })
+        .expect("serialize settings event");
+        assert_eq!(settings["planMode"], false);
+        assert_eq!(settings["credentialConfigured"], true);
+        assert!(settings.get("plan_mode").is_none());
     }
 }

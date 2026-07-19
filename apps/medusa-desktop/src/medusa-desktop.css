@@ -6,6 +6,8 @@
 .medusa-shell .new-session span { display: flex; align-items: center; gap: 8px; }
 .sidebar-spacer { flex: 1; }
 .project-card { border-top: 1px solid var(--line); padding-top: 16px; }
+.projectless-action { width: 100%; border: 0; background: transparent; color: var(--muted); padding: 8px 4px 0; text-align: left; font-size: .74rem; }
+.projectless-action:hover { color: var(--purple); }
 .project-picker { display: grid; grid-template-columns: auto minmax(0,1fr) auto; align-items: center; gap: 10px; width: 100%; border: 1px solid var(--line); border-radius: 8px; background: var(--surface); padding: 10px; text-align: left; color: var(--text); }
 .project-picker span { display: grid; min-width: 0; }
 .project-picker strong, .project-picker small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

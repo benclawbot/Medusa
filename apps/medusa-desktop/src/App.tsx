@@ -60,12 +60,41 @@ interface SettingsState {
   credentialConfigured: boolean;
 }
 
+interface ModelPreferences {
+  provider: string;
+  model: string;
+  effort: Effort;
+}
+
 const emptyUsage: UsageState = { input: 0, output: 0, cached: 0, cacheWrite: 0, elapsed: 0 };
+const defaultModelPreferences: ModelPreferences = {
+  provider: "minimax",
+  model: "MiniMax-M2.5",
+  effort: "auto",
+};
 let messageCounter = 0;
 const nextMessageId = () => ++messageCounter;
 
 function basename(path: string): string {
   return path.split(/[\\/]/).filter(Boolean).pop() ?? path;
+}
+
+function loadModelPreferences(): ModelPreferences {
+  const raw = window.localStorage.getItem("medusa.desktop.model");
+  if (!raw) return defaultModelPreferences;
+  try {
+    const value = JSON.parse(raw) as Partial<ModelPreferences>;
+    if (
+      typeof value.provider === "string" && value.provider.trim() &&
+      typeof value.model === "string" && value.model.trim() &&
+      ["auto", "low", "medium", "high"].includes(value.effort ?? "")
+    ) {
+      return value as ModelPreferences;
+    }
+  } catch {
+    window.localStorage.removeItem("medusa.desktop.model");
+  }
+  return defaultModelPreferences;
 }
 
 function readImage(file: File): Promise<DesktopAttachment> {
@@ -91,6 +120,7 @@ function planIcon(status: PlanStep["status"]) {
 }
 
 export function App() {
+  const modelPreferences = useMemo(loadModelPreferences, []);
   const [runtimeId, setRuntimeId] = useState<string>();
   const [repo, setRepo] = useState("");
   const [messages, setMessages] = useState<ConversationMessage[]>([]);
@@ -109,9 +139,9 @@ export function App() {
   const [busy, setBusy] = useState(false);
   const [turn, setTurn] = useState(0);
   const [error, setError] = useState<string>();
-  const [provider, setProvider] = useState("minimax");
-  const [model, setModel] = useState("MiniMax-M2.5");
-  const [effort, setEffort] = useState<Effort>("auto");
+  const [provider, setProvider] = useState(modelPreferences.provider);
+  const [model, setModel] = useState(modelPreferences.model);
+  const [effort, setEffort] = useState<Effort>(modelPreferences.effort);
   const [apiKey, setApiKey] = useState("");
   const [activePanel, setActivePanel] = useState<"chat" | "plan" | "settings">("chat");
   const pollBusy = useRef(false);
@@ -249,9 +279,17 @@ export function App() {
 
   useEffect(() => {
     const previous = window.localStorage.getItem("medusa.desktop.repo");
-    if (!previous) return;
     let disposed = false;
-    void startRuntime(previous)
+    const start = async () => {
+      try {
+        return await startRuntime(previous || undefined);
+      } catch (cause) {
+        if (!previous) throw cause;
+        window.localStorage.removeItem("medusa.desktop.repo");
+        return startRuntime();
+      }
+    };
+    void start()
       .then((started) => {
         if (disposed) {
           void closeRuntime(started.runtimeId);
@@ -259,9 +297,12 @@ export function App() {
         }
         setRuntimeId(started.runtimeId);
         setRepo(started.repo);
+        void configureRuntime(started.runtimeId, modelPreferences).catch((cause) => {
+          if (!disposed) setError(String(cause));
+        });
       })
-      .catch(() => {
-        if (!disposed) window.localStorage.removeItem("medusa.desktop.repo");
+      .catch((cause) => {
+        if (!disposed) setError(String(cause));
       });
     return () => {
       disposed = true;
@@ -277,6 +318,8 @@ export function App() {
     if (typeof selected !== "string") return;
     try {
       const started = await startRuntime(selected);
+      await configureRuntime(started.runtimeId, { provider, model, effort });
+      if (runtimeId) await closeRuntime(runtimeId);
       setRuntimeId(started.runtimeId);
       setRepo(started.repo);
       setMessages([]);
@@ -285,6 +328,24 @@ export function App() {
       setQuestions([]);
       setError(undefined);
       window.localStorage.setItem("medusa.desktop.repo", started.repo);
+    } catch (cause) {
+      setError(String(cause));
+    }
+  };
+
+  const openGeneralChat = async () => {
+    try {
+      const started = await startRuntime();
+      await configureRuntime(started.runtimeId, { provider, model, effort });
+      if (runtimeId) await closeRuntime(runtimeId);
+      setRuntimeId(started.runtimeId);
+      setRepo("");
+      setMessages([]);
+      setActivities([]);
+      setPlan([]);
+      setQuestions([]);
+      setError(undefined);
+      window.localStorage.removeItem("medusa.desktop.repo");
     } catch (cause) {
       setError(String(cause));
     }
@@ -360,6 +421,10 @@ export function App() {
         effort,
         apiKey: apiKey.trim() || undefined,
       });
+      window.localStorage.setItem(
+        "medusa.desktop.model",
+        JSON.stringify({ provider, model, effort }),
+      );
       setApiKey("");
       setError(undefined);
     } catch (cause) {
@@ -385,7 +450,7 @@ export function App() {
     }
   };
 
-  const repoName = useMemo(() => basename(repo) || "No project", [repo]);
+  const repoName = useMemo(() => basename(repo) || "General chat", [repo]);
   const totalTokens = usage.input + usage.output;
 
   return (
@@ -414,12 +479,13 @@ export function App() {
           </button>
         </nav>
         <section className="project-card">
-          <p className="section-label">Project</p>
+          <p className="section-label">Context</p>
           <button className="project-picker" onClick={openProject}>
             <FolderOpen size={16} />
-            <span><strong>{repoName}</strong><small>{repo || "Choose a repository"}</small></span>
+            <span><strong>{repoName}</strong><small>{repo || "No project attached"}</small></span>
             <ChevronRight size={15} />
           </button>
+          {!!repo && <button className="projectless-action" onClick={openGeneralChat}>Switch to general chat</button>}
         </section>
         <div className="sidebar-spacer" />
         <div className="security-note"><ShieldCheck size={15} /> Medusa policy remains authoritative</div>
@@ -433,7 +499,7 @@ export function App() {
           </div>
           <div className="runtime-state">
             <span className={`status-dot ${busy ? "busy" : runtimeId ? "ready" : "offline"}`} />
-            {busy ? `Working · turn ${turn}` : runtimeId ? "Ready" : "Open a project"}
+            {busy ? `Working · turn ${turn}` : runtimeId ? "Ready" : "Starting"}
           </div>
         </header>
 
@@ -443,15 +509,14 @@ export function App() {
               {!runtimeId && (
                 <div className="empty-state">
                   <span className="empty-icon"><Bot size={28} /></span>
-                  <h2>Open a project to start Medusa</h2>
-                  <p>The desktop interface uses the same runtime, tools, memory, safety policy, and sessions as the terminal interface.</p>
-                  <button className="primary-action" onClick={openProject}><FolderOpen size={16} /> Open project</button>
+                  <h2>Starting Medusa</h2>
+                  <p>Preparing a general chat. You can attach a project whenever the task needs repository access.</p>
                 </div>
               )}
               {runtimeId && messages.length === 0 && (
                 <div className="empty-state compact">
-                  <h2>What should Medusa build?</h2>
-                  <p>Describe a coding task, paste a screenshot, attach repository files, or use a slash command.</p>
+                  <h2>{repo ? "What should Medusa build?" : "How can Medusa help?"}</h2>
+                  <p>{repo ? "Describe a coding task, paste a screenshot, attach repository files, or use a slash command." : "Ask a question, paste a screenshot, or open a project when you want Medusa to work on files."}</p>
                 </div>
               )}
               {messages.map((message) => (
@@ -518,7 +583,7 @@ export function App() {
                       void submit();
                     }
                   }}
-                  placeholder={runtimeId ? busy ? "Add guidance for the next turn…" : "Describe a coding task…" : "Open a project first"}
+                  placeholder={runtimeId ? busy ? "Add guidance for the next turn…" : repo ? "Describe a coding task…" : "Ask Medusa anything…" : "Starting Medusa…"}
                   rows={3}
                 />
                 <div className="composer-bottom">
@@ -548,11 +613,11 @@ export function App() {
 
         {activePanel === "settings" && (
           <div className="standalone-panel settings-form">
-            <div className="panel-title"><Settings size={18} /><div><h2>Model settings</h2><p>Session-only configuration</p></div></div>
+            <div className="panel-title"><Settings size={18} /><div><h2>Model settings</h2><p>Saved securely in your operating system credential manager</p></div></div>
             <label>Provider<select value={provider} onChange={(event) => setProvider(event.target.value)}><option value="minimax">MiniMax</option><option value="anthropic">Anthropic</option><option value="anthropic-compatible">Anthropic-compatible</option></select></label>
             <label>Model<input value={model} onChange={(event) => setModel(event.target.value)} /></label>
             <label>Effort<select value={effort} onChange={(event) => setEffort(event.target.value as Effort)}><option value="auto">Auto</option><option value="low">Low</option><option value="medium">Medium</option><option value="high">High</option></select></label>
-            <label>Session API key<input type="password" value={apiKey} onChange={(event) => setApiKey(event.target.value)} placeholder="Stored only for this runtime session" /></label>
+            <label>API key<input type="password" value={apiKey} onChange={(event) => setApiKey(event.target.value)} placeholder="Leave blank to use the saved key" /></label>
             <button className="primary-action" onClick={applyModel} disabled={!runtimeId}>Apply configuration</button>
           </div>
         )}

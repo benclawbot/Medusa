@@ -1,3 +1,4 @@
+mod credentials;
 mod dto;
 mod runtime;
 #[cfg(test)]
@@ -13,7 +14,7 @@ use runtime::{
 };
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
-pub fn run() {
+pub fn run() -> tauri::Result<()> {
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .manage(RuntimeRegistry::default())
@@ -27,5 +28,4 @@ pub fn run() {
             runtime_configure_model,
         ])
         .run(tauri::generate_context!())
-        .expect("failed to run Medusa Desktop");
 }

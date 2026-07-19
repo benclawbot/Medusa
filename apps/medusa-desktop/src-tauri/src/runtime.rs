@@ -20,11 +20,14 @@ use medusa_runtime::{
         TextAttachment,
     },
 };
-use tauri::State;
+use tauri::{AppHandle, Manager, State};
 
-use crate::dto::{
-    DesktopAttachment, DesktopModelConfiguration, DesktopPromptDraft, DesktopRuntimeEvent,
-    DesktopSubmitDisposition, RuntimeStartResponse,
+use crate::{
+    credentials::{CredentialStore, SystemCredentialStore},
+    dto::{
+        DesktopAttachment, DesktopModelConfiguration, DesktopPromptDraft, DesktopRuntimeEvent,
+        DesktopSubmitDisposition, RuntimeStartResponse,
+    },
 };
 
 struct DesktopDaemon {
@@ -73,7 +76,11 @@ pub struct RuntimeRegistry {
 }
 
 impl RuntimeRegistry {
-    fn insert(&self, repo: PathBuf) -> Result<RuntimeStartResponse, String> {
+    fn insert(
+        &self,
+        repo: PathBuf,
+        displayed_repo: String,
+    ) -> Result<RuntimeStartResponse, String> {
         let id = format!(
             "desktop-runtime-{}",
             self.next_id.fetch_add(1, Ordering::Relaxed) + 1
@@ -96,7 +103,7 @@ impl RuntimeRegistry {
             .insert(id.clone(), entry);
         Ok(RuntimeStartResponse {
             runtime_id: id,
-            repo: repo.to_string_lossy().into_owned(),
+            repo: displayed_repo,
         })
     }
 
@@ -121,11 +128,32 @@ impl RuntimeRegistry {
 
 #[tauri::command]
 pub fn runtime_start(
-    repo: String,
+    repo: Option<String>,
+    app: AppHandle,
     registry: State<'_, RuntimeRegistry>,
 ) -> Result<RuntimeStartResponse, String> {
-    let repo = canonical_directory(Path::new(&repo))?;
-    registry.insert(repo)
+    let (runtime_repo, displayed_repo) = match repo {
+        Some(repo) => {
+            let runtime_repo = canonical_directory(Path::new(&repo))?;
+            let displayed_repo = runtime_repo.to_string_lossy().into_owned();
+            (runtime_repo, displayed_repo)
+        }
+        None => {
+            let runtime_repo = app
+                .path()
+                .app_local_data_dir()
+                .map_err(|error| format!("cannot locate Medusa application data: {error}"))?
+                .join("general-chat");
+            fs::create_dir_all(&runtime_repo).map_err(|error| {
+                format!(
+                    "cannot create general chat workspace {}: {error}",
+                    runtime_repo.display()
+                )
+            })?;
+            (canonical_directory(&runtime_repo)?, String::new())
+        }
+    };
+    registry.insert(runtime_repo, displayed_repo)
 }
 
 #[tauri::command]
@@ -225,17 +253,28 @@ pub fn runtime_configure_model(
         "auto" => Effort::Auto,
         _ => return Err("effort must be low, medium, high, or auto".to_owned()),
     };
+    let provider = configuration.provider;
+    let supplied_api_key = configuration.api_key.filter(|key| !key.trim().is_empty());
+    let credentials = SystemCredentialStore;
+    let api_key = match supplied_api_key.as_ref() {
+        Some(api_key) => Some(api_key.clone()),
+        None => credentials.load(&provider)?,
+    };
     registry.with_entry(&runtime_id, |entry| {
         entry
             .controller
             .configure_model(ModelConfiguration {
-                provider: configuration.provider,
+                provider: provider.clone(),
                 model: configuration.model,
                 effort,
-                api_key: configuration.api_key.filter(|key| !key.trim().is_empty()),
+                api_key,
             })
             .map_err(|error| error.to_string())
-    })
+    })?;
+    if let Some(api_key) = supplied_api_key {
+        credentials.save(&provider, &api_key)?;
+    }
+    Ok(())
 }
 
 fn canonical_directory(path: &Path) -> Result<PathBuf, String> {
