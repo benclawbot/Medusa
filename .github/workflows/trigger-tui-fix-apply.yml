@@ -30,16 +30,20 @@ jobs:
           patch = base64.b64decode(encoded, validate=True)
           Path('/tmp/tui.patch').write_bytes(patch)
           print(f'extracted {len(patch)} patch bytes')
-      - name: Apply and publish verified patch
+      - name: Apply and publish code changes
         shell: bash
         run: |
           set -euxo pipefail
-          git apply --check /tmp/tui.patch
-          git apply /tmp/tui.patch
-          rm .github/workflows/apply-tui-fixes.yml .github/workflows/trigger-tui-fix-apply.yml
+          git apply --3way /tmp/tui.patch
           git config user.name github-actions[bot]
           git config user.email 41898282+github-actions[bot]@users.noreply.github.com
-          git add -A
+          git add crates/medusa-agent/src/engine.rs \
+            crates/medusa-tui/src/app.rs \
+            crates/medusa-tui/src/app/tests.rs \
+            crates/medusa-tui/src/lib.rs \
+            crates/medusa-tui/src/render.rs \
+            crates/medusa-tui/src/render/markdown.rs \
+            crates/medusa-tui/src/session.rs
           git diff --cached --stat
           git commit -m "tui: fix markdown scrollback and concise chat"
           git push origin HEAD
