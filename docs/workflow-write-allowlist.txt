@@ -4,3 +4,4 @@
 # Keep this registry empty unless a retained workflow has a reviewed,
 # non-self-modifying reason to write repository contents. Direct `git push`
 # and workflow self-deletion are forbidden even for registered entries.
+.github/workflows/publish-release.yml|Creates a draft GitHub Release and uploads validated assets for an existing version tag; it never pushes commits or publishes the release.

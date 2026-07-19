@@ -1,0 +1,300 @@
+name: Publish Draft Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: publish-draft-${{ github.ref_name }}
+  cancel-in-progress: false
+
+jobs:
+  validate:
+    name: Validate release tag
+    runs-on: ubuntu-latest
+    outputs:
+      release-tag: ${{ steps.release.outputs.tag }}
+      version: ${{ steps.release.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Validate evidence generator
+        run: python3 scripts/release-evidence.py self-test
+      - name: Validate synchronized version, tag, event SHA, and main ancestry
+        id: release
+        shell: bash
+        env:
+          RELEASE_TAG: ${{ github.ref_name }}
+          RELEASE_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          version=$(python3 scripts/release-evidence.py validate-tag --root . --tag "$RELEASE_TAG")
+          git fetch --force --tags origin
+          git fetch --no-tags origin main
+          tag_commit=$(git rev-list -n 1 "$RELEASE_TAG")
+          if [[ "$tag_commit" != "$RELEASE_SHA" || "$(git rev-parse HEAD)" != "$RELEASE_SHA" ]]; then
+            echo "release tag $RELEASE_TAG is not bound to workflow event SHA $RELEASE_SHA" >&2
+            exit 2
+          fi
+          if ! git merge-base --is-ancestor "$RELEASE_SHA" origin/main; then
+            echo "release tag $RELEASE_TAG does not point to a commit in main history" >&2
+            exit 2
+          fi
+          echo "tag=$RELEASE_TAG" >> "$GITHUB_OUTPUT"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
+  linux:
+    name: Build Linux release assets
+    needs: validate
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Linux Tauri dependencies
+        run: sudo apt-get update && sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: apps/medusa-desktop/package-lock.json
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - uses: dtolnay/rust-toolchain@1.88.0
+      - name: Install desktop dependencies
+        working-directory: apps/medusa-desktop
+        run: npm ci
+      - name: Build Linux desktop bundles
+        working-directory: apps/medusa-desktop
+        env:
+          APPIMAGE_EXTRACT_AND_RUN: "1"
+        run: npm run tauri:build -- --bundles deb,appimage
+      - name: Validate Linux desktop bundles
+        run: >-
+          python3 scripts/desktop-package-smoke.py
+          --root apps/medusa-desktop/src-tauri/target/release/bundle
+          --platform linux
+          --manifest desktop-package-linux.json
+      - name: Build Linux CLI
+        run: cargo build --release --locked --bin medusa
+      - name: Assemble Linux release assets
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p release-assets cli-package
+          cp target/release/medusa cli-package/medusa
+          cp LICENSE cli-package/LICENSE
+          cp docs/RELEASE.md cli-package/RELEASE.md
+          cp docs/COMPATIBILITY.md cli-package/COMPATIBILITY.md
+          python3 scripts/release-evidence.py sbom --root . --output cli-package/medusa-sbom.cdx.json
+          tar -czf release-assets/medusa-cli-linux.tar.gz -C cli-package .
+
+          deb_count=$(find apps/medusa-desktop/src-tauri/target/release/bundle -type f -name '*.deb' | wc -l | tr -d ' ')
+          appimage_count=$(find apps/medusa-desktop/src-tauri/target/release/bundle -type f -name '*.AppImage' | wc -l | tr -d ' ')
+          test "$deb_count" -eq 1
+          test "$appimage_count" -eq 1
+          deb=$(find apps/medusa-desktop/src-tauri/target/release/bundle -type f -name '*.deb' -print -quit)
+          appimage=$(find apps/medusa-desktop/src-tauri/target/release/bundle -type f -name '*.AppImage' -print -quit)
+          cp "$deb" release-assets/medusa-desktop-linux.deb
+          cp "$appimage" release-assets/medusa-desktop-linux.AppImage
+          cp desktop-package-linux.json release-assets/desktop-package-linux.json
+      - uses: actions/upload-artifact@v4
+        with:
+          name: medusa-release-linux-${{ github.sha }}
+          path: release-assets
+          if-no-files-found: error
+          retention-days: 30
+
+  macos:
+    name: Build macOS release assets
+    needs: validate
+    runs-on: macos-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: apps/medusa-desktop/package-lock.json
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - uses: dtolnay/rust-toolchain@1.88.0
+      - name: Install desktop dependencies
+        working-directory: apps/medusa-desktop
+        run: npm ci
+      - name: Build macOS desktop bundles
+        working-directory: apps/medusa-desktop
+        run: npm run tauri:build -- --bundles app,dmg
+      - name: Validate macOS desktop bundles
+        run: >-
+          python3 scripts/desktop-package-smoke.py
+          --root apps/medusa-desktop/src-tauri/target/release/bundle
+          --platform macos
+          --manifest desktop-package-macos.json
+      - name: Build macOS CLI
+        run: cargo build --release --locked --bin medusa
+      - name: Assemble macOS release assets
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p release-assets cli-package
+          cp target/release/medusa cli-package/medusa
+          cp LICENSE cli-package/LICENSE
+          cp docs/RELEASE.md cli-package/RELEASE.md
+          cp docs/COMPATIBILITY.md cli-package/COMPATIBILITY.md
+          python3 scripts/release-evidence.py sbom --root . --output cli-package/medusa-sbom.cdx.json
+          tar -czf release-assets/medusa-cli-macos.tar.gz -C cli-package .
+
+          dmg_count=$(find apps/medusa-desktop/src-tauri/target/release/bundle -type f -name '*.dmg' | wc -l | tr -d ' ')
+          app_count=$(find apps/medusa-desktop/src-tauri/target/release/bundle -type d -name '*.app' | wc -l | tr -d ' ')
+          test "$dmg_count" -eq 1
+          test "$app_count" -eq 1
+          dmg=$(find apps/medusa-desktop/src-tauri/target/release/bundle -type f -name '*.dmg' -print -quit)
+          app=$(find apps/medusa-desktop/src-tauri/target/release/bundle -type d -name '*.app' -print -quit)
+          cp "$dmg" release-assets/medusa-desktop-macos.dmg
+          ditto -c -k --sequesterRsrc --keepParent "$app" release-assets/medusa-desktop-macos-app.zip
+          cp desktop-package-macos.json release-assets/desktop-package-macos.json
+      - uses: actions/upload-artifact@v4
+        with:
+          name: medusa-release-macos-${{ github.sha }}
+          path: release-assets
+          if-no-files-found: error
+          retention-days: 30
+
+  windows:
+    name: Build Windows release assets
+    needs: validate
+    runs-on: windows-2022
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: apps/medusa-desktop/package-lock.json
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - uses: dtolnay/rust-toolchain@1.88.0
+      - name: Install desktop dependencies
+        working-directory: apps/medusa-desktop
+        run: npm ci
+      - name: Build Windows desktop bundle
+        working-directory: apps/medusa-desktop
+        run: npm run tauri:build -- --bundles nsis
+      - name: Validate Windows desktop bundle
+        run: >-
+          python scripts/desktop-package-smoke.py
+          --root apps/medusa-desktop/src-tauri/target/release/bundle
+          --platform windows
+          --manifest desktop-package-windows.json
+      - name: Build Windows CLI
+        run: cargo build --release --locked --bin medusa
+      - name: Assemble Windows release assets
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          New-Item -ItemType Directory -Force release-assets, cli-package | Out-Null
+          Copy-Item target/release/medusa.exe cli-package/medusa.exe
+          Copy-Item LICENSE cli-package/LICENSE
+          Copy-Item docs/RELEASE.md cli-package/RELEASE.md
+          Copy-Item docs/COMPATIBILITY.md cli-package/COMPATIBILITY.md
+          python scripts/release-evidence.py sbom --root . --output cli-package/medusa-sbom.cdx.json
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          Compress-Archive -Path cli-package/* -DestinationPath release-assets/medusa-cli-windows.zip
+
+          $installers = @(Get-ChildItem apps/medusa-desktop/src-tauri/target/release/bundle -Recurse -File -Filter *.exe)
+          if ($installers.Count -ne 1) {
+            throw "expected exactly one NSIS installer, found $($installers.Count)"
+          }
+          Copy-Item $installers[0].FullName release-assets/medusa-desktop-windows.exe
+          Copy-Item desktop-package-windows.json release-assets/desktop-package-windows.json
+      - uses: actions/upload-artifact@v4
+        with:
+          name: medusa-release-windows-${{ github.sha }}
+          path: release-assets
+          if-no-files-found: error
+          retention-days: 30
+
+  publish-draft:
+    name: Attest and create draft release
+    needs: [validate, linux, macos, windows]
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: write
+      id-token: write
+      attestations: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: medusa-release-*-${{ github.sha }}
+          path: release-assets
+          merge-multiple: true
+      - name: Revalidate tag binding and generate complete release evidence
+        shell: bash
+        env:
+          RELEASE_TAG: ${{ needs.validate.outputs.release-tag }}
+          RELEASE_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          python3 scripts/release-evidence.py validate-tag --root . --tag "$RELEASE_TAG"
+          git fetch --force --tags origin
+          tag_commit=$(git rev-list -n 1 "$RELEASE_TAG")
+          if [[ "$tag_commit" != "$RELEASE_SHA" || "$(git rev-parse HEAD)" != "$RELEASE_SHA" ]]; then
+            echo "release tag $RELEASE_TAG moved away from workflow event SHA $RELEASE_SHA" >&2
+            exit 2
+          fi
+          cp LICENSE release-assets/LICENSE
+          cp docs/RELEASE.md release-assets/RELEASE.md
+          cp docs/COMPATIBILITY.md release-assets/COMPATIBILITY.md
+          python3 scripts/release-evidence.py sbom --root . --output release-assets/medusa-sbom.cdx.json
+          python3 scripts/release-evidence.py manifest \
+            --assets release-assets \
+            --output release-assets/medusa-release-manifest.json \
+            --checksums release-assets/SHA256SUMS
+      - name: Attest release assets
+        uses: actions/attest@v4
+        with:
+          subject-path: release-assets/*
+      - name: Preserve assembled release evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: medusa-draft-release-${{ needs.validate.outputs.release-tag }}
+          path: release-assets
+          if-no-files-found: error
+          retention-days: 90
+      - name: Create draft GitHub Release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ needs.validate.outputs.release-tag }}
+          RELEASE_VERSION: ${{ needs.validate.outputs.version }}
+        run: |
+          set -euo pipefail
+          if gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
+            echo "release $RELEASE_TAG already exists; refusing to overwrite it" >&2
+            exit 2
+          fi
+          gh release create "$RELEASE_TAG" release-assets/* \
+            --draft \
+            --verify-tag \
+            --generate-notes \
+            --title "Medusa $RELEASE_VERSION"

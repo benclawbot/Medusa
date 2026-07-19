@@ -1,32 +1,37 @@
 # Medusa Desktop Distribution
 
-## Current package boundary
+## Package layers
 
-Medusa Desktop is built as an unsigned Tauri application on Linux, macOS, and Windows. The `Desktop` workflow creates packages as read-only GitHub Actions artifacts; it does not publish a GitHub Release, modify repository contents, or access signing credentials.
+Medusa Desktop has two distribution layers:
 
-The validated targets are:
+1. the read-only `Desktop` workflow builds unsigned packages for pull-request and `main` validation and retains them as short-lived GitHub Actions artifacts;
+2. the tag-only `Publish Draft Release` workflow rebuilds the same package classes, combines them with CLI assets and release evidence, creates provenance attestations, and opens a draft GitHub Release.
+
+Neither layer performs Windows Authenticode signing, macOS Developer ID signing or notarization, or Linux repository signing.
+
+## Validated targets
 
 | Platform | Bundles |
 |---|---|
 | Linux | Debian package (`.deb`) and AppImage (`.AppImage`) |
-| macOS | application bundle (`.app`) and disk image (`.dmg`) |
+| macOS | application archive (`.zip`) and disk image (`.dmg`) |
 | Windows | NSIS installer (`.exe`) |
 
-Each workflow artifact also contains `desktop-package-<platform>.json`. The manifest records each expected package's relative path, byte length, and SHA-256 digest.
+The `Desktop` workflow also validates the uncompressed macOS `.app` tree before it is archived for release.
 
-## CI validation
+## Continuous package validation
 
-The desktop bundle job:
+The read-only desktop bundle job:
 
 1. installs the pinned Node.js and Rust toolchains;
 2. installs platform build prerequisites;
 3. runs `npm ci` from `apps/medusa-desktop`;
-4. builds only the target formats listed above;
+4. builds only the supported target formats;
 5. rejects missing, duplicate, unexpectedly small, or path-escaping artifacts;
 6. hashes the resulting files and macOS application tree;
-7. uploads the bundle directory and evidence manifest for 14 days.
+7. uploads the bundle directory and `desktop-package-<platform>.json` for 14 days.
 
-The package validator includes deterministic fixtures proving that valid packages pass while missing, tiny, and escaping artifacts fail.
+The package validator includes deterministic fixtures proving that valid packages pass while missing, tiny, duplicate, and escaping artifacts fail.
 
 Version metadata is checked independently across:
 
@@ -35,7 +40,21 @@ Version metadata is checked independently across:
 - `apps/medusa-desktop/package.json`;
 - `apps/medusa-desktop/src-tauri/tauri.conf.json`.
 
-A mismatch or non-semantic version fails before packaging.
+A mismatch or invalid semantic version fails before packaging.
+
+## Draft release assembly
+
+The release workflow accepts only an existing tag that exactly matches `v<version>` and points into `main` history. Linux, macOS, and Windows jobs build independently with read-only repository permissions. Their normalized release assets are downloaded by one final job.
+
+Before creating a draft, the final job requires exactly one of every expected CLI and desktop asset, rejects symlinks and duplicate basenames, and generates:
+
+- a complete JSON asset manifest;
+- `SHA256SUMS`;
+- a deterministic CycloneDX SBOM from the locked Rust and npm graphs;
+- compatibility, release, rollback, and license documents;
+- GitHub/Sigstore provenance attestations for every assembled asset.
+
+Only that final job receives `contents: write`, `id-token: write`, and `attestations: write`. The permission is registered in `docs/workflow-write-allowlist.txt`. The workflow creates a draft release, refuses to overwrite an existing release, and cannot publish automatically.
 
 ## Obtaining a CI package
 
@@ -44,14 +63,26 @@ A mismatch or non-semantic version fails before packaging.
 3. Download the artifact named `medusa-desktop-<platform>-<commit-sha>`.
 4. Verify that the package digest matches the bundled JSON manifest before testing it.
 
-The artifacts are intended for development, smoke testing, and installation-path verification.
+CI artifacts are intended for development, smoke testing, and installation-path verification.
+
+## Verifying a draft release asset
+
+Download the draft asset together with `SHA256SUMS`, then verify both its digest and provenance:
+
+```bash
+sha256sum --check SHA256SUMS --ignore-missing
+gh attestation verify <asset> --repo benclawbot/Medusa
+```
+
+The attestation identifies the workflow, repository, commit, tag, and short-lived signing identity that produced the asset. It is not a substitute for operating-system code signing.
 
 ## Local package build
 
-From the repository root, first validate the version metadata:
+From the repository root, first validate the version metadata and release evidence implementation:
 
 ```bash
 python scripts/check-desktop-version-sync.py --root . --self-test
+python scripts/release-evidence.py self-test
 ```
 
 Then install dependencies and build the platform's supported targets:
@@ -90,15 +121,15 @@ python scripts/desktop-package-smoke.py \
 
 ## Unsigned-package limitations
 
-These artifacts are not trusted end-user releases:
+These packages are not yet trusted end-user releases:
 
 - Windows SmartScreen may warn because the NSIS installer is not Authenticode-signed.
 - macOS Gatekeeper may block or warn because the app is not Developer ID signed or notarized.
 - Linux packages are not published through a signed repository and carry no distribution-maintainer signature.
-- GitHub Actions artifact integrity and the included SHA-256 evidence do not replace platform code signing.
+- SHA-256 evidence and GitHub provenance establish build origin and integrity, but do not grant platform trust.
 
-Signing, notarization, certificate custody, provenance attestations, and publication require a separate design. That work must preserve least privilege, avoid exposing long-lived credentials to pull requests, and define certificate rotation and rollback before packages can be described as production-trusted releases.
+Signing, notarization, certificate custody, rotation, revocation, and public release approval require a separate design. Long-lived signing credentials must never be exposed to pull-request workflows.
 
 ## Rollback
 
-This packaging layer changes no runtime state or repository schema. Reverting the desktop workflow and validation scripts restores test-only desktop CI. Existing unsigned artifacts expire according to their workflow retention period and are not automatically installed or published.
+Reverting the desktop or publication workflows restores the prior CI behavior and prevents future automated drafts. Existing workflow artifacts expire according to retention. Existing draft releases and attestations remain auditable and require explicit deletion if invalidated.
