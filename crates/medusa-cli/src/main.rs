@@ -9,7 +9,7 @@ use clap::{Parser, Subcommand};
 use medusa_agent::{AgentEngine, bootstrap};
 use medusa_config::Config;
 use medusa_core::{ErrorCategory, ErrorCode, MedusaError, MedusaResult};
-use medusa_daemon::{DaemonLaunch, DaemonPaths, serve};
+use medusa_daemon::{DaemonPaths, serve};
 use medusa_extensions::{DesktopCommanderClient, DesktopCommanderSettings};
 use medusa_hardening::{CURRENT_SCHEMA_VERSION, Migrator};
 use medusa_provider::MiniMaxProvider;
@@ -85,7 +85,6 @@ fn run() -> MedusaResult<()> {
         options.initial_prompt = cli.prompt;
         options.resume_session = cli.resume_session;
         options.continue_latest = cli.r#continue;
-        options.daemon_launch = Some(DaemonLaunch::for_current_executable()?);
         let _ = run_tui(options)?;
         return Ok(());
     };
