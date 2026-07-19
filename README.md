@@ -15,7 +15,7 @@ Medusa is a production-grade autonomous coding agent written in Rust. It combine
 - **Mid-turn guidance** — submit extra detail while Medusa is working; the user turn remains visible and is injected at the next safe agent-turn boundary.
 - **Clipboard-native input** — paste text or screenshots with `Ctrl+V`; supported providers receive screenshots as image context.
 - **Repository-aware tooling** — bounded file access, search, atomic writes, patch transactions, shell execution, Git checkpoints, and targeted verification.
-- **Persistent background jobs** — repository-scoped daemon jobs, ownership, reconnect, durable state, and restart recovery work on Linux, macOS, and Windows.
+- **Persistent background jobs** — repository-scoped daemon jobs, bounded workers and queues, overload backpressure, ownership, reconnect, durable state, and restart recovery work on Linux, macOS, and Windows.
 - **Browser and web interaction** — a persistent Playwright sidecar can navigate, click, fill, press, capture screenshots, evaluate JavaScript, and manage tabs.
 - **Markdown conversation display** — headings, lists, task boxes, quotes, links, rules, and fenced code blocks render directly in the terminal.
 - **Persistent memory** — Markdown-first storage with validation, indexing, retrieval, lifecycle management, and provenance controls.
@@ -25,16 +25,16 @@ Medusa is a production-grade autonomous coding agent written in Rust. It combine
 
 ## Current status and evidence
 
-The original phase labels are historical planning shorthand, not the current source of truth. As of July 18, 2026, repository evidence through PR #48 includes the Rust agent core, interactive TUI, frontend-neutral runtime, Zeus-derived React/Tauri desktop entry point, durable sessions and memory, guarded repository tools, browser verification, parallel workers, Markdown rendering, mid-turn follow-ups, optional Desktop Commander MCP integration, panic-free production targets, workflow-write guardrails, and cross-platform daemon transport, recovery, and TUI connection visibility.
+The original phase labels are historical planning shorthand, not the current source of truth. As of July 19, 2026, repository evidence through PR #50 includes the Rust agent core, interactive TUI, frontend-neutral runtime, Zeus-derived React/Tauri desktop entry point, durable sessions and memory, guarded repository tools, browser verification, parallel workers, Markdown rendering, mid-turn follow-ups, optional Desktop Commander MCP integration, panic-free production targets, workflow-write guardrails, cross-platform daemon transport and recovery, TUI connection visibility, bounded daemon workers and queues, explicit overload backpressure, graceful draining, and cross-platform load evidence.
 
 | Area | Current evidence |
 |---|---|
 | Interactive product surface | `medusa` launches the TUI; transcript preservation, Markdown rendering, clipboard input, cancellation, usage metrics, skills, queued follow-ups, and daemon connection transitions are implemented in `medusa-tui`. |
 | Agent and repository runtime | `medusa-runtime` owns frontend-neutral interactive session control, while planning, tools, policy, verification, intelligence, and persistence remain implemented across `medusa-agent`, `medusa-intelligence`, `medusa-memory`, and related crates. |
-| Background daemon | `medusa-daemon` provides one protocol and durable lifecycle across Linux, macOS, and Windows. Unix uses a repository-scoped domain socket; Windows uses an ephemeral loopback-only endpoint descriptor. Reconnect, ownership, backup restoration, and interrupted-job recovery are tested on all three platforms. |
+| Background daemon | `medusa-daemon` provides one protocol and durable lifecycle across Linux, macOS, and Windows. It uses four fixed job workers and a 32-job queue by default, returns `daemon_busy` under overload, bounds local I/O and request size, and drains accepted work during graceful shutdown. Reconnect, ownership, recovery, a 64-client burst, exact queue backpressure, and shutdown persistence are tested on all three platforms. |
 | Shared frontend runtime and desktop | `medusa-tui` and `apps/medusa-desktop` adapt the same `medusa-runtime` commands, events, plans, questions, cancellation, follow-ups, skills, provider settings, and policy. |
 | Extensions and MCP | Skills, hooks, MCP isolation, and the pinned Desktop Commander adapter are implemented in `medusa-extensions`. |
-| Release evidence | `CI`, `Daemon`, `Desktop`, `Refactor Guardrails`, and `Release Gates` enforce formatting, Clippy, panic-free production targets, workspace tests, documentation, dependency policy, source-size limits, workflow hygiene, three-platform daemon/TUI and desktop checks, coverage, adversarial tests, package smoke tests, and live-provider scenarios. |
+| Release evidence | `CI`, `Daemon`, `Desktop`, `Refactor Guardrails`, and `Release Gates` enforce formatting, Clippy, panic-free production targets, workspace tests, documentation, dependency policy, source-size limits, workflow hygiene, three-platform daemon/TUI and desktop checks, bounded-load evidence, coverage, adversarial tests, package smoke tests, and live-provider scenarios. |
 
 See [Capability evidence](docs/CAPABILITY-EVIDENCE.md) for the auditable mapping from shipped capabilities to code and gates. Historical completion summaries should not override the current repository, merged pull requests, or required checks.
 
@@ -220,18 +220,22 @@ The TUI header reports session duration, cumulative input/output tokens, cache-r
 
 ## Background daemon
 
-`medusa-daemon` owns repository-scoped background jobs, reconnectable local IPC, durable job records, process ownership, and restart recovery.
+`medusa-daemon` owns repository-scoped background jobs, reconnectable local IPC, durable job records, process ownership, bounded execution, restart recovery, and graceful shutdown.
 
 - Linux and macOS use `.medusa/daemon/medusa.sock` as a Unix-domain socket.
 - Windows uses the same path as an endpoint descriptor containing an ephemeral loopback TCP address; non-loopback descriptors are rejected.
 - A new connection is used for each request, so clients can disconnect while daemon-owned jobs continue.
-- Queued or running jobs found after restart are marked `interrupted` with recovery evidence.
+- Production defaults are four concurrent job workers and 32 queued jobs; no new operating-system thread is created per submission.
+- When the queue is full, the submission receives `daemon_busy` and no durable job record is retained for rejected work.
+- Local reads and writes time out after five seconds, and requests larger than 64 KiB are rejected.
+- Graceful shutdown stops new request acceptance, drains queued and running accepted jobs, joins workers, and then releases endpoint ownership.
+- Queued or running jobs found after an ungraceful restart are marked `interrupted` with recovery evidence.
 - Stale ownership is reclaimed only when the recorded process is no longer alive.
 - The TUI reports daemon connection-state transitions on Linux, macOS, and Windows without flooding the transcript.
 
-The daemon and TUI contract is validated by the permanent `Daemon` workflow on Ubuntu, macOS, and Windows. See [the daemon operations guide](crates/medusa-daemon/README.md).
+The permanent `Daemon` workflow validates the daemon/TUI contract on Ubuntu, macOS, and Windows. Its acceptance evidence includes 64 simultaneous reconnecting clients, exact one-worker/one-queue backpressure, and persisted graceful draining. See [the daemon operations guide](crates/medusa-daemon/README.md) and [the concurrency decision](docs/DAEMON-CONCURRENCY.md).
 
-**Current limitation:** the daemon transport and observation path are cross-platform, but one shared external lifecycle owner for TUI and desktop has not yet been selected. Automatic executable discovery, startup race handling, restart policy, coordinated shutdown, and visible degraded/recovery states remain issue #42 work. The TUI observes an available daemon; it does not silently create an in-process substitute that would die with the frontend.
+**Current limitation:** one shared external lifecycle owner for TUI and desktop has not yet been selected. Automatic executable discovery, startup race handling, restart policy, process-tree cancellation, coordinated shutdown, and visible degraded/recovery states remain issue #42 work. Graceful shutdown currently waits for running children to finish, so a hung child process tree can delay completion. The TUI observes an available daemon; it does not silently create an in-process substitute that would die with the frontend.
 
 ## Browser tools
 
@@ -319,7 +323,7 @@ See [Security hardening](docs/SECURITY-HARDENING.md) for release-enforced contro
 | `medusa-cli` | User-facing command entry point |
 | `medusa-runtime` | Frontend-neutral interactive session controller, commands, events, cancellation, follow-ups, and provider orchestration |
 | `medusa-tui` | Terminal presentation, composer, clipboard, drafts, rendering, and daemon connection-state observation |
-| `medusa-daemon` | Cross-platform local IPC, durable background jobs, ownership, reconnect, persistence, and restart recovery |
+| `medusa-daemon` | Cross-platform local IPC, bounded background-job scheduling, overload backpressure, ownership, reconnect, persistence, restart recovery, and graceful draining |
 | `medusa-agent` | Session lifecycle, orchestration, tools, policy, and verification |
 | `medusa-provider` | Provider-neutral model interface and MiniMax integration |
 | `medusa-intelligence` | Parsing, indexing, patching, and conflict-aware transactions |
@@ -372,6 +376,7 @@ Release Gates additionally run complete workspace coverage with a 75% line thres
 - [Security hardening](docs/SECURITY-HARDENING.md)
 - [Capability evidence](docs/CAPABILITY-EVIDENCE.md)
 - [Daemon operations](crates/medusa-daemon/README.md)
+- [Daemon concurrency and backpressure](docs/DAEMON-CONCURRENCY.md)
 
 ## License
 
