@@ -1,5 +1,6 @@
 use super::*;
 use crate::{clipboard::ClipboardImage, commands::Effort};
+use crossterm::event::KeyEvent;
 use tempfile::tempdir;
 
 struct FakeClipboard(ClipboardContent);
@@ -475,4 +476,46 @@ fn rejected_submission_restores_the_visible_user_draft() {
         .expect("restore submission");
     assert_eq!(app.composer.draft, draft);
     assert!(app.transcript.is_empty());
+}
+
+#[test]
+fn page_and_mouse_scrolling_update_scrollback() {
+    let directory = tempfile::tempdir().expect("temporary directory");
+    let mut app = AppState::new(
+        directory.path().to_path_buf(),
+        "scrollback-input",
+        "",
+        std::sync::Arc::new(crate::clipboard::UnsupportedClipboard),
+    )
+    .expect("app");
+    assert_eq!(app.scrollback_offset(), 0);
+    assert_eq!(
+        app.handle_event(Event::Key(KeyEvent::new(
+            KeyCode::PageUp,
+            KeyModifiers::NONE
+        )))
+        .expect("page up"),
+        AppAction::Redraw
+    );
+    assert_eq!(app.scrollback_offset(), 10);
+    assert_eq!(
+        app.handle_event(Event::Key(KeyEvent::new(
+            KeyCode::PageDown,
+            KeyModifiers::NONE
+        )))
+        .expect("page down"),
+        AppAction::Redraw
+    );
+    assert_eq!(app.scrollback_offset(), 0);
+    assert_eq!(
+        app.handle_event(Event::Mouse(crossterm::event::MouseEvent {
+            kind: crossterm::event::MouseEventKind::ScrollUp,
+            column: 0,
+            row: 0,
+            modifiers: KeyModifiers::NONE,
+        }))
+        .expect("mouse scroll"),
+        AppAction::Redraw
+    );
+    assert_eq!(app.scrollback_offset(), 3);
 }

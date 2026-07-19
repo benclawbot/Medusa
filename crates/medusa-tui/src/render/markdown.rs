@@ -86,7 +86,14 @@ pub(super) fn markdown_block_lines(
             continue;
         }
 
-        let (text, foreground, attribute) = markdown_line(trimmed, content_width);
+        if is_table_separator(trimmed) {
+            continue;
+        }
+        let (text, foreground, attribute) = if let Some(row) = table_row(trimmed) {
+            (row, Color::White, Attribute::Reset)
+        } else {
+            markdown_line(trimmed, content_width)
+        };
         push_wrapped(
             &mut rendered,
             &mut first,
@@ -197,11 +204,11 @@ fn ordered_item(source: &str) -> bool {
 }
 
 fn clean_inline(source: &str) -> String {
-    let mut value = source
-        .replace("**", "")
-        .replace("__", "")
-        .replace("~~", "")
-        .replace('`', "");
+    let mut value = source.to_owned();
+    value = replace_paired(&value, "**", "", "");
+    value = replace_paired(&value, "__", "", "");
+    value = replace_paired(&value, "~~", "", "");
+    value = replace_paired(&value, "`", "‹", "›");
     while let Some(start) = value.find('[') {
         let Some(label_end) = value[start + 1..]
             .find("](")
@@ -221,6 +228,45 @@ fn clean_inline(source: &str) -> String {
         value.replace_range(start..=url_end, &format!("{label} ({url})"));
     }
     value
+}
+
+fn replace_paired(source: &str, marker: &str, open: &str, close: &str) -> String {
+    let mut output = String::new();
+    let mut rest = source;
+    let mut opening = true;
+    while let Some(index) = rest.find(marker) {
+        output.push_str(&rest[..index]);
+        output.push_str(if opening { open } else { close });
+        opening = !opening;
+        rest = &rest[index + marker.len()..];
+    }
+    output.push_str(rest);
+    output
+}
+
+fn is_table_separator(source: &str) -> bool {
+    let cells = source.trim_matches('|').split('|').map(str::trim);
+    let mut found = false;
+    for cell in cells {
+        found = true;
+        let cell = cell.trim_matches(':');
+        if cell.len() < 3 || !cell.chars().all(|ch| ch == '-') {
+            return false;
+        }
+    }
+    found
+}
+
+fn table_row(source: &str) -> Option<String> {
+    if !source.contains('|') {
+        return None;
+    }
+    let cells = source
+        .trim_matches('|')
+        .split('|')
+        .map(|cell| clean_inline(cell.trim()))
+        .collect::<Vec<_>>();
+    (cells.len() > 1).then(|| format!("│ {} │", cells.join(" │ ")))
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -393,6 +439,23 @@ mod tests {
             .map(|line| line.text.as_str())
             .collect::<Vec<_>>();
         assert!(rendered.iter().any(|line| *line == "│     print(\"a  b\")"));
+    }
+
+    #[test]
+    fn markdown_renders_tables_and_inline_code() {
+        let lines = markdown_block_lines(
+            "Medusa  ",
+            Color::Magenta,
+            "| Area | Result |\n| --- | --- |\n| TUI | `fixed` |",
+            80,
+        );
+        let rendered = lines
+            .iter()
+            .map(|line| line.text.as_str())
+            .collect::<Vec<_>>();
+        assert!(rendered.iter().any(|line| *line == "│ Area │ Result │"));
+        assert!(rendered.iter().any(|line| *line == "│ TUI │ ‹fixed› │"));
+        assert!(!rendered.iter().any(|line| line.contains("---")));
     }
 
     #[test]
