@@ -20,6 +20,7 @@ use time::OffsetDateTime;
 use ulid::Ulid;
 
 use crate::{
+    cancellation::{append_detail, cancel_all_jobs, cancel_job, mark_job_interrupted},
     paths::DaemonPaths,
     process::ProcessRegistry,
     protocol::{
@@ -167,14 +168,7 @@ pub fn spawn_with_limits(
                     return Err(error);
                 }
             };
-            run_loop(
-                listener,
-                paths,
-                jobs,
-                processes,
-                server_shutdown,
-                scheduler,
-            )
+            run_loop(listener, paths, jobs, processes, server_shutdown, scheduler)
         })
         .map_err(|error| {
             MedusaError::new(
@@ -196,12 +190,7 @@ fn start_scheduler(
     let worker_jobs = Arc::clone(jobs);
     let worker_processes = Arc::clone(processes);
     let runner: JobRunner = Arc::new(move |job_id| {
-        run_job(
-            &worker_paths,
-            &worker_jobs,
-            &worker_processes,
-            &job_id,
-        );
+        run_job(&worker_paths, &worker_jobs, &worker_processes, &job_id);
     });
     JobScheduler::start(limits, runner)
 }
@@ -218,14 +207,8 @@ fn run_loop(
         while shutdown.load(Ordering::SeqCst) == SHUTDOWN_NONE {
             match listener.accept() {
                 Ok(stream) => {
-                    let _ = handle_connection(
-                        stream,
-                        &paths,
-                        &jobs,
-                        &processes,
-                        &shutdown,
-                        &scheduler,
-                    );
+                    let _ =
+                        handle_connection(stream, &paths, &jobs, &processes, &shutdown, &scheduler);
                 }
                 Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
                     thread::sleep(Duration::from_millis(20));
@@ -243,9 +226,7 @@ fn run_loop(
     let scheduler_result = scheduler.shutdown();
     listener.cleanup();
     match (result, cancellation_result, scheduler_result) {
-        (Err(error), _, _)
-        | (Ok(()), Err(error), _)
-        | (Ok(()), Ok(()), Err(error)) => Err(error),
+        (Err(error), _, _) | (Ok(()), Err(error), _) | (Ok(()), Ok(()), Err(error)) => Err(error),
         (Ok(()), Ok(()), Ok(())) => Ok(()),
     }
 }
@@ -393,103 +374,6 @@ fn request_shutdown(shutdown: &AtomicU8, mode: u8) {
     shutdown.fetch_max(mode, Ordering::SeqCst);
 }
 
-fn cancel_job(
-    paths: &DaemonPaths,
-    jobs: &Arc<Mutex<BTreeMap<String, JobRecord>>>,
-    processes: &ProcessRegistry,
-    scheduler: &JobScheduler,
-    job_id: &str,
-) -> MedusaResult<Response> {
-    let current = lock_jobs(jobs)?.get(job_id).cloned();
-    let Some(current) = current else {
-        return Ok(Response::Cancelled { job: None });
-    };
-    match current.state {
-        JobState::Interrupted => return Ok(Response::Cancelled { job: Some(current) }),
-        JobState::Succeeded | JobState::Failed => {
-            return Ok(Response::Error {
-                code: "job_not_cancellable".into(),
-                message: format!("daemon job {job_id} is already terminal"),
-            });
-        }
-        JobState::Queued | JobState::Running => {}
-    }
-
-    let removed_from_queue = scheduler.cancel(job_id);
-    match processes.cancel(job_id) {
-        Ok(true) => {}
-        Ok(false) => {
-            return Ok(Response::Error {
-                code: "job_not_cancellable".into(),
-                message: format!("daemon job {job_id} no longer has an active process control"),
-            });
-        }
-        Err(error) => {
-            return Ok(Response::Error {
-                code: "cancellation_failed".into(),
-                message: error.to_string(),
-            });
-        }
-    }
-    let updated = mark_job_interrupted(paths, jobs, job_id, "cancelled by user request")?;
-    if removed_from_queue {
-        processes.remove(job_id)?;
-    }
-    Ok(Response::Cancelled { job: Some(updated) })
-}
-
-fn cancel_all_jobs(
-    paths: &DaemonPaths,
-    jobs: &Arc<Mutex<BTreeMap<String, JobRecord>>>,
-    processes: &ProcessRegistry,
-    scheduler: &JobScheduler,
-) -> MedusaResult<()> {
-    let queued = scheduler.cancel_all_queued();
-    let mut first_error = None;
-    for job_id in queued {
-        if let Err(error) = processes.cancel(&job_id)
-            && first_error.is_none()
-        {
-            first_error = Some(error);
-        }
-        if let Err(error) = mark_job_interrupted(
-            paths,
-            jobs,
-            &job_id,
-            "cancelled by immediate daemon shutdown",
-        ) && first_error.is_none()
-        {
-            first_error = Some(error);
-        }
-        if let Err(error) = processes.remove(&job_id)
-            && first_error.is_none()
-        {
-            first_error = Some(error);
-        }
-    }
-    if let Err(error) = processes.cancel_all()
-        && first_error.is_none()
-    {
-        first_error = Some(error);
-    }
-    {
-        let mut locked = lock_jobs(jobs)?;
-        let mut changed = false;
-        for job in locked.values_mut() {
-            if matches!(job.state, JobState::Queued | JobState::Running) {
-                job.state = JobState::Interrupted;
-                job.finished_at = Some(OffsetDateTime::now_utc());
-                append_detail(&mut job.stderr, "cancelled by immediate daemon shutdown");
-                changed = true;
-            }
-        }
-        if changed {
-            persist_jobs(paths, &locked)?;
-        }
-    }
-    first_error.map_or(Ok(()), Err)
-}
-
 fn discard_rejected_job(
     paths: &DaemonPaths,
     jobs: &Arc<Mutex<BTreeMap<String, JobRecord>>>,
@@ -572,7 +456,10 @@ fn run_job_inner(
         if !process_stderr.trim().is_empty() {
             append_detail(&mut job.stderr, process_stderr.trim());
         }
-        append_detail(&mut job.stderr, "process tree terminated after cancellation");
+        append_detail(
+            &mut job.stderr,
+            "process tree terminated after cancellation",
+        );
         job.state = JobState::Interrupted;
     } else {
         job.stderr = process_stderr.into_owned();
@@ -599,40 +486,6 @@ fn record_worker_error(
         }
         Ok(false) | Err(_) => mark_job_failed(paths, jobs, job_id, message),
     }
-}
-
-fn mark_job_interrupted(
-    paths: &DaemonPaths,
-    jobs: &Arc<Mutex<BTreeMap<String, JobRecord>>>,
-    job_id: &str,
-    detail: &str,
-) -> MedusaResult<JobRecord> {
-    let mut locked = lock_jobs(jobs)?;
-    let Some(job) = locked.get_mut(job_id) else {
-        return Err(MedusaError::new(
-            ErrorCode::InternalInvariant,
-            ErrorCategory::Internal,
-            format!("daemon job disappeared while being interrupted: {job_id}"),
-        ));
-    };
-    job.state = JobState::Interrupted;
-    job.finished_at = Some(OffsetDateTime::now_utc());
-    append_detail(&mut job.stderr, detail);
-    let updated = job.clone();
-    persist_jobs(paths, &locked)?;
-    Ok(updated)
-}
-
-fn append_detail(target: &mut String, detail: &str) {
-    if target.contains(detail) {
-        return;
-    }
-    if !target.is_empty() && !target.ends_with('\n') {
-        target.push('\n');
-    }
-    target.push('[');
-    target.push_str(detail);
-    target.push(']');
 }
 
 fn mark_job_failed(
@@ -677,7 +530,10 @@ fn load_and_recover(paths: &DaemonPaths) -> MedusaResult<(BTreeMap<String, JobRe
     Ok((jobs, recovered))
 }
 
-fn persist_jobs(paths: &DaemonPaths, jobs: &BTreeMap<String, JobRecord>) -> MedusaResult<()> {
+pub(crate) fn persist_jobs(
+    paths: &DaemonPaths,
+    jobs: &BTreeMap<String, JobRecord>,
+) -> MedusaResult<()> {
     fs::create_dir_all(&paths.directory)?;
     let temporary = paths.state.with_extension("json.tmp");
     fs::write(&temporary, serde_json::to_vec_pretty(jobs)?)?;
@@ -736,7 +592,7 @@ fn validate_program(program: &str) -> MedusaResult<()> {
     Ok(())
 }
 
-fn lock_jobs(
+pub(crate) fn lock_jobs(
     jobs: &Arc<Mutex<BTreeMap<String, JobRecord>>>,
 ) -> MedusaResult<std::sync::MutexGuard<'_, BTreeMap<String, JobRecord>>> {
     jobs.lock().map_err(|_| {
