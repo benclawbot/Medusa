@@ -156,7 +156,9 @@ impl ProcessControl {
                 let mut child = lock_child(&self.child)?;
                 let Some(process) = child.as_mut() else {
                     cleanup_output_files(&stdout_path, &stderr_path);
-                    return Err(process_error("daemon child process disappeared before wait"));
+                    return Err(process_error(
+                        "daemon child process disappeared before wait",
+                    ));
                 };
                 process.try_wait()?
             };
@@ -218,13 +220,17 @@ fn cleanup_output_files(stdout: &Path, stderr: &Path) {
 fn lock_controls(
     controls: &Mutex<BTreeMap<String, Arc<ProcessControl>>>,
 ) -> MedusaResult<MutexGuard<'_, BTreeMap<String, Arc<ProcessControl>>>> {
-    controls.lock().map_err(|_| process_error("daemon process registry lock was poisoned"))
+    controls
+        .lock()
+        .map_err(|_| process_error("daemon process registry lock was poisoned"))
 }
 
 fn lock_child(
     child: &Mutex<Option<std::process::Child>>,
 ) -> MedusaResult<MutexGuard<'_, Option<std::process::Child>>> {
-    child.lock().map_err(|_| process_error("daemon child process lock was poisoned"))
+    child
+        .lock()
+        .map_err(|_| process_error("daemon child process lock was poisoned"))
 }
 
 fn process_error(message: impl Into<String>) -> MedusaError {
