@@ -4,18 +4,12 @@ on:
   push:
     tags:
       - "v*"
-  workflow_dispatch:
-    inputs:
-      tag:
-        description: Existing version tag to package
-        required: true
-        type: string
 
 permissions:
   contents: read
 
 concurrency:
-  group: publish-draft-${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
+  group: publish-draft-${{ github.ref_name }}
   cancel-in-progress: false
 
 jobs:
@@ -28,24 +22,29 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
           fetch-depth: 0
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
       - name: Validate evidence generator
         run: python3 scripts/release-evidence.py self-test
-      - name: Validate synchronized version, tag, and main ancestry
+      - name: Validate synchronized version, tag, event SHA, and main ancestry
         id: release
         shell: bash
         env:
-          RELEASE_TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
+          RELEASE_TAG: ${{ github.ref_name }}
+          RELEASE_SHA: ${{ github.sha }}
         run: |
           set -euo pipefail
           version=$(python3 scripts/release-evidence.py validate-tag --root . --tag "$RELEASE_TAG")
+          git fetch --force --tags origin
           git fetch --no-tags origin main
-          release_commit=$(git rev-parse HEAD)
-          if ! git merge-base --is-ancestor "$release_commit" origin/main; then
+          tag_commit=$(git rev-list -n 1 "$RELEASE_TAG")
+          if [[ "$tag_commit" != "$RELEASE_SHA" || "$(git rev-parse HEAD)" != "$RELEASE_SHA" ]]; then
+            echo "release tag $RELEASE_TAG is not bound to workflow event SHA $RELEASE_SHA" >&2
+            exit 2
+          fi
+          if ! git merge-base --is-ancestor "$RELEASE_SHA" origin/main; then
             echo "release tag $RELEASE_TAG does not point to a commit in main history" >&2
             exit 2
           fi
@@ -59,8 +58,6 @@ jobs:
     timeout-minutes: 90
     steps:
       - uses: actions/checkout@v4
-        with:
-          ref: ${{ needs.validate.outputs.release-tag }}
       - name: Install Linux Tauri dependencies
         run: sudo apt-get update && sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf
       - uses: actions/setup-node@v4
@@ -123,8 +120,6 @@ jobs:
     timeout-minutes: 90
     steps:
       - uses: actions/checkout@v4
-        with:
-          ref: ${{ needs.validate.outputs.release-tag }}
       - uses: actions/setup-node@v4
         with:
           node-version: "22"
@@ -183,8 +178,6 @@ jobs:
     timeout-minutes: 90
     steps:
       - uses: actions/checkout@v4
-        with:
-          ref: ${{ needs.validate.outputs.release-tag }}
       - uses: actions/setup-node@v4
         with:
           node-version: "22"
@@ -246,7 +239,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: ${{ needs.validate.outputs.release-tag }}
+          fetch-depth: 0
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
@@ -255,13 +248,20 @@ jobs:
           pattern: medusa-release-*-${{ github.sha }}
           path: release-assets
           merge-multiple: true
-      - name: Generate complete release evidence
+      - name: Revalidate tag binding and generate complete release evidence
         shell: bash
         env:
           RELEASE_TAG: ${{ needs.validate.outputs.release-tag }}
+          RELEASE_SHA: ${{ github.sha }}
         run: |
           set -euo pipefail
           python3 scripts/release-evidence.py validate-tag --root . --tag "$RELEASE_TAG"
+          git fetch --force --tags origin
+          tag_commit=$(git rev-list -n 1 "$RELEASE_TAG")
+          if [[ "$tag_commit" != "$RELEASE_SHA" || "$(git rev-parse HEAD)" != "$RELEASE_SHA" ]]; then
+            echo "release tag $RELEASE_TAG moved away from workflow event SHA $RELEASE_SHA" >&2
+            exit 2
+          fi
           cp LICENSE release-assets/LICENSE
           cp docs/RELEASE.md release-assets/RELEASE.md
           cp docs/COMPATIBILITY.md release-assets/COMPATIBILITY.md
