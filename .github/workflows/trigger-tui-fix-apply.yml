@@ -34,7 +34,7 @@ jobs:
         shell: bash
         run: |
           set -euxo pipefail
-          git apply --3way /tmp/tui.patch
+          patch --batch --forward -p1 < /tmp/tui.patch
           git config user.name github-actions[bot]
           git config user.email 41898282+github-actions[bot]@users.noreply.github.com
           git add crates/medusa-agent/src/engine.rs \
