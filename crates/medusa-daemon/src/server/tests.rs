@@ -210,7 +210,9 @@ fn queued_job_cancellation_prevents_execution() {
     wait_for_state(&client, &running.id, JobState::Running);
     let marker = directory.path().join("cancelled-queue.txt");
     let queued = submit_job(&client, marker_command(&marker));
-    let Response::Cancelled { job: Some(cancelled) } = client
+    let Response::Cancelled {
+        job: Some(cancelled),
+    } = client
         .request(Request::Cancel {
             job_id: queued.id.clone(),
         })
@@ -238,7 +240,9 @@ fn running_cancellation_terminates_descendants_but_not_unrelated_processes() {
     let mut unrelated = spawn_unrelated_process();
 
     let started = Instant::now();
-    let Response::Cancelled { job: Some(cancelled) } = client
+    let Response::Cancelled {
+        job: Some(cancelled),
+    } = client
         .request(Request::Cancel {
             job_id: job.id.clone(),
         })
@@ -257,7 +261,10 @@ fn running_cancellation_terminates_descendants_but_not_unrelated_processes() {
     thread::sleep(Duration::from_millis(1200));
     assert!(!marker.exists(), "cancelled descendant wrote its marker");
     assert!(
-        unrelated.try_wait().expect("inspect unrelated process").is_none(),
+        unrelated
+            .try_wait()
+            .expect("inspect unrelated process")
+            .is_none(),
         "cancelling a daemon job terminated an unrelated process"
     );
     unrelated.kill().expect("kill unrelated process");
