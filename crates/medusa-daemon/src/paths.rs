@@ -9,6 +9,8 @@ pub struct DaemonPaths {
     pub socket: PathBuf,
     pub state: PathBuf,
     pub owner: PathBuf,
+    /// Serializes external frontend startup attempts for this repository.
+    pub startup: PathBuf,
 }
 
 impl DaemonPaths {
@@ -20,6 +22,7 @@ impl DaemonPaths {
             socket: directory.join("medusa.sock"),
             state: directory.join("jobs.json"),
             owner: directory.join("owner.pid"),
+            startup: directory.join("startup.lock"),
             directory,
         }
     }

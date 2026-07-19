@@ -9,6 +9,7 @@ use clap::{Parser, Subcommand};
 use medusa_agent::{AgentEngine, bootstrap};
 use medusa_config::Config;
 use medusa_core::{ErrorCategory, ErrorCode, MedusaError, MedusaResult};
+use medusa_daemon::{DaemonPaths, serve};
 use medusa_extensions::{DesktopCommanderClient, DesktopCommanderSettings};
 use medusa_hardening::{CURRENT_SCHEMA_VERSION, Migrator};
 use medusa_provider::MiniMaxProvider;
@@ -43,11 +44,24 @@ enum CommandKind {
     Bootstrap,
     Doctor,
     Migrate,
-    Search { pattern: String },
-    Shell { program: String, args: Vec<String> },
-    Checkpoint { message: String },
-    Run { objective: String },
-    Resume { session: String },
+    Search {
+        pattern: String,
+    },
+    Shell {
+        program: String,
+        args: Vec<String>,
+    },
+    Checkpoint {
+        message: String,
+    },
+    Run {
+        objective: String,
+    },
+    Resume {
+        session: String,
+    },
+    #[command(name = "__daemon-serve", hide = true)]
+    DaemonServe,
 }
 
 #[derive(Debug, Serialize)]
@@ -94,6 +108,10 @@ fn run() -> MedusaResult<()> {
         ));
     }
 
+    if matches!(command, CommandKind::DaemonServe) {
+        return serve(DaemonPaths::for_repo(&repo));
+    }
+
     let overrides = cli.overrides.into_iter().collect::<BTreeMap<_, _>>();
     let config = Config::load_layers(None, None, &BTreeMap::new(), &overrides)?;
 
@@ -126,6 +144,7 @@ fn run() -> MedusaResult<()> {
             print_completion(&session);
             Ok(())
         }
+        CommandKind::DaemonServe => serve(DaemonPaths::for_repo(&repo)),
     }
 }
 
@@ -382,5 +401,12 @@ mod tests {
             .expect("parse before semantic validation");
         assert!(cli.command.is_some());
         assert_eq!(cli.prompt.as_deref(), Some("hello"));
+    }
+
+    #[test]
+    fn hidden_daemon_host_accepts_repository_after_subcommand() {
+        let cli = Cli::try_parse_from(["medusa", "__daemon-serve", "--repo", "."])
+            .expect("parse daemon host");
+        assert!(matches!(cli.command, Some(CommandKind::DaemonServe)));
     }
 }

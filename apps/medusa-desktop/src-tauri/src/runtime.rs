@@ -3,13 +3,14 @@ use std::{
     fs,
     path::{Path, PathBuf},
     sync::{
-        Mutex,
+        Arc, Mutex,
         atomic::{AtomicU64, Ordering},
     },
 };
 
 use base64::{Engine as _, engine::general_purpose::STANDARD};
 use image::ImageReader;
+use medusa_daemon::{DaemonLaunch, DaemonLifecycleState, DaemonSupervisor};
 use medusa_runtime::{
     RuntimeController, SubmitDisposition,
     commands::{Effort, ModelConfiguration, parse_slash_command},
@@ -26,9 +27,37 @@ use crate::dto::{
     DesktopSubmitDisposition, RuntimeStartResponse,
 };
 
+struct DesktopDaemon {
+    supervisor: DaemonSupervisor,
+    last_state: Option<DaemonLifecycleState>,
+}
+
 struct RuntimeEntry {
     repo: PathBuf,
     controller: RuntimeController,
+    daemon: DesktopDaemon,
+}
+
+impl RuntimeEntry {
+    fn daemon_event(&mut self) -> Option<DesktopRuntimeEvent> {
+        let lifecycle = self.daemon.supervisor.poll();
+        let suppress_connected_after_start = matches!(
+            (self.daemon.last_state, lifecycle.state),
+            (
+                Some(DaemonLifecycleState::Started | DaemonLifecycleState::Recovered),
+                DaemonLifecycleState::Connected
+            )
+        );
+        let changed = self.daemon.last_state != Some(lifecycle.state);
+        self.daemon.last_state = Some(lifecycle.state);
+        if !changed || suppress_connected_after_start {
+            return None;
+        }
+        Some(DesktopRuntimeEvent::Notice {
+            title: format!("Background daemon {}", lifecycle.state.as_str()),
+            details: vec![lifecycle.detail],
+        })
+    }
 }
 
 impl Drop for RuntimeEntry {
@@ -40,7 +69,7 @@ impl Drop for RuntimeEntry {
 #[derive(Default)]
 pub struct RuntimeRegistry {
     next_id: AtomicU64,
-    entries: Mutex<BTreeMap<String, RuntimeEntry>>,
+    entries: Mutex<BTreeMap<String, Arc<Mutex<RuntimeEntry>>>>,
 }
 
 impl RuntimeRegistry {
@@ -50,16 +79,21 @@ impl RuntimeRegistry {
             self.next_id.fetch_add(1, Ordering::Relaxed) + 1
         );
         let controller = RuntimeController::start(repo.clone());
+        let supervisor = DaemonLaunch::for_current_executable()
+            .map(|launch| DaemonSupervisor::new(&repo, launch))
+            .unwrap_or_else(|_| DaemonSupervisor::observe_only(&repo));
+        let entry = Arc::new(Mutex::new(RuntimeEntry {
+            repo: repo.clone(),
+            controller,
+            daemon: DesktopDaemon {
+                supervisor,
+                last_state: None,
+            },
+        }));
         self.entries
             .lock()
             .map_err(|_| "desktop runtime registry is poisoned".to_owned())?
-            .insert(
-                id.clone(),
-                RuntimeEntry {
-                    repo: repo.clone(),
-                    controller,
-                },
-            );
+            .insert(id.clone(), entry);
         Ok(RuntimeStartResponse {
             runtime_id: id,
             repo: repo.to_string_lossy().into_owned(),
@@ -69,16 +103,19 @@ impl RuntimeRegistry {
     fn with_entry<T>(
         &self,
         runtime_id: &str,
-        action: impl FnOnce(&RuntimeEntry) -> Result<T, String>,
+        action: impl FnOnce(&mut RuntimeEntry) -> Result<T, String>,
     ) -> Result<T, String> {
-        let entries = self
+        let entry = self
             .entries
             .lock()
-            .map_err(|_| "desktop runtime registry is poisoned".to_owned())?;
-        let entry = entries
+            .map_err(|_| "desktop runtime registry is poisoned".to_owned())?
             .get(runtime_id)
+            .cloned()
             .ok_or_else(|| format!("runtime {runtime_id} does not exist"))?;
-        action(entry)
+        let mut entry = entry
+            .lock()
+            .map_err(|_| format!("runtime {runtime_id} is poisoned"))?;
+        action(&mut entry)
     }
 }
 
@@ -158,6 +195,9 @@ pub fn runtime_poll(
     registry.with_entry(&runtime_id, |entry| {
         let mut events = Vec::new();
         let limit = max_events.unwrap_or(200).clamp(1, 500);
+        if let Some(event) = entry.daemon_event() {
+            events.push(event);
+        }
         while events.len() < limit {
             match entry
                 .controller
