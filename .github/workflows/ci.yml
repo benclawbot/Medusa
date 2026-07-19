@@ -6,7 +6,7 @@ on:
   pull_request:
 
 permissions:
-  contents: write
+  contents: read
 
 concurrency:
   group: ci-${{ github.workflow }}-${{ github.ref }}
@@ -18,26 +18,9 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-        with:
-          ref: ${{ github.head_ref || github.ref_name }}
-          fetch-depth: 2
       - uses: dtolnay/rust-toolchain@1.88.0
         with:
           components: rustfmt,clippy
-      - name: Restore base lock and apply only manifest-edge changes
-        if: github.event_name == 'pull_request' && github.head_ref == 'hardening/dependency-pruning'
-        shell: bash
-        run: |
-          git fetch --no-tags --depth=1 origin "${{ github.base_ref }}"
-          git show "origin/${{ github.base_ref }}:Cargo.lock" > Cargo.lock
-          cargo metadata --format-version 1 --all-features > /dev/null
-          git config user.name 'github-actions[bot]'
-          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git add Cargo.lock
-          if ! git diff --cached --quiet; then
-            git commit -m 'deps: preserve base lock resolution'
-            git push origin HEAD:${{ github.head_ref }}
-          fi
       - name: Refresh dependency lock for the merged PR graph
         run: cargo generate-lockfile
       - name: Check formatting
