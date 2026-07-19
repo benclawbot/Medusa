@@ -226,7 +226,11 @@ impl DaemonSupervisor {
                     });
                 }
                 StartupLockAttempt::Busy { owner_pid } => {
-                    if owner_pid.is_none_or(|pid| !process_is_alive(pid)) {
+                    let reclaim = match owner_pid {
+                        Some(pid) => !process_is_alive(pid),
+                        None => startup_lock_is_stale(&self.paths.startup),
+                    };
+                    if reclaim {
                         let _ = fs::remove_file(&self.paths.startup);
                         continue;
                     }
@@ -298,6 +302,14 @@ fn wait_for_ready(paths: &DaemonPaths, deadline: Instant) -> MedusaResult<()> {
         paths.socket.display(),
         STARTUP_TIMEOUT.as_secs()
     )))
+}
+
+fn startup_lock_is_stale(path: &Path) -> bool {
+    fs::metadata(path)
+        .and_then(|metadata| metadata.modified())
+        .ok()
+        .and_then(|modified| modified.elapsed().ok())
+        .is_some_and(|age| age >= STARTUP_TIMEOUT)
 }
 
 fn lifecycle_error(message: impl Into<String>) -> MedusaError {
@@ -452,6 +464,15 @@ mod tests {
         }
         assert_eq!(launches.load(Ordering::SeqCst), 1);
         stop_servers(&servers);
+    }
+
+    #[test]
+    fn fresh_empty_startup_lock_is_not_reclaimed() {
+        let directory = tempfile::tempdir().expect("tempdir");
+        let paths = DaemonPaths::for_repo(directory.path());
+        fs::create_dir_all(&paths.directory).expect("daemon directory");
+        fs::write(&paths.startup, []).expect("empty startup lock");
+        assert!(!startup_lock_is_stale(&paths.startup));
     }
 
     #[test]
