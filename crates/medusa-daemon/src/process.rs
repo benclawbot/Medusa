@@ -8,17 +8,18 @@ use std::{
         atomic::{AtomicBool, Ordering},
     },
     thread,
-    time::{Duration, Instant},
+    time::Duration,
 };
 
 #[cfg(unix)]
-use std::os::unix::process::CommandExt;
+use std::{os::unix::process::CommandExt, time::Instant};
 #[cfg(windows)]
 use std::os::windows::process::CommandExt;
 
 use medusa_core::{ErrorCategory, ErrorCode, MedusaError, MedusaResult};
 
 const PROCESS_POLL_INTERVAL: Duration = Duration::from_millis(20);
+#[cfg(unix)]
 const TERMINATION_GRACE: Duration = Duration::from_millis(300);
 
 pub(crate) struct ProcessResult {
