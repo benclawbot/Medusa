@@ -2,11 +2,11 @@
 
 ## Decision
 
-Medusa keeps a synchronous standard-library daemon architecture for this increment. The evidence did not justify introducing Tokio or Mio as direct runtime dependencies.
+Medusa keeps a synchronous standard-library daemon architecture. The evidence does not justify introducing Tokio or Mio as direct runtime dependencies.
 
-Before this change, the daemon handled local requests serially and created one operating-system thread for every submitted job. There was no queue limit, no busy response, and clean shutdown did not join daemon-owned job workers.
+Before bounded execution, the daemon handled local requests serially and created one operating-system thread for every submitted job. There was no queue limit, no busy response, clean shutdown did not join daemon-owned workers, and child execution could not be cancelled safely.
 
-The bounded design now separates short local requests from background process execution:
+The current design separates short local requests from background process execution:
 
 - request parsing remains synchronous and repository-local
 - background execution uses a fixed worker set
@@ -14,7 +14,9 @@ The bounded design now separates short local requests from background process ex
 - excess submissions receive `Response::Error` with code `daemon_busy`
 - IPC reads and writes have finite timeouts
 - request bodies have a fixed maximum size
-- shutdown stops the listener, drains accepted jobs, joins workers, and then removes endpoint ownership
+- one cancellation control is registered before each accepted job enters the queue
+- graceful shutdown drains accepted work
+- immediate shutdown cancels queued and running work before worker join
 
 ## Production defaults
 
@@ -29,34 +31,43 @@ The bounded design now separates short local requests from background process ex
 
 `serve_with_limits` and `spawn_with_limits` allow deterministic test and embedding configurations. Zero workers or zero queue capacity are rejected as invalid configuration.
 
-## Cross-platform load evidence
+## Cross-platform load and cancellation evidence
 
-`crates/medusa-daemon/tests/concurrency_limits.rs` is executed by the permanent `Daemon` workflow on Ubuntu, macOS, and Windows.
+The permanent `Daemon` workflow executes the daemon and TUI suite on Ubuntu, macOS, and Windows. The suite requires:
 
-The suite requires:
+1. **64 simultaneous ping clients** — all clients cross a barrier together and receive `Pong` through the reconnecting `DaemonClient` API.
+2. **Exact worker and queue limits** — with one worker and one queue slot, one job is running, one remains queued, and a third submission receives `daemon_busy` without retaining a durable record.
+3. **Graceful shutdown** — `Shutdown` stops request acceptance, drains accepted jobs, joins workers, and persists successful terminal records.
+4. **Queued cancellation** — a cancelled queued command never starts and is persisted as `interrupted`.
+5. **Running process-tree cancellation** — cancelling a running job terminates descendants within the bounded test interval while an unrelated process remains alive.
+6. **Immediate shutdown** — `ShutdownNow` cancels queued and running work and returns without waiting for the original long-running child duration.
+7. **Restart readability** — interrupted records remain valid durable state and require no migration.
 
-1. **64 simultaneous ping clients** — all clients cross a barrier together and must receive `Pong` through the normal reconnecting `DaemonClient` API.
-2. **Exact worker and queue limits** — with one worker and one queue slot, one job must be `running`, one must remain `queued`, and the third submission must receive `daemon_busy` without creating a durable job record.
-3. **Graceful shutdown** — a protocol `Shutdown` request must stop new request acceptance, drain both accepted jobs, join the worker, and persist both records as `succeeded`.
+These tests are acceptance thresholds, not throughput claims.
 
-These tests are acceptance thresholds, not throughput claims. They establish that the current synchronous request loop handles a meaningful local burst while job execution remains bounded.
+## Process ownership and cancellation
+
+Cancellation is deliberately implemented around operating-system process ownership rather than an async executor:
+
+- Unix jobs start in isolated process groups and receive TERM/KILL escalation.
+- GNU/Linux uses `--` before negative process-group IDs so the external `kill` utility cannot interpret the group ID as an option.
+- Linux `/proc` inspection treats running or stopped members as live while ignoring already terminated zombie entries awaiting reaping.
+- macOS retains process-group signal verification.
+- Windows jobs start in isolated process groups and terminate through `taskkill /T /F`.
+
+The implementation reports descendant-termination failures instead of silently treating an immediate-child kill as complete tree cancellation. No unsafe Rust, new dependency, or persisted-state migration was introduced.
 
 ## Why no async runtime
 
-The daemon protocol is local, line-oriented, short-lived, and uses one connection per request. Background child processes dominate job duration; async sockets would not remove that process cost. A fixed worker set and queue directly address the observed unbounded resource risk with no new dependency graph or executor lifecycle.
+The protocol is local, line-oriented, short-lived, and uses one connection per request. Background child processes dominate job duration; async sockets would not remove that process cost. A fixed worker set, bounded queue, explicit process controls, and platform process-tree termination directly address the measured resource and shutdown risks.
 
 An async or multiplexed connection architecture should be reconsidered only if measured workloads show one of these failures:
 
 - the 64-client burst threshold becomes insufficient for real frontend usage
 - request timeout frequency is material under normal local load
 - connection parsing becomes CPU-bound
-- desktop and TUI lifecycle integration requires long-lived streaming connections
-- process cancellation requires an asynchronous child-management design
+- frontend integration requires long-lived streaming connections
 
-## Shutdown semantics and remaining uncertainty
+## Remaining uncertainty
 
-Shutdown is graceful for accepted work: queued jobs drain and running child processes are allowed to finish before worker threads join. This prevents accepted jobs from silently disappearing and keeps persisted state consistent.
-
-The daemon does not yet forcibly terminate a long-running child process. A hung child can therefore delay graceful shutdown. Cross-platform process-group cancellation and a bounded forced-shutdown policy require a separate design because terminating only the immediate child can orphan descendants. That limitation must remain visible until lifecycle ownership and cancellation semantics are implemented for both TUI and desktop clients.
-
-The request loop is still synchronous. A slow or malformed client can occupy it only until the five-second I/O timeout, and an oversized request is rejected after 64 KiB. A bounded connection-worker pool is the next escalation step if load evidence shows the timeout boundary is not sufficient.
+The request loop is still synchronous. A slow or malformed client can occupy it only until the five-second I/O timeout, and an oversized request is rejected after 64 KiB. A bounded connection-worker pool is the next escalation step only if load evidence shows the current boundary is insufficient.
