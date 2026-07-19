@@ -2,25 +2,24 @@ use std::{
     collections::BTreeMap,
     fs::{self, File},
     path::{Path, PathBuf},
-    process::{Command, ExitStatus, Stdio},
+    process::{Child, Command, ExitStatus, Stdio},
     sync::{
         Arc, Mutex, MutexGuard,
         atomic::{AtomicBool, Ordering},
     },
     thread,
-    time::Duration,
+    time::{Duration, Instant},
 };
 
 #[cfg(unix)]
-use std::{os::unix::process::CommandExt, time::Instant};
+use std::os::unix::process::CommandExt;
 #[cfg(windows)]
 use std::os::windows::process::CommandExt;
 
 use medusa_core::{ErrorCategory, ErrorCode, MedusaError, MedusaResult};
 
 const PROCESS_POLL_INTERVAL: Duration = Duration::from_millis(20);
-#[cfg(unix)]
-const TERMINATION_GRACE: Duration = Duration::from_millis(300);
+const TERMINATION_GRACE: Duration = Duration::from_secs(1);
 
 pub(crate) struct ProcessResult {
     pub status: ExitStatus,
@@ -110,7 +109,7 @@ impl ProcessRegistry {
 #[derive(Default)]
 struct ProcessControl {
     cancelled: AtomicBool,
-    child: Mutex<Option<std::process::Child>>,
+    child: Mutex<Option<Child>>,
 }
 
 impl ProcessControl {
@@ -192,7 +191,7 @@ impl ProcessControl {
             return Ok(());
         };
         let pid = process.id();
-        if let Err(error) = terminate_process_tree(pid) {
+        if let Err(error) = terminate_process_tree(process) {
             let fallback = process.kill();
             return match fallback {
                 Ok(()) => Err(error),
@@ -226,9 +225,7 @@ fn lock_controls(
         .map_err(|_| process_error("daemon process registry lock was poisoned"))
 }
 
-fn lock_child(
-    child: &Mutex<Option<std::process::Child>>,
-) -> MedusaResult<MutexGuard<'_, Option<std::process::Child>>> {
+fn lock_child(child: &Mutex<Option<Child>>) -> MedusaResult<MutexGuard<'_, Option<Child>>> {
     child
         .lock()
         .map_err(|_| process_error("daemon child process lock was poisoned"))
@@ -255,31 +252,43 @@ fn configure_process_group(command: &mut Command) {
 }
 
 #[cfg(unix)]
-fn terminate_process_tree(pid: u32) -> MedusaResult<()> {
-    if !process_group_alive(pid) {
+fn terminate_process_tree(process: &mut Child) -> MedusaResult<()> {
+    let pid = process.id();
+    if wait_for_unix_tree_exit(process, pid, Duration::ZERO)? {
         return Ok(());
     }
     send_group_signal("-TERM", pid)?;
-    let deadline = Instant::now() + TERMINATION_GRACE;
-    while Instant::now() < deadline {
-        if !process_group_alive(pid) {
-            return Ok(());
-        }
-        thread::sleep(PROCESS_POLL_INTERVAL);
+    if wait_for_unix_tree_exit(process, pid, TERMINATION_GRACE)? {
+        return Ok(());
     }
     send_group_signal("-KILL", pid)?;
-    let deadline = Instant::now() + TERMINATION_GRACE;
-    while Instant::now() < deadline {
-        if !process_group_alive(pid) {
-            return Ok(());
-        }
-        thread::sleep(PROCESS_POLL_INTERVAL);
+    if wait_for_unix_tree_exit(process, pid, TERMINATION_GRACE)? {
+        return Ok(());
     }
     Err(MedusaError::new(
         ErrorCode::ToolExecutionFailed,
         ErrorCategory::Execution,
         format!("process group {pid} remained alive after TERM/KILL escalation"),
     ))
+}
+
+#[cfg(unix)]
+fn wait_for_unix_tree_exit(
+    process: &mut Child,
+    pid: u32,
+    timeout: Duration,
+) -> MedusaResult<bool> {
+    let deadline = Instant::now() + timeout;
+    loop {
+        let leader_exited = process.try_wait()?.is_some();
+        if leader_exited && !process_group_alive(pid) {
+            return Ok(true);
+        }
+        if Instant::now() >= deadline {
+            return Ok(false);
+        }
+        thread::sleep(PROCESS_POLL_INTERVAL);
+    }
 }
 
 #[cfg(unix)]
@@ -315,8 +324,9 @@ fn process_group_alive(pid: u32) -> bool {
 }
 
 #[cfg(windows)]
-fn terminate_process_tree(pid: u32) -> MedusaResult<()> {
-    if !process_alive(pid) {
+fn terminate_process_tree(process: &mut Child) -> MedusaResult<()> {
+    let pid = process.id();
+    if process.try_wait()?.is_some() || !process_alive(pid) {
         return Ok(());
     }
     let pid_text = pid.to_string();
@@ -325,8 +335,15 @@ fn terminate_process_tree(pid: u32) -> MedusaResult<()> {
         .stdout(Stdio::null())
         .stderr(Stdio::piped())
         .output()?;
-    if output.status.success() || !process_alive(pid) {
-        return Ok(());
+    let deadline = Instant::now() + TERMINATION_GRACE;
+    loop {
+        if process.try_wait()?.is_some() || !process_alive(pid) {
+            return Ok(());
+        }
+        if Instant::now() >= deadline {
+            break;
+        }
+        thread::sleep(PROCESS_POLL_INTERVAL);
     }
     Err(MedusaError::new(
         ErrorCode::ToolExecutionFailed,
