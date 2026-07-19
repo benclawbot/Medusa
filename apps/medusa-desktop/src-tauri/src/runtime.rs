@@ -35,32 +35,28 @@ struct DesktopDaemon {
 struct RuntimeEntry {
     repo: PathBuf,
     controller: RuntimeController,
-    daemon: Mutex<DesktopDaemon>,
+    daemon: DesktopDaemon,
 }
 
 impl RuntimeEntry {
-    fn daemon_event(&self) -> Result<Option<DesktopRuntimeEvent>, String> {
-        let mut daemon = self
-            .daemon
-            .lock()
-            .map_err(|_| "desktop daemon supervisor is poisoned".to_owned())?;
-        let lifecycle = daemon.supervisor.poll();
+    fn daemon_event(&mut self) -> Option<DesktopRuntimeEvent> {
+        let lifecycle = self.daemon.supervisor.poll();
         let suppress_connected_after_start = matches!(
-            (daemon.last_state, lifecycle.state),
+            (self.daemon.last_state, lifecycle.state),
             (
                 Some(DaemonLifecycleState::Started | DaemonLifecycleState::Recovered),
                 DaemonLifecycleState::Connected
             )
         );
-        let changed = daemon.last_state != Some(lifecycle.state);
-        daemon.last_state = Some(lifecycle.state);
+        let changed = self.daemon.last_state != Some(lifecycle.state);
+        self.daemon.last_state = Some(lifecycle.state);
         if !changed || suppress_connected_after_start {
-            return Ok(None);
+            return None;
         }
-        Ok(Some(DesktopRuntimeEvent::Notice {
+        Some(DesktopRuntimeEvent::Notice {
             title: format!("Background daemon {}", lifecycle.state.as_str()),
             details: vec![lifecycle.detail],
-        }))
+        })
     }
 }
 
@@ -73,7 +69,7 @@ impl Drop for RuntimeEntry {
 #[derive(Default)]
 pub struct RuntimeRegistry {
     next_id: AtomicU64,
-    entries: Mutex<BTreeMap<String, Arc<RuntimeEntry>>>,
+    entries: Mutex<BTreeMap<String, Arc<Mutex<RuntimeEntry>>>>,
 }
 
 impl RuntimeRegistry {
@@ -86,14 +82,14 @@ impl RuntimeRegistry {
         let supervisor = DaemonLaunch::for_current_executable()
             .map(|launch| DaemonSupervisor::new(&repo, launch))
             .unwrap_or_else(|_| DaemonSupervisor::observe_only(&repo));
-        let entry = Arc::new(RuntimeEntry {
+        let entry = Arc::new(Mutex::new(RuntimeEntry {
             repo: repo.clone(),
             controller,
-            daemon: Mutex::new(DesktopDaemon {
+            daemon: DesktopDaemon {
                 supervisor,
                 last_state: None,
-            }),
-        });
+            },
+        }));
         self.entries
             .lock()
             .map_err(|_| "desktop runtime registry is poisoned".to_owned())?
@@ -107,7 +103,7 @@ impl RuntimeRegistry {
     fn with_entry<T>(
         &self,
         runtime_id: &str,
-        action: impl FnOnce(&RuntimeEntry) -> Result<T, String>,
+        action: impl FnOnce(&mut RuntimeEntry) -> Result<T, String>,
     ) -> Result<T, String> {
         let entry = self
             .entries
@@ -116,7 +112,10 @@ impl RuntimeRegistry {
             .get(runtime_id)
             .cloned()
             .ok_or_else(|| format!("runtime {runtime_id} does not exist"))?;
-        action(&entry)
+        let mut entry = entry
+            .lock()
+            .map_err(|_| format!("runtime {runtime_id} is poisoned"))?;
+        action(&mut entry)
     }
 }
 
@@ -196,7 +195,7 @@ pub fn runtime_poll(
     registry.with_entry(&runtime_id, |entry| {
         let mut events = Vec::new();
         let limit = max_events.unwrap_or(200).clamp(1, 500);
-        if let Some(event) = entry.daemon_event()? {
+        if let Some(event) = entry.daemon_event() {
             events.push(event);
         }
         while events.len() < limit {
