@@ -11,6 +11,18 @@ medusa doctor
 
 `medusa doctor` checks Git, Cargo, Node.js, repository access, writable state, provider credentials, configured model, and schema compatibility. A missing `MINIMAX_API_KEY` is reported as a failed live-provider capability rather than silently ignored.
 
+## Desktop package evidence
+
+The `Desktop` workflow builds unsigned application packages as read-only workflow artifacts:
+
+- Linux: Debian package and AppImage;
+- macOS: application bundle and DMG;
+- Windows: NSIS installer.
+
+The workflow verifies synchronized `1.0.0` release metadata across the Rust workspace, desktop Cargo package, `package.json`, and Tauri configuration. It rejects missing, duplicate, unexpectedly small, or path-escaping packages and emits a JSON manifest containing relative paths, byte lengths, and SHA-256 digests.
+
+These CI artifacts are suitable for installation and packaging smoke tests, not trusted public distribution. Windows signing, macOS Developer ID signing and notarization, Linux repository signing, certificate custody, and publication are intentionally separate release work. See [Desktop distribution](DESKTOP-DISTRIBUTION.md).
+
 ## Upgrade
 
 Back up the repository and run:
@@ -29,7 +41,7 @@ Every migration creates a backup and a checksummed receipt before mutation. Unsu
 4. Verify the restored state digest and run `medusa doctor`.
 5. Re-run the repository's targeted verification before resuming a session.
 
-Release packages must contain the binary, `SHA256SUMS`, an SBOM, this rollback document, license, and compatibility notes.
+Release packages must contain the binary, `SHA256SUMS`, an SBOM, this rollback document, license, and compatibility notes. Desktop workflow artifacts currently provide package-specific SHA-256 manifests but are not yet published release packages and therefore do not satisfy the complete signed-release contract.
 
 ## Live MiniMax canary
 
