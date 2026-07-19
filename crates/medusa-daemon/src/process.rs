@@ -290,8 +290,12 @@ fn wait_for_unix_tree_exit(process: &mut Child, pid: u32, timeout: Duration) -> 
 #[cfg(unix)]
 fn send_group_signal(signal: &str, pid: u32) -> MedusaResult<()> {
     let group = format!("-{pid}");
-    let output = Command::new("kill")
-        .args([signal, group.as_str()])
+    let mut command = Command::new("kill");
+    command.arg(signal);
+    #[cfg(target_os = "linux")]
+    command.arg("--");
+    let output = command
+        .arg(&group)
         .stdout(Stdio::null())
         .stderr(Stdio::piped())
         .output()?;
@@ -348,8 +352,12 @@ fn process_group_alive(pid: u32) -> bool {
 #[cfg(unix)]
 fn process_group_signal_alive(pid: u32) -> bool {
     let group = format!("-{pid}");
-    Command::new("kill")
-        .args(["-0", group.as_str()])
+    let mut command = Command::new("kill");
+    command.arg("-0");
+    #[cfg(target_os = "linux")]
+    command.arg("--");
+    command
+        .arg(&group)
         .stdout(Stdio::null())
         .stderr(Stdio::null())
         .status()
