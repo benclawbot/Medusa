@@ -1,7 +1,9 @@
 //! Persistent local daemon, cross-platform IPC, process ownership, crash recovery, and lifecycle supervision.
 
+mod cancellation;
 mod lifecycle;
 mod paths;
+mod process;
 mod protocol;
 mod scheduler;
 mod server;

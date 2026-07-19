@@ -6,7 +6,7 @@ use std::{
     process::Command,
     sync::{
         Arc, Mutex,
-        atomic::{AtomicBool, Ordering},
+        atomic::{AtomicU8, Ordering},
     },
     thread,
     time::Duration,
@@ -20,7 +20,9 @@ use time::OffsetDateTime;
 use ulid::Ulid;
 
 use crate::{
+    cancellation::{append_detail, cancel_all_jobs, cancel_job, mark_job_interrupted},
     paths::DaemonPaths,
+    process::ProcessRegistry,
     protocol::{
         DAEMON_PROTOCOL_VERSION, JobRecord, JobState, Request, RequestEnvelope, Response,
         ResponseEnvelope,
@@ -31,17 +33,26 @@ use crate::{
 
 const MAX_REQUEST_BYTES: usize = 64 * 1024;
 const REQUEST_IO_TIMEOUT: Duration = Duration::from_secs(5);
+const SHUTDOWN_NONE: u8 = 0;
+const SHUTDOWN_GRACEFUL: u8 = 1;
+const SHUTDOWN_IMMEDIATE: u8 = 2;
 
-/// Handle used to request graceful daemon shutdown from tests or embedding code.
+/// Handle used to request daemon shutdown from tests or embedding code.
 pub struct ServerHandle {
-    shutdown: Arc<AtomicBool>,
+    shutdown: Arc<AtomicU8>,
     socket: PathBuf,
 }
 
 impl ServerHandle {
     /// Stops accepting requests, wakes the listener, and lets accepted jobs drain.
     pub fn shutdown(&self) {
-        self.shutdown.store(true, Ordering::SeqCst);
+        request_shutdown(&self.shutdown, SHUTDOWN_GRACEFUL);
+        let _ = wake(&self.socket);
+    }
+
+    /// Stops accepting requests and cancels queued and running jobs before worker join.
+    pub fn shutdown_now(&self) {
+        request_shutdown(&self.shutdown, SHUTDOWN_IMMEDIATE);
         let _ = wake(&self.socket);
     }
 }
@@ -89,7 +100,7 @@ impl DaemonClient {
     }
 }
 
-/// Starts a daemon loop with production limits and blocks until graceful shutdown.
+/// Starts a daemon loop with production limits and blocks until shutdown.
 pub fn serve(paths: DaemonPaths) -> MedusaResult<()> {
     serve_with_limits(paths, DaemonLimits::default())
 }
@@ -103,8 +114,9 @@ pub fn serve_with_limits(paths: DaemonPaths, limits: DaemonLimits) -> MedusaResu
         persist_jobs(&paths, &jobs)?;
     }
     let jobs = Arc::new(Mutex::new(jobs));
+    let processes = Arc::new(ProcessRegistry::default());
     let listener = LocalListener::bind(&paths.socket).map_err(transport_error)?;
-    let scheduler = match start_scheduler(&paths, &jobs, limits) {
+    let scheduler = match start_scheduler(&paths, &jobs, &processes, limits) {
         Ok(scheduler) => scheduler,
         Err(error) => {
             listener.cleanup();
@@ -115,7 +127,8 @@ pub fn serve_with_limits(paths: DaemonPaths, limits: DaemonLimits) -> MedusaResu
         listener,
         paths,
         jobs,
-        Arc::new(AtomicBool::new(false)),
+        processes,
+        Arc::new(AtomicU8::new(SHUTDOWN_NONE)),
         scheduler,
     )
 }
@@ -134,7 +147,7 @@ pub fn spawn_with_limits(
 ) -> MedusaResult<(ServerHandle, thread::JoinHandle<MedusaResult<()>>)> {
     fs::create_dir_all(&paths.directory)?;
     limits.validate()?;
-    let shutdown = Arc::new(AtomicBool::new(false));
+    let shutdown = Arc::new(AtomicU8::new(SHUTDOWN_NONE));
     let server_shutdown = Arc::clone(&shutdown);
     let socket = paths.socket.clone();
     let handle = thread::Builder::new()
@@ -146,15 +159,16 @@ pub fn spawn_with_limits(
                 persist_jobs(&paths, &jobs)?;
             }
             let jobs = Arc::new(Mutex::new(jobs));
+            let processes = Arc::new(ProcessRegistry::default());
             let listener = LocalListener::bind(&paths.socket).map_err(transport_error)?;
-            let scheduler = match start_scheduler(&paths, &jobs, limits) {
+            let scheduler = match start_scheduler(&paths, &jobs, &processes, limits) {
                 Ok(scheduler) => scheduler,
                 Err(error) => {
                     listener.cleanup();
                     return Err(error);
                 }
             };
-            run_loop(listener, paths, jobs, server_shutdown, scheduler)
+            run_loop(listener, paths, jobs, processes, server_shutdown, scheduler)
         })
         .map_err(|error| {
             MedusaError::new(
@@ -169,12 +183,14 @@ pub fn spawn_with_limits(
 fn start_scheduler(
     paths: &DaemonPaths,
     jobs: &Arc<Mutex<BTreeMap<String, JobRecord>>>,
+    processes: &Arc<ProcessRegistry>,
     limits: DaemonLimits,
 ) -> MedusaResult<JobScheduler> {
     let worker_paths = paths.clone();
     let worker_jobs = Arc::clone(jobs);
+    let worker_processes = Arc::clone(processes);
     let runner: JobRunner = Arc::new(move |job_id| {
-        run_job(&worker_paths, &worker_jobs, &job_id);
+        run_job(&worker_paths, &worker_jobs, &worker_processes, &job_id);
     });
     JobScheduler::start(limits, runner)
 }
@@ -183,14 +199,16 @@ fn run_loop(
     listener: LocalListener,
     paths: DaemonPaths,
     jobs: Arc<Mutex<BTreeMap<String, JobRecord>>>,
-    shutdown: Arc<AtomicBool>,
+    processes: Arc<ProcessRegistry>,
+    shutdown: Arc<AtomicU8>,
     mut scheduler: JobScheduler,
 ) -> MedusaResult<()> {
     let result = (|| {
-        while !shutdown.load(Ordering::SeqCst) {
+        while shutdown.load(Ordering::SeqCst) == SHUTDOWN_NONE {
             match listener.accept() {
                 Ok(stream) => {
-                    let _ = handle_connection(stream, &paths, &jobs, &shutdown, &scheduler);
+                    let _ =
+                        handle_connection(stream, &paths, &jobs, &processes, &shutdown, &scheduler);
                 }
                 Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
                     thread::sleep(Duration::from_millis(20));
@@ -200,11 +218,16 @@ fn run_loop(
         }
         Ok(())
     })();
+    let cancellation_result = if shutdown.load(Ordering::SeqCst) == SHUTDOWN_IMMEDIATE {
+        cancel_all_jobs(&paths, &jobs, &processes, &scheduler)
+    } else {
+        Ok(())
+    };
     let scheduler_result = scheduler.shutdown();
     listener.cleanup();
-    match (result, scheduler_result) {
-        (Err(error), _) | (Ok(()), Err(error)) => Err(error),
-        (Ok(()), Ok(())) => Ok(()),
+    match (result, cancellation_result, scheduler_result) {
+        (Err(error), _, _) | (Ok(()), Err(error), _) | (Ok(()), Ok(()), Err(error)) => Err(error),
+        (Ok(()), Ok(()), Ok(())) => Ok(()),
     }
 }
 
@@ -212,7 +235,8 @@ fn handle_connection(
     mut stream: LocalStream,
     paths: &DaemonPaths,
     jobs: &Arc<Mutex<BTreeMap<String, JobRecord>>>,
-    shutdown: &Arc<AtomicBool>,
+    processes: &Arc<ProcessRegistry>,
+    shutdown: &Arc<AtomicU8>,
     scheduler: &JobScheduler,
 ) -> MedusaResult<()> {
     stream
@@ -244,7 +268,14 @@ fn handle_connection(
             message: format!("unsupported protocol {}", envelope.version),
         }
     } else {
-        dispatch(envelope.request, paths, jobs, shutdown, scheduler)?
+        dispatch(
+            envelope.request,
+            paths,
+            jobs,
+            processes,
+            shutdown,
+            scheduler,
+        )?
     };
     write_response(&mut stream, response)
 }
@@ -266,7 +297,8 @@ fn dispatch(
     request: Request,
     paths: &DaemonPaths,
     jobs: &Arc<Mutex<BTreeMap<String, JobRecord>>>,
-    shutdown: &Arc<AtomicBool>,
+    processes: &Arc<ProcessRegistry>,
+    shutdown: &Arc<AtomicU8>,
     scheduler: &JobScheduler,
 ) -> MedusaResult<Response> {
     match request {
@@ -286,22 +318,27 @@ fn dispatch(
                 stdout: String::new(),
                 stderr: String::new(),
             };
+            processes.register(&job.id)?;
             {
                 let mut locked = lock_jobs(jobs)?;
                 locked.insert(job.id.clone(), job.clone());
-                persist_jobs(paths, &locked)?;
+                if let Err(error) = persist_jobs(paths, &locked) {
+                    locked.remove(&job.id);
+                    let _ = processes.remove(&job.id);
+                    return Err(error);
+                }
             }
             match scheduler.enqueue(job.id.clone()) {
                 Ok(()) => Ok(Response::Submitted { job }),
                 Err(SubmitError::Busy) => {
-                    discard_rejected_job(paths, jobs, &job.id)?;
+                    discard_rejected_job(paths, jobs, processes, &job.id)?;
                     Ok(Response::Error {
                         code: "daemon_busy".into(),
                         message: "daemon job queue is at capacity; retry later".into(),
                     })
                 }
                 Err(SubmitError::Stopped) => {
-                    discard_rejected_job(paths, jobs, &job.id)?;
+                    discard_rejected_job(paths, jobs, processes, &job.id)?;
                     Ok(Response::Error {
                         code: "daemon_stopping".into(),
                         message: "daemon is shutting down and no longer accepts jobs".into(),
@@ -315,6 +352,7 @@ fn dispatch(
                 job: locked.get(&job_id).cloned(),
             })
         }
+        Request::Cancel { job_id } => cancel_job(paths, jobs, processes, scheduler, &job_id),
         Request::List => {
             let locked = lock_jobs(jobs)?;
             Ok(Response::Jobs {
@@ -322,38 +360,56 @@ fn dispatch(
             })
         }
         Request::Shutdown => {
-            shutdown.store(true, Ordering::SeqCst);
+            request_shutdown(shutdown, SHUTDOWN_GRACEFUL);
+            Ok(Response::Ack)
+        }
+        Request::ShutdownNow => {
+            request_shutdown(shutdown, SHUTDOWN_IMMEDIATE);
             Ok(Response::Ack)
         }
     }
 }
 
+fn request_shutdown(shutdown: &AtomicU8, mode: u8) {
+    shutdown.fetch_max(mode, Ordering::SeqCst);
+}
+
 fn discard_rejected_job(
     paths: &DaemonPaths,
     jobs: &Arc<Mutex<BTreeMap<String, JobRecord>>>,
+    processes: &ProcessRegistry,
     job_id: &str,
 ) -> MedusaResult<()> {
     let mut locked = lock_jobs(jobs)?;
     locked.remove(job_id);
-    persist_jobs(paths, &locked)
+    persist_jobs(paths, &locked)?;
+    processes.remove(job_id)
 }
 
-fn run_job(paths: &DaemonPaths, jobs: &Arc<Mutex<BTreeMap<String, JobRecord>>>, job_id: &str) {
-    if let Err(error) = run_job_inner(paths, jobs, job_id) {
-        mark_job_failed(
-            paths,
-            jobs,
-            job_id,
-            format!("daemon worker failed: {error}"),
-        );
+fn run_job(
+    paths: &DaemonPaths,
+    jobs: &Arc<Mutex<BTreeMap<String, JobRecord>>>,
+    processes: &ProcessRegistry,
+    job_id: &str,
+) {
+    if let Err(error) = run_job_inner(paths, jobs, processes, job_id) {
+        record_worker_error(paths, jobs, processes, job_id, error);
+    }
+    if let Err(error) = processes.remove(job_id) {
+        record_worker_error(paths, jobs, processes, job_id, error);
     }
 }
 
 fn run_job_inner(
     paths: &DaemonPaths,
     jobs: &Arc<Mutex<BTreeMap<String, JobRecord>>>,
+    processes: &ProcessRegistry,
     job_id: &str,
 ) -> MedusaResult<()> {
+    if processes.is_cancelled(job_id)? {
+        mark_job_interrupted(paths, jobs, job_id, "cancelled before process start")?;
+        return Ok(());
+    }
     let command = {
         let mut locked = lock_jobs(jobs)?;
         let Some(job) = locked.get_mut(job_id) else {
@@ -363,6 +419,9 @@ fn run_job_inner(
                 format!("daemon queued job disappeared before execution: {job_id}"),
             ));
         };
+        if job.state == JobState::Interrupted {
+            return Ok(());
+        }
         job.state = JobState::Running;
         job.started_at = Some(OffsetDateTime::now_utc());
         let command = (job.program.clone(), job.args.clone());
@@ -370,10 +429,17 @@ fn run_job_inner(
         command
     };
 
-    let output = Command::new(&command.0)
-        .args(&command.1)
-        .current_dir(&paths.repo)
-        .output();
+    let output = processes.run(
+        job_id,
+        &command.0,
+        &command.1,
+        &paths.repo,
+        &paths.directory,
+    )?;
+    let Some(output) = output else {
+        mark_job_interrupted(paths, jobs, job_id, "cancelled before process start")?;
+        return Ok(());
+    };
     let mut locked = lock_jobs(jobs)?;
     let Some(job) = locked.get_mut(job_id) else {
         return Err(MedusaError::new(
@@ -383,23 +449,43 @@ fn run_job_inner(
         ));
     };
     job.finished_at = Some(OffsetDateTime::now_utc());
-    match output {
-        Ok(output) => {
-            job.exit_code = output.status.code();
-            job.stdout = String::from_utf8_lossy(&output.stdout).into_owned();
-            job.stderr = String::from_utf8_lossy(&output.stderr).into_owned();
-            job.state = if output.status.success() {
-                JobState::Succeeded
-            } else {
-                JobState::Failed
-            };
+    job.exit_code = output.status.code();
+    job.stdout = String::from_utf8_lossy(&output.stdout).into_owned();
+    let process_stderr = String::from_utf8_lossy(&output.stderr);
+    if output.cancelled || job.state == JobState::Interrupted {
+        if !process_stderr.trim().is_empty() {
+            append_detail(&mut job.stderr, process_stderr.trim());
         }
-        Err(error) => {
-            job.stderr = error.to_string();
-            job.state = JobState::Failed;
-        }
+        append_detail(
+            &mut job.stderr,
+            "process tree terminated after cancellation",
+        );
+        job.state = JobState::Interrupted;
+    } else {
+        job.stderr = process_stderr.into_owned();
+        job.state = if output.status.success() {
+            JobState::Succeeded
+        } else {
+            JobState::Failed
+        };
     }
     persist_jobs(paths, &locked)
+}
+
+fn record_worker_error(
+    paths: &DaemonPaths,
+    jobs: &Arc<Mutex<BTreeMap<String, JobRecord>>>,
+    processes: &ProcessRegistry,
+    job_id: &str,
+    error: MedusaError,
+) {
+    let message = format!("daemon worker failed: {error}");
+    match processes.is_cancelled(job_id) {
+        Ok(true) => {
+            let _ = mark_job_interrupted(paths, jobs, job_id, &message);
+        }
+        Ok(false) | Err(_) => mark_job_failed(paths, jobs, job_id, message),
+    }
 }
 
 fn mark_job_failed(
@@ -414,9 +500,13 @@ fn mark_job_failed(
     let Some(job) = locked.get_mut(job_id) else {
         return;
     };
-    job.state = JobState::Failed;
-    job.finished_at = Some(OffsetDateTime::now_utc());
-    job.stderr = message;
+    if job.state == JobState::Interrupted {
+        append_detail(&mut job.stderr, &message);
+    } else {
+        job.state = JobState::Failed;
+        job.finished_at = Some(OffsetDateTime::now_utc());
+        job.stderr = message;
+    }
     let _ = persist_jobs(paths, &locked);
 }
 
@@ -440,7 +530,10 @@ fn load_and_recover(paths: &DaemonPaths) -> MedusaResult<(BTreeMap<String, JobRe
     Ok((jobs, recovered))
 }
 
-fn persist_jobs(paths: &DaemonPaths, jobs: &BTreeMap<String, JobRecord>) -> MedusaResult<()> {
+pub(crate) fn persist_jobs(
+    paths: &DaemonPaths,
+    jobs: &BTreeMap<String, JobRecord>,
+) -> MedusaResult<()> {
     fs::create_dir_all(&paths.directory)?;
     let temporary = paths.state.with_extension("json.tmp");
     fs::write(&temporary, serde_json::to_vec_pretty(jobs)?)?;
@@ -499,7 +592,7 @@ fn validate_program(program: &str) -> MedusaResult<()> {
     Ok(())
 }
 
-fn lock_jobs(
+pub(crate) fn lock_jobs(
     jobs: &Arc<Mutex<BTreeMap<String, JobRecord>>>,
 ) -> MedusaResult<std::sync::MutexGuard<'_, BTreeMap<String, JobRecord>>> {
     jobs.lock().map_err(|_| {

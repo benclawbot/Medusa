@@ -115,6 +115,20 @@ impl JobScheduler {
         Ok(())
     }
 
+    pub(crate) fn cancel(&self, job_id: &str) -> bool {
+        let mut state = lock_state(&self.shared.state);
+        let Some(index) = state.queue.iter().position(|queued| queued == job_id) else {
+            return false;
+        };
+        state.queue.remove(index);
+        true
+    }
+
+    pub(crate) fn cancel_all_queued(&self) -> Vec<String> {
+        let mut state = lock_state(&self.shared.state);
+        state.queue.drain(..).collect()
+    }
+
     pub(crate) fn shutdown(&mut self) -> MedusaResult<()> {
         if self.workers.is_empty() {
             return Ok(());
