@@ -2,6 +2,7 @@
 
 mod lifecycle;
 mod paths;
+mod process;
 mod protocol;
 mod scheduler;
 mod server;
