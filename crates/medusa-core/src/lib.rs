@@ -74,6 +74,8 @@ pub enum ErrorCategory {
 pub enum ErrorCode {
     #[error("invalid configuration")]
     InvalidConfiguration,
+    #[error("invalid input")]
+    InvalidInput,
     #[error("incompatible protocol version")]
     IncompatibleProtocol,
     #[error("invalid event")]
