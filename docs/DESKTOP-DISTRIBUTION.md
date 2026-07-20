@@ -19,6 +19,14 @@ Neither layer performs Windows Authenticode signing, macOS Developer ID signing 
 
 The `Desktop` workflow also validates the uncompressed macOS `.app` tree before it is archived for release.
 
+## Shared runtime and durable sessions
+
+The desktop application is a thin Tauri adapter over `medusa-runtime`; it does not maintain a separate agent implementation. It uses the same controller, provider configuration, skills, tools, policy, cancellation, follow-up queue, plans, questions, memory, and repository-scoped daemon supervisor as the TUI.
+
+The **Sessions** dock lists durable sessions for the active repository and can preview their stored transcript. Selecting **Resume this session** starts the desktop through `RuntimeController::start_resumed` and preserves the session identity, objective, turn state, plan, pending question, transcript, and evidence chain.
+
+The resume request is one-shot and is cleared during desktop startup. Invalid identifiers, missing sessions, repository mismatches, corrupted state, and failed integrity checks return an error instead of silently opening a blank replacement conversation. See [Durable session resume](SESSION-RESUME.md) for the complete behavior and validation evidence.
+
 ## Continuous package validation
 
 The read-only desktop bundle job:
