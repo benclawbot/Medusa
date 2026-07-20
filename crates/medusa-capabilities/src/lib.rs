@@ -194,10 +194,14 @@ impl CapabilityRegistry {
     }
 
     #[must_use]
-    pub fn state(&self, capability: Capability) -> &CapabilityState {
+    pub fn state(&self, capability: Capability) -> CapabilityState {
         self.capabilities
             .get(&capability)
-            .expect("all capability states are populated")
+            .cloned()
+            .unwrap_or(CapabilityState {
+                available: false,
+                detail: "capability was not discovered".into(),
+            })
     }
 
     #[must_use]
