@@ -13,6 +13,7 @@ medusa-config = { path = "../medusa-config" }
 medusa-core.workspace = true
 medusa-extensions = { path = "../medusa-extensions" }
 medusa-intelligence = { path = "../medusa-intelligence" }
+medusa-memory = { path = "../medusa-memory" }
 medusa-protocol.workspace = true
 medusa-provider = { path = "../medusa-provider" }
 reqwest = { version = "0.12", default-features = false, features = ["blocking", "rustls-tls"] }
