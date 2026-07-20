@@ -1,5 +1,7 @@
 //! Provider-neutral model contracts and the MiniMax Anthropic-compatible adapter.
 
+mod manager;
+
 use std::{env, sync::OnceLock, thread, time::Duration};
 
 use medusa_config::Config;
@@ -7,6 +9,8 @@ use medusa_core::{ErrorCategory, ErrorCode, MedusaError, MedusaResult};
 use reqwest::{StatusCode, blocking::Client};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
+
+pub use manager::{ProviderHealth, ProviderManager};
 
 const PROVIDER_REQUEST_TIMEOUT: Duration = Duration::from_secs(120);
 const MAX_PROVIDER_RETRIES: u8 = 2;
@@ -469,6 +473,29 @@ impl ConfiguredProvider {
                 session_api_key,
             )?))
         }
+    }
+
+    /// Builds the configured primary provider plus ordered fallback providers.
+    pub fn manager_from_config(
+        config: &Config,
+        session_api_key: Option<String>,
+    ) -> MedusaResult<ProviderManager<Self>> {
+        let mut providers = vec![Self::from_config_with_api_key(
+            config,
+            session_api_key.clone(),
+        )?];
+        for fallback in &config.model.fallback_providers {
+            if fallback.eq_ignore_ascii_case(&config.model.provider) {
+                continue;
+            }
+            let mut fallback_config = config.clone();
+            fallback_config.model.provider = fallback.clone();
+            providers.push(Self::from_config_with_api_key(
+                &fallback_config,
+                session_api_key.clone(),
+            )?);
+        }
+        Ok(ProviderManager::new(providers))
     }
 }
 

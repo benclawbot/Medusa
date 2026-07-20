@@ -426,9 +426,8 @@ fn run_prompt(
 ) -> Result<RuntimeEvent, RuntimeError> {
     let config = state.config.clone();
     let max_turns = config.agent.max_turns;
-    let provider =
-        ConfiguredProvider::from_config_with_api_key(&config, state.session_api_key.clone())
-            .map_err(RuntimeError::agent)?;
+    let provider = ConfiguredProvider::manager_from_config(&config, state.session_api_key.clone())
+        .map_err(RuntimeError::agent)?;
     let engine = AgentEngine::new(provider, config);
     let selected_skill = state.pending_skill.clone();
     let skill_context = selected_skill.as_ref().map(SelectedSkill::prompt_context);

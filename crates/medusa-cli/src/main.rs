@@ -170,7 +170,7 @@ fn run() -> MedusaResult<()> {
         CommandKind::Shell { program, args } => shell(&repo, &program, &args),
         CommandKind::Checkpoint { message } => checkpoint(&repo, &message),
         CommandKind::Run { objective } => {
-            let provider = ConfiguredProvider::from_config(&config)?;
+            let provider = ConfiguredProvider::manager_from_config(&config, None)?;
             let engine = AgentEngine::new(provider, config);
             let mut session = engine.create_session(&repo, objective)?;
             println!("session {} created", session.id);
@@ -179,7 +179,7 @@ fn run() -> MedusaResult<()> {
             Ok(())
         }
         CommandKind::Resume { session } => {
-            let provider = ConfiguredProvider::from_config(&config)?;
+            let provider = ConfiguredProvider::manager_from_config(&config, None)?;
             let engine = AgentEngine::new(provider, config);
             let mut session = engine.load_session(&repo, &session)?;
             println!("session {} resumed", session.id);
