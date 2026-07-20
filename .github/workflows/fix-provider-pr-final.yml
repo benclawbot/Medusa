@@ -3,6 +3,8 @@ name: Fix provider PR final gates
 on:
   push:
     branches: [agent/provider-first-run-config]
+  pull_request:
+    branches: [main]
   workflow_dispatch:
 
 permissions:
@@ -30,37 +32,29 @@ jobs:
           old = '''        let mut profile = ProviderProfile::default();
                   profile.configured = true;
                   profile.connection = "omniroute".into();
-                  profile.base_url = Some("http://127.0.0.1:20128/v1".into());'''
+                  profile.base_url = Some("http://127.0.0.1:20128/v1".into());'''.replace('                  ', '        ')
           new = '''        let profile = ProviderProfile {
                       configured: true,
                       connection: "omniroute".into(),
                       base_url: Some("http://127.0.0.1:20128/v1".into()),
                       ..ProviderProfile::default()
-                  };'''
-          if old not in text and new not in text:
+                  };'''.replace('                  ', '        ').replace('                      ', '            ')
+          if old in text:
+              text = text.replace(old, new)
+          elif new not in text:
               raise SystemExit('config profile test marker missing')
-          path.write_text(text.replace(old, new))
+          path.write_text(text)
 
           path = Path('apps/medusa-desktop/src-tauri/src/dto.rs')
           text = path.read_text()
-          text = text.replace(
-              '''    Tool,
-                  Verification,
-              }''',
-              '''    Tool,
-                  Progress,
-                  Verification,
-              }''',
-          )
-          text = text.replace(
-              '''                        RuntimeActivityKind::Tool => DesktopActivityKind::Tool,
-                              RuntimeActivityKind::Verification => DesktopActivityKind::Verification,''',
-              '''                        RuntimeActivityKind::Tool => DesktopActivityKind::Tool,
-                              RuntimeActivityKind::Progress => DesktopActivityKind::Progress,
-                              RuntimeActivityKind::Verification => DesktopActivityKind::Verification,''',
-          )
-          if 'RuntimeActivityKind::Progress => DesktopActivityKind::Progress' not in text:
-              raise SystemExit('desktop progress mapping marker missing')
+          if '    Progress,\n    Verification,' not in text:
+              text = text.replace('    Tool,\n    Verification,', '    Tool,\n    Progress,\n    Verification,')
+          mapping = '                        RuntimeActivityKind::Progress => DesktopActivityKind::Progress,\n'
+          if mapping not in text:
+              anchor = '                        RuntimeActivityKind::Tool => DesktopActivityKind::Tool,\n'
+              if anchor not in text:
+                  raise SystemExit('desktop tool mapping marker missing')
+              text = text.replace(anchor, anchor + mapping)
           path.write_text(text)
           PY
           cargo fmt --all
