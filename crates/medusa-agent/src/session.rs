@@ -11,6 +11,8 @@ use time::OffsetDateTime;
 
 use crate::evidence::verify_chain;
 
+mod recall;
+
 /// A durable model-authored task plan step.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct AgentPlanStep {
@@ -151,10 +153,13 @@ pub(crate) fn load(repo: &Path, session: &str) -> MedusaResult<AgentSession> {
 
 pub(crate) fn persist(session: &AgentSession) -> MedusaResult<()> {
     let primary = session_path(&session.repo, &session.id);
-    match persist_at(&primary, session) {
+    let persisted = match persist_at(&primary, session) {
         Ok(()) => Ok(()),
         Err(_) => persist_at(&fallback_session_path(&session.repo, &session.id), session),
-    }
+    };
+    persisted?;
+    let _recall_result = recall::persist_completed_session(session);
+    Ok(())
 }
 
 fn persist_at(path: &Path, session: &AgentSession) -> MedusaResult<()> {
