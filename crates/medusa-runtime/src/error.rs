@@ -79,11 +79,9 @@ impl RuntimeController {
     /// Starts a runtime with a verified durable session already attached.
     pub fn start_resumed(repo: PathBuf, session_id: &str) -> Result<Self, RuntimeError> {
         let mut state = RuntimeState::load(repo.clone())?;
-        let provider = ConfiguredProvider::manager_from_config(
-            &state.config,
-            state.session_api_key.clone(),
-        )
-        .map_err(RuntimeError::agent)?;
+        let provider =
+            ConfiguredProvider::manager_from_config(&state.config, state.session_api_key.clone())
+                .map_err(RuntimeError::agent)?;
         let engine = AgentEngine::new(provider, state.config.clone());
         let session = engine
             .load_session(&repo, session_id)
