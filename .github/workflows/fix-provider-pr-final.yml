@@ -58,12 +58,6 @@ jobs:
           path.write_text(text)
           PY
           cargo fmt --all
-      - name: Verify fixes
-        run: |
-          cargo clippy --workspace --all-targets --locked -- -D warnings
-          cargo check --manifest-path apps/medusa-desktop/src-tauri/Cargo.toml --all-targets --locked
-          cargo test -p medusa-cli --locked
-          bash scripts/check-source-size.sh
       - name: Commit fixes
         run: |
           git config user.name 'github-actions[bot]'
@@ -73,3 +67,9 @@ jobs:
             git commit --no-verify -m 'fix: satisfy final provider and desktop gates'
             git push origin HEAD:agent/provider-first-run-config
           fi
+      - name: Verify fixes
+        run: |
+          cargo clippy --workspace --all-targets --locked -- -D warnings
+          cargo check --manifest-path apps/medusa-desktop/src-tauri/Cargo.toml --all-targets --locked
+          cargo test -p medusa-cli --locked
+          bash scripts/check-source-size.sh
