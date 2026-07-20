@@ -1,7 +1,10 @@
 use std::{collections::BTreeMap, io::Read};
 
 use medusa_core::{ErrorCategory, ErrorCode, MedusaError, MedusaResult};
-use reqwest::blocking::{Client, Response};
+use reqwest::{
+    StatusCode,
+    blocking::{Client, Response},
+};
 use semver::Version;
 use serde::Deserialize;
 
@@ -12,7 +15,8 @@ const MANIFEST_NAME: &str = "medusa-release-manifest.json";
 
 /// Discovers a published release and streams its assets.
 pub trait ReleaseClient {
-    fn latest(&self) -> MedusaResult<Release>;
+    /// Returns `None` when the repository has not published a stable release yet.
+    fn latest(&self) -> MedusaResult<Option<Release>>;
     fn download(
         &self,
         artifact: &Artifact,
@@ -57,12 +61,25 @@ impl GithubReleaseClient {
 }
 
 impl ReleaseClient for GithubReleaseClient {
-    fn latest(&self) -> MedusaResult<Release> {
+    fn latest(&self) -> MedusaResult<Option<Release>> {
         let url = format!(
             "{}/repos/{}/releases/latest",
             self.api_base, self.repository
         );
-        let release: GithubRelease = self.response(&url)?.json().map_err(http_error)?;
+        let response = self
+            .client
+            .get(&url)
+            .header("Accept", "application/vnd.github+json")
+            .send()
+            .map_err(http_error)?;
+        if response.status() == StatusCode::NOT_FOUND {
+            return Ok(None);
+        }
+        let release: GithubRelease = response
+            .error_for_status()
+            .map_err(http_error)?
+            .json()
+            .map_err(http_error)?;
         if release.draft || release.prerelease {
             return Err(invalid(
                 "latest GitHub release must be published and stable",
@@ -106,7 +123,7 @@ impl ReleaseClient for GithubReleaseClient {
                 })
             })
             .collect::<MedusaResult<Vec<_>>>()?;
-        Ok(Release {
+        Ok(Some(Release {
             version,
             repository: self.repository.clone(),
             manifest: Artifact {
@@ -116,7 +133,7 @@ impl ReleaseClient for GithubReleaseClient {
                 sha256: manifest_asset.digest.clone().unwrap_or_default(),
             },
             artifacts,
-        })
+        }))
     }
 
     fn download(

@@ -197,7 +197,10 @@ fn update(check_only: bool, automatic: bool) -> MedusaResult<()> {
     let check_only = check_only || policy == UpdatePolicy::Check;
     let automatic = automatic || policy == UpdatePolicy::Automatic;
     let client = GithubReleaseClient::public()?;
-    let release = client.latest()?;
+    let Some(release) = client.latest()? else {
+        println!("No published Medusa release is available yet; this installation is unchanged.");
+        return Ok(());
+    };
     match UpdateCheck::compare(env!("CARGO_PKG_VERSION"), release.version.clone()) {
         UpdateCheck::UpToDate { current } => {
             println!("Medusa {current} is up to date.");
