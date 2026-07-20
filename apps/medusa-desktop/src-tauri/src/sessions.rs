@@ -37,6 +37,11 @@ pub fn runtime_list_sessions(repo: String) -> Result<Vec<DesktopSessionSummary>,
         return Err(format!("{} is not a directory", repo.display()));
     }
     list_sessions(&repo)
-        .map(|sessions| sessions.into_iter().map(DesktopSessionSummary::from).collect())
+        .map(|sessions| {
+            sessions
+                .into_iter()
+                .map(DesktopSessionSummary::from)
+                .collect()
+        })
         .map_err(|error| error.to_string())
 }
