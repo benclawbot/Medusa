@@ -494,4 +494,75 @@ mod tests {
         assert_eq!(calls[0].0, "git");
         assert_eq!(calls[0].1[1], "https://github.example/acme/medusa.git");
     }
+
+    #[test]
+    fn every_repository_pr_issue_and_actions_operation_routes_through_the_service() {
+        let fake = FakeExecutor::default();
+        let github = service(fake.clone());
+        github.fetch().expect("fetch");
+        github.pull().expect("pull");
+        github.push().expect("push");
+        github.checkout("main").expect("checkout");
+        github.branches().expect("branches");
+        github.tags().expect("tags");
+        github
+            .create_pr("title", "body", "main", Some("feature"))
+            .expect("create pr");
+        github
+            .update_pr(7, Some("updated"), Some("details"))
+            .expect("update pr");
+        github
+            .review_pr(7, "looks good", false)
+            .expect("comment review");
+        github.close_pr(7).expect("close pr");
+        github.create_issue("bug", "details").expect("create issue");
+        github.comment_issue(8, "triaged").expect("comment issue");
+        github.assign_issue(8, "octocat").expect("assign issue");
+        github.label_issue(8, "bug").expect("label issue");
+        github.milestone_issue(8, "v1").expect("milestone issue");
+        github.watch_workflow(99).expect("watch workflow");
+        github.download_workflow_logs(99).expect("logs");
+        let calls = fake.0.lock().expect("lock");
+        assert!(
+            calls
+                .iter()
+                .any(|(_, args)| args.contains(&"--head".into()))
+        );
+        assert!(
+            calls
+                .iter()
+                .any(|(_, args)| args.contains(&"--comment".into()))
+        );
+        assert!(
+            calls
+                .iter()
+                .any(|(_, args)| args.contains(&"--add-label".into()))
+        );
+        assert!(
+            calls
+                .iter()
+                .any(|(_, args)| args.contains(&"--exit-status".into()))
+        );
+        assert!(calls.iter().any(|(_, args)| args.contains(&"--log".into())));
+    }
+
+    struct FailingExecutor;
+    impl CommandExecutor for FailingExecutor {
+        fn run(&self, _: &str, _: &[String], _: Option<&Path>) -> MedusaResult<CommandOutput> {
+            Ok(CommandOutput {
+                success: false,
+                stdout: String::new(),
+                stderr: "denied".into(),
+            })
+        }
+    }
+
+    #[test]
+    fn failed_external_command_is_a_structured_execution_error() {
+        let github =
+            GitHubService::enterprise("acme/medusa", "github.example", None, FailingExecutor);
+        let error = github.fetch().expect_err("failed git command");
+        assert_eq!(error.code, ErrorCode::ToolExecutionFailed);
+        assert!(error.message.contains("denied"));
+    }
 }
