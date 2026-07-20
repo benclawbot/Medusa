@@ -1,9 +1,30 @@
+use std::fs;
+
 use medusa_core::MedusaResult;
-use medusa_memory::{SessionEvent, SessionRecallStore, SessionRecord};
+use serde::Serialize;
 use serde_json::Value;
 use time::format_description::well_known::Rfc3339;
 
 use super::AgentSession;
+
+#[derive(Serialize)]
+struct RecallEvent {
+    ordinal: usize,
+    kind: String,
+    tool: Option<String>,
+    success: Option<bool>,
+    text: String,
+}
+
+#[derive(Serialize)]
+struct RecallRecord {
+    session_id: String,
+    parent_session_id: Option<String>,
+    created_at: String,
+    repository_fingerprint: String,
+    outcome: String,
+    events: Vec<RecallEvent>,
+}
 
 pub(super) fn persist_completed_session(session: &AgentSession) -> MedusaResult<()> {
     if !session.completed {
@@ -13,7 +34,7 @@ pub(super) fn persist_completed_session(session: &AgentSession) -> MedusaResult<
     let mut events = Vec::with_capacity(session.messages.len() + session.events.len());
     for (ordinal, message) in session.messages.iter().enumerate() {
         let value = serde_json::to_value(message)?;
-        events.push(SessionEvent {
+        events.push(RecallEvent {
             ordinal,
             kind: "message".to_owned(),
             tool: find_string(&value, &["tool", "name"]),
@@ -25,7 +46,7 @@ pub(super) fn persist_completed_session(session: &AgentSession) -> MedusaResult<
     let offset = events.len();
     for (index, envelope) in session.events.iter().enumerate() {
         let value = serde_json::to_value(envelope)?;
-        events.push(SessionEvent {
+        events.push(RecallEvent {
             ordinal: offset + index,
             kind: "event".to_owned(),
             tool: find_string(&value, &["tool", "name"]),
@@ -35,7 +56,7 @@ pub(super) fn persist_completed_session(session: &AgentSession) -> MedusaResult<
     }
 
     if events.is_empty() {
-        events.push(SessionEvent {
+        events.push(RecallEvent {
             ordinal: 0,
             kind: "objective".to_owned(),
             tool: None,
@@ -44,7 +65,7 @@ pub(super) fn persist_completed_session(session: &AgentSession) -> MedusaResult<
         });
     }
 
-    SessionRecallStore::new(&session.repo)?.upsert(&SessionRecord {
+    let record = RecallRecord {
         session_id: session.id.to_string(),
         parent_session_id: None,
         created_at: session.created_at.format(&Rfc3339).map_err(|error| {
@@ -57,7 +78,15 @@ pub(super) fn persist_completed_session(session: &AgentSession) -> MedusaResult<
         repository_fingerprint: format!("path:{}", session.repo.to_string_lossy()),
         outcome: "success".to_owned(),
         events,
-    })
+    };
+
+    let inbox = session.repo.join(".medusa/session-recall-inbox");
+    fs::create_dir_all(&inbox)?;
+    let path = inbox.join(format!("{}.json", session.id));
+    let temporary = path.with_extension("json.tmp");
+    fs::write(&temporary, serde_json::to_vec_pretty(&record)?)?;
+    fs::rename(temporary, path)?;
+    Ok(())
 }
 
 fn find_string(value: &Value, keys: &[&str]) -> Option<String> {
@@ -97,13 +126,12 @@ mod tests {
     use std::path::PathBuf;
 
     use medusa_core::SessionId;
-    use medusa_memory::{SessionRecallStore, SessionSearchQuery};
     use time::OffsetDateTime;
 
     use super::*;
 
     #[test]
-    fn completed_session_is_written_to_recall_store() {
+    fn completed_session_is_written_to_recall_inbox() {
         let directory = tempfile::tempdir().expect("tempdir");
         let session = AgentSession {
             id: SessionId::new(),
@@ -122,15 +150,13 @@ mod tests {
         };
 
         persist_completed_session(&session).expect("persist recall");
-        let hits = SessionRecallStore::new(directory.path())
-            .expect("store")
-            .session_search(&SessionSearchQuery {
-                query: "repair update command".to_owned(),
-                limit: 5,
-                ..SessionSearchQuery::default()
-            })
-            .expect("search");
-        assert_eq!(hits.len(), 1);
-        assert_eq!(hits[0].session_id, session.id.to_string());
+        let path = directory
+            .path()
+            .join(".medusa/session-recall-inbox")
+            .join(format!("{}.json", session.id));
+        let value: Value = serde_json::from_slice(&fs::read(path).expect("inbox record"))
+            .expect("valid recall record");
+        assert_eq!(value["session_id"], session.id.to_string());
+        assert_eq!(value["events"][0]["text"], "repair the update command");
     }
 }
