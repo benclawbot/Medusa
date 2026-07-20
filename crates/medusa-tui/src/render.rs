@@ -117,12 +117,12 @@ pub(super) fn session_metrics_line(app: &AppState) -> String {
         .output_tokens_per_second()
         .map_or_else(|| "—".to_owned(), format_token_rate);
     format!(
-        "session {} · in {} · out {} · cached {} ({:.0}%) · {rate} tok/s",
+        "session {} · input {} · output {} · cache-read {} · cache-write {} · {rate} tok/s",
         format_elapsed(app.session_elapsed_seconds()),
-        format_token_count(app.total_input_tokens()),
+        format_token_count(app.input_tokens),
         format_token_count(app.output_tokens),
         format_token_count(app.cache_read_input_tokens),
-        app.cache_read_percentage(),
+        format_token_count(app.cache_creation_input_tokens),
     )
 }
 
