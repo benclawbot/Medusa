@@ -1,4 +1,7 @@
-use std::{collections::BTreeSet, path::{Path, PathBuf}};
+use std::{
+    collections::BTreeSet,
+    path::{Path, PathBuf},
+};
 
 use medusa_core::{ErrorCategory, ErrorCode, MedusaError, MedusaResult};
 use rusqlite::{Connection, OptionalExtension, params};
@@ -145,7 +148,10 @@ impl SessionRecallStore {
         Ok(())
     }
 
-    pub fn session_search(&self, query: &SessionSearchQuery) -> MedusaResult<Vec<SessionSearchHit>> {
+    pub fn session_search(
+        &self,
+        query: &SessionSearchQuery,
+    ) -> MedusaResult<Vec<SessionSearchHit>> {
         let expression = fts_expression(&query.query)?;
         let connection = self.connection()?;
         let mut statement = connection
@@ -177,17 +183,37 @@ impl SessionRecallStore {
         let limit = query.limit.clamp(1, 100);
         let mut hits = Vec::new();
         for row in rows {
-            let (session_id, parent_session_id, created_at, repository, tools_json, outcome, excerpt, rank) =
-                row.map_err(sql_error)?;
+            let (
+                session_id,
+                parent_session_id,
+                created_at,
+                repository,
+                tools_json,
+                outcome,
+                excerpt,
+                rank,
+            ) = row.map_err(sql_error)?;
             let tools: BTreeSet<String> = serde_json::from_str(&tools_json)?;
             if query
                 .repository_fingerprint
                 .as_ref()
                 .is_some_and(|value| value != &repository)
-                || query.tool.as_ref().is_some_and(|value| !tools.contains(value))
-                || query.outcome.as_ref().is_some_and(|value| value != &outcome)
-                || query.date_from.as_ref().is_some_and(|value| &created_at < value)
-                || query.date_to.as_ref().is_some_and(|value| &created_at > value)
+                || query
+                    .tool
+                    .as_ref()
+                    .is_some_and(|value| !tools.contains(value))
+                || query
+                    .outcome
+                    .as_ref()
+                    .is_some_and(|value| value != &outcome)
+                || query
+                    .date_from
+                    .as_ref()
+                    .is_some_and(|value| &created_at < value)
+                || query
+                    .date_to
+                    .as_ref()
+                    .is_some_and(|value| &created_at > value)
             {
                 continue;
             }
@@ -229,7 +255,11 @@ impl SessionRecallStore {
         })
     }
 
-    pub fn session_compare(&self, session_a: &str, session_b: &str) -> MedusaResult<SessionComparison> {
+    pub fn session_compare(
+        &self,
+        session_a: &str,
+        session_b: &str,
+    ) -> MedusaResult<SessionComparison> {
         let a = self.read(session_a)?;
         let b = self.read(session_b)?;
         let tools_a = a.tools();
@@ -319,7 +349,9 @@ fn fts_expression(query: &str) -> MedusaResult<String> {
         .map(|term| format!("\"{}\"", term.replace('"', "\"\"")))
         .collect::<Vec<_>>();
     if terms.is_empty() {
-        return Err(invalid("session search requires at least one searchable term"));
+        return Err(invalid(
+            "session search requires at least one searchable term",
+        ));
     }
     Ok(terms.join(" AND "))
 }
@@ -362,7 +394,9 @@ mod tests {
     fn fts_search_preserves_lineage_and_filters() {
         let directory = tempfile::tempdir().expect("tempdir");
         let store = SessionRecallStore::new(directory.path()).expect("store");
-        store.upsert(&record("child", Some("parent"), "success")).expect("upsert");
+        store
+            .upsert(&record("child", Some("parent"), "success"))
+            .expect("upsert");
         let hits = store
             .session_search(&SessionSearchQuery {
                 query: "Windows Cargo replacement".to_owned(),
@@ -381,7 +415,9 @@ mod tests {
     fn open_can_return_a_window_around_an_event() {
         let directory = tempfile::tempdir().expect("tempdir");
         let store = SessionRecallStore::new(directory.path()).expect("store");
-        store.upsert(&record("session", None, "success")).expect("upsert");
+        store
+            .upsert(&record("session", None, "success"))
+            .expect("upsert");
         let window = store.session_open("session", Some(1), 0).expect("open");
         assert_eq!(window.events.len(), 1);
         assert_eq!(window.events[0].ordinal, 1);
