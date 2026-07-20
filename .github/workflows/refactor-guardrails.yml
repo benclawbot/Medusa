@@ -42,8 +42,20 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Enforce source-size ceiling and exception registry
-        run: bash scripts/check-source-size.sh
+      - name: Capture source-size report
+        run: |
+          set +e
+          bash scripts/check-source-size.sh > source-size.log 2>&1
+          echo $? > source-size.status
+          exit 0
+      - uses: actions/upload-artifact@v4
+        with:
+          name: source-size-report
+          path: |
+            source-size.log
+            source-size.status
+      - name: Enforce source-size result
+        run: test "$(cat source-size.status)" = "0"
 
   workflow-hygiene:
     name: Workflows are read-only or explicitly justified
