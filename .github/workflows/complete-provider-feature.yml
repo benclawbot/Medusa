@@ -29,24 +29,10 @@ jobs:
         run: python3 scripts/complete_provider_feature.py
       - name: Format
         run: cargo fmt --all
-      - name: Record generated diff
-        run: |
-          git status --short
-          git diff --binary > provider-feature.patch
-      - uses: actions/upload-artifact@v4
-        with:
-          name: provider-feature-patch
-          path: provider-feature.patch
+      - name: Refresh lockfile
+        run: cargo update -p medusa-config -p medusa-provider -p medusa-runtime -p medusa-cli || cargo generate-lockfile
       - name: Compile workspace
-        run: |
-          set -o pipefail
-          cargo check --workspace --all-targets --locked 2>&1 | tee provider-compile.log
-      - name: Upload compiler diagnostics
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: provider-compile-log
-          path: provider-compile.log
+        run: cargo check --workspace --all-targets --locked
       - name: Test provider, config, runtime, and CLI
         run: |
           cargo test -p medusa-config --locked
@@ -57,7 +43,6 @@ jobs:
         run: |
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          rm -f provider-feature.patch provider-compile.log
           git add -A
           if git diff --cached --quiet; then
             echo 'No generated changes'
