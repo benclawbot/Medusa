@@ -69,11 +69,13 @@ Install the latest CLI in one line:
 cargo install --git https://github.com/benclawbot/Medusa.git --locked medusa-cli
 ```
 
-The same command works in Bash. To update an existing installation later, run:
+Release-installed binaries can check for a newer verified release without changing the installation:
 
 ```text
-medusa update
+medusa update --check
 ```
+
+`medusa update` downloads the platform-specific CLI archive, verifies the GitHub/Sigstore attestation for the release manifest and the archive SHA-256, then performs an atomic replacement with a rollback binary. It restarts itself after a successful update; Windows uses a short-lived helper process so the running executable is never locked. Package-managed Linux and macOS installations are not overwritten: Medusa reports the corresponding package-manager command instead. For unattended maintenance, use `medusa update --automatic`.
 
 For a development checkout instead:
 

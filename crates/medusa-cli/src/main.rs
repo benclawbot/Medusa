@@ -3,6 +3,7 @@ mod config_command;
 use std::{
     collections::BTreeMap,
     fs,
+    io::IsTerminal,
     path::{Path, PathBuf},
     process::Command,
 };
@@ -19,6 +20,10 @@ use medusa_extensions::{DesktopCommanderClient, DesktopCommanderSettings};
 use medusa_hardening::{CURRENT_SCHEMA_VERSION, Migrator};
 use medusa_provider::ConfiguredProvider;
 use medusa_tui::{TuiOptions, run as run_tui};
+use medusa_update::{
+    AtomicInstaller, AttestationVerifier, GithubAttestationVerifier, GithubReleaseClient,
+    InstallKind, InstallLocation, Platform, ReleaseClient, Restart, UpdateCheck, verify_sha256,
+};
 use serde::Serialize;
 use walkdir::WalkDir;
 
@@ -54,8 +59,15 @@ enum CommandKind {
         #[command(subcommand)]
         action: Option<ConfigAction>,
     },
-    /// Install the latest Medusa CLI from the official repository.
-    Update,
+    /// Check for or install a verified release from the official repository.
+    Update {
+        /// Report whether a verified update is available without modifying this installation.
+        #[arg(long)]
+        check: bool,
+        /// Apply an available update without an additional prompt (for managed automation).
+        #[arg(long)]
+        automatic: bool,
+    },
     Search {
         pattern: String,
     },
@@ -152,7 +164,7 @@ fn run() -> MedusaResult<()> {
         }
         CommandKind::Doctor => doctor(&repo, &config),
         CommandKind::Migrate => migrate(&repo),
-        CommandKind::Update => update(),
+        CommandKind::Update { check, automatic } => update(check, automatic),
         CommandKind::Search { pattern } => search(&repo, &pattern),
         CommandKind::Shell { program, args } => shell(&repo, &program, &args),
         CommandKind::Checkpoint { message } => checkpoint(&repo, &message),
@@ -179,33 +191,58 @@ fn run() -> MedusaResult<()> {
     }
 }
 
-fn update() -> MedusaResult<()> {
-    println!("Updating Medusa from https://github.com/benclawbot/Medusa ...");
-    let status = Command::new("cargo")
-        .args([
-            "install",
-            "--git",
-            "https://github.com/benclawbot/Medusa.git",
-            "--locked",
-            "--force",
-            "medusa-cli",
-        ])
-        .status()
-        .map_err(|error| {
-            MedusaError::new(
-                ErrorCode::DependencyUnavailable,
-                ErrorCategory::Environment,
-                format!("could not start Cargo updater: {error}"),
-            )
-        })?;
-    if !status.success() {
+fn update(check_only: bool, automatic: bool) -> MedusaResult<()> {
+    let client = GithubReleaseClient::public()?;
+    let release = client.latest()?;
+    match UpdateCheck::compare(env!("CARGO_PKG_VERSION"), release.version.clone()) {
+        UpdateCheck::UpToDate { current } => {
+            println!("Medusa {current} is up to date.");
+            return Ok(());
+        }
+        UpdateCheck::Available { current, latest } => {
+            println!("Medusa update available: {current} -> {latest}")
+        }
+        UpdateCheck::CurrentBuildUnparseable { current, latest } => {
+            println!("Medusa build {current} can be updated to verified release {latest}");
+        }
+    }
+    if check_only {
+        return Ok(());
+    }
+    if !automatic && !std::io::stdin().is_terminal() {
         return Err(MedusaError::new(
-            ErrorCode::ToolExecutionFailed,
-            ErrorCategory::Execution,
-            format!("Cargo updater exited with {status}"),
+            ErrorCode::PolicyDenied,
+            ErrorCategory::Policy,
+            "refusing unattended replacement; use medusa update --automatic",
         ));
     }
-    println!("Medusa is up to date. Restart any open Medusa sessions to use the new version.");
+    let location = InstallLocation::current()?;
+    if let InstallKind::PackageManaged { manager, command } = location.kind {
+        println!("This Medusa binary is managed by {manager}. Update it with: {command}");
+        return Ok(());
+    }
+    let temporary = tempfile::tempdir()?;
+    let manifest_path = temporary.path().join("medusa-release-manifest.json");
+    client.download(&release.manifest, &manifest_path, |_, _| {})?;
+    GithubAttestationVerifier.verify_manifest(&manifest_path, &release.repository)?;
+    let artifact = release.artifact_for(&Platform::current())?;
+    let archive = temporary.path().join(&artifact.name);
+    println!("Downloading {}...", artifact.name);
+    client.download(artifact, &archive, |written, total| match total {
+        Some(total) => eprint!("\r{written}/{total} bytes"),
+        None => eprint!("\r{written} bytes"),
+    })?;
+    eprintln!();
+    verify_sha256(&archive, &artifact.sha256)?;
+    let installer = AtomicInstaller::new(location.executable);
+    let extracted = installer.extract_archive(&archive, &temporary.path().join("payload"))?;
+    match installer.replace(&extracted, &Restart::default())? {
+        Some(backup) => println!(
+            "Medusa updated and restarted. Rollback binary: {}",
+            backup.display()
+        ),
+        None => println!("Medusa replacement is scheduled after this process exits."),
+    }
     Ok(())
 }
 
@@ -497,8 +534,15 @@ mod tests {
 
     #[test]
     fn update_command_is_available_without_extra_arguments() {
-        let cli = Cli::try_parse_from(["medusa", "update"]).expect("parse update command");
-        assert!(matches!(cli.command, Some(CommandKind::Update)));
+        let cli =
+            Cli::try_parse_from(["medusa", "update", "--check"]).expect("parse update command");
+        assert!(matches!(
+            cli.command,
+            Some(CommandKind::Update {
+                check: true,
+                automatic: false
+            })
+        ));
     }
 
     #[test]

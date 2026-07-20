@@ -20,9 +20,11 @@ medusa-extensions = { path = "../medusa-extensions" }
 medusa-hardening = { path = "../medusa-hardening" }
 medusa-provider = { path = "../medusa-provider" }
 medusa-tui = { path = "../medusa-tui" }
+medusa-update = { path = "../medusa-update" }
 serde.workspace = true
 serde_json.workspace = true
 toml.workspace = true
+tempfile.workspace = true
 walkdir = "2.5"
 
 [dev-dependencies]
