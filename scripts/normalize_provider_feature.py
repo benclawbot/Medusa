@@ -1,5 +1,4 @@
 from pathlib import Path
-import re
 
 path = Path("crates/medusa-config/src/lib.rs")
 text = path.read_text()
@@ -15,12 +14,9 @@ new = '''    let mut model = toml::map::Map::new();
     let overlay = toml::Value::Table(root);
 '''
 if new not in text:
-    pattern = re.compile(
-        r"\s*let overlay = toml::Value::try_from\(toml::toml! \{.*?\}\)"
-        r"\.map_err\(\|error\| invalid\(error\.to_string\(\)\)\)\?;\n",
-        re.DOTALL,
-    )
-    text, count = pattern.subn("\n" + new, text, count=1)
-    if count != 1:
-        raise SystemExit("provider overlay marker not found")
+    start = text.find("    let overlay = toml::Value::try_from(toml::toml! {")
+    end = text.find("    merge(base, overlay);", start)
+    if start < 0 or end < 0:
+        raise SystemExit("provider overlay markers not found")
+    text = text[:start] + new + text[end:]
 path.write_text(text)
