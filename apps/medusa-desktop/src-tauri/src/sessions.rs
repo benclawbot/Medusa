@@ -19,14 +19,23 @@ pub struct DesktopSessionSummary {
     pub turn: u32,
 }
 
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DesktopSessionMessage {
+    pub role: String,
+    pub text: String,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DesktopSessionDetail {
+    pub summary: DesktopSessionSummary,
+    pub messages: Vec<DesktopSessionMessage>,
+}
+
 #[tauri::command]
 pub fn runtime_list_sessions(repo: String) -> Result<Vec<DesktopSessionSummary>, String> {
-    let repo = fs::canonicalize(Path::new(&repo))
-        .map_err(|error| format!("cannot open {repo}: {error}"))?;
-    if !repo.is_dir() {
-        return Err(format!("{} is not a directory", repo.display()));
-    }
-
+    let repo = canonical_repo(&repo)?;
     let mut sessions = BTreeMap::new();
     collect_sessions(&repo.join(".medusa/sessions"), &mut sessions)?;
     collect_sessions(&fallback_session_root(&repo), &mut sessions)?;
@@ -38,6 +47,51 @@ pub fn runtime_list_sessions(repo: String) -> Result<Vec<DesktopSessionSummary>,
             .then_with(|| left.id.cmp(&right.id))
     });
     Ok(sessions)
+}
+
+#[tauri::command]
+pub fn runtime_read_session(repo: String, session_id: String) -> Result<DesktopSessionDetail, String> {
+    let repo = canonical_repo(&repo)?;
+    let value = read_session_value(&repo, &session_id)?;
+    let summary = summary_from_value(&value)
+        .ok_or_else(|| format!("session {session_id} is missing required metadata"))?;
+    let messages = value
+        .get("messages")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(message_from_value)
+        .collect();
+    Ok(DesktopSessionDetail { summary, messages })
+}
+
+fn canonical_repo(repo: &str) -> Result<PathBuf, String> {
+    let repo = fs::canonicalize(Path::new(repo))
+        .map_err(|error| format!("cannot open {repo}: {error}"))?;
+    if !repo.is_dir() {
+        return Err(format!("{} is not a directory", repo.display()));
+    }
+    Ok(repo)
+}
+
+fn read_session_value(repo: &Path, session_id: &str) -> Result<Value, String> {
+    if session_id.is_empty()
+        || !session_id
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-' || byte == b'_')
+    {
+        return Err("invalid session id".to_owned());
+    }
+    for root in [repo.join(".medusa/sessions"), fallback_session_root(repo)] {
+        let path = root.join(format!("{session_id}.json"));
+        if path.is_file() {
+            return serde_json::from_slice(
+                &fs::read(&path).map_err(|error| format!("cannot read {}: {error}", path.display()))?,
+            )
+            .map_err(|error| format!("cannot parse {}: {error}", path.display()));
+        }
+    }
+    Err(format!("session {session_id} was not found for {}", repo.display()))
 }
 
 fn collect_sessions(
@@ -84,6 +138,31 @@ fn summary_from_value(value: &Value) -> Option<DesktopSessionSummary> {
             .is_some_and(|question| !question.is_null()),
         turn: u32::try_from(value.get("turn")?.as_u64()?).ok()?,
     })
+}
+
+fn message_from_value(value: &Value) -> Option<DesktopSessionMessage> {
+    let role = value.get("role")?.as_str()?.to_owned();
+    let text = value
+        .get("content")?
+        .as_array()?
+        .iter()
+        .filter_map(block_text)
+        .collect::<Vec<_>>()
+        .join("\n");
+    (!text.trim().is_empty()).then_some(DesktopSessionMessage { role, text })
+}
+
+fn block_text(value: &Value) -> Option<String> {
+    match value.get("type")?.as_str()? {
+        "text" => value.get("text")?.as_str().map(str::to_owned),
+        "image" => Some("[Image attachment]".to_owned()),
+        "tool_use" => Some(format!(
+            "Tool: {}",
+            value.get("name").and_then(Value::as_str).unwrap_or("unknown")
+        )),
+        "tool_result" => value.get("content")?.as_str().map(str::to_owned),
+        _ => None,
+    }
 }
 
 fn fallback_session_root(repo: &Path) -> PathBuf {
