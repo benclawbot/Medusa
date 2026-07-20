@@ -37,7 +37,7 @@ pub use medusa_agent::{
 use support::{
     SelectedSkill, UpdateState, configure_model, credential_environment, discover_skills,
     effort_for_turns, forward_update, is_supported_provider, load_selected_skill, message_blocks,
-    model_configuration_details, objective_for, turns_for_effort,
+    model_configuration_details, objective_for, should_auto_compact, turns_for_effort,
 };
 
 #[derive(Debug)]
@@ -70,6 +70,8 @@ pub enum RuntimeEvent {
         effort: String,
         plan_mode: bool,
         credential_configured: bool,
+        context_window_tokens: u64,
+        auto_compact_percent: u8,
     },
     Notice {
         title: String,
@@ -392,6 +394,8 @@ impl RuntimeState {
             credential_configured: self.session_api_key.is_some()
                 || credential_environment(&self.config.model.provider)
                     .is_some_and(|name| env::var(name).is_ok()),
+            context_window_tokens: self.config.model.context_window_tokens,
+            auto_compact_percent: self.config.model.auto_compact_percent,
         }
     }
 }
@@ -455,6 +459,24 @@ fn run_prompt(
                 })
                 .map_err(RuntimeError::agent)?;
             let _ = events.send(RuntimeEvent::Progress { turn: session.turn });
+
+            if matches!(outcome, StepOutcome::Continue | StepOutcome::TurnComplete)
+                && should_auto_compact(
+                    updates.current_context_tokens,
+                    state.config.model.context_window_tokens,
+                    state.config.model.auto_compact_percent,
+                )
+            {
+                compact_session(&mut session, None).map_err(RuntimeError::agent)?;
+                updates.current_context_tokens = 0;
+                let _ = events.send(RuntimeEvent::Compacted {
+                    message: format!(
+                        "Auto-compacted at {}% of the {}-token context window.",
+                        state.config.model.auto_compact_percent,
+                        state.config.model.context_window_tokens
+                    ),
+                });
+            }
 
             if cancel_requested(cancel, submission) {
                 return Ok(RuntimeEvent::Cancelled);

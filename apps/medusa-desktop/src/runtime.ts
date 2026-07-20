@@ -8,6 +8,12 @@ export interface RuntimeStartResponse {
   repo: string;
 }
 
+export interface CommandSuggestion {
+  name: string;
+  usage: string;
+  description: string;
+}
+
 export interface FileAttachment {
   kind: "file";
   path: string;
@@ -111,6 +117,13 @@ export async function submitRuntime(
 
 export async function runRuntimeCommand(runtimeId: string, input: string): Promise<void> {
   await invoke("runtime_command", { runtimeId, input });
+}
+
+export async function commandSuggestions(
+  runtimeId: string,
+  input: string,
+): Promise<CommandSuggestion[]> {
+  return invoke<CommandSuggestion[]>("runtime_command_suggestions", { runtimeId, input });
 }
 
 export async function cancelRuntime(runtimeId: string): Promise<boolean> {

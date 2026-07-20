@@ -13,7 +13,7 @@ use image::ImageReader;
 use medusa_daemon::{DaemonLaunch, DaemonLifecycleState, DaemonSupervisor};
 use medusa_runtime::{
     RuntimeController, SubmitDisposition,
-    commands::{Effort, ModelConfiguration, parse_slash_command},
+    commands::{Effort, ModelConfiguration, command_suggestions, parse_slash_command},
     prompt::{
         ClipboardImage, FileAttachment, MAX_CLIPBOARD_TEXT_BYTES, MAX_IMAGE_BYTES,
         MAX_IMAGE_PIXELS, MAX_TOTAL_ATTACHMENT_BYTES, PromptAttachment, PromptDraft,
@@ -25,8 +25,8 @@ use tauri::{AppHandle, Manager, State};
 use crate::{
     credentials::{CredentialStore, SystemCredentialStore},
     dto::{
-        DesktopAttachment, DesktopModelConfiguration, DesktopPromptDraft, DesktopRuntimeEvent,
-        DesktopSubmitDisposition, RuntimeStartResponse,
+        DesktopAttachment, DesktopCommandSuggestion, DesktopModelConfiguration, DesktopPromptDraft,
+        DesktopRuntimeEvent, DesktopSubmitDisposition, RuntimeStartResponse,
     },
 };
 
@@ -203,6 +203,24 @@ pub fn runtime_command(
             .controller
             .run_command(command)
             .map_err(|error| error.to_string())
+    })
+}
+
+#[tauri::command]
+pub fn runtime_command_suggestions(
+    runtime_id: String,
+    input: String,
+    registry: State<'_, RuntimeRegistry>,
+) -> Result<Vec<DesktopCommandSuggestion>, String> {
+    registry.with_entry(&runtime_id, |entry| {
+        Ok(command_suggestions(&input, &entry.repo)
+            .into_iter()
+            .map(|suggestion| DesktopCommandSuggestion {
+                name: suggestion.name,
+                usage: suggestion.usage,
+                description: suggestion.description,
+            })
+            .collect())
     })
 }
 

@@ -75,6 +75,65 @@ pub(crate) fn create_dir(repo: &Path, relative: &str) -> MedusaResult<String> {
     Ok(format!("created directory {}", path.display()))
 }
 
+pub(crate) fn write_approved(path: &str, content: &str) -> MedusaResult<String> {
+    let path = approved_absolute_path(path)?;
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent)?;
+    }
+    fs::write(&path, content)?;
+    Ok(format!(
+        "wrote {} bytes to {}",
+        content.len(),
+        path.display()
+    ))
+}
+
+pub(crate) fn create_dir_approved(path: &str) -> MedusaResult<String> {
+    let path = approved_absolute_path(path)?;
+    fs::create_dir_all(&path)?;
+    Ok(format!("created directory {}", path.display()))
+}
+
+fn approved_absolute_path(value: &str) -> MedusaResult<std::path::PathBuf> {
+    use medusa_core::{ErrorCategory, ErrorCode, MedusaError};
+
+    let path = Path::new(value);
+    if !path.is_absolute() || path.parent().is_none() {
+        return Err(MedusaError::new(
+            ErrorCode::PolicyDenied,
+            ErrorCategory::Policy,
+            "an approved external path must be absolute and narrower than a filesystem root",
+        ));
+    }
+    let mut existing = path;
+    while !existing.exists() {
+        existing = existing.parent().ok_or_else(|| {
+            MedusaError::new(
+                ErrorCode::PolicyDenied,
+                ErrorCategory::Policy,
+                "approved path has no existing confined ancestor",
+            )
+        })?;
+    }
+    let canonical_existing = existing.canonicalize()?;
+    let suffix = path.strip_prefix(existing).map_err(|error| {
+        MedusaError::new(
+            ErrorCode::PolicyDenied,
+            ErrorCategory::Policy,
+            format!("approved path could not be confined: {error}"),
+        )
+    })?;
+    let resolved = canonical_existing.join(suffix);
+    if resolved.exists() && fs::symlink_metadata(&resolved)?.file_type().is_symlink() {
+        return Err(MedusaError::new(
+            ErrorCode::PolicyDenied,
+            ErrorCategory::Policy,
+            "approved path targets a symbolic link",
+        ));
+    }
+    Ok(resolved)
+}
+
 pub(crate) fn search(repo: &Path, query: &str) -> MedusaResult<String> {
     let mut results = Vec::new();
     for entry in WalkDir::new(repo).into_iter().filter_map(Result::ok) {

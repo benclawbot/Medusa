@@ -295,6 +295,41 @@ pub(crate) fn execute_tool(repo: &Path, name: &str, input: &Value) -> MedusaResu
     }
 }
 
+pub(crate) fn execute_approved_tool(
+    repo: &Path,
+    name: &str,
+    input: &Value,
+) -> MedusaResult<String> {
+    match name {
+        "fs_create_dir" => filesystem::create_dir_approved(input_string(input, "path")?),
+        "fs_write" => filesystem::write_approved(
+            input_string(input, "path")?,
+            input_string(input, "content")?,
+        ),
+        "shell_run" => {
+            let program = input_string(input, "program")?;
+            let args = input
+                .get("args")
+                .and_then(Value::as_array)
+                .ok_or_else(|| invalid_tool("args must be an array"))?
+                .iter()
+                .map(|value| {
+                    value
+                        .as_str()
+                        .map(str::to_owned)
+                        .ok_or_else(|| invalid_tool("every arg must be a string"))
+                })
+                .collect::<MedusaResult<Vec<_>>>()?;
+            shell::run_approved(repo, program, &args)
+        }
+        _ => Err(MedusaError::new(
+            ErrorCode::PolicyDenied,
+            ErrorCategory::Policy,
+            format!("{name} cannot be authorized interactively"),
+        )),
+    }
+}
+
 fn input_domains(input: &Value, key: &str) -> MedusaResult<Vec<String>> {
     let Some(domains) = input.get(key) else {
         return Ok(Vec::new());

@@ -63,7 +63,19 @@ See [Capability evidence](docs/CAPABILITY-EVIDENCE.md) for the auditable mapping
 
 ## Installation
 
-Medusa is currently installed from source:
+Install the latest CLI in one line:
+
+```powershell
+cargo install --git https://github.com/benclawbot/Medusa.git --locked medusa-cli
+```
+
+The same command works in Bash. To update an existing installation later, run:
+
+```text
+medusa update
+```
+
+For a development checkout instead:
 
 ```bash
 git clone https://github.com/benclawbot/Medusa.git

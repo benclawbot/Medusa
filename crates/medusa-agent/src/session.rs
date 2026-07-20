@@ -54,6 +54,15 @@ pub struct AgentQuestion {
     pub(crate) legacy_question: Option<String>,
     #[serde(default, rename = "options", skip_serializing)]
     pub(crate) legacy_options: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) approval: Option<PendingToolApproval>,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub(crate) struct PendingToolApproval {
+    pub tool_use_id: String,
+    pub tool: String,
+    pub input: serde_json::Value,
 }
 
 impl AgentQuestion {

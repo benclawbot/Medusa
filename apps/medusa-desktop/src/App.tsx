@@ -23,6 +23,7 @@ import { open } from "@tauri-apps/plugin-dialog";
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   cancelRuntime,
+  commandSuggestions,
   closeRuntime,
   configureRuntime,
   pollRuntime,
@@ -30,6 +31,7 @@ import {
   startRuntime,
   submitRuntime,
   type DesktopAttachment,
+  type CommandSuggestion,
   type Effort,
   type PlanStep,
   type QuestionPrompt,
@@ -119,6 +121,36 @@ function planIcon(status: PlanStep["status"]) {
   return <Circle size={13} />;
 }
 
+function ConversationText({ text }: { text: string }) {
+  const urlPattern = /https?:\/\/[^\s]+/g;
+  const parts: React.ReactNode[] = [];
+  let cursor = 0;
+  for (const match of text.matchAll(urlPattern)) {
+    const start = match.index ?? 0;
+    const raw = match[0];
+    const url = raw.replace(/[.,;:!?\)\]\}]+$/, "");
+    parts.push(text.slice(cursor, start));
+    parts.push(
+      <a
+        key={`${start}-${url}`}
+        href={url}
+        target="_blank"
+        rel="noreferrer"
+        title="Ctrl+click to open"
+        onClick={(event) => {
+          if (!event.ctrlKey) event.preventDefault();
+        }}
+      >
+        {url}
+      </a>,
+    );
+    parts.push(raw.slice(url.length));
+    cursor = start + raw.length;
+  }
+  parts.push(text.slice(cursor));
+  return <>{parts}</>;
+}
+
 export function App() {
   const modelPreferences = useMemo(loadModelPreferences, []);
   const [runtimeId, setRuntimeId] = useState<string>();
@@ -135,6 +167,8 @@ export function App() {
     credentialConfigured: false,
   });
   const [prompt, setPrompt] = useState("");
+  const [slashSuggestions, setSlashSuggestions] = useState<CommandSuggestion[]>([]);
+  const [slashSelection, setSlashSelection] = useState(0);
   const [attachments, setAttachments] = useState<DesktopAttachment[]>([]);
   const [busy, setBusy] = useState(false);
   const [turn, setTurn] = useState(0);
@@ -146,6 +180,7 @@ export function App() {
   const [activePanel, setActivePanel] = useState<"chat" | "plan" | "settings">("chat");
   const pollBusy = useRef(false);
   const transcriptRef = useRef<HTMLDivElement>(null);
+  const composerRef = useRef<HTMLTextAreaElement>(null);
 
   const applyEvent = useCallback((event: RuntimeEvent) => {
     switch (event.type) {
@@ -276,6 +311,26 @@ export function App() {
       window.clearInterval(interval);
     };
   }, [runtimeId, applyEvent]);
+
+  useEffect(() => {
+    if (!runtimeId || !prompt.trimStart().startsWith("/") || prompt.includes("\n")) {
+      setSlashSuggestions([]);
+      return;
+    }
+    let active = true;
+    void commandSuggestions(runtimeId, prompt)
+      .then((suggestions) => {
+        if (!active) return;
+        setSlashSuggestions(suggestions);
+        setSlashSelection(0);
+      })
+      .catch((cause) => {
+        if (active) setError(String(cause));
+      });
+    return () => {
+      active = false;
+    };
+  }, [runtimeId, prompt]);
 
   useEffect(() => {
     const previous = window.localStorage.getItem("medusa.desktop.repo");
@@ -412,6 +467,12 @@ export function App() {
 
   const submit = async () => sendText(prompt);
 
+  const selectSlashSuggestion = (suggestion: CommandSuggestion) => {
+    setPrompt(`/${suggestion.name} `);
+    setSlashSuggestions([]);
+    setSlashSelection(0);
+  };
+
   const applyModel = async () => {
     if (!runtimeId) return;
     try {
@@ -525,7 +586,7 @@ export function App() {
                     <span>{message.role === "user" ? "You" : message.role === "assistant" ? "Medusa" : "Runtime"}</span>
                     {message.queued && <small>queued for next turn</small>}
                   </div>
-                  <div className="message-body">{message.text}</div>
+                  <div className="message-body"><ConversationText text={message.text} /></div>
                   {!!message.attachments?.length && (
                     <div className="message-attachments">
                       {message.attachments.map((attachment, index) => (
@@ -545,8 +606,19 @@ export function App() {
                       <small>{question.header}</small>
                       <strong>{question.question}</strong>
                       <div className="question-options">
-                        {question.options.map((option) => (
-                          <button key={option.label} onClick={() => void sendText(option.label, [])}>
+                        {question.options.map((option, index) => (
+                          <button
+                            key={option.label}
+                            autoFocus={question.header === "Permission" && index === 0}
+                            onClick={() => {
+                              if (option.label === "Provide feedback") {
+                                setPrompt("");
+                                composerRef.current?.focus();
+                              } else {
+                                void sendText(option.label, []);
+                              }
+                            }}
+                          >
                             <span>{option.label}</span><small>{option.description}</small>
                           </button>
                         ))}
@@ -572,12 +644,51 @@ export function App() {
                 </div>
               )}
               <div className="composer-card">
+                {!!slashSuggestions.length && (
+                  <div className="slash-menu" role="listbox" aria-label="Slash commands">
+                    {slashSuggestions.map((suggestion, index) => (
+                      <button
+                        className={`slash-row${index === slashSelection ? " active" : ""}`}
+                        key={suggestion.name}
+                        role="option"
+                        aria-selected={index === slashSelection}
+                        onMouseDown={(event) => event.preventDefault()}
+                        onClick={() => selectSlashSuggestion(suggestion)}
+                      >
+                        <span className="slash-row-label">{suggestion.usage}</span>
+                        <span className="slash-row-desc">{suggestion.description}</span>
+                        <span className="slash-row-kind">{prompt.startsWith("/skills ") ? "skill" : "command"}</span>
+                      </button>
+                    ))}
+                  </div>
+                )}
                 <textarea
+                  ref={composerRef}
                   value={prompt}
                   disabled={!runtimeId}
                   onChange={(event) => setPrompt(event.target.value)}
                   onPaste={onPaste}
                   onKeyDown={(event) => {
+                    if (slashSuggestions.length && (event.key === "ArrowDown" || event.key === "ArrowUp")) {
+                      event.preventDefault();
+                      const direction = event.key === "ArrowDown" ? 1 : -1;
+                      setSlashSelection((current) => (current + direction + slashSuggestions.length) % slashSuggestions.length);
+                      return;
+                    }
+                    if (slashSuggestions.length && event.key === "Tab" && !event.shiftKey) {
+                      event.preventDefault();
+                      selectSlashSuggestion(slashSuggestions[slashSelection]);
+                      return;
+                    }
+                    if (slashSuggestions.length && event.key === "Enter" && !event.shiftKey) {
+                      const selected = slashSuggestions[slashSelection];
+                      const exact = prompt.trim() === `/${selected.name}`;
+                      if (!exact || prompt.trim() === "/skills") {
+                        event.preventDefault();
+                        selectSlashSuggestion(selected);
+                        return;
+                      }
+                    }
                     if (event.key === "Enter" && !event.shiftKey) {
                       event.preventDefault();
                       void submit();

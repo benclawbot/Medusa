@@ -59,6 +59,8 @@ pub struct ModelConfig {
     pub protocol: String,
     pub temperature_milli: u16,
     pub max_output_tokens: u32,
+    pub context_window_tokens: u64,
+    pub auto_compact_percent: u8,
 }
 
 /// Runtime settings.
@@ -130,6 +132,8 @@ impl Default for ModelConfig {
             protocol: "anthropic".into(),
             temperature_milli: 200,
             max_output_tokens: 32_768,
+            context_window_tokens: 1_000_000,
+            auto_compact_percent: 40,
         }
     }
 }
@@ -220,6 +224,12 @@ impl Config {
         if self.model.temperature_milli > 1_000 {
             return Err(invalid("temperature_milli must be at most 1000"));
         }
+        if self.model.context_window_tokens == 0 {
+            return Err(invalid("context_window_tokens must be greater than zero"));
+        }
+        if !(1..=100).contains(&self.model.auto_compact_percent) {
+            return Err(invalid("auto_compact_percent must be between 1 and 100"));
+        }
         if self.git.allow_force_push {
             return Err(invalid(
                 "force push cannot be enabled by the built-in schema",
@@ -309,7 +319,10 @@ mod tests {
 
     #[test]
     fn defaults_validate() {
-        Config::default().validate().expect("defaults");
+        let config = Config::default();
+        config.validate().expect("defaults");
+        assert_eq!(config.model.context_window_tokens, 1_000_000);
+        assert_eq!(config.model.auto_compact_percent, 40);
     }
 
     #[test]

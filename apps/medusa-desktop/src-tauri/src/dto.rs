@@ -8,6 +8,14 @@ pub struct RuntimeStartResponse {
     pub repo: String,
 }
 
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DesktopCommandSuggestion {
+    pub name: String,
+    pub usage: String,
+    pub description: String,
+}
+
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct DesktopPromptDraft {
@@ -219,6 +227,7 @@ impl From<RuntimeEvent> for DesktopRuntimeEvent {
                 effort,
                 plan_mode,
                 credential_configured,
+                ..
             } => Self::Settings {
                 model,
                 effort,

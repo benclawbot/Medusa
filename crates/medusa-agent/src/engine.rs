@@ -1,4 +1,4 @@
-use std::{collections::VecDeque, path::Path, sync::Mutex};
+use std::{collections::VecDeque, path::Path, sync::Mutex, thread};
 
 use medusa_config::{Config, Mode};
 use medusa_core::{ErrorCategory, ErrorCode, MedusaError, MedusaResult, SessionId};
@@ -11,12 +11,16 @@ use crate::{
     engine_support::*,
     evidence::append_event,
     output_envelope::{OutputFormat, wrap as wrap_envelope},
-    session::{AgentPlanStep, AgentQuestion, AgentSession, bootstrap, load, persist},
-    tools::{execute_tool, input_string},
-    verification::targeted_verification,
+    policy::validate_shell_command_hard_denials,
+    session::{
+        AgentPlanStep, AgentQuestion, AgentQuestionItem, AgentQuestionOption, AgentSession,
+        PendingToolApproval, bootstrap, load, persist,
+    },
+    tools::{execute_approved_tool, execute_tool, input_string},
+    verification::targeted_verification_for_paths,
 };
 
-pub(crate) const SYSTEM_PROMPT: &str = "You are Medusa, an autonomous coding agent. Inspect the repository, make the smallest correct change, and verify it. Use tools rather than inventing repository contents. Use `fs_read` with path `.` to list repository files before reading a specific file, and use `fs_create_dir` to create directories. Call `shell_run` with an approved executable and argument array directly; never wrap commands in bash, sh, cmd, PowerShell, or shell operators. You have `web_search` for current public information and `web_fetch` for public pages; use them when the user requests current, external, or source-linked information. For work requiring more than one action, call `update_plan` before meaningful work and update its statuses as you progress. When information from the user is needed to proceed, call `ask_user_question` with one to four concise multiple-choice questions in a single call, each with a short header and two to four options. Never put blocking questions in assistant text, and do not mark the plan or task complete while waiting. Never modify tests, verification scripts, snapshots, fixtures, or expected outputs unless the user explicitly asks for that exact change; fix the product code instead. Do not expose private chain-of-thought. Default to caveman chat: terse, direct, concrete, usually one to three short sentences. Avoid preambles, repetition, and broad explanations unless the user asks for detail. Report only the decision, action, result, and essential evidence.";
+pub(crate) const SYSTEM_PROMPT: &str = "You are Medusa, an autonomous coding agent. Inspect the repository, make the smallest correct change, and verify it. Use tools rather than inventing repository contents. Use `fs_read` with path `.` to list repository files before reading a specific file, and use `fs_create_dir` to create directories. Call `shell_run` with an approved executable and argument array directly; never repeat the executable in the argument array, and never wrap commands in bash, sh, cmd, PowerShell, or shell operators. You have `web_search` for current public information and `web_fetch` for public pages; use them when the user requests current, external, or source-linked information. Issue independent read-only tool calls together in one response so they can run concurrently. Reuse tool results, avoid near-duplicate searches, and fetch only sources that materially support the answer. For work requiring more than one action, call `update_plan` before meaningful work and update its statuses as you progress. When information from the user is needed to proceed, call `ask_user_question` with one to four concise multiple-choice questions in a single call, each with a short header and two to four options. Never put blocking questions in assistant text, and do not mark the plan or task complete while waiting. Never modify tests, verification scripts, snapshots, fixtures, or expected outputs unless the user explicitly asks for that exact change; fix the product code instead. Do not expose private chain-of-thought. Default to caveman chat: terse, direct, concrete, usually one to three short sentences. Avoid preambles, repetition, and broad explanations unless the user asks for detail. Report only the decision, action, result, and essential evidence.";
 pub(crate) const PLAN_SYSTEM_PROMPT: &str = "You are Medusa in read-only planning mode. Inspect the repository and produce a concise, ordered implementation plan grounded in the files you examined. Use `update_plan` to maintain the visible plan as your understanding changes. When clarification is necessary, call `ask_user_question` with one to four concise multiple-choice questions in a single call, each with a short header and two to four options, then wait for its answer before producing a final plan. You can use `web_search` and `web_fetch` for current public information. Do not modify files, create commits, or claim that implementation work has been completed. Only read-only repository and web tools are available. Do not expose private chain-of-thought. Use terse, direct language and an ordered plan without commentary or repetition.";
 
 /// Result of one durable model/tool step.
@@ -26,6 +30,40 @@ pub enum StepOutcome {
     TurnComplete,
     WaitingForUser,
     Completed,
+}
+
+const MAX_PARALLEL_TOOL_CALLS: usize = 8;
+
+fn parallel_safe_tool(name: &str) -> bool {
+    matches!(
+        name,
+        "fs_read" | "search_text" | "skill_read" | "web_search" | "web_fetch"
+    )
+}
+
+pub(crate) fn map_parallel_ordered<T, U, F>(items: Vec<T>, operation: F) -> MedusaResult<Vec<U>>
+where
+    T: Send,
+    U: Send,
+    F: Fn(T) -> U + Sync,
+{
+    thread::scope(|scope| {
+        let handles = items
+            .into_iter()
+            .map(|item| scope.spawn(|| operation(item)))
+            .collect::<Vec<_>>();
+        let mut results = Vec::with_capacity(handles.len());
+        for handle in handles {
+            results.push(handle.join().map_err(|_| {
+                MedusaError::new(
+                    ErrorCode::InternalInvariant,
+                    ErrorCategory::Execution,
+                    "parallel tool worker panicked",
+                )
+            })?);
+        }
+        Ok(results)
+    })
 }
 
 /// A live update emitted while the engine executes one step.
@@ -219,15 +257,36 @@ impl<P: ModelProvider> AgentEngine<P> {
         }
         session.completed = false;
         session.turn = 0;
-        let content = match question.tool_use_id {
-            Some(tool_use_id) => vec![MessageBlock::ToolResult {
-                tool_use_id,
-                content: format!("User response: {answer}"),
-                is_error: false,
-            }],
-            None => vec![MessageBlock::Text {
-                text: format!("User response to the clarification question: {answer}"),
-            }],
+        let content = if let Some(approval) = question.approval {
+            let approved = answer.trim().eq_ignore_ascii_case("approve")
+                || answer.trim().to_ascii_lowercase().starts_with("approve ");
+            let (content, is_error) = if approved {
+                match execute_approved_tool(&session.repo, &approval.tool, &approval.input) {
+                    Ok(output) => (format!("User approved this exact action.\n{output}"), false),
+                    Err(error) => (format!("Approved action failed: {error}"), true),
+                }
+            } else {
+                (
+                    format!("User did not approve this action. Feedback: {answer}"),
+                    true,
+                )
+            };
+            vec![MessageBlock::ToolResult {
+                tool_use_id: approval.tool_use_id,
+                content,
+                is_error,
+            }]
+        } else {
+            match question.tool_use_id {
+                Some(tool_use_id) => vec![MessageBlock::ToolResult {
+                    tool_use_id,
+                    content: format!("User response: {answer}"),
+                    is_error: false,
+                }],
+                None => vec![MessageBlock::Text {
+                    text: format!("User response to the clarification question: {answer}"),
+                }],
+            }
         };
         session.messages.push(Message {
             role: Role::User,
@@ -384,106 +443,180 @@ impl<P: ModelProvider> AgentEngine<P> {
             return Ok(StepOutcome::WaitingForUser);
         }
 
-        while let Some((id, name, input)) = calls.pop_front() {
-            let event_tool = audited_tool_name(&name, &input);
-            append_observed(
-                session,
-                EventPayload::ToolCallRequested {
-                    tool: event_tool.clone(),
-                    arguments: input.clone(),
-                },
-                &mut observer,
-            )?;
-            let result = if name == "update_plan" {
-                let plan = plan_from_input(&input);
-                if plan.is_empty() {
-                    Ok("Visible task plan update ignored because it was empty.".to_owned())
-                } else {
-                    session.plan = plan.clone();
-                    observer(&AgentUpdate::Plan(plan));
-                    Ok("Visible task plan updated.".to_owned())
-                }
-            } else if name == "ask_user_question" {
-                match question_from_input(id.clone(), &input) {
-                    Ok(question) => {
-                        pause_for_question(session, question, &mut observer)?;
-                        return Ok(StepOutcome::WaitingForUser);
-                    }
-                    Err(error) => Err(error),
-                }
-            } else if name == "desktop_commander" && tool_allowed(self.config.agent.mode, &name) {
-                self.execute_desktop_commander(&session.repo, &input)
-            } else if tool_allowed(self.config.agent.mode, &name) {
-                execute_tool(&session.repo, &name, &input)
-            } else {
-                let reason = "tool is unavailable in read-only planning mode".to_owned();
+        while !calls.is_empty() {
+            let parallel_count = calls
+                .iter()
+                .take(MAX_PARALLEL_TOOL_CALLS)
+                .take_while(|(_, name, _)| {
+                    parallel_safe_tool(name) && tool_allowed(self.config.agent.mode, name)
+                })
+                .count();
+            let batch_len = parallel_count.max(1);
+            let batch = calls.drain(..batch_len).collect::<Vec<_>>();
+            for (_, name, input) in &batch {
                 append_observed(
                     session,
-                    EventPayload::ToolCallDenied {
-                        tool: event_tool.clone(),
-                        reason: reason.clone(),
+                    EventPayload::ToolCallRequested {
+                        tool: audited_tool_name(name, input),
+                        arguments: input.clone(),
                     },
                     &mut observer,
                 )?;
-                Err(MedusaError::new(
-                    ErrorCode::PolicyDenied,
-                    ErrorCategory::Policy,
-                    reason,
-                ))
-            };
-            let (raw_content, is_error, exit_code) = match result {
-                Ok(output) => (output, false, Some(0)),
-                Err(error) => (error.to_string(), true, Some(1)),
-            };
-            append_observed(
-                session,
-                EventPayload::ToolExecutionCompleted {
-                    tool: event_tool,
-                    exit_code,
-                },
-                &mut observer,
-            )?;
-            // The TUI sees the full body verbatim; the model sees the compact
-            // head/tail envelope with a pointer to the on-disk artifact.
-            observer(&AgentUpdate::ToolOutput {
-                tool: name.clone(),
-                output: raw_content.clone(),
-                is_error,
-            });
-            let envelope_cfg = default_envelope_config(&session.repo);
-            let model_content = match wrap_envelope(
-                &name,
-                raw_content.as_bytes(),
-                OutputFormat::Plain,
-                &envelope_cfg,
-            ) {
-                Ok(env) => {
-                    let compact = compact_envelope_for_model(&env);
-                    // Persist the artifact path on the session for later
-                    // reference (cleanup, replay). Currently unused by
-                    // downstream consumers — Task 7 wires SessionBrowser on top.
-                    session.tool_artifacts.push(env.path.clone());
-                    if is_error {
-                        format!("[error]\n{compact}")
+            }
+
+            let executed = if parallel_count > 1 {
+                let repo = session.repo.as_path();
+                map_parallel_ordered(batch, |(id, name, input)| {
+                    let result = execute_tool(repo, &name, &input);
+                    (id, name, input, result)
+                })?
+            } else {
+                let (id, name, input) = batch.into_iter().next().ok_or_else(|| {
+                    MedusaError::new(
+                        ErrorCode::InternalInvariant,
+                        ErrorCategory::Execution,
+                        "tool batch was unexpectedly empty",
+                    )
+                })?;
+                let result = if name == "update_plan" {
+                    let plan = plan_from_input(&input);
+                    if plan.is_empty() {
+                        Ok("Visible task plan update ignored because it was empty.".to_owned())
                     } else {
-                        compact
+                        session.plan = plan.clone();
+                        observer(&AgentUpdate::Plan(plan));
+                        Ok("Visible task plan updated.".to_owned())
                     }
-                }
-                Err(_) => {
-                    // Envelope wrap failed (rare — disk full, perms). Fall back
-                    // to the raw body so the model still sees output.
-                    raw_content.clone()
-                }
+                } else if name == "ask_user_question" {
+                    match question_from_input(id.clone(), &input) {
+                        Ok(question) => {
+                            pause_for_question(session, question, &mut observer)?;
+                            return Ok(StepOutcome::WaitingForUser);
+                        }
+                        Err(error) => Err(error),
+                    }
+                } else if name == "desktop_commander" && tool_allowed(self.config.agent.mode, &name)
+                {
+                    self.execute_desktop_commander(&session.repo, &input)
+                } else if tool_allowed(self.config.agent.mode, &name) {
+                    execute_tool(&session.repo, &name, &input)
+                } else {
+                    let reason = "tool is unavailable in read-only planning mode".to_owned();
+                    append_observed(
+                        session,
+                        EventPayload::ToolCallDenied {
+                            tool: audited_tool_name(&name, &input),
+                            reason: reason.clone(),
+                        },
+                        &mut observer,
+                    )?;
+                    Err(MedusaError::new(
+                        ErrorCode::PolicyDenied,
+                        ErrorCategory::Policy,
+                        reason,
+                    ))
+                };
+                vec![(id, name, input, result)]
             };
-            session.messages.push(Message {
-                role: Role::User,
-                content: vec![MessageBlock::ToolResult {
-                    tool_use_id: id,
-                    content: model_content,
+
+            for (id, name, input, result) in executed {
+                if let Err(error) = &result
+                    && error.code == ErrorCode::PolicyDenied
+                    && self.config.agent.mode != Mode::ReadOnly
+                    && interactively_approvable(&name, &input)
+                {
+                    let action = approval_action_label(&name, &input);
+                    pause_for_question(
+                        session,
+                        AgentQuestion {
+                            tool_use_id: Some(id.clone()),
+                            questions: vec![AgentQuestionItem {
+                                header: "Permission".to_owned(),
+                                question: format!("Allow Medusa to {action}?"),
+                                options: vec![
+                                    AgentQuestionOption {
+                                        label: "Approve".to_owned(),
+                                        description: "Allow this exact action once".to_owned(),
+                                    },
+                                    AgentQuestionOption {
+                                        label: "Deny".to_owned(),
+                                        description: "Do not run this action".to_owned(),
+                                    },
+                                    AgentQuestionOption {
+                                        label: "Provide feedback".to_owned(),
+                                        description: "Type a different instruction below"
+                                            .to_owned(),
+                                    },
+                                ],
+                                multi_select: false,
+                            }],
+                            legacy_question: None,
+                            legacy_options: Vec::new(),
+                            approval: Some(PendingToolApproval {
+                                tool_use_id: id,
+                                tool: name,
+                                input,
+                            }),
+                        },
+                        &mut observer,
+                    )?;
+                    return Ok(StepOutcome::WaitingForUser);
+                }
+                let event_tool = audited_tool_name(&name, &input);
+                let (raw_content, is_error, exit_code) = match result {
+                    Ok(output) => (output, false, Some(0)),
+                    Err(error) => (error.to_string(), true, Some(1)),
+                };
+                append_observed(
+                    session,
+                    EventPayload::ToolExecutionCompleted {
+                        tool: event_tool,
+                        exit_code,
+                    },
+                    &mut observer,
+                )?;
+                // The TUI sees the full body verbatim; the model sees the compact
+                // head/tail envelope with a pointer to the on-disk artifact.
+                observer(&AgentUpdate::ToolOutput {
+                    tool: name.clone(),
+                    output: raw_content.clone(),
                     is_error,
-                }],
-            });
-            persist(session)?;
+                });
+                let envelope_cfg = default_envelope_config(&session.repo);
+                let model_content = match wrap_envelope(
+                    &name,
+                    raw_content.as_bytes(),
+                    OutputFormat::Plain,
+                    &envelope_cfg,
+                ) {
+                    Ok(env) => {
+                        let compact = compact_envelope_for_model(&env);
+                        // Persist the artifact path on the session for later
+                        // reference (cleanup, replay). Currently unused by
+                        // downstream consumers — Task 7 wires SessionBrowser on top.
+                        session.tool_artifacts.push(env.path.clone());
+                        if is_error {
+                            format!("[error]\n{compact}")
+                        } else {
+                            compact
+                        }
+                    }
+                    Err(_) => {
+                        // Envelope wrap failed (rare — disk full, perms). Fall back
+                        // to the raw body so the model still sees output.
+                        raw_content.clone()
+                    }
+                };
+                session.messages.push(Message {
+                    role: Role::User,
+                    content: vec![MessageBlock::ToolResult {
+                        tool_use_id: id,
+                        content: model_content,
+                        is_error,
+                    }],
+                });
+                persist(session)?;
+            }
         }
 
         if response.stop_reason.as_deref() == Some("end_turn")
@@ -506,7 +639,10 @@ impl<P: ModelProvider> AgentEngine<P> {
                 },
                 &mut observer,
             )?;
-            let verification = targeted_verification(&session.repo)?;
+            let verification = targeted_verification_for_paths(
+                &session.repo,
+                &successful_mutation_paths(session),
+            )?;
             append_observed(
                 session,
                 EventPayload::VerificationCompleted {
@@ -546,5 +682,70 @@ impl<P: ModelProvider> AgentEngine<P> {
         } else {
             StepOutcome::Continue
         })
+    }
+}
+
+fn approval_action_label(name: &str, input: &serde_json::Value) -> String {
+    match name {
+        "fs_write" => format!(
+            "write {}",
+            input
+                .get("path")
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or("the requested file")
+        ),
+        "fs_create_dir" => format!(
+            "create {}",
+            input
+                .get("path")
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or("the requested directory")
+        ),
+        "shell_run" => format!(
+            "run {} {}",
+            input
+                .get("program")
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or("the requested command"),
+            input
+                .get("args")
+                .and_then(serde_json::Value::as_array)
+                .map(|args| args
+                    .iter()
+                    .filter_map(serde_json::Value::as_str)
+                    .collect::<Vec<_>>()
+                    .join(" "))
+                .unwrap_or_default()
+        )
+        .trim()
+        .to_owned(),
+        _ => "run the requested action".to_owned(),
+    }
+}
+
+fn interactively_approvable(name: &str, input: &serde_json::Value) -> bool {
+    match name {
+        "fs_write" | "fs_create_dir" => input
+            .get("path")
+            .and_then(serde_json::Value::as_str)
+            .is_some_and(|path| Path::new(path).is_absolute()),
+        "shell_run" => {
+            let Some(program) = input.get("program").and_then(serde_json::Value::as_str) else {
+                return false;
+            };
+            let Some(args) = input.get("args").and_then(serde_json::Value::as_array) else {
+                return false;
+            };
+            let Some(args) = args
+                .iter()
+                .map(serde_json::Value::as_str)
+                .map(|arg| arg.map(str::to_owned))
+                .collect::<Option<Vec<_>>>()
+            else {
+                return false;
+            };
+            validate_shell_command_hard_denials(program, &args).is_ok()
+        }
+        _ => false,
     }
 }

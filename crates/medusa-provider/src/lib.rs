@@ -1,6 +1,6 @@
 //! Provider-neutral model contracts and the MiniMax Anthropic-compatible adapter.
 
-use std::{env, thread, time::Duration};
+use std::{env, sync::OnceLock, thread, time::Duration};
 
 use medusa_config::Config;
 use medusa_core::{ErrorCategory, ErrorCode, MedusaError, MedusaResult};
@@ -156,10 +156,7 @@ impl MiniMaxProvider {
             })?;
         let base_url = env::var(settings.base_url_env)
             .unwrap_or_else(|_| settings.default_base_url.to_owned());
-        let client = Client::builder()
-            .timeout(Duration::from_secs(600))
-            .build()
-            .map_err(provider_error)?;
+        let client = shared_http_client()?;
         Ok(Self {
             client,
             base_url: base_url.trim_end_matches('/').to_owned(),
@@ -212,6 +209,21 @@ impl MiniMaxProvider {
         }
         Ok(())
     }
+}
+
+fn shared_http_client() -> MedusaResult<Client> {
+    static CLIENT: OnceLock<Client> = OnceLock::new();
+    if let Some(client) = CLIENT.get() {
+        return Ok(client.clone());
+    }
+    let client = Client::builder()
+        .timeout(Duration::from_secs(600))
+        .tcp_nodelay(true)
+        .pool_max_idle_per_host(8)
+        .build()
+        .map_err(provider_error)?;
+    let _ = CLIENT.set(client.clone());
+    Ok(CLIENT.get().cloned().unwrap_or(client))
 }
 
 struct ProviderSettings {

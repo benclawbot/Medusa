@@ -54,6 +54,10 @@ pub(super) fn configure_model(
     }
     state.config.model.provider = configuration.provider;
     state.config.model.name = configuration.model;
+    state.config.model.context_window_tokens = model_context_window_tokens(
+        &state.config.model.name,
+        state.base_config.model.context_window_tokens,
+    );
     state.effort = configuration.effort;
     state.config.agent.max_turns = match configuration.effort {
         Effort::Auto => state.base_config.agent.max_turns,
@@ -89,6 +93,24 @@ pub(super) fn turns_for_effort(effort: Effort) -> u32 {
 
 pub(super) fn is_supported_provider(provider: &str) -> bool {
     matches!(provider, "minimax" | "anthropic" | "anthropic-compatible")
+}
+
+pub(super) fn model_context_window_tokens(model: &str, configured_default: u64) -> u64 {
+    match model.to_ascii_lowercase().as_str() {
+        "minimax-m3" => 1_000_000,
+        "minimax-m2.7" => 204_800,
+        _ => configured_default,
+    }
+}
+
+pub(super) fn should_auto_compact(
+    current_tokens: u64,
+    context_window_tokens: u64,
+    threshold_percent: u8,
+) -> bool {
+    context_window_tokens > 0
+        && u128::from(current_tokens).saturating_mul(100)
+            >= u128::from(context_window_tokens).saturating_mul(u128::from(threshold_percent))
 }
 
 pub(super) fn model_configuration_details(state: &RuntimeState) -> Vec<String> {
@@ -260,6 +282,7 @@ pub(super) struct UpdateState {
     next_tool_id: u64,
     pending_tools: VecDeque<PendingTool>,
     model_started_at: Option<Instant>,
+    pub(super) current_context_tokens: u64,
 }
 
 impl UpdateState {
@@ -268,6 +291,7 @@ impl UpdateState {
             next_tool_id: 0,
             pending_tools: VecDeque::new(),
             model_started_at: None,
+            current_context_tokens: 0,
         }
     }
 }
@@ -293,23 +317,30 @@ pub(super) fn forward_update(
                     .unwrap_or(u64::MAX)
                     .max(1)
             });
+            let input_tokens = usage
+                .get("input_tokens")
+                .and_then(Value::as_u64)
+                .unwrap_or_default();
+            let output_tokens = usage
+                .get("output_tokens")
+                .and_then(Value::as_u64)
+                .unwrap_or_default();
+            let cache_read_input_tokens = usage
+                .get("cache_read_input_tokens")
+                .and_then(Value::as_u64)
+                .unwrap_or_default();
+            let cache_creation_input_tokens = usage
+                .get("cache_creation_input_tokens")
+                .and_then(Value::as_u64)
+                .unwrap_or_default();
+            state.current_context_tokens = input_tokens
+                .saturating_add(cache_read_input_tokens)
+                .saturating_add(cache_creation_input_tokens);
             let _ = events.send(RuntimeEvent::Usage {
-                input_tokens: usage
-                    .get("input_tokens")
-                    .and_then(Value::as_u64)
-                    .unwrap_or_default(),
-                output_tokens: usage
-                    .get("output_tokens")
-                    .and_then(Value::as_u64)
-                    .unwrap_or_default(),
-                cache_read_input_tokens: usage
-                    .get("cache_read_input_tokens")
-                    .and_then(Value::as_u64)
-                    .unwrap_or_default(),
-                cache_creation_input_tokens: usage
-                    .get("cache_creation_input_tokens")
-                    .and_then(Value::as_u64)
-                    .unwrap_or_default(),
+                input_tokens,
+                output_tokens,
+                cache_read_input_tokens,
+                cache_creation_input_tokens,
                 model_elapsed_millis,
             });
         }
@@ -568,6 +599,8 @@ mod tests {
             Some("MEDUSA_API_KEY")
         );
         assert_eq!(credential_environment("other"), None);
+        assert!(!should_auto_compact(399_999, 1_000_000, 40));
+        assert!(should_auto_compact(400_000, 1_000_000, 40));
     }
 
     #[test]

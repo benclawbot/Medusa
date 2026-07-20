@@ -105,6 +105,7 @@ fn provider_usage_forwards_input_output_cache_and_model_time() {
             model_elapsed_millis,
         } if model_elapsed_millis >= 1
     ));
+    assert_eq!(state.current_context_tokens, 220);
 
     forward_update(
         &AgentUpdate::Event(EventPayload::ModelResponseReceived {

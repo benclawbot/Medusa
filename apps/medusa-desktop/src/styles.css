@@ -1185,6 +1185,19 @@ textarea:focus-visible {
   font-size: 0.84rem;
 }
 
+.message-body a {
+  color: var(--purple);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+  cursor: pointer;
+}
+
+.message-body a:focus-visible {
+  outline: 2px solid var(--purple);
+  outline-offset: 2px;
+  border-radius: 2px;
+}
+
 .slash-hint {
   margin: 4px 4px 0;
   color: var(--muted);

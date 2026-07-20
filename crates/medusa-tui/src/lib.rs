@@ -357,6 +357,59 @@ mod tests {
     }
 
     #[test]
+    fn context_meter_shows_current_window_use_and_progress() {
+        let directory = tempfile::tempdir().expect("tempdir");
+        let mut app = AppState::new(
+            directory.path().to_path_buf(),
+            "context-meter",
+            "",
+            Arc::new(UnsupportedClipboard),
+        )
+        .expect("app");
+        app.set_runtime_settings(
+            "minimax / MiniMax-M3".to_owned(),
+            "effort:high".to_owned(),
+            false,
+            true,
+            1_000_000,
+            40,
+        );
+        app.record_usage(50_000, 1_000, 350_000, 0, 1_000);
+        app.dismiss_welcome_for_event(&Event::Paste(String::new()));
+
+        assert_eq!(app.current_context_tokens(), 400_000);
+        assert_eq!(
+            context_meter_line(&app),
+            "context [████░░░░░░] 400.0k/1.0m (40%) · auto-compact 40%"
+        );
+        let frame = render_frame(&UiIdentity::for_repo(directory.path()), &app, 100, 24);
+        assert!(
+            frame
+                .iter()
+                .rev()
+                .take(5)
+                .any(|line| line.text.contains("400.0k/1.0m"))
+        );
+    }
+
+    #[test]
+    fn context_use_tracks_the_latest_request_instead_of_session_sum() {
+        let directory = tempfile::tempdir().expect("tempdir");
+        let mut app = AppState::new(
+            directory.path().to_path_buf(),
+            "context-current",
+            "",
+            Arc::new(UnsupportedClipboard),
+        )
+        .expect("app");
+        app.record_usage(10, 1, 20, 30, 1);
+        app.record_usage(100, 1, 200, 300, 1);
+
+        assert_eq!(app.current_context_tokens(), 600);
+        assert_eq!(app.total_input_tokens(), 660);
+    }
+
+    #[test]
     fn new_session_resets_all_usage_totals() {
         let directory = tempfile::tempdir().expect("tempdir");
         let mut app = AppState::new(

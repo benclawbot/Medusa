@@ -44,6 +44,8 @@ enum CommandKind {
     Bootstrap,
     Doctor,
     Migrate,
+    /// Install the latest Medusa CLI from the official repository.
+    Update,
     Search {
         pattern: String,
     },
@@ -123,6 +125,7 @@ fn run() -> MedusaResult<()> {
         }
         CommandKind::Doctor => doctor(&repo, &config),
         CommandKind::Migrate => migrate(&repo),
+        CommandKind::Update => update(),
         CommandKind::Search { pattern } => search(&repo, &pattern),
         CommandKind::Shell { program, args } => shell(&repo, &program, &args),
         CommandKind::Checkpoint { message } => checkpoint(&repo, &message),
@@ -146,6 +149,36 @@ fn run() -> MedusaResult<()> {
         }
         CommandKind::DaemonServe => serve(DaemonPaths::for_repo(&repo)),
     }
+}
+
+fn update() -> MedusaResult<()> {
+    println!("Updating Medusa from https://github.com/benclawbot/Medusa ...");
+    let status = Command::new("cargo")
+        .args([
+            "install",
+            "--git",
+            "https://github.com/benclawbot/Medusa.git",
+            "--locked",
+            "--force",
+            "medusa-cli",
+        ])
+        .status()
+        .map_err(|error| {
+            MedusaError::new(
+                ErrorCode::DependencyUnavailable,
+                ErrorCategory::Environment,
+                format!("could not start Cargo updater: {error}"),
+            )
+        })?;
+    if !status.success() {
+        return Err(MedusaError::new(
+            ErrorCode::ToolExecutionFailed,
+            ErrorCategory::Execution,
+            format!("Cargo updater exited with {status}"),
+        ));
+    }
+    println!("Medusa is up to date. Restart any open Medusa sessions to use the new version.");
+    Ok(())
 }
 
 fn doctor(repo: &Path, config: &Config) -> MedusaResult<()> {
@@ -368,6 +401,12 @@ mod tests {
     #[test]
     fn clap_definition_is_valid() {
         Cli::command().debug_assert();
+    }
+
+    #[test]
+    fn update_command_is_available_without_extra_arguments() {
+        let cli = Cli::try_parse_from(["medusa", "update"]).expect("parse update command");
+        assert!(matches!(cli.command, Some(CommandKind::Update)));
     }
 
     #[test]

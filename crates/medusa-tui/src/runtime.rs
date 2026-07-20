@@ -30,6 +30,8 @@ pub enum RuntimeEvent {
         effort: String,
         plan_mode: bool,
         credential_configured: bool,
+        context_window_tokens: u64,
+        auto_compact_percent: u8,
     },
     Notice {
         title: String,
@@ -156,11 +158,15 @@ fn map_event(event: medusa_runtime::RuntimeEvent) -> RuntimeEvent {
             effort,
             plan_mode,
             credential_configured,
+            context_window_tokens,
+            auto_compact_percent,
         } => RuntimeEvent::Settings {
             model,
             effort,
             plan_mode,
             credential_configured,
+            context_window_tokens,
+            auto_compact_percent,
         },
         medusa_runtime::RuntimeEvent::Notice { title, details } => {
             RuntimeEvent::Notice { title, details }

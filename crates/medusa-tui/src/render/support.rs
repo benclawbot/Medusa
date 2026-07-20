@@ -62,8 +62,8 @@ pub(crate) fn transcript_lines(app: &AppState, width: u16) -> Vec<StyledLine> {
                     "You     ",
                     Color::Cyan,
                     text,
-                    Color::Black,
-                    Some(Color::Grey),
+                    Color::White,
+                    Some(Color::DarkGrey),
                     true,
                     Attribute::Reset,
                     width,
@@ -73,8 +73,8 @@ pub(crate) fn transcript_lines(app: &AppState, width: u16) -> Vec<StyledLine> {
                         "        ",
                         Color::DarkGrey,
                         &format!("[attachment] {}", attachment_label(attachment)),
-                        Color::Black,
-                        Some(Color::Grey),
+                        Color::White,
+                        Some(Color::DarkGrey),
                         true,
                         Attribute::Reset,
                         width,
@@ -446,12 +446,16 @@ impl StyledLine {
                 SetForegroundColor(*marker_color),
                 Print(marker),
                 SetForegroundColor(self.foreground),
-                Print(body),
+                Print(terminal_hyperlinks(&body)),
             )?;
         } else {
             let body = wrap_to_width(&self.text, width);
             used = body.chars().count();
-            queue!(stdout, SetForegroundColor(self.foreground), Print(body))?;
+            queue!(
+                stdout,
+                SetForegroundColor(self.foreground),
+                Print(terminal_hyperlinks(&body))
+            )?;
         }
         if self.fill_background {
             queue!(
@@ -655,4 +659,66 @@ pub(crate) fn app_error(error: AppError) -> io::Error {
 
 pub(crate) fn runtime_error(error: runtime::RuntimeError) -> io::Error {
     io::Error::other(error)
+}
+
+pub(crate) fn terminal_hyperlinks(text: &str) -> String {
+    let mut output = String::with_capacity(text.len());
+    let mut rest = text;
+    while let Some(start) = rest.find("http://").or_else(|| rest.find("https://")) {
+        output.push_str(&rest[..start]);
+        let candidate = &rest[start..];
+        let end = candidate
+            .find(char::is_whitespace)
+            .unwrap_or(candidate.len());
+        let raw_url = &candidate[..end];
+        let url = raw_url.trim_end_matches(['.', ',', ';', ':', '!', '?', ')', ']', '}']);
+        if url.is_empty() {
+            output.push_str(raw_url);
+        } else {
+            output.push_str("\x1b]8;;");
+            output.push_str(url);
+            output.push_str("\x1b\\");
+            output.push_str(url);
+            output.push_str("\x1b]8;;\x1b\\");
+            output.push_str(&raw_url[url.len()..]);
+        }
+        rest = &candidate[end..];
+    }
+    output.push_str(rest);
+    output
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn user_prompt_text_is_readable_on_a_dark_terminal() {
+        let directory = tempfile::tempdir().expect("tempdir");
+        let mut app = AppState::new(
+            directory.path().to_path_buf(),
+            "user-prompt-contrast",
+            "",
+            Arc::new(UnsupportedClipboard),
+        )
+        .expect("app");
+        app.transcript.push(TranscriptEntry::User(PromptDraft {
+            text: "make it into html".to_owned(),
+            ..PromptDraft::default()
+        }));
+
+        let prompt = transcript_lines(&app, 80)
+            .into_iter()
+            .find(|line| line.text == "make it into html")
+            .expect("rendered user prompt");
+
+        assert_ne!(prompt.foreground, Color::Black);
+    }
+
+    #[test]
+    fn conversation_urls_are_emitted_as_terminal_hyperlinks() {
+        let rendered = terminal_hyperlinks("See https://example.com/docs.");
+        assert!(rendered.contains("\x1b]8;;https://example.com/docs\x1b\\"));
+        assert!(rendered.ends_with("\x1b]8;;\x1b\\."));
+    }
 }

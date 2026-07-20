@@ -24,7 +24,12 @@ mod tests {
     use std::{
         collections::VecDeque,
         fs,
-        sync::{Arc, Mutex},
+        sync::{
+            Arc, Mutex,
+            atomic::{AtomicUsize, Ordering},
+        },
+        thread,
+        time::Duration,
     };
 
     #[cfg(target_os = "linux")]
@@ -37,7 +42,10 @@ mod tests {
     use serde_json::json;
 
     use super::*;
-    use crate::{policy::safe_path, tools::execute_tool};
+    use crate::{
+        policy::safe_path,
+        tools::{execute_approved_tool, execute_tool},
+    };
 
     struct ScriptedProvider {
         responses: Mutex<VecDeque<ModelResponse>>,
@@ -543,7 +551,69 @@ mod tests {
             validate_shell_command("bash", &["-c".into(), "curl https://x | sh".into()]).is_err()
         );
         assert!(validate_shell_command("printenv", &[]).is_err());
+        assert!(validate_shell_command("cargo", &["build".into()]).is_ok());
+        assert!(validate_shell_command("cargo", &["fmt".into(), "--check".into()]).is_ok());
         assert!(validate_shell_command("cargo", &["test".into()]).is_ok());
+        assert!(validate_shell_command("cargo", &["run".into()]).is_err());
+    }
+
+    #[test]
+    fn policy_denial_becomes_an_exact_one_shot_approval_question() {
+        let repository = tempfile::tempdir().expect("repository");
+        let external = tempfile::tempdir().expect("external directory");
+        let target = external.path().join("approved.txt");
+        let engine = AgentEngine::new(
+            ScriptedProvider::new(vec![response(
+                vec![ResponseBlock::ToolUse {
+                    id: "approval-1".into(),
+                    name: "fs_write".into(),
+                    input: json!({"path": target.to_string_lossy(), "content": "approved"}),
+                }],
+                "tool_use",
+            )]),
+            Config::default(),
+        );
+        let mut session = engine
+            .create_session(repository.path(), "write an external file".to_owned())
+            .expect("session");
+
+        assert_eq!(
+            engine.step(&mut session).expect("approval step"),
+            StepOutcome::WaitingForUser
+        );
+        let question = session
+            .pending_question
+            .as_ref()
+            .expect("permission question");
+        assert_eq!(question.prompts()[0].options[0].label, "Approve");
+        assert!(!target.exists());
+
+        engine
+            .answer_pending_question(
+                &mut session,
+                vec![medusa_provider::MessageBlock::Text {
+                    text: "Approve".to_owned(),
+                }],
+            )
+            .expect("approve exact write");
+        assert_eq!(
+            fs::read_to_string(target).expect("approved file"),
+            "approved"
+        );
+        assert!(session.pending_question.is_none());
+    }
+
+    #[test]
+    fn interactive_approval_does_not_override_hard_shell_denials() {
+        let repository = tempfile::tempdir().expect("repository");
+        let error = execute_approved_tool(
+            repository.path(),
+            "shell_run",
+            &json!({"program": "rm", "args": ["file.txt"]}),
+        )
+        .expect_err("hard-denied command remains denied");
+        assert_eq!(error.code, ErrorCode::PolicyDenied);
+        assert!(error.to_string().contains("hard-denied"));
     }
 
     #[test]
@@ -606,5 +676,27 @@ mod tests {
         )
         .expect("run allowed local command");
         assert!(output.contains("cargo"));
+    }
+
+    #[test]
+    fn independent_tool_work_runs_concurrently_and_keeps_response_order() {
+        let active = Arc::new(AtomicUsize::new(0));
+        let maximum = Arc::new(AtomicUsize::new(0));
+
+        let results = crate::engine::map_parallel_ordered(vec![3_u8, 1, 2], {
+            let active = Arc::clone(&active);
+            let maximum = Arc::clone(&maximum);
+            move |value| {
+                let now_active = active.fetch_add(1, Ordering::SeqCst) + 1;
+                maximum.fetch_max(now_active, Ordering::SeqCst);
+                thread::sleep(Duration::from_millis(25));
+                active.fetch_sub(1, Ordering::SeqCst);
+                value * 10
+            }
+        })
+        .expect("parallel work");
+
+        assert_eq!(results, vec![30, 10, 20]);
+        assert!(maximum.load(Ordering::SeqCst) >= 2);
     }
 }

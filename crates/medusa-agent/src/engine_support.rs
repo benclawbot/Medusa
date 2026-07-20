@@ -1,4 +1,4 @@
-use std::{fs, path::Path};
+use std::{collections::HashMap, fs, path::Path};
 
 use medusa_config::Mode;
 use medusa_core::{ErrorCategory, ErrorCode, MedusaError, MedusaResult};
@@ -128,6 +128,7 @@ pub(crate) fn question_from_input(
         questions,
         legacy_question: None,
         legacy_options: Vec::new(),
+        approval: None,
     })
 }
 
@@ -244,6 +245,7 @@ pub(crate) fn question_from_assistant_text(text: &str) -> Option<AgentQuestion> 
         }],
         legacy_question: None,
         legacy_options: Vec::new(),
+        approval: None,
     })
 }
 
@@ -357,6 +359,55 @@ pub(crate) fn has_mutating_tool_result(session: &AgentSession) -> bool {
                     .is_some_and(desktop_commander_tool_is_mutating)
         )
     })
+}
+
+pub(crate) fn successful_mutation_paths(session: &AgentSession) -> Vec<String> {
+    let mut calls = HashMap::new();
+    let mut paths = Vec::new();
+    for message in &session.messages {
+        for block in &message.content {
+            match block {
+                MessageBlock::ToolUse { id, name, input } => {
+                    calls.insert(id.as_str(), (name.as_str(), input));
+                }
+                MessageBlock::ToolResult {
+                    tool_use_id,
+                    is_error: false,
+                    ..
+                } => {
+                    let Some((name, input)) = calls.get(tool_use_id.as_str()) else {
+                        continue;
+                    };
+                    match *name {
+                        "fs_write" | "fs_create_dir" => {
+                            if let Some(path) =
+                                input.get("path").and_then(serde_json::Value::as_str)
+                            {
+                                paths.push(path.to_owned());
+                            }
+                        }
+                        "patch_apply" => {
+                            paths.extend(
+                                input
+                                    .get("edits")
+                                    .and_then(serde_json::Value::as_array)
+                                    .into_iter()
+                                    .flatten()
+                                    .filter_map(|edit| edit.get("path"))
+                                    .filter_map(serde_json::Value::as_str)
+                                    .map(str::to_owned),
+                            );
+                        }
+                        _ => {}
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+    paths.sort();
+    paths.dedup();
+    paths
 }
 
 pub(crate) fn plan_is_complete(session: &AgentSession) -> bool {

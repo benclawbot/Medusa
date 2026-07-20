@@ -277,6 +277,16 @@ pub fn command_suggestions(input: &str, repo: &Path) -> Vec<CommandSuggestion> {
     let Some(prefix) = input.trim_start().strip_prefix('/') else {
         return Vec::new();
     };
+    if let Some(skill_prefix) = prefix.strip_prefix("skills").and_then(|remainder| {
+        remainder
+            .starts_with(char::is_whitespace)
+            .then(|| remainder.trim_start().to_ascii_lowercase())
+    }) {
+        return skill_command_suggestions(repo)
+            .into_iter()
+            .filter(|skill| skill.name.to_ascii_lowercase().starts_with(&skill_prefix))
+            .collect();
+    }
     if prefix.contains(char::is_whitespace) {
         return Vec::new();
     }
@@ -481,6 +491,25 @@ mod tests {
             Some("/model ".to_owned())
         );
         assert!(command_suggestions("/plan task", directory.path()).is_empty());
+    }
+
+    #[test]
+    fn skills_command_lists_installed_skills_for_selection() {
+        let directory = tempfile::tempdir().expect("temporary directory");
+        let skill = directory.path().join(".medusa/skills/release");
+        fs::create_dir_all(&skill).expect("create skill directory");
+        fs::write(
+            skill.join("SKILL.md"),
+            "---\ndescription: Prepare a release\n---\n",
+        )
+        .expect("write skill");
+
+        let suggestions = command_suggestions("/skills ", directory.path());
+        let release = suggestions
+            .iter()
+            .find(|suggestion| suggestion.name == "release")
+            .expect("project skill is selectable");
+        assert!(release.description.contains("Prepare a release"));
     }
 
     #[test]

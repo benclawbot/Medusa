@@ -9,8 +9,8 @@ extern crate self as tempfile;
 pub(crate) use test_tempfile::tempdir;
 
 use runtime::{
-    RuntimeRegistry, runtime_cancel, runtime_close, runtime_command, runtime_configure_model,
-    runtime_poll, runtime_start, runtime_submit,
+    RuntimeRegistry, runtime_cancel, runtime_close, runtime_command, runtime_command_suggestions,
+    runtime_configure_model, runtime_poll, runtime_start, runtime_submit,
 };
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -23,6 +23,7 @@ pub fn run() -> tauri::Result<()> {
             runtime_close,
             runtime_submit,
             runtime_command,
+            runtime_command_suggestions,
             runtime_cancel,
             runtime_poll,
             runtime_configure_model,

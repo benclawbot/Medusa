@@ -53,6 +53,9 @@ pub(super) struct PortableRenderSnapshot {
     timed_output_tokens: u64,
     cache_read_input_tokens: u64,
     cache_creation_input_tokens: u64,
+    current_context_tokens: u64,
+    context_window_tokens: u64,
+    auto_compact_percent: u8,
     model_elapsed_millis: u64,
     run_elapsed_seconds: Option<u64>,
     session_elapsed_seconds: u64,
@@ -81,6 +84,9 @@ pub(super) fn portable_render_snapshot(
         timed_output_tokens: app.timed_output_tokens,
         cache_read_input_tokens: app.cache_read_input_tokens,
         cache_creation_input_tokens: app.cache_creation_input_tokens,
+        current_context_tokens: app.current_context_tokens(),
+        context_window_tokens: app.context_window_tokens(),
+        auto_compact_percent: app.auto_compact_percent(),
         model_elapsed_millis: app.model_elapsed_millis,
         run_elapsed_seconds: app.elapsed_seconds(),
         session_elapsed_seconds: app.session_elapsed_seconds(),
@@ -118,6 +124,33 @@ pub(super) fn session_metrics_line(app: &AppState) -> String {
     )
 }
 
+pub(super) fn context_meter_line(app: &AppState) -> String {
+    const SEGMENTS: u64 = 10;
+    let window = app.context_window_tokens();
+    let used = app.current_context_tokens().min(window);
+    let percent = if window == 0 {
+        0
+    } else {
+        used.saturating_mul(100) / window
+    };
+    let filled = if window == 0 {
+        0
+    } else {
+        used.saturating_mul(SEGMENTS) / window
+    };
+    let bar = format!(
+        "{}{}",
+        "█".repeat(usize::try_from(filled).unwrap_or(usize::MAX)),
+        "░".repeat(usize::try_from(SEGMENTS.saturating_sub(filled)).unwrap_or_default())
+    );
+    format!(
+        "context [{bar}] {}/{} ({percent}%) · auto-compact {}%",
+        format_token_count(used),
+        format_token_count(window),
+        app.auto_compact_percent(),
+    )
+}
+
 fn format_token_rate(tokens_per_second: f64) -> String {
     if tokens_per_second < 1_000.0 {
         return format!("{tokens_per_second:.1}");
@@ -137,7 +170,10 @@ pub(super) fn format_token_count(tokens: u64) -> String {
     if tokens < 1_000 {
         return tokens.to_string();
     }
-    format!("{:.1}k", tokens as f64 / 1_000.0)
+    if tokens < 1_000_000 {
+        return format!("{:.1}k", tokens as f64 / 1_000.0);
+    }
+    format!("{:.1}m", tokens as f64 / 1_000_000.0)
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -222,15 +258,21 @@ pub(super) fn legacy_draw_common(
     } else {
         Vec::new()
     };
-    let available_suggestion_rows = height.saturating_sub(header_height.saturating_add(4));
+    let available_suggestion_rows = height.saturating_sub(header_height.saturating_add(5));
+    let suggestion_rows = usize::from(available_suggestion_rows);
+    let suggestion_start = app
+        .command_selection
+        .saturating_sub(suggestion_rows.saturating_sub(1))
+        .min(suggestions.len().saturating_sub(suggestion_rows));
     let visible_suggestions = suggestions
         .iter()
-        .take(usize::from(available_suggestion_rows))
+        .skip(suggestion_start)
+        .take(suggestion_rows)
         .collect::<Vec<_>>();
     let requested_composer_height = if model_modal.is_some() {
         3_u16.saturating_add(u16::try_from(modal_lines.len()).unwrap_or(u16::MAX))
     } else {
-        4_u16.saturating_add(u16::try_from(visible_suggestions.len()).unwrap_or(u16::MAX))
+        5_u16.saturating_add(u16::try_from(visible_suggestions.len()).unwrap_or(u16::MAX))
     };
     let composer_height = requested_composer_height.min(height.saturating_sub(header_height));
     let content_rows = height.saturating_sub(composer_height + header_height) as usize;
@@ -288,7 +330,7 @@ pub(super) fn legacy_draw_common(
         return stdout.flush();
     }
     for (index, suggestion) in visible_suggestions.iter().enumerate() {
-        let selected = index == app.command_selection;
+        let selected = suggestion_start + index == app.command_selection;
         StyledLine::with_marker(
             if selected { "> " } else { "  " },
             if selected {
@@ -321,6 +363,7 @@ pub(super) fn legacy_draw_common(
         },
     )
     .print(stdout, width)?;
+    StyledLine::new(context_meter_line(app), Color::Grey).print(stdout, width)?;
     print_separator(stdout, width)?;
     StyledLine::with_marker(
         "› ",
@@ -328,7 +371,7 @@ pub(super) fn legacy_draw_common(
         if app.is_running() {
             "enter queues a follow-up · ctrl+c interrupt · esc exit"
         } else {
-            "enter to submit · ctrl+v to paste · tab to complete commands · esc to exit"
+            "enter selects/submits · ctrl+v paste · tab also completes commands · esc exit"
         },
         Color::DarkGrey,
     )
@@ -386,7 +429,7 @@ pub(super) fn render_frame(
         Vec::new()
     };
     let panel_rows = u16::try_from(plan_panel.len()).unwrap_or(u16::MAX);
-    let base_composer_rows = 4_u16.saturating_add(panel_rows);
+    let base_composer_rows = 5_u16.saturating_add(panel_rows);
     let suggestions = if !is_modal {
         command_suggestions(&app.composer.draft.text, app.repository())
     } else {
@@ -394,9 +437,15 @@ pub(super) fn render_frame(
     };
     let available_suggestion_rows =
         height.saturating_sub(header_height.saturating_add(base_composer_rows));
+    let suggestion_rows = usize::from(available_suggestion_rows);
+    let suggestion_start = app
+        .command_selection
+        .saturating_sub(suggestion_rows.saturating_sub(1))
+        .min(suggestions.len().saturating_sub(suggestion_rows));
     let visible_suggestions = suggestions
         .into_iter()
-        .take(usize::from(available_suggestion_rows))
+        .skip(suggestion_start)
+        .take(suggestion_rows)
         .collect::<Vec<_>>();
     let requested_composer_height = if is_modal {
         3_u16.saturating_add(u16::try_from(modal_lines.len()).unwrap_or(u16::MAX))
@@ -466,7 +515,7 @@ pub(super) fn render_frame(
         bottom_row = bottom_row.saturating_add(1);
     }
     for (index, suggestion) in visible_suggestions.iter().enumerate() {
-        let selected = index == app.command_selection;
+        let selected = suggestion_start + index == app.command_selection;
         set_frame_line(
             &mut frame,
             bottom_row,
@@ -505,6 +554,12 @@ pub(super) fn render_frame(
                 Color::White
             },
         ),
+    );
+    bottom_row = bottom_row.saturating_add(1);
+    set_frame_line(
+        &mut frame,
+        bottom_row,
+        StyledLine::new(context_meter_line(app), Color::Grey),
     );
     bottom_row = bottom_row.saturating_add(1);
     set_frame_line(&mut frame, bottom_row, separator_line(width));

@@ -1,6 +1,7 @@
 use std::{
+    collections::BTreeSet,
     fs,
-    path::{Component, Path},
+    path::{Component, Path, PathBuf},
     process::Command,
 };
 
@@ -10,6 +11,13 @@ use crate::tools::format_command_output;
 
 /// Runs deterministic repository-specific verification.
 pub fn targeted_verification(repo: &Path) -> MedusaResult<VerificationResult> {
+    targeted_verification_for_paths(repo, &[])
+}
+
+pub(crate) fn targeted_verification_for_paths(
+    repo: &Path,
+    artifact_paths: &[String],
+) -> MedusaResult<VerificationResult> {
     #[cfg(windows)]
     let command = if repo.join("verify.ps1").is_file() {
         Some(("powershell", vec!["-NoProfile", "-File", "verify.ps1"]))
@@ -18,8 +26,13 @@ pub fn targeted_verification(repo: &Path) -> MedusaResult<VerificationResult> {
     };
     #[cfg(not(windows))]
     let command = inferred_command(repo)?;
-    if command.is_none() && repo.join("index.html").is_file() {
-        return verify_static_site(repo);
+    if command.is_none() {
+        if !artifact_paths.is_empty() {
+            return verify_standalone_artifacts(repo, artifact_paths);
+        }
+        if repo.join("index.html").is_file() {
+            return verify_static_site(repo, Path::new("index.html"));
+        }
     }
     let Some((program, args)) = command else {
         return Err(MedusaError::new(
@@ -67,13 +80,14 @@ fn package_has_test_script(repo: &Path) -> MedusaResult<bool> {
         .is_some_and(|script| !script.trim().is_empty()))
 }
 
-fn verify_static_site(repo: &Path) -> MedusaResult<VerificationResult> {
-    let html = fs::read_to_string(repo.join("index.html"))?;
+fn verify_static_site(repo: &Path, entry: &Path) -> MedusaResult<VerificationResult> {
+    let html = fs::read_to_string(repo.join(entry))?;
     let mut passed = html.to_ascii_lowercase().contains("<html");
     let mut evidence = vec![
-        "static_site=index.html".to_owned(),
+        format!("static_site={}", entry.display()),
         format!("html_document={passed}"),
     ];
+    let base = entry.parent().unwrap_or_else(|| Path::new(""));
     for asset in local_asset_references(&html) {
         let path = Path::new(&asset);
         let safe = !path.is_absolute()
@@ -83,11 +97,58 @@ fn verify_static_site(repo: &Path) -> MedusaResult<VerificationResult> {
                     Component::ParentDir | Component::RootDir | Component::Prefix(_)
                 )
             });
-        if safe && repo.join(path).is_file() {
+        if safe && repo.join(base).join(path).is_file() {
             evidence.push(format!("asset_present={asset}"));
         } else {
             passed = false;
             evidence.push(format!("missing_asset={asset}"));
+        }
+    }
+    Ok(VerificationResult { passed, evidence })
+}
+
+fn verify_standalone_artifacts(
+    repo: &Path,
+    artifact_paths: &[String],
+) -> MedusaResult<VerificationResult> {
+    let mut passed = true;
+    let mut evidence = Vec::new();
+    let unique = artifact_paths
+        .iter()
+        .map(PathBuf::from)
+        .collect::<BTreeSet<_>>();
+    for relative in unique {
+        let safe = !relative.is_absolute()
+            && !relative.components().any(|component| {
+                matches!(
+                    component,
+                    Component::ParentDir | Component::RootDir | Component::Prefix(_)
+                )
+            });
+        if !safe {
+            passed = false;
+            evidence.push(format!("unsafe_artifact={}", relative.display()));
+            continue;
+        }
+        let absolute = repo.join(&relative);
+        if absolute.is_dir() {
+            evidence.push(format!("directory_present={}", relative.display()));
+        } else if absolute.is_file()
+            && relative
+                .extension()
+                .is_some_and(|extension| extension.eq_ignore_ascii_case("html"))
+        {
+            let result = verify_static_site(repo, &relative)?;
+            passed &= result.passed;
+            evidence.extend(result.evidence);
+        } else if absolute.is_file() {
+            let nonempty = absolute.metadata()?.len() > 0;
+            passed &= nonempty;
+            evidence.push(format!("artifact_present={}", relative.display()));
+            evidence.push(format!("artifact_nonempty={nonempty}"));
+        } else {
+            passed = false;
+            evidence.push(format!("missing_artifact={}", relative.display()));
         }
     }
     Ok(VerificationResult { passed, evidence })
@@ -210,6 +271,28 @@ mod tests {
                 .evidence
                 .iter()
                 .any(|line| line == "missing_asset=missing.css")
+        );
+    }
+
+    #[test]
+    fn standalone_html_artifact_verifies_without_a_repository_test_command() {
+        let directory = tempfile::tempdir().expect("tempdir");
+        fs::write(
+            directory.path().join("latest-ai-news.html"),
+            "<!doctype html><html><head><title>AI news</title></head><body>Current reporting</body></html>",
+        )
+        .expect("html artifact");
+
+        let result =
+            targeted_verification_for_paths(directory.path(), &["latest-ai-news.html".to_owned()])
+                .expect("standalone artifact verification");
+
+        assert!(result.passed);
+        assert!(
+            result
+                .evidence
+                .iter()
+                .any(|line| line == "static_site=latest-ai-news.html")
         );
     }
 

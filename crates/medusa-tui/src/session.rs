@@ -357,8 +357,17 @@ pub(super) fn drain_runtime_events(
                 effort,
                 plan_mode,
                 credential_configured,
+                context_window_tokens,
+                auto_compact_percent,
             } => {
-                app.set_runtime_settings(model, effort, plan_mode, credential_configured);
+                app.set_runtime_settings(
+                    model,
+                    effort,
+                    plan_mode,
+                    credential_configured,
+                    context_window_tokens,
+                    auto_compact_percent,
+                );
             }
             RuntimeEvent::Notice { title, details } => {
                 let status = title.to_ascii_lowercase();

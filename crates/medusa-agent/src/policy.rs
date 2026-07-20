@@ -56,6 +56,23 @@ pub(crate) fn safe_path(repo: &Path, relative: &str) -> MedusaResult<PathBuf> {
 }
 
 pub fn validate_shell_command(program: &str, args: &[String]) -> MedusaResult<()> {
+    validate_shell_command_hard_denials(program, args)?;
+    #[cfg(not(target_os = "linux"))]
+    validate_portable_shell_command(
+        &Path::new(program)
+            .file_name()
+            .and_then(|name| name.to_str())
+            .unwrap_or(program)
+            .to_ascii_lowercase(),
+        args,
+    )?;
+    Ok(())
+}
+
+pub(crate) fn validate_shell_command_hard_denials(
+    program: &str,
+    args: &[String],
+) -> MedusaResult<()> {
     let basename = Path::new(program)
         .file_name()
         .and_then(|name| name.to_str())
@@ -160,8 +177,6 @@ pub fn validate_shell_command(program: &str, args: &[String]) -> MedusaResult<()
             )));
         }
     }
-    #[cfg(not(target_os = "linux"))]
-    validate_portable_shell_command(&basename, args)?;
     Ok(())
 }
 
@@ -171,7 +186,15 @@ fn validate_portable_shell_command(program: &str, args: &[String]) -> MedusaResu
     let allowed = match program {
         "cargo" => matches!(
             first,
-            "check" | "clippy" | "metadata" | "test" | "tree" | "--version" | "version"
+            "build"
+                | "check"
+                | "clippy"
+                | "fmt"
+                | "metadata"
+                | "test"
+                | "tree"
+                | "--version"
+                | "version"
         ),
         "git" => matches!(
             first,

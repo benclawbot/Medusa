@@ -99,7 +99,7 @@ fn submit_clears_durable_draft_after_capturing_prompt() {
 }
 
 #[test]
-fn slash_menu_selection_controls_tab_completion() {
+fn slash_menu_selection_accepts_enter_as_well_as_tab() {
     let repository = tempdir().expect("temporary repository");
     let mut app = AppState::new(
         repository.path().to_path_buf(),
@@ -119,7 +119,7 @@ fn slash_menu_selection_controls_tab_completion() {
     assert_eq!(app.command_selection, 1);
     assert_eq!(
         app.handle_event(Event::Key(crossterm::event::KeyEvent::new(
-            KeyCode::Tab,
+            KeyCode::Enter,
             KeyModifiers::NONE,
         )))
         .expect("complete selected command"),
@@ -129,7 +129,7 @@ fn slash_menu_selection_controls_tab_completion() {
 }
 
 #[test]
-fn typed_slash_commands_keep_their_name_and_a_bare_slash_stays_in_the_picker() {
+fn typed_slash_commands_are_selected_before_they_are_submitted() {
     let repository = tempdir().expect("temporary repository");
     let mut app = AppState::new(
         repository.path().to_path_buf(),
@@ -147,17 +147,8 @@ fn typed_slash_commands_keep_their_name_and_a_bare_slash_stays_in_the_picker() {
         .expect("submit bare slash"),
         AppAction::Redraw
     );
-    assert_eq!(app.composer.draft.text, "/");
+    assert_eq!(app.composer.draft.text, "/new ");
     assert!(app.transcript.is_empty());
-
-    for character in ['n', 'e', 'w'] {
-        app.handle_event(Event::Key(crossterm::event::KeyEvent::new(
-            KeyCode::Char(character),
-            KeyModifiers::NONE,
-        )))
-        .expect("type command");
-    }
-    assert_eq!(app.composer.draft.text, "/new");
     assert_eq!(
         app.handle_event(Event::Key(crossterm::event::KeyEvent::new(
             KeyCode::Enter,
@@ -166,6 +157,29 @@ fn typed_slash_commands_keep_their_name_and_a_bare_slash_stays_in_the_picker() {
         .expect("submit command"),
         AppAction::Command(SlashCommand::New)
     );
+}
+
+#[test]
+fn starting_a_new_turn_removes_the_stale_terminal_failure_marker() {
+    let repository = tempdir().expect("temporary repository");
+    let mut app = AppState::new(
+        repository.path().to_path_buf(),
+        "failure",
+        "next task",
+        Arc::new(FakeClipboard(ClipboardContent::Empty)),
+    )
+    .expect("create app");
+    app.record_activity(TranscriptActivity {
+        id: None,
+        kind: TranscriptActivityKind::Error,
+        title: "Task failed".to_owned(),
+        details: vec!["old failure".to_owned()],
+    });
+
+    app.begin_run();
+
+    assert!(!app.transcript.iter().any(|entry| matches!(entry, TranscriptEntry::Activity(activity) if activity.title == "Task failed")));
+    assert_eq!(app.status, "Working");
 }
 
 #[test]

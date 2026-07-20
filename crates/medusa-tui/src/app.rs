@@ -55,6 +55,9 @@ pub struct AppState {
     pub timed_output_tokens: u64,
     pub cache_read_input_tokens: u64,
     pub cache_creation_input_tokens: u64,
+    current_context_tokens: u64,
+    context_window_tokens: u64,
+    auto_compact_percent: u8,
     pub model_elapsed_millis: u64,
     pub active_turn: u32,
     pub command_selection: usize,
@@ -125,6 +128,9 @@ impl AppState {
             timed_output_tokens: 0,
             cache_read_input_tokens: 0,
             cache_creation_input_tokens: 0,
+            current_context_tokens: 0,
+            context_window_tokens: 1_000_000,
+            auto_compact_percent: 40,
             model_elapsed_millis: 0,
             active_turn: 0,
             command_selection: 0,
@@ -215,6 +221,16 @@ impl AppState {
             ComposerAction::CommandNext => self.select_command(1),
             ComposerAction::CompleteCommand => self.complete_command(),
             ComposerAction::Submit => {
+                let suggestions = command_suggestions(&self.composer.draft.text, &self.repository);
+                let command_text = self.composer.draft.text.trim();
+                let is_exact_command = suggestions
+                    .iter()
+                    .any(|suggestion| command_text == format!("/{}", suggestion.name));
+                if !suggestions.is_empty()
+                    && (!is_exact_command || matches!(command_text, "/" | "/skills"))
+                {
+                    return self.complete_command();
+                }
                 let submitted = self.composer.draft.clone();
                 if submitted.attachments.is_empty() && submitted.text.trim() == "/" {
                     self.status = "choose a command".to_owned();
@@ -294,6 +310,7 @@ impl AppState {
         self.timed_output_tokens = 0;
         self.cache_read_input_tokens = 0;
         self.cache_creation_input_tokens = 0;
+        self.current_context_tokens = 0;
         self.model_elapsed_millis = 0;
         self.active_turn = 0;
         self.session_started_at = Instant::now();
@@ -312,6 +329,7 @@ impl AppState {
                 .split_off(self.transcript.len().saturating_sub(TRANSCRIPT_TAIL));
         }
         self.transcript.insert(0, TranscriptEntry::System(message));
+        self.current_context_tokens = 0;
         self.status = "context compacted".to_owned();
     }
 
@@ -321,11 +339,15 @@ impl AppState {
         effort: String,
         plan_mode: bool,
         credential_configured: bool,
+        context_window_tokens: u64,
+        auto_compact_percent: u8,
     ) {
         self.model_label = Some(model);
         self.effort_label = Some(effort);
         self.plan_mode = plan_mode;
         self.credential_configured = credential_configured;
+        self.context_window_tokens = context_window_tokens;
+        self.auto_compact_percent = auto_compact_percent;
     }
 
     pub fn set_plan(&mut self, plan: TranscriptPlan) {
@@ -446,6 +468,17 @@ impl AppState {
     }
 
     pub fn begin_run(&mut self) {
+        self.transcript.retain(|entry| {
+            !matches!(
+                entry,
+                TranscriptEntry::Activity(TranscriptActivity {
+                    id: None,
+                    kind: TranscriptActivityKind::Error,
+                    title,
+                    ..
+                }) if title == "Task failed"
+            )
+        });
         self.status = "Working".to_owned();
         self.active_turn = 0;
         self.spinner_frame = 0;
@@ -500,6 +533,9 @@ impl AppState {
         self.cache_creation_input_tokens = self
             .cache_creation_input_tokens
             .saturating_add(cache_creation_input_tokens);
+        self.current_context_tokens = input_tokens
+            .saturating_add(cache_read_input_tokens)
+            .saturating_add(cache_creation_input_tokens);
         self.model_elapsed_millis = self
             .model_elapsed_millis
             .saturating_add(model_elapsed_millis);
@@ -510,6 +546,21 @@ impl AppState {
         self.input_tokens
             .saturating_add(self.cache_read_input_tokens)
             .saturating_add(self.cache_creation_input_tokens)
+    }
+
+    #[must_use]
+    pub fn current_context_tokens(&self) -> u64 {
+        self.current_context_tokens
+    }
+
+    #[must_use]
+    pub fn context_window_tokens(&self) -> u64 {
+        self.context_window_tokens
+    }
+
+    #[must_use]
+    pub fn auto_compact_percent(&self) -> u8 {
+        self.auto_compact_percent
     }
 
     #[must_use]
