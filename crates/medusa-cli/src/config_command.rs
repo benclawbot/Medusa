@@ -190,7 +190,12 @@ fn choose(title: &str, choices: &[(&str, &str)], current: &str) -> MedusaResult<
         let marker = if *value == current { "*" } else { " " };
         println!("  {}. [{marker}] {label}", index + 1);
     }
-    let raw = prompt("Selection", "1")?;
+    let default_selection = choices
+        .iter()
+        .position(|(value, _)| *value == current)
+        .map(|index| (index + 1).to_string())
+        .unwrap_or_else(|| "1".to_owned());
+    let raw = prompt("Selection", &default_selection)?;
     let index = raw
         .parse::<usize>()
         .map_err(|_| config_error(format!("invalid selection: {raw}")))?;
