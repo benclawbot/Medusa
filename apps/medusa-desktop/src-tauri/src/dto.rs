@@ -122,6 +122,7 @@ pub enum DesktopActivityKind {
     Done,
     Error,
     Tool,
+    Progress,
     Verification,
 }
 
@@ -169,6 +170,7 @@ impl From<RuntimeEvent> for DesktopRuntimeEvent {
                         RuntimeActivityKind::Done => DesktopActivityKind::Done,
                         RuntimeActivityKind::Error => DesktopActivityKind::Error,
                         RuntimeActivityKind::Tool => DesktopActivityKind::Tool,
+                        RuntimeActivityKind::Progress => DesktopActivityKind::Progress,
                         RuntimeActivityKind::Verification => DesktopActivityKind::Verification,
                     },
                     title: activity.title,

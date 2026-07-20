@@ -282,10 +282,12 @@ mod tests {
 
     #[test]
     fn profile_round_trips_without_secrets() {
-        let mut profile = ProviderProfile::default();
-        profile.configured = true;
-        profile.connection = "omniroute".into();
-        profile.base_url = Some("http://127.0.0.1:20128/v1".into());
+        let profile = ProviderProfile {
+            configured: true,
+            connection: "omniroute".into(),
+            base_url: Some("http://127.0.0.1:20128/v1".into()),
+            ..ProviderProfile::default()
+        };
         let encoded = toml::to_string(&profile).expect("serialize");
         assert!(!encoded.to_ascii_lowercase().contains("api_key"));
         let decoded: ProviderProfile = toml::from_str(&encoded).expect("deserialize");
