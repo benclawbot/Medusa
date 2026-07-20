@@ -204,6 +204,7 @@ impl Config {
         let mut value =
             toml::Value::try_from(Self::default()).map_err(|error| invalid(error.to_string()))?;
         merge_provider_profile(&mut value)?;
+        merge_provider_profile(&mut value)?;
         if let Some(path) = user {
             merge_file(&mut value, path)?;
         }
