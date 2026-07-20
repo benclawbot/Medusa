@@ -26,7 +26,9 @@ jobs:
           toolchain: '1.88'
           components: rustfmt, clippy
       - name: Apply production provider implementation
-        run: python3 scripts/complete_provider_feature.py
+        run: |
+          python3 scripts/complete_provider_feature.py
+          python3 scripts/normalize_provider_feature.py
       - name: Format
         run: cargo fmt --all
       - name: Refresh lockfile
