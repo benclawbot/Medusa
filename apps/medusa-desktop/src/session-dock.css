@@ -29,8 +29,8 @@
   position: absolute;
   left: 0;
   bottom: 46px;
-  width: min(390px, calc(100vw - 36px));
-  max-height: min(620px, calc(100vh - 92px));
+  width: min(430px, calc(100vw - 36px));
+  max-height: min(680px, calc(100vh - 92px));
   display: flex;
   flex-direction: column;
   overflow: hidden;
@@ -56,6 +56,7 @@
 
 .session-dock-panel > header div:first-child {
   display: flex;
+  min-width: 0;
   flex-direction: column;
   gap: 2px;
 }
@@ -67,11 +68,15 @@
 }
 
 .session-dock-panel header strong {
+  overflow: hidden;
   font-size: 14px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .session-dock-actions {
   display: flex;
+  flex: 0 0 auto;
   gap: 4px;
 }
 
@@ -91,14 +96,20 @@
   color: #fff;
 }
 
-.session-dock-list {
+.session-dock-list,
+.session-history {
   overflow-y: auto;
   padding: 8px;
 }
 
 .session-dock-item {
+  width: 100%;
   padding: 11px 12px;
+  border: 0;
   border-radius: 10px;
+  background: transparent;
+  color: inherit;
+  text-align: left;
 }
 
 .session-dock-item + .session-dock-item {
@@ -152,7 +163,8 @@
   color: rgb(147, 197, 253);
 }
 
-.session-dock-meta {
+.session-dock-meta,
+.session-history-meta {
   display: flex;
   align-items: center;
   gap: 8px;
@@ -161,9 +173,47 @@
   font-size: 10px;
 }
 
-.session-dock-meta code {
+.session-dock-meta code,
+.session-history-meta code {
   margin-left: auto;
   color: rgba(255, 255, 255, 0.36);
+}
+
+.session-history-meta {
+  margin: 2px 4px 12px;
+}
+
+.session-history-message {
+  padding: 10px 12px;
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.035);
+}
+
+.session-history-message + .session-history-message {
+  margin-top: 8px;
+}
+
+.session-history-message.user {
+  margin-left: 32px;
+  background: rgba(96, 165, 250, 0.09);
+}
+
+.session-history-message.assistant {
+  margin-right: 32px;
+}
+
+.session-history-message small {
+  color: rgba(255, 255, 255, 0.46);
+  font-size: 10px;
+  text-transform: capitalize;
+}
+
+.session-history-message p {
+  margin: 5px 0 0;
+  color: rgba(255, 255, 255, 0.86);
+  font-size: 12px;
+  line-height: 1.5;
+  white-space: pre-wrap;
 }
 
 .session-dock-empty,
