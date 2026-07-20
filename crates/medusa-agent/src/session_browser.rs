@@ -269,8 +269,7 @@ mod tests {
         fs::create_dir_all(&fallback).expect("fallback directory");
         fs::copy(&primary, fallback.join(format!("{}.json", session.id)))
             .expect("duplicate fallback session");
-        fs::write(fallback.join("not-a-session.json"), b"{}")
-            .expect("unrelated json file");
+        fs::write(fallback.join("not-a-session.json"), b"{}").expect("unrelated json file");
 
         let sessions = list_sessions(repository.path()).expect("session catalog");
         assert_eq!(sessions.len(), 1);
