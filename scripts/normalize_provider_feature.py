@@ -1,17 +1,8 @@
 from pathlib import Path
+import re
 
 path = Path("crates/medusa-config/src/lib.rs")
 text = path.read_text()
-old = '''    let overlay = toml::Value::try_from(toml::toml! {
-        [model]
-        provider = profile.provider
-        name = profile.model
-        protocol = protocol
-        auth = profile.auth
-        speed = profile.speed
-        reasoning = profile.reasoning
-    }).map_err(|error| invalid(error.to_string()))?;
-'''
 new = '''    let mut model = toml::map::Map::new();
     model.insert("provider".to_owned(), toml::Value::String(profile.provider));
     model.insert("name".to_owned(), toml::Value::String(profile.model));
@@ -23,6 +14,13 @@ new = '''    let mut model = toml::map::Map::new();
     root.insert("model".to_owned(), toml::Value::Table(model));
     let overlay = toml::Value::Table(root);
 '''
-if old not in text and new not in text:
-    raise SystemExit("provider overlay marker not found")
-path.write_text(text.replace(old, new))
+if new not in text:
+    pattern = re.compile(
+        r"\s*let overlay = toml::Value::try_from\(toml::toml! \{.*?\}\)"
+        r"\.map_err\(\|error\| invalid\(error\.to_string\(\)\)\)\?;\n",
+        re.DOTALL,
+    )
+    text, count = pattern.subn("\n" + new, text, count=1)
+    if count != 1:
+        raise SystemExit("provider overlay marker not found")
+path.write_text(text)
