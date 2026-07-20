@@ -11,22 +11,29 @@ def replace(path: str, old: str, new: str) -> None:
     p.write_text(text.replace(old, new))
 
 
-# Extend the typed model configuration so the first-run profile is runtime data,
-# not a disconnected CLI-only document.
 config = Path("crates/medusa-config/src/lib.rs")
 text = config.read_text()
-text = text.replace(
-    "    pub auto_compact_percent: u8,\n}",
-    "    pub auto_compact_percent: u8,\n    pub base_url: Option<String>,\n    pub auth: String,\n    pub speed: String,\n    pub reasoning: String,\n}",
-)
-text = text.replace(
-    "            auto_compact_percent: 40,\n        }",
-    "            auto_compact_percent: 40,\n            base_url: None,\n            auth: \"api-key\".into(),\n            speed: \"balanced\".into(),\n            reasoning: \"medium\".into(),\n        }",
-)
-text = text.replace(
-    "        let mut value =\n            toml::Value::try_from(Self::default()).map_err(|error| invalid(error.to_string()))?;",
-    "        let mut value =\n            toml::Value::try_from(Self::default()).map_err(|error| invalid(error.to_string()))?;\n        merge_provider_profile(&mut value)?;",
-)
+if "pub base_url: Option<String>" not in text:
+    text = text.replace(
+        "    pub auto_compact_percent: u8,\n}",
+        "    pub auto_compact_percent: u8,\n    pub base_url: Option<String>,\n    pub auth: String,\n    pub speed: String,\n    pub reasoning: String,\n}",
+    )
+if "base_url: None" not in text:
+    text = text.replace(
+        "            auto_compact_percent: 40,\n        }",
+        "            auto_compact_percent: 40,\n            base_url: None,\n            auth: \"api-key\".into(),\n            speed: \"balanced\".into(),\n            reasoning: \"medium\".into(),\n        }",
+    )
+# Normalize accidental duplicate insertions from earlier generator runs.
+while "        merge_provider_profile(&mut value)?;\n        merge_provider_profile(&mut value)?;" in text:
+    text = text.replace(
+        "        merge_provider_profile(&mut value)?;\n        merge_provider_profile(&mut value)?;",
+        "        merge_provider_profile(&mut value)?;",
+    )
+if "merge_provider_profile(&mut value)?;" not in text:
+    text = text.replace(
+        "        let mut value =\n            toml::Value::try_from(Self::default()).map_err(|error| invalid(error.to_string()))?;",
+        "        let mut value =\n            toml::Value::try_from(Self::default()).map_err(|error| invalid(error.to_string()))?;\n        merge_provider_profile(&mut value)?;",
+    )
 if "fn merge_provider_profile" not in text:
     marker = "fn merge_file(base: &mut toml::Value, path: &Path) -> MedusaResult<()> {"
     helper = r'''
@@ -86,8 +93,6 @@ fn merge_provider_profile(base: &mut toml::Value) -> MedusaResult<()> {
     text = text.replace(marker, helper + marker)
 config.write_text(text)
 
-# Add a provider factory and an OpenAI-compatible adapter. Existing Anthropic
-# behavior remains intact and is selected by protocol.
 provider = Path("crates/medusa-provider/src/lib.rs")
 ptext = provider.read_text()
 if "pub enum ConfiguredProvider" not in ptext:
@@ -109,15 +114,9 @@ impl ConfiguredProvider {
         session_api_key: Option<String>,
     ) -> MedusaResult<Self> {
         if config.model.protocol.eq_ignore_ascii_case("openai") {
-            Ok(Self::OpenAi(OpenAiProvider::from_config_with_api_key(
-                config,
-                session_api_key,
-            )?))
+            Ok(Self::OpenAi(OpenAiProvider::from_config_with_api_key(config, session_api_key)?))
         } else {
-            Ok(Self::Anthropic(MiniMaxProvider::from_config_with_api_key(
-                config,
-                session_api_key,
-            )?))
+            Ok(Self::Anthropic(MiniMaxProvider::from_config_with_api_key(config, session_api_key)?))
         }
     }
 }
@@ -147,10 +146,7 @@ pub struct OpenAiProvider {
 }
 
 impl OpenAiProvider {
-    pub fn from_config_with_api_key(
-        config: &Config,
-        session_api_key: Option<String>,
-    ) -> MedusaResult<Self> {
+    pub fn from_config_with_api_key(config: &Config, session_api_key: Option<String>) -> MedusaResult<Self> {
         let provider = config.model.provider.trim().to_ascii_uppercase().replace('-', "_");
         let api_key = session_api_key
             .or_else(|| env::var(format!("{provider}_API_KEY")).ok())
@@ -292,28 +288,16 @@ impl OpenAiWireResponse {
 }
 '''
     marker = "#[cfg(test)]\nmod tests"
-    if marker not in ptext:
-        ptext += insert
-    else:
-        ptext = ptext.replace(marker, insert + "\n" + marker, 1)
+    ptext = ptext.replace(marker, insert + "\n" + marker, 1) if marker in ptext else ptext + insert
 provider.write_text(ptext)
 
-# Route all runtime entry points through the provider factory.
-for file in [
-    Path("crates/medusa-runtime/src/lib.rs"),
-    Path("crates/medusa-cli/src/main.rs"),
-]:
-    text = file.read_text()
-    text = text.replace("MiniMaxProvider", "ConfiguredProvider")
+for file in [Path("crates/medusa-runtime/src/lib.rs"), Path("crates/medusa-cli/src/main.rs")]:
+    text = file.read_text().replace("MiniMaxProvider", "ConfiguredProvider")
     file.write_text(text)
 
-# Keep CLI diagnostics provider-aware.
 main = Path("crates/medusa-cli/src/main.rs")
 text = main.read_text()
-text = text.replace(
-    'ok: std::env::var("MINIMAX_API_KEY").is_ok(),',
-    'ok: config.model.auth != "api-key" || provider_credential_present(config),',
-)
+text = text.replace('ok: std::env::var("MINIMAX_API_KEY").is_ok(),', 'ok: config.model.auth != "api-key" || provider_credential_present(config),')
 text = text.replace(
     'detail: if std::env::var("MINIMAX_API_KEY").is_ok() {\n                "MINIMAX_API_KEY is present".into()\n            } else {\n                "MINIMAX_API_KEY is absent; direct MiniMax live runs are unavailable".into()\n            },',
     'detail: provider_credential_detail(config),',
@@ -332,9 +316,7 @@ fn provider_credential_present(config: &Config) -> bool {
 }
 
 fn provider_credential_detail(config: &Config) -> String {
-    if config.model.auth != "api-key" {
-        return format!("authentication mode: {}", config.model.auth);
-    }
+    if config.model.auth != "api-key" { return format!("authentication mode: {}", config.model.auth); }
     if provider_credential_present(config) {
         "provider credential is present".to_owned()
     } else {
@@ -346,7 +328,6 @@ fn provider_credential_detail(config: &Config) -> String {
     text = text.replace(marker, helper + marker)
 main.write_text(text)
 
-# Document the actual end-to-end behavior.
 readme = Path("README.md")
 rtext = readme.read_text()
 section = r'''
