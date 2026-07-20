@@ -55,7 +55,10 @@ fn discovers_manifest_backed_release_and_streams_platform_asset() {
     ]
     });
     let client = GithubReleaseClient::new("acme/medusa", &base).expect("client");
-    let release = client.latest().expect("release");
+    let release = client
+        .latest()
+        .expect("release request")
+        .expect("published release");
     assert!(matches!(
         UpdateCheck::compare("1.1.9", release.version.clone()),
         UpdateCheck::Available { .. }
@@ -76,6 +79,23 @@ fn discovers_manifest_backed_release_and_streams_platform_asset() {
         .expect("download");
     verify_sha256(&destination, &artifact.sha256).expect("verified digest");
     assert_eq!(progress.last(), Some(&(7, Some(7))));
+    worker.join().expect("server");
+}
+
+#[test]
+fn absent_latest_release_is_not_an_updater_failure() {
+    let listener = TcpListener::bind("127.0.0.1:0").expect("listener");
+    let address = format!("http://{}", listener.local_addr().expect("address"));
+    let worker = thread::spawn(move || {
+        let (mut stream, _) = listener.accept().expect("request");
+        let mut request = [0_u8; 4096];
+        let _ = stream.read(&mut request).expect("read request");
+        stream
+            .write_all(b"HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\nConnection: close\r\n\r\n")
+            .expect("response");
+    });
+    let client = GithubReleaseClient::new("acme/medusa", address).expect("client");
+    assert!(client.latest().expect("request").is_none());
     worker.join().expect("server");
 }
 
