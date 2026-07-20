@@ -77,6 +77,8 @@ medusa update --check
 
 `medusa update` downloads the platform-specific CLI archive, verifies the GitHub/Sigstore attestation for the release manifest and the archive SHA-256, then performs an atomic replacement with a rollback binary. It restarts itself after a successful update; Windows uses a short-lived helper process so the running executable is never locked. Package-managed Linux and macOS installations are not overwritten: Medusa reports the corresponding package-manager command instead. For unattended maintenance, use `medusa update --automatic`.
 
+Set `MEDUSA_UPDATE_POLICY=check` to make a normal `medusa update` report availability only, or `MEDUSA_UPDATE_POLICY=automatic` to permit verified unattended replacement. The command-line `--check` and `--automatic` flags take precedence for a single invocation.
+
 For a development checkout instead:
 
 ```bash
