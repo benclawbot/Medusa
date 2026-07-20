@@ -167,6 +167,8 @@ fn doctor_emits_checks_and_fails_without_provider_credential() {
     let directory = tempfile::tempdir().expect("tempdir");
     let output = medusa()
         .env_remove("MINIMAX_API_KEY")
+        .env("XDG_CONFIG_HOME", directory.path())
+        .env("APPDATA", directory.path())
         .args(["--repo", directory.path().to_str().expect("repo"), "doctor"])
         .output()
         .expect("doctor");

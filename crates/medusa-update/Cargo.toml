@@ -1,0 +1,25 @@
+[package]
+name = "medusa-update"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+flate2 = "1.1"
+medusa-core.workspace = true
+reqwest.workspace = true
+semver.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+tar = "0.4"
+tempfile.workspace = true
+zip = { version = "2.2", default-features = false, features = ["deflate"] }
+
+[dev-dependencies]
+serial_test.workspace = true
+
+[lints]
+workspace = true
