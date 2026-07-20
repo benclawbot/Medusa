@@ -46,12 +46,18 @@ fn controller_exercises_non_agent_command_lifecycle() {
     let repo = repo();
     let controller = RuntimeController::start(repo.clone());
     let initial = collect(&controller, 1);
-    assert!(initial.iter().any(|event| matches!(event, RuntimeEvent::Settings { .. })));
+    assert!(
+        initial
+            .iter()
+            .any(|event| matches!(event, RuntimeEvent::Settings { .. }))
+    );
     assert!(!controller.is_busy());
     assert!(!controller.cancel());
 
     let help = run(&controller, SlashCommand::Help, 1);
-    assert!(help.iter().any(|event| matches!(event, RuntimeEvent::Notice { title, .. } if title == "Slash commands")));
+    assert!(help.iter().any(
+        |event| matches!(event, RuntimeEvent::Notice { title, .. } if title == "Slash commands")
+    ));
 
     let goal = run(
         &controller,
@@ -60,12 +66,18 @@ fn controller_exercises_non_agent_command_lifecycle() {
         },
         1,
     );
-    assert!(goal.iter().any(|event| matches!(event, RuntimeEvent::Notice { title, .. } if title == "Goal updated")));
+    assert!(goal.iter().any(
+        |event| matches!(event, RuntimeEvent::Notice { title, .. } if title == "Goal updated")
+    ));
     let current_goal = run(&controller, SlashCommand::Goal { objective: None }, 1);
-    assert!(current_goal.iter().any(|event| matches!(event, RuntimeEvent::Notice { title, .. } if title == "Current goal")));
+    assert!(current_goal.iter().any(
+        |event| matches!(event, RuntimeEvent::Notice { title, .. } if title == "Current goal")
+    ));
 
     let compact = run(&controller, SlashCommand::Compact { focus: None }, 1);
-    assert!(compact.iter().any(|event| matches!(event, RuntimeEvent::Notice { title, .. } if title == "Nothing to compact")));
+    assert!(compact.iter().any(
+        |event| matches!(event, RuntimeEvent::Notice { title, .. } if title == "Nothing to compact")
+    ));
 
     run(&controller, SlashCommand::Model(ModelCommand::Show), 1);
     run(
@@ -83,7 +95,9 @@ fn controller_exercises_non_agent_command_lifecycle() {
         SlashCommand::Model(ModelCommand::SetProvider("invalid".into())),
         1,
     );
-    assert!(invalid_provider.iter().any(|event| matches!(event, RuntimeEvent::Notice { title, .. } if title == "Command failed")));
+    assert!(invalid_provider.iter().any(
+        |event| matches!(event, RuntimeEvent::Notice { title, .. } if title == "Command failed")
+    ));
     run(
         &controller,
         SlashCommand::Model(ModelCommand::SetApiKey("session-secret".into())),
@@ -105,10 +119,16 @@ fn controller_exercises_non_agent_command_lifecycle() {
         1,
     );
     let effort = run(&controller, SlashCommand::Effort { effort: None }, 1);
-    assert!(effort.iter().any(|event| matches!(event, RuntimeEvent::Notice { title, .. } if title == "Effort")));
+    assert!(
+        effort
+            .iter()
+            .any(|event| matches!(event, RuntimeEvent::Notice { title, .. } if title == "Effort"))
+    );
 
     let skills = run(&controller, SlashCommand::Skills, 1);
-    assert!(skills.iter().any(|event| matches!(event, RuntimeEvent::Notice { title, .. } if title == "Available skills")));
+    assert!(skills.iter().any(
+        |event| matches!(event, RuntimeEvent::Notice { title, .. } if title == "Available skills")
+    ));
 
     run(&controller, SlashCommand::Plan { task: None }, 2);
     run(
@@ -128,10 +148,18 @@ fn controller_exercises_non_agent_command_lifecycle() {
         })
         .expect("configure model");
     let configured = collect(&controller, 2);
-    assert!(configured.iter().any(|event| matches!(event, RuntimeEvent::Settings { .. })));
+    assert!(
+        configured
+            .iter()
+            .any(|event| matches!(event, RuntimeEvent::Settings { .. }))
+    );
 
     let fresh = run(&controller, SlashCommand::New, 2);
-    assert!(fresh.iter().any(|event| matches!(event, RuntimeEvent::NewSession)));
+    assert!(
+        fresh
+            .iter()
+            .any(|event| matches!(event, RuntimeEvent::NewSession))
+    );
     assert!(!controller.is_busy());
 
     drop(controller);
