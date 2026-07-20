@@ -427,8 +427,10 @@ mod tests {
     use super::*;
     use std::sync::{Arc, Mutex};
 
+    type RecordedCommands = Arc<Mutex<Vec<(String, Vec<String>)>>>;
+
     #[derive(Clone, Default, Debug)]
-    struct FakeExecutor(Arc<Mutex<Vec<(String, Vec<String>)>>>);
+    struct FakeExecutor(RecordedCommands);
     impl CommandExecutor for FakeExecutor {
         fn run(
             &self,
