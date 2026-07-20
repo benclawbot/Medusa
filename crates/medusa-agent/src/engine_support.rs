@@ -63,7 +63,7 @@ pub(crate) fn system_prompt_with_context(
     }
     let skills = available_skills(repo);
     if skills.is_empty() {
-        prompt.push_str("\n\nNo Medusa or Claude skills are installed for this workspace or user.");
+        prompt.push_str("\n\nNo Medusa skills are installed for this workspace or user.");
     } else {
         prompt.push_str(
             "\n\nAvailable skills: call `skill_read` before applying a relevant skill.\n",
@@ -431,7 +431,7 @@ pub(crate) fn plan_is_complete(session: &AgentSession) -> bool {
 fn repository_instructions(repo: &Path) -> String {
     let mut remaining = MAX_REPOSITORY_INSTRUCTIONS_BYTES;
     let mut output = String::new();
-    for name in ["AGENTS.md", "CLAUDE.md", "MEDUSA.md", ".medusa/AGENTS.md"] {
+    for name in ["AGENTS.md", "MEDUSA.md", ".medusa/AGENTS.md"] {
         if remaining == 0 {
             break;
         }
