@@ -14,6 +14,32 @@ use medusa_extensions::DesktopCommanderSettings;
 use medusa_provider::ToolDefinition;
 use serde_json::{Value, json};
 
+/// Single policy-aware registry for built-in tools shared by every agent frontend.
+#[derive(Clone, Debug)]
+pub struct ToolManager {
+    desktop_commander: DesktopCommanderSettings,
+}
+
+impl ToolManager {
+    #[must_use]
+    pub fn new(desktop_commander: DesktopCommanderSettings) -> Self {
+        Self { desktop_commander }
+    }
+
+    #[must_use]
+    pub fn definitions(&self, read_only: bool) -> Vec<ToolDefinition> {
+        built_in_tools(&self.desktop_commander, read_only)
+    }
+
+    pub fn execute(&self, repo: &Path, name: &str, input: &Value) -> MedusaResult<String> {
+        execute_tool(repo, name, input)
+    }
+
+    pub fn execute_approved(&self, repo: &Path, name: &str, input: &Value) -> MedusaResult<String> {
+        execute_approved_tool(repo, name, input)
+    }
+}
+
 pub(crate) fn available_skills(repo: &Path) -> Vec<skills::SkillSummary> {
     skills::summaries(repo)
 }
