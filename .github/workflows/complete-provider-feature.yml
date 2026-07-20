@@ -4,9 +4,9 @@ on:
   push:
     branches:
       - agent/provider-first-run-config
-    paths:
-      - scripts/complete_provider_feature.py
-      - .github/workflows/complete-provider-feature.yml
+  pull_request:
+    branches:
+      - main
   workflow_dispatch:
 
 permissions:
@@ -38,6 +38,7 @@ jobs:
           cargo test -p medusa-runtime --locked
           cargo test -p medusa-cli --locked
       - name: Commit implementation
+        if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
         run: |
           if git diff --quiet; then
             echo 'No generated changes'
