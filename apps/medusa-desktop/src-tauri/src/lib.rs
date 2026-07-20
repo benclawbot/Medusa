@@ -1,6 +1,9 @@
 mod credentials;
 mod dto;
-mod runtime;
+mod runtime {
+    include!("runtime.rs");
+    include!("runtime_resume.rs");
+}
 mod sessions;
 #[cfg(test)]
 mod test_tempfile;
@@ -11,7 +14,7 @@ pub(crate) use test_tempfile::tempdir;
 
 use runtime::{
     RuntimeRegistry, runtime_cancel, runtime_close, runtime_command, runtime_command_suggestions,
-    runtime_configure_model, runtime_poll, runtime_start, runtime_submit,
+    runtime_configure_model, runtime_poll, runtime_resume, runtime_start, runtime_submit,
 };
 use sessions::{runtime_list_sessions, runtime_read_session};
 
@@ -22,6 +25,7 @@ pub fn run() -> tauri::Result<()> {
         .manage(RuntimeRegistry::default())
         .invoke_handler(tauri::generate_handler![
             runtime_start,
+            runtime_resume,
             runtime_close,
             runtime_submit,
             runtime_command,
