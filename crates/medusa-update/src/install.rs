@@ -134,6 +134,7 @@ impl AtomicInstaller {
     }
 }
 
+#[cfg(any(windows, test))]
 fn windows_replace_script(
     parent_pid: u32,
     backup: &Path,
