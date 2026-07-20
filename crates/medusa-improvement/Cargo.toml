@@ -6,6 +6,9 @@ rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
 
+[lib]
+path = "src/crate.rs"
+
 [dependencies]
 medusa-core.workspace = true
 serde.workspace = true
