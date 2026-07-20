@@ -17,6 +17,8 @@ use std::os::unix::process::CommandExt;
 use std::os::windows::process::CommandExt;
 
 use medusa_core::{ErrorCategory, ErrorCode, MedusaError, MedusaResult};
+#[cfg(windows)]
+use medusa_process_containment::WindowsJob;
 
 const PROCESS_POLL_INTERVAL: Duration = Duration::from_millis(20);
 const TERMINATION_GRACE: Duration = Duration::from_secs(1);
@@ -110,6 +112,8 @@ impl ProcessRegistry {
 struct ProcessControl {
     cancelled: AtomicBool,
     child: Mutex<Option<Child>>,
+    #[cfg(windows)]
+    job: Mutex<Option<WindowsJob>>,
 }
 
 impl ProcessControl {
@@ -145,7 +149,35 @@ impl ProcessControl {
                 ));
             }
         };
-        *lock_child(&self.child)? = Some(child);
+        #[cfg(windows)]
+        let mut child = child;
+        #[cfg(windows)]
+        let job = match WindowsJob::assign(&child).and_then(|job| {
+            job.resume(&child)?;
+            Ok(job)
+        }) {
+            Ok(job) => job,
+            Err(error) => {
+                let _ = child.kill();
+                let _ = child.wait();
+                cleanup_output_files(&stdout_path, &stderr_path);
+                return Err(MedusaError::new(
+                    ErrorCode::ToolExecutionFailed,
+                    ErrorCategory::Execution,
+                    format!("failed to contain daemon job process {program}: {error}"),
+                ));
+            }
+        };
+        {
+            let mut child_slot = lock_child(&self.child)?;
+            #[cfg(windows)]
+            let mut job_slot = lock_job(&self.job)?;
+            *child_slot = Some(child);
+            #[cfg(windows)]
+            {
+                *job_slot = Some(job);
+            }
+        }
 
         if self.cancelled.load(Ordering::SeqCst) {
             self.terminate()?;
@@ -163,21 +195,30 @@ impl ProcessControl {
                 process.try_wait()?
             };
             if let Some(status) = status {
-                *lock_child(&self.child)? = None;
-                break status;
+                if self.process_tree_exited()? {
+                    break status;
+                }
             }
             thread::sleep(PROCESS_POLL_INTERVAL);
         };
 
-        let stdout = fs::read(&stdout_path);
-        let stderr = fs::read(&stderr_path);
+        let result = (|| {
+            let stdout = fs::read(&stdout_path)?;
+            let stderr = fs::read(&stderr_path)?;
+            Ok(ProcessResult {
+                status,
+                stdout,
+                stderr,
+                cancelled: self.cancelled.load(Ordering::SeqCst),
+            })
+        })();
         cleanup_output_files(&stdout_path, &stderr_path);
-        Ok(ProcessResult {
-            status,
-            stdout: stdout?,
-            stderr: stderr?,
-            cancelled: self.cancelled.load(Ordering::SeqCst),
-        })
+        *lock_child(&self.child)? = None;
+        #[cfg(windows)]
+        {
+            *lock_job(&self.job)? = None;
+        }
+        result
     }
 
     fn cancel(&self) -> MedusaResult<()> {
@@ -190,21 +231,38 @@ impl ProcessControl {
         let Some(process) = child.as_mut() else {
             return Ok(());
         };
-        let pid = process.id();
-        if let Err(error) = terminate_process_tree(process) {
-            let fallback = process.kill();
-            return match fallback {
-                Ok(()) => Err(error),
-                Err(fallback_error) => Err(MedusaError::new(
-                    ErrorCode::ToolExecutionFailed,
-                    ErrorCategory::Execution,
-                    format!(
-                        "failed to terminate process tree {pid}: {error}; immediate-child fallback also failed: {fallback_error}"
-                    ),
-                )),
-            };
+        #[cfg(unix)]
+        {
+            terminate_process_tree(process)
         }
-        Ok(())
+        #[cfg(windows)]
+        {
+            let pid = process.id();
+            let job = lock_job(&self.job)?;
+            let Some(job) = job.as_ref() else {
+                return Err(process_error(format!(
+                    "Windows Job Object is missing for daemon process tree {pid}"
+                )));
+            };
+            terminate_process_tree(process, job)
+        }
+    }
+
+    fn process_tree_exited(&self) -> MedusaResult<bool> {
+        #[cfg(unix)]
+        {
+            let child = lock_child(&self.child)?;
+            let Some(process) = child.as_ref() else {
+                return Ok(true);
+            };
+            Ok(!process_group_alive(process.id()))
+        }
+        #[cfg(windows)]
+        {
+            let job = lock_job(&self.job)?;
+            job.as_ref()
+                .map_or(Ok(true), |job| job.is_empty().map_err(Into::into))
+        }
     }
 }
 
@@ -231,6 +289,12 @@ fn lock_child(child: &Mutex<Option<Child>>) -> MedusaResult<MutexGuard<'_, Optio
         .map_err(|_| process_error("daemon child process lock was poisoned"))
 }
 
+#[cfg(windows)]
+fn lock_job(job: &Mutex<Option<WindowsJob>>) -> MedusaResult<MutexGuard<'_, Option<WindowsJob>>> {
+    job.lock()
+        .map_err(|_| process_error("daemon Windows Job Object lock was poisoned"))
+}
+
 fn process_error(message: impl Into<String>) -> MedusaError {
     MedusaError::new(
         ErrorCode::InternalInvariant,
@@ -246,9 +310,9 @@ fn configure_process_group(command: &mut Command) {
 
 #[cfg(windows)]
 fn configure_process_group(command: &mut Command) {
-    const CREATE_NEW_PROCESS_GROUP: u32 = 0x0000_0200;
+    const CREATE_SUSPENDED: u32 = 0x0000_0004;
     const CREATE_NO_WINDOW: u32 = 0x0800_0000;
-    command.creation_flags(CREATE_NEW_PROCESS_GROUP | CREATE_NO_WINDOW);
+    command.creation_flags(CREATE_SUSPENDED | CREATE_NO_WINDOW);
 }
 
 #[cfg(unix)]
@@ -365,20 +429,25 @@ fn process_group_signal_alive(pid: u32) -> bool {
 }
 
 #[cfg(windows)]
-fn terminate_process_tree(process: &mut Child) -> MedusaResult<()> {
+fn terminate_process_tree(process: &mut Child, job: &WindowsJob) -> MedusaResult<()> {
     let pid = process.id();
-    if process.try_wait()?.is_some() {
+    if process.try_wait()?.is_some() && job.is_empty().map_err(MedusaError::from)? {
         return Ok(());
     }
-    let pid_text = pid.to_string();
-    let output = Command::new("taskkill")
-        .args(["/PID", pid_text.as_str(), "/T", "/F"])
-        .stdout(Stdio::null())
-        .stderr(Stdio::piped())
-        .output()?;
     let deadline = Instant::now() + TERMINATION_GRACE;
     loop {
-        if process.try_wait()?.is_some() {
+        if job.is_empty().map_err(MedusaError::from)? {
+            return Ok(());
+        }
+        if Instant::now() >= deadline {
+            break;
+        }
+        thread::sleep(PROCESS_POLL_INTERVAL);
+    }
+    job.terminate().map_err(MedusaError::from)?;
+    let deadline = Instant::now() + TERMINATION_GRACE;
+    loop {
+        if job.is_empty().map_err(MedusaError::from)? {
             return Ok(());
         }
         if Instant::now() >= deadline {
@@ -389,9 +458,6 @@ fn terminate_process_tree(process: &mut Child) -> MedusaResult<()> {
     Err(MedusaError::new(
         ErrorCode::ToolExecutionFailed,
         ErrorCategory::Execution,
-        format!(
-            "failed to terminate Windows process tree {pid}: {}",
-            String::from_utf8_lossy(&output.stderr).trim()
-        ),
+        format!("Windows Job Object process tree {pid} remained alive after termination"),
     ))
 }

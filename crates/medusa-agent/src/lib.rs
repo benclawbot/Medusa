@@ -554,7 +554,10 @@ mod tests {
         assert!(validate_shell_command("cargo", &["build".into()]).is_ok());
         assert!(validate_shell_command("cargo", &["fmt".into(), "--check".into()]).is_ok());
         assert!(validate_shell_command("cargo", &["test".into()]).is_ok());
+        #[cfg(target_os = "linux")]
         assert!(validate_shell_command("cargo", &["run".into()]).is_ok());
+        #[cfg(not(target_os = "linux"))]
+        assert!(validate_shell_command("cargo", &["run".into()]).is_err());
         assert!(validate_shell_command("rm", &["-rf".into(), "/".into()]).is_err());
     }
 

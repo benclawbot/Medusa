@@ -16,6 +16,7 @@ ulid.workspace = true
 [target.'cfg(windows)'.dependencies]
 getrandom.workspace = true
 hex.workspace = true
+medusa-process-containment.workspace = true
 
 [dev-dependencies]
 tempfile.workspace = true
