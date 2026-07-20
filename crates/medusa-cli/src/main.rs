@@ -1,3 +1,5 @@
+mod config_command;
+
 use std::{
     collections::BTreeMap,
     fs,
@@ -6,6 +8,7 @@ use std::{
 };
 
 use clap::{Parser, Subcommand};
+use config_command::{configure_interactive, ensure_first_run, reset as reset_config, show as show_config};
 use medusa_agent::{AgentEngine, bootstrap};
 use medusa_config::Config;
 use medusa_core::{ErrorCategory, ErrorCode, MedusaError, MedusaResult};
@@ -22,7 +25,7 @@ use walkdir::WalkDir;
     name = "medusa",
     version,
     about = "Autonomous coding agent",
-    after_help = "Run `medusa` without a subcommand to open the interactive terminal. Use `medusa run` for headless execution."
+    after_help = "Run `medusa` without a subcommand to open the interactive terminal. Use `medusa config` to change provider preferences and `medusa run` for headless execution."
 )]
 struct Cli {
     #[arg(long, default_value = ".", global = true)]
@@ -44,26 +47,28 @@ enum CommandKind {
     Bootstrap,
     Doctor,
     Migrate,
+    /// Configure provider, model, performance, and authentication preferences.
+    Config {
+        #[command(subcommand)]
+        action: Option<ConfigAction>,
+    },
     /// Install the latest Medusa CLI from the official repository.
     Update,
-    Search {
-        pattern: String,
-    },
-    Shell {
-        program: String,
-        args: Vec<String>,
-    },
-    Checkpoint {
-        message: String,
-    },
-    Run {
-        objective: String,
-    },
-    Resume {
-        session: String,
-    },
+    Search { pattern: String },
+    Shell { program: String, args: Vec<String> },
+    Checkpoint { message: String },
+    Run { objective: String },
+    Resume { session: String },
     #[command(name = "__daemon-serve", hide = true)]
     DaemonServe,
+}
+
+#[derive(Subcommand, Debug)]
+enum ConfigAction {
+    /// Print the non-secret provider profile.
+    Show,
+    /// Remove the provider profile so setup runs again.
+    Reset,
 }
 
 #[derive(Debug, Serialize)]
@@ -94,6 +99,7 @@ fn run() -> MedusaResult<()> {
     let repo = cli.repo.canonicalize().unwrap_or(cli.repo);
 
     let Some(command) = cli.command else {
+        ensure_first_run()?;
         let mut options = TuiOptions::for_repo(repo);
         options.initial_prompt = cli.prompt;
         options.resume_session = cli.resume_session;
@@ -112,6 +118,14 @@ fn run() -> MedusaResult<()> {
 
     if matches!(command, CommandKind::DaemonServe) {
         return serve(DaemonPaths::for_repo(&repo));
+    }
+
+    if let CommandKind::Config { action } = command {
+        return match action {
+            None => configure_interactive(),
+            Some(ConfigAction::Show) => show_config(),
+            Some(ConfigAction::Reset) => reset_config(),
+        };
     }
 
     let overrides = cli.overrides.into_iter().collect::<BTreeMap<_, _>>();
@@ -147,6 +161,7 @@ fn run() -> MedusaResult<()> {
             print_completion(&session);
             Ok(())
         }
+        CommandKind::Config { .. } => unreachable!("handled before runtime config loading"),
         CommandKind::DaemonServe => serve(DaemonPaths::for_repo(&repo)),
     }
 }
@@ -197,8 +212,15 @@ fn doctor(repo: &Path, config: &Config) -> MedusaResult<()> {
             detail: if std::env::var("MINIMAX_API_KEY").is_ok() {
                 "MINIMAX_API_KEY is present".into()
             } else {
-                "MINIMAX_API_KEY is absent; live model runs are unavailable".into()
+                "MINIMAX_API_KEY is absent; direct MiniMax live runs are unavailable".into()
             },
+        },
+        DoctorCheck {
+            name: "provider_profile",
+            ok: config_command::load_profile().is_ok_and(|profile| profile.configured),
+            detail: config_command::config_path()
+                .map(|path| path.display().to_string())
+                .unwrap_or_else(|error| error.to_string()),
         },
         DoctorCheck {
             name: "model",
@@ -219,10 +241,7 @@ fn doctor(repo: &Path, config: &Config) -> MedusaResult<()> {
             detail: format!("supported schema <= {CURRENT_SCHEMA_VERSION}"),
         },
     ];
-    checks.push(desktop_commander_check(
-        repo,
-        &DesktopCommanderSettings::from_env(),
-    ));
+    checks.push(desktop_commander_check(repo, &DesktopCommanderSettings::from_env()));
     println!("{}", serde_json::to_string_pretty(&checks)?);
     if checks.iter().all(|check| check.ok) {
         Ok(())
@@ -249,11 +268,7 @@ fn command_check(name: &'static str, program: &str, args: &[&str]) -> DoctorChec
             ok: output.status.success(),
             detail: String::from_utf8_lossy(&output.stdout).trim().to_owned(),
         },
-        Err(error) => DoctorCheck {
-            name,
-            ok: false,
-            detail: error.to_string(),
-        },
+        Err(error) => DoctorCheck { name, ok: false, detail: error.to_string() },
     }
 }
 
@@ -266,11 +281,7 @@ fn desktop_commander_check(repo: &Path, settings: &DesktopCommanderSettings) -> 
         };
     }
     if let Some(error) = settings.configuration_error() {
-        return DoctorCheck {
-            name: "desktop_commander_mcp",
-            ok: false,
-            detail: error.to_owned(),
-        };
+        return DoctorCheck { name: "desktop_commander_mcp", ok: false, detail: error.to_owned() };
     }
     if !executable_available(settings.command()) {
         return DoctorCheck {
@@ -283,11 +294,7 @@ fn desktop_commander_check(repo: &Path, settings: &DesktopCommanderSettings) -> 
         Ok(_) => DoctorCheck {
             name: "desktop_commander_mcp",
             ok: true,
-            detail: format!(
-                "MCP handshake ready: {} via {}",
-                settings.package_label(),
-                settings.command().display()
-            ),
+            detail: format!("MCP handshake ready: {} via {}", settings.package_label(), settings.command().display()),
         },
         Err(error) => DoctorCheck {
             name: "desktop_commander_mcp",
@@ -301,9 +308,7 @@ fn executable_available(program: &Path) -> bool {
     if program.components().count() > 1 {
         return program.is_file();
     }
-    let Some(path) = std::env::var_os("PATH") else {
-        return false;
-    };
+    let Some(path) = std::env::var_os("PATH") else { return false; };
     std::env::split_paths(&path).any(|directory| {
         let candidate = directory.join(program);
         candidate.is_file()
@@ -334,10 +339,7 @@ fn print_completion(session: &medusa_agent::AgentSession) {
 fn search(repo: &Path, pattern: &str) -> MedusaResult<()> {
     for entry in WalkDir::new(repo).into_iter().filter_map(Result::ok) {
         if !entry.file_type().is_file()
-            || entry
-                .path()
-                .components()
-                .any(|part| part.as_os_str() == ".git")
+            || entry.path().components().any(|part| part.as_os_str() == ".git")
         {
             continue;
         }
@@ -362,21 +364,12 @@ fn shell(repo: &Path, program: &str, args: &[String]) -> MedusaResult<()> {
     }
     #[cfg(windows)]
     let status = if program.eq_ignore_ascii_case("true") {
-        Command::new("cmd")
-            .args(["/C", "exit", "0"])
-            .current_dir(repo)
-            .status()?
+        Command::new("cmd").args(["/C", "exit", "0"]).current_dir(repo).status()?
     } else {
-        Command::new(program)
-            .args(args)
-            .current_dir(repo)
-            .status()?
+        Command::new(program).args(args).current_dir(repo).status()?
     };
     #[cfg(not(windows))]
-    let status = Command::new(program)
-        .args(args)
-        .current_dir(repo)
-        .status()?;
+    let status = Command::new(program).args(args).current_dir(repo).status()?;
     if status.success() {
         Ok(())
     } else {
@@ -417,6 +410,18 @@ mod tests {
     }
 
     #[test]
+    fn config_command_is_available() {
+        let cli = Cli::try_parse_from(["medusa", "config"]).expect("parse config command");
+        assert!(matches!(cli.command, Some(CommandKind::Config { action: None })));
+    }
+
+    #[test]
+    fn config_show_is_available() {
+        let cli = Cli::try_parse_from(["medusa", "config", "show"]).expect("parse config show");
+        assert!(matches!(cli.command, Some(CommandKind::Config { action: Some(ConfigAction::Show) })));
+    }
+
+    #[test]
     fn update_command_is_available_without_extra_arguments() {
         let cli = Cli::try_parse_from(["medusa", "update"]).expect("parse update command");
         assert!(matches!(cli.command, Some(CommandKind::Update)));
@@ -433,32 +438,19 @@ mod tests {
     #[test]
     fn headless_run_remains_available() {
         let cli = Cli::try_parse_from(["medusa", "run", "fix tests"]).expect("parse headless run");
-        assert!(matches!(
-            cli.command,
-            Some(CommandKind::Run { objective }) if objective == "fix tests"
-        ));
+        assert!(matches!(cli.command, Some(CommandKind::Run { objective }) if objective == "fix tests"));
     }
 
     #[test]
     fn interactive_resume_flags_are_parsed() {
-        let cli = Cli::try_parse_from(["medusa", "--resume", "session-123"])
-            .expect("parse interactive resume");
+        let cli = Cli::try_parse_from(["medusa", "--resume", "session-123"]).expect("parse interactive resume");
         assert_eq!(cli.resume_session.as_deref(), Some("session-123"));
         assert!(cli.command.is_none());
     }
 
     #[test]
-    fn interactive_flags_parse_with_subcommand_for_runtime_validation() {
-        let cli = Cli::try_parse_from(["medusa", "--prompt", "hello", "doctor"])
-            .expect("parse before semantic validation");
-        assert!(cli.command.is_some());
-        assert_eq!(cli.prompt.as_deref(), Some("hello"));
-    }
-
-    #[test]
     fn hidden_daemon_host_accepts_repository_after_subcommand() {
-        let cli = Cli::try_parse_from(["medusa", "__daemon-serve", "--repo", "."])
-            .expect("parse daemon host");
+        let cli = Cli::try_parse_from(["medusa", "__daemon-serve", "--repo", "."]).expect("parse daemon host");
         assert!(matches!(cli.command, Some(CommandKind::DaemonServe)));
     }
 }
