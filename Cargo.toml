@@ -19,6 +19,7 @@ members = [
   "crates/medusa-improvement",
   "crates/medusa-hardening",
   "crates/medusa-update",
+  "crates/medusa-github",
   "crates/medusa-cli",
 ]
 
