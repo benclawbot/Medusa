@@ -134,7 +134,10 @@ fn openai_success_maps_messages_tools_usage_and_auth() {
     assert!(matches!(&response.blocks[0], ResponseBlock::Text { text } if text == "answer"));
     assert!(matches!(&response.blocks[1], ResponseBlock::ToolUse { name, .. } if name == "write"));
     let wire = server.join().expect("server").pop().expect("request");
-    assert!(wire.contains("Authorization: Bearer secret") || wire.contains("authorization: Bearer secret"));
+    assert!(
+        wire.contains("Authorization: Bearer secret")
+            || wire.contains("authorization: Bearer secret")
+    );
     assert!(wire.contains("chat/completions"));
     assert!(wire.contains("tool_calls"));
     assert!(wire.contains("tool_call_id"));
@@ -200,8 +203,8 @@ fn anthropic_selection_rejects_unknown_provider_and_image_input() {
     assert!(ConfiguredProvider::from_config_with_api_key(&config, Some("x".into())).is_err());
 
     config.model.provider = "anthropic-compatible".into();
-    let provider = ConfiguredProvider::from_config_with_api_key(&config, Some("x".into()))
-        .expect("provider");
+    let provider =
+        ConfiguredProvider::from_config_with_api_key(&config, Some("x".into())).expect("provider");
     assert!(!provider.capabilities().image_input);
     let image_request = ModelRequest {
         messages: vec![Message {
