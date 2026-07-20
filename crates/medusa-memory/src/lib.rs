@@ -8,6 +8,7 @@ mod proposal;
 mod retrieval;
 mod schema;
 mod session_recall;
+mod session_recall_inbox;
 mod support;
 
 pub use engine::MemoryEngine;
@@ -16,6 +17,7 @@ pub use session_recall::{
     SessionComparison, SessionEvent, SessionRecallStore, SessionRecord, SessionSearchHit,
     SessionSearchQuery, SessionWindow,
 };
+pub use session_recall_inbox::open_session_recall;
 
 #[cfg(test)]
 mod tests {
