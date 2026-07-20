@@ -29,17 +29,14 @@ jobs:
         run: python3 scripts/complete_provider_feature.py
       - name: Format
         run: cargo fmt --all
-      - name: Commit implementation
+      - name: Record generated diff
         run: |
-          git config user.name 'github-actions[bot]'
-          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git add -A
-          if git diff --cached --quiet; then
-            echo 'No generated changes'
-          else
-            git commit --no-verify -m 'feat: wire production provider configuration end to end'
-            git push origin HEAD:agent/provider-first-run-config
-          fi
+          git status --short
+          git diff --binary > provider-feature.patch
+      - uses: actions/upload-artifact@v4
+        with:
+          name: provider-feature-patch
+          path: provider-feature.patch
       - name: Compile workspace
         run: cargo check --workspace --all-targets --locked
       - name: Test provider, config, runtime, and CLI
@@ -48,3 +45,15 @@ jobs:
           cargo test -p medusa-provider --locked
           cargo test -p medusa-runtime --locked
           cargo test -p medusa-cli --locked
+      - name: Commit implementation
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          rm -f provider-feature.patch
+          git add -A
+          if git diff --cached --quiet; then
+            echo 'No generated changes'
+          else
+            git commit --no-verify -m 'feat: wire production provider configuration end to end'
+            git push origin HEAD:agent/provider-first-run-config
+          fi
