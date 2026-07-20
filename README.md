@@ -275,11 +275,14 @@ See [Security hardening](docs/SECURITY-HARDENING.md) for release-enforced contro
 | Crate | Responsibility |
 |---|---|
 | `medusa-cli` | User-facing command entry point |
-| `medusa-runtime` | Frontend-neutral interactive session control, commands, events, cancellation, follow-ups, and provider orchestration |
+| `medusa-runtime` | Frontend-neutral interactive session control, commands, events, cancellation, follow-ups, and manager composition |
 | `medusa-tui` | Terminal presentation, composer, clipboard, drafts, rendering, and daemon lifecycle visibility |
 | `medusa-daemon` | Cross-platform IPC, shared lifecycle supervision, bounded scheduling, overload backpressure, race-safe cancellation, descendant-safe immediate shutdown, persistence, recovery, and graceful draining |
-| `medusa-agent` | Session lifecycle, orchestration, tools, policy, and verification |
-| `medusa-provider` | Provider-neutral model interface and MiniMax integration |
+| `medusa-agent` | Agent Orchestrator: session lifecycle, planning, policy, completion verification, and the shared Tool Manager |
+| `medusa-capabilities` | Capability Manager: one discovered capability matrix for CLI, TUI, desktop, and model context |
+| `medusa-provider` | Provider Manager: provider-neutral contracts, bounded retry/failover, response cache, and health snapshots |
+| `medusa-github` | GitHub Manager: authenticated repository, pull request, issue, and Actions operations via GitHub CLI credential storage |
+| `medusa-update` | Update Manager: release discovery, provenance/checksum verification, platform installation, rollback, and restart |
 | `medusa-intelligence` | Parsing, indexing, patching, and conflict-aware transactions |
 | `medusa-memory` | Markdown storage, retrieval, provenance, and lifecycle |
 | `medusa-workers` | Parallel worktrees and deterministic merge coordination |
@@ -287,6 +290,8 @@ See [Security hardening](docs/SECURITY-HARDENING.md) for release-enforced contro
 | `medusa-hardening` | Observability, migrations, archives, chaos recovery, and release evidence |
 | `medusa-browser-client` | Browser sidecar client and protocol |
 | `medusa-browserd` | Node.js and Playwright browser sidecar process |
+
+The manager boundaries are deliberately one-way: frontends depend on `medusa-runtime`; runtime composes capability, provider, and agent managers; the agent consumes the Tool Manager and capability context; service managers stay independent of presentation. This keeps future GitLab, Bitbucket, Azure DevOps, package sources, MCP servers, and model providers additive rather than changes to a monolithic runtime.
 
 ## Desktop interface
 
