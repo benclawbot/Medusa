@@ -1,8 +1,7 @@
 //! Guarded self-improvement and evidence-backed learning primitives.
 
-mod legacy {
-    include!("lib.rs");
-}
+#[path = "lib.rs"]
+mod legacy;
 
 pub use legacy::*;
 pub mod learning;
