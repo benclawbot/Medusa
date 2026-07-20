@@ -18,7 +18,10 @@ use medusa_core::{ErrorCategory, ErrorCode, MedusaError, MedusaResult};
 
 use crate::{DaemonClient, DaemonPaths, Request, Response};
 
-const STARTUP_TIMEOUT: Duration = Duration::from_secs(3);
+// A cold Windows process can take several seconds to rebuild daemon state and
+// publish its loopback endpoint. Keep lifecycle status accurate instead of
+// reporting a transient degraded state while that process is still starting.
+const STARTUP_TIMEOUT: Duration = Duration::from_secs(10);
 const RESTART_BACKOFF: Duration = Duration::from_secs(2);
 const READY_POLL_INTERVAL: Duration = Duration::from_millis(50);
 

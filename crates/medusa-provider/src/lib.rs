@@ -1,5 +1,6 @@
 //! Provider-neutral model contracts and the MiniMax Anthropic-compatible adapter.
 
+mod manager;
 use std::{env, sync::OnceLock, thread, time::Duration};
 
 use medusa_config::Config;
@@ -8,6 +9,7 @@ use reqwest::{StatusCode, blocking::Client};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
+pub use manager::{ProviderHealth, ProviderManager};
 const PROVIDER_REQUEST_TIMEOUT: Duration = Duration::from_secs(120);
 const MAX_PROVIDER_RETRIES: u8 = 2;
 
@@ -434,15 +436,31 @@ fn classify_status(status: StatusCode, body: String) -> MedusaError {
     .with_retryable(retryable)
 }
 
-fn provider_error(error: impl std::fmt::Display) -> MedusaError {
+fn provider_error(error: reqwest::Error) -> MedusaError {
+    let message = if error.is_connect() {
+        let endpoint = error
+            .url()
+            .map_or_else(|| "the configured endpoint".to_owned(), ToString::to_string);
+        format!(
+            "provider endpoint is unavailable at {endpoint}; start the local or gateway service, configure a reachable provider with `medusa config`, or configure model.fallback_providers: {error}"
+        )
+    } else {
+        format!("provider request failed: {error}")
+    };
     MedusaError::new(
         ErrorCode::DependencyUnavailable,
         ErrorCategory::Transient,
-        format!("provider request failed: {error}"),
+        message,
     )
     .with_retryable(true)
 }
-
+fn provider_response_error(error: impl std::fmt::Display) -> MedusaError {
+    MedusaError::new(
+        ErrorCode::DependencyUnavailable,
+        ErrorCategory::Validation,
+        format!("provider returned an invalid response: {error}"),
+    )
+}
 /// Runtime-selected provider supporting Anthropic and OpenAI-compatible APIs.
 pub enum ConfiguredProvider {
     Anthropic(MiniMaxProvider),
@@ -469,6 +487,29 @@ impl ConfiguredProvider {
                 session_api_key,
             )?))
         }
+    }
+
+    /// Builds the configured primary provider plus ordered fallback providers.
+    pub fn manager_from_config(
+        config: &Config,
+        session_api_key: Option<String>,
+    ) -> MedusaResult<ProviderManager<Self>> {
+        let mut providers = vec![Self::from_config_with_api_key(
+            config,
+            session_api_key.clone(),
+        )?];
+        for fallback in &config.model.fallback_providers {
+            if fallback.eq_ignore_ascii_case(&config.model.provider) {
+                continue;
+            }
+            let mut fallback_config = config.clone();
+            fallback_config.model.provider = fallback.clone();
+            providers.push(Self::from_config_with_api_key(
+                &fallback_config,
+                session_api_key.clone(),
+            )?);
+        }
+        Ok(ProviderManager::new(providers))
     }
 }
 
@@ -667,7 +708,8 @@ impl OpenAiWireResponse {
             blocks.push(ResponseBlock::Text { text });
         }
         for call in choice.message.tool_calls {
-            let input = serde_json::from_str(&call.function.arguments).map_err(provider_error)?;
+            let input =
+                serde_json::from_str(&call.function.arguments).map_err(provider_response_error)?;
             blocks.push(ResponseBlock::ToolUse {
                 id: call.id,
                 name: call.function.name,

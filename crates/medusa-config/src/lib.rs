@@ -55,6 +55,7 @@ pub struct AgentConfig {
 #[serde(default, deny_unknown_fields)]
 pub struct ModelConfig {
     pub provider: String,
+    pub fallback_providers: Vec<String>,
     pub name: String,
     pub protocol: String,
     pub temperature_milli: u16,
@@ -132,6 +133,7 @@ impl Default for ModelConfig {
     fn default() -> Self {
         Self {
             provider: "minimax".into(),
+            fallback_providers: Vec::new(),
             name: "MiniMax-M3".into(),
             protocol: "anthropic".into(),
             temperature_milli: 200,

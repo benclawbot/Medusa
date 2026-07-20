@@ -1,5 +1,6 @@
 use std::{collections::HashMap, fs, path::Path};
 
+use medusa_capabilities::CapabilityRegistry;
 use medusa_config::Mode;
 use medusa_core::{ErrorCategory, ErrorCode, MedusaError, MedusaResult};
 use medusa_extensions::{DesktopCommanderSettings, desktop_commander_tool_is_mutating};
@@ -44,6 +45,15 @@ pub(crate) fn system_prompt_with_context(
         SYSTEM_PROMPT
     };
     let mut prompt = format!("{base}\n\nWorkspace: {}", repo.display());
+    match CapabilityRegistry::discover(repo) {
+        Ok(registry) => {
+            prompt.push_str("\n\nRuntime capabilities (shared with every Medusa frontend):\n");
+            prompt.push_str(&registry.prompt_summary());
+        }
+        Err(error) => prompt.push_str(&format!(
+            "\n\nRuntime capability discovery unavailable: {error}"
+        )),
+    }
     let instructions = repository_instructions(repo);
     if instructions.is_empty() {
         prompt.push_str("\n\nNo repository instruction files were found.");
@@ -750,6 +760,7 @@ mod tests {
         .expect("write skill");
 
         let prompt = system_prompt_with_context(Mode::Yolo, directory.path(), None);
+        assert!(prompt.contains("Runtime capabilities (shared with every Medusa frontend):"));
         assert!(prompt.contains("Run the focused test suite."));
         assert!(prompt.contains("release (project): Release preparation"));
         assert!(prompt.contains("call `skill_read`"));

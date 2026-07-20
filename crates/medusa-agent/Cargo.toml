@@ -8,6 +8,7 @@ repository.workspace = true
 
 [dependencies]
 medusa-browser-client = { path = "../medusa-browser-client" }
+medusa-capabilities = { path = "../medusa-capabilities" }
 medusa-config = { path = "../medusa-config" }
 medusa-core.workspace = true
 medusa-extensions = { path = "../medusa-extensions" }
