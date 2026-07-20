@@ -48,7 +48,7 @@ The authoritative order is:
 | Shared runtime capability registry | PR #75 centralizes runtime capability reporting so frontends and prompts consume one authoritative capability matrix | Registry tests, runtime tests, and workspace validation |
 | Shared tool manager | PR #79 introduces one manager boundary for tool discovery, policy, and execution wiring | Tool manager tests, workspace Clippy/tests, and source-size guardrail |
 | Modular manager architecture | Manager boundaries and ownership are documented in PR #80 | Documentation checks and architecture consistency review |
-| Independent Medusa identity grounding | PR #85 makes Medusa identity and runtime capabilities authoritative and removes automatic `CLAUDE.md` instruction loading | Focused prompt/instruction tests plus canonical CI and Refactor Guardrails |
+| Independent Medusa identity grounding | PR #85 makes Medusa identity and runtime capabilities authoritative and removes automatic `CLAUDE.md` instruction loading | Focused prompt/instruction tests plus canonical CI and Refactor Guardrails; additional adversarial repository-configuration regressions are tracked in PR #87 |
 
 ## Canonical gates
 
