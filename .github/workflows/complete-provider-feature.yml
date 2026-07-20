@@ -38,8 +38,6 @@ jobs:
           name: provider-feature-patch
           path: provider-feature.patch
       - name: Compile workspace
-        id: compile
-        continue-on-error: true
         run: |
           set -o pipefail
           cargo check --workspace --all-targets --locked 2>&1 | tee provider-compile.log
@@ -49,9 +47,6 @@ jobs:
         with:
           name: provider-compile-log
           path: provider-compile.log
-      - name: Fail on compilation error
-        if: steps.compile.outcome != 'success'
-        run: exit 1
       - name: Test provider, config, runtime, and CLI
         run: |
           cargo test -p medusa-config --locked
