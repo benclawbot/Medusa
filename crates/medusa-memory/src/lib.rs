@@ -7,10 +7,14 @@ mod persistence;
 mod proposal;
 mod retrieval;
 mod schema;
+mod session_recall;
 mod support;
 
 pub use engine::MemoryEngine;
 pub use schema::{MemoryDocument, MemoryProposal, RetrievedMemory, Scope, Status, Validation};
+pub use session_recall::{
+    SessionComparison, SessionHit, SessionQuery, SessionRecallStore, SessionRecord,
+};
 
 #[cfg(test)]
 mod tests {
