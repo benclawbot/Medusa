@@ -94,6 +94,7 @@ pub enum RuntimeActivityKind {
     Assistant,
     Done,
     Error,
+    Progress,
     Tool,
     Verification,
 }

@@ -1,10 +1,14 @@
 use std::{
     fs,
     path::{Component, Path, PathBuf},
-    process::{Command, Output},
+    process::{Command, Output, Stdio},
+    thread,
+    time::{Duration, Instant},
 };
 
 use medusa_core::{ErrorCategory, ErrorCode, MedusaError, MedusaResult};
+
+const SHELL_COMMAND_TIMEOUT: Duration = Duration::from_secs(120);
 
 pub(crate) fn safe_path(repo: &Path, relative: &str) -> MedusaResult<PathBuf> {
     let path = Path::new(relative);
@@ -221,7 +225,8 @@ pub(crate) fn sandboxed_command(
     #[cfg(target_os = "linux")]
     {
         let root = repo.canonicalize()?;
-        let output = Command::new("bwrap")
+        let mut command = Command::new("bwrap");
+        command
             .args([
                 "--die-with-parent",
                 "--new-session",
@@ -239,43 +244,61 @@ pub(crate) fn sandboxed_command(
             .arg(std::env::var("PATH").unwrap_or_else(|_| "/usr/local/bin:/usr/bin:/bin".into()))
             .arg("--")
             .arg(program)
-            .args(args)
-            .output()
-            .map_err(|error| {
-                MedusaError::new(
-                    ErrorCode::DependencyUnavailable,
-                    ErrorCategory::Environment,
-                    format!("Linux bubblewrap sandbox unavailable: {error}"),
-                )
-            })?;
-        Ok(output)
+            .args(args);
+        output_with_timeout(&mut command, "Linux bubblewrap sandbox")
     }
     #[cfg(not(target_os = "linux"))]
     {
         let root = repo.canonicalize()?;
         #[cfg(windows)]
         if program.eq_ignore_ascii_case("ls") {
-            return Command::new("cmd")
-                .args(["/C", "dir"])
-                .current_dir(root)
-                .output()
-                .map_err(local_shell_error);
+            let mut command = Command::new("cmd");
+            command.args(["/C", "dir"]).current_dir(root);
+            return output_with_timeout(&mut command, "Windows directory listing");
         }
-        Command::new(program)
-            .args(args)
-            .current_dir(root)
-            .output()
-            .map_err(local_shell_error)
+        let mut command = Command::new(program);
+        command.args(args).current_dir(root);
+        output_with_timeout(&mut command, "local shell command")
     }
 }
 
-#[cfg(not(target_os = "linux"))]
-fn local_shell_error(error: std::io::Error) -> MedusaError {
-    MedusaError::new(
-        ErrorCode::DependencyUnavailable,
-        ErrorCategory::Environment,
-        format!("local shell execution unavailable: {error}"),
-    )
+fn output_with_timeout(command: &mut Command, description: &str) -> MedusaResult<Output> {
+    let mut child = command
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .map_err(|error| {
+            MedusaError::new(
+                ErrorCode::DependencyUnavailable,
+                ErrorCategory::Environment,
+                format!("{description} unavailable: {error}"),
+            )
+        })?;
+    let started = Instant::now();
+    loop {
+        if child.try_wait()?.is_some() {
+            return child.wait_with_output().map_err(|error| {
+                MedusaError::new(
+                    ErrorCode::ToolExecutionFailed,
+                    ErrorCategory::Execution,
+                    format!("{description} failed while collecting output: {error}"),
+                )
+            });
+        }
+        if started.elapsed() >= SHELL_COMMAND_TIMEOUT {
+            let _ = child.kill();
+            let _ = child.wait();
+            return Err(MedusaError::new(
+                ErrorCode::ToolExecutionFailed,
+                ErrorCategory::Execution,
+                format!(
+                    "{description} timed out after {} seconds",
+                    SHELL_COMMAND_TIMEOUT.as_secs()
+                ),
+            ));
+        }
+        thread::sleep(Duration::from_millis(50));
+    }
 }
 
 fn policy_denied(message: impl Into<String>) -> MedusaError {

@@ -117,6 +117,9 @@ pub(super) fn run_loop(
             if ctrl_l_redraw(&terminal_event) {
                 continue;
             }
+            if handle_mouse_selection(app, identity, &terminal_event)? {
+                continue;
+            }
             if ctrl_d_on_empty(&terminal_event, app) {
                 return Ok(ExitReason::InputClosed);
             }
@@ -170,6 +173,10 @@ pub(super) fn run_loop(
                 last_frame = None;
                 continue;
             }
+            if handle_mouse_selection(app, identity, &terminal_event)? {
+                last_frame = None;
+                continue;
+            }
             if ctrl_d_on_empty(&terminal_event, app) {
                 return Ok(ExitReason::InputClosed);
             }
@@ -178,6 +185,53 @@ pub(super) fn run_loop(
             }
         }
         thread::sleep(Duration::from_millis(25));
+    }
+}
+
+fn handle_mouse_selection(
+    app: &mut AppState,
+    identity: &UiIdentity,
+    event: &Event,
+) -> io::Result<bool> {
+    let Event::Mouse(mouse) = event else {
+        return Ok(false);
+    };
+    let position = TerminalPosition {
+        row: mouse.row,
+        column: mouse.column,
+    };
+    match mouse.kind {
+        MouseEventKind::Down(MouseButton::Left) => {
+            app.begin_text_selection(position);
+            Ok(true)
+        }
+        MouseEventKind::Drag(MouseButton::Left) => {
+            app.update_text_selection(position);
+            Ok(true)
+        }
+        MouseEventKind::Moved if app.is_selecting_text() => {
+            app.update_text_selection(position);
+            Ok(true)
+        }
+        MouseEventKind::Up(MouseButton::Left) => {
+            let Some(selection) = app.finish_text_selection(position) else {
+                return Ok(true);
+            };
+            if selection.is_empty() {
+                return Ok(true);
+            }
+            let (width, height) = size()?;
+            let frame = render_frame(identity, app, width, height);
+            let text = selected_text(&frame, width, selection);
+            if !text.is_empty()
+                && let Err(error) = app.copy_text(&text)
+            {
+                app.status = format!("copy failed: {error}");
+            }
+            Ok(true)
+        }
+        MouseEventKind::ScrollUp | MouseEventKind::ScrollDown => Ok(false),
+        _ => Ok(false),
     }
 }
 
@@ -310,6 +364,12 @@ pub(super) fn drain_runtime_events(
         match event {
             RuntimeEvent::Started => {
                 app.begin_run();
+                app.record_activity(TranscriptActivity {
+                    id: None,
+                    kind: TranscriptActivityKind::Progress,
+                    title: "Waiting for model or tool response".to_owned(),
+                    details: Vec::new(),
+                });
             }
             RuntimeEvent::AssistantText(text) => {
                 app.record_assistant_text(text);
@@ -321,6 +381,7 @@ pub(super) fn drain_runtime_events(
                         RuntimeActivityKind::Assistant => TranscriptActivityKind::Assistant,
                         RuntimeActivityKind::Done => TranscriptActivityKind::Done,
                         RuntimeActivityKind::Error => TranscriptActivityKind::Error,
+                        RuntimeActivityKind::Progress => TranscriptActivityKind::Progress,
                         RuntimeActivityKind::Tool => TranscriptActivityKind::Tool,
                         RuntimeActivityKind::Verification => TranscriptActivityKind::Verification,
                     },

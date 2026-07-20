@@ -17,7 +17,8 @@ use std::{
 use std::thread;
 
 use app::{
-    AppAction, AppError, AppState, TranscriptActivity, TranscriptActivityKind, TranscriptEntry,
+    AppAction, AppError, AppState, TerminalPosition, TextSelection, TranscriptActivity,
+    TranscriptActivityKind, TranscriptEntry,
 };
 use clipboard::{ClipboardService, PromptAttachment, PromptDraft, UnsupportedClipboard};
 use commands::command_suggestions;
@@ -25,7 +26,7 @@ use crossterm::{
     cursor::{Hide, MoveTo, Show},
     event::{
         self, DisableBracketedPaste, DisableMouseCapture, EnableBracketedPaste, EnableMouseCapture,
-        Event, KeyCode, KeyEventKind, KeyModifiers,
+        Event, KeyCode, KeyEventKind, KeyModifiers, MouseButton, MouseEventKind,
     },
     execute, queue,
     style::{
@@ -49,6 +50,7 @@ const MEDUSA_LOGO: [&str; 3] = [
 ];
 const MEDUSA_LOADING_LOGO: &str = include_str!("medusa_logo_ascii.txt");
 const HEADER_TOP_PADDING: u16 = 1;
+const USER_INPUT_INDENT: &str = "    ";
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct TuiOptions {

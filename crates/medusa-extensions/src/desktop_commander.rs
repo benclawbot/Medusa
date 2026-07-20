@@ -503,33 +503,45 @@ fn sanitize_arguments(repo: &Path, arguments: &Value) -> MedusaResult<Value> {
     if !arguments.is_object() {
         return Err(invalid("Desktop Commander arguments must be a JSON object"));
     }
-    let root = repo.canonicalize()?;
+    let root = repo.to_path_buf();
+    let canonical_root = repo.canonicalize()?;
     let mut safe = arguments.clone();
-    rewrite_paths(&root, &mut safe, None)?;
+    rewrite_paths(&root, &canonical_root, &mut safe, None)?;
     Ok(safe)
 }
 
-fn rewrite_paths(root: &Path, value: &mut Value, key: Option<&str>) -> MedusaResult<()> {
+fn rewrite_paths(
+    root: &Path,
+    canonical_root: &Path,
+    value: &mut Value,
+    key: Option<&str>,
+) -> MedusaResult<()> {
     match value {
         Value::String(raw) if key.is_some_and(is_path_key) => {
-            *raw = secure_path(root, raw)?.display().to_string();
+            *raw = secure_path(root, canonical_root, raw)?
+                .display()
+                .to_string();
         }
         Value::Array(values) if key.is_some_and(is_path_key) => {
             for value in values {
                 let raw = value
                     .as_str()
                     .ok_or_else(|| invalid("every Desktop Commander path must be a string"))?;
-                *value = Value::String(secure_path(root, raw)?.display().to_string());
+                *value = Value::String(
+                    secure_path(root, canonical_root, raw)?
+                        .display()
+                        .to_string(),
+                );
             }
         }
         Value::Array(values) => {
             for value in values {
-                rewrite_paths(root, value, key)?;
+                rewrite_paths(root, canonical_root, value, key)?;
             }
         }
         Value::Object(values) => {
             for (key, value) in values {
-                rewrite_paths(root, value, Some(key))?;
+                rewrite_paths(root, canonical_root, value, Some(key))?;
             }
         }
         _ => {}
@@ -542,7 +554,7 @@ fn is_path_key(key: &str) -> bool {
     key.contains("path") || matches!(key.as_str(), "source" | "destination" | "directory")
 }
 
-fn secure_path(root: &Path, raw: &str) -> MedusaResult<PathBuf> {
+fn secure_path(root: &Path, canonical_root: &Path, raw: &str) -> MedusaResult<PathBuf> {
     if raw.trim().is_empty() || raw.starts_with('~') || raw.contains('\0') {
         return Err(policy(
             "Desktop Commander path is empty, contains NUL, or uses ~ expansion",
@@ -582,13 +594,13 @@ fn secure_path(root: &Path, raw: &str) -> MedusaResult<PathBuf> {
             .ok_or_else(|| policy("Desktop Commander path has no existing ancestor"))?;
     }
     let canonical_probe = probe.canonicalize()?;
-    if !canonical_probe.starts_with(root) {
+    if !canonical_probe.starts_with(canonical_root) {
         return Err(policy(format!(
             "Desktop Commander path crosses a symlink outside the repository: {}",
             candidate.display()
         )));
     }
-    if candidate.exists() && !candidate.canonicalize()?.starts_with(root) {
+    if candidate.exists() && !candidate.canonicalize()?.starts_with(canonical_root) {
         return Err(policy(format!(
             "Desktop Commander path resolves outside the repository: {}",
             candidate.display()

@@ -360,6 +360,19 @@ fn shell(repo: &Path, program: &str, args: &[String]) -> MedusaResult<()> {
             format!("hard-denied command: {program}"),
         ));
     }
+    #[cfg(windows)]
+    let status = if program.eq_ignore_ascii_case("true") {
+        Command::new("cmd")
+            .args(["/C", "exit", "0"])
+            .current_dir(repo)
+            .status()?
+    } else {
+        Command::new(program)
+            .args(args)
+            .current_dir(repo)
+            .status()?
+    };
+    #[cfg(not(windows))]
     let status = Command::new(program)
         .args(args)
         .current_dir(repo)

@@ -67,6 +67,8 @@ pub struct AppState {
     pub task_list_visible: bool,
     pub spinner_frame: u8,
     pub scrollback: Scrollback,
+    pub selection: Option<TextSelection>,
+    selection_dragging: bool,
     welcome_visible: bool,
     credential_configured: bool,
     model_modal: Option<ModelModal>,
@@ -140,6 +142,8 @@ impl AppState {
             task_list_visible: true,
             spinner_frame: 0,
             scrollback: Scrollback::default(),
+            selection: None,
+            selection_dragging: false,
             welcome_visible: true,
             credential_configured: false,
             model_modal: None,
@@ -319,6 +323,8 @@ impl AppState {
         self.plan_mode = false;
         self.task_list_visible = true;
         self.question_modal = None;
+        self.selection = None;
+        self.selection_dragging = false;
     }
 
     pub fn compact_transcript(&mut self, message: String) {
@@ -353,6 +359,43 @@ impl AppState {
     pub fn set_plan(&mut self, plan: TranscriptPlan) {
         self.plan = Some(plan);
         self.task_list_visible = true;
+    }
+
+    pub fn begin_text_selection(&mut self, position: TerminalPosition) {
+        self.selection = Some(TextSelection {
+            anchor: position,
+            active: position,
+        });
+        self.selection_dragging = true;
+    }
+
+    pub fn update_text_selection(&mut self, position: TerminalPosition) {
+        if self.selection_dragging
+            && let Some(selection) = self.selection.as_mut()
+        {
+            selection.active = position;
+        }
+    }
+
+    #[must_use]
+    pub fn finish_text_selection(&mut self, position: TerminalPosition) -> Option<TextSelection> {
+        if !self.selection_dragging {
+            return None;
+        }
+        self.update_text_selection(position);
+        self.selection_dragging = false;
+        self.selection
+    }
+
+    #[must_use]
+    pub fn is_selecting_text(&self) -> bool {
+        self.selection_dragging
+    }
+
+    pub fn copy_text(&mut self, text: &str) -> Result<(), AppError> {
+        self.clipboard.write_text(text)?;
+        self.status = format!("copied {} characters", text.chars().count());
+        Ok(())
     }
 
     pub fn record_assistant_text(&mut self, text: String) {

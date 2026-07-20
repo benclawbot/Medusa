@@ -65,6 +65,7 @@ pub(super) struct PortableRenderSnapshot {
     effort_label: Option<String>,
     plan_mode: bool,
     spinner_frame: u8,
+    selection: Option<TextSelection>,
     model_modal: Option<app::ModelModal>,
     welcome_visible: bool,
 }
@@ -96,6 +97,7 @@ pub(super) fn portable_render_snapshot(
         effort_label: app.effort_label.clone(),
         plan_mode: app.plan_mode,
         spinner_frame: app.spinner_frame,
+        selection: app.selection,
         model_modal: app.model_modal().cloned(),
         welcome_visible: app.welcome_visible(),
     }
@@ -355,7 +357,7 @@ pub(super) fn legacy_draw_common(
     StyledLine::with_marker(
         "> ",
         Color::Cyan,
-        prompt,
+        format!("{USER_INPUT_INDENT}{prompt}"),
         if app.composer.draft.text.is_empty() {
             Color::DarkGrey
         } else {
@@ -507,6 +509,7 @@ pub(super) fn render_frame(
             bottom_row,
             StyledLine::with_marker("> ", Color::Magenta, help, Color::DarkGrey),
         );
+        apply_selection(&mut frame, app.selection);
         return frame;
     }
 
@@ -547,7 +550,7 @@ pub(super) fn render_frame(
         StyledLine::with_marker(
             "> ",
             Color::Cyan,
-            prompt,
+            format!("{USER_INPUT_INDENT}{prompt}"),
             if app.composer.draft.text.is_empty() {
                 Color::DarkGrey
             } else {
@@ -578,5 +581,62 @@ pub(super) fn render_frame(
             Color::DarkGrey,
         ),
     );
+    apply_selection(&mut frame, app.selection);
     frame
+}
+
+fn apply_selection(frame: &mut [StyledLine], selection: Option<TextSelection>) {
+    let Some(selection) = selection else {
+        return;
+    };
+    if selection.is_empty() {
+        return;
+    }
+    let (start, end) = selection.ordered();
+    for row in start.row..=end.row {
+        let from = if row == start.row {
+            usize::from(start.column)
+        } else {
+            0
+        };
+        let to = if row == end.row {
+            usize::from(end.column).saturating_add(1)
+        } else {
+            usize::MAX
+        };
+        if let Some(line) = frame.get_mut(usize::from(row)) {
+            line.set_selection(from, to);
+        }
+    }
+}
+
+pub(super) fn selected_text(frame: &[StyledLine], width: u16, selection: TextSelection) -> String {
+    if selection.is_empty() {
+        return String::new();
+    }
+    let (start, end) = selection.ordered();
+    let mut text = String::new();
+    for row in start.row..=end.row {
+        if row != start.row {
+            text.push('\n');
+        }
+        let Some(line) = frame.get(usize::from(row)) else {
+            continue;
+        };
+        let chars = line.visible_text(width).chars().collect::<Vec<_>>();
+        let from = if row == start.row {
+            usize::from(start.column).min(chars.len())
+        } else {
+            0
+        };
+        let to = if row == end.row {
+            usize::from(end.column).saturating_add(1).min(chars.len())
+        } else {
+            chars.len()
+        };
+        if from < to {
+            text.extend(chars[from..to].iter());
+        }
+    }
+    text
 }

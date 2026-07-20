@@ -59,7 +59,7 @@ pub(crate) fn transcript_lines(app: &AppState, width: u16) -> Vec<StyledLine> {
                     &draft.text
                 };
                 lines.extend(conversation_block_lines(
-                    "You     ",
+                    "    You  ",
                     Color::Cyan,
                     text,
                     Color::White,
@@ -70,7 +70,7 @@ pub(crate) fn transcript_lines(app: &AppState, width: u16) -> Vec<StyledLine> {
                 ));
                 for attachment in &draft.attachments {
                     lines.extend(conversation_block_lines(
-                        "        ",
+                        "            ",
                         Color::DarkGrey,
                         &format!("[attachment] {}", attachment_label(attachment)),
                         Color::White,
@@ -370,6 +370,7 @@ pub(crate) struct StyledLine {
     background: Option<Color>,
     attribute: Attribute,
     fill_background: bool,
+    selection: Option<(usize, usize)>,
 }
 
 impl StyledLine {
@@ -391,6 +392,7 @@ impl StyledLine {
             background,
             attribute,
             fill_background,
+            selection: None,
         }
     }
 
@@ -427,7 +429,25 @@ impl StyledLine {
             background,
             attribute,
             fill_background,
+            selection: None,
         }
+    }
+
+    pub(super) fn set_selection(&mut self, start: usize, end: usize) {
+        self.selection = Some((start, end));
+    }
+
+    pub(super) fn visible_text(&self, width: u16) -> String {
+        wrap_to_width(&self.display_text(), width)
+    }
+
+    fn display_text(&self) -> String {
+        self.marker
+            .as_ref()
+            .map(|(marker, _)| marker.as_str())
+            .unwrap_or_default()
+            .to_owned()
+            + &self.text
     }
 
     fn print_content(&self, stdout: &mut io::Stdout, width: u16) -> io::Result<()> {
@@ -441,20 +461,37 @@ impl StyledLine {
             let remaining = width.saturating_sub(marker.chars().count() as u16);
             let body = wrap_to_width(&self.text, remaining);
             used = marker.chars().count().saturating_add(body.chars().count());
-            queue!(
+            print_selected_text(
                 stdout,
-                SetForegroundColor(*marker_color),
-                Print(marker),
-                SetForegroundColor(self.foreground),
-                Print(terminal_hyperlinks(&body)),
+                &marker,
+                self.selection,
+                *marker_color,
+                self.background,
+                self.attribute,
+            )?;
+            print_selected_text(
+                stdout,
+                &body,
+                self.selection.map(|(start, end)| {
+                    (
+                        start.saturating_sub(marker.chars().count()),
+                        end.saturating_sub(marker.chars().count()),
+                    )
+                }),
+                self.foreground,
+                self.background,
+                self.attribute,
             )?;
         } else {
             let body = wrap_to_width(&self.text, width);
             used = body.chars().count();
-            queue!(
+            print_selected_text(
                 stdout,
-                SetForegroundColor(self.foreground),
-                Print(terminal_hyperlinks(&body))
+                &body,
+                self.selection,
+                self.foreground,
+                self.background,
+                self.attribute,
             )?;
         }
         if self.fill_background {
@@ -496,6 +533,65 @@ impl StyledLine {
         self.print_content(stdout, width)?;
         queue!(stdout, SetAttribute(Attribute::Reset), ResetColor)
     }
+}
+
+fn print_selected_text(
+    stdout: &mut io::Stdout,
+    text: &str,
+    selection: Option<(usize, usize)>,
+    foreground: Color,
+    background: Option<Color>,
+    attribute: Attribute,
+) -> io::Result<()> {
+    let chars = text.chars().collect::<Vec<_>>();
+    let Some((start, end)) = selection else {
+        return queue!(
+            stdout,
+            SetForegroundColor(foreground),
+            Print(terminal_hyperlinks(text))
+        );
+    };
+    let start = start.min(chars.len());
+    let end = end.min(chars.len());
+    if start >= end {
+        return queue!(
+            stdout,
+            SetForegroundColor(foreground),
+            Print(terminal_hyperlinks(text))
+        );
+    }
+    let base_background = background;
+    let print_base = |stdout: &mut io::Stdout| -> io::Result<()> {
+        if let Some(background) = base_background {
+            queue!(stdout, SetBackgroundColor(background))?;
+        } else {
+            queue!(stdout, ResetColor)?;
+        }
+        queue!(
+            stdout,
+            SetAttribute(attribute),
+            SetForegroundColor(foreground)
+        )
+    };
+    print_base(stdout)?;
+    queue!(
+        stdout,
+        Print(terminal_hyperlinks(
+            &chars[..start].iter().collect::<String>()
+        )),
+        SetBackgroundColor(Color::DarkGrey),
+        SetForegroundColor(Color::White),
+        Print(terminal_hyperlinks(
+            &chars[start..end].iter().collect::<String>()
+        )),
+    )?;
+    print_base(stdout)?;
+    queue!(
+        stdout,
+        Print(terminal_hyperlinks(
+            &chars[end..].iter().collect::<String>()
+        ))
+    )
 }
 
 pub(super) fn system_line(message: &str) -> StyledLine {

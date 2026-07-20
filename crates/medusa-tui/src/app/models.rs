@@ -60,6 +60,34 @@ pub enum AppAction {
     Quit,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct TerminalPosition {
+    pub row: u16,
+    pub column: u16,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct TextSelection {
+    pub anchor: TerminalPosition,
+    pub active: TerminalPosition,
+}
+
+impl TextSelection {
+    #[must_use]
+    pub fn ordered(self) -> (TerminalPosition, TerminalPosition) {
+        if (self.anchor.row, self.anchor.column) <= (self.active.row, self.active.column) {
+            (self.anchor, self.active)
+        } else {
+            (self.active, self.anchor)
+        }
+    }
+
+    #[must_use]
+    pub fn is_empty(self) -> bool {
+        self.anchor == self.active
+    }
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct QuestionOption {
     pub label: String,

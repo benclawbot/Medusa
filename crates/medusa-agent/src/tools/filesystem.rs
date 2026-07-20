@@ -1,12 +1,32 @@
-use std::{
-    fs,
-    path::{Component, Path},
-};
+use std::{fs, path::Path};
 
 use medusa_core::MedusaResult;
 use walkdir::WalkDir;
 
 use crate::policy::safe_path;
+
+const MAX_SEARCH_FILES: usize = 10_000;
+const MAX_SEARCH_BYTES: u64 = 32 * 1024 * 1024;
+const IGNORED_DIRECTORY_NAMES: &[&str] = &[
+    ".git",
+    ".medusa",
+    "target",
+    "node_modules",
+    ".venv",
+    "venv",
+    "dist",
+    "build",
+    ".next",
+    "coverage",
+];
+
+fn is_ignored_directory(path: &Path) -> bool {
+    path.file_name().is_some_and(|name| {
+        IGNORED_DIRECTORY_NAMES
+            .iter()
+            .any(|ignored| name == *ignored)
+    })
+}
 
 pub(crate) fn read(repo: &Path, relative: &str) -> MedusaResult<String> {
     if relative == "." {
@@ -21,12 +41,9 @@ fn repository_listing(repo: &Path) -> String {
         .min_depth(1)
         .max_depth(2)
         .into_iter()
+        .filter_entry(|entry| !is_ignored_directory(entry.path()))
         .filter_map(Result::ok)
-        .filter(|entry| {
-            !entry.path().components().any(|part| {
-                matches!(part, Component::Normal(name) if name == ".git" || name == ".medusa")
-            })
-        })
+        .filter(|entry| !is_ignored_directory(entry.path()))
         .filter_map(|entry| {
             let relative = entry.path().strip_prefix(repo).ok()?;
             let mut display = relative
@@ -136,14 +153,26 @@ fn approved_absolute_path(value: &str) -> MedusaResult<std::path::PathBuf> {
 
 pub(crate) fn search(repo: &Path, query: &str) -> MedusaResult<String> {
     let mut results = Vec::new();
-    for entry in WalkDir::new(repo).into_iter().filter_map(Result::ok) {
-        if !entry.file_type().is_file()
-            || entry.path().components().any(|part| {
-                matches!(part, Component::Normal(name) if name == ".git" || name == ".medusa")
-            })
-        {
+    let mut scanned_files = 0usize;
+    let mut scanned_bytes = 0u64;
+    let mut truncated = false;
+    for entry in WalkDir::new(repo)
+        .into_iter()
+        .filter_entry(|entry| !is_ignored_directory(entry.path()))
+        .filter_map(Result::ok)
+    {
+        if !entry.file_type().is_file() {
             continue;
         }
+        scanned_files = scanned_files.saturating_add(1);
+        let bytes = entry.metadata().map(|metadata| metadata.len()).unwrap_or(0);
+        if scanned_files > MAX_SEARCH_FILES
+            || scanned_bytes.saturating_add(bytes) > MAX_SEARCH_BYTES
+        {
+            truncated = true;
+            break;
+        }
+        scanned_bytes = scanned_bytes.saturating_add(bytes);
         if let Ok(text) = fs::read_to_string(entry.path()) {
             for (index, line) in text.lines().enumerate() {
                 if line.contains(query) {
@@ -158,7 +187,16 @@ pub(crate) fn search(repo: &Path, query: &str) -> MedusaResult<String> {
             }
         }
     }
-    Ok(results.join("\n"))
+    let mut output = results.join("\n");
+    if truncated {
+        if !output.is_empty() {
+            output.push('\n');
+        }
+        output.push_str(&format!(
+            "[search truncated after scanning {scanned_files} files or {scanned_bytes} bytes]"
+        ));
+    }
+    Ok(output)
 }
 
 #[cfg(test)]

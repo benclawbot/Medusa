@@ -8,6 +8,9 @@ use reqwest::{StatusCode, blocking::Client};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
+const PROVIDER_REQUEST_TIMEOUT: Duration = Duration::from_secs(120);
+const MAX_PROVIDER_RETRIES: u8 = 2;
+
 /// Strict tool definition sent to the model.
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
 pub struct ToolDefinition {
@@ -162,7 +165,7 @@ impl MiniMaxProvider {
             base_url: base_url.trim_end_matches('/').to_owned(),
             api_key,
             model: config.model.name.clone(),
-            max_retries: 5,
+            max_retries: MAX_PROVIDER_RETRIES,
             capabilities: (settings.capabilities)(),
         })
     }
@@ -217,7 +220,8 @@ fn shared_http_client() -> MedusaResult<Client> {
         return Ok(client.clone());
     }
     let client = Client::builder()
-        .timeout(Duration::from_secs(600))
+        .connect_timeout(Duration::from_secs(15))
+        .timeout(PROVIDER_REQUEST_TIMEOUT)
         .tcp_nodelay(true)
         .pool_max_idle_per_host(8)
         .build()
