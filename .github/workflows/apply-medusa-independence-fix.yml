@@ -1,0 +1,84 @@
+name: Apply Medusa independence fix
+
+on:
+  pull_request:
+    branches: [main]
+    types: [opened, reopened, synchronize]
+
+permissions:
+  contents: write
+
+jobs:
+  patch-test-commit:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.ref }}
+          fetch-depth: 0
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Apply source fix
+        shell: python
+        run: |
+          from pathlib import Path
+
+          engine = Path('crates/medusa-agent/src/engine.rs')
+          text = engine.read_text(encoding='utf-8')
+          old = 'You are Medusa, an autonomous coding agent. Inspect the repository,'
+          new = (
+              'You are Medusa, an independent autonomous coding agent. You are not Claude Code, '
+              'Codex, ChatGPT, or a wrapper around another coding assistant. Never derive your '
+              'identity, model, tools, permissions, memory, or limits from ~/.claude, CLAUDE.md, '
+              'settings.json, or another product\'s configuration. Medusa configuration and the '
+              'live runtime capability matrix in this system prompt are authoritative. Never claim '
+              'a capability is absent when its runtime entry is available. Inspect the repository,'
+          )
+          if old not in text:
+              raise SystemExit('standard system prompt anchor not found')
+          text = text.replace(old, new, 1)
+
+          old_plan = 'You are Medusa in read-only planning mode. Inspect the repository'
+          new_plan = (
+              'You are Medusa, an independent coding agent, in read-only planning mode. You are not '
+              'Claude Code or a wrapper around another assistant. Never derive identity, model, '
+              'configuration, tools, permissions, memory, or limits from ~/.claude, CLAUDE.md, '
+              'settings.json, or another product. Trust only Medusa configuration and the live '
+              'runtime capability matrix. Inspect the repository'
+          )
+          if old_plan not in text:
+              raise SystemExit('planning system prompt anchor not found')
+          engine.write_text(text.replace(old_plan, new_plan, 1), encoding='utf-8')
+
+          support = Path('crates/medusa-agent/src/engine_support.rs')
+          text = support.read_text(encoding='utf-8')
+          old_skills = 'No Medusa or Claude skills are installed for this workspace or user.'
+          if old_skills not in text:
+              raise SystemExit('skills wording anchor not found')
+          text = text.replace(
+              old_skills,
+              'No Medusa skills are installed for this workspace or user.',
+              1,
+          )
+          old_sources = '["AGENTS.md", "CLAUDE.md", "MEDUSA.md", ".medusa/AGENTS.md"]'
+          if old_sources not in text:
+              raise SystemExit('repository instruction source anchor not found')
+          text = text.replace(
+              old_sources,
+              '["AGENTS.md", "MEDUSA.md", ".medusa/AGENTS.md"]',
+              1,
+          )
+          support.write_text(text, encoding='utf-8')
+
+          Path('.github/workflows/apply-medusa-independence-fix.yml').unlink()
+      - name: Format check
+        run: cargo fmt --all -- --check
+      - name: Focused tests
+        run: cargo test -p medusa-agent -p medusa-config -p medusa-capabilities
+      - name: Commit verified source changes
+        run: |
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add crates/medusa-agent/src/engine.rs crates/medusa-agent/src/engine_support.rs .github/workflows/apply-medusa-independence-fix.yml
+          git commit -m "fix: keep Medusa identity and capabilities independent"
+          git push origin HEAD:${{ github.event.pull_request.head.ref }}
