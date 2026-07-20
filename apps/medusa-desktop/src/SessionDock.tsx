@@ -1,6 +1,12 @@
-import { ArrowLeft, CheckCircle2, Clock3, History, LoaderCircle, MessageCircleQuestion, RefreshCw, X } from "lucide-react";
+import { ArrowLeft, CheckCircle2, Clock3, History, LoaderCircle, MessageCircleQuestion, Play, RefreshCw, X } from "lucide-react";
 import { useCallback, useEffect, useState } from "react";
-import { listRuntimeSessions, readRuntimeSession, type SessionSummary, type SessionTranscript } from "./runtime";
+import {
+  listRuntimeSessions,
+  readRuntimeSession,
+  requestRuntimeResume,
+  type SessionSummary,
+  type SessionTranscript,
+} from "./runtime";
 import "./session-dock.css";
 
 function currentRepo(): string {
@@ -73,6 +79,12 @@ export function SessionDock() {
     } finally {
       setLoading(false);
     }
+  };
+
+  const resumeTranscript = () => {
+    if (!transcript) return;
+    requestRuntimeResume(transcript.id);
+    window.location.reload();
   };
 
   useEffect(() => {
@@ -162,7 +174,15 @@ export function SessionDock() {
               })}
             </div>
           )}
-          <footer>{transcript ? "Read-only durable transcript. Live resume is the next runtime step." : "Select a session to inspect its durable transcript."}</footer>
+          <footer>
+            {transcript ? (
+              <button type="button" onClick={resumeTranscript} disabled={loading}>
+                <Play size={13} /> Resume this session
+              </button>
+            ) : (
+              "Select a session to inspect its durable transcript."
+            )}
+          </footer>
         </section>
       )}
     </div>
