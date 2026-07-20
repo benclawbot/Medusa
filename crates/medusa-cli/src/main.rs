@@ -22,7 +22,8 @@ use medusa_provider::ConfiguredProvider;
 use medusa_tui::{TuiOptions, run as run_tui};
 use medusa_update::{
     AtomicInstaller, AttestationVerifier, GithubAttestationVerifier, GithubReleaseClient,
-    InstallKind, InstallLocation, Platform, ReleaseClient, Restart, UpdateCheck, verify_sha256,
+    InstallKind, InstallLocation, Platform, ReleaseClient, Restart, UpdateCheck, UpdatePolicy,
+    verify_sha256,
 };
 use serde::Serialize;
 use walkdir::WalkDir;
@@ -192,6 +193,9 @@ fn run() -> MedusaResult<()> {
 }
 
 fn update(check_only: bool, automatic: bool) -> MedusaResult<()> {
+    let policy = UpdatePolicy::from_environment();
+    let check_only = check_only || policy == UpdatePolicy::Check;
+    let automatic = automatic || policy == UpdatePolicy::Automatic;
     let client = GithubReleaseClient::public()?;
     let release = client.latest()?;
     match UpdateCheck::compare(env!("CARGO_PKG_VERSION"), release.version.clone()) {
