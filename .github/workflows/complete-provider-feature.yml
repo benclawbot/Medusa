@@ -1,0 +1,50 @@
+name: Complete provider feature
+
+on:
+  push:
+    branches:
+      - agent/provider-first-run-config
+    paths:
+      - scripts/complete_provider_feature.py
+      - .github/workflows/complete-provider-feature.yml
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  implement:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: agent/provider-first-run-config
+          fetch-depth: 0
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: '1.88'
+          components: rustfmt, clippy
+      - name: Apply production provider implementation
+        run: python3 scripts/complete_provider_feature.py
+      - name: Format
+        run: cargo fmt --all
+      - name: Compile workspace
+        run: cargo check --workspace --all-targets --locked
+      - name: Test provider, config, runtime, and CLI
+        run: |
+          cargo test -p medusa-config --locked
+          cargo test -p medusa-provider --locked
+          cargo test -p medusa-runtime --locked
+          cargo test -p medusa-cli --locked
+      - name: Commit implementation
+        run: |
+          if git diff --quiet; then
+            echo 'No generated changes'
+            exit 0
+          fi
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add crates README.md
+          git commit -m 'feat: wire production provider configuration end to end'
+          git push origin HEAD:agent/provider-first-run-config
