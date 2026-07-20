@@ -15,16 +15,12 @@ use config_command::{
 use medusa_agent::{AgentEngine, bootstrap};
 use medusa_config::Config;
 use medusa_core::{ErrorCategory, ErrorCode, MedusaError, MedusaResult};
-use medusa_daemon::{DaemonPaths, serve};
+use medusa_daemon::{DaemonClient, DaemonPaths, Request, serve};
 use medusa_extensions::{DesktopCommanderClient, DesktopCommanderSettings};
 use medusa_hardening::{CURRENT_SCHEMA_VERSION, Migrator};
 use medusa_provider::ConfiguredProvider;
 use medusa_tui::{TuiOptions, run as run_tui};
-use medusa_update::{
-    AtomicInstaller, AttestationVerifier, GithubAttestationVerifier, GithubReleaseClient,
-    InstallKind, InstallLocation, Platform, ReleaseClient, Restart, UpdateCheck, UpdatePolicy,
-    verify_sha256,
-};
+use medusa_update::{InstallKind, InstallLocation, MainBranchUpdater, UpdatePolicy};
 use serde::Serialize;
 use walkdir::WalkDir;
 
@@ -60,9 +56,9 @@ enum CommandKind {
         #[command(subcommand)]
         action: Option<ConfigAction>,
     },
-    /// Check for or install a verified release from the official repository.
+    /// Check for or install the latest Medusa main-branch build.
     Update {
-        /// Report whether a verified update is available without modifying this installation.
+        /// Report whether this build matches the current main branch without modifying it.
         #[arg(long)]
         check: bool,
         /// Apply an available update without an additional prompt (for managed automation).
@@ -165,7 +161,7 @@ fn run() -> MedusaResult<()> {
         }
         CommandKind::Doctor => doctor(&repo, &config),
         CommandKind::Migrate => migrate(&repo),
-        CommandKind::Update { check, automatic } => update(check, automatic),
+        CommandKind::Update { check, automatic } => update(&repo, check, automatic),
         CommandKind::Search { pattern } => search(&repo, &pattern),
         CommandKind::Shell { program, args } => shell(&repo, &program, &args),
         CommandKind::Checkpoint { message } => checkpoint(&repo, &message),
@@ -192,27 +188,18 @@ fn run() -> MedusaResult<()> {
     }
 }
 
-fn update(check_only: bool, automatic: bool) -> MedusaResult<()> {
+fn update(repo: &Path, check_only: bool, automatic: bool) -> MedusaResult<()> {
     let policy = UpdatePolicy::from_environment();
     let check_only = check_only || policy == UpdatePolicy::Check;
     let automatic = automatic || policy == UpdatePolicy::Automatic;
-    let client = GithubReleaseClient::public()?;
-    let Some(release) = client.latest()? else {
-        println!("No published Medusa release is available yet; this installation is unchanged.");
+    let updater = MainBranchUpdater::public()?;
+    let latest = updater.latest_main()?;
+    let current = env!("MEDUSA_BUILD_COMMIT");
+    if current == latest.sha {
+        println!("Medusa is already running main commit {current}.");
         return Ok(());
-    };
-    match UpdateCheck::compare(env!("CARGO_PKG_VERSION"), release.version.clone()) {
-        UpdateCheck::UpToDate { current } => {
-            println!("Medusa {current} is up to date.");
-            return Ok(());
-        }
-        UpdateCheck::Available { current, latest } => {
-            println!("Medusa update available: {current} -> {latest}")
-        }
-        UpdateCheck::CurrentBuildUnparseable { current, latest } => {
-            println!("Medusa build {current} can be updated to verified release {latest}");
-        }
     }
+    println!("Medusa main update available: {current} -> {}", latest.sha);
     if check_only {
         return Ok(());
     }
@@ -228,29 +215,15 @@ fn update(check_only: bool, automatic: bool) -> MedusaResult<()> {
         println!("This Medusa binary is managed by {manager}. Update it with: {command}");
         return Ok(());
     }
-    let temporary = tempfile::tempdir()?;
-    let manifest_path = temporary.path().join("medusa-release-manifest.json");
-    client.download(&release.manifest, &manifest_path, |_, _| {})?;
-    GithubAttestationVerifier.verify_manifest(&manifest_path, &release.repository)?;
-    let artifact = release.artifact_for(&Platform::current())?;
-    let archive = temporary.path().join(&artifact.name);
-    println!("Downloading {}...", artifact.name);
-    client.download(artifact, &archive, |written, total| match total {
-        Some(total) => eprint!("\r{written}/{total} bytes"),
-        None => eprint!("\r{written} bytes"),
-    })?;
-    eprintln!();
-    verify_sha256(&archive, &artifact.sha256)?;
-    let installer = AtomicInstaller::new(location.executable);
-    let extracted = installer.extract_archive(&archive, &temporary.path().join("payload"))?;
-    match installer.replace(&extracted, &Restart::default())? {
-        Some(backup) => println!(
-            "Medusa updated and restarted. Rollback binary: {}",
-            backup.display()
-        ),
-        None => println!("Medusa replacement is scheduled after this process exits."),
-    }
+    request_daemon_shutdown(repo);
+    updater.schedule_main_install(&location.executable, std::process::id())?;
+    println!("Medusa main update is scheduled after this process exits.");
     Ok(())
+}
+
+fn request_daemon_shutdown(repo: &Path) {
+    let paths = DaemonPaths::for_repo(repo);
+    let _ = DaemonClient::new(&paths.socket).request(Request::ShutdownNow);
 }
 
 fn doctor(repo: &Path, config: &Config) -> MedusaResult<()> {
