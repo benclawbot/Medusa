@@ -8,14 +8,16 @@ use std::{
 };
 
 use clap::{Parser, Subcommand};
-use config_command::{configure_interactive, ensure_first_run, reset as reset_config, show as show_config};
+use config_command::{
+    configure_interactive, ensure_first_run, reset as reset_config, show as show_config,
+};
 use medusa_agent::{AgentEngine, bootstrap};
 use medusa_config::Config;
 use medusa_core::{ErrorCategory, ErrorCode, MedusaError, MedusaResult};
 use medusa_daemon::{DaemonPaths, serve};
 use medusa_extensions::{DesktopCommanderClient, DesktopCommanderSettings};
 use medusa_hardening::{CURRENT_SCHEMA_VERSION, Migrator};
-use medusa_provider::MiniMaxProvider;
+use medusa_provider::ConfiguredProvider;
 use medusa_tui::{TuiOptions, run as run_tui};
 use serde::Serialize;
 use walkdir::WalkDir;
@@ -54,11 +56,22 @@ enum CommandKind {
     },
     /// Install the latest Medusa CLI from the official repository.
     Update,
-    Search { pattern: String },
-    Shell { program: String, args: Vec<String> },
-    Checkpoint { message: String },
-    Run { objective: String },
-    Resume { session: String },
+    Search {
+        pattern: String,
+    },
+    Shell {
+        program: String,
+        args: Vec<String>,
+    },
+    Checkpoint {
+        message: String,
+    },
+    Run {
+        objective: String,
+    },
+    Resume {
+        session: String,
+    },
     #[command(name = "__daemon-serve", hide = true)]
     DaemonServe,
 }
@@ -144,7 +157,7 @@ fn run() -> MedusaResult<()> {
         CommandKind::Shell { program, args } => shell(&repo, &program, &args),
         CommandKind::Checkpoint { message } => checkpoint(&repo, &message),
         CommandKind::Run { objective } => {
-            let provider = MiniMaxProvider::from_config(&config)?;
+            let provider = ConfiguredProvider::from_config(&config)?;
             let engine = AgentEngine::new(provider, config);
             let mut session = engine.create_session(&repo, objective)?;
             println!("session {} created", session.id);
@@ -153,7 +166,7 @@ fn run() -> MedusaResult<()> {
             Ok(())
         }
         CommandKind::Resume { session } => {
-            let provider = MiniMaxProvider::from_config(&config)?;
+            let provider = ConfiguredProvider::from_config(&config)?;
             let engine = AgentEngine::new(provider, config);
             let mut session = engine.load_session(&repo, &session)?;
             println!("session {} resumed", session.id);
@@ -208,12 +221,8 @@ fn doctor(repo: &Path, config: &Config) -> MedusaResult<()> {
         },
         DoctorCheck {
             name: "provider_credential",
-            ok: std::env::var("MINIMAX_API_KEY").is_ok(),
-            detail: if std::env::var("MINIMAX_API_KEY").is_ok() {
-                "MINIMAX_API_KEY is present".into()
-            } else {
-                "MINIMAX_API_KEY is absent; direct MiniMax live runs are unavailable".into()
-            },
+            ok: config.model.auth != "api-key" || provider_credential_present(config),
+            detail: provider_credential_detail(config),
         },
         DoctorCheck {
             name: "provider_profile",
@@ -241,7 +250,10 @@ fn doctor(repo: &Path, config: &Config) -> MedusaResult<()> {
             detail: format!("supported schema <= {CURRENT_SCHEMA_VERSION}"),
         },
     ];
-    checks.push(desktop_commander_check(repo, &DesktopCommanderSettings::from_env()));
+    checks.push(desktop_commander_check(
+        repo,
+        &DesktopCommanderSettings::from_env(),
+    ));
     println!("{}", serde_json::to_string_pretty(&checks)?);
     if checks.iter().all(|check| check.ok) {
         Ok(())
@@ -261,6 +273,34 @@ fn migrate(repo: &Path) -> MedusaResult<()> {
     Ok(())
 }
 
+fn provider_credential_present(config: &Config) -> bool {
+    if config.model.auth != "api-key" {
+        return true;
+    }
+    let prefix = config
+        .model
+        .provider
+        .trim()
+        .to_ascii_uppercase()
+        .replace('-', "_");
+    std::env::var(format!("{prefix}_API_KEY")).is_ok()
+        || std::env::var("OPENAI_API_KEY").is_ok()
+        || std::env::var("MEDUSA_API_KEY").is_ok()
+        || std::env::var("MINIMAX_API_KEY").is_ok()
+        || std::env::var("ANTHROPIC_API_KEY").is_ok()
+}
+
+fn provider_credential_detail(config: &Config) -> String {
+    if config.model.auth != "api-key" {
+        return format!("authentication mode: {}", config.model.auth);
+    }
+    if provider_credential_present(config) {
+        "provider credential is present".to_owned()
+    } else {
+        "provider credential is absent; configure the provider-specific API key environment variable".to_owned()
+    }
+}
+
 fn command_check(name: &'static str, program: &str, args: &[&str]) -> DoctorCheck {
     match Command::new(program).args(args).output() {
         Ok(output) => DoctorCheck {
@@ -268,7 +308,11 @@ fn command_check(name: &'static str, program: &str, args: &[&str]) -> DoctorChec
             ok: output.status.success(),
             detail: String::from_utf8_lossy(&output.stdout).trim().to_owned(),
         },
-        Err(error) => DoctorCheck { name, ok: false, detail: error.to_string() },
+        Err(error) => DoctorCheck {
+            name,
+            ok: false,
+            detail: error.to_string(),
+        },
     }
 }
 
@@ -281,7 +325,11 @@ fn desktop_commander_check(repo: &Path, settings: &DesktopCommanderSettings) -> 
         };
     }
     if let Some(error) = settings.configuration_error() {
-        return DoctorCheck { name: "desktop_commander_mcp", ok: false, detail: error.to_owned() };
+        return DoctorCheck {
+            name: "desktop_commander_mcp",
+            ok: false,
+            detail: error.to_owned(),
+        };
     }
     if !executable_available(settings.command()) {
         return DoctorCheck {
@@ -294,7 +342,11 @@ fn desktop_commander_check(repo: &Path, settings: &DesktopCommanderSettings) -> 
         Ok(_) => DoctorCheck {
             name: "desktop_commander_mcp",
             ok: true,
-            detail: format!("MCP handshake ready: {} via {}", settings.package_label(), settings.command().display()),
+            detail: format!(
+                "MCP handshake ready: {} via {}",
+                settings.package_label(),
+                settings.command().display()
+            ),
         },
         Err(error) => DoctorCheck {
             name: "desktop_commander_mcp",
@@ -308,7 +360,9 @@ fn executable_available(program: &Path) -> bool {
     if program.components().count() > 1 {
         return program.is_file();
     }
-    let Some(path) = std::env::var_os("PATH") else { return false; };
+    let Some(path) = std::env::var_os("PATH") else {
+        return false;
+    };
     std::env::split_paths(&path).any(|directory| {
         let candidate = directory.join(program);
         candidate.is_file()
@@ -339,7 +393,10 @@ fn print_completion(session: &medusa_agent::AgentSession) {
 fn search(repo: &Path, pattern: &str) -> MedusaResult<()> {
     for entry in WalkDir::new(repo).into_iter().filter_map(Result::ok) {
         if !entry.file_type().is_file()
-            || entry.path().components().any(|part| part.as_os_str() == ".git")
+            || entry
+                .path()
+                .components()
+                .any(|part| part.as_os_str() == ".git")
         {
             continue;
         }
@@ -364,12 +421,21 @@ fn shell(repo: &Path, program: &str, args: &[String]) -> MedusaResult<()> {
     }
     #[cfg(windows)]
     let status = if program.eq_ignore_ascii_case("true") {
-        Command::new("cmd").args(["/C", "exit", "0"]).current_dir(repo).status()?
+        Command::new("cmd")
+            .args(["/C", "exit", "0"])
+            .current_dir(repo)
+            .status()?
     } else {
-        Command::new(program).args(args).current_dir(repo).status()?
+        Command::new(program)
+            .args(args)
+            .current_dir(repo)
+            .status()?
     };
     #[cfg(not(windows))]
-    let status = Command::new(program).args(args).current_dir(repo).status()?;
+    let status = Command::new(program)
+        .args(args)
+        .current_dir(repo)
+        .status()?;
     if status.success() {
         Ok(())
     } else {
@@ -412,13 +478,21 @@ mod tests {
     #[test]
     fn config_command_is_available() {
         let cli = Cli::try_parse_from(["medusa", "config"]).expect("parse config command");
-        assert!(matches!(cli.command, Some(CommandKind::Config { action: None })));
+        assert!(matches!(
+            cli.command,
+            Some(CommandKind::Config { action: None })
+        ));
     }
 
     #[test]
     fn config_show_is_available() {
         let cli = Cli::try_parse_from(["medusa", "config", "show"]).expect("parse config show");
-        assert!(matches!(cli.command, Some(CommandKind::Config { action: Some(ConfigAction::Show) })));
+        assert!(matches!(
+            cli.command,
+            Some(CommandKind::Config {
+                action: Some(ConfigAction::Show)
+            })
+        ));
     }
 
     #[test]
@@ -438,19 +512,23 @@ mod tests {
     #[test]
     fn headless_run_remains_available() {
         let cli = Cli::try_parse_from(["medusa", "run", "fix tests"]).expect("parse headless run");
-        assert!(matches!(cli.command, Some(CommandKind::Run { objective }) if objective == "fix tests"));
+        assert!(
+            matches!(cli.command, Some(CommandKind::Run { objective }) if objective == "fix tests")
+        );
     }
 
     #[test]
     fn interactive_resume_flags_are_parsed() {
-        let cli = Cli::try_parse_from(["medusa", "--resume", "session-123"]).expect("parse interactive resume");
+        let cli = Cli::try_parse_from(["medusa", "--resume", "session-123"])
+            .expect("parse interactive resume");
         assert_eq!(cli.resume_session.as_deref(), Some("session-123"));
         assert!(cli.command.is_none());
     }
 
     #[test]
     fn hidden_daemon_host_accepts_repository_after_subcommand() {
-        let cli = Cli::try_parse_from(["medusa", "__daemon-serve", "--repo", "."]).expect("parse daemon host");
+        let cli = Cli::try_parse_from(["medusa", "__daemon-serve", "--repo", "."])
+            .expect("parse daemon host");
         assert!(matches!(cli.command, Some(CommandKind::DaemonServe)));
     }
 }

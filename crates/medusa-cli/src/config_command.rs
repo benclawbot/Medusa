@@ -81,10 +81,7 @@ pub(crate) fn configure_interactive() -> MedusaResult<()> {
                 "omniroute",
                 "OmniRoute managed/existing gateway (recommended)",
             ),
-            (
-                "openai-compatible",
-                "Existing OpenAI-compatible endpoint",
-            ),
+            ("openai-compatible", "Existing OpenAI-compatible endpoint"),
             ("direct", "Direct provider"),
             ("local", "Local model runtime"),
         ],
@@ -95,10 +92,7 @@ pub(crate) fn configure_interactive() -> MedusaResult<()> {
         "Provider or route",
         provider_default(&profile.connection, &profile.provider),
     )?;
-    profile.model = prompt(
-        "Model",
-        model_default(&profile.connection, &profile.model),
-    )?;
+    profile.model = prompt("Model", model_default(&profile.connection, &profile.model))?;
     profile.speed = choose(
         "Speed",
         &[
@@ -142,10 +136,7 @@ pub(crate) fn configure_interactive() -> MedusaResult<()> {
         &[
             ("oauth", "OAuth / browser sign-in"),
             ("api-key", "API key"),
-            (
-                "existing",
-                "Existing environment or gateway credentials",
-            ),
+            ("existing", "Existing environment or gateway credentials"),
             ("none", "No authentication"),
         ],
         &profile.auth,
@@ -184,8 +175,7 @@ fn save_profile(profile: &ProviderProfile) -> MedusaResult<()> {
         .ok_or_else(|| config_error("configuration path has no parent"))?;
     fs::create_dir_all(parent)
         .map_err(|error| config_error(format!("create {}: {error}", parent.display())))?;
-    let text =
-        toml::to_string_pretty(profile).map_err(|error| config_error(error.to_string()))?;
+    let text = toml::to_string_pretty(profile).map_err(|error| config_error(error.to_string()))?;
     let temporary = path.with_extension("toml.tmp");
     fs::write(&temporary, text)
         .map_err(|error| config_error(format!("write {}: {error}", temporary.display())))?;
