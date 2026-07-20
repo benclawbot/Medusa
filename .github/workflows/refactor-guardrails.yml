@@ -30,7 +30,7 @@ on:
       - '.github/workflows/**'
 
 permissions:
-  contents: write
+  contents: read
 
 concurrency:
   group: refactor-guardrails-${{ github.ref }}
@@ -42,32 +42,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-        with:
-          ref: agent/provider-first-run-config
-          fetch-depth: 0
-      - uses: dtolnay/rust-toolchain@stable
-        with:
-          toolchain: '1.88'
-          components: rustfmt
-      - name: Extract inline tests
-        run: |
-          python3 scripts/extract_oversized_inline_tests.py
-          cargo fmt --all
-      - name: Verify extracted modules
-        run: |
-          cargo check -p medusa-extensions -p medusa-tui --all-targets --locked
-          cargo test -p medusa-extensions --locked
-          cargo test -p medusa-tui --locked
-          bash scripts/check-source-size.sh
-      - name: Commit extraction
-        run: |
-          git config user.name 'github-actions[bot]'
-          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git add -A
-          if ! git diff --cached --quiet; then
-            git commit --no-verify -m 'refactor: extract oversized inline test modules'
-            git push origin HEAD:agent/provider-first-run-config
-          fi
+      - name: Enforce source-size ceiling and exception registry
+        run: bash scripts/check-source-size.sh
 
   workflow-hygiene:
     name: Workflows are read-only or explicitly justified
