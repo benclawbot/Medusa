@@ -121,8 +121,19 @@ export interface ModelConfiguration {
   apiKey?: string;
 }
 
+const pendingResumeKey = "medusa.desktop.resumeSession";
+
 export async function startRuntime(repo?: string): Promise<RuntimeStartResponse> {
+  const pendingSession = window.localStorage.getItem(pendingResumeKey);
+  if (repo && pendingSession) {
+    window.localStorage.removeItem(pendingResumeKey);
+    return invoke<RuntimeStartResponse>("runtime_resume", { repo, sessionId: pendingSession });
+  }
   return invoke<RuntimeStartResponse>("runtime_start", repo ? { repo } : {});
+}
+
+export function requestRuntimeResume(sessionId: string): void {
+  window.localStorage.setItem(pendingResumeKey, sessionId);
 }
 
 export async function listRuntimeSessions(repo: string): Promise<SessionSummary[]> {
