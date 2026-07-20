@@ -52,8 +52,11 @@ mod tests {
                 text: "repair update command".to_owned(),
             }],
         };
-        fs::write(&path, serde_json::to_vec_pretty(&record).expect("serialize"))
-            .expect("write record");
+        fs::write(
+            &path,
+            serde_json::to_vec_pretty(&record).expect("serialize"),
+        )
+        .expect("write record");
 
         let store = open_session_recall(directory.path()).expect("open recall");
         let hits = store
