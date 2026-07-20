@@ -1,8 +1,106 @@
-use std::path::{Path, PathBuf};
-use std::time::Duration;
+use std::{
+    collections::BTreeSet,
+    fs,
+    path::{Path, PathBuf},
+    time::Duration,
+};
 
 use medusa_browser_client::BrowserClient;
-use medusa_core::{ErrorCategory, ErrorCode, MedusaError, MedusaResult};
+use medusa_core::{ErrorCategory, ErrorCode, MedusaError, MedusaResult, SessionId};
+use serde::{Deserialize, Serialize};
+use time::OffsetDateTime;
+
+use crate::session::load;
+
+/// Lightweight durable-session metadata suitable for frontend discovery lists.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct SessionSummary {
+    pub id: String,
+    pub objective: String,
+    #[serde(with = "time::serde::rfc3339")]
+    pub created_at: OffsetDateTime,
+    #[serde(with = "time::serde::rfc3339")]
+    pub updated_at: OffsetDateTime,
+    pub completed: bool,
+    pub waiting_for_user: bool,
+    pub turn: u32,
+}
+
+/// Discovers all durable sessions for one repository across primary and fallback storage.
+///
+/// Duplicate session IDs are returned once. Sessions are ordered by most recently updated,
+/// then by ID for deterministic presentation.
+pub fn list_sessions(repo: &Path) -> MedusaResult<Vec<SessionSummary>> {
+    let mut ids = BTreeSet::new();
+    collect_session_ids(&repo.join(".medusa/sessions"), &mut ids)?;
+    collect_session_ids(&fallback_session_root(repo), &mut ids)?;
+
+    let mut sessions = ids
+        .into_iter()
+        .map(|id| {
+            let session = load(repo, id.as_str())?;
+            Ok(SessionSummary {
+                id: session.id.to_string(),
+                objective: session.objective,
+                created_at: session.created_at,
+                updated_at: session.updated_at,
+                completed: session.completed,
+                waiting_for_user: session.pending_question.is_some(),
+                turn: session.turn,
+            })
+        })
+        .collect::<MedusaResult<Vec<_>>>()?;
+    sessions.sort_by(|left, right| {
+        right
+            .updated_at
+            .cmp(&left.updated_at)
+            .then_with(|| left.id.cmp(&right.id))
+    });
+    Ok(sessions)
+}
+
+fn collect_session_ids(root: &Path, ids: &mut BTreeSet<SessionId>) -> MedusaResult<()> {
+    let entries = match fs::read_dir(root) {
+        Ok(entries) => entries,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(error) => return Err(error.into()),
+    };
+    for entry in entries {
+        let entry = entry?;
+        if !entry.file_type()?.is_file() {
+            continue;
+        }
+        let path = entry.path();
+        if path.extension().and_then(|extension| extension.to_str()) != Some("json") {
+            continue;
+        }
+        let Some(stem) = path.file_stem().and_then(|stem| stem.to_str()) else {
+            continue;
+        };
+        if let Ok(id) = SessionId::parse(stem) {
+            ids.insert(id);
+        }
+    }
+    Ok(())
+}
+
+fn fallback_session_root(repo: &Path) -> PathBuf {
+    let root = std::env::var_os("LOCALAPPDATA")
+        .or_else(|| std::env::var_os("APPDATA"))
+        .map(PathBuf::from)
+        .or_else(|| std::env::var_os("HOME").map(PathBuf::from))
+        .unwrap_or_else(std::env::temp_dir);
+    root.join("Medusa/sessions").join(repository_key(repo))
+}
+
+fn repository_key(repo: &Path) -> String {
+    let mut hash = 0xcbf2_9ce4_8422_2325_u64;
+    for byte in repo.to_string_lossy().as_bytes() {
+        hash ^= u64::from(*byte);
+        hash = hash.wrapping_mul(0x0000_0100_0000_01b3);
+    }
+    format!("{hash:016x}")
+}
 
 #[derive(Clone, Debug)]
 pub struct SessionBrowserConfig {
@@ -71,12 +169,12 @@ fn resolve_path(configured: Option<&Path>) -> MedusaResult<PathBuf> {
         "medusa-browserd"
     };
     let agent_exe =
-        std::env::current_exe().map_err(|e| unavailable(format!("current_exe: {e}")))?;
-    let adjacent = agent_exe.parent().map(|p| p.join(exe_name));
-    if let Some(adj) = &adjacent {
-        if adj.exists() {
-            return Ok(adj.clone());
-        }
+        std::env::current_exe().map_err(|error| unavailable(format!("current_exe: {error}")))?;
+    let adjacent = agent_exe.parent().map(|parent| parent.join(exe_name));
+    if let Some(adjacent) = &adjacent
+        && adjacent.exists()
+    {
+        return Ok(adjacent.clone());
     }
     if let Ok(found) = which(exe_name) {
         return Ok(found);
@@ -86,10 +184,10 @@ fn resolve_path(configured: Option<&Path>) -> MedusaResult<PathBuf> {
     )))
 }
 
-fn which(cmd: &str) -> Result<PathBuf, ()> {
+fn which(command: &str) -> Result<PathBuf, ()> {
     let path = std::env::var_os("PATH").ok_or(())?;
     for entry in std::env::split_paths(&path) {
-        let candidate = entry.join(cmd);
+        let candidate = entry.join(command);
         if candidate.is_file() {
             return Ok(candidate);
         }
@@ -116,16 +214,31 @@ fn invalid(message: &'static str) -> MedusaError {
 
 #[cfg(test)]
 mod tests {
+    use std::fs;
+
+    use medusa_config::Config;
+    use medusa_core::MedusaResult;
+    use medusa_provider::{ModelProvider, ModelRequest, ModelResponse};
+
     use super::*;
+    use crate::AgentEngine;
+
+    struct UnusedProvider;
+
+    impl ModelProvider for UnusedProvider {
+        fn complete(&self, _: &ModelRequest) -> MedusaResult<ModelResponse> {
+            unreachable!("session creation does not call the provider")
+        }
+    }
 
     #[test]
     fn session_browser_disabled_when_path_missing() {
         let config = SessionBrowserConfig {
             enabled: true,
-            path: Some(std::path::PathBuf::from("/nonexistent/medusa-browserd")),
-            timeout: std::time::Duration::from_secs(5),
+            path: Some(PathBuf::from("/nonexistent/medusa-browserd")),
+            timeout: Duration::from_secs(5),
         };
-        let session = SessionBrowser::connect(&config).unwrap();
+        let session = SessionBrowser::connect(&config).expect("browser configuration");
         assert!(!session.is_enabled());
     }
 
@@ -134,9 +247,35 @@ mod tests {
         let config = SessionBrowserConfig {
             enabled: false,
             path: None,
-            timeout: std::time::Duration::from_secs(5),
+            timeout: Duration::from_secs(5),
         };
-        let session = SessionBrowser::connect(&config).unwrap();
+        let session = SessionBrowser::connect(&config).expect("browser configuration");
         assert!(!session.is_enabled());
+    }
+
+    #[test]
+    fn durable_sessions_are_discovered_once_with_frontend_metadata() {
+        let repository = tempfile::tempdir().expect("repository");
+        let engine = AgentEngine::new(UnusedProvider, Config::default());
+        let session = engine
+            .create_session(repository.path(), "Resume desktop work".to_owned())
+            .expect("session");
+
+        let primary = repository
+            .path()
+            .join(".medusa/sessions")
+            .join(format!("{}.json", session.id));
+        let fallback = fallback_session_root(repository.path());
+        fs::create_dir_all(&fallback).expect("fallback directory");
+        fs::copy(&primary, fallback.join(format!("{}.json", session.id)))
+            .expect("duplicate fallback session");
+        fs::write(fallback.join("not-a-session.json"), b"{}").expect("unrelated json file");
+
+        let sessions = list_sessions(repository.path()).expect("session catalog");
+        assert_eq!(sessions.len(), 1);
+        assert_eq!(sessions[0].id, session.id.to_string());
+        assert_eq!(sessions[0].objective, "Resume desktop work");
+        assert!(!sessions[0].completed);
+        assert!(!sessions[0].waiting_for_user);
     }
 }
