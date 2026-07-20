@@ -1,7 +1,6 @@
 //! Provider-neutral model contracts and the MiniMax Anthropic-compatible adapter.
 
 mod manager;
-
 use std::{env, sync::OnceLock, thread, time::Duration};
 
 use medusa_config::Config;
@@ -11,7 +10,6 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
 pub use manager::{ProviderHealth, ProviderManager};
-
 const PROVIDER_REQUEST_TIMEOUT: Duration = Duration::from_secs(120);
 const MAX_PROVIDER_RETRIES: u8 = 2;
 
@@ -456,7 +454,6 @@ fn provider_error(error: reqwest::Error) -> MedusaError {
     )
     .with_retryable(true)
 }
-
 fn provider_response_error(error: impl std::fmt::Display) -> MedusaError {
     MedusaError::new(
         ErrorCode::DependencyUnavailable,
@@ -464,7 +461,6 @@ fn provider_response_error(error: impl std::fmt::Display) -> MedusaError {
         format!("provider returned an invalid response: {error}"),
     )
 }
-
 /// Runtime-selected provider supporting Anthropic and OpenAI-compatible APIs.
 pub enum ConfiguredProvider {
     Anthropic(MiniMaxProvider),
