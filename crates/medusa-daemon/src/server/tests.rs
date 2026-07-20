@@ -118,7 +118,7 @@ fn descendant_command(marker: &Path) -> (String, Vec<String>) {
         "sh".to_owned(),
         vec![
             "-c".to_owned(),
-            "(sleep 1; printf orphan > \"$1\") & wait".to_owned(),
+            "(sleep 1; printf orphan > \"$1\") &".to_owned(),
             "medusa-descendant".to_owned(),
             marker.to_string_lossy().into_owned(),
         ],
@@ -133,7 +133,7 @@ fn descendant_command(marker: &Path) -> (String, Vec<String>) {
             "-NoProfile".to_owned(),
             "-NonInteractive".to_owned(),
             "-Command".to_owned(),
-            "$target=$args[0]; $job=Start-Job -ArgumentList $target -ScriptBlock { param($path) Start-Sleep -Milliseconds 1000; Set-Content -NoNewline -LiteralPath $path -Value orphan }; Wait-Job -Job $job | Out-Null"
+            "$target=$args[0]; Start-Process powershell.exe -ArgumentList @('-NoProfile', '-NonInteractive', '-Command', \"Start-Sleep -Milliseconds 1000; Set-Content -NoNewline -LiteralPath '$target' -Value orphan\")"
                 .to_owned(),
             marker.to_string_lossy().into_owned(),
         ],
@@ -142,7 +142,7 @@ fn descendant_command(marker: &Path) -> (String, Vec<String>) {
 
 fn spawn_unrelated_process() -> std::process::Child {
     let (program, args) = blocking_command();
-    Command::new(program)
+    std::process::Command::new(program)
         .args(args)
         .spawn()
         .expect("spawn unrelated process")

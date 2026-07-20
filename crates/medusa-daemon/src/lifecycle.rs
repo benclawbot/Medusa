@@ -389,14 +389,7 @@ fn process_is_alive(pid: u32) -> bool {
 
 #[cfg(windows)]
 fn process_is_alive(pid: u32) -> bool {
-    let filter = format!("PID eq {pid}");
-    Command::new("tasklist")
-        .args(["/FI", filter.as_str(), "/FO", "CSV", "/NH"])
-        .output()
-        .is_ok_and(|output| {
-            output.status.success()
-                && String::from_utf8_lossy(&output.stdout).contains(&format!("\"{pid}\""))
-        })
+    medusa_process_containment::process_is_alive(pid)
 }
 
 #[cfg(test)]
