@@ -38,7 +38,20 @@ jobs:
           name: provider-feature-patch
           path: provider-feature.patch
       - name: Compile workspace
-        run: cargo check --workspace --all-targets --locked
+        id: compile
+        continue-on-error: true
+        run: |
+          set -o pipefail
+          cargo check --workspace --all-targets --locked 2>&1 | tee provider-compile.log
+      - name: Upload compiler diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: provider-compile-log
+          path: provider-compile.log
+      - name: Fail on compilation error
+        if: steps.compile.outcome != 'success'
+        run: exit 1
       - name: Test provider, config, runtime, and CLI
         run: |
           cargo test -p medusa-config --locked
@@ -49,7 +62,7 @@ jobs:
         run: |
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          rm -f provider-feature.patch
+          rm -f provider-feature.patch provider-compile.log
           git add -A
           if git diff --cached --quiet; then
             echo 'No generated changes'
