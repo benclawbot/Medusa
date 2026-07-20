@@ -8,6 +8,16 @@ export interface RuntimeStartResponse {
   repo: string;
 }
 
+export interface SessionSummary {
+  id: string;
+  objective: string;
+  createdAt: string;
+  updatedAt: string;
+  completed: boolean;
+  waitingForUser: boolean;
+  turn: number;
+}
+
 export interface CommandSuggestion {
   name: string;
   usage: string;
@@ -102,6 +112,10 @@ export interface ModelConfiguration {
 
 export async function startRuntime(repo?: string): Promise<RuntimeStartResponse> {
   return invoke<RuntimeStartResponse>("runtime_start", repo ? { repo } : {});
+}
+
+export async function listRuntimeSessions(repo: string): Promise<SessionSummary[]> {
+  return invoke<SessionSummary[]>("runtime_list_sessions", { repo });
 }
 
 export async function closeRuntime(runtimeId: string): Promise<void> {
