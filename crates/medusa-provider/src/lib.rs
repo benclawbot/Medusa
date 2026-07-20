@@ -438,13 +438,31 @@ fn classify_status(status: StatusCode, body: String) -> MedusaError {
     .with_retryable(retryable)
 }
 
-fn provider_error(error: impl std::fmt::Display) -> MedusaError {
+fn provider_error(error: reqwest::Error) -> MedusaError {
+    let message = if error.is_connect() {
+        let endpoint = error
+            .url()
+            .map_or_else(|| "the configured endpoint".to_owned(), ToString::to_string);
+        format!(
+            "provider endpoint is unavailable at {endpoint}; start the local or gateway service, configure a reachable provider with `medusa config`, or configure model.fallback_providers: {error}"
+        )
+    } else {
+        format!("provider request failed: {error}")
+    };
     MedusaError::new(
         ErrorCode::DependencyUnavailable,
         ErrorCategory::Transient,
-        format!("provider request failed: {error}"),
+        message,
     )
     .with_retryable(true)
+}
+
+fn provider_response_error(error: impl std::fmt::Display) -> MedusaError {
+    MedusaError::new(
+        ErrorCode::DependencyUnavailable,
+        ErrorCategory::Validation,
+        format!("provider returned an invalid response: {error}"),
+    )
 }
 
 /// Runtime-selected provider supporting Anthropic and OpenAI-compatible APIs.
@@ -694,7 +712,8 @@ impl OpenAiWireResponse {
             blocks.push(ResponseBlock::Text { text });
         }
         for call in choice.message.tool_calls {
-            let input = serde_json::from_str(&call.function.arguments).map_err(provider_error)?;
+            let input =
+                serde_json::from_str(&call.function.arguments).map_err(provider_response_error)?;
             blocks.push(ResponseBlock::ToolUse {
                 id: call.id,
                 name: call.function.name,
