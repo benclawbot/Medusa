@@ -117,18 +117,8 @@ impl AtomicInstaller {
         // running executable before spawning the delayed helper so cleanup
         // cannot race the Windows file-lock workaround.
         fs::copy(candidate, &staged)?;
-        let restart_args = restart
-            .arguments
-            .iter()
-            .map(|argument| format!("\"{}\"", argument.replace('"', "\\\"")))
-            .collect::<Vec<_>>()
-            .join(" ");
-        let content = format!(
-            "@echo off\r\nsetlocal\r\nping 127.0.0.1 -n 2 > nul\r\nif exist \"{backup}\" del /f /q \"{backup}\"\r\nif exist \"{target}\" move /y \"{target}\" \"{backup}\"\r\nmove /y \"{candidate}\" \"{target}\"\r\nstart \"\" \"{target}\" {restart_args}\r\ndel /f /q \"%~f0\"\r\n",
-            backup = backup.display(),
-            target = self.target.display(),
-            candidate = staged.display(),
-        );
+        let content =
+            windows_replace_script(std::process::id(), &backup, &self.target, &staged, restart);
         fs::write(&script, content)?;
         Command::new("cmd")
             .args(["/C", "start", "", "/B"])
@@ -142,6 +132,27 @@ impl AtomicInstaller {
     fn schedule_windows_replace(&self, _candidate: &Path, _restart: &Restart) -> MedusaResult<()> {
         unreachable!("windows replacement is only selected on Windows")
     }
+}
+
+fn windows_replace_script(
+    parent_pid: u32,
+    backup: &Path,
+    target: &Path,
+    candidate: &Path,
+    restart: &Restart,
+) -> String {
+    let restart_args = restart
+        .arguments
+        .iter()
+        .map(|argument| format!("\"{}\"", argument.replace('"', "\\\"")))
+        .collect::<Vec<_>>()
+        .join(" ");
+    format!(
+        "@echo off\r\nsetlocal\r\n:wait_for_parent\r\ntasklist /fi \"PID eq {parent_pid}\" /nh | find \"{parent_pid}\" >nul\r\nif not errorlevel 1 (\r\n  timeout /t 1 /nobreak >nul\r\n  goto wait_for_parent\r\n)\r\nif exist \"{backup}\" del /f /q \"{backup}\"\r\nif exist \"{target}\" move /y \"{target}\" \"{backup}\"\r\nmove /y \"{candidate}\" \"{target}\"\r\nstart \"\" \"{target}\" {restart_args}\r\ndel /f /q \"%~f0\"\r\n",
+        backup = backup.display(),
+        target = target.display(),
+        candidate = candidate.display(),
+    )
 }
 
 fn extract_zip(archive: &Path, workspace: &Path) -> MedusaResult<PathBuf> {
@@ -277,5 +288,24 @@ mod tests {
             .cli_asset_name(),
             "medusa-cli-windows.zip"
         );
+    }
+
+    #[test]
+    fn windows_handoff_waits_for_the_running_binary_before_replacement() {
+        let restart = Restart {
+            arguments: vec!["resume".into(), "session-1".into()],
+        };
+        let script = windows_replace_script(
+            4242,
+            Path::new(r"C:\bin\medusa.previous.exe"),
+            Path::new(r"C:\bin\medusa.exe"),
+            Path::new(r"C:\bin\medusa.update-new.exe"),
+            &restart,
+        );
+        assert!(script.contains(":wait_for_parent"));
+        assert!(script.contains("tasklist /fi \"PID eq 4242\""));
+        assert!(script.contains("goto wait_for_parent"));
+        assert!(script.contains("move /y \"C:\\bin\\medusa.update-new.exe\""));
+        assert!(script.contains("start \"\" \"C:\\bin\\medusa.exe\" \"resume\" \"session-1\""));
     }
 }
