@@ -22,10 +22,8 @@ keyring = "=4.1.5"
 medusa-daemon = { path = "../../../crates/medusa-daemon" }
 medusa-runtime = { path = "../../../crates/medusa-runtime" }
 serde = { version = "1", features = ["derive"] }
+serde_json = "1"
 tauri = { version = "2", features = [] }
 tauri-plugin-dialog = "2"
-
-[dev-dependencies]
-serde_json = "1"
 
 [workspace]
