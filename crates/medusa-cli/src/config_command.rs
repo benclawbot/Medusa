@@ -1,4 +1,8 @@
-use std::{env, fs, io::{self, Write}, path::PathBuf};
+use std::{
+    env, fs,
+    io::{self, IsTerminal, Write},
+    path::PathBuf,
+};
 
 use medusa_core::{ErrorCategory, ErrorCode, MedusaError, MedusaResult};
 use serde::{Deserialize, Serialize};
@@ -39,11 +43,13 @@ pub(crate) fn config_path() -> MedusaResult<PathBuf> {
     } else {
         env::var_os("HOME").map(|home| PathBuf::from(home).join(".config"))
     }
-    .ok_or_else(|| MedusaError::new(
-        ErrorCode::InvalidConfiguration,
-        ErrorCategory::Environment,
-        "could not resolve the user configuration directory",
-    ))?;
+    .ok_or_else(|| {
+        MedusaError::new(
+            ErrorCode::InvalidConfiguration,
+            ErrorCategory::Environment,
+            "could not resolve the user configuration directory",
+        )
+    })?;
     Ok(base.join("medusa").join("provider.toml"))
 }
 
@@ -52,8 +58,10 @@ pub(crate) fn load_profile() -> MedusaResult<ProviderProfile> {
     if !path.exists() {
         return Ok(ProviderProfile::default());
     }
-    let text = fs::read_to_string(&path).map_err(|error| config_error(format!("read {}: {error}", path.display())))?;
-    toml::from_str(&text).map_err(|error| config_error(format!("parse {}: {error}", path.display())))
+    let text = fs::read_to_string(&path)
+        .map_err(|error| config_error(format!("read {}: {error}", path.display())))?;
+    toml::from_str(&text)
+        .map_err(|error| config_error(format!("parse {}: {error}", path.display())))
 }
 
 pub(crate) fn ensure_first_run() -> MedusaResult<()> {
@@ -69,24 +77,60 @@ pub(crate) fn configure_interactive() -> MedusaResult<()> {
     profile.connection = choose(
         "Connection type",
         &[
-            ("omniroute", "OmniRoute managed/existing gateway (recommended)"),
-            ("openai-compatible", "Existing OpenAI-compatible endpoint"),
+            (
+                "omniroute",
+                "OmniRoute managed/existing gateway (recommended)",
+            ),
+            (
+                "openai-compatible",
+                "Existing OpenAI-compatible endpoint",
+            ),
             ("direct", "Direct provider"),
             ("local", "Local model runtime"),
         ],
         &profile.connection,
     )?;
 
-    profile.provider = prompt("Provider or route", provider_default(&profile.connection, &profile.provider))?;
-    profile.model = prompt("Model", model_default(&profile.connection, &profile.model))?;
-    profile.speed = choose("Speed", &[("fast", "Fast"), ("balanced", "Balanced"), ("quality", "Maximum quality"), ("custom", "Custom")], &profile.speed)?;
-    profile.reasoning = choose("Thinking level", &[("low", "Low"), ("medium", "Medium"), ("high", "High"), ("maximum", "Maximum")], &profile.reasoning)?;
+    profile.provider = prompt(
+        "Provider or route",
+        provider_default(&profile.connection, &profile.provider),
+    )?;
+    profile.model = prompt(
+        "Model",
+        model_default(&profile.connection, &profile.model),
+    )?;
+    profile.speed = choose(
+        "Speed",
+        &[
+            ("fast", "Fast"),
+            ("balanced", "Balanced"),
+            ("quality", "Maximum quality"),
+            ("custom", "Custom"),
+        ],
+        &profile.speed,
+    )?;
+    profile.reasoning = choose(
+        "Thinking level",
+        &[
+            ("low", "Low"),
+            ("medium", "Medium"),
+            ("high", "High"),
+            ("maximum", "Maximum"),
+        ],
+        &profile.reasoning,
+    )?;
 
-    if matches!(profile.connection.as_str(), "omniroute" | "openai-compatible" | "local") {
+    if matches!(
+        profile.connection.as_str(),
+        "omniroute" | "openai-compatible" | "local"
+    ) {
         let default_url = match profile.connection.as_str() {
             "omniroute" => "http://127.0.0.1:20128/v1",
             "local" => "http://127.0.0.1:11434/v1",
-            _ => profile.base_url.as_deref().unwrap_or("http://127.0.0.1:8000/v1"),
+            _ => profile
+                .base_url
+                .as_deref()
+                .unwrap_or("http://127.0.0.1:8000/v1"),
         };
         profile.base_url = Some(prompt("Base URL", default_url)?);
     } else {
@@ -95,7 +139,15 @@ pub(crate) fn configure_interactive() -> MedusaResult<()> {
 
     profile.auth = choose(
         "Authentication",
-        &[("oauth", "OAuth / browser sign-in"), ("api-key", "API key"), ("existing", "Existing environment or gateway credentials"), ("none", "No authentication")],
+        &[
+            ("oauth", "OAuth / browser sign-in"),
+            ("api-key", "API key"),
+            (
+                "existing",
+                "Existing environment or gateway credentials",
+            ),
+            ("none", "No authentication"),
+        ],
         &profile.auth,
     )?;
     profile.configured = true;
@@ -108,14 +160,18 @@ pub(crate) fn configure_interactive() -> MedusaResult<()> {
 
 pub(crate) fn show() -> MedusaResult<()> {
     let profile = load_profile()?;
-    println!("{}", toml::to_string_pretty(&profile).map_err(|error| config_error(error.to_string()))?);
+    println!(
+        "{}",
+        toml::to_string_pretty(&profile).map_err(|error| config_error(error.to_string()))?
+    );
     Ok(())
 }
 
 pub(crate) fn reset() -> MedusaResult<()> {
     let path = config_path()?;
     if path.exists() {
-        fs::remove_file(&path).map_err(|error| config_error(format!("remove {}: {error}", path.display())))?;
+        fs::remove_file(&path)
+            .map_err(|error| config_error(format!("remove {}: {error}", path.display())))?;
     }
     println!("Medusa provider configuration reset.");
     Ok(())
@@ -123,12 +179,18 @@ pub(crate) fn reset() -> MedusaResult<()> {
 
 fn save_profile(profile: &ProviderProfile) -> MedusaResult<()> {
     let path = config_path()?;
-    let parent = path.parent().ok_or_else(|| config_error("configuration path has no parent"))?;
-    fs::create_dir_all(parent).map_err(|error| config_error(format!("create {}: {error}", parent.display())))?;
-    let text = toml::to_string_pretty(profile).map_err(|error| config_error(error.to_string()))?;
+    let parent = path
+        .parent()
+        .ok_or_else(|| config_error("configuration path has no parent"))?;
+    fs::create_dir_all(parent)
+        .map_err(|error| config_error(format!("create {}: {error}", parent.display())))?;
+    let text =
+        toml::to_string_pretty(profile).map_err(|error| config_error(error.to_string()))?;
     let temporary = path.with_extension("toml.tmp");
-    fs::write(&temporary, text).map_err(|error| config_error(format!("write {}: {error}", temporary.display())))?;
-    fs::rename(&temporary, &path).map_err(|error| config_error(format!("replace {}: {error}", path.display())))?;
+    fs::write(&temporary, text)
+        .map_err(|error| config_error(format!("write {}: {error}", temporary.display())))?;
+    fs::rename(&temporary, &path)
+        .map_err(|error| config_error(format!("replace {}: {error}", path.display())))?;
     Ok(())
 }
 
@@ -139,17 +201,30 @@ fn choose(title: &str, choices: &[(&str, &str)], current: &str) -> MedusaResult<
         println!("  {}. [{marker}] {label}", index + 1);
     }
     let raw = prompt("Selection", "1")?;
-    let index = raw.parse::<usize>().map_err(|_| config_error(format!("invalid selection: {raw}")))?;
-    choices.get(index.saturating_sub(1)).map(|(value, _)| (*value).to_owned()).ok_or_else(|| config_error(format!("selection out of range: {index}")))
+    let index = raw
+        .parse::<usize>()
+        .map_err(|_| config_error(format!("invalid selection: {raw}")))?;
+    choices
+        .get(index.saturating_sub(1))
+        .map(|(value, _)| (*value).to_owned())
+        .ok_or_else(|| config_error(format!("selection out of range: {index}")))
 }
 
 fn prompt(label: &str, default: &str) -> MedusaResult<String> {
     print!("{label} [{default}]: ");
-    io::stdout().flush().map_err(|error| config_error(error.to_string()))?;
+    io::stdout()
+        .flush()
+        .map_err(|error| config_error(error.to_string()))?;
     let mut value = String::new();
-    io::stdin().read_line(&mut value).map_err(|error| config_error(error.to_string()))?;
+    io::stdin()
+        .read_line(&mut value)
+        .map_err(|error| config_error(error.to_string()))?;
     let value = value.trim();
-    Ok(if value.is_empty() { default.to_owned() } else { value.to_owned() })
+    Ok(if value.is_empty() {
+        default.to_owned()
+    } else {
+        value.to_owned()
+    })
 }
 
 fn provider_default<'a>(connection: &str, current: &'a str) -> &'a str {
@@ -166,7 +241,11 @@ fn provider_default<'a>(connection: &str, current: &'a str) -> &'a str {
 
 fn model_default<'a>(connection: &str, current: &'a str) -> &'a str {
     if current.is_empty() {
-        if connection == "omniroute" { "auto/coding" } else { "MiniMax-M3" }
+        if connection == "omniroute" {
+            "auto/coding"
+        } else {
+            "MiniMax-M3"
+        }
     } else {
         current
     }
@@ -174,16 +253,28 @@ fn model_default<'a>(connection: &str, current: &'a str) -> &'a str {
 
 fn print_auth_guidance(profile: &ProviderProfile) {
     match profile.auth.as_str() {
-        "oauth" if profile.connection == "omniroute" => println!("Complete provider OAuth in the OmniRoute dashboard; Medusa will use the local gateway credential."),
-        "oauth" => println!("OAuth support is provider-specific and will open the provider login flow when the adapter supports it."),
-        "api-key" => println!("API keys are not written to provider.toml. Use `medusa auth set-key <provider>` once the credential-store command is available; existing environment variables remain supported."),
-        "existing" => println!("Medusa will use credentials already available to the selected gateway or provider."),
+        "oauth" if profile.connection == "omniroute" => println!(
+            "Complete provider OAuth in the OmniRoute dashboard; Medusa will use the local gateway credential."
+        ),
+        "oauth" => println!(
+            "OAuth support is provider-specific and will open the provider login flow when the adapter supports it."
+        ),
+        "api-key" => println!(
+            "API keys are not written to provider.toml. Existing provider environment variables remain supported."
+        ),
+        "existing" => println!(
+            "Medusa will use credentials already available to the selected gateway or provider."
+        ),
         _ => {}
     }
 }
 
 fn config_error(message: impl Into<String>) -> MedusaError {
-    MedusaError::new(ErrorCode::InvalidConfiguration, ErrorCategory::Validation, message)
+    MedusaError::new(
+        ErrorCode::InvalidConfiguration,
+        ErrorCategory::Validation,
+        message,
+    )
 }
 
 #[cfg(test)]
