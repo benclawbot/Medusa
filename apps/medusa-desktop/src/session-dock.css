@@ -1,0 +1,197 @@
+.session-dock {
+  position: fixed;
+  left: 18px;
+  bottom: 18px;
+  z-index: 50;
+  font-family: inherit;
+}
+
+.session-dock-trigger {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 36px;
+  padding: 0 12px;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 10px;
+  background: rgba(24, 24, 27, 0.94);
+  color: rgba(255, 255, 255, 0.86);
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.28);
+  backdrop-filter: blur(16px);
+}
+
+.session-dock-trigger:hover {
+  background: rgba(38, 38, 42, 0.98);
+  color: #fff;
+}
+
+.session-dock-panel {
+  position: absolute;
+  left: 0;
+  bottom: 46px;
+  width: min(390px, calc(100vw - 36px));
+  max-height: min(620px, calc(100vh - 92px));
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 14px;
+  background: rgba(20, 20, 23, 0.98);
+  color: rgba(255, 255, 255, 0.9);
+  box-shadow: 0 24px 64px rgba(0, 0, 0, 0.42);
+  backdrop-filter: blur(20px);
+}
+
+.session-dock-panel > header,
+.session-dock-panel > footer {
+  padding: 14px 16px;
+}
+
+.session-dock-panel > header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.session-dock-panel > header div:first-child {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.session-dock-panel header small,
+.session-dock-panel footer {
+  color: rgba(255, 255, 255, 0.48);
+  font-size: 11px;
+}
+
+.session-dock-panel header strong {
+  font-size: 14px;
+}
+
+.session-dock-actions {
+  display: flex;
+  gap: 4px;
+}
+
+.session-dock-actions button {
+  display: grid;
+  width: 30px;
+  height: 30px;
+  place-items: center;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: rgba(255, 255, 255, 0.62);
+}
+
+.session-dock-actions button:hover {
+  background: rgba(255, 255, 255, 0.08);
+  color: #fff;
+}
+
+.session-dock-list {
+  overflow-y: auto;
+  padding: 8px;
+}
+
+.session-dock-item {
+  padding: 11px 12px;
+  border-radius: 10px;
+}
+
+.session-dock-item + .session-dock-item {
+  margin-top: 4px;
+}
+
+.session-dock-item:hover {
+  background: rgba(255, 255, 255, 0.055);
+}
+
+.session-dock-item-top {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.session-dock-item-top > strong {
+  min-width: 0;
+  overflow: hidden;
+  color: rgba(255, 255, 255, 0.92);
+  font-size: 13px;
+  font-weight: 600;
+  line-height: 1.35;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.session-status {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 4px;
+  padding: 3px 6px;
+  border-radius: 999px;
+  font-size: 10px;
+}
+
+.session-status.completed {
+  background: rgba(74, 222, 128, 0.1);
+  color: rgb(134, 239, 172);
+}
+
+.session-status.waiting {
+  background: rgba(250, 204, 21, 0.1);
+  color: rgb(253, 224, 71);
+}
+
+.session-status.active {
+  background: rgba(96, 165, 250, 0.1);
+  color: rgb(147, 197, 253);
+}
+
+.session-dock-meta {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 7px;
+  color: rgba(255, 255, 255, 0.42);
+  font-size: 10px;
+}
+
+.session-dock-meta code {
+  margin-left: auto;
+  color: rgba(255, 255, 255, 0.36);
+}
+
+.session-dock-empty,
+.session-dock-error {
+  display: flex;
+  min-height: 104px;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 20px;
+  color: rgba(255, 255, 255, 0.48);
+  font-size: 12px;
+  text-align: center;
+}
+
+.session-dock-error {
+  color: rgb(252, 165, 165);
+}
+
+.session-dock-panel > footer {
+  border-top: 1px solid rgba(255, 255, 255, 0.08);
+  line-height: 1.4;
+}
+
+.spin {
+  animation: session-dock-spin 0.9s linear infinite;
+}
+
+@keyframes session-dock-spin {
+  to { transform: rotate(360deg); }
+}
