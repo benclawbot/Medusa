@@ -13,7 +13,7 @@ use runtime::{
     RuntimeRegistry, runtime_cancel, runtime_close, runtime_command, runtime_command_suggestions,
     runtime_configure_model, runtime_poll, runtime_start, runtime_submit,
 };
-use sessions::runtime_list_sessions;
+use sessions::{runtime_list_sessions, runtime_read_session};
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() -> tauri::Result<()> {
@@ -30,6 +30,7 @@ pub fn run() -> tauri::Result<()> {
             runtime_poll,
             runtime_configure_model,
             runtime_list_sessions,
+            runtime_read_session,
         ])
         .run(tauri::generate_context!())
 }
