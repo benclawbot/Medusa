@@ -44,9 +44,11 @@ configured = true
         .expect("reset configuration");
     assert!(reset.status.success());
     assert!(!profile.exists());
-    assert!(String::from_utf8(reset.stdout)
-        .expect("utf8 reset")
-        .contains("configuration reset"));
+    assert!(
+        String::from_utf8(reset.stdout)
+            .expect("utf8 reset")
+            .contains("configuration reset")
+    );
 
     let default = medusa(home.path())
         .args(["config", "show"])
@@ -85,7 +87,9 @@ fn config_show_reports_malformed_profiles_and_cli_conflicts() {
         .output()
         .expect("run conflicting arguments");
     assert!(!conflict.status.success());
-    assert!(String::from_utf8(conflict.stderr)
-        .expect("utf8 conflict")
-        .contains("interactive-only"));
+    assert!(
+        String::from_utf8(conflict.stderr)
+            .expect("utf8 conflict")
+            .contains("interactive-only")
+    );
 }
