@@ -18,6 +18,17 @@ export interface SessionSummary {
   turn: number;
 }
 
+export interface SessionMessage {
+  role: string;
+  text: string;
+}
+
+export interface SessionTranscript {
+  id: string;
+  objective: string;
+  messages: SessionMessage[];
+}
+
 export interface CommandSuggestion {
   name: string;
   usage: string;
@@ -116,6 +127,10 @@ export async function startRuntime(repo?: string): Promise<RuntimeStartResponse>
 
 export async function listRuntimeSessions(repo: string): Promise<SessionSummary[]> {
   return invoke<SessionSummary[]>("runtime_list_sessions", { repo });
+}
+
+export async function readRuntimeSession(repo: string, sessionId: string): Promise<SessionTranscript> {
+  return invoke<SessionTranscript>("runtime_read_session", { repo, sessionId });
 }
 
 export async function closeRuntime(runtimeId: string): Promise<void> {
