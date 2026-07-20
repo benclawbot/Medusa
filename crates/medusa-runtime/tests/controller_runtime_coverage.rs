@@ -45,12 +45,15 @@ fn run(controller: &RuntimeController, command: SlashCommand, minimum: usize) ->
 fn controller_exercises_non_agent_command_lifecycle() {
     let repo = repo();
     let controller = RuntimeController::start(repo.clone());
-    let initial = collect(&controller, 1);
+    let initial = collect(&controller, 2);
     assert!(
         initial
             .iter()
             .any(|event| matches!(event, RuntimeEvent::Settings { .. }))
     );
+    assert!(initial.iter().any(
+        |event| matches!(event, RuntimeEvent::Notice { title, details } if title == "Runtime capabilities" && details.iter().any(|line| line.starts_with("Filesystem")))
+    ));
     assert!(!controller.is_busy());
     assert!(!controller.cancel());
 
