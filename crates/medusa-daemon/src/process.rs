@@ -138,7 +138,7 @@ impl ProcessControl {
             .stdout(Stdio::from(stdout))
             .stderr(Stdio::from(stderr));
         configure_process_group(&mut command);
-        let mut child = match command.spawn() {
+        let child = match command.spawn() {
             Ok(child) => child,
             Err(error) => {
                 cleanup_output_files(&stdout_path, &stderr_path);
@@ -149,6 +149,8 @@ impl ProcessControl {
                 ));
             }
         };
+        #[cfg(windows)]
+        let mut child = child;
         #[cfg(windows)]
         let job = match WindowsJob::assign(&child).and_then(|job| {
             job.resume(&child)?;
@@ -229,13 +231,13 @@ impl ProcessControl {
         let Some(process) = child.as_mut() else {
             return Ok(());
         };
-        let pid = process.id();
         #[cfg(unix)]
         {
             terminate_process_tree(process)
         }
         #[cfg(windows)]
         {
+            let pid = process.id();
             let job = lock_job(&self.job)?;
             let Some(job) = job.as_ref() else {
                 return Err(process_error(format!(

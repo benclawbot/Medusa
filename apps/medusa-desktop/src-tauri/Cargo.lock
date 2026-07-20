@@ -2185,6 +2185,7 @@ dependencies = [
  "getrandom 0.4.3",
  "hex",
  "medusa-core",
+ "medusa-process-containment",
  "serde",
  "serde_json",
  "time",
@@ -2229,6 +2230,13 @@ dependencies = [
  "tree-sitter",
  "tree-sitter-rust",
  "walkdir",
+]
+
+[[package]]
+name = "medusa-process-containment"
+version = "1.0.0"
+dependencies = [
+ "windows",
 ]
 
 [[package]]

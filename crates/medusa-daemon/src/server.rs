@@ -12,6 +12,9 @@ use std::{
 };
 
 #[cfg(unix)]
+use std::process::Command;
+
+#[cfg(unix)]
 use std::process::Stdio;
 
 use medusa_core::{ErrorCategory, ErrorCode, MedusaError, MedusaResult};
