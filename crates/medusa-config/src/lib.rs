@@ -61,6 +61,10 @@ pub struct ModelConfig {
     pub max_output_tokens: u32,
     pub context_window_tokens: u64,
     pub auto_compact_percent: u8,
+    pub base_url: Option<String>,
+    pub auth: String,
+    pub speed: String,
+    pub reasoning: String,
 }
 
 /// Runtime settings.
@@ -134,6 +138,10 @@ impl Default for ModelConfig {
             max_output_tokens: 32_768,
             context_window_tokens: 1_000_000,
             auto_compact_percent: 40,
+            base_url: None,
+            auth: "api-key".into(),
+            speed: "balanced".into(),
+            reasoning: "medium".into(),
         }
     }
 }
@@ -195,6 +203,7 @@ impl Config {
     ) -> MedusaResult<Self> {
         let mut value =
             toml::Value::try_from(Self::default()).map_err(|error| invalid(error.to_string()))?;
+        merge_provider_profile(&mut value)?;
         if let Some(path) = user {
             merge_file(&mut value, path)?;
         }
@@ -248,6 +257,78 @@ fn invalid(message: impl Into<String>) -> MedusaError {
         ErrorCategory::Validation,
         message,
     )
+}
+
+#[derive(Debug, Default, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+struct ProviderProfile {
+    connection: String,
+    provider: String,
+    model: String,
+    speed: String,
+    reasoning: String,
+    auth: String,
+    base_url: Option<String>,
+    configured: bool,
+}
+
+fn provider_profile_path() -> Option<std::path::PathBuf> {
+    let base = if cfg!(windows) {
+        std::env::var_os("APPDATA").map(std::path::PathBuf::from)
+    } else if let Some(path) = std::env::var_os("XDG_CONFIG_HOME") {
+        Some(std::path::PathBuf::from(path))
+    } else {
+        std::env::var_os("HOME").map(|home| std::path::PathBuf::from(home).join(".config"))
+    }?;
+    Some(base.join("medusa").join("provider.toml"))
+}
+
+fn merge_provider_profile(base: &mut toml::Value) -> MedusaResult<()> {
+    let Some(path) = provider_profile_path() else {
+        return Ok(());
+    };
+    if !path.exists() {
+        return Ok(());
+    }
+    let text = fs::read_to_string(&path)
+        .map_err(|error| invalid(format!("read {}: {error}", path.display())))?;
+    let profile: ProviderProfile = toml::from_str(&text)
+        .map_err(|error| invalid(format!("parse {}: {error}", path.display())))?;
+    if !profile.configured {
+        return Ok(());
+    }
+    let protocol = match profile.connection.as_str() {
+        "direct"
+            if matches!(
+                profile.provider.as_str(),
+                "minimax" | "anthropic" | "anthropic-compatible"
+            ) =>
+        {
+            "anthropic"
+        }
+        _ => "openai",
+    };
+    let mut model = toml::map::Map::new();
+    model.insert("provider".to_owned(), toml::Value::String(profile.provider));
+    model.insert("name".to_owned(), toml::Value::String(profile.model));
+    model.insert(
+        "protocol".to_owned(),
+        toml::Value::String(protocol.to_owned()),
+    );
+    model.insert("auth".to_owned(), toml::Value::String(profile.auth));
+    model.insert("speed".to_owned(), toml::Value::String(profile.speed));
+    model.insert(
+        "reasoning".to_owned(),
+        toml::Value::String(profile.reasoning),
+    );
+    let mut root = toml::map::Map::new();
+    root.insert("model".to_owned(), toml::Value::Table(model));
+    let overlay = toml::Value::Table(root);
+    merge(base, overlay);
+    if let Some(url) = profile.base_url {
+        set_path(base, "model.base_url", toml::Value::String(url))?;
+    }
+    Ok(())
 }
 
 fn merge_file(base: &mut toml::Value, path: &Path) -> MedusaResult<()> {

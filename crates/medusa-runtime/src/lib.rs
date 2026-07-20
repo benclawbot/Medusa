@@ -15,7 +15,7 @@ use medusa_agent::{
     update_session_objective,
 };
 use medusa_config::{Config, Mode};
-use medusa_provider::{MiniMaxProvider, ModelProvider};
+use medusa_provider::{ConfiguredProvider, ModelProvider};
 
 use crate::{
     commands::{Effort, ModelCommand, ModelConfiguration, SlashCommand},
@@ -411,7 +411,7 @@ fn run_prompt(
     let config = state.config.clone();
     let max_turns = config.agent.max_turns;
     let provider =
-        MiniMaxProvider::from_config_with_api_key(&config, state.session_api_key.clone())
+        ConfiguredProvider::from_config_with_api_key(&config, state.session_api_key.clone())
             .map_err(RuntimeError::agent)?;
     let engine = AgentEngine::new(provider, config);
     let selected_skill = state.pending_skill.clone();

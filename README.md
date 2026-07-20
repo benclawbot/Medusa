@@ -339,3 +339,15 @@ Release Gates additionally run workspace coverage with a 75% threshold, named ad
 ## License
 
 Medusa is licensed under the [MIT License](LICENSE).
+
+## Provider configuration
+
+On first interactive launch, Medusa creates a non-secret provider profile in the platform user configuration directory. The profile controls the real runtime used by the TUI and headless commands.
+
+Supported protocols:
+
+- Anthropic Messages API: MiniMax, Anthropic, and compatible endpoints
+- OpenAI Chat Completions API: OpenAI-compatible gateways, OmniRoute, Ollama-compatible servers, and local endpoints
+
+Credentials are never written to `provider.toml`. Use a provider-specific `<PROVIDER>_API_KEY`, `OPENAI_API_KEY`, `MEDUSA_API_KEY`, or the selected gateway's existing authentication. `medusa config show` displays only non-secret settings and `medusa config reset` removes the profile.
+

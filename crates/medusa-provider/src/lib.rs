@@ -443,6 +443,250 @@ fn provider_error(error: impl std::fmt::Display) -> MedusaError {
     .with_retryable(true)
 }
 
+/// Runtime-selected provider supporting Anthropic and OpenAI-compatible APIs.
+pub enum ConfiguredProvider {
+    Anthropic(MiniMaxProvider),
+    OpenAi(OpenAiProvider),
+}
+
+impl ConfiguredProvider {
+    pub fn from_config(config: &Config) -> MedusaResult<Self> {
+        Self::from_config_with_api_key(config, None)
+    }
+
+    pub fn from_config_with_api_key(
+        config: &Config,
+        session_api_key: Option<String>,
+    ) -> MedusaResult<Self> {
+        if config.model.protocol.eq_ignore_ascii_case("openai") {
+            Ok(Self::OpenAi(OpenAiProvider::from_config_with_api_key(
+                config,
+                session_api_key,
+            )?))
+        } else {
+            Ok(Self::Anthropic(MiniMaxProvider::from_config_with_api_key(
+                config,
+                session_api_key,
+            )?))
+        }
+    }
+}
+
+impl ModelProvider for ConfiguredProvider {
+    fn complete(&self, request: &ModelRequest) -> MedusaResult<ModelResponse> {
+        match self {
+            Self::Anthropic(provider) => provider.complete(request),
+            Self::OpenAi(provider) => provider.complete(request),
+        }
+    }
+
+    fn capabilities(&self) -> ProviderCapabilities {
+        match self {
+            Self::Anthropic(provider) => provider.capabilities(),
+            Self::OpenAi(provider) => provider.capabilities(),
+        }
+    }
+}
+
+pub struct OpenAiProvider {
+    client: Client,
+    base_url: String,
+    api_key: Option<String>,
+    model: String,
+    max_retries: u8,
+}
+
+impl OpenAiProvider {
+    pub fn from_config_with_api_key(
+        config: &Config,
+        session_api_key: Option<String>,
+    ) -> MedusaResult<Self> {
+        let provider = config
+            .model
+            .provider
+            .trim()
+            .to_ascii_uppercase()
+            .replace('-', "_");
+        let api_key = session_api_key
+            .or_else(|| env::var(format!("{provider}_API_KEY")).ok())
+            .or_else(|| env::var("OPENAI_API_KEY").ok())
+            .or_else(|| env::var("MEDUSA_API_KEY").ok());
+        if config.model.auth == "api-key" && api_key.is_none() {
+            return Err(MedusaError::new(
+                ErrorCode::DependencyUnavailable,
+                ErrorCategory::Environment,
+                format!(
+                    "missing provider credential; set {provider}_API_KEY, OPENAI_API_KEY, or MEDUSA_API_KEY"
+                ),
+            ));
+        }
+        let base_url = config
+            .model
+            .base_url
+            .clone()
+            .or_else(|| env::var(format!("{provider}_BASE_URL")).ok())
+            .or_else(|| env::var("OPENAI_BASE_URL").ok())
+            .or_else(|| env::var("MEDUSA_BASE_URL").ok())
+            .unwrap_or_else(|| "https://api.openai.com/v1".to_owned());
+        Ok(Self {
+            client: shared_http_client()?,
+            base_url: base_url.trim_end_matches('/').to_owned(),
+            api_key,
+            model: config.model.name.clone(),
+            max_retries: MAX_PROVIDER_RETRIES,
+        })
+    }
+
+    fn request_body(&self, request: &ModelRequest) -> Value {
+        let mut messages = vec![json!({"role": "system", "content": request.system})];
+        for message in &request.messages {
+            let role = match message.role {
+                Role::User => "user",
+                Role::Assistant => "assistant",
+            };
+            let mut text = String::new();
+            let mut tool_calls = Vec::new();
+            for block in &message.content {
+                match block {
+                    MessageBlock::Text { text: value } => text.push_str(value),
+                    MessageBlock::ToolUse { id, name, input } => tool_calls.push(json!({
+                        "id": id,
+                        "type": "function",
+                        "function": {"name": name, "arguments": input.to_string()}
+                    })),
+                    MessageBlock::ToolResult {
+                        tool_use_id,
+                        content,
+                        ..
+                    } => messages.push(json!({
+                        "role": "tool", "tool_call_id": tool_use_id, "content": content
+                    })),
+                    MessageBlock::Image { .. } => {}
+                }
+            }
+            let mut wire = json!({"role": role, "content": text});
+            if !tool_calls.is_empty() {
+                wire["tool_calls"] = Value::Array(tool_calls);
+            }
+            messages.push(wire);
+        }
+        let tools: Vec<Value> = request.tools.iter().map(|tool| json!({
+            "type": "function",
+            "function": {"name": tool.name, "description": tool.description, "parameters": tool.input_schema}
+        })).collect();
+        json!({
+            "model": self.model,
+            "messages": messages,
+            "tools": tools,
+            "max_tokens": request.max_tokens,
+            "temperature": f64::from(request.temperature_milli) / 1000.0,
+            "stream": false
+        })
+    }
+}
+
+impl ModelProvider for OpenAiProvider {
+    fn complete(&self, request: &ModelRequest) -> MedusaResult<ModelResponse> {
+        let endpoint = format!("{}/chat/completions", self.base_url);
+        let body = self.request_body(request);
+        let mut attempt = 0_u8;
+        loop {
+            let mut builder = self.client.post(&endpoint).json(&body);
+            if let Some(key) = &self.api_key {
+                builder = builder.bearer_auth(key);
+            }
+            match builder.send() {
+                Ok(response) if response.status().is_success() => {
+                    let wire: OpenAiWireResponse = response.json().map_err(provider_error)?;
+                    return wire.into_model_response();
+                }
+                Ok(response) => {
+                    let status = response.status();
+                    let text = response.text().unwrap_or_default();
+                    let error = classify_status(status, text);
+                    if !error.retryable || attempt >= self.max_retries {
+                        return Err(error);
+                    }
+                }
+                Err(error) if attempt >= self.max_retries => return Err(provider_error(error)),
+                Err(_) => {}
+            }
+            attempt = attempt.saturating_add(1);
+            thread::sleep(Duration::from_millis(250 * u64::from(attempt)));
+        }
+    }
+}
+
+#[derive(Debug, Deserialize)]
+struct OpenAiWireResponse {
+    id: Option<String>,
+    #[serde(default)]
+    choices: Vec<OpenAiChoice>,
+    #[serde(default)]
+    usage: OpenAiUsage,
+}
+#[derive(Debug, Deserialize)]
+struct OpenAiChoice {
+    message: OpenAiMessage,
+    finish_reason: Option<String>,
+}
+#[derive(Debug, Deserialize)]
+struct OpenAiMessage {
+    content: Option<String>,
+    #[serde(default)]
+    tool_calls: Vec<OpenAiToolCall>,
+}
+#[derive(Debug, Deserialize)]
+struct OpenAiToolCall {
+    id: String,
+    function: OpenAiFunction,
+}
+#[derive(Debug, Deserialize)]
+struct OpenAiFunction {
+    name: String,
+    arguments: String,
+}
+#[derive(Debug, Default, Deserialize)]
+struct OpenAiUsage {
+    #[serde(default)]
+    prompt_tokens: u64,
+    #[serde(default)]
+    completion_tokens: u64,
+}
+impl OpenAiWireResponse {
+    fn into_model_response(self) -> MedusaResult<ModelResponse> {
+        let choice = self.choices.into_iter().next().ok_or_else(|| {
+            MedusaError::new(
+                ErrorCode::DependencyUnavailable,
+                ErrorCategory::Execution,
+                "provider returned no choices",
+            )
+        })?;
+        let mut blocks = Vec::new();
+        if let Some(text) = choice.message.content.filter(|value| !value.is_empty()) {
+            blocks.push(ResponseBlock::Text { text });
+        }
+        for call in choice.message.tool_calls {
+            let input = serde_json::from_str(&call.function.arguments).map_err(provider_error)?;
+            blocks.push(ResponseBlock::ToolUse {
+                id: call.id,
+                name: call.function.name,
+                input,
+            });
+        }
+        Ok(ModelResponse {
+            response_id: self.id,
+            stop_reason: choice.finish_reason,
+            blocks,
+            usage: Usage {
+                input_tokens: self.usage.prompt_tokens,
+                output_tokens: self.usage.completion_tokens,
+                ..Usage::default()
+            },
+        })
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

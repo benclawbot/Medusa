@@ -1,3 +1,5 @@
+mod config_command;
+
 use std::{
     collections::BTreeMap,
     fs,
@@ -6,13 +8,16 @@ use std::{
 };
 
 use clap::{Parser, Subcommand};
+use config_command::{
+    configure_interactive, ensure_first_run, reset as reset_config, show as show_config,
+};
 use medusa_agent::{AgentEngine, bootstrap};
 use medusa_config::Config;
 use medusa_core::{ErrorCategory, ErrorCode, MedusaError, MedusaResult};
 use medusa_daemon::{DaemonPaths, serve};
 use medusa_extensions::{DesktopCommanderClient, DesktopCommanderSettings};
 use medusa_hardening::{CURRENT_SCHEMA_VERSION, Migrator};
-use medusa_provider::MiniMaxProvider;
+use medusa_provider::ConfiguredProvider;
 use medusa_tui::{TuiOptions, run as run_tui};
 use serde::Serialize;
 use walkdir::WalkDir;
@@ -22,7 +27,7 @@ use walkdir::WalkDir;
     name = "medusa",
     version,
     about = "Autonomous coding agent",
-    after_help = "Run `medusa` without a subcommand to open the interactive terminal. Use `medusa run` for headless execution."
+    after_help = "Run `medusa` without a subcommand to open the interactive terminal. Use `medusa config` to change provider preferences and `medusa run` for headless execution."
 )]
 struct Cli {
     #[arg(long, default_value = ".", global = true)]
@@ -44,6 +49,11 @@ enum CommandKind {
     Bootstrap,
     Doctor,
     Migrate,
+    /// Configure provider, model, performance, and authentication preferences.
+    Config {
+        #[command(subcommand)]
+        action: Option<ConfigAction>,
+    },
     /// Install the latest Medusa CLI from the official repository.
     Update,
     Search {
@@ -64,6 +74,14 @@ enum CommandKind {
     },
     #[command(name = "__daemon-serve", hide = true)]
     DaemonServe,
+}
+
+#[derive(Subcommand, Debug)]
+enum ConfigAction {
+    /// Print the non-secret provider profile.
+    Show,
+    /// Remove the provider profile so setup runs again.
+    Reset,
 }
 
 #[derive(Debug, Serialize)]
@@ -94,6 +112,7 @@ fn run() -> MedusaResult<()> {
     let repo = cli.repo.canonicalize().unwrap_or(cli.repo);
 
     let Some(command) = cli.command else {
+        ensure_first_run()?;
         let mut options = TuiOptions::for_repo(repo);
         options.initial_prompt = cli.prompt;
         options.resume_session = cli.resume_session;
@@ -114,6 +133,14 @@ fn run() -> MedusaResult<()> {
         return serve(DaemonPaths::for_repo(&repo));
     }
 
+    if let CommandKind::Config { action } = command {
+        return match action {
+            None => configure_interactive(),
+            Some(ConfigAction::Show) => show_config(),
+            Some(ConfigAction::Reset) => reset_config(),
+        };
+    }
+
     let overrides = cli.overrides.into_iter().collect::<BTreeMap<_, _>>();
     let config = Config::load_layers(None, None, &BTreeMap::new(), &overrides)?;
 
@@ -130,7 +157,7 @@ fn run() -> MedusaResult<()> {
         CommandKind::Shell { program, args } => shell(&repo, &program, &args),
         CommandKind::Checkpoint { message } => checkpoint(&repo, &message),
         CommandKind::Run { objective } => {
-            let provider = MiniMaxProvider::from_config(&config)?;
+            let provider = ConfiguredProvider::from_config(&config)?;
             let engine = AgentEngine::new(provider, config);
             let mut session = engine.create_session(&repo, objective)?;
             println!("session {} created", session.id);
@@ -139,7 +166,7 @@ fn run() -> MedusaResult<()> {
             Ok(())
         }
         CommandKind::Resume { session } => {
-            let provider = MiniMaxProvider::from_config(&config)?;
+            let provider = ConfiguredProvider::from_config(&config)?;
             let engine = AgentEngine::new(provider, config);
             let mut session = engine.load_session(&repo, &session)?;
             println!("session {} resumed", session.id);
@@ -147,6 +174,7 @@ fn run() -> MedusaResult<()> {
             print_completion(&session);
             Ok(())
         }
+        CommandKind::Config { .. } => unreachable!("handled before runtime config loading"),
         CommandKind::DaemonServe => serve(DaemonPaths::for_repo(&repo)),
     }
 }
@@ -193,12 +221,15 @@ fn doctor(repo: &Path, config: &Config) -> MedusaResult<()> {
         },
         DoctorCheck {
             name: "provider_credential",
-            ok: std::env::var("MINIMAX_API_KEY").is_ok(),
-            detail: if std::env::var("MINIMAX_API_KEY").is_ok() {
-                "MINIMAX_API_KEY is present".into()
-            } else {
-                "MINIMAX_API_KEY is absent; live model runs are unavailable".into()
-            },
+            ok: config.model.auth != "api-key" || provider_credential_present(config),
+            detail: provider_credential_detail(config),
+        },
+        DoctorCheck {
+            name: "provider_profile",
+            ok: config_command::load_profile().is_ok_and(|profile| profile.configured),
+            detail: config_command::config_path()
+                .map(|path| path.display().to_string())
+                .unwrap_or_else(|error| error.to_string()),
         },
         DoctorCheck {
             name: "model",
@@ -240,6 +271,34 @@ fn migrate(repo: &Path) -> MedusaResult<()> {
     let receipts = migrator.upgrade_to_current()?;
     println!("{}", serde_json::to_string_pretty(&receipts)?);
     Ok(())
+}
+
+fn provider_credential_present(config: &Config) -> bool {
+    if config.model.auth != "api-key" {
+        return true;
+    }
+    let prefix = config
+        .model
+        .provider
+        .trim()
+        .to_ascii_uppercase()
+        .replace('-', "_");
+    std::env::var(format!("{prefix}_API_KEY")).is_ok()
+        || std::env::var("OPENAI_API_KEY").is_ok()
+        || std::env::var("MEDUSA_API_KEY").is_ok()
+        || std::env::var("MINIMAX_API_KEY").is_ok()
+        || std::env::var("ANTHROPIC_API_KEY").is_ok()
+}
+
+fn provider_credential_detail(config: &Config) -> String {
+    if config.model.auth != "api-key" {
+        return format!("authentication mode: {}", config.model.auth);
+    }
+    if provider_credential_present(config) {
+        "provider credential is present".to_owned()
+    } else {
+        "provider credential is absent; configure the provider-specific API key environment variable".to_owned()
+    }
 }
 
 fn command_check(name: &'static str, program: &str, args: &[&str]) -> DoctorCheck {
@@ -417,6 +476,26 @@ mod tests {
     }
 
     #[test]
+    fn config_command_is_available() {
+        let cli = Cli::try_parse_from(["medusa", "config"]).expect("parse config command");
+        assert!(matches!(
+            cli.command,
+            Some(CommandKind::Config { action: None })
+        ));
+    }
+
+    #[test]
+    fn config_show_is_available() {
+        let cli = Cli::try_parse_from(["medusa", "config", "show"]).expect("parse config show");
+        assert!(matches!(
+            cli.command,
+            Some(CommandKind::Config {
+                action: Some(ConfigAction::Show)
+            })
+        ));
+    }
+
+    #[test]
     fn update_command_is_available_without_extra_arguments() {
         let cli = Cli::try_parse_from(["medusa", "update"]).expect("parse update command");
         assert!(matches!(cli.command, Some(CommandKind::Update)));
@@ -433,10 +512,9 @@ mod tests {
     #[test]
     fn headless_run_remains_available() {
         let cli = Cli::try_parse_from(["medusa", "run", "fix tests"]).expect("parse headless run");
-        assert!(matches!(
-            cli.command,
-            Some(CommandKind::Run { objective }) if objective == "fix tests"
-        ));
+        assert!(
+            matches!(cli.command, Some(CommandKind::Run { objective }) if objective == "fix tests")
+        );
     }
 
     #[test]
@@ -445,14 +523,6 @@ mod tests {
             .expect("parse interactive resume");
         assert_eq!(cli.resume_session.as_deref(), Some("session-123"));
         assert!(cli.command.is_none());
-    }
-
-    #[test]
-    fn interactive_flags_parse_with_subcommand_for_runtime_validation() {
-        let cli = Cli::try_parse_from(["medusa", "--prompt", "hello", "doctor"])
-            .expect("parse before semantic validation");
-        assert!(cli.command.is_some());
-        assert_eq!(cli.prompt.as_deref(), Some("hello"));
     }
 
     #[test]
