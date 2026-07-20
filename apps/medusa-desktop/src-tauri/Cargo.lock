@@ -2125,6 +2125,7 @@ name = "medusa-agent"
 version = "1.0.0"
 dependencies = [
  "medusa-browser-client",
+ "medusa-capabilities",
  "medusa-config",
  "medusa-core",
  "medusa-extensions",
