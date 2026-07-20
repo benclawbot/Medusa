@@ -14,6 +14,7 @@ use medusa_agent::{
     AgentEngine, AgentPlanStep, AgentQuestion, AgentSession, StepOutcome, compact_session,
     update_session_objective,
 };
+use medusa_capabilities::CapabilityRegistry;
 use medusa_config::{Config, Mode};
 use medusa_provider::{ConfiguredProvider, ModelProvider};
 
@@ -254,6 +255,21 @@ fn worker_loop(
         }
     };
     let _ = events.send(state.settings_event());
+    let capability_event = match CapabilityRegistry::discover(state.repo.clone()) {
+        Ok(registry) => RuntimeEvent::Notice {
+            title: "Runtime capabilities".to_owned(),
+            details: registry
+                .prompt_summary()
+                .lines()
+                .map(str::to_owned)
+                .collect(),
+        },
+        Err(error) => RuntimeEvent::Notice {
+            title: "Runtime capabilities unavailable".to_owned(),
+            details: vec![error.to_string()],
+        },
+    };
+    let _ = events.send(capability_event);
     while let Ok(command) = commands.recv() {
         match command {
             RuntimeCommand::Submit(draft) => {

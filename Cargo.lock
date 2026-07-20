@@ -1054,6 +1054,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "medusa-capabilities"
+version = "1.0.0"
+dependencies = [
+ "medusa-config",
+ "medusa-core",
+ "medusa-extensions",
+ "serde",
+ "tempfile",
+]
+
+[[package]]
 name = "medusa-cli"
 version = "1.0.0"
 dependencies = [
@@ -1215,6 +1226,7 @@ version = "1.0.0"
 dependencies = [
  "base64",
  "medusa-agent",
+ "medusa-capabilities",
  "medusa-config",
  "medusa-protocol",
  "medusa-provider",
