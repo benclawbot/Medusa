@@ -6,6 +6,7 @@
 mod github;
 mod install;
 mod model;
+mod source;
 
 pub use github::{GithubReleaseClient, ReleaseClient};
 pub use install::{AtomicInstaller, InstallKind, InstallLocation, Restart};
@@ -13,6 +14,7 @@ pub use model::{
     Artifact, AttestationVerifier, GithubAttestationVerifier, Platform, Release, UpdateCheck,
     UpdatePolicy, verify_sha256,
 };
+pub use source::{MainBranchRevision, MainBranchUpdater};
 
 use std::{io::Read, path::Path};
 

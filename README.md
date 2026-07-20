@@ -69,13 +69,13 @@ Install the latest CLI in one line:
 cargo install --git https://github.com/benclawbot/Medusa.git --locked medusa-cli
 ```
 
-Release-installed binaries can check for a newer verified release without changing the installation:
+Installed binaries can check whether they match the current `main` branch without changing the installation:
 
 ```text
 medusa update --check
 ```
 
-`medusa update` downloads the platform-specific CLI archive, verifies the GitHub/Sigstore attestation for the release manifest and the archive SHA-256, then performs an atomic replacement with a rollback binary. It restarts itself after a successful update; Windows uses a short-lived helper process so the running executable is never locked. Package-managed Linux and macOS installations are not overwritten: Medusa reports the corresponding package-manager command instead. For unattended maintenance, use `medusa update --automatic`.
+`medusa update` resolves the current immutable commit on `main`, compares it with the commit embedded in the running binary, and builds `medusa-cli` directly from that branch with Cargo. It requires Cargo and Git access to GitHub. The update runs in a detached helper after the CLI exits; on Windows the helper stops Medusa background processes that use the same executable before Cargo replaces it, then restarts Medusa. Package-managed Linux and macOS installations are not overwritten: Medusa reports the corresponding package-manager command instead. For unattended maintenance, use `medusa update --automatic`.
 
 Set `MEDUSA_UPDATE_POLICY=check` to make a normal `medusa update` report availability only, or `MEDUSA_UPDATE_POLICY=automatic` to permit verified unattended replacement. The command-line `--check` and `--automatic` flags take precedence for a single invocation.
 
@@ -282,7 +282,7 @@ See [Security hardening](docs/SECURITY-HARDENING.md) for release-enforced contro
 | `medusa-capabilities` | Capability Manager: one discovered capability matrix for CLI, TUI, desktop, and model context |
 | `medusa-provider` | Provider Manager: provider-neutral contracts, bounded retry/failover, response cache, and health snapshots |
 | `medusa-github` | GitHub Manager: authenticated repository, pull request, issue, and Actions operations via GitHub CLI credential storage |
-| `medusa-update` | Update Manager: release discovery, provenance/checksum verification, platform installation, rollback, and restart |
+| `medusa-update` | Update Manager: main-branch discovery, verified-release primitives, platform installation, rollback, and restart |
 | `medusa-intelligence` | Parsing, indexing, patching, and conflict-aware transactions |
 | `medusa-memory` | Markdown storage, retrieval, provenance, and lifecycle |
 | `medusa-workers` | Parallel worktrees and deterministic merge coordination |
