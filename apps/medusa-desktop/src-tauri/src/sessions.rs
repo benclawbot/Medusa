@@ -79,7 +79,9 @@ fn summary_from_value(value: &Value) -> Option<DesktopSessionSummary> {
         created_at: value.get("created_at")?.as_str()?.to_owned(),
         updated_at: value.get("updated_at")?.as_str()?.to_owned(),
         completed: value.get("completed")?.as_bool()?,
-        waiting_for_user: value.get("pending_question").is_some_and(|question| !question.is_null()),
+        waiting_for_user: value
+            .get("pending_question")
+            .is_some_and(|question| !question.is_null()),
         turn: u32::try_from(value.get("turn")?.as_u64()?).ok()?,
     })
 }
