@@ -95,10 +95,7 @@ pub(super) fn refresh(repo: &Path) -> MedusaResult<()> {
             );
             continue;
         };
-        reports.insert(
-            lifecycle.skill.clone(),
-            build_report(&lifecycle, metric),
-        );
+        reports.insert(lifecycle.skill.clone(), build_report(&lifecycle, metric));
     }
 
     let destination = repo.join(PROBATION_PATH);
@@ -348,10 +345,9 @@ mod tests {
         value["status"] = serde_json::json!("quarantined");
         fs::write(lifecycle, serde_json::to_vec_pretty(&value).expect("json")).expect("write");
         refresh(repo.path()).expect("refresh");
-        let summary: serde_json::Value = serde_json::from_slice(
-            &fs::read(repo.path().join(PROBATION_PATH)).expect("summary"),
-        )
-        .expect("summary json");
+        let summary: serde_json::Value =
+            serde_json::from_slice(&fs::read(repo.path().join(PROBATION_PATH)).expect("summary"))
+                .expect("summary json");
         assert_eq!(summary["skills"], serde_json::json!({}));
     }
 }
