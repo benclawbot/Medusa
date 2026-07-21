@@ -1,0 +1,239 @@
+name: Wire skill dependencies
+
+on:
+  push:
+    branches: [agent/skill-dependencies]
+    paths: [.github/workflows/wire-skill-dependencies.yml]
+
+permissions:
+  contents: write
+
+jobs:
+  wire:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: agent/skill-dependencies
+          fetch-depth: 0
+      - uses: dtolnay/rust-toolchain@1.88.0
+        with:
+          components: rustfmt, clippy
+      - name: Apply wiring
+        shell: python
+        run: |
+          from pathlib import Path
+
+          def replace(path, old, new):
+              p = Path(path)
+              text = p.read_text()
+              if old not in text:
+                  raise SystemExit(f"missing replacement anchor in {path}: {old[:80]!r}")
+              p.write_text(text.replace(old, new, 1))
+
+          lib = Path("crates/medusa-runtime/src/lib.rs")
+          text = lib.read_text()
+          if "pub mod skill_dependencies;" not in text:
+              text = text.replace("mod error;\n", "mod error;\npub mod skill_dependencies;\n", 1)
+          lib.write_text(text)
+
+          dep = Path("crates/medusa-runtime/src/skill_dependencies.rs")
+          text = dep.read_text()
+          text = text.replace("use serde_json::Value;", "use serde::Serialize;\nuse serde_json::Value;")
+          text = text.replace("#[derive(Clone, Debug, Eq, PartialEq)]\npub(crate) struct ResolvedSkillGraph", "#[derive(Clone, Debug, Eq, PartialEq, Serialize)]\npub struct ResolvedSkillGraph")
+          text = text.replace("#[derive(Clone, Debug, Eq, PartialEq)]\npub(crate) struct DependencyInspection", "#[derive(Clone, Debug, Eq, PartialEq, Serialize)]\npub struct DependencyInspection")
+          text = text.replace("pub(crate) ", "pub ")
+          dep.write_text(text)
+
+          cargo = Path("crates/medusa-runtime/Cargo.toml")
+          text = cargo.read_text()
+          if "serde.workspace = true" not in text:
+              text = text.replace("png = \"0.17\"\n", "png = \"0.17\"\nserde.workspace = true\n")
+          cargo.write_text(text)
+
+          support = Path("crates/medusa-runtime/src/support.rs")
+          text = support.read_text()
+          anchor = '''    let Some((scope, path)) = matches.pop() else {
+          return Err(RuntimeError::InvalidCommand(format!(
+              "skill {name} disappeared while resolving its path"
+          )));
+      };
+      let bytes = fs::read(&path)?;'''
+          replacement = '''    let Some((scope, path)) = matches.pop() else {
+          return Err(RuntimeError::InvalidCommand(format!(
+              "skill {name} disappeared while resolving its path"
+          )));
+      };
+      let approved_root = repo.join(".medusa/skills");
+      if scope == "project" && approved_root.is_dir() {
+          let canonical_root = fs::canonicalize(&approved_root)?;
+          if path.starts_with(&canonical_root) {
+              let resolved = crate::skill_dependencies::resolve_project_skill(
+                  &approved_root,
+                  name,
+                  MAX_SKILL_CONTEXT_BYTES,
+              )
+              .map_err(RuntimeError::InvalidCommand)?;
+              return Ok(SelectedSkill {
+                  name: name.to_owned(),
+                  scope: scope.to_owned(),
+                  content: resolved.content,
+              });
+          }
+      }
+      let bytes = fs::read(&path)?;'''
+          if anchor not in text:
+              raise SystemExit("support.rs load anchor not found")
+          support.write_text(text.replace(anchor, replacement, 1))
+
+          cli_cargo = Path("crates/medusa-cli/Cargo.toml")
+          text = cli_cargo.read_text()
+          if "medusa-runtime" not in text:
+              text = text.replace('medusa-provider = { path = "../medusa-provider" }\n', 'medusa-provider = { path = "../medusa-provider" }\nmedusa-runtime = { path = "../medusa-runtime" }\n')
+          cli_cargo.write_text(text)
+
+          cli_mod = Path("crates/medusa-cli/src/skill_dependencies.rs")
+          cli_mod.write_text(r'''use std::path::Path;
+
+use medusa_runtime::skill_dependencies::{inspect_project_skill, validate_project_graph};
+
+pub(super) fn try_run(root: &Path, args: &[String]) -> Option<Result<(), String>> {
+    match args.first().map(String::as_str) {
+        Some("dependencies") => Some(inspect(root, &args[1..])),
+        Some("validate-dependencies") => Some(validate(root, &args[1..])),
+        _ => None,
+    }
+}
+
+pub(super) fn usage_lines() -> &'static str {
+    "  medusa [--repo PATH] skills dependencies NAME [--json]\n  medusa [--repo PATH] skills validate-dependencies [--json]"
+}
+
+fn inspect(root: &Path, args: &[String]) -> Result<(), String> {
+    let (name, json) = match args {
+        [name] => (name.as_str(), false),
+        [name, flag] if flag == "--json" => (name.as_str(), true),
+        _ => return Err(usage()),
+    };
+    let report = inspect_project_skill(&root.join(".medusa/skills"), name)?;
+    if json {
+        println!("{}", serde_json::to_string_pretty(&report).map_err(|e| e.to_string())?);
+    } else {
+        println!("skill: {}", report.skill);
+        println!("direct: {}", display(&report.direct));
+        println!("load order: {}", display(&report.transitive_order));
+        println!("dependents: {}", display(&report.reverse_dependents));
+    }
+    Ok(())
+}
+
+fn validate(root: &Path, args: &[String]) -> Result<(), String> {
+    let json = match args {
+        [] => false,
+        [flag] if flag == "--json" => true,
+        _ => return Err(usage()),
+    };
+    let skills = validate_project_graph(&root.join(".medusa/skills"))?;
+    if json {
+        println!("{}", serde_json::to_string_pretty(&serde_json::json!({"valid": true, "skills": skills})).map_err(|e| e.to_string())?);
+    } else {
+        println!("Validated {} approved project skill(s).", skills.len());
+    }
+    Ok(())
+}
+
+fn display(values: &[String]) -> String {
+    if values.is_empty() { "-".to_owned() } else { values.join(", ") }
+}
+
+fn usage() -> String { format!("Usage:\n{}", usage_lines()) }
+''')
+
+          main = Path("crates/medusa-cli/src/main.rs")
+          text = main.read_text()
+          if "mod skill_dependencies;" not in text:
+              text = text.replace("mod skill_graduation;\n", "mod skill_dependencies;\nmod skill_graduation;\n", 1)
+          old = '''        let graduation = skill_graduation::try_run(&repo, &command_args);
+          let lifecycle = if graduation.is_none() {
+              skill_lifecycle::try_run(&repo, &command_args)
+          } else {
+              None
+          };'''
+          new = '''        let dependencies = skill_dependencies::try_run(&repo, &command_args);
+          let graduation = if dependencies.is_none() {
+              skill_graduation::try_run(&repo, &command_args)
+          } else {
+              None
+          };
+          let lifecycle = if dependencies.is_none() && graduation.is_none() {
+              skill_lifecycle::try_run(&repo, &command_args)
+          } else {
+              None
+          };'''
+          if old not in text:
+              raise SystemExit("main routing anchor not found")
+          text = text.replace(old, new, 1)
+          text = text.replace('''        let probation = if graduation.is_none() && lifecycle.is_none() {''', '''        let probation = if dependencies.is_none() && graduation.is_none() && lifecycle.is_none() {''', 1)
+          text = text.replace('''        let usage = if graduation.is_some() {''', '''        let usage = if dependencies.is_some() {
+              Some(skill_dependencies::usage_lines())
+          } else if graduation.is_some() {''', 1)
+          text = text.replace('''        let result = match (graduation, lifecycle, probation) {
+              (Some(result), _, _) | (_, Some(result), _) | (_, _, Some(result)) => result,
+              (None, None, None) => skills::run(&skill_args),
+          };''', '''        let result = match (dependencies, graduation, lifecycle, probation) {
+              (Some(result), _, _, _)
+              | (_, Some(result), _, _)
+              | (_, _, Some(result), _)
+              | (_, _, _, Some(result)) => result,
+              (None, None, None, None) => skills::run(&skill_args),
+          };''', 1)
+          main.write_text(text)
+
+          lifecycle = Path("crates/medusa-cli/src/skill_lifecycle.rs")
+          text = lifecycle.read_text()
+          quarantine_anchor = '''    let recommendation = recommendation_for(root, &parsed.name)?;
+      let active = root.join(ACTIVE_ROOT).join(&parsed.name);'''
+          quarantine_replacement = '''    let recommendation = recommendation_for(root, &parsed.name)?;
+      let active_root = root.join(ACTIVE_ROOT);
+      let dependents = medusa_runtime::skill_dependencies::reverse_dependents(&active_root, &parsed.name)?;
+      if !dependents.is_empty() {
+          return Err(format!(
+              "skill `{}` cannot be quarantined while active dependents exist: {}",
+              parsed.name,
+              dependents.join(", ")
+          ));
+      }
+      let active = active_root.join(&parsed.name);'''
+          if quarantine_anchor not in text:
+              raise SystemExit("quarantine anchor not found")
+          lifecycle.write_text(text.replace(quarantine_anchor, quarantine_replacement, 1))
+
+          graduation = Path("crates/medusa-cli/src/skill_graduation.rs")
+          text = graduation.read_text()
+          graduation_anchor = '''    let lifecycle_path = root.join(ACTIVE_ROOT).join(name).join(LIFECYCLE_FILE);
+      let mut lifecycle: LifecycleRecord = read_json(&lifecycle_path)?;'''
+          graduation_replacement = '''    medusa_runtime::skill_dependencies::resolve_project_skill(
+          &root.join(ACTIVE_ROOT),
+          name,
+          64_000,
+      )?;
+      let lifecycle_path = root.join(ACTIVE_ROOT).join(name).join(LIFECYCLE_FILE);
+      let mut lifecycle: LifecycleRecord = read_json(&lifecycle_path)?;'''
+          if graduation_anchor not in text:
+              raise SystemExit("graduation anchor not found")
+          graduation.write_text(text.replace(graduation_anchor, graduation_replacement, 1))
+
+          Path(".github/workflows/wire-skill-dependencies.yml").unlink()
+      - name: Format and test
+        run: |
+          cargo fmt --all -- --check
+          cargo test -p medusa-runtime --test skill_dependency_graph --locked
+          cargo test -p medusa-cli --locked skill -- --nocapture
+          cargo clippy -p medusa-runtime -p medusa-cli --all-targets --locked -- -D warnings
+      - name: Commit wiring
+        run: |
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add -A
+          git commit -m "Wire dependency-aware skill loading and lifecycle guards"
+          git push origin HEAD:agent/skill-dependencies
