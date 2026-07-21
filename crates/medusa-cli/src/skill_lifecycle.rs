@@ -1,11 +1,10 @@
 use std::{
     fs,
-    path::{Component, Path, PathBuf},
+    path::{Component, Path},
     time::{SystemTime, UNIX_EPOCH},
 };
 
 use serde::{Deserialize, Serialize};
-use serde_json::Value;
 
 const ACTIVE_ROOT: &str = ".medusa/skills";
 const QUARANTINE_ROOT: &str = ".medusa/learning/skill-quarantine";
