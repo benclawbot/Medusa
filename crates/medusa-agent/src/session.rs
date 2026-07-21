@@ -14,6 +14,7 @@ use crate::evidence::verify_chain;
 mod lessons;
 mod recall;
 mod skill_drafts;
+mod skill_outcomes;
 
 /// A durable model-authored task plan step.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -164,6 +165,7 @@ pub(crate) fn persist(session: &AgentSession) -> MedusaResult<()> {
     if let Ok(Some(lesson_path)) = lessons::extract_completed_session(session) {
         let _skill_result = skill_drafts::create_from_lesson(&lesson_path);
     }
+    let _skill_outcome_result = skill_outcomes::record_completed_session(session);
     Ok(())
 }
 
