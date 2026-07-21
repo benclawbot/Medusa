@@ -26,6 +26,24 @@ struct LessonProposal {
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+struct ProvenanceRecord {
+    lesson_id: String,
+    session_id: String,
+    lesson_kind: String,
+    confidence_milli: u16,
+    procedure_items: usize,
+    evidence_items: usize,
+    observed_tools: Vec<String>,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+struct ConfidenceObservation {
+    revision: u32,
+    lesson_id: String,
+    confidence_milli: u16,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 struct SkillDraftManifest {
     schema_version: u8,
     name: String,
@@ -43,6 +61,10 @@ struct SkillDraftManifest {
     source_lesson_ids: Vec<String>,
     #[serde(default)]
     source_session_ids: Vec<String>,
+    #[serde(default)]
+    provenance: Vec<ProvenanceRecord>,
+    #[serde(default)]
+    confidence_history: Vec<ConfidenceObservation>,
 }
 
 pub(super) fn create_from_lesson(lesson_path: &Path) -> MedusaResult<Option<PathBuf>> {
@@ -82,7 +104,7 @@ fn create_new(directory: &Path, lesson: &LessonProposal, name: &str) -> MedusaRe
         .as_bytes(),
     )?;
     let manifest = SkillDraftManifest {
-        schema_version: 2,
+        schema_version: 3,
         name: name.to_owned(),
         status: "proposed".to_owned(),
         source_lesson_id: lesson.id.clone(),
@@ -95,6 +117,8 @@ fn create_new(directory: &Path, lesson: &LessonProposal, name: &str) -> MedusaRe
         revision: 1,
         source_lesson_ids: vec![lesson.id.clone()],
         source_session_ids: vec![lesson.source_session_id.clone()],
+        provenance: vec![provenance_record(lesson)],
+        confidence_history: vec![confidence_observation(1, lesson)],
     };
     write_manifest(directory, &manifest)
 }
@@ -102,6 +126,7 @@ fn create_new(directory: &Path, lesson: &LessonProposal, name: &str) -> MedusaRe
 fn refine_existing(directory: &Path, lesson: &LessonProposal, name: &str) -> MedusaResult<()> {
     let manifest_path = directory.join("manifest.json");
     let mut manifest: SkillDraftManifest = serde_json::from_slice(&fs::read(&manifest_path)?)?;
+    migrate_legacy_history(&mut manifest);
     if manifest.status != "proposed"
         || manifest.repository_fingerprint != lesson.repository_fingerprint
         || manifest.source_lesson_ids.iter().any(|id| id == &lesson.id)
@@ -136,21 +161,80 @@ fn refine_existing(directory: &Path, lesson: &LessonProposal, name: &str) -> Med
         render_skill(lesson, name, &procedure, &evidence, &tools).as_bytes(),
     )?;
 
-    manifest.schema_version = 2;
+    let next_revision = revision.saturating_add(1);
+    manifest.schema_version = 3;
     manifest.source_lesson_id = lesson.id.clone();
     manifest.source_session_id = lesson.source_session_id.clone();
     manifest.confidence_milli = manifest
         .confidence_milli
         .max(lesson.confidence_milli)
         .min(1_000);
-    manifest.revision = revision.saturating_add(1);
+    manifest.revision = next_revision;
     push_unique(&mut manifest.source_lesson_ids, lesson.id.clone());
     push_unique(
         &mut manifest.source_session_ids,
         lesson.source_session_id.clone(),
     );
+    manifest.provenance.push(provenance_record(lesson));
+    manifest
+        .confidence_history
+        .push(confidence_observation(next_revision, lesson));
     manifest.requires_approval = true;
     write_manifest(directory, &manifest)
+}
+
+fn migrate_legacy_history(manifest: &mut SkillDraftManifest) {
+    let revision = manifest.revision.max(1);
+    if manifest.source_lesson_ids.is_empty() {
+        push_unique(
+            &mut manifest.source_lesson_ids,
+            manifest.source_lesson_id.clone(),
+        );
+    }
+    if manifest.source_session_ids.is_empty() {
+        push_unique(
+            &mut manifest.source_session_ids,
+            manifest.source_session_id.clone(),
+        );
+    }
+    if manifest.provenance.is_empty() {
+        manifest.provenance.push(ProvenanceRecord {
+            lesson_id: manifest.source_lesson_id.clone(),
+            session_id: manifest.source_session_id.clone(),
+            lesson_kind: "legacy-unrecorded".to_owned(),
+            confidence_milli: manifest.confidence_milli,
+            procedure_items: 0,
+            evidence_items: 0,
+            observed_tools: Vec::new(),
+        });
+    }
+    if manifest.confidence_history.is_empty() {
+        manifest.confidence_history.push(ConfidenceObservation {
+            revision,
+            lesson_id: manifest.source_lesson_id.clone(),
+            confidence_milli: manifest.confidence_milli,
+        });
+    }
+}
+
+fn provenance_record(lesson: &LessonProposal) -> ProvenanceRecord {
+    ProvenanceRecord {
+        lesson_id: lesson.id.clone(),
+        session_id: lesson.source_session_id.clone(),
+        lesson_kind: lesson.kind.clone(),
+        confidence_milli: lesson.confidence_milli,
+        procedure_items: lesson.procedure.iter().filter(|item| safe_text(item)).count(),
+        evidence_items: lesson.evidence.iter().filter(|item| safe_text(item)).count(),
+        observed_tools: merge_items(Vec::new(), lesson.tools.iter().filter(|item| safe_text(item))),
+    }
+}
+
+fn confidence_observation(revision: u32, lesson: &LessonProposal) -> ConfidenceObservation {
+    ConfidenceObservation {
+        revision,
+        lesson_id: lesson.id.clone(),
+        confidence_milli: lesson.confidence_milli,
+    }
 }
 
 fn write_manifest(directory: &Path, manifest: &SkillDraftManifest) -> MedusaResult<()> {
@@ -357,21 +441,28 @@ mod tests {
         path
     }
 
+    fn read_manifest(draft: &Path) -> SkillDraftManifest {
+        serde_json::from_slice(&fs::read(draft.join("manifest.json")).expect("manifest"))
+            .expect("manifest json")
+    }
+
     #[test]
     fn verified_lesson_creates_inactive_skill_draft() {
         let directory = tempfile::tempdir().expect("tempdir");
         let draft = create_from_lesson(&lesson(directory.path(), "lesson-1", 900, "Build package"))
             .expect("create")
             .expect("draft");
-        let manifest: SkillDraftManifest =
-            serde_json::from_slice(&fs::read(draft.join("manifest.json")).expect("manifest"))
-                .expect("manifest json");
+        let manifest = read_manifest(&draft);
+        assert_eq!(manifest.schema_version, 3);
         assert_eq!(manifest.revision, 1);
+        assert_eq!(manifest.provenance.len(), 1);
+        assert_eq!(manifest.confidence_history.len(), 1);
+        assert_eq!(manifest.provenance[0].evidence_items, 2);
         assert!(manifest.requires_approval);
     }
 
     #[test]
-    fn later_lesson_refines_draft_and_preserves_previous_revision() {
+    fn later_lesson_refines_draft_and_preserves_provenance() {
         let directory = tempfile::tempdir().expect("tempdir");
         let first = lesson(directory.path(), "lesson-1", 800, "Build package");
         let draft = create_from_lesson(&first).expect("create").expect("draft");
@@ -379,16 +470,35 @@ mod tests {
         create_from_lesson(&second).expect("refine");
 
         let skill = fs::read_to_string(draft.join("SKILL.md")).expect("skill");
-        let manifest: SkillDraftManifest =
-            serde_json::from_slice(&fs::read(draft.join("manifest.json")).expect("manifest"))
-                .expect("manifest json");
+        let manifest = read_manifest(&draft);
         assert!(skill.contains("Build package"));
         assert!(skill.contains("Run package smoke"));
         assert!(draft.join("revisions/0001.md").is_file());
         assert_eq!(manifest.revision, 2);
         assert_eq!(manifest.confidence_milli, 950);
         assert_eq!(manifest.source_lesson_ids.len(), 2);
+        assert_eq!(manifest.provenance.len(), 2);
+        assert_eq!(manifest.confidence_history.len(), 2);
+        assert_eq!(manifest.confidence_history[0].confidence_milli, 800);
+        assert_eq!(manifest.confidence_history[1].confidence_milli, 950);
         assert!(manifest.requires_approval);
+    }
+
+    #[test]
+    fn lower_confidence_refinement_does_not_reduce_effective_confidence() {
+        let directory = tempfile::tempdir().expect("tempdir");
+        let first = lesson(directory.path(), "lesson-1", 950, "Build package");
+        let draft = create_from_lesson(&first).expect("create").expect("draft");
+        create_from_lesson(&lesson(
+            directory.path(),
+            "lesson-2",
+            800,
+            "Run package smoke",
+        ))
+        .expect("refine");
+        let manifest = read_manifest(&draft);
+        assert_eq!(manifest.confidence_milli, 950);
+        assert_eq!(manifest.confidence_history[1].confidence_milli, 800);
     }
 
     #[test]
@@ -397,11 +507,36 @@ mod tests {
         let source = lesson(directory.path(), "lesson-1", 900, "Build package");
         let draft = create_from_lesson(&source).expect("create").expect("draft");
         create_from_lesson(&source).expect("repeat");
-        let manifest: SkillDraftManifest =
-            serde_json::from_slice(&fs::read(draft.join("manifest.json")).expect("manifest"))
-                .expect("manifest json");
+        let manifest = read_manifest(&draft);
         assert_eq!(manifest.revision, 1);
+        assert_eq!(manifest.provenance.len(), 1);
+        assert_eq!(manifest.confidence_history.len(), 1);
         assert!(!draft.join("revisions").exists());
+    }
+
+    #[test]
+    fn legacy_manifest_gains_explicit_unknown_provenance() {
+        let mut manifest = SkillDraftManifest {
+            schema_version: 2,
+            name: "example".to_owned(),
+            status: "proposed".to_owned(),
+            source_lesson_id: "lesson-1".to_owned(),
+            source_session_id: "session-1".to_owned(),
+            repository_fingerprint: "repo".to_owned(),
+            confidence_milli: 800,
+            proposed_install_path: "path".to_owned(),
+            skill_file: "SKILL.md".to_owned(),
+            requires_approval: true,
+            revision: 1,
+            source_lesson_ids: Vec::new(),
+            source_session_ids: Vec::new(),
+            provenance: Vec::new(),
+            confidence_history: Vec::new(),
+        };
+        migrate_legacy_history(&mut manifest);
+        assert_eq!(manifest.provenance[0].lesson_kind, "legacy-unrecorded");
+        assert_eq!(manifest.provenance[0].evidence_items, 0);
+        assert_eq!(manifest.confidence_history[0].confidence_milli, 800);
     }
 
     #[test]
