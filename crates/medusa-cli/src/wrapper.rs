@@ -1,5 +1,7 @@
 use std::{env, path::PathBuf, process::Command};
 
+mod skills;
+
 mod legacy {
     pub(super) fn entry() {
         main();
@@ -10,7 +12,14 @@ mod legacy {
 
 fn main() {
     let args = env::args().skip(1).collect::<Vec<_>>();
-    if let Some(recall_args) = recall_arguments(&args) {
+    if let Some(skill_args) = subcommand_arguments(&args, "skills") {
+        if let Err(error) = skills::run(&skill_args) {
+            eprintln!("{error}");
+            std::process::exit(1);
+        }
+        return;
+    }
+    if let Some(recall_args) = subcommand_arguments(&args, "recall") {
         if let Err(error) = run_recall(&recall_args) {
             eprintln!("{error}");
             std::process::exit(1);
@@ -20,11 +29,11 @@ fn main() {
     legacy::entry();
 }
 
-fn recall_arguments(args: &[String]) -> Option<Vec<String>> {
+fn subcommand_arguments(args: &[String], command: &str) -> Option<Vec<String>> {
     let mut index = 0;
     while index < args.len() {
         let value = &args[index];
-        if value == "recall" {
+        if value == command {
             let mut forwarded = args.to_vec();
             forwarded.remove(index);
             return Some(forwarded);
@@ -92,21 +101,32 @@ mod tests {
     #[test]
     fn bare_recall_is_delegated() {
         assert_eq!(
-            recall_arguments(&strings(&["recall", "search", "parser"])),
+            subcommand_arguments(&strings(&["recall", "search", "parser"]), "recall"),
             Some(strings(&["search", "parser"]))
+        );
+    }
+
+    #[test]
+    fn bare_skills_is_handled_in_process() {
+        assert_eq!(
+            subcommand_arguments(&strings(&["skills", "list"]), "skills"),
+            Some(strings(&["list"]))
         );
     }
 
     #[test]
     fn global_repository_is_forwarded() {
         assert_eq!(
-            recall_arguments(&strings(&[
-                "--repo",
-                "/workspace/project",
-                "recall",
-                "open",
-                "session-1"
-            ])),
+            subcommand_arguments(
+                &strings(&[
+                    "--repo",
+                    "/workspace/project",
+                    "recall",
+                    "open",
+                    "session-1"
+                ]),
+                "recall"
+            ),
             Some(strings(&[
                 "--repo",
                 "/workspace/project",
@@ -114,18 +134,56 @@ mod tests {
                 "session-1"
             ]))
         );
+        assert_eq!(
+            subcommand_arguments(
+                &strings(&[
+                    "--repo",
+                    "/workspace/project",
+                    "skills",
+                    "approve",
+                    "verify-package"
+                ]),
+                "skills"
+            ),
+            Some(strings(&[
+                "--repo",
+                "/workspace/project",
+                "approve",
+                "verify-package"
+            ]))
+        );
     }
 
     #[test]
     fn ordinary_commands_remain_with_the_existing_cli() {
-        assert_eq!(recall_arguments(&strings(&["run", "fix tests"])), None);
-        assert_eq!(recall_arguments(&strings(&["search", "recall"])), None);
+        assert_eq!(
+            subcommand_arguments(&strings(&["run", "fix tests"]), "recall"),
+            None
+        );
+        assert_eq!(
+            subcommand_arguments(&strings(&["search", "recall"]), "recall"),
+            None
+        );
+        assert_eq!(
+            subcommand_arguments(&strings(&["run", "skills"]), "skills"),
+            None
+        );
     }
 
     #[test]
-    fn option_values_named_recall_are_not_subcommands() {
+    fn option_values_named_like_commands_are_not_subcommands() {
         assert_eq!(
-            recall_arguments(&strings(&["--prompt", "recall", "run", "tests"])),
+            subcommand_arguments(
+                &strings(&["--prompt", "recall", "run", "tests"]),
+                "recall"
+            ),
+            None
+        );
+        assert_eq!(
+            subcommand_arguments(
+                &strings(&["--prompt", "skills", "run", "tests"]),
+                "skills"
+            ),
             None
         );
     }
