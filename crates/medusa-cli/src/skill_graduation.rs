@@ -90,6 +90,11 @@ fn graduate(root: &Path, args: &[String]) -> Result<(), String> {
         ));
     }
 
+    medusa_runtime::skill_dependencies::resolve_project_skill(
+        &root.join(ACTIVE_ROOT),
+        name,
+        64_000,
+    )?;
     let lifecycle_path = root.join(ACTIVE_ROOT).join(name).join(LIFECYCLE_FILE);
     let mut lifecycle: LifecycleRecord = read_json(&lifecycle_path)?;
     if lifecycle.skill != name || lifecycle.status != "restored" {

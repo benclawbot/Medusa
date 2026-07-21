@@ -26,6 +26,7 @@ use crate::{
 pub mod commands;
 mod error;
 pub mod prompt;
+pub mod skill_dependencies;
 mod support;
 #[cfg(test)]
 mod tests;
