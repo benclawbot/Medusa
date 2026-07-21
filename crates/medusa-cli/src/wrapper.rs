@@ -17,11 +17,15 @@ fn main() {
     if let Some(skill_args) = subcommand_arguments(&args, "skills") {
         let repo = repository_argument(&skill_args).unwrap_or_else(|| PathBuf::from("."));
         let command_args = strip_repository_argument(&skill_args);
-        let result = skill_lifecycle::try_run(&repo, &command_args)
-            .unwrap_or_else(|| skills::run(&skill_args));
+        let lifecycle = skill_lifecycle::try_run(&repo, &command_args);
+        let is_lifecycle = lifecycle.is_some();
+        let result = match lifecycle {
+            Some(result) => result,
+            None => skills::run(&skill_args),
+        };
         if let Err(error) = result {
             eprintln!("{error}");
-            if skill_lifecycle::try_run(&repo, &command_args).is_some() {
+            if is_lifecycle {
                 eprintln!("{}", skill_lifecycle::usage_lines());
             }
             std::process::exit(1);
