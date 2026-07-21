@@ -1,6 +1,7 @@
 use std::{env, path::PathBuf, process::Command};
 
 mod skill_lifecycle;
+mod skill_probation;
 #[cfg_attr(not(test), allow(unused_imports))]
 mod skills;
 
@@ -18,15 +19,26 @@ fn main() {
         let repo = repository_argument(&skill_args).unwrap_or_else(|| PathBuf::from("."));
         let command_args = strip_repository_argument(&skill_args);
         let lifecycle = skill_lifecycle::try_run(&repo, &command_args);
-        let is_lifecycle = lifecycle.is_some();
-        let result = match lifecycle {
-            Some(result) => result,
-            None => skills::run(&skill_args),
+        let probation = if lifecycle.is_none() {
+            skill_probation::try_run(&repo, &command_args)
+        } else {
+            None
+        };
+        let usage = if lifecycle.is_some() {
+            Some(skill_lifecycle::usage_lines())
+        } else if probation.is_some() {
+            Some(skill_probation::usage_line())
+        } else {
+            None
+        };
+        let result = match (lifecycle, probation) {
+            (Some(result), _) | (_, Some(result)) => result,
+            (None, None) => skills::run(&skill_args),
         };
         if let Err(error) = result {
             eprintln!("{error}");
-            if is_lifecycle {
-                eprintln!("{}", skill_lifecycle::usage_lines());
+            if let Some(usage) = usage {
+                eprintln!("{usage}");
             }
             std::process::exit(1);
         }
@@ -213,6 +225,24 @@ mod tests {
         assert_eq!(
             strip_repository_argument(&args),
             strings(&["quarantine", "verify", "--confirm"])
+        );
+    }
+
+    #[test]
+    fn probation_router_receives_repository_and_command_arguments() {
+        let args = strings(&[
+            "--repo=/workspace/project",
+            "probation",
+            "verify",
+            "--json",
+        ]);
+        assert_eq!(
+            repository_argument(&args),
+            Some(PathBuf::from("/workspace/project"))
+        );
+        assert_eq!(
+            strip_repository_argument(&args),
+            strings(&["probation", "verify", "--json"])
         );
     }
 
