@@ -16,7 +16,7 @@ replacement = '''        let file_type = entry
             .map_err(|error| format!("inspect {}: {error}", entry.path().display()))?;
         if file_type.is_symlink() {
             return Err(format!(
-                "approved skill entry is a symlink and is not allowed: {}",
+                "approved skill entry escapes approved skill root through symlink: {}",
                 entry.path().display()
             ));
         }
