@@ -162,7 +162,10 @@ fn outcome_records(repo: &Path) -> Vec<SkillOutcomeRecord> {
         .flatten()
         .flatten()
         .map(|entry| entry.path())
-        .filter(|path| path.extension().is_some_and(|extension| extension == "json"))
+        .filter(|path| {
+            path.extension()
+                .is_some_and(|extension| extension == "json")
+        })
         .collect::<Vec<_>>();
     paths.sort();
     paths
