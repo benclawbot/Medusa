@@ -56,26 +56,12 @@ jobs:
           python scripts/fix-skill-dependency-patcher.py
       - name: Format
         run: cargo fmt --all
-      - name: Run dependency graph test
-        run: |
-          set +e
-          cargo test -p medusa-runtime --test skill_dependency_graph --locked > dependency-test.log 2>&1
-          echo $? > dependency-test.status
-          exit 0
-      - name: Upload dependency test diagnostics
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: dependency-test-diagnostics
-          path: |
-            dependency-test.log
-            dependency-test.status
-      - name: Require dependency graph test success
-        run: test "$(cat dependency-test.status)" = "0"
+      - name: Test dependency graph
+        run: cargo test -p medusa-runtime --test skill_dependency_graph
       - name: Test skill CLI and lifecycle
-        run: cargo test -p medusa-cli --locked skill -- --nocapture
+        run: cargo test -p medusa-cli skill -- --nocapture
       - name: Clippy
-        run: cargo clippy -p medusa-runtime -p medusa-cli --all-targets --locked -- -D warnings
+        run: cargo clippy -p medusa-runtime -p medusa-cli --all-targets -- -D warnings
       - name: Restore workflow and commit implementation
         run: |
           git checkout origin/main -- .github/workflows/refactor-guardrails.yml
