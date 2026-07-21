@@ -166,7 +166,12 @@ mod tests {
 
     #[test]
     fn flags_and_values_are_removed() {
-        let mut args = vec!["search".to_owned(), "--json".to_owned(), "--limit".to_owned(), "5".to_owned()];
+        let mut args = vec![
+            "search".to_owned(),
+            "--json".to_owned(),
+            "--limit".to_owned(),
+            "5".to_owned(),
+        ];
         assert!(take_flag(&mut args, "--json"));
         assert_eq!(take_value(&mut args, "--limit").as_deref(), Some("5"));
         assert_eq!(args, vec!["search"]);
