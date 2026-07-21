@@ -1,11 +1,11 @@
 use std::{env, path::PathBuf, process::Command};
 
 mod legacy {
-    include!("main.rs");
-
     pub(super) fn entry() {
         main();
     }
+
+    include!("main.rs");
 }
 
 fn main() {
