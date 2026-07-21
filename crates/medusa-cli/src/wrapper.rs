@@ -1,5 +1,6 @@
 use std::{env, path::PathBuf, process::Command};
 
+mod skill_lifecycle;
 #[cfg_attr(not(test), allow(unused_imports))]
 mod skills;
 
@@ -14,8 +15,15 @@ mod legacy {
 fn main() {
     let args = env::args().skip(1).collect::<Vec<_>>();
     if let Some(skill_args) = subcommand_arguments(&args, "skills") {
-        if let Err(error) = skills::run(&skill_args) {
+        let repo = repository_argument(&skill_args).unwrap_or_else(|| PathBuf::from("."));
+        let command_args = strip_repository_argument(&skill_args);
+        let result = skill_lifecycle::try_run(&repo, &command_args)
+            .unwrap_or_else(|| skills::run(&skill_args));
+        if let Err(error) = result {
             eprintln!("{error}");
+            if skill_lifecycle::try_run(&repo, &command_args).is_some() {
+                eprintln!("{}", skill_lifecycle::usage_lines());
+            }
             std::process::exit(1);
         }
         return;
@@ -57,6 +65,36 @@ fn subcommand_arguments(args: &[String], command: &str) -> Option<Vec<String>> {
         return None;
     }
     None
+}
+
+fn repository_argument(args: &[String]) -> Option<PathBuf> {
+    let mut index = 0;
+    while index < args.len() {
+        if args[index] == "--repo" {
+            return args.get(index + 1).map(PathBuf::from);
+        }
+        if let Some(path) = args[index].strip_prefix("--repo=") {
+            return (!path.is_empty()).then(|| PathBuf::from(path));
+        }
+        index += 1;
+    }
+    None
+}
+
+fn strip_repository_argument(args: &[String]) -> Vec<String> {
+    let mut stripped = Vec::new();
+    let mut index = 0;
+    while index < args.len() {
+        if args[index] == "--repo" {
+            index += 2;
+        } else if args[index].starts_with("--repo=") {
+            index += 1;
+        } else {
+            stripped.push(args[index].clone());
+            index += 1;
+        }
+    }
+    stripped
 }
 
 fn takes_value(value: &str) -> bool {
@@ -152,6 +190,25 @@ mod tests {
                 "approve",
                 "verify-package"
             ]))
+        );
+    }
+
+    #[test]
+    fn lifecycle_router_resolves_and_strips_repository_argument() {
+        let args = strings(&[
+            "--repo",
+            "/workspace/project",
+            "quarantine",
+            "verify",
+            "--confirm",
+        ]);
+        assert_eq!(
+            repository_argument(&args),
+            Some(PathBuf::from("/workspace/project"))
+        );
+        assert_eq!(
+            strip_repository_argument(&args),
+            strings(&["quarantine", "verify", "--confirm"])
         );
     }
 
