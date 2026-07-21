@@ -490,7 +490,10 @@ mod tests {
     #[test]
     fn metrics_loader_supports_empty_and_populated_summaries() {
         let temp = tempfile::tempdir().expect("tempdir");
-        assert_eq!(load_metrics(temp.path()).expect("empty metrics")["skills"], json!({}));
+        assert_eq!(
+            load_metrics(temp.path()).expect("empty metrics")["skills"],
+            json!({})
+        );
         let path = temp.path().join(METRICS_PATH);
         fs::create_dir_all(path.parent().expect("metrics parent")).expect("create metrics");
         fs::write(
