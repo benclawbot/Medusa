@@ -1,5 +1,6 @@
 use std::{env, path::PathBuf, process::Command};
 
+#[cfg_attr(not(test), allow(unused_imports))]
 mod skills;
 
 mod legacy {
