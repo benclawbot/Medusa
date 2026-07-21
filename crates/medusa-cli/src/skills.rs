@@ -23,7 +23,9 @@ pub(super) fn run(args: &[String]) -> Result<(), String> {
     let (repo, command_args) = split_global_repo(args)?;
     let root = match repo {
         Some(path) => path,
-        None => env::current_dir().map_err(|error| format!("resolve current directory: {error}"))?,
+        None => {
+            env::current_dir().map_err(|error| format!("resolve current directory: {error}"))?
+        }
     };
     let Some(command) = command_args.first().map(String::as_str) else {
         return Err(usage());
@@ -170,9 +172,9 @@ fn approve(root: &Path, args: &[String]) -> Result<(), String> {
     let parent = destination
         .parent()
         .ok_or_else(|| "active skill destination has no parent".to_owned())?;
-    fs::create_dir_all(parent)
-        .map_err(|error| format!("create {}: {error}", parent.display()))?;
-    let content = fs::read(&source).map_err(|error| format!("read {}: {error}", source.display()))?;
+    fs::create_dir_all(parent).map_err(|error| format!("create {}: {error}", parent.display()))?;
+    let content =
+        fs::read(&source).map_err(|error| format!("read {}: {error}", source.display()))?;
     atomic_write(&destination, &content)?;
 
     set_review(&mut manifest, "approved", None)?;
@@ -314,7 +316,10 @@ fn set_review(manifest: &mut Value, status: &str, reason: Option<&str>) -> Resul
         .ok_or_else(|| "manifest root must be an object".to_owned())?;
     object.insert("status".to_owned(), Value::String(status.to_owned()));
     object.insert("requires_approval".to_owned(), Value::Bool(false));
-    object.insert("review_decision".to_owned(), Value::String(status.to_owned()));
+    object.insert(
+        "review_decision".to_owned(),
+        Value::String(status.to_owned()),
+    );
     if let Some(reason) = reason {
         object.insert("review_reason".to_owned(), Value::String(reason.to_owned()));
     } else {
@@ -335,7 +340,10 @@ fn summary(manifest: &Value) -> Result<ProposalSummary, String> {
             .and_then(Value::as_str)
             .unwrap_or("unknown")
             .to_owned(),
-        revision: manifest.get("revision").and_then(Value::as_u64).unwrap_or(1),
+        revision: manifest
+            .get("revision")
+            .and_then(Value::as_u64)
+            .unwrap_or(1),
         confidence_milli: manifest
             .get("confidence_milli")
             .and_then(Value::as_u64)
