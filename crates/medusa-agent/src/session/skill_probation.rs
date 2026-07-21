@@ -21,8 +21,6 @@ struct MetricsSummary {
 struct SkillMetric {
     observed_sessions: usize,
     verified_sessions: usize,
-    verification_rate_milli: u16,
-    confidence_milli: u16,
     latest_recorded_at: String,
 }
 
