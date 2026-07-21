@@ -5,48 +5,70 @@ on:
     paths:
       - 'Cargo.toml'
       - 'crates/**'
+      - 'scripts/check-source-size.sh'
+      - 'scripts/check-workflow-hygiene.sh'
+      - 'scripts/test-workflow-hygiene.sh'
+      - 'docs/REFACTOR-BASELINE.md'
+      - 'docs/PUBLIC-API-BASELINE.md'
+      - 'docs/BENCHMARKS.md'
+      - 'docs/source-size-exceptions.txt'
+      - 'docs/workflow-write-allowlist.txt'
+      - '.github/workflows/**'
+  push:
+    branches: [main]
+    paths:
+      - 'Cargo.toml'
+      - 'crates/**'
+      - 'scripts/check-source-size.sh'
+      - 'scripts/check-workflow-hygiene.sh'
+      - 'scripts/test-workflow-hygiene.sh'
+      - 'docs/REFACTOR-BASELINE.md'
+      - 'docs/PUBLIC-API-BASELINE.md'
+      - 'docs/BENCHMARKS.md'
+      - 'docs/source-size-exceptions.txt'
+      - 'docs/workflow-write-allowlist.txt'
       - '.github/workflows/**'
 
 permissions:
-  contents: write
+  contents: read
 
 concurrency:
   group: refactor-guardrails-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
-  wire-dependency-locks:
-    if: github.event_name == 'pull_request' && github.head_ref == 'agent/skill-dependency-locks'
+  source-size:
+    name: Production source files <= 800 lines
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-        with:
-          ref: agent/skill-dependency-locks
-          fetch-depth: 0
-      - name: Restore and patch runtime module export
+      - name: Enforce source-size ceiling and exception registry
+        run: bash scripts/check-source-size.sh
+
+  workflow-hygiene:
+    name: Workflows are read-only or explicitly justified
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Test workflow hygiene guard
+        run: bash scripts/test-workflow-hygiene.sh
+      - name: Audit repository workflows
+        run: bash scripts/check-workflow-hygiene.sh
+
+  compatibility-baseline:
+    name: Public API and benchmark baseline present
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Validate baseline documents
+        shell: bash
         run: |
           set -euo pipefail
-          git checkout origin/main -- crates/medusa-runtime/src/lib.rs
-          python3 - <<'PY'
-          from pathlib import Path
-          path = Path('crates/medusa-runtime/src/lib.rs')
-          text = path.read_text()
-          needle = 'pub mod skill_dependencies;\n'
-          replacement = needle + 'pub mod skill_dependency_locks;\n'
-          if replacement not in text:
-              text = text.replace(needle, replacement, 1)
-          path.write_text(text)
-          PY
-      - name: Format and verify lock runtime
-        run: |
-          cargo fmt --all
-          cargo check -p medusa-runtime
-          bash scripts/check-source-size.sh
-      - name: Restore workflow and commit implementation
-        run: |
-          git checkout origin/main -- .github/workflows/refactor-guardrails.yml
-          git config user.name github-actions[bot]
-          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
-          git add crates/medusa-runtime/src/lib.rs crates/medusa-runtime/src/skill_dependency_locks.rs crates/medusa-runtime/Cargo.toml Cargo.lock .github/workflows/refactor-guardrails.yml
-          git commit -m "Implement skill dependency lock runtime"
-          git push origin HEAD:agent/skill-dependency-locks
+          test -s docs/REFACTOR-BASELINE.md
+          test -s docs/PUBLIC-API-BASELINE.md
+          test -s docs/BENCHMARKS.md
+          test -s docs/source-size-exceptions.txt
+          grep -q '75%' docs/REFACTOR-BASELINE.md
+          grep -q '5%' docs/BENCHMARKS.md
+          grep -q 'medusa-agent' docs/PUBLIC-API-BASELINE.md
+          echo refactor-baseline-ok

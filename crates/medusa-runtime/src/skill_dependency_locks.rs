@@ -52,17 +52,17 @@ pub fn compute_dependency_lock(
     for name in &resolved.order {
         validate_name(name)?;
         let directory = confined_directory(&canonical_root, name)?;
-        let skill = confined_file(&canonical_root, &directory.join(SKILL_FILE), name, "skill file")?;
-        let skill_bytes = fs::read(&skill)
-            .map_err(|error| format!("read {}: {error}", skill.display()))?;
+        let skill = confined_file(
+            &canonical_root,
+            &directory.join(SKILL_FILE),
+            name,
+            "skill file",
+        )?;
+        let skill_bytes =
+            fs::read(&skill).map_err(|error| format!("read {}: {error}", skill.display()))?;
         let manifest = directory.join(MANIFEST_FILE);
         let manifest_bytes = if manifest.exists() {
-            let manifest = confined_file(
-                &canonical_root,
-                &manifest,
-                name,
-                "dependency manifest",
-            )?;
+            let manifest = confined_file(&canonical_root, &manifest, name, "dependency manifest")?;
             let bytes = fs::read(&manifest)
                 .map_err(|error| format!("read {}: {error}", manifest.display()))?;
             canonical_manifest(&bytes, &manifest)?
@@ -91,10 +91,7 @@ pub fn compute_dependency_lock(
     })
 }
 
-pub fn write_dependency_lock(
-    root: &Path,
-    selected: &str,
-) -> Result<DependencyLockReceipt, String> {
+pub fn write_dependency_lock(root: &Path, selected: &str) -> Result<DependencyLockReceipt, String> {
     let receipt = compute_dependency_lock(root, selected)?;
     let canonical_root = fs::canonicalize(root)
         .map_err(|error| format!("resolve approved skill root {}: {error}", root.display()))?;
@@ -123,12 +120,8 @@ pub fn write_dependency_lock(
             .and_then(|_| file.write_all(b"\n"))
             .and_then(|_| file.sync_all())
             .map_err(|error| format!("write {}: {error}", temporary.display()))?;
-        fs::rename(&temporary, &destination).map_err(|error| {
-            format!(
-                "replace dependency lock {}: {error}",
-                destination.display()
-            )
-        })
+        fs::rename(&temporary, &destination)
+            .map_err(|error| format!("replace dependency lock {}: {error}", destination.display()))
     })();
     if result.is_err() {
         let _ = fs::remove_file(&temporary);
@@ -137,10 +130,7 @@ pub fn write_dependency_lock(
     Ok(receipt)
 }
 
-pub fn verify_dependency_lock(
-    root: &Path,
-    selected: &str,
-) -> Result<LockVerification, String> {
+pub fn verify_dependency_lock(root: &Path, selected: &str) -> Result<LockVerification, String> {
     verify_dependency_lock_required(root, selected, true)
 }
 
@@ -210,8 +200,7 @@ fn verify_dependency_lock_required(
 fn canonical_manifest(bytes: &[u8], path: &Path) -> Result<Vec<u8>, String> {
     let value: serde_json::Value = serde_json::from_slice(bytes)
         .map_err(|error| format!("parse {}: {error}", path.display()))?;
-    serde_json::to_vec(&value)
-        .map_err(|error| format!("canonicalize {}: {error}", path.display()))
+    serde_json::to_vec(&value).map_err(|error| format!("canonicalize {}: {error}", path.display()))
 }
 
 fn confined_directory(root: &Path, name: &str) -> Result<std::path::PathBuf, String> {
@@ -236,8 +225,8 @@ fn confined_file(
     if metadata.file_type().is_symlink() || !metadata.is_file() {
         return Err(format!("{label} for `{name}` must be a regular file"));
     }
-    let canonical = fs::canonicalize(path)
-        .map_err(|error| format!("resolve {}: {error}", path.display()))?;
+    let canonical =
+        fs::canonicalize(path).map_err(|error| format!("resolve {}: {error}", path.display()))?;
     if !canonical.starts_with(root) {
         return Err(format!("{label} for `{name}` escapes approved skill root"));
     }
