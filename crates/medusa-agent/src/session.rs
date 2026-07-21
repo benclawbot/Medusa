@@ -15,6 +15,7 @@ mod lessons;
 mod recall;
 mod skill_drafts;
 mod skill_outcomes;
+mod skill_probation;
 
 /// A durable model-authored task plan step.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -166,6 +167,7 @@ pub(crate) fn persist(session: &AgentSession) -> MedusaResult<()> {
         let _skill_result = skill_drafts::create_from_lesson(&lesson_path);
     }
     let _skill_outcome_result = skill_outcomes::record_completed_session(session);
+    let _skill_probation_result = skill_probation::refresh(&session.repo);
     Ok(())
 }
 
