@@ -1,6 +1,6 @@
 use std::{fs, path::PathBuf};
 
-use medusa_core::MedusaResult;
+use medusa_core::{ErrorCategory, ErrorCode, MedusaError, MedusaResult};
 use serde::Serialize;
 use time::{OffsetDateTime, format_description::well_known::Rfc3339};
 
@@ -40,13 +40,18 @@ pub(super) fn record_completed_session(session: &AgentSession) -> MedusaResult<O
         return Ok(Some(destination));
     }
 
+    let recorded_at = OffsetDateTime::now_utc().format(&Rfc3339).map_err(|error| {
+        MedusaError::new(
+            ErrorCode::InternalInvariant,
+            ErrorCategory::Internal,
+            format!("could not format skill outcome timestamp: {error}"),
+        )
+    })?;
     let record = SkillOutcomeRecord {
         schema_version: 1,
         session_id: session.id.to_string(),
         objective: session.objective.clone(),
-        recorded_at: OffsetDateTime::now_utc()
-            .format(&Rfc3339)
-            .map_err(medusa_core::MedusaError::from)?,
+        recorded_at,
         completed: true,
         verified: !session.evidence.is_empty(),
         turns: session.turn,
