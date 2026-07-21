@@ -110,7 +110,7 @@ fn attach_approved_instructions(skills: &mut [SkillSummary]) {
         let marker = "Approved instructions automatically loaded:\n";
         let prefix = skill
             .description
-            .take()
+            .as_deref()
             .map(|description| format!("{description}\n\n"))
             .unwrap_or_default();
         let overhead = prefix.len().saturating_add(marker.len());
