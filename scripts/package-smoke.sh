@@ -11,7 +11,12 @@ cp "$medusa_binary" "$tmp/medusa"
 cp "$recall_binary" "$tmp/medusa-recall"
 "$tmp/medusa" --help | grep -F 'Autonomous coding agent'
 "$tmp/medusa-recall" --help | grep -F 'search'
+"$tmp/medusa-recall" --help | grep -F 'list'
 "$tmp/medusa" recall --help | grep -F 'search'
+"$tmp/medusa" recall --help | grep -F 'list'
+empty_repo="$tmp/empty-repo"
+mkdir -p "$empty_repo"
+"$tmp/medusa" recall --repo "$empty_repo" list | grep -F 'No recorded sessions.'
 sha256sum "$tmp/medusa" "$tmp/medusa-recall" > "$tmp/SHA256SUMS"
 test -s "$tmp/SHA256SUMS"
 echo package-smoke-ok
