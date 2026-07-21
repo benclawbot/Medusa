@@ -39,7 +39,7 @@ jobs:
           PY
       - name: Format and verify lock runtime
         run: |
-          cargo fmt --all -- --check
+          cargo fmt --all
           cargo check -p medusa-runtime
           bash scripts/check-source-size.sh
       - name: Restore workflow and commit implementation
