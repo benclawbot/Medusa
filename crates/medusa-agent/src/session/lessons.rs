@@ -98,7 +98,11 @@ fn build_proposal(session: &AgentSession) -> MedusaResult<Option<LessonProposal>
         .filter(|value| safe_text(value))
         .map(|value| compact(value, 300))
         .collect::<Vec<_>>();
-    evidence.extend(failed_steps.into_iter().map(|step| format!("Rejected approach: {step}")));
+    evidence.extend(
+        failed_steps
+            .into_iter()
+            .map(|step| format!("Rejected approach: {step}")),
+    );
     deduplicate(&mut evidence);
     evidence.truncate(MAX_EVIDENCE_ITEMS);
 
@@ -144,9 +148,15 @@ fn classify(text: &[String], failures: &[String], tools: &BTreeSet<String>) -> L
         LessonKind::Recovery
     } else if corpus.contains("test") || corpus.contains("verify") || corpus.contains("check") {
         LessonKind::Verification
-    } else if corpus.contains("convention") || corpus.contains("readme") || corpus.contains("repository") {
+    } else if corpus.contains("convention")
+        || corpus.contains("readme")
+        || corpus.contains("repository")
+    {
         LessonKind::RepositoryConvention
-    } else if tools.iter().any(|tool| tool.contains("shell") || tool.contains("command")) {
+    } else if tools
+        .iter()
+        .any(|tool| tool.contains("shell") || tool.contains("command"))
+    {
         LessonKind::Command
     } else {
         LessonKind::Debugging
@@ -198,8 +208,12 @@ fn collect_tool_observations(
 fn collect_strings(value: &Value, output: &mut Vec<String>) {
     match value {
         Value::String(text) if safe_text(text) => output.push(compact(text, 300)),
-        Value::Array(values) => values.iter().for_each(|value| collect_strings(value, output)),
-        Value::Object(map) => map.values().for_each(|value| collect_strings(value, output)),
+        Value::Array(values) => values
+            .iter()
+            .for_each(|value| collect_strings(value, output)),
+        Value::Object(map) => map
+            .values()
+            .for_each(|value| collect_strings(value, output)),
         _ => {}
     }
 }
@@ -207,9 +221,16 @@ fn collect_strings(value: &Value, output: &mut Vec<String>) {
 fn safe_text(text: &str) -> bool {
     let lower = text.to_ascii_lowercase();
     !text.trim().is_empty()
-        && !["api_key", "apikey", "authorization:", "bearer ", "secret=", "token="]
-            .iter()
-            .any(|marker| lower.contains(marker))
+        && ![
+            "api_key",
+            "apikey",
+            "authorization:",
+            "bearer ",
+            "secret=",
+            "token=",
+        ]
+        .iter()
+        .any(|marker| lower.contains(marker))
 }
 
 fn compact(text: &str, limit: usize) -> String {
@@ -217,7 +238,10 @@ fn compact(text: &str, limit: usize) -> String {
     if normalized.chars().count() <= limit {
         return normalized;
     }
-    let mut shortened = normalized.chars().take(limit.saturating_sub(1)).collect::<String>();
+    let mut shortened = normalized
+        .chars()
+        .take(limit.saturating_sub(1))
+        .collect::<String>();
     shortened.push('…');
     shortened
 }
@@ -272,12 +296,16 @@ mod tests {
         let path = extract_completed_session(&session)
             .expect("extract")
             .expect("proposal");
-        let value: Value = serde_json::from_slice(&fs::read(path).expect("proposal file"))
-            .expect("proposal json");
+        let value: Value =
+            serde_json::from_slice(&fs::read(path).expect("proposal file")).expect("proposal json");
         assert_eq!(value["source_session_id"], session.id.to_string());
         assert_eq!(value["kind"], "platform_fix");
         assert_eq!(value["status"], "proposed");
-        assert!(value["procedure"].as_array().is_some_and(|items| !items.is_empty()));
+        assert!(
+            value["procedure"]
+                .as_array()
+                .is_some_and(|items| !items.is_empty())
+        );
     }
 
     #[test]
@@ -285,10 +313,18 @@ mod tests {
         let directory = tempfile::tempdir().expect("tempdir");
         let mut session = session(directory.path());
         session.evidence.clear();
-        assert!(extract_completed_session(&session).expect("extract").is_none());
+        assert!(
+            extract_completed_session(&session)
+                .expect("extract")
+                .is_none()
+        );
         session.evidence.push("verified".to_owned());
         session.completed = false;
-        assert!(extract_completed_session(&session).expect("extract").is_none());
+        assert!(
+            extract_completed_session(&session)
+                .expect("extract")
+                .is_none()
+        );
     }
 
     #[test]
