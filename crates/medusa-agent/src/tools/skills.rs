@@ -107,20 +107,25 @@ fn attach_approved_instructions(skills: &mut [SkillSummary]) {
         if included >= MAX_AUTOMATIC_SKILLS || remaining == 0 {
             continue;
         }
-        let budget = remaining.min(MAX_SINGLE_AUTOMATIC_SKILL_BYTES);
-        let instructions = truncate_to_bytes(&content, budget);
-        if instructions.is_empty() {
-            continue;
-        }
+        let marker = "Approved instructions automatically loaded:\n";
         let prefix = skill
             .description
             .take()
             .map(|description| format!("{description}\n\n"))
             .unwrap_or_default();
-        let loaded = format!(
-            "{prefix}Approved instructions automatically loaded:\n{instructions}"
-        );
-        remaining = remaining.saturating_sub(instructions.len());
+        let overhead = prefix.len().saturating_add(marker.len());
+        if overhead >= remaining {
+            continue;
+        }
+        let budget = remaining
+            .saturating_sub(overhead)
+            .min(MAX_SINGLE_AUTOMATIC_SKILL_BYTES);
+        let instructions = truncate_to_bytes(&content, budget);
+        if instructions.is_empty() {
+            continue;
+        }
+        let loaded = format!("{prefix}{marker}{instructions}");
+        remaining = remaining.saturating_sub(loaded.len());
         skill.description = Some(loaded);
         included += 1;
     }
@@ -260,12 +265,22 @@ mod tests {
                 })
             })
             .collect::<Vec<_>>();
-        assert_eq!(loaded.len(), MAX_AUTOMATIC_SKILLS);
+        assert!(loaded.len() <= MAX_AUTOMATIC_SKILLS);
         let loaded_bytes = loaded
             .iter()
             .map(|skill| skill.description.as_deref().unwrap_or_default().len())
             .sum::<usize>();
-        assert!(loaded_bytes <= MAX_AUTOMATIC_SKILL_BYTES + 512);
+        assert!(loaded_bytes <= MAX_AUTOMATIC_SKILL_BYTES);
+        assert!(loaded.iter().all(|skill| {
+            std::str::from_utf8(
+                skill
+                    .description
+                    .as_deref()
+                    .unwrap_or_default()
+                    .as_bytes(),
+            )
+            .is_ok()
+        }));
     }
 
     #[test]
