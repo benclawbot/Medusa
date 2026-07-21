@@ -1,4 +1,9 @@
-use std::{collections::BTreeMap, fs, path::{Component, Path}, time::{SystemTime, UNIX_EPOCH}};
+use std::{
+    collections::BTreeMap,
+    fs,
+    path::{Component, Path},
+    time::{SystemTime, UNIX_EPOCH},
+};
 
 use serde::{Deserialize, Serialize};
 
@@ -55,8 +60,7 @@ struct GraduationReceipt {
 }
 
 pub(super) fn try_run(root: &Path, args: &[String]) -> Option<Result<(), String>> {
-    (args.first().map(String::as_str) == Some("graduate"))
-        .then(|| graduate(root, &args[1..]))
+    (args.first().map(String::as_str) == Some("graduate")).then(|| graduate(root, &args[1..]))
 }
 
 pub(super) fn usage_line() -> &'static str {
@@ -135,7 +139,10 @@ fn graduate(root: &Path, args: &[String]) -> Result<(), String> {
 
     summary.skills.remove(name);
     write_json(&probation_path, &summary)?;
-    println!("Graduated `{name}` from probation. Receipt: {}", receipt_path.display());
+    println!(
+        "Graduated `{name}` from probation. Receipt: {}",
+        receipt_path.display()
+    );
     Ok(())
 }
 
@@ -172,7 +179,11 @@ fn write_json(path: &Path, value: &impl Serialize) -> Result<(), String> {
     fs::write(&temporary, content)
         .map_err(|error| format!("write {}: {error}", temporary.display()))?;
     fs::rename(&temporary, path).map_err(|error| {
-        format!("replace {} with {}: {error}", path.display(), temporary.display())
+        format!(
+            "replace {} with {}: {error}",
+            path.display(),
+            temporary.display()
+        )
     })
 }
 
@@ -250,19 +261,22 @@ mod tests {
     fn passed_skill_graduates_with_receipt_and_leaves_probation() {
         let repo = tempfile::tempdir().expect("repo");
         fixture(repo.path(), "passed");
-        graduate(repo.path(), &["verify".to_owned(), "--confirm".to_owned()])
-            .expect("graduate");
+        graduate(repo.path(), &["verify".to_owned(), "--confirm".to_owned()]).expect("graduate");
         let lifecycle: serde_json::Value = serde_json::from_slice(
             &fs::read(repo.path().join(ACTIVE_ROOT).join("verify/lifecycle.json"))
                 .expect("lifecycle"),
         )
         .expect("lifecycle json");
         assert_eq!(lifecycle["status"], "graduated");
-        assert!(repo.path().join(GRADUATION_ROOT).join("verify.json").is_file());
-        let probation: serde_json::Value = serde_json::from_slice(
-            &fs::read(repo.path().join(PROBATION_PATH)).expect("probation"),
-        )
-        .expect("probation json");
+        assert!(
+            repo.path()
+                .join(GRADUATION_ROOT)
+                .join("verify.json")
+                .is_file()
+        );
+        let probation: serde_json::Value =
+            serde_json::from_slice(&fs::read(repo.path().join(PROBATION_PATH)).expect("probation"))
+                .expect("probation json");
         assert!(probation["skills"]["verify"].is_null());
     }
 
