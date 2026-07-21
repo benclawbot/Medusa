@@ -16,14 +16,13 @@ on:
       - 'docs/workflow-write-allowlist.txt'
       - '.github/workflows/**'
   push:
-    branches: [main, agent/skill-dependencies]
+    branches: [main]
     paths:
       - 'Cargo.toml'
       - 'crates/**'
       - 'scripts/check-source-size.sh'
       - 'scripts/check-workflow-hygiene.sh'
       - 'scripts/test-workflow-hygiene.sh'
-      - 'scripts/wire-skill-dependencies.py'
       - 'docs/REFACTOR-BASELINE.md'
       - 'docs/PUBLIC-API-BASELINE.md'
       - 'docs/BENCHMARKS.md'
@@ -40,7 +39,7 @@ concurrency:
 
 jobs:
   wire-skill-dependencies:
-    if: github.event_name == 'push' && github.ref == 'refs/heads/agent/skill-dependencies'
+    if: github.event_name == 'pull_request' && github.head_ref == 'agent/skill-dependencies'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -63,7 +62,7 @@ jobs:
       - name: Restore workflow and commit implementation
         run: |
           git checkout origin/main -- .github/workflows/refactor-guardrails.yml
-          rm scripts/wire-skill-dependencies.py
+          rm -f scripts/wire-skill-dependencies.py .medusa/workflow-trigger
           git config user.name github-actions[bot]
           git config user.email 41898282+github-actions[bot]@users.noreply.github.com
           git add -A
@@ -71,7 +70,7 @@ jobs:
           git push origin HEAD:agent/skill-dependencies
 
   source-size:
-    if: github.event_name != 'push' || github.ref != 'refs/heads/agent/skill-dependencies'
+    if: github.event_name != 'pull_request' || github.head_ref != 'agent/skill-dependencies'
     name: Production source files <= 800 lines
     runs-on: ubuntu-latest
     steps:
@@ -80,7 +79,7 @@ jobs:
         run: bash scripts/check-source-size.sh
 
   workflow-hygiene:
-    if: github.event_name != 'push' || github.ref != 'refs/heads/agent/skill-dependencies'
+    if: github.event_name != 'pull_request' || github.head_ref != 'agent/skill-dependencies'
     name: Workflows are read-only or explicitly justified
     runs-on: ubuntu-latest
     steps:
@@ -91,7 +90,7 @@ jobs:
         run: bash scripts/check-workflow-hygiene.sh
 
   compatibility-baseline:
-    if: github.event_name != 'push' || github.ref != 'refs/heads/agent/skill-dependencies'
+    if: github.event_name != 'pull_request' || github.head_ref != 'agent/skill-dependencies'
     name: Public API and benchmark baseline present
     runs-on: ubuntu-latest
     steps:
