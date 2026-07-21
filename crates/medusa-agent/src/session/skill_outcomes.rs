@@ -168,10 +168,8 @@ fn rebuild_effectiveness_summary(repo: &Path) -> MedusaResult<PathBuf> {
             let samples = metric.observed_sessions as u64;
             let verification_rate_milli =
                 ratio_milli(metric.verified_sessions, metric.observed_sessions);
-            let confidence_milli = calibrated_confidence_milli(
-                metric.verified_sessions,
-                metric.observed_sessions,
-            );
+            let confidence_milli =
+                calibrated_confidence_milli(metric.verified_sessions, metric.observed_sessions);
             let (evidence_state, reason) = evidence_state(
                 metric.observed_sessions,
                 verification_rate_milli,
