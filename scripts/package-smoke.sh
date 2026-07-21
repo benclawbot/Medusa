@@ -11,6 +11,7 @@ cp "$medusa_binary" "$tmp/medusa"
 cp "$recall_binary" "$tmp/medusa-recall"
 "$tmp/medusa" --help | grep -F 'Autonomous coding agent'
 "$tmp/medusa-recall" --help | grep -F 'search'
+"$tmp/medusa" recall --help | grep -F 'search'
 sha256sum "$tmp/medusa" "$tmp/medusa-recall" > "$tmp/SHA256SUMS"
 test -s "$tmp/SHA256SUMS"
 echo package-smoke-ok
