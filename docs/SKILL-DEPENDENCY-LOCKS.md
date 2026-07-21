@@ -1,6 +1,6 @@
 # Skill dependency lock receipts
 
-Status: design and implementation in progress.
+Status: implementation in progress in PR #120.
 
 ## Goal
 
@@ -54,7 +54,7 @@ medusa skills verify-dependency-lock NAME --json
 
 ## Lifecycle integration
 
-- Quarantine preserves the existing lock receipt with the skill.
+- Quarantine preserves the existing lock receipt with the skill directory.
 - Restore validates active dependencies and verifies the quarantined lock receipt before moving the skill back into the approved root.
 - Probation records the verified graph digest alongside probation evidence.
 - Graduation requires the current graph digest to match the digest verified when probation began.
@@ -78,7 +78,7 @@ A later migration may make receipts mandatory after every approved skill has an 
 
 ## Verification coverage
 
-Tests must cover deterministic receipts, diamond graphs, content drift, manifest drift, missing lock files, malformed receipts, wrong selected skill, reordered receipt entries, symlink rejection, atomic replacement, runtime rejection of stale locks, restore rejection, probation digest capture, and graduation drift rejection.
+Tests cover deterministic receipts, graph content drift, manifest drift, missing lock files, malformed receipts, wrong selected skill, reordered receipt entries, symlink rejection, atomic replacement, runtime rejection of stale locks, restore rejection, probation digest capture, and graduation drift rejection.
 
 ## Rollout boundary
 
