@@ -236,6 +236,23 @@ pub(super) fn load_selected_skill(
             "skill {name} disappeared while resolving its path"
         )));
     };
+    let approved_root = repo.join(".medusa/skills");
+    if scope == "project" && approved_root.is_dir() {
+        let canonical_root = fs::canonicalize(&approved_root)?;
+        if path.starts_with(&canonical_root) {
+            let resolved = crate::skill_dependencies::resolve_project_skill(
+                &approved_root,
+                name,
+                MAX_SKILL_CONTEXT_BYTES,
+            )
+            .map_err(RuntimeError::InvalidCommand)?;
+            return Ok(SelectedSkill {
+                name: name.to_owned(),
+                scope: scope.to_owned(),
+                content: resolved.content,
+            });
+        }
+    }
     let bytes = fs::read(&path)?;
     if bytes.len() > MAX_SKILL_CONTEXT_BYTES {
         return Err(RuntimeError::FileTooLarge {

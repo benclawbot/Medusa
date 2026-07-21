@@ -8,7 +8,6 @@ on:
       - 'scripts/check-source-size.sh'
       - 'scripts/check-workflow-hygiene.sh'
       - 'scripts/test-workflow-hygiene.sh'
-      - 'scripts/rehome-skill-dependency-loader.py'
       - 'docs/REFACTOR-BASELINE.md'
       - 'docs/PUBLIC-API-BASELINE.md'
       - 'docs/BENCHMARKS.md'
@@ -31,48 +30,14 @@ on:
       - '.github/workflows/**'
 
 permissions:
-  contents: write
+  contents: read
 
 concurrency:
   group: refactor-guardrails-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
-  rehome-skill-dependency-loader:
-    if: github.event_name == 'pull_request' && github.head_ref == 'agent/skill-dependencies'
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          ref: agent/skill-dependencies
-          fetch-depth: 0
-      - uses: dtolnay/rust-toolchain@1.88.0
-        with:
-          components: rustfmt, clippy
-      - name: Rehome dependency loading
-        run: python scripts/rehome-skill-dependency-loader.py
-      - name: Format
-        run: cargo fmt --all
-      - name: Enforce source-size ceiling
-        run: bash scripts/check-source-size.sh
-      - name: Test dependency graph and skill lifecycle
-        run: |
-          cargo test -p medusa-runtime --test skill_dependency_graph --locked
-          cargo test -p medusa-cli skill --locked -- --nocapture
-      - name: Clippy
-        run: cargo clippy -p medusa-runtime -p medusa-cli --all-targets --locked -- -D warnings
-      - name: Restore workflow and commit remediation
-        run: |
-          git checkout origin/main -- .github/workflows/refactor-guardrails.yml
-          rm -f scripts/rehome-skill-dependency-loader.py
-          git config user.name github-actions[bot]
-          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
-          git add -A
-          git commit -m "Keep dependency loading within runtime source limits"
-          git push origin HEAD:agent/skill-dependencies
-
   source-size:
-    if: github.event_name != 'pull_request' || github.head_ref != 'agent/skill-dependencies'
     name: Production source files <= 800 lines
     runs-on: ubuntu-latest
     steps:
@@ -81,7 +46,6 @@ jobs:
         run: bash scripts/check-source-size.sh
 
   workflow-hygiene:
-    if: github.event_name != 'pull_request' || github.head_ref != 'agent/skill-dependencies'
     name: Workflows are read-only or explicitly justified
     runs-on: ubuntu-latest
     steps:
@@ -92,7 +56,6 @@ jobs:
         run: bash scripts/check-workflow-hygiene.sh
 
   compatibility-baseline:
-    if: github.event_name != 'pull_request' || github.head_ref != 'agent/skill-dependencies'
     name: Public API and benchmark baseline present
     runs-on: ubuntu-latest
     steps:
