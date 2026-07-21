@@ -5,3 +5,4 @@
 # non-self-modifying reason to write repository contents. Direct `git push`
 # and workflow self-deletion are forbidden even for registered entries.
 .github/workflows/publish-release.yml|Creates a draft GitHub Release and uploads validated assets for an existing version tag; it never pushes commits or publishes the release.
+.github/workflows/refresh-cli-release-assets.yml|Replaces only the three CLI archives on an already-created draft release with validated dual-binary packages built from the immutable tagged commit; it never pushes commits or publishes the release.

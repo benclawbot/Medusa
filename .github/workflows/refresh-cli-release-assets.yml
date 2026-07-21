@@ -1,0 +1,119 @@
+name: Refresh CLI Release Assets
+
+on:
+  workflow_run:
+    workflows: ["Publish Draft Release"]
+    types: [completed]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: refresh-cli-assets-${{ github.event.workflow_run.head_sha }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    if: ${{ github.event.workflow_run.conclusion == 'success' }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            platform: linux
+            archive: medusa-cli-linux.tar.gz
+          - os: macos-latest
+            platform: macos
+            archive: medusa-cli-macos.tar.gz
+          - os: windows-2022
+            platform: windows
+            archive: medusa-cli-windows.zip
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.workflow_run.head_sha }}
+      - uses: dtolnay/rust-toolchain@1.88.0
+      - name: Refresh dependency lock for the release graph
+        run: cargo generate-lockfile
+      - name: Build both CLI binaries
+        run: cargo build --release --locked --bin medusa --bin medusa-recall
+      - name: Assemble Unix CLI archive
+        if: runner.os != 'Windows'
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p cli-package release-assets
+          cp target/release/medusa cli-package/medusa
+          cp target/release/medusa-recall cli-package/medusa-recall
+          cp LICENSE cli-package/LICENSE
+          cp docs/RELEASE.md cli-package/RELEASE.md
+          cp docs/COMPATIBILITY.md cli-package/COMPATIBILITY.md
+          target/release/medusa --version
+          target/release/medusa-recall --help | grep -F 'medusa-recall'
+          tar -czf "release-assets/${{ matrix.archive }}" -C cli-package .
+      - name: Assemble Windows CLI archive
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          New-Item -ItemType Directory -Force cli-package, release-assets | Out-Null
+          Copy-Item target/release/medusa.exe cli-package/medusa.exe
+          Copy-Item target/release/medusa-recall.exe cli-package/medusa-recall.exe
+          Copy-Item LICENSE cli-package/LICENSE
+          Copy-Item docs/RELEASE.md cli-package/RELEASE.md
+          Copy-Item docs/COMPATIBILITY.md cli-package/COMPATIBILITY.md
+          & target/release/medusa.exe --version
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          & target/release/medusa-recall.exe --help | Select-String 'medusa-recall'
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          Compress-Archive -Path cli-package/* -DestinationPath "release-assets/${{ matrix.archive }}"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dual-cli-${{ matrix.platform }}-${{ github.event.workflow_run.head_sha }}
+          path: release-assets/${{ matrix.archive }}
+          if-no-files-found: error
+          retention-days: 30
+
+  publish:
+    if: ${{ github.event.workflow_run.conclusion == 'success' }}
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.workflow_run.head_sha }}
+          fetch-depth: 0
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: dual-cli-*-${{ github.event.workflow_run.head_sha }}
+          path: release-assets
+          merge-multiple: true
+      - name: Resolve immutable release tag
+        id: release
+        shell: bash
+        env:
+          RELEASE_SHA: ${{ github.event.workflow_run.head_sha }}
+        run: |
+          set -euo pipefail
+          git fetch --force --tags origin
+          mapfile -t tags < <(git tag --points-at "$RELEASE_SHA" | grep '^v')
+          if [[ ${#tags[@]} -ne 1 ]]; then
+            echo "expected exactly one v* tag at $RELEASE_SHA, found ${#tags[@]}" >&2
+            exit 2
+          fi
+          echo "tag=${tags[0]}" >> "$GITHUB_OUTPUT"
+      - name: Replace CLI archives in the draft release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ steps.release.outputs.tag }}
+        run: |
+          set -euo pipefail
+          test -f release-assets/medusa-cli-linux.tar.gz
+          test -f release-assets/medusa-cli-macos.tar.gz
+          test -f release-assets/medusa-cli-windows.zip
+          gh release view "$RELEASE_TAG" >/dev/null
+          gh release upload "$RELEASE_TAG" release-assets/medusa-cli-* --clobber
