@@ -53,7 +53,7 @@ medusa skills validate-dependencies --json
 
 The dependency graph test suite covers deterministic diamond ordering, direct and transitive relationships, reverse dependents, missing dependencies, duplicate declarations, self-dependencies, readable cycle reporting, unsafe names, total byte-budget enforcement, and symlink escape rejection.
 
-CLI and lifecycle tests compile and run with dependency inspection, validation, quarantine protection, restore validation, and graduation graph revalidation wired into the existing commands. The runtime and CLI crates also pass Clippy with warnings denied, and all production source files remain within the 800-line ceiling.
+CLI and lifecycle tests compile and run with dependency inspection, validation, quarantine protection, restore validation, and graduation graph revalidation wired into the existing commands. The runtime and CLI crates pass Clippy with warnings denied. Refactor Guardrails also confirms that all production source files remain within the 800-line ceiling and that workflow hygiene and compatibility baselines remain valid.
 
 ## Rollout boundary
 
