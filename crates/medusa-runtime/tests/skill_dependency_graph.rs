@@ -1,3 +1,5 @@
+#![allow(dead_code)]
+
 #[path = "../src/skill_dependencies.rs"]
 mod skill_dependencies;
 
@@ -40,16 +42,28 @@ fn resolves_diamond_graph_deterministically() {
 fn rejects_missing_duplicate_and_self_dependencies() {
     let missing = tempfile::tempdir().expect("missing");
     skill(missing.path(), "selected", &["absent"], "selected");
-    assert!(validate_project_graph(missing.path()).unwrap_err().contains("missing"));
+    assert!(
+        validate_project_graph(missing.path())
+            .unwrap_err()
+            .contains("missing")
+    );
 
     let duplicate = tempfile::tempdir().expect("duplicate");
     skill(duplicate.path(), "base", &[], "base");
     skill(duplicate.path(), "selected", &["base", "base"], "selected");
-    assert!(validate_project_graph(duplicate.path()).unwrap_err().contains("duplicate"));
+    assert!(
+        validate_project_graph(duplicate.path())
+            .unwrap_err()
+            .contains("duplicate")
+    );
 
     let own = tempfile::tempdir().expect("self");
     skill(own.path(), "selected", &["selected"], "selected");
-    assert!(validate_project_graph(own.path()).unwrap_err().contains("itself"));
+    assert!(
+        validate_project_graph(own.path())
+            .unwrap_err()
+            .contains("itself")
+    );
 }
 
 #[test]
@@ -92,5 +106,9 @@ fn rejects_symlink_escape() {
     let outside = tempfile::tempdir().expect("outside");
     skill(outside.path(), "escaped", &[], "escaped");
     symlink(outside.path().join("escaped"), root.path().join("escaped")).expect("symlink");
-    assert!(validate_project_graph(root.path()).unwrap_err().contains("escapes"));
+    assert!(
+        validate_project_graph(root.path())
+            .unwrap_err()
+            .contains("escapes")
+    );
 }

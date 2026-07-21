@@ -20,6 +20,7 @@ medusa-daemon = { path = "../medusa-daemon" }
 medusa-extensions = { path = "../medusa-extensions" }
 medusa-hardening = { path = "../medusa-hardening" }
 medusa-provider = { path = "../medusa-provider" }
+medusa-runtime = { path = "../medusa-runtime" }
 medusa-tui = { path = "../medusa-tui" }
 medusa-update = { path = "../medusa-update" }
 serde.workspace = true

@@ -26,6 +26,7 @@ use crate::{
 pub mod commands;
 mod error;
 pub mod prompt;
+pub mod skill_dependencies;
 mod support;
 #[cfg(test)]
 mod tests;
@@ -417,6 +418,24 @@ impl RuntimeState {
     }
 }
 
+fn load_skill(repo: &std::path::Path, selector: &str) -> Result<SelectedSkill, RuntimeError> {
+    let selector = selector.trim();
+    let (name, requested_scope) = selector
+        .rsplit_once('@')
+        .map_or((selector, None), |(name, scope)| (name, Some(scope)));
+    let approved_root = repo.join(".medusa/skills");
+    if requested_scope != Some("user") && approved_root.join(name).join("SKILL.md").is_file() {
+        let resolved = skill_dependencies::resolve_project_skill(&approved_root, name, 64_000)
+            .map_err(RuntimeError::InvalidCommand)?;
+        return Ok(SelectedSkill {
+            name: name.to_owned(),
+            scope: "project".to_owned(),
+            content: resolved.content,
+        });
+    }
+    load_selected_skill(repo, selector)
+}
+
 fn run_prompt(
     state: &mut RuntimeState,
     draft: PromptDraft,
@@ -720,7 +739,7 @@ fn execute_slash_command_with_submission(
             });
         }
         SlashCommand::Skill { selector, task } => {
-            let skill = load_selected_skill(&state.repo, &selector)?;
+            let skill = load_skill(&state.repo, &selector)?;
             let label = skill.label();
             if let Some(task) = task {
                 state.pending_skill = Some(skill);

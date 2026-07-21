@@ -1,5 +1,6 @@
 use std::{env, path::PathBuf, process::Command};
 
+mod skill_dependencies;
 mod skill_graduation;
 mod skill_lifecycle;
 mod skill_probation;
@@ -19,18 +20,25 @@ fn main() {
     if let Some(skill_args) = subcommand_arguments(&args, "skills") {
         let repo = repository_argument(&skill_args).unwrap_or_else(|| PathBuf::from("."));
         let command_args = strip_repository_argument(&skill_args);
-        let graduation = skill_graduation::try_run(&repo, &command_args);
-        let lifecycle = if graduation.is_none() {
+        let dependencies = skill_dependencies::try_run(&repo, &command_args);
+        let graduation = if dependencies.is_none() {
+            skill_graduation::try_run(&repo, &command_args)
+        } else {
+            None
+        };
+        let lifecycle = if dependencies.is_none() && graduation.is_none() {
             skill_lifecycle::try_run(&repo, &command_args)
         } else {
             None
         };
-        let probation = if graduation.is_none() && lifecycle.is_none() {
+        let probation = if dependencies.is_none() && graduation.is_none() && lifecycle.is_none() {
             skill_probation::try_run(&repo, &command_args)
         } else {
             None
         };
-        let usage = if graduation.is_some() {
+        let usage = if dependencies.is_some() {
+            Some(skill_dependencies::usage_lines())
+        } else if graduation.is_some() {
             Some(skill_graduation::usage_line())
         } else if lifecycle.is_some() {
             Some(skill_lifecycle::usage_lines())
@@ -39,9 +47,12 @@ fn main() {
         } else {
             None
         };
-        let result = match (graduation, lifecycle, probation) {
-            (Some(result), _, _) | (_, Some(result), _) | (_, _, Some(result)) => result,
-            (None, None, None) => skills::run(&skill_args),
+        let result = match (dependencies, graduation, lifecycle, probation) {
+            (Some(result), _, _, _)
+            | (_, Some(result), _, _)
+            | (_, _, Some(result), _)
+            | (_, _, _, Some(result)) => result,
+            (None, None, None, None) => skills::run(&skill_args),
         };
         if let Err(error) = result {
             eprintln!("{error}");

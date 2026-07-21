@@ -99,7 +99,17 @@ fn quarantine(root: &Path, args: &[String]) -> Result<(), String> {
         ));
     }
     let recommendation = recommendation_for(root, &parsed.name)?;
-    let active = root.join(ACTIVE_ROOT).join(&parsed.name);
+    let active_root = root.join(ACTIVE_ROOT);
+    let dependents =
+        medusa_runtime::skill_dependencies::reverse_dependents(&active_root, &parsed.name)?;
+    if !dependents.is_empty() {
+        return Err(format!(
+            "skill `{}` cannot be quarantined while active dependents exist: {}",
+            parsed.name,
+            dependents.join(", ")
+        ));
+    }
+    let active = active_root.join(&parsed.name);
     let skill_file = active.join("SKILL.md");
     if !skill_file.is_file() {
         return Err(format!("active skill not found: {}", skill_file.display()));
@@ -169,6 +179,11 @@ fn restore(root: &Path, args: &[String]) -> Result<(), String> {
             record.skill, record.status
         ));
     }
+    medusa_runtime::skill_dependencies::validate_restorable_skill(
+        &root.join(ACTIVE_ROOT),
+        &quarantined,
+        name,
+    )?;
     let active = root.join(ACTIVE_ROOT).join(name);
     if active.exists() {
         return Err(format!(
