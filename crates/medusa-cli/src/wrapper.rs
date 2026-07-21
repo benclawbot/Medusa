@@ -230,12 +230,7 @@ mod tests {
 
     #[test]
     fn probation_router_receives_repository_and_command_arguments() {
-        let args = strings(&[
-            "--repo=/workspace/project",
-            "probation",
-            "verify",
-            "--json",
-        ]);
+        let args = strings(&["--repo=/workspace/project", "probation", "verify", "--json"]);
         assert_eq!(
             repository_argument(&args),
             Some(PathBuf::from("/workspace/project"))
