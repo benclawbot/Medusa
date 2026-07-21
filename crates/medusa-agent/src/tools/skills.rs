@@ -89,9 +89,7 @@ fn entries_for_root(scope: &str, root: &Path, automatic: bool) -> Vec<SkillSumma
                 name: entry.file_name().to_string_lossy().into_owned(),
                 scope: scope.to_owned(),
                 description: description(&path),
-                automatic_instructions: automatic
-                    .then(|| fs::read_to_string(&path).ok())
-                    .flatten(),
+                automatic_instructions: automatic.then(|| fs::read_to_string(&path).ok()).flatten(),
             })
         })
         .collect()
@@ -163,7 +161,10 @@ fn truncate(content: &str) -> String {
     if content.len() <= MAX_SKILL_BYTES {
         return content.to_owned();
     }
-    format!("{}\n[truncated]", truncate_to_bytes(content, MAX_SKILL_BYTES))
+    format!(
+        "{}\n[truncated]",
+        truncate_to_bytes(content, MAX_SKILL_BYTES)
+    )
 }
 
 fn truncate_to_bytes(content: &str, max_bytes: usize) -> &str {
@@ -250,10 +251,8 @@ mod tests {
             let skill = directory
                 .path()
                 .join(format!(".medusa/skills/skill-{index:02}/SKILL.md"));
-            fs::create_dir_all(skill.parent().expect("skill directory"))
-                .expect("create skills");
-            fs::write(&skill, "é".repeat(MAX_SINGLE_AUTOMATIC_SKILL_BYTES))
-                .expect("write skill");
+            fs::create_dir_all(skill.parent().expect("skill directory")).expect("create skills");
+            fs::write(&skill, "é".repeat(MAX_SINGLE_AUTOMATIC_SKILL_BYTES)).expect("write skill");
         }
 
         let summaries = summaries(directory.path());
@@ -272,14 +271,7 @@ mod tests {
             .sum::<usize>();
         assert!(loaded_bytes <= MAX_AUTOMATIC_SKILL_BYTES);
         assert!(loaded.iter().all(|skill| {
-            std::str::from_utf8(
-                skill
-                    .description
-                    .as_deref()
-                    .unwrap_or_default()
-                    .as_bytes(),
-            )
-            .is_ok()
+            std::str::from_utf8(skill.description.as_deref().unwrap_or_default().as_bytes()).is_ok()
         }));
     }
 
