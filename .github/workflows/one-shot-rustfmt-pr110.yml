@@ -1,0 +1,31 @@
+name: One-shot rustfmt PR 110
+
+on:
+  push:
+    branches:
+      - agent/skill-provenance-confidence
+
+permissions:
+  contents: write
+
+jobs:
+  format-and-remove:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: agent/skill-provenance-confidence
+          fetch-depth: 0
+      - uses: dtolnay/rust-toolchain@1.88.0
+        with:
+          components: rustfmt
+      - name: Apply formatter and remove one-shot workflow
+        run: |
+          cargo fmt --all
+          git rm .github/workflows/one-shot-rustfmt-pr110.yml
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add crates/medusa-agent/src/session/skill_drafts.rs
+          git commit -m "Format skill provenance implementation"
+          git push origin HEAD:agent/skill-provenance-confidence
