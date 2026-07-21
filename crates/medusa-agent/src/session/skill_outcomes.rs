@@ -40,13 +40,15 @@ pub(super) fn record_completed_session(session: &AgentSession) -> MedusaResult<O
         return Ok(Some(destination));
     }
 
-    let recorded_at = OffsetDateTime::now_utc().format(&Rfc3339).map_err(|error| {
-        MedusaError::new(
-            ErrorCode::InternalInvariant,
-            ErrorCategory::Internal,
-            format!("could not format skill outcome timestamp: {error}"),
-        )
-    })?;
+    let recorded_at = OffsetDateTime::now_utc()
+        .format(&Rfc3339)
+        .map_err(|error| {
+            MedusaError::new(
+                ErrorCode::InternalInvariant,
+                ErrorCategory::Internal,
+                format!("could not format skill outcome timestamp: {error}"),
+            )
+        })?;
     let record = SkillOutcomeRecord {
         schema_version: 1,
         session_id: session.id.to_string(),
