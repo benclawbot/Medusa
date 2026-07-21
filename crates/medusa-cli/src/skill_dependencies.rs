@@ -66,10 +66,16 @@ fn lock(root: &Path, args: &[String]) -> Result<(), String> {
     if json {
         print_json(&receipt)
     } else if check {
-        println!("Dependency lock for `{name}` is current ({}).", receipt.graph_sha256);
+        println!(
+            "Dependency lock for `{name}` is current ({}).",
+            receipt.graph_sha256
+        );
         Ok(())
     } else {
-        println!("Locked dependency graph for `{name}` ({}).", receipt.graph_sha256);
+        println!(
+            "Locked dependency graph for `{name}` ({}).",
+            receipt.graph_sha256
+        );
         Ok(())
     }
 }
@@ -80,7 +86,10 @@ fn verify_lock(root: &Path, args: &[String]) -> Result<(), String> {
     if json {
         print_json(&report)
     } else {
-        println!("Dependency lock for `{name}` is valid ({}).", report.graph_sha256);
+        println!(
+            "Dependency lock for `{name}` is valid ({}).",
+            report.graph_sha256
+        );
         Ok(())
     }
 }
