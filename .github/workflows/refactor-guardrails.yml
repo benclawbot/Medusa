@@ -5,8 +5,6 @@ on:
     paths:
       - 'Cargo.toml'
       - 'crates/**'
-      - 'apps/medusa-desktop/src-tauri/Cargo.toml'
-      - 'apps/medusa-desktop/src-tauri/Cargo.lock'
       - 'scripts/check-source-size.sh'
       - 'scripts/check-workflow-hygiene.sh'
       - 'scripts/test-workflow-hygiene.sh'
@@ -32,36 +30,14 @@ on:
       - '.github/workflows/**'
 
 permissions:
-  contents: write
+  contents: read
 
 concurrency:
   group: refactor-guardrails-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
-  refresh-desktop-lock:
-    if: github.event_name == 'pull_request' && github.head_ref == 'agent/skill-dependencies'
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          ref: agent/skill-dependencies
-          fetch-depth: 0
-      - uses: dtolnay/rust-toolchain@1.88.0
-      - name: Refresh Tauri lockfile
-        working-directory: apps/medusa-desktop/src-tauri
-        run: cargo generate-lockfile
-      - name: Restore workflow and commit lockfile
-        run: |
-          git checkout origin/main -- .github/workflows/refactor-guardrails.yml
-          git config user.name github-actions[bot]
-          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
-          git add apps/medusa-desktop/src-tauri/Cargo.lock .github/workflows/refactor-guardrails.yml
-          git commit -m "Refresh desktop dependency lock"
-          git push origin HEAD:agent/skill-dependencies
-
   source-size:
-    if: github.event_name != 'pull_request' || github.head_ref != 'agent/skill-dependencies'
     name: Production source files <= 800 lines
     runs-on: ubuntu-latest
     steps:
@@ -70,7 +46,6 @@ jobs:
         run: bash scripts/check-source-size.sh
 
   workflow-hygiene:
-    if: github.event_name != 'pull_request' || github.head_ref != 'agent/skill-dependencies'
     name: Workflows are read-only or explicitly justified
     runs-on: ubuntu-latest
     steps:
@@ -81,7 +56,6 @@ jobs:
         run: bash scripts/check-workflow-hygiene.sh
 
   compatibility-baseline:
-    if: github.event_name != 'pull_request' || github.head_ref != 'agent/skill-dependencies'
     name: Public API and benchmark baseline present
     runs-on: ubuntu-latest
     steps:
