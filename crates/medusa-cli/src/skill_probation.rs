@@ -39,8 +39,7 @@ struct ProbationReport {
 }
 
 pub(super) fn try_run(root: &Path, args: &[String]) -> Option<Result<(), String>> {
-    (args.first().map(String::as_str) == Some("probation"))
-        .then(|| run(root, &args[1..]))
+    (args.first().map(String::as_str) == Some("probation")).then(|| run(root, &args[1..]))
 }
 
 pub(super) fn usage_line() -> &'static str {
