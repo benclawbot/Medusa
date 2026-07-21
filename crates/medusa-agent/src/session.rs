@@ -11,6 +11,7 @@ use time::OffsetDateTime;
 
 use crate::evidence::verify_chain;
 
+mod lessons;
 mod recall;
 
 /// A durable model-authored task plan step.
@@ -159,6 +160,7 @@ pub(crate) fn persist(session: &AgentSession) -> MedusaResult<()> {
     };
     persisted?;
     let _recall_result = recall::persist_completed_session(session);
+    let _lesson_result = lessons::extract_completed_session(session);
     Ok(())
 }
 
