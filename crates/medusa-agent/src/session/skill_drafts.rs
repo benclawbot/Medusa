@@ -72,7 +72,14 @@ pub(super) fn create_from_lesson(lesson_path: &Path) -> MedusaResult<Option<Path
 fn create_new(directory: &Path, lesson: &LessonProposal, name: &str) -> MedusaResult<()> {
     atomic_write(
         &directory.join("SKILL.md"),
-        render_skill(lesson, name, &lesson.procedure, &lesson.evidence, &lesson.tools).as_bytes(),
+        render_skill(
+            lesson,
+            name,
+            &lesson.procedure,
+            &lesson.evidence,
+            &lesson.tools,
+        )
+        .as_bytes(),
     )?;
     let manifest = SkillDraftManifest {
         schema_version: 2,
@@ -195,7 +202,11 @@ fn render_skill(
 }
 
 fn append_items(output: &mut String, items: &[String]) {
-    for item in items.iter().filter(|value| safe_text(value)).take(MAX_SECTION_ITEMS) {
+    for item in items
+        .iter()
+        .filter(|value| safe_text(value))
+        .take(MAX_SECTION_ITEMS)
+    {
         output.push_str("- ");
         output.push_str(item.trim());
         output.push('\n');
@@ -253,7 +264,11 @@ fn push_unique(items: &mut Vec<String>, value: String) {
 }
 
 fn normalized(value: &str) -> String {
-    value.split_whitespace().collect::<Vec<_>>().join(" ").to_ascii_lowercase()
+    value
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+        .to_ascii_lowercase()
 }
 
 fn atomic_write(path: &Path, content: &[u8]) -> MedusaResult<()> {
@@ -348,10 +363,9 @@ mod tests {
         let draft = create_from_lesson(&lesson(directory.path(), "lesson-1", 900, "Build package"))
             .expect("create")
             .expect("draft");
-        let manifest: SkillDraftManifest = serde_json::from_slice(
-            &fs::read(draft.join("manifest.json")).expect("manifest"),
-        )
-        .expect("manifest json");
+        let manifest: SkillDraftManifest =
+            serde_json::from_slice(&fs::read(draft.join("manifest.json")).expect("manifest"))
+                .expect("manifest json");
         assert_eq!(manifest.revision, 1);
         assert!(manifest.requires_approval);
     }
@@ -365,10 +379,9 @@ mod tests {
         create_from_lesson(&second).expect("refine");
 
         let skill = fs::read_to_string(draft.join("SKILL.md")).expect("skill");
-        let manifest: SkillDraftManifest = serde_json::from_slice(
-            &fs::read(draft.join("manifest.json")).expect("manifest"),
-        )
-        .expect("manifest json");
+        let manifest: SkillDraftManifest =
+            serde_json::from_slice(&fs::read(draft.join("manifest.json")).expect("manifest"))
+                .expect("manifest json");
         assert!(skill.contains("Build package"));
         assert!(skill.contains("Run package smoke"));
         assert!(draft.join("revisions/0001.md").is_file());
@@ -384,10 +397,9 @@ mod tests {
         let source = lesson(directory.path(), "lesson-1", 900, "Build package");
         let draft = create_from_lesson(&source).expect("create").expect("draft");
         create_from_lesson(&source).expect("repeat");
-        let manifest: SkillDraftManifest = serde_json::from_slice(
-            &fs::read(draft.join("manifest.json")).expect("manifest"),
-        )
-        .expect("manifest json");
+        let manifest: SkillDraftManifest =
+            serde_json::from_slice(&fs::read(draft.join("manifest.json")).expect("manifest"))
+                .expect("manifest json");
         assert_eq!(manifest.revision, 1);
         assert!(!draft.join("revisions").exists());
     }
@@ -396,23 +408,23 @@ mod tests {
     fn low_confidence_lesson_does_not_create_skill() {
         let directory = tempfile::tempdir().expect("tempdir");
         assert!(
-            create_from_lesson(&lesson(directory.path(), "lesson-low", 699, "Build package"))
-                .expect("create")
-                .is_none()
+            create_from_lesson(&lesson(
+                directory.path(),
+                "lesson-low",
+                699,
+                "Build package"
+            ))
+            .expect("create")
+            .is_none()
         );
     }
 
     #[test]
     fn generated_skill_is_outside_active_skill_root() {
         let directory = tempfile::tempdir().expect("tempdir");
-        let draft = create_from_lesson(&lesson(
-            directory.path(),
-            "lesson-1",
-            900,
-            "Build package",
-        ))
-        .expect("create")
-        .expect("draft");
+        let draft = create_from_lesson(&lesson(directory.path(), "lesson-1", 900, "Build package"))
+            .expect("create")
+            .expect("draft");
         assert!(draft.starts_with(directory.path().join(".medusa/learning/skill-proposals")));
         assert!(!directory.path().join(".medusa/skills").exists());
     }
