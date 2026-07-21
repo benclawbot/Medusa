@@ -223,9 +223,20 @@ fn provenance_record(lesson: &LessonProposal) -> ProvenanceRecord {
         session_id: lesson.source_session_id.clone(),
         lesson_kind: lesson.kind.clone(),
         confidence_milli: lesson.confidence_milli,
-        procedure_items: lesson.procedure.iter().filter(|item| safe_text(item)).count(),
-        evidence_items: lesson.evidence.iter().filter(|item| safe_text(item)).count(),
-        observed_tools: merge_items(Vec::new(), lesson.tools.iter().filter(|item| safe_text(item))),
+        procedure_items: lesson
+            .procedure
+            .iter()
+            .filter(|item| safe_text(item))
+            .count(),
+        evidence_items: lesson
+            .evidence
+            .iter()
+            .filter(|item| safe_text(item))
+            .count(),
+        observed_tools: merge_items(
+            Vec::new(),
+            lesson.tools.iter().filter(|item| safe_text(item)),
+        ),
     }
 }
 
