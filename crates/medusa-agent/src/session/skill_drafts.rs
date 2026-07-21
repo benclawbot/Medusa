@@ -1,4 +1,7 @@
-use std::{fs, path::{Path, PathBuf}};
+use std::{
+    fs,
+    path::{Path, PathBuf},
+};
 
 use medusa_core::MedusaResult;
 use serde::{Deserialize, Serialize};
@@ -149,19 +152,36 @@ fn slug(value: &str) -> String {
 }
 
 fn heading(value: &str) -> String {
-    value.replace(['\n', '\r', '#'], " ").split_whitespace().collect::<Vec<_>>().join(" ")
+    value
+        .replace(['\n', '\r', '#'], " ")
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
 }
 
 fn yaml_value(value: &str) -> String {
-    format!("\"{}\"", value.replace('\\', "\\\\").replace('"', "\\\"").replace(['\n', '\r'], " "))
+    format!(
+        "\"{}\"",
+        value
+            .replace('\\', "\\\\")
+            .replace('"', "\\\"")
+            .replace(['\n', '\r'], " ")
+    )
 }
 
 fn safe_text(value: &str) -> bool {
     let lower = value.to_ascii_lowercase();
     !value.trim().is_empty()
-        && !["api_key", "apikey", "authorization:", "bearer ", "secret=", "token="]
-            .iter()
-            .any(|marker| lower.contains(marker))
+        && ![
+            "api_key",
+            "apikey",
+            "authorization:",
+            "bearer ",
+            "secret=",
+            "token=",
+        ]
+        .iter()
+        .any(|marker| lower.contains(marker))
 }
 
 #[cfg(test)]
@@ -202,24 +222,27 @@ mod tests {
             .expect("create")
             .expect("draft");
         let skill = fs::read_to_string(draft.join("SKILL.md")).expect("skill");
-        let manifest: serde_json::Value = serde_json::from_slice(
-            &fs::read(draft.join("manifest.json")).expect("manifest"),
-        )
-        .expect("manifest json");
+        let manifest: serde_json::Value =
+            serde_json::from_slice(&fs::read(draft.join("manifest.json")).expect("manifest"))
+                .expect("manifest json");
         assert!(skill.contains("status: proposed"));
         assert!(skill.contains("cargo test --workspace"));
         assert_eq!(manifest["requires_approval"], true);
-        assert!(manifest["proposed_install_path"]
-            .as_str()
-            .is_some_and(|path| path.starts_with(".medusa/skills/")));
+        assert!(
+            manifest["proposed_install_path"]
+                .as_str()
+                .is_some_and(|path| path.starts_with(".medusa/skills/"))
+        );
     }
 
     #[test]
     fn low_confidence_lesson_does_not_create_skill() {
         let directory = tempfile::tempdir().expect("tempdir");
-        assert!(create_from_lesson(&lesson(directory.path(), 699))
-            .expect("create")
-            .is_none());
+        assert!(
+            create_from_lesson(&lesson(directory.path(), 699))
+                .expect("create")
+                .is_none()
+        );
     }
 
     #[test]
