@@ -26,8 +26,6 @@ Medusa is a production-grade autonomous coding agent written in Rust. It combine
 
 ## Current status and evidence
 
-The original phase labels are historical planning shorthand, not the current source of truth. As of July 19, 2026, repository evidence through merged PR #67 includes:
-
 - the Rust agent core, TUI, and frontend-neutral runtime
 - the Zeus-derived React/Tauri desktop entry point
 - durable sessions, prompt drafts, and Markdown memory
@@ -268,7 +266,6 @@ Medusa is autonomous, but not boundary-free. The runtime enforces:
 - reversible migrations and rollback receipts
 - explicit verification evidence before completion
 
-See [Security hardening](docs/SECURITY-HARDENING.md) for release-enforced controls.
 
 ## Architecture
 
