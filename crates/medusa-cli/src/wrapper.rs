@@ -173,17 +173,11 @@ mod tests {
     #[test]
     fn option_values_named_like_commands_are_not_subcommands() {
         assert_eq!(
-            subcommand_arguments(
-                &strings(&["--prompt", "recall", "run", "tests"]),
-                "recall"
-            ),
+            subcommand_arguments(&strings(&["--prompt", "recall", "run", "tests"]), "recall"),
             None
         );
         assert_eq!(
-            subcommand_arguments(
-                &strings(&["--prompt", "skills", "run", "tests"]),
-                "skills"
-            ),
+            subcommand_arguments(&strings(&["--prompt", "skills", "run", "tests"]), "skills"),
             None
         );
     }
