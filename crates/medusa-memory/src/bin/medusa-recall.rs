@@ -1,4 +1,8 @@
-use std::{collections::BTreeSet, env, path::{Path, PathBuf}};
+use std::{
+    collections::BTreeSet,
+    env,
+    path::{Path, PathBuf},
+};
 
 use medusa_memory::{SessionSearchQuery, open_session_recall};
 use rusqlite::Connection;
@@ -64,7 +68,10 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                 println!("No recorded sessions.");
             } else {
                 for entry in entries {
-                    println!("{}  {}  {}", entry.session_id, entry.created_at, entry.outcome);
+                    println!(
+                        "{}  {}  {}",
+                        entry.session_id, entry.created_at, entry.outcome
+                    );
                     println!(
                         "  repository={} events={} tools={}",
                         entry.repository_fingerprint,
@@ -182,8 +189,8 @@ fn list_sessions(
     }
     let connection = Connection::open(path)?;
     let mut statement = connection.prepare(
-        "SELECT session_id, parent_session_id, created_at, repository_fingerprint,\
-                tools_json, outcome, events_json\
+        "SELECT session_id, parent_session_id, created_at, repository_fingerprint, \
+                tools_json, outcome, events_json \
          FROM session_recall ORDER BY created_at DESC, session_id DESC",
     )?;
     let rows = statement.query_map([], |row| {
@@ -201,16 +208,36 @@ fn list_sessions(
     let limit = query.limit.clamp(1, 100);
     let mut entries = Vec::new();
     for row in rows {
-        let (session_id, parent_session_id, created_at, repository, tools_json, outcome, events_json) = row?;
+        let (
+            session_id,
+            parent_session_id,
+            created_at,
+            repository,
+            tools_json,
+            outcome,
+            events_json,
+        ) = row?;
         let tools: BTreeSet<String> = serde_json::from_str(&tools_json)?;
         if query
             .repository_fingerprint
             .as_ref()
             .is_some_and(|value| value != &repository)
-            || query.tool.as_ref().is_some_and(|value| !tools.contains(value))
-            || query.outcome.as_ref().is_some_and(|value| value != &outcome)
-            || query.date_from.as_ref().is_some_and(|value| &created_at < value)
-            || query.date_to.as_ref().is_some_and(|value| &created_at > value)
+            || query
+                .tool
+                .as_ref()
+                .is_some_and(|value| !tools.contains(value))
+            || query
+                .outcome
+                .as_ref()
+                .is_some_and(|value| value != &outcome)
+            || query
+                .date_from
+                .as_ref()
+                .is_some_and(|value| &created_at < value)
+            || query
+                .date_to
+                .as_ref()
+                .is_some_and(|value| &created_at > value)
         {
             continue;
         }
@@ -300,26 +327,32 @@ mod tests {
         let medusa = directory.path().join(".medusa");
         std::fs::create_dir_all(&medusa).expect("directory");
         let connection = Connection::open(medusa.join("session-recall.sqlite3")).expect("db");
-        connection.execute_batch(
-            "CREATE VIRTUAL TABLE session_recall USING fts5(\
-               session_id UNINDEXED, parent_session_id UNINDEXED, created_at UNINDEXED,\
-               repository_fingerprint UNINDEXED, tools_json UNINDEXED, outcome UNINDEXED,\
-               events_json UNINDEXED, text\
-             );\
-             INSERT INTO session_recall VALUES\
-               ('old', NULL, '2026-07-19T10:00:00Z', 'repo-a', '[\"shell\"]', 'failure', '[{},{}]', 'old');\
-             INSERT INTO session_recall VALUES\
-               ('new', 'old', '2026-07-20T10:00:00Z', 'repo-a', '[\"shell\",\"git\"]', 'success', '[{},{},{}]', 'new');",
-        ).expect("schema");
+        connection
+            .execute_batch(
+                "CREATE VIRTUAL TABLE session_recall USING fts5(\
+                   session_id UNINDEXED, parent_session_id UNINDEXED, created_at UNINDEXED,\
+                   repository_fingerprint UNINDEXED, tools_json UNINDEXED, outcome UNINDEXED,\
+                   events_json UNINDEXED, text\
+                 );\
+                 INSERT INTO session_recall VALUES\
+                   ('old', NULL, '2026-07-19T10:00:00Z', 'repo-a', '[\"shell\"]', 'failure', '[{},{}]', 'old');\
+                 INSERT INTO session_recall VALUES\
+                   ('new', 'old', '2026-07-20T10:00:00Z', 'repo-a', '[\"shell\",\"git\"]', 'success', '[{},{},{}]', 'new');",
+            )
+            .expect("schema");
         drop(connection);
 
-        let entries = list_sessions(directory.path(), &SessionListQuery {
-            repository_fingerprint: Some("repo-a".to_owned()),
-            tool: Some("git".to_owned()),
-            outcome: Some("success".to_owned()),
-            limit: 10,
-            ..SessionListQuery::default()
-        }).expect("list");
+        let entries = list_sessions(
+            directory.path(),
+            &SessionListQuery {
+                repository_fingerprint: Some("repo-a".to_owned()),
+                tool: Some("git".to_owned()),
+                outcome: Some("success".to_owned()),
+                limit: 10,
+                ..SessionListQuery::default()
+            },
+        )
+        .expect("list");
         assert_eq!(entries.len(), 1);
         assert_eq!(entries[0].session_id, "new");
         assert_eq!(entries[0].parent_session_id.as_deref(), Some("old"));
@@ -329,7 +362,17 @@ mod tests {
     #[test]
     fn missing_recall_database_is_an_empty_history() {
         let directory = tempfile::tempdir().expect("tempdir");
-        assert!(list_sessions(directory.path(), &SessionListQuery { limit: 20, ..SessionListQuery::default() }).expect("list").is_empty());
+        assert!(
+            list_sessions(
+                directory.path(),
+                &SessionListQuery {
+                    limit: 20,
+                    ..SessionListQuery::default()
+                }
+            )
+            .expect("list")
+            .is_empty()
+        );
     }
 
     #[test]
