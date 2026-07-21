@@ -8,6 +8,7 @@ use serde_json::{Value, json};
 
 const PROPOSAL_ROOT: &str = ".medusa/learning/skill-proposals";
 const ACTIVE_ROOT: &str = ".medusa/skills";
+const METRICS_PATH: &str = ".medusa/learning/skill-metrics/summary.json";
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 struct ProposalSummary {
@@ -35,6 +36,7 @@ pub(super) fn run(args: &[String]) -> Result<(), String> {
         "show" => show(&root, &command_args[1..]),
         "approve" => approve(&root, &command_args[1..]),
         "reject" => reject(&root, &command_args[1..]),
+        "metrics" => metrics(&root, &command_args[1..]),
         "help" | "--help" | "-h" => {
             println!("{}", usage());
             Ok(())
@@ -44,7 +46,7 @@ pub(super) fn run(args: &[String]) -> Result<(), String> {
 }
 
 fn usage() -> String {
-    "Usage:\n  medusa [--repo PATH] skills list [--json]\n  medusa [--repo PATH] skills show NAME [--json]\n  medusa [--repo PATH] skills approve NAME\n  medusa [--repo PATH] skills reject NAME [--reason TEXT]".to_owned()
+    "Usage:\n  medusa [--repo PATH] skills list [--json]\n  medusa [--repo PATH] skills show NAME [--json]\n  medusa [--repo PATH] skills approve NAME\n  medusa [--repo PATH] skills reject NAME [--reason TEXT]\n  medusa [--repo PATH] skills metrics [--json]".to_owned()
 }
 
 fn split_global_repo(args: &[String]) -> Result<(Option<PathBuf>, Vec<String>), String> {
@@ -196,6 +198,59 @@ fn reject(root: &Path, args: &[String]) -> Result<(), String> {
     write_manifest(&directory, &manifest)?;
     println!("Rejected `{name}`.");
     Ok(())
+}
+
+fn metrics(root: &Path, args: &[String]) -> Result<(), String> {
+    let json_output = parse_json_flag(args)?;
+    let summary = load_metrics(root)?;
+    if json_output {
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&summary)
+                .map_err(|error| format!("serialize skill metrics: {error}"))?
+        );
+        return Ok(());
+    }
+    let Some(skills) = summary.get("skills").and_then(Value::as_object) else {
+        return Err("skill metrics summary is missing skills".to_owned());
+    };
+    if skills.is_empty() {
+        println!("No approved skill effectiveness metrics found.");
+        return Ok(());
+    }
+    let mut names = skills.keys().collect::<Vec<_>>();
+    names.sort();
+    println!("skill\tsessions\tverified\trate\tavg_turns\tavg_evidence\tlatest");
+    for name in names {
+        let metric = &skills[name];
+        println!(
+            "{}\t{}\t{}\t{:.1}%\t{:.2}\t{:.2}\t{}",
+            name,
+            metric_u64(metric, "observed_sessions"),
+            metric_u64(metric, "verified_sessions"),
+            metric_u64(metric, "verification_rate_milli") as f64 / 10.0,
+            metric_u64(metric, "average_turns_milli") as f64 / 1_000.0,
+            metric_u64(metric, "average_evidence_milli") as f64 / 1_000.0,
+            metric
+                .get("latest_recorded_at")
+                .and_then(Value::as_str)
+                .unwrap_or("unknown")
+        );
+    }
+    Ok(())
+}
+
+fn load_metrics(root: &Path) -> Result<Value, String> {
+    let path = root.join(METRICS_PATH);
+    if !path.is_file() {
+        return Ok(json!({"schema_version": 1, "skills": {}}));
+    }
+    let bytes = fs::read(&path).map_err(|error| format!("read {}: {error}", path.display()))?;
+    serde_json::from_slice(&bytes).map_err(|error| format!("parse {}: {error}", path.display()))
+}
+
+fn metric_u64(metric: &Value, field: &str) -> u64 {
+    metric.get(field).and_then(Value::as_u64).unwrap_or(0)
 }
 
 fn parse_json_flag(args: &[String]) -> Result<bool, String> {
@@ -430,6 +485,37 @@ mod tests {
         write_manifest(&directory, &manifest).expect("write");
         assert!(approve(temp.path(), &["verify-package".to_owned()]).is_err());
         assert!(!temp.path().join(ACTIVE_ROOT).exists());
+    }
+
+    #[test]
+    fn metrics_loader_supports_empty_and_populated_summaries() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        assert_eq!(
+            load_metrics(temp.path()).expect("empty metrics")["skills"],
+            json!({})
+        );
+        let path = temp.path().join(METRICS_PATH);
+        fs::create_dir_all(path.parent().expect("metrics parent")).expect("create metrics");
+        fs::write(
+            &path,
+            serde_json::to_vec_pretty(&json!({
+                "schema_version": 1,
+                "skills": {
+                    "verify": {
+                        "observed_sessions": 2,
+                        "verified_sessions": 2,
+                        "verification_rate_milli": 1000,
+                        "average_turns_milli": 3500,
+                        "average_evidence_milli": 1500,
+                        "latest_recorded_at": "2026-07-21T14:00:00Z"
+                    }
+                }
+            }))
+            .expect("metrics json"),
+        )
+        .expect("write metrics");
+        let metrics = load_metrics(temp.path()).expect("populated metrics");
+        assert_eq!(metrics["skills"]["verify"]["observed_sessions"], 2);
     }
 
     #[test]
