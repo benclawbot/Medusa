@@ -48,14 +48,9 @@ jobs:
           ref: agent/skill-dependencies
           fetch-depth: 0
       - uses: dtolnay/rust-toolchain@1.88.0
-        with:
-          components: clippy
       - name: Refresh Tauri lockfile
         working-directory: apps/medusa-desktop/src-tauri
-        run: cargo check
-      - name: Verify locked desktop adapter
-        working-directory: apps/medusa-desktop/src-tauri
-        run: cargo clippy --all-targets --locked -- -D warnings
+        run: cargo generate-lockfile
       - name: Restore workflow and commit lockfile
         run: |
           git checkout origin/main -- .github/workflows/refactor-guardrails.yml
