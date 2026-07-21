@@ -115,8 +115,7 @@ fn quarantine(root: &Path, args: &[String]) -> Result<(), String> {
     let parent = quarantined
         .parent()
         .ok_or_else(|| "quarantine destination has no parent".to_owned())?;
-    fs::create_dir_all(parent)
-        .map_err(|error| format!("create {}: {error}", parent.display()))?;
+    fs::create_dir_all(parent).map_err(|error| format!("create {}: {error}", parent.display()))?;
     fs::rename(&active, &quarantined).map_err(|error| {
         format!(
             "move active skill {} to {}: {error}",
@@ -181,8 +180,7 @@ fn restore(root: &Path, args: &[String]) -> Result<(), String> {
     let parent = active
         .parent()
         .ok_or_else(|| "active destination has no parent".to_owned())?;
-    fs::create_dir_all(parent)
-        .map_err(|error| format!("create {}: {error}", parent.display()))?;
+    fs::create_dir_all(parent).map_err(|error| format!("create {}: {error}", parent.display()))?;
     record.status = "restored".to_owned();
     record.restored_at_epoch_seconds = Some(now_epoch_seconds()?);
     write_json(&lifecycle_path, &record)?;
@@ -203,9 +201,7 @@ fn recommendation_for(root: &Path, name: &str) -> Result<ReviewRecommendation, S
         .into_iter()
         .find(|recommendation| recommendation.skill == name)
         .ok_or_else(|| {
-            format!(
-                "skill `{name}` has no active review recommendation; refusing quarantine"
-            )
+            format!("skill `{name}` has no active review recommendation; refusing quarantine")
         })
 }
 
@@ -366,7 +362,12 @@ mod tests {
         assert!(quarantine(temp.path(), &unconfirmed).is_err());
         let confirmed = vec!["verify".to_owned(), "--confirm".to_owned()];
         assert!(quarantine(temp.path(), &confirmed).is_err());
-        assert!(temp.path().join(ACTIVE_ROOT).join("verify/SKILL.md").is_file());
+        assert!(
+            temp.path()
+                .join(ACTIVE_ROOT)
+                .join("verify/SKILL.md")
+                .is_file()
+        );
     }
 
     #[test]
