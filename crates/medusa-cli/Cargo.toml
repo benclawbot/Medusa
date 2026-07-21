@@ -9,7 +9,7 @@ build = "build.rs"
 
 [[bin]]
 name = "medusa"
-path = "src/main.rs"
+path = "src/wrapper.rs"
 
 [dependencies]
 clap = { version = "4.5", features = ["derive"] }
