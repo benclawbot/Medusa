@@ -3,7 +3,8 @@ export type GitHubMutationKind =
   | "checkpoint"
   | "commit"
   | "push"
-  | "pullRequest";
+  | "pullRequest"
+  | "actionsRetry";
 
 export interface GitHubMutationPreview {
   kind: GitHubMutationKind;
