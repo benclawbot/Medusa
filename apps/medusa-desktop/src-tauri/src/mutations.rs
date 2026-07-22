@@ -132,7 +132,10 @@ pub fn runtime_push_branch(
     if remote.is_empty() || remote.starts_with('-') || remote.chars().any(char::is_whitespace) {
         return Err("invalid remote name".to_owned());
     }
-    run_git(&repo, ["push", "--set-upstream", remote, branch.as_str()])?;
+    run_git(
+        &repo,
+        ["push", "--set-upstream", remote, branch.as_str()],
+    )?;
     mutation_result(&repo, None)
 }
 
