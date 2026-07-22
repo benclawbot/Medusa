@@ -3,6 +3,7 @@ mod diffs;
 mod dto;
 mod memories;
 mod mutations;
+mod pull_requests;
 mod runtime {
     include!("runtime.rs");
     include!("runtime_resume.rs");
@@ -21,6 +22,7 @@ use memories::runtime_list_memories;
 use mutations::{
     runtime_commit_changes, runtime_create_branch, runtime_create_checkpoint, runtime_push_branch,
 };
+use pull_requests::runtime_create_draft_pull_request;
 use runtime::{
     RuntimeRegistry, runtime_cancel, runtime_close, runtime_command, runtime_command_suggestions,
     runtime_configure_model, runtime_poll, runtime_resume, runtime_start, runtime_submit,
@@ -51,6 +53,7 @@ pub fn run() -> tauri::Result<()> {
             runtime_create_checkpoint,
             runtime_commit_changes,
             runtime_push_branch,
+            runtime_create_draft_pull_request,
             runtime_list_memories,
         ])
         .run(tauri::generate_context!())
