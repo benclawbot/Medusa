@@ -1,6 +1,6 @@
 use std::{
     fs,
-    path::{Path, PathBuf},
+    path::{Component, Path, PathBuf},
     process::{Command, Output},
 };
 
@@ -267,9 +267,16 @@ fn validate_paths(paths: &[String]) -> Result<Vec<String>, String> {
         .iter()
         .map(|path| {
             let path = path.trim();
+            let has_unsafe_component = Path::new(path).components().any(|component| {
+                matches!(
+                    component,
+                    Component::Prefix(_) | Component::RootDir | Component::ParentDir
+                )
+            });
             if path.is_empty()
-                || Path::new(path).is_absolute()
-                || path.split('/').any(|part| part == "..")
+                || path.starts_with('/')
+                || path.starts_with('\\')
+                || has_unsafe_component
                 || path.starts_with('-')
             {
                 return Err(format!("invalid repository-relative path: {path}"));
@@ -357,6 +364,7 @@ mod tests {
             vec!["src/deleted.rs"]
         );
         assert!(validate_paths(&["/etc/passwd".to_owned()]).is_err());
+        assert!(validate_paths(&["C:\\Windows\\system.ini".to_owned()]).is_err());
         assert!(validate_paths(&["../secret".to_owned()]).is_err());
     }
 }
