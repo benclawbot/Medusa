@@ -207,8 +207,7 @@ mod tests {
         let lessons = root.join("lessons");
         fs::create_dir_all(&lessons).expect("create lessons");
         fs::write(root.join("README.md"), "# Memory layout\n").expect("write readme");
-        fs::write(lessons.join("memory.md"), memory("Decision", "active"))
-            .expect("write memory");
+        fs::write(lessons.join("memory.md"), memory("Decision", "active")).expect("write memory");
 
         let items = runtime_list_memories(directory.path().display().to_string(), None, None)
             .expect("list");
