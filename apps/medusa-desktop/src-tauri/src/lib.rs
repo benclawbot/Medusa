@@ -7,6 +7,7 @@ mod runtime {
     include!("runtime_resume.rs");
 }
 mod sessions;
+mod worktree;
 #[cfg(test)]
 mod test_tempfile;
 #[cfg(test)]
@@ -21,6 +22,7 @@ use runtime::{
     runtime_configure_model, runtime_poll, runtime_resume, runtime_start, runtime_submit,
 };
 use sessions::{runtime_list_sessions, runtime_read_session};
+use worktree::runtime_read_worktree;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() -> tauri::Result<()> {
@@ -40,6 +42,7 @@ pub fn run() -> tauri::Result<()> {
             runtime_list_sessions,
             runtime_read_session,
             runtime_read_diff,
+            runtime_read_worktree,
             runtime_list_memories,
         ])
         .run(tauri::generate_context!())
