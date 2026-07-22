@@ -1,4 +1,4 @@
-name: Format PR120
+name: Fix PR120 restore verification
 
 on:
   push:
@@ -11,7 +11,7 @@ permissions:
   contents: write
 
 jobs:
-  format:
+  fix:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -21,26 +21,41 @@ jobs:
       - uses: dtolnay/rust-toolchain@1.88.0
         with:
           components: rustfmt, clippy
-      - name: Format and verify
+      - name: Fix eager active-directory resolution
         run: |
-          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+          path = Path('crates/medusa-runtime/src/skill_dependency_locks.rs')
+          text = path.read_text()
+          old = '''        let directory = if name == selected {
+            selected_directory
+                .map(Path::to_path_buf)
+                .unwrap_or(confined_directory(active_root, name)?)
+        } else {
+            confined_directory(active_root, name)?
+        };'''
+          new = '''        let directory = if name == selected {
+            match selected_directory {
+                Some(directory) => directory.to_path_buf(),
+                None => confined_directory(active_root, name)?,
+            }
+        } else {
+            confined_directory(active_root, name)?
+        };'''
+          if old not in text:
+              raise SystemExit('target snippet not found')
+          path.write_text(text.replace(old, new, 1))
+          PY
           cargo fmt --all
           cargo fmt --all -- --check
           cargo clippy --workspace --all-targets --all-features -- -D warnings
           cargo test --workspace --all-features
-      - name: Commit formatted sources
+      - name: Commit verified fix
         run: |
           set -euo pipefail
           git config user.name github-actions[bot]
           git config user.email 41898282+github-actions[bot]@users.noreply.github.com
-          if git diff --quiet; then
-            echo "No formatting changes required"
-            exit 0
-          fi
-          git add crates/medusa-agent/src/session/skill_probation.rs \
-            crates/medusa-cli/src/skill_graduation.rs \
-            crates/medusa-runtime/src/skill_dependencies.rs \
-            crates/medusa-runtime/src/skill_dependency_locks.rs \
-            crates/medusa-runtime/tests/skill_dependency_locks.rs
-          git commit -m "Format skill dependency lock tests"
+          git add crates/medusa-runtime/src/skill_dependency_locks.rs \
+            crates/medusa-runtime/tests/skill_dependency_locks_coverage.rs
+          git commit -m "Fix quarantined dependency lock verification"
           git push origin HEAD:agent/skill-dependency-locks
