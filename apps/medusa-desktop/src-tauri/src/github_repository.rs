@@ -195,7 +195,8 @@ fn permission_names(value: Option<&RepositoryPermissions>) -> Vec<String> {
     ];
     candidates
         .into_iter()
-        .filter_map(|(name, enabled)| enabled.unwrap_or(false).then(|| name.to_owned()))
+        .filter(|(_, enabled)| enabled.unwrap_or(false))
+        .map(|(name, _)| name.to_owned())
         .collect()
 }
 
