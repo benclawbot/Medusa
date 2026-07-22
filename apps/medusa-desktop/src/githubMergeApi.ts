@@ -26,7 +26,7 @@ export interface PullRequestMergeResult {
   audit: PullRequestMergeAudit;
 }
 
-export function mergeGitHubPullRequest(
+export async function mergeGitHubPullRequest(
   repository: string,
   pullRequestNumber: number,
   expectedHeadSha: string,
