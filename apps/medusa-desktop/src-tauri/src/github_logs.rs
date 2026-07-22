@@ -38,12 +38,7 @@ pub fn runtime_github_actions_job_log(
 
     let endpoint = format!("repos/{repository}/actions/jobs/{job_id}/logs");
     let (bytes, source_truncated) = run_gh_api(&hostname, &endpoint)?;
-    Ok(sanitize_log(
-        &repository,
-        job_id,
-        &bytes,
-        source_truncated,
-    ))
+    Ok(sanitize_log(&repository, job_id, &bytes, source_truncated))
 }
 
 fn run_gh_api(hostname: &str, endpoint: &str) -> Result<(Vec<u8>, bool), String> {
