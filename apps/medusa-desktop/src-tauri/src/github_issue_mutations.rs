@@ -130,13 +130,7 @@ pub fn runtime_create_github_issue(
         ],
     )?;
 
-    result_from_response(
-        repository,
-        response,
-        "issueCreate",
-        confirmation,
-        "created",
-    )
+    result_from_response(repository, response, "issueCreate", confirmation, "created")
 }
 
 #[tauri::command]
@@ -204,13 +198,7 @@ pub fn runtime_update_github_issue(
     let args = owned_args.iter().map(String::as_str).collect::<Vec<_>>();
     let response = gh_json::<IssueResponse>(&hostname, &endpoint, &args)?;
 
-    result_from_response(
-        repository,
-        response,
-        "issueUpdate",
-        confirmation,
-        "updated",
-    )
+    result_from_response(repository, response, "issueUpdate", confirmation, "updated")
 }
 
 fn normalize_hostname(hostname: Option<String>) -> String {
@@ -518,6 +506,8 @@ mod tests {
     #[test]
     fn rejects_unsafe_urls() {
         assert!(safe_https_url("https://github.com/octo/repo/issues/1".to_owned()).is_ok());
-        assert!(safe_https_url("https://user@example.com/issues/1?token=secret".to_owned()).is_err());
+        assert!(
+            safe_https_url("https://user@example.com/issues/1?token=secret".to_owned()).is_err()
+        );
     }
 }
