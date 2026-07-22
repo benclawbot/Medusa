@@ -1,0 +1,34 @@
+name: Format PR 121
+
+on:
+  push:
+    branches:
+      - agent/desktop-session-history
+
+permissions:
+  contents: write
+
+jobs:
+  format:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: agent/desktop-session-history
+      - uses: dtolnay/rust-toolchain@1.88.0
+        with:
+          components: rustfmt
+      - name: Apply pinned desktop formatting
+        run: cargo fmt --manifest-path apps/medusa-desktop/src-tauri/Cargo.toml --all
+      - name: Commit formatter output
+        run: |
+          if git diff --quiet; then
+            echo "No formatting changes needed"
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add apps/medusa-desktop/src-tauri
+          git commit -m "Apply pinned desktop rustfmt"
+          git push origin HEAD:agent/desktop-session-history
