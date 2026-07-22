@@ -142,14 +142,7 @@ pub fn runtime_retry_github_actions_job(
 
 fn run_gh_api(hostname: &str, method: &str, endpoint: &str) -> Result<Output, String> {
     let output = Command::new("gh")
-        .args([
-            "api",
-            "--method",
-            method,
-            "--hostname",
-            hostname,
-            endpoint,
-        ])
+        .args(["api", "--method", method, "--hostname", hostname, endpoint])
         .output()
         .map_err(|error| {
             if error.kind() == std::io::ErrorKind::NotFound {
@@ -177,14 +170,20 @@ fn parse_run(output: &Output) -> Result<ActionsRunResponse, String> {
 
 fn require_retryable_job(job: &ActionsJobResponse) -> Result<(), String> {
     if job.status != "completed" {
-        return Err(format!("GitHub Actions job '{}' is not completed", job.name));
+        return Err(format!(
+            "GitHub Actions job '{}' is not completed",
+            job.name
+        ));
     }
     let retryable = matches!(
         job.conclusion.as_deref(),
         Some("failure" | "cancelled" | "timed_out")
     );
     if !retryable {
-        return Err(format!("GitHub Actions job '{}' is not retryable", job.name));
+        return Err(format!(
+            "GitHub Actions job '{}' is not retryable",
+            job.name
+        ));
     }
     Ok(())
 }
