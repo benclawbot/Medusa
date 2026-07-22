@@ -1,11 +1,21 @@
-import { ArrowLeft, CheckCircle2, Clock3, History, LoaderCircle, MessageCircleQuestion, Play, RefreshCw, X } from "lucide-react";
+import {
+  ArrowLeft,
+  CheckCircle2,
+  Clock3,
+  History,
+  LoaderCircle,
+  MessageCircleQuestion,
+  Play,
+  RefreshCw,
+  X,
+} from "lucide-react";
 import { useCallback, useEffect, useState } from "react";
 import {
   listRuntimeSessions,
   readRuntimeSession,
   requestRuntimeResume,
+  type SessionDetail,
   type SessionSummary,
-  type SessionTranscript,
 } from "./runtime";
 import "./session-dock.css";
 
@@ -36,8 +46,9 @@ export function SessionDock() {
   const [open, setOpen] = useState(false);
   const [repo, setRepo] = useState(currentRepo);
   const [sessions, setSessions] = useState<SessionSummary[]>([]);
-  const [transcript, setTranscript] = useState<SessionTranscript>();
+  const [selected, setSelected] = useState<SessionDetail>();
   const [loading, setLoading] = useState(false);
+  const [detailLoading, setDetailLoading] = useState(false);
   const [error, setError] = useState<string>();
 
   useEffect(() => {
@@ -49,7 +60,7 @@ export function SessionDock() {
   }, []);
 
   useEffect(() => {
-    setTranscript(undefined);
+    setSelected(undefined);
   }, [repo]);
 
   const refresh = useCallback(async () => {
@@ -69,23 +80,23 @@ export function SessionDock() {
     }
   }, [repo]);
 
-  const openTranscript = async (sessionId: string) => {
-    setLoading(true);
+  const openSession = useCallback(async (sessionId: string) => {
+    setDetailLoading(true);
     setError(undefined);
     try {
-      setTranscript(await readRuntimeSession(repo, sessionId));
+      setSelected(await readRuntimeSession(repo, sessionId));
     } catch (cause) {
       setError(String(cause));
     } finally {
-      setLoading(false);
+      setDetailLoading(false);
     }
-  };
+  }, [repo]);
 
-  const resumeTranscript = () => {
-    if (!transcript) return;
-    requestRuntimeResume(transcript.id);
+  const resumeSession = useCallback(() => {
+    if (!selected) return;
+    requestRuntimeResume(selected.summary.id);
     window.location.reload();
-  };
+  }, [selected]);
 
   useEffect(() => {
     if (open) void refresh();
@@ -110,16 +121,16 @@ export function SessionDock() {
         <section className="session-dock-panel" aria-label="Recent Medusa sessions">
           <header>
             <div>
-              <small>Current project</small>
-              <strong>{transcript ? transcript.objective || "Untitled session" : "Recent sessions"}</strong>
+              <small>{selected ? "Saved conversation" : "Current project"}</small>
+              <strong>{selected ? selected.summary.objective || "Untitled session" : "Recent sessions"}</strong>
             </div>
             <div className="session-dock-actions">
-              {transcript && (
-                <button type="button" onClick={() => setTranscript(undefined)} aria-label="Back to session list">
+              {selected && (
+                <button type="button" onClick={() => setSelected(undefined)} aria-label="Back to sessions">
                   <ArrowLeft size={14} />
                 </button>
               )}
-              {!transcript && (
+              {!selected && (
                 <button type="button" onClick={() => void refresh()} disabled={loading} aria-label="Refresh sessions">
                   <RefreshCw size={14} className={loading ? "spin" : undefined} />
                 </button>
@@ -130,23 +141,25 @@ export function SessionDock() {
             </div>
           </header>
 
-          {transcript ? (
-            <div className="session-transcript">
-              {loading && <div className="session-dock-empty"><LoaderCircle className="spin" size={18} /> Loading transcript…</div>}
-              {!!error && <div className="session-dock-error">{error}</div>}
-              {!loading && !error && transcript.messages.length === 0 && (
-                <div className="session-dock-empty"><History size={18} /> No text messages were saved in this session.</div>
-              )}
-              {!loading && transcript.messages.map((message, index) => (
-                <article className={`session-transcript-message ${message.role}`} key={`${transcript.id}-${index}`}>
-                  <small>{message.role === "user" ? "You" : message.role === "assistant" ? "Medusa" : message.role}</small>
+          {selected ? (
+            <div className="session-history">
+              <div className="session-history-meta">
+                <span>Turn {selected.summary.turn}</span>
+                <span>{formatSessionAge(selected.summary.updatedAt)}</span>
+                <code>{selected.summary.id.slice(0, 8)}</code>
+              </div>
+              {selected.messages.length ? selected.messages.map((message, index) => (
+                <article className={`session-history-message ${message.role}`} key={`${message.role}-${index}`}>
+                  <small>{message.role === "assistant" ? "Medusa" : message.role === "user" ? "You" : message.role}</small>
                   <p>{message.text}</p>
                 </article>
-              ))}
+              )) : (
+                <div className="session-dock-empty"><History size={18} /> No durable messages in this session.</div>
+              )}
             </div>
           ) : (
             <div className="session-dock-list">
-              {loading && sessions.length === 0 && (
+              {(loading || detailLoading) && sessions.length === 0 && (
                 <div className="session-dock-empty"><LoaderCircle className="spin" size={18} /> Loading sessions…</div>
               )}
               {!!error && <div className="session-dock-error">{error}</div>}
@@ -156,7 +169,13 @@ export function SessionDock() {
               {sessions.slice(0, 12).map((session) => {
                 const status = sessionStatus(session);
                 return (
-                  <button className="session-dock-item" type="button" key={session.id} onClick={() => void openTranscript(session.id)}>
+                  <button
+                    className="session-dock-item"
+                    key={session.id}
+                    type="button"
+                    onClick={() => void openSession(session.id)}
+                    disabled={detailLoading}
+                  >
                     <div className="session-dock-item-top">
                       <strong>{session.objective || "Untitled session"}</strong>
                       <span className={`session-status ${status.className}`}>
@@ -175,12 +194,12 @@ export function SessionDock() {
             </div>
           )}
           <footer>
-            {transcript ? (
-              <button type="button" onClick={resumeTranscript} disabled={loading}>
-                <Play size={13} /> Resume this session
+            {selected ? (
+              <button type="button" className="session-resume" onClick={resumeSession}>
+                <Play size={14} /> Resume session
               </button>
             ) : (
-              "Select a session to inspect its durable transcript."
+              <span>Select a session to inspect its durable conversation.</span>
             )}
           </footer>
         </section>

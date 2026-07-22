@@ -76,6 +76,7 @@
 
 .session-dock-actions {
   display: flex;
+  flex: 0 0 auto;
   gap: 4px;
 }
 
@@ -96,7 +97,7 @@
 }
 
 .session-dock-list,
-.session-transcript {
+.session-history {
   overflow-y: auto;
   padding: 8px;
 }
@@ -162,7 +163,8 @@
   color: rgb(147, 197, 253);
 }
 
-.session-dock-meta {
+.session-dock-meta,
+.session-history-meta {
   display: flex;
   align-items: center;
   gap: 8px;
@@ -171,40 +173,46 @@
   font-size: 10px;
 }
 
-.session-dock-meta code {
+.session-dock-meta code,
+.session-history-meta code {
   margin-left: auto;
   color: rgba(255, 255, 255, 0.36);
 }
 
-.session-transcript-message {
-  padding: 10px 12px;
-  border-radius: 10px;
-  background: rgba(255, 255, 255, 0.04);
+.session-history-meta {
+  margin: 2px 4px 12px;
 }
 
-.session-transcript-message + .session-transcript-message {
+.session-history-message {
+  padding: 10px 12px;
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.035);
+}
+
+.session-history-message + .session-history-message {
   margin-top: 8px;
 }
 
-.session-transcript-message.user {
-  margin-left: 34px;
+.session-history-message.user {
+  margin-left: 32px;
   background: rgba(96, 165, 250, 0.09);
 }
 
-.session-transcript-message.assistant {
-  margin-right: 20px;
+.session-history-message.assistant {
+  margin-right: 32px;
 }
 
-.session-transcript-message small {
-  color: rgba(255, 255, 255, 0.42);
+.session-history-message small {
+  color: rgba(255, 255, 255, 0.46);
   font-size: 10px;
+  text-transform: capitalize;
 }
 
-.session-transcript-message p {
+.session-history-message p {
   margin: 5px 0 0;
-  color: rgba(255, 255, 255, 0.84);
+  color: rgba(255, 255, 255, 0.86);
   font-size: 12px;
-  line-height: 1.55;
+  line-height: 1.5;
   white-space: pre-wrap;
 }
 
