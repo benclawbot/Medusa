@@ -40,6 +40,7 @@ jobs:
           git add crates/medusa-agent/src/session/skill_probation.rs \
             crates/medusa-cli/src/skill_graduation.rs \
             crates/medusa-runtime/src/skill_dependencies.rs \
-            crates/medusa-runtime/src/skill_dependency_locks.rs
-          git commit -m "Format skill dependency lifecycle integration"
+            crates/medusa-runtime/src/skill_dependency_locks.rs \
+            crates/medusa-runtime/tests/skill_dependency_locks.rs
+          git commit -m "Format skill dependency lock tests"
           git push origin HEAD:agent/skill-dependency-locks
