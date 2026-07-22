@@ -8,6 +8,7 @@ import "./styles.css";
 import "./medusa-desktop.css";
 import "./diff-dock.css";
 import "./memory-browser.css";
+import "./accessibility.css";
 
 ReactDOM.createRoot(document.getElementById("root") as HTMLElement).render(
   <React.StrictMode>

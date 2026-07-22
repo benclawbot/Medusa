@@ -1,6 +1,7 @@
 import { FileCode2, GitCompareArrows, RefreshCw, X } from "lucide-react";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { readRuntimeDiff, type DiffFile, type RepositoryDiff } from "./diff-runtime";
+import { useDialogFocus } from "./useDialogFocus";
 
 function pathFor(file: DiffFile): string {
   return file.status === "deleted" ? file.oldPath : file.newPath;
@@ -13,6 +14,9 @@ export function DiffDock() {
   const [selectedPath, setSelectedPath] = useState("");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string>();
+  const dialogRef = useRef<HTMLElement>(null);
+  const close = useCallback(() => setOpen(false), []);
+  useDialogFocus(open, dialogRef, close);
 
   const refresh = useCallback(async () => {
     const currentRepo = window.localStorage.getItem("medusa.desktop.repo") ?? "";
@@ -48,23 +52,23 @@ export function DiffDock() {
 
   return (
     <>
-      <button className="diff-dock-trigger" onClick={() => setOpen(true)} aria-label="Open changes viewer">
+      <button className="diff-dock-trigger" onClick={() => setOpen(true)} aria-label="Open changes viewer" aria-haspopup="dialog" aria-expanded={open}>
         <GitCompareArrows size={16} /> Changes
       </button>
       {open && (
-        <section className="diff-dock" aria-label="Repository changes">
+        <section ref={dialogRef} className="diff-dock" role="dialog" aria-modal="true" aria-labelledby="diff-dialog-title" tabIndex={-1}>
           <header className="diff-dock-toolbar">
             <div>
-              <h2>Working tree changes</h2>
-              <p>{diff.files.length} files <span className="diff-add">+{diff.additions}</span> <span className="diff-del">−{diff.deletions}</span></p>
+              <h2 id="diff-dialog-title">Working tree changes</h2>
+              <p aria-live="polite">{diff.files.length} files <span className="diff-add">+{diff.additions}</span> <span className="diff-del">−{diff.deletions}</span></p>
             </div>
             <div>
               <button onClick={() => void refresh()} disabled={loading}><RefreshCw size={15} /> {loading ? "Refreshing" : "Refresh"}</button>
-              <button onClick={() => setOpen(false)} aria-label="Close changes viewer"><X size={16} /></button>
+              <button onClick={close} aria-label="Close changes viewer"><X size={16} /></button>
             </div>
           </header>
           {!repo && <div className="diff-empty">Open a repository to inspect working-tree changes.</div>}
-          {error && <div className="diff-error">{error}</div>}
+          {error && <div className="diff-error" role="alert">{error}</div>}
           {repo && !diff.files.length && !loading && <div className="diff-empty">No tracked changes against HEAD.</div>}
           {!!diff.files.length && (
             <div className="diff-layout">
@@ -72,7 +76,7 @@ export function DiffDock() {
                 {diff.files.map((file) => {
                   const path = pathFor(file);
                   return (
-                    <button key={`${file.oldPath}-${file.newPath}`} className={path === selectedPath ? "active" : ""} onClick={() => setSelectedPath(path)}>
+                    <button key={`${file.oldPath}-${file.newPath}`} className={path === selectedPath ? "active" : ""} aria-current={path === selectedPath ? "true" : undefined} onClick={() => setSelectedPath(path)}>
                       <FileCode2 size={14} />
                       <span><strong>{path}</strong><small>{file.status}</small></span>
                       <em className="diff-add">+{file.additions}</em><em className="diff-del">−{file.deletions}</em>
@@ -80,7 +84,7 @@ export function DiffDock() {
                   );
                 })}
               </nav>
-              <section className="diff-file" aria-live="polite">
+              <section className="diff-file" aria-live="polite" aria-label="Selected file diff">
                 {selected && (
                   <>
                     <header><strong>{pathFor(selected)}</strong>{selected.status === "renamed" && <small>{selected.oldPath} → {selected.newPath}</small>}</header>
