@@ -138,10 +138,8 @@ fn lifecycle_paths(root: &Path) -> Vec<std::path::PathBuf> {
 }
 
 fn dependency_graph_sha256(skill_directory: &Path) -> Option<String> {
-    let value: serde_json::Value = serde_json::from_slice(
-        &fs::read(skill_directory.join(LOCK_FILE)).ok()?,
-    )
-    .ok()?;
+    let value: serde_json::Value =
+        serde_json::from_slice(&fs::read(skill_directory.join(LOCK_FILE)).ok()?).ok()?;
     let digest = value.get("graph_sha256")?.as_str()?;
     (digest.len() == 64 && digest.bytes().all(|byte| byte.is_ascii_hexdigit()))
         .then(|| digest.to_owned())
@@ -336,10 +334,9 @@ mod tests {
         .expect("lock");
         metrics(repo.path(), "verify", 8, 4);
         refresh(repo.path()).expect("refresh recovered");
-        let summary: serde_json::Value = serde_json::from_slice(
-            &fs::read(repo.path().join(PROBATION_PATH)).expect("summary"),
-        )
-        .expect("summary json");
+        let summary: serde_json::Value =
+            serde_json::from_slice(&fs::read(repo.path().join(PROBATION_PATH)).expect("summary"))
+                .expect("summary json");
         assert_eq!(summary["skills"]["verify"]["state"], "passed");
         assert_eq!(
             summary["skills"]["verify"]["dependency_graph_sha256"],

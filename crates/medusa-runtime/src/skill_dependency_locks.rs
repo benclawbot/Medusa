@@ -126,7 +126,12 @@ pub fn verify_restorable_dependency_lock(
     if !lock_path.exists() {
         return Ok(None);
     }
-    let lock_path = confined_file(&canonical_candidate, &lock_path, selected, "dependency lock")?;
+    let lock_path = confined_file(
+        &canonical_candidate,
+        &lock_path,
+        selected,
+        "dependency lock",
+    )?;
     let stored = read_receipt(&lock_path, selected)?;
     let direct = candidate_dependencies(&canonical_candidate, selected)?;
     let mut order = Vec::new();
@@ -251,8 +256,8 @@ fn locked_skill(root: &Path, directory: &Path, name: &str) -> Result<LockedSkill
     let manifest = directory.join(MANIFEST_FILE);
     let manifest_bytes = if manifest.exists() {
         let manifest = confined_file(root, &manifest, name, "dependency manifest")?;
-        let bytes = fs::read(&manifest)
-            .map_err(|error| format!("read {}: {error}", manifest.display()))?;
+        let bytes =
+            fs::read(&manifest).map_err(|error| format!("read {}: {error}", manifest.display()))?;
         canonical_manifest(&bytes, &manifest)?
     } else {
         EMPTY_MANIFEST.to_vec()
@@ -274,26 +279,25 @@ fn candidate_dependencies(candidate: &Path, selected: &str) -> Result<Vec<String
         &fs::read(&manifest).map_err(|error| format!("read {}: {error}", manifest.display()))?,
     )
     .map_err(|error| format!("parse {}: {error}", manifest.display()))?;
-    if value.get("schema_version").and_then(serde_json::Value::as_u64) != Some(1) {
+    if value
+        .get("schema_version")
+        .and_then(serde_json::Value::as_u64)
+        != Some(1)
+    {
         return Err(format!("{} requires schema_version 1", manifest.display()));
     }
-    let mut dependencies = value
-        .get("requires")
-        .map_or(Ok(Vec::new()), |value| {
-            value
-                .as_array()
-                .ok_or_else(|| format!("{}.requires must be an array", manifest.display()))?
-                .iter()
-                .map(|value| {
-                    value
-                        .as_str()
-                        .map(str::to_owned)
-                        .ok_or_else(|| {
-                            format!("{}.requires entries must be strings", manifest.display())
-                        })
+    let mut dependencies = value.get("requires").map_or(Ok(Vec::new()), |value| {
+        value
+            .as_array()
+            .ok_or_else(|| format!("{}.requires must be an array", manifest.display()))?
+            .iter()
+            .map(|value| {
+                value.as_str().map(str::to_owned).ok_or_else(|| {
+                    format!("{}.requires entries must be strings", manifest.display())
                 })
-                .collect::<Result<Vec<_>, String>>()
-        })?;
+            })
+            .collect::<Result<Vec<_>, String>>()
+    })?;
     for dependency in &dependencies {
         validate_name(dependency)?;
     }
@@ -319,12 +323,7 @@ fn confined_directory(root: &Path, name: &str) -> Result<PathBuf, String> {
     Ok(canonical)
 }
 
-fn confined_file(
-    root: &Path,
-    path: &Path,
-    name: &str,
-    label: &str,
-) -> Result<PathBuf, String> {
+fn confined_file(root: &Path, path: &Path, name: &str, label: &str) -> Result<PathBuf, String> {
     let metadata = fs::symlink_metadata(path)
         .map_err(|error| format!("inspect {}: {error}", path.display()))?;
     if metadata.file_type().is_symlink() || !metadata.is_file() {

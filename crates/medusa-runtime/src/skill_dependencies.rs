@@ -332,10 +332,6 @@ pub fn validate_restorable_skill(
             ));
         }
     }
-    crate::skill_dependency_locks::verify_restorable_dependency_lock(
-        active_root,
-        candidate,
-        name,
-    )?;
+    crate::skill_dependency_locks::verify_restorable_dependency_lock(active_root, candidate, name)?;
     Ok(())
 }

@@ -158,7 +158,8 @@ fn verify_probation_digest(
     let Some(expected) = report.dependency_graph_sha256.as_deref() else {
         return Ok(());
     };
-    let current = medusa_runtime::skill_dependency_locks::verify_dependency_lock(active_root, name)?;
+    let current =
+        medusa_runtime::skill_dependency_locks::verify_dependency_lock(active_root, name)?;
     if current.graph_sha256 != expected {
         return Err(format!(
             "skill `{name}` dependency graph drifted during probation: expected {expected}, found {}",
