@@ -198,7 +198,10 @@ fn validate_preview(preview: &GitMutationPreview) -> Result<(), String> {
         return Err("preview title is required".to_owned());
     }
     if preview.affected_resources.is_empty()
-        || preview.affected_resources.iter().any(|value| value.trim().is_empty())
+        || preview
+            .affected_resources
+            .iter()
+            .any(|value| value.trim().is_empty())
     {
         return Err("preview affected resources are required".to_owned());
     }
@@ -276,7 +279,10 @@ fn validate_paths(paths: &[String]) -> Result<Vec<String>, String> {
         .collect()
 }
 
-fn mutation_result(repo: &Path, checkpoint_ref: Option<String>) -> Result<GitMutationResult, String> {
+fn mutation_result(
+    repo: &Path,
+    checkpoint_ref: Option<String>,
+) -> Result<GitMutationResult, String> {
     let branch = current_branch(repo)?;
     let output = run_git(repo, ["rev-parse", "HEAD"])?;
     let commit_sha = String::from_utf8(output.stdout)
