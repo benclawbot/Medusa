@@ -21,6 +21,8 @@ import {
 } from "lucide-react";
 import { open } from "@tauri-apps/plugin-dialog";
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { ApprovalCard } from "./ApprovalCard";
+import "./approval-card.css";
 import {
   cancelRuntime,
   commandSuggestions,
@@ -599,34 +601,15 @@ export function App() {
                   )}
                 </article>
               ))}
-              {!!questions.length && (
-                <section className="question-card">
-                  {questions.map((question) => (
-                    <div key={`${question.header}-${question.question}`}>
-                      <small>{question.header}</small>
-                      <strong>{question.question}</strong>
-                      <div className="question-options">
-                        {question.options.map((option, index) => (
-                          <button
-                            key={option.label}
-                            autoFocus={question.header === "Permission" && index === 0}
-                            onClick={() => {
-                              if (option.label === "Provide feedback") {
-                                setPrompt("");
-                                composerRef.current?.focus();
-                              } else {
-                                void sendText(option.label, []);
-                              }
-                            }}
-                          >
-                            <span>{option.label}</span><small>{option.description}</small>
-                          </button>
-                        ))}
-                      </div>
-                    </div>
-                  ))}
-                </section>
-              )}
+              <ApprovalCard
+                prompts={questions}
+                plan={plan}
+                onRespond={(response) => void sendText(response, [])}
+                onEditPlan={() => {
+                  setPrompt("Please modify the plan: ");
+                  composerRef.current?.focus();
+                }}
+              />
               {busy && <div className="thinking-row"><Activity size={15} /> Medusa is working…</div>}
             </div>
 
