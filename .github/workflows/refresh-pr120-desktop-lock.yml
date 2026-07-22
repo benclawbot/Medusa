@@ -1,0 +1,32 @@
+name: Refresh PR120 desktop lock
+
+on:
+  push:
+    branches:
+      - agent/skill-dependency-locks
+    paths:
+      - '.github/workflows/refresh-pr120-desktop-lock.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  refresh:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: agent/skill-dependency-locks
+      - uses: dtolnay/rust-toolchain@1.88.0
+      - name: Regenerate desktop Cargo lock
+        working-directory: apps/medusa-desktop/src-tauri
+        run: cargo generate-lockfile
+      - name: Commit lock and remove temporary workflow
+        run: |
+          set -euo pipefail
+          rm .github/workflows/refresh-pr120-desktop-lock.yml
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add apps/medusa-desktop/src-tauri/Cargo.lock .github/workflows/refresh-pr120-desktop-lock.yml
+          git commit -m "Refresh desktop lock for skill dependency receipts"
+          git push origin HEAD:agent/skill-dependency-locks
