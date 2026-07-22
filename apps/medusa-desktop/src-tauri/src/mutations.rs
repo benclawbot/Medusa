@@ -1,6 +1,6 @@
 use std::{
     fs,
-    path::{Component, Path, PathBuf},
+    path::{Path, PathBuf},
     process::{Command, Output},
 };
 
@@ -267,16 +267,15 @@ fn validate_paths(paths: &[String]) -> Result<Vec<String>, String> {
         .iter()
         .map(|path| {
             let path = path.trim();
-            let has_unsafe_component = Path::new(path).components().any(|component| {
-                matches!(
-                    component,
-                    Component::Prefix(_) | Component::RootDir | Component::ParentDir
-                )
-            });
+            let bytes = path.as_bytes();
+            let has_drive_prefix =
+                bytes.len() >= 2 && bytes[0].is_ascii_alphabetic() && bytes[1] == b':';
+            let has_parent_segment = path.split(['/', '\\']).any(|segment| segment == "..");
             if path.is_empty()
                 || path.starts_with('/')
                 || path.starts_with('\\')
-                || has_unsafe_component
+                || has_drive_prefix
+                || has_parent_segment
                 || path.starts_with('-')
             {
                 return Err(format!("invalid repository-relative path: {path}"));
