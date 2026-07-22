@@ -23,6 +23,9 @@ pub struct IssueMutationPreview {
     recipients: Vec<String>,
     affected_resources: Vec<String>,
     destructive: bool,
+    mutation_title: Option<String>,
+    mutation_body: Option<String>,
+    mutation_state: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -73,6 +76,12 @@ struct Fingerprint<'a> {
     recipients: Vec<String>,
     affected_resources: Vec<String>,
     destructive: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    mutation_title: Option<&'a str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    mutation_body: Option<&'a str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    mutation_state: Option<&'a str>,
 }
 
 #[tauri::command]
@@ -100,6 +109,9 @@ pub fn runtime_create_github_issue(
         &repository,
         "issue:new",
         false,
+        Some(title.as_str()),
+        Some(body.as_str()),
+        None,
     )?;
 
     let endpoint = format!("repos/{repository}/issues");
@@ -108,7 +120,14 @@ pub fn runtime_create_github_issue(
     let response = gh_json::<IssueResponse>(
         &hostname,
         &endpoint,
-        &["--method", "POST", "-f", title_field.as_str(), "-f", body_field.as_str()],
+        &[
+            "--method",
+            "POST",
+            "-f",
+            title_field.as_str(),
+            "-f",
+            body_field.as_str(),
+        ],
     )?;
 
     result_from_response(
@@ -164,6 +183,9 @@ pub fn runtime_update_github_issue(
         &repository,
         &resource,
         destructive,
+        title.as_deref(),
+        body.as_deref(),
+        state.as_deref(),
     )?;
 
     let endpoint = format!("repos/{repository}/issues/{issue_number}");
@@ -250,6 +272,7 @@ fn gh_json<T: for<'de> Deserialize<'de>>(
         .map_err(|_| "GitHub issue response could not be read".to_owned())
 }
 
+#[allow(clippy::too_many_arguments)]
 fn validate_preview(
     preview: &IssueMutationPreview,
     confirmation: &IssueMutationConfirmation,
@@ -257,6 +280,9 @@ fn validate_preview(
     repository: &str,
     resource: &str,
     destructive: bool,
+    mutation_title: Option<&str>,
+    mutation_body: Option<&str>,
+    mutation_state: Option<&str>,
 ) -> Result<(), String> {
     if std::mem::discriminant(&preview.kind) != std::mem::discriminant(&kind) {
         return Err("mutation preview kind does not match requested issue operation".to_owned());
@@ -274,6 +300,12 @@ fn validate_preview(
     {
         return Err("mutation preview does not identify the requested issue resource".to_owned());
     }
+    if normalized_optional(preview.mutation_title.as_deref()) != mutation_title
+        || normalized_optional(preview.mutation_body.as_deref()) != mutation_body
+        || normalized_optional(preview.mutation_state.as_deref()) != mutation_state
+    {
+        return Err("mutation preview content does not match requested issue mutation".to_owned());
+    }
     if confirmation.confirmed_at.trim().is_empty() {
         return Err("mutation confirmation timestamp is required".to_owned());
     }
@@ -282,6 +314,10 @@ fn validate_preview(
         return Err("mutation confirmation does not match the active preview".to_owned());
     }
     Ok(())
+}
+
+fn normalized_optional(value: Option<&str>) -> Option<&str> {
+    value.map(str::trim)
 }
 
 fn mutation_fingerprint(preview: &IssueMutationPreview) -> Result<String, String> {
@@ -306,6 +342,9 @@ fn mutation_fingerprint(preview: &IssueMutationPreview) -> Result<String, String
         recipients,
         affected_resources,
         destructive: preview.destructive,
+        mutation_title: normalized_optional(preview.mutation_title.as_deref()),
+        mutation_body: normalized_optional(preview.mutation_body.as_deref()),
+        mutation_state: normalized_optional(preview.mutation_state.as_deref()),
     })
     .map_err(|error| format!("cannot encode mutation preview: {error}"))
 }
@@ -387,32 +426,66 @@ mod tests {
             recipients: Vec::new(),
             affected_resources: vec![resource.to_owned()],
             destructive,
+            mutation_title: None,
+            mutation_body: None,
+            mutation_state: None,
+        }
+    }
+
+    fn confirmation(preview: &IssueMutationPreview) -> IssueMutationConfirmation {
+        IssueMutationConfirmation {
+            preview_fingerprint: mutation_fingerprint(preview).expect("fingerprint"),
+            confirmed_at: "2026-07-22T00:00:00Z".to_owned(),
         }
     }
 
     #[test]
     fn fingerprints_match_frontend_normalization() {
-        let value = preview(IssueMutationKind::IssueCreate, "issue:new", false);
+        let mut value = preview(IssueMutationKind::IssueCreate, "issue:new", false);
+        value.mutation_title = Some("Bug".to_owned());
+        value.mutation_body = Some("Details".to_owned());
         assert_eq!(
             mutation_fingerprint(&value).expect("fingerprint"),
-            r#"{"kind":"issueCreate","repository":"octo/repo","branch":"main","title":"Issue mutation","body":"Details","recipients":[],"affectedResources":["issue:new"],"destructive":false}"#
+            r#"{"kind":"issueCreate","repository":"octo/repo","branch":"main","title":"Issue mutation","body":"Details","recipients":[],"affectedResources":["issue:new"],"destructive":false,"mutationTitle":"Bug","mutationBody":"Details"}"#
         );
     }
 
     #[test]
-    fn requires_destructive_confirmation_for_closing_issue() {
-        let value = preview(IssueMutationKind::IssueUpdate, "issue:42", false);
-        let confirmation = IssueMutationConfirmation {
-            preview_fingerprint: mutation_fingerprint(&value).expect("fingerprint"),
-            confirmed_at: "2026-07-22T00:00:00Z".to_owned(),
-        };
+    fn binds_confirmation_to_mutated_content() {
+        let mut value = preview(IssueMutationKind::IssueCreate, "issue:new", false);
+        value.mutation_title = Some("Safe title".to_owned());
+        value.mutation_body = Some("Safe body".to_owned());
+        let confirmed = confirmation(&value);
         let error = validate_preview(
             &value,
-            &confirmation,
+            &confirmed,
+            IssueMutationKind::IssueCreate,
+            "octo/repo",
+            "issue:new",
+            false,
+            Some("Tampered title"),
+            Some("Safe body"),
+            None,
+        )
+        .expect_err("tampered content must fail");
+        assert!(error.contains("content does not match"));
+    }
+
+    #[test]
+    fn requires_destructive_confirmation_for_closing_issue() {
+        let mut value = preview(IssueMutationKind::IssueUpdate, "issue:42", false);
+        value.mutation_state = Some("closed".to_owned());
+        let confirmed = confirmation(&value);
+        let error = validate_preview(
+            &value,
+            &confirmed,
             IssueMutationKind::IssueUpdate,
             "octo/repo",
             "issue:42",
             true,
+            None,
+            None,
+            Some("closed"),
         )
         .expect_err("close must require destructive preview");
         assert!(error.contains("destructive"));
@@ -431,6 +504,9 @@ mod tests {
             "octo/repo",
             "issue:42",
             false,
+            None,
+            None,
+            None,
         )
         .expect_err("stale confirmation must fail");
         assert!(error.contains("does not match"));
