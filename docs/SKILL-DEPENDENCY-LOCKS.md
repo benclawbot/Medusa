@@ -1,12 +1,12 @@
 # Skill dependency lock receipts
 
-Status: implementation in progress in PR #120.
+Status: implemented in PR #120.
 
 ## Goal
 
-Pin the exact approved project-skill graph used during a lifecycle transition so later restore, probation, graduation, and operator inspection can distinguish a valid graph from an unchanged graph.
+Pin the exact approved project-skill graph used during lifecycle evaluation so later restore, probation, graduation, and operator inspection can distinguish verified content from dependency drift.
 
-Dependency validation currently proves that the graph is structurally safe at the moment it is resolved. Lock receipts add content integrity and explicit drift evidence without introducing automatic updates or lifecycle transitions.
+Dependency validation proves that the graph is structurally safe at the moment it is resolved. Lock receipts add content integrity and explicit drift evidence without introducing automatic updates or lifecycle transitions.
 
 ## Receipt format
 
@@ -57,7 +57,7 @@ medusa skills verify-dependency-lock NAME --json
 - Quarantine preserves the existing lock receipt with the skill directory.
 - Restore validates active dependencies and verifies the quarantined lock receipt before moving the skill back into the approved root.
 - Probation records the verified graph digest alongside probation evidence.
-- Graduation requires the current graph digest to match the digest verified when probation began.
+- Graduation requires the current graph digest to match the digest verified during probation.
 - Dependency content or manifest drift is reported explicitly; Medusa never rewrites the lock automatically.
 - Operators may deliberately refresh the receipt with `lock-dependencies` after reviewing the changed graph.
 
