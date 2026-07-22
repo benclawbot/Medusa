@@ -1,0 +1,65 @@
+name: Cross-platform path fix
+
+on:
+  pull_request:
+    paths:
+      - ".github/workflows/cross-platform-path-fix.yml"
+
+permissions:
+  contents: write
+
+jobs:
+  fix:
+    if: github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.ref }}
+      - uses: dtolnay/rust-toolchain@1.88.0
+        with:
+          components: rustfmt
+      - name: Apply portable path validation
+        shell: python
+        run: |
+          from pathlib import Path
+          target = Path("apps/medusa-desktop/src-tauri/src/mutations.rs")
+          source = target.read_text()
+          source = source.replace(
+              '    path::{Component, Path, PathBuf},',
+              '    path::{Path, PathBuf},',
+          )
+          old = '''            let parsed = Path::new(path);
+            let has_unsafe_component = parsed.components().any(|component| {
+                matches!(
+                    component,
+                    Component::Prefix(_) | Component::RootDir | Component::ParentDir
+                )
+            });
+            if path.is_empty()
+                || has_unsafe_component
+                || path.starts_with(['/', '\\\\'])
+                || path.starts_with('-')
+            {'''
+          new = '''            let has_drive_prefix = path.as_bytes().get(1) == Some(&b':')
+                && path.as_bytes()[0].is_ascii_alphabetic();
+            let has_parent_segment = path
+                .split(['/', '\\\\'])
+                .any(|segment| segment == "..");
+            if path.is_empty()
+                || path.starts_with(['/', '\\\\'])
+                || has_drive_prefix
+                || has_parent_segment
+                || path.starts_with('-')
+            {'''
+          if old not in source:
+              raise SystemExit("expected validation block not found")
+          target.write_text(source.replace(old, new))
+      - name: Format and commit
+        run: |
+          cargo fmt --manifest-path apps/medusa-desktop/src-tauri/Cargo.toml
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add apps/medusa-desktop/src-tauri/src/mutations.rs
+          git commit -m "fix(desktop): validate commit paths portably"
+          git push origin HEAD:${{ github.event.pull_request.head.ref }}
