@@ -1,0 +1,64 @@
+name: Fix merge adapter once
+
+on:
+  pull_request:
+    paths:
+      - ".github/workflows/fix-merge-adapter-once.yml"
+
+permissions:
+  contents: write
+
+jobs:
+  fix:
+    if: github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.ref }}
+      - uses: dtolnay/rust-toolchain@1.88.0
+        with:
+          components: rustfmt
+      - run: |
+          python - <<'PY'
+          from pathlib import Path
+          path = Path('apps/medusa-desktop/src-tauri/src/github_merge.rs')
+          text = path.read_text()
+          old = '''    let merge_endpoint = format!("{endpoint}/merge");
+    let merge_response = gh_json::<MergeResponse>(
+        &hostname,
+        &merge_endpoint,
+        &[
+            "--method",
+            "PUT",
+            "-f",
+            expected_head_sha_field(&expected_head_sha).as_str(),
+            "-f",
+            merge_method_field(&merge_method).as_str(),
+        ],
+    )?;'''
+          new = '''    let merge_endpoint = format!("{endpoint}/merge");
+    let expected_head_sha_field = expected_head_sha_field(&expected_head_sha);
+    let merge_method_field = merge_method_field(&merge_method);
+    let merge_response = gh_json::<MergeResponse>(
+        &hostname,
+        &merge_endpoint,
+        &[
+            "--method",
+            "PUT",
+            "-f",
+            expected_head_sha_field.as_str(),
+            "-f",
+            merge_method_field.as_str(),
+        ],
+    )?;'''
+          if old not in text:
+              raise SystemExit('expected merge snippet not found')
+          path.write_text(text.replace(old, new))
+          PY
+          cargo fmt --manifest-path apps/medusa-desktop/src-tauri/Cargo.toml
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add apps/medusa-desktop/src-tauri/src/github_merge.rs
+          git commit -m "fix(desktop): stabilize merge command arguments"
+          git push origin HEAD:${{ github.event.pull_request.head.ref }}
