@@ -3,7 +3,9 @@ export type GitHubMutationKind =
   | "checkpoint"
   | "commit"
   | "push"
-  | "pullRequest";
+  | "pullRequest"
+  | "actionsRetry"
+  | "pullRequestMerge";
 
 export interface GitHubMutationPreview {
   kind: GitHubMutationKind;
@@ -41,6 +43,9 @@ export function validateMutationPreview(preview: GitHubMutationPreview): string[
   if (!preview.title.trim()) errors.push("title is required");
   if (preview.kind === "pullRequest" && !preview.body?.trim()) {
     errors.push("pull request body is required");
+  }
+  if (preview.kind === "pullRequestMerge" && !preview.destructive) {
+    errors.push("pull request merge must be marked destructive");
   }
   if (preview.affectedResources.length === 0) {
     errors.push("at least one affected resource is required");
