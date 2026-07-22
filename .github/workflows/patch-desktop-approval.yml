@@ -1,0 +1,39 @@
+name: Patch desktop approval flow
+
+on:
+  push:
+    branches:
+      - agent/desktop-approval-flows
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: agent/desktop-approval-flows
+      - uses: actions/setup-python@v5
+      - name: Wire approval card
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          path = Path('apps/medusa-desktop/src/App.tsx')
+          text = path.read_text()
+          text = text.replace('import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";\n', 'import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";\nimport { ApprovalCard } from "./ApprovalCard";\nimport "./approval-card.css";\n')
+          old = '''              {!!questions.length && (\n                <section className="question-card">\n                  {questions.map((question) => (\n                    <div key={`${question.header}-${question.question}`}>\n                      <small>{question.header}</small>\n                      <strong>{question.question}</strong>\n                      <div className="question-options">\n                        {question.options.map((option, index) => (\n                          <button\n                            key={option.label}\n                            autoFocus={question.header === "Permission" && index === 0}\n                            onClick={() => {\n                              if (option.label === "Provide feedback") {\n                                setPrompt("");\n                                composerRef.current?.focus();\n                              } else {\n                                void sendText(option.label, []);\n                              }\n                            }}\n                          >\n                            <span>{option.label}</span><small>{option.description}</small>\n                          </button>\n                        ))}\n                      </div>\n                    </div>\n                  ))}\n                </section>\n              )}'''
+          new = '''              <ApprovalCard\n                prompts={questions}\n                plan={plan}\n                onRespond={(response) => void sendText(response, [])}\n                onEditPlan={() => {\n                  setPrompt("Please modify the plan: ");\n                  composerRef.current?.focus();\n                }}\n              />'''
+          if old not in text:
+              raise SystemExit('question card block not found')
+          path.write_text(text.replace(old, new))
+          PY
+      - name: Commit patch
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add apps/medusa-desktop/src/App.tsx
+          git commit -m "Wire desktop approval actions" || exit 0
+          git push origin HEAD:agent/desktop-approval-flows
