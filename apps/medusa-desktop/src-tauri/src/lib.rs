@@ -4,6 +4,7 @@ mod dto;
 mod github_actions;
 mod github_auth;
 mod github_checks;
+mod github_issue_mutations;
 mod github_issues;
 mod github_logs;
 #[rustfmt::skip]
@@ -29,6 +30,7 @@ use diffs::runtime_read_diff;
 use github_actions::runtime_retry_github_actions_job;
 use github_auth::runtime_github_auth_status;
 use github_checks::runtime_github_commit_checks;
+use github_issue_mutations::{runtime_create_github_issue, runtime_update_github_issue};
 use github_issues::runtime_github_issues;
 use github_logs::runtime_github_actions_job_log;
 use github_merge::runtime_merge_github_pull_request;
@@ -73,6 +75,8 @@ pub fn run() -> tauri::Result<()> {
             runtime_github_repository_access,
             runtime_github_commit_checks,
             runtime_github_issues,
+            runtime_create_github_issue,
+            runtime_update_github_issue,
             runtime_github_actions_job_log,
             runtime_retry_github_actions_job,
             runtime_merge_github_pull_request,
