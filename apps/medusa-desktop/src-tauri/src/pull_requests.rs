@@ -1,8 +1,35 @@
-use std::{fs, path::{Path, PathBuf}, process::Command};
+use std::{
+    fs,
+    path::{Path, PathBuf},
+    process::Command,
+};
 
 use serde::{Deserialize, Serialize};
 
-use crate::mutations::{GitMutationConfirmation, GitMutationKind, GitMutationPreview};
+#[derive(Clone, Copy, Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+enum PullRequestMutationKind {
+    PullRequest,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PullRequestMutationPreview {
+    kind: PullRequestMutationKind,
+    repository: String,
+    branch: String,
+    title: String,
+    body: Option<String>,
+    recipients: Vec<String>,
+    affected_resources: Vec<String>,
+    destructive: bool,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PullRequestMutationConfirmation {
+    preview_fingerprint: String,
+}
 
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -15,7 +42,7 @@ pub struct DraftPullRequestResult {
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 struct Fingerprint<'a> {
-    kind: GitMutationKind,
+    kind: PullRequestMutationKind,
     repository: &'a str,
     branch: &'a str,
     title: &'a str,
@@ -29,8 +56,8 @@ struct Fingerprint<'a> {
 pub fn runtime_create_draft_pull_request(
     repo: String,
     base: String,
-    preview: GitMutationPreview,
-    confirmation: GitMutationConfirmation,
+    preview: PullRequestMutationPreview,
+    confirmation: PullRequestMutationConfirmation,
 ) -> Result<DraftPullRequestResult, String> {
     let repo = canonical_repo(&repo)?;
     validate_preview(&preview, &confirmation, &repo)?;
@@ -61,7 +88,12 @@ pub fn runtime_create_draft_pull_request(
         "--head".to_owned(),
         branch.clone(),
     ];
-    for reviewer in preview.recipients.iter().map(|value| value.trim()).filter(|value| !value.is_empty()) {
+    for reviewer in preview
+        .recipients
+        .iter()
+        .map(|value| value.trim())
+        .filter(|value| !value.is_empty())
+    {
         args.push("--reviewer".to_owned());
         args.push(reviewer.to_owned());
     }
@@ -83,11 +115,16 @@ pub fn runtime_create_draft_pull_request(
         .map(str::to_owned)
         .ok_or_else(|| "GitHub CLI did not return a pull request URL".to_owned())?;
     let commit_sha = git_stdout(&repo, ["rev-parse", "HEAD"])?;
-    Ok(DraftPullRequestResult { branch, commit_sha, pull_request_url })
+    Ok(DraftPullRequestResult {
+        branch,
+        commit_sha,
+        pull_request_url,
+    })
 }
 
 fn canonical_repo(repo: &str) -> Result<PathBuf, String> {
-    let repo = fs::canonicalize(Path::new(repo)).map_err(|error| format!("cannot open {repo}: {error}"))?;
+    let repo = fs::canonicalize(Path::new(repo))
+        .map_err(|error| format!("cannot open {repo}: {error}"))?;
     if !repo.is_dir() {
         return Err(format!("{} is not a directory", repo.display()));
     }
@@ -96,19 +133,23 @@ fn canonical_repo(repo: &str) -> Result<PathBuf, String> {
 }
 
 fn validate_preview(
-    preview: &GitMutationPreview,
-    confirmation: &GitMutationConfirmation,
+    preview: &PullRequestMutationPreview,
+    confirmation: &PullRequestMutationConfirmation,
     repo: &Path,
 ) -> Result<(), String> {
-    if !matches!(preview.kind, GitMutationKind::PullRequest) {
-        return Err("mutation preview kind does not match requested operation".to_owned());
-    }
     let preview_repo = fs::canonicalize(preview.repository.trim())
         .map_err(|error| format!("cannot open preview repository: {error}"))?;
     if preview_repo != repo {
         return Err("mutation preview repository does not match requested repository".to_owned());
     }
-    if preview.title.trim().is_empty() || preview.affected_resources.is_empty() {
+    if preview.title.trim().is_empty()
+        || preview.body.as_deref().unwrap_or("").trim().is_empty()
+        || preview.affected_resources.is_empty()
+        || preview
+            .affected_resources
+            .iter()
+            .any(|value| value.trim().is_empty())
+    {
         return Err("pull request preview is incomplete".to_owned());
     }
     let expected = mutation_fingerprint(preview)?;
@@ -118,10 +159,18 @@ fn validate_preview(
     Ok(())
 }
 
-fn mutation_fingerprint(preview: &GitMutationPreview) -> Result<String, String> {
-    let mut recipients = preview.recipients.iter().map(|value| value.trim().to_owned()).collect::<Vec<_>>();
+fn mutation_fingerprint(preview: &PullRequestMutationPreview) -> Result<String, String> {
+    let mut recipients = preview
+        .recipients
+        .iter()
+        .map(|value| value.trim().to_owned())
+        .collect::<Vec<_>>();
     recipients.sort();
-    let mut affected_resources = preview.affected_resources.iter().map(|value| value.trim().to_owned()).collect::<Vec<_>>();
+    let mut affected_resources = preview
+        .affected_resources
+        .iter()
+        .map(|value| value.trim().to_owned())
+        .collect::<Vec<_>>();
     affected_resources.sort();
     serde_json::to_string(&Fingerprint {
         kind: preview.kind,
@@ -132,7 +181,8 @@ fn mutation_fingerprint(preview: &GitMutationPreview) -> Result<String, String> 
         recipients,
         affected_resources,
         destructive: preview.destructive,
-    }).map_err(|error| format!("cannot encode mutation preview: {error}"))
+    })
+    .map_err(|error| format!("cannot encode mutation preview: {error}"))
 }
 
 fn current_branch(repo: &Path) -> Result<String, String> {
@@ -144,7 +194,15 @@ fn current_branch(repo: &Path) -> Result<String, String> {
 }
 
 fn require_upstream(repo: &Path, branch: &str) -> Result<(), String> {
-    let upstream = git_stdout(repo, ["rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{upstream}"])?;
+    let upstream = git_stdout(
+        repo,
+        [
+            "rev-parse",
+            "--abbrev-ref",
+            "--symbolic-full-name",
+            "@{upstream}",
+        ],
+    )?;
     if upstream.is_empty() || !upstream.ends_with(branch) {
         return Err("active branch must be pushed before creating a pull request".to_owned());
     }
@@ -171,17 +229,20 @@ mod tests {
     use super::*;
 
     #[test]
-    fn rejects_non_pull_request_preview() {
-        let preview = GitMutationPreview {
-            kind: GitMutationKind::Commit,
+    fn fingerprint_matches_frontend_normalization() {
+        let preview = PullRequestMutationPreview {
+            kind: PullRequestMutationKind::PullRequest,
             repository: "/repo".to_owned(),
             branch: "feature/safe".to_owned(),
-            title: "Title".to_owned(),
+            title: "Open draft".to_owned(),
             body: Some("Body".to_owned()),
-            recipients: vec![],
+            recipients: vec!["reviewer".to_owned()],
             affected_resources: vec!["branch:feature/safe".to_owned()],
             destructive: false,
         };
-        assert!(!matches!(preview.kind, GitMutationKind::PullRequest));
+        assert_eq!(
+            mutation_fingerprint(&preview).expect("fingerprint"),
+            r#"{"kind":"pullRequest","repository":"/repo","branch":"feature/safe","title":"Open draft","body":"Body","recipients":["reviewer"],"affectedResources":["branch:feature/safe"],"destructive":false}"#
+        );
     }
 }
