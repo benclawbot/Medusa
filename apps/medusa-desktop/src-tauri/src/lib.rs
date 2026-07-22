@@ -1,4 +1,5 @@
 mod credentials;
+mod diffs;
 mod dto;
 mod runtime {
     include!("runtime.rs");
@@ -12,6 +13,7 @@ extern crate self as tempfile;
 #[cfg(test)]
 pub(crate) use test_tempfile::tempdir;
 
+use diffs::runtime_read_diff;
 use runtime::{
     RuntimeRegistry, runtime_cancel, runtime_close, runtime_command, runtime_command_suggestions,
     runtime_configure_model, runtime_poll, runtime_resume, runtime_start, runtime_submit,
@@ -35,6 +37,7 @@ pub fn run() -> tauri::Result<()> {
             runtime_configure_model,
             runtime_list_sessions,
             runtime_read_session,
+            runtime_read_diff,
         ])
         .run(tauri::generate_context!())
 }
