@@ -2,6 +2,8 @@
 
 #[path = "../src/skill_dependencies.rs"]
 mod skill_dependencies;
+#[path = "../src/skill_dependency_locks.rs"]
+mod skill_dependency_locks;
 
 use std::{fs, path::Path};
 

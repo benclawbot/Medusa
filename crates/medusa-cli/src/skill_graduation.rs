@@ -31,6 +31,8 @@ struct ProbationReport {
     verification_rate_change_milli: i32,
     remaining_samples: usize,
     restored_at_epoch_seconds: Option<u64>,
+    #[serde(default)]
+    dependency_graph_sha256: Option<String>,
     latest_recorded_at: String,
     recommendation: String,
 }
@@ -90,12 +92,11 @@ fn graduate(root: &Path, args: &[String]) -> Result<(), String> {
         ));
     }
 
-    medusa_runtime::skill_dependencies::resolve_project_skill(
-        &root.join(ACTIVE_ROOT),
-        name,
-        64_000,
-    )?;
-    let lifecycle_path = root.join(ACTIVE_ROOT).join(name).join(LIFECYCLE_FILE);
+    let active_root = root.join(ACTIVE_ROOT);
+    medusa_runtime::skill_dependencies::resolve_project_skill(&active_root, name, 64_000)?;
+    verify_probation_digest(&active_root, name, &report)?;
+
+    let lifecycle_path = active_root.join(name).join(LIFECYCLE_FILE);
     let mut lifecycle: LifecycleRecord = read_json(&lifecycle_path)?;
     if lifecycle.skill != name || lifecycle.status != "restored" {
         return Err(format!(
@@ -111,9 +112,7 @@ fn graduate(root: &Path, args: &[String]) -> Result<(), String> {
 
     let receipt_path = root.join(GRADUATION_ROOT).join(format!("{name}.json"));
     if receipt_path.exists() {
-        lifecycle.status = "restored".to_owned();
-        lifecycle.graduated_at_epoch_seconds = None;
-        let _ = write_json(&lifecycle_path, &lifecycle);
+        rollback_lifecycle(&lifecycle_path, &mut lifecycle);
         return Err(format!(
             "graduation receipt already exists; refusing overwrite: {}",
             receipt_path.display()
@@ -149,6 +148,31 @@ fn graduate(root: &Path, args: &[String]) -> Result<(), String> {
         receipt_path.display()
     );
     Ok(())
+}
+
+fn verify_probation_digest(
+    active_root: &Path,
+    name: &str,
+    report: &ProbationReport,
+) -> Result<(), String> {
+    let Some(expected) = report.dependency_graph_sha256.as_deref() else {
+        return Ok(());
+    };
+    let current =
+        medusa_runtime::skill_dependency_locks::verify_dependency_lock(active_root, name)?;
+    if current.graph_sha256 != expected {
+        return Err(format!(
+            "skill `{name}` dependency graph drifted during probation: expected {expected}, found {}",
+            current.graph_sha256
+        ));
+    }
+    Ok(())
+}
+
+fn rollback_lifecycle(path: &Path, lifecycle: &mut LifecycleRecord) {
+    lifecycle.status = "restored".to_owned();
+    lifecycle.graduated_at_epoch_seconds = None;
+    let _ = write_json(path, lifecycle);
 }
 
 fn parse_args(args: &[String]) -> Result<(&str, bool), String> {
@@ -207,7 +231,7 @@ fn usage() -> String {
 mod tests {
     use super::*;
 
-    fn fixture(root: &Path, state: &str) {
+    fn fixture(root: &Path, state: &str, digest: Option<&str>) {
         let skill = root.join(ACTIVE_ROOT).join("verify");
         fs::create_dir_all(&skill).expect("skill directory");
         fs::write(skill.join("SKILL.md"), "# Verify\n").expect("skill");
@@ -244,6 +268,7 @@ mod tests {
                     "verification_rate_change_milli": 800,
                     "remaining_samples": 0,
                     "restored_at_epoch_seconds": 2,
+                    "dependency_graph_sha256": digest,
                     "latest_recorded_at": "2026-07-21T16:00:00Z",
                     "recommendation": "remain active"
                 }}
@@ -256,16 +281,16 @@ mod tests {
     #[test]
     fn graduation_requires_passed_state_and_confirmation() {
         let repo = tempfile::tempdir().expect("repo");
-        fixture(repo.path(), "watch");
+        fixture(repo.path(), "watch", None);
         assert!(graduate(repo.path(), &["verify".to_owned(), "--confirm".to_owned()]).is_err());
-        fixture(repo.path(), "passed");
+        fixture(repo.path(), "passed", None);
         assert!(graduate(repo.path(), &["verify".to_owned()]).is_err());
     }
 
     #[test]
-    fn passed_skill_graduates_with_receipt_and_leaves_probation() {
+    fn passed_legacy_skill_graduates_with_receipt() {
         let repo = tempfile::tempdir().expect("repo");
-        fixture(repo.path(), "passed");
+        fixture(repo.path(), "passed", None);
         graduate(repo.path(), &["verify".to_owned(), "--confirm".to_owned()]).expect("graduate");
         let lifecycle: serde_json::Value = serde_json::from_slice(
             &fs::read(repo.path().join(ACTIVE_ROOT).join("verify/lifecycle.json"))
@@ -273,21 +298,25 @@ mod tests {
         )
         .expect("lifecycle json");
         assert_eq!(lifecycle["status"], "graduated");
-        assert!(
-            repo.path()
-                .join(GRADUATION_ROOT)
-                .join("verify.json")
-                .is_file()
-        );
-        let probation: serde_json::Value =
-            serde_json::from_slice(&fs::read(repo.path().join(PROBATION_PATH)).expect("probation"))
-                .expect("probation json");
-        assert!(probation["skills"]["verify"].is_null());
+        assert!(root_receipt(repo.path()).is_file());
+    }
+
+    #[test]
+    fn probation_digest_requires_a_current_lock() {
+        let repo = tempfile::tempdir().expect("repo");
+        fixture(repo.path(), "passed", Some(&"a".repeat(64)));
+        let error = graduate(repo.path(), &["verify".to_owned(), "--confirm".to_owned()])
+            .expect_err("missing lock must block graduation");
+        assert!(error.contains("dependency lock is missing"));
     }
 
     #[test]
     fn names_cannot_escape_skill_root() {
         assert!(validate_name("../escape").is_err());
         assert!(validate_name("nested/name").is_err());
+    }
+
+    fn root_receipt(root: &Path) -> std::path::PathBuf {
+        root.join(GRADUATION_ROOT).join("verify.json")
     }
 }

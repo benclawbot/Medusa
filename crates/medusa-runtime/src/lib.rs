@@ -27,6 +27,7 @@ pub mod commands;
 mod error;
 pub mod prompt;
 pub mod skill_dependencies;
+pub mod skill_dependency_locks;
 mod support;
 #[cfg(test)]
 mod tests;

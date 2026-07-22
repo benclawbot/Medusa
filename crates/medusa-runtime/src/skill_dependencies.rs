@@ -33,6 +33,17 @@ pub fn resolve_project_skill(
     max_bytes: usize,
 ) -> Result<ResolvedSkillGraph, String> {
     validate_name(selected)?;
+    if max_bytes != usize::MAX {
+        crate::skill_dependency_locks::verify_dependency_lock_if_present(root, selected)?;
+    }
+    resolve_project_skill_unverified(root, selected, max_bytes)
+}
+
+fn resolve_project_skill_unverified(
+    root: &Path,
+    selected: &str,
+    max_bytes: usize,
+) -> Result<ResolvedSkillGraph, String> {
     let graph = load_graph(root)?;
     let direct = graph
         .get(selected)
@@ -74,13 +85,11 @@ pub fn inspect_project_skill(root: &Path, selected: &str) -> Result<DependencyIn
         .get(selected)
         .cloned()
         .ok_or_else(|| format!("approved project skill `{selected}` was not found"))?;
-    let transitive_order = topological_order(&graph, selected)?;
-    let reverse_dependents = reverse_dependents_in_graph(&graph, selected)?;
     Ok(DependencyInspection {
         skill: selected.to_owned(),
         direct,
-        transitive_order,
-        reverse_dependents,
+        transitive_order: topological_order(&graph, selected)?,
+        reverse_dependents: reverse_dependents_in_graph(&graph, selected)?,
     })
 }
 
@@ -94,20 +103,19 @@ pub fn validate_project_graph(root: &Path) -> Result<Vec<String>, String> {
 
 pub fn reverse_dependents(root: &Path, target: &str) -> Result<Vec<String>, String> {
     validate_name(target)?;
-    let graph = load_graph(root)?;
-    reverse_dependents_in_graph(&graph, target)
+    reverse_dependents_in_graph(&load_graph(root)?, target)
 }
 
 fn load_graph(root: &Path) -> Result<BTreeMap<String, Vec<String>>, String> {
     let canonical_root = fs::canonicalize(root)
         .map_err(|error| format!("resolve approved skill root {}: {error}", root.display()))?;
-    let mut graph = BTreeMap::new();
     let entries = fs::read_dir(&canonical_root).map_err(|error| {
         format!(
             "read approved skill root {}: {error}",
             canonical_root.display()
         )
     })?;
+    let mut graph = BTreeMap::new();
     for entry in entries {
         let entry = entry.map_err(|error| format!("read approved skill entry: {error}"))?;
         let file_type = entry
@@ -124,12 +132,10 @@ fn load_graph(root: &Path) -> Result<BTreeMap<String, Vec<String>>, String> {
         }
         let name = entry.file_name().to_string_lossy().into_owned();
         validate_name(&name)?;
-        let skill_path = confined_skill_path(&canonical_root, &name)?;
-        if !skill_path.is_file() {
+        if !confined_skill_path(&canonical_root, &name)?.is_file() {
             continue;
         }
-        let dependencies = read_dependencies(&canonical_root, &name)?;
-        graph.insert(name, dependencies);
+        graph.insert(name.clone(), read_dependencies(&canonical_root, &name)?);
     }
     for (skill, dependencies) in &graph {
         for dependency in dependencies {
@@ -147,49 +153,43 @@ fn load_graph(root: &Path) -> Result<BTreeMap<String, Vec<String>>, String> {
 }
 
 fn read_dependencies(root: &Path, name: &str) -> Result<Vec<String>, String> {
-    let directory = confined_directory(root, name)?;
-    let manifest = directory.join(MANIFEST);
+    let manifest = confined_directory(root, name)?.join(MANIFEST);
     if !manifest.exists() {
         return Ok(Vec::new());
     }
-    let canonical_manifest = fs::canonicalize(&manifest)
+    let canonical = fs::canonicalize(&manifest)
         .map_err(|error| format!("resolve {}: {error}", manifest.display()))?;
-    if !canonical_manifest.starts_with(root) {
+    if !canonical.starts_with(root) {
         return Err(format!(
             "dependency manifest for `{name}` escapes approved skill root"
         ));
     }
-    let bytes = fs::read(&canonical_manifest)
-        .map_err(|error| format!("read {}: {error}", canonical_manifest.display()))?;
-    let value: Value = serde_json::from_slice(&bytes)
-        .map_err(|error| format!("parse {}: {error}", canonical_manifest.display()))?;
-    let object = value.as_object().ok_or_else(|| {
-        format!(
-            "{} must contain a JSON object",
-            canonical_manifest.display()
-        )
-    })?;
+    parse_dependencies(&canonical, name)
+}
+
+fn parse_dependencies(manifest: &Path, name: &str) -> Result<Vec<String>, String> {
+    let value: Value = serde_json::from_slice(
+        &fs::read(manifest).map_err(|error| format!("read {}: {error}", manifest.display()))?,
+    )
+    .map_err(|error| format!("parse {}: {error}", manifest.display()))?;
+    let object = value
+        .as_object()
+        .ok_or_else(|| format!("{} must contain a JSON object", manifest.display()))?;
     if object.get("schema_version").and_then(Value::as_u64) != Some(1) {
-        return Err(format!(
-            "{} requires schema_version 1",
-            canonical_manifest.display()
-        ));
+        return Err(format!("{} requires schema_version 1", manifest.display()));
     }
     let requires = match object.get("requires") {
         None => return Ok(Vec::new()),
         Some(value) => value
             .as_array()
-            .ok_or_else(|| format!("{}.requires must be an array", canonical_manifest.display()))?,
+            .ok_or_else(|| format!("{}.requires must be an array", manifest.display()))?,
     };
     let mut dependencies = Vec::with_capacity(requires.len());
     let mut seen = BTreeSet::new();
     for value in requires {
-        let dependency = value.as_str().ok_or_else(|| {
-            format!(
-                "{}.requires entries must be strings",
-                canonical_manifest.display()
-            )
-        })?;
+        let dependency = value
+            .as_str()
+            .ok_or_else(|| format!("{}.requires entries must be strings", manifest.display()))?;
         validate_name(dependency)?;
         if !seen.insert(dependency.to_owned()) {
             return Err(format!(
@@ -206,7 +206,7 @@ fn topological_order(
     graph: &BTreeMap<String, Vec<String>>,
     selected: &str,
 ) -> Result<Vec<String>, String> {
-    let mut state = BTreeMap::<String, VisitState>::new();
+    let mut state = BTreeMap::new();
     let mut stack = Vec::new();
     let mut order = Vec::new();
     visit(selected, graph, &mut state, &mut stack, &mut order)?;
@@ -253,11 +253,11 @@ fn reverse_dependents_in_graph(
     }
     let mut dependents = Vec::new();
     for name in graph.keys() {
-        if name == target {
-            continue;
-        }
-        let order = topological_order(graph, name)?;
-        if order.iter().any(|dependency| dependency == target) {
+        if name != target
+            && topological_order(graph, name)?
+                .iter()
+                .any(|dependency| dependency == target)
+        {
             dependents.push(name.clone());
         }
     }
@@ -308,57 +308,30 @@ pub fn validate_restorable_skill(
     validate_name(name)?;
     let graph = load_graph(active_root)?;
     let manifest = candidate.join(MANIFEST);
-    if !manifest.exists() {
-        return Ok(());
-    }
-    let canonical_candidate = fs::canonicalize(candidate)
-        .map_err(|error| format!("resolve {}: {error}", candidate.display()))?;
-    let canonical_manifest = fs::canonicalize(&manifest)
-        .map_err(|error| format!("resolve {}: {error}", manifest.display()))?;
-    if !canonical_manifest.starts_with(&canonical_candidate) {
-        return Err(format!(
-            "dependency manifest for `{name}` escapes quarantined skill directory"
-        ));
-    }
-    let value: Value = serde_json::from_slice(
-        &fs::read(&canonical_manifest)
-            .map_err(|error| format!("read {}: {error}", canonical_manifest.display()))?,
-    )
-    .map_err(|error| format!("parse {}: {error}", canonical_manifest.display()))?;
-    if value.get("schema_version").and_then(Value::as_u64) != Some(1) {
-        return Err(format!(
-            "{} requires schema_version 1",
-            canonical_manifest.display()
-        ));
-    }
-    let requires = value.get("requires").map_or(Ok(&[][..]), |value| {
-        value
-            .as_array()
-            .map(Vec::as_slice)
-            .ok_or_else(|| format!("{}.requires must be an array", canonical_manifest.display()))
-    })?;
-    let mut seen = BTreeSet::new();
-    for value in requires {
-        let dependency = value.as_str().ok_or_else(|| {
-            format!(
-                "{}.requires entries must be strings",
-                canonical_manifest.display()
-            )
-        })?;
-        validate_name(dependency)?;
+    let requires = if manifest.exists() {
+        let canonical_candidate = fs::canonicalize(candidate)
+            .map_err(|error| format!("resolve {}: {error}", candidate.display()))?;
+        let canonical_manifest = fs::canonicalize(&manifest)
+            .map_err(|error| format!("resolve {}: {error}", manifest.display()))?;
+        if !canonical_manifest.starts_with(&canonical_candidate) {
+            return Err(format!(
+                "dependency manifest for `{name}` escapes quarantined skill directory"
+            ));
+        }
+        parse_dependencies(&canonical_manifest, name)?
+    } else {
+        Vec::new()
+    };
+    for dependency in requires {
         if dependency == name {
             return Err(format!("skill `{name}` cannot depend on itself"));
         }
-        if !seen.insert(dependency) {
-            return Err(format!(
-                "skill `{name}` declares duplicate dependency `{dependency}`"
-            ));
-        }
-        if !graph.contains_key(dependency) {
+        if !graph.contains_key(&dependency) {
             return Err(format!(
                 "skill `{name}` requires unavailable approved project skill `{dependency}`"
             ));
         }
     }
+    crate::skill_dependency_locks::verify_restorable_dependency_lock(active_root, candidate, name)?;
     Ok(())
 }
