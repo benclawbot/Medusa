@@ -5,6 +5,7 @@ mod github_actions;
 mod github_auth;
 mod github_checks;
 mod github_issues;
+mod github_merge;
 mod github_repository;
 mod memories;
 mod mutations;
@@ -27,6 +28,7 @@ use github_actions::runtime_retry_github_actions_job;
 use github_auth::runtime_github_auth_status;
 use github_checks::runtime_github_commit_checks;
 use github_issues::runtime_github_issues;
+use github_merge::runtime_merge_github_pull_request;
 use github_repository::runtime_github_repository_access;
 use memories::runtime_list_memories;
 use mutations::{
@@ -69,6 +71,7 @@ pub fn run() -> tauri::Result<()> {
             runtime_github_commit_checks,
             runtime_github_issues,
             runtime_retry_github_actions_job,
+            runtime_merge_github_pull_request,
             runtime_list_memories,
         ])
         .run(tauri::generate_context!())
