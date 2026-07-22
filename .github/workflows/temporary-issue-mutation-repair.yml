@@ -1,0 +1,128 @@
+name: Temporary issue mutation repair
+
+on:
+  push:
+    branches: [roadmap/147-issue-mutations]
+    paths:
+      - ".github/workflows/temporary-issue-mutation-repair.yml"
+
+permissions:
+  contents: write
+
+jobs:
+  repair:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: roadmap/147-issue-mutations
+      - uses: dtolnay/rust-toolchain@1.88.0
+        with:
+          components: rustfmt
+      - name: Bind confirmations to exact issue payload
+        shell: python
+        run: |
+          from pathlib import Path
+
+          def replace(path, old, new):
+              file = Path(path)
+              text = file.read_text()
+              if old not in text:
+                  raise SystemExit(f"missing expected block in {path}: {old[:80]!r}")
+              file.write_text(text.replace(old, new))
+
+          rust = "apps/medusa-desktop/src-tauri/src/github_issue_mutations.rs"
+          replace(rust,
+          """    destructive: bool,\n}\n""",
+          """    destructive: bool,\n    mutation_title: Option<String>,\n    mutation_body: Option<String>,\n    mutation_state: Option<String>,\n}\n""")
+          replace(rust,
+          """    destructive: bool,\n}\n\n#[tauri::command]""",
+          """    destructive: bool,\n    #[serde(skip_serializing_if = \"Option::is_none\")]\n    mutation_title: Option<&'a str>,\n    #[serde(skip_serializing_if = \"Option::is_none\")]\n    mutation_body: Option<&'a str>,\n    #[serde(skip_serializing_if = \"Option::is_none\")]\n    mutation_state: Option<&'a str>,\n}\n\n#[tauri::command]""")
+          replace(rust,
+          """        \"issue:new\",\n        false,\n    )?;""",
+          """        \"issue:new\",\n        false,\n        Some(title.as_str()),\n        Some(body.as_str()),\n        None,\n    )?;""")
+          replace(rust,
+          """        &resource,\n        destructive,\n    )?;""",
+          """        &resource,\n        destructive,\n        title.as_deref(),\n        body.as_deref(),\n        state.as_deref(),\n    )?;""")
+          replace(rust,
+          """fn validate_preview(\n    preview: &IssueMutationPreview,\n    confirmation: &IssueMutationConfirmation,\n    kind: IssueMutationKind,\n    repository: &str,\n    resource: &str,\n    destructive: bool,\n) -> Result<(), String> {""",
+          """#[allow(clippy::too_many_arguments)]\nfn validate_preview(\n    preview: &IssueMutationPreview,\n    confirmation: &IssueMutationConfirmation,\n    kind: IssueMutationKind,\n    repository: &str,\n    resource: &str,\n    destructive: bool,\n    mutation_title: Option<&str>,\n    mutation_body: Option<&str>,\n    mutation_state: Option<&str>,\n) -> Result<(), String> {""")
+          replace(rust,
+          """    if confirmation.confirmed_at.trim().is_empty() {""",
+          """    if normalized_optional(preview.mutation_title.as_deref()) != mutation_title\n        || normalized_optional(preview.mutation_body.as_deref()) != mutation_body\n        || normalized_optional(preview.mutation_state.as_deref()) != mutation_state\n    {\n        return Err(\"mutation preview content does not match requested issue mutation\".to_owned());\n    }\n    if confirmation.confirmed_at.trim().is_empty() {""")
+          replace(rust,
+          """fn mutation_fingerprint(preview: &IssueMutationPreview) -> Result<String, String> {""",
+          """fn normalized_optional(value: Option<&str>) -> Option<&str> {\n    value.map(str::trim)\n}\n\nfn mutation_fingerprint(preview: &IssueMutationPreview) -> Result<String, String> {""")
+          replace(rust,
+          """        destructive: preview.destructive,\n    })""",
+          """        destructive: preview.destructive,\n        mutation_title: normalized_optional(preview.mutation_title.as_deref()),\n        mutation_body: normalized_optional(preview.mutation_body.as_deref()),\n        mutation_state: normalized_optional(preview.mutation_state.as_deref()),\n    })""")
+          replace(rust,
+          """            destructive,\n        }""",
+          """            destructive,\n            mutation_title: None,\n            mutation_body: None,\n            mutation_state: None,\n        }""")
+          replace(rust,
+          """    #[test]\n    fn fingerprints_match_frontend_normalization() {\n        let value = preview(IssueMutationKind::IssueCreate, \"issue:new\", false);""",
+          """    #[test]\n    fn fingerprints_match_frontend_normalization() {\n        let mut value = preview(IssueMutationKind::IssueCreate, \"issue:new\", false);\n        value.mutation_title = Some(\"Bug\".to_owned());\n        value.mutation_body = Some(\"Details\".to_owned());""")
+          replace(rust,
+          """            r#\"{\"kind\":\"issueCreate\",\"repository\":\"octo/repo\",\"branch\":\"main\",\"title\":\"Issue mutation\",\"body\":\"Details\",\"recipients\":[],\"affectedResources\":[\"issue:new\"],\"destructive\":false}\"#""",
+          """            r#\"{\"kind\":\"issueCreate\",\"repository\":\"octo/repo\",\"branch\":\"main\",\"title\":\"Issue mutation\",\"body\":\"Details\",\"recipients\":[],\"affectedResources\":[\"issue:new\"],\"destructive\":false,\"mutationTitle\":\"Bug\",\"mutationBody\":\"Details\"}\"#""")
+          replace(rust,
+          """            false,\n        )\n        .expect_err(\"stale confirmation must fail\");""",
+          """            false,\n            None,\n            None,\n            None,\n        )\n        .expect_err(\"stale confirmation must fail\");""")
+          replace(rust,
+          """            true,\n        )\n        .expect_err(\"close must require destructive preview\");""",
+          """            true,\n            None,\n            None,\n            None,\n        )\n        .expect_err(\"close must require destructive preview\");""")
+          marker = """    #[test]\n    fn requires_destructive_confirmation_for_closing_issue() {"""
+          insertion = """    #[test]\n    fn rejects_content_not_bound_to_confirmation() {\n        let mut value = preview(IssueMutationKind::IssueCreate, \"issue:new\", false);\n        value.mutation_title = Some(\"Safe title\".to_owned());\n        value.mutation_body = Some(\"Safe body\".to_owned());\n        let confirmation = IssueMutationConfirmation {\n            preview_fingerprint: mutation_fingerprint(&value).expect(\"fingerprint\"),\n            confirmed_at: \"2026-07-22T00:00:00Z\".to_owned(),\n        };\n        let error = validate_preview(\n            &value,\n            &confirmation,\n            IssueMutationKind::IssueCreate,\n            \"octo/repo\",\n            \"issue:new\",\n            false,\n            Some(\"Tampered title\"),\n            Some(\"Safe body\"),\n            None,\n        )\n        .expect_err(\"tampered content must fail\");\n        assert!(error.contains(\"content does not match\"));\n    }\n\n""" + marker
+          replace(rust, marker, insertion)
+
+          mutation = "apps/medusa-desktop/src/githubMutation.ts"
+          replace(mutation,
+          """  destructive: boolean;\n}""",
+          """  destructive: boolean;\n  mutationTitle?: string;\n  mutationBody?: string;\n  mutationState?: string;\n}""")
+          replace(mutation,
+          """    destructive: preview.destructive,\n  });""",
+          """    destructive: preview.destructive,\n    ...(preview.mutationTitle === undefined ? {} : { mutationTitle: preview.mutationTitle.trim() }),\n    ...(preview.mutationBody === undefined ? {} : { mutationBody: preview.mutationBody.trim() }),\n    ...(preview.mutationState === undefined ? {} : { mutationState: preview.mutationState.trim() }),\n  });""")
+
+          api = "apps/medusa-desktop/src/githubIssueMutationsApi.ts"
+          replace(api,
+          """  if (preview.destructive) {\n    throw new Error(\"GitHub issue creation must not be marked destructive\");\n  }\n  return invoke""",
+          """  if (preview.destructive) {\n    throw new Error(\"GitHub issue creation must not be marked destructive\");\n  }\n  const normalizedBody = body?.trim() || \"\";\n  if (preview.mutationTitle?.trim() !== normalizedTitle || preview.mutationBody?.trim() !== normalizedBody) {\n    throw new Error(\"GitHub issue preview content must match the requested mutation\");\n  }\n  return invoke""")
+          replace(api,
+          """    body: body?.trim() || null,""",
+          """    body: normalizedBody || null,""")
+          replace(api,
+          """  if (changes.state !== \"closed\" && preview.destructive) {\n    throw new Error(\"Non-closing GitHub issue updates must not be marked destructive\");\n  }\n  return invoke""",
+          """  if (changes.state !== \"closed\" && preview.destructive) {\n    throw new Error(\"Non-closing GitHub issue updates must not be marked destructive\");\n  }\n  if (preview.mutationTitle?.trim() !== title || preview.mutationBody?.trim() !== body || preview.mutationState?.trim() !== changes.state) {\n    throw new Error(\"GitHub issue preview content must match the requested mutation\");\n  }\n  return invoke""")
+
+          tests = "apps/medusa-desktop/src/githubIssueMutationsApi.test.ts"
+          replace(tests,
+          """  destructive = false,\n): GitHubMutationPreview {""",
+          """  destructive = false,\n  mutation: { title?: string; body?: string; state?: string } = {},\n): GitHubMutationPreview {""")
+          replace(tests,
+          """    destructive,\n  };""",
+          """    destructive,\n    mutationTitle: mutation.title,\n    mutationBody: mutation.body,\n    mutationState: mutation.state,\n  };""")
+          replace(tests,
+          """       preview(\"issueCreate\", \"issue:new\"),""",
+          """       preview(\"issueCreate\", \"issue:new\", false, { title: \"Bug\", body: \"Details\" }),""")
+          replace(tests,
+          """       preview: preview(\"issueCreate\", \"issue:new\"),""",
+          """       preview: preview(\"issueCreate\", \"issue:new\", false, { title: \"Bug\", body: \"Details\" }),""")
+          replace(tests,
+          """        preview(\"issueUpdate\", \"issue:42\"),""",
+          """        preview(\"issueUpdate\", \"issue:42\", false, { state: \"closed\" }),""")
+          replace(tests,
+          """        preview(\"issueUpdate\", \"issue:42\", true),""",
+          """        preview(\"issueUpdate\", \"issue:42\", true, { title: \"Updated\" }),""")
+          replace(tests,
+          """        preview(\"issueUpdate\", \"issue:0\"),""",
+          """        preview(\"issueUpdate\", \"issue:0\", false, { title: \"Updated\" }),""")
+
+      - name: Format Rust
+        run: cargo fmt --manifest-path apps/medusa-desktop/src-tauri/Cargo.toml
+      - name: Commit repair
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add apps/medusa-desktop
+          git commit -m "fix(desktop): bind issue confirmations to payload"
+          git push origin HEAD:roadmap/147-issue-mutations
