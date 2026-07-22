@@ -41,7 +41,10 @@ pub fn runtime_github_commit_checks(
 ) -> Result<GithubCommitChecks, String> {
     let repository = repository.trim().to_owned();
     let commit_sha = commit_sha.trim().to_owned();
-    let hostname = hostname.unwrap_or_else(|| "github.com".to_owned()).trim().to_owned();
+    let hostname = hostname
+        .unwrap_or_else(|| "github.com".to_owned())
+        .trim()
+        .to_owned();
     if !valid_repository(&repository) || !valid_sha(&commit_sha) || !valid_hostname(&hostname) {
         return Err("invalid GitHub repository, commit SHA, or hostname".to_owned());
     }
@@ -67,10 +70,18 @@ pub fn runtime_github_commit_checks(
     if !output.status.success() {
         return Err("GitHub checks could not be read".to_owned());
     }
-    parse_checks(&repository, &commit_sha, &String::from_utf8_lossy(&output.stdout))
+    parse_checks(
+        &repository,
+        &commit_sha,
+        &String::from_utf8_lossy(&output.stdout),
+    )
 }
 
-fn parse_checks(repository: &str, commit_sha: &str, stdout: &str) -> Result<GithubCommitChecks, String> {
+fn parse_checks(
+    repository: &str,
+    commit_sha: &str,
+    stdout: &str,
+) -> Result<GithubCommitChecks, String> {
     let response: CheckRunsResponse = serde_json::from_str(stdout)
         .map_err(|_| "GitHub checks response could not be read".to_owned())?;
     let mut checks = response
@@ -80,7 +91,9 @@ fn parse_checks(repository: &str, commit_sha: &str, stdout: &str) -> Result<Gith
             name: check.name,
             status: check.status,
             conclusion: check.conclusion,
-            details_url: check.details_url.filter(|value| value.starts_with("https://")),
+            details_url: check
+                .details_url
+                .filter(|value| value.starts_with("https://")),
         })
         .collect::<Vec<_>>();
     checks.sort_by(|left, right| left.name.cmp(&right.name));
