@@ -5,7 +5,9 @@ export type GitHubMutationKind =
   | "push"
   | "pullRequest"
   | "actionsRetry"
-  | "pullRequestMerge";
+  | "pullRequestMerge"
+  | "issueCreate"
+  | "issueUpdate";
 
 export interface GitHubMutationPreview {
   kind: GitHubMutationKind;
@@ -16,6 +18,9 @@ export interface GitHubMutationPreview {
   recipients: string[];
   affectedResources: string[];
   destructive: boolean;
+  mutationTitle?: string;
+  mutationBody?: string;
+  mutationState?: string;
 }
 
 export interface GitHubMutationConfirmation {
@@ -33,6 +38,15 @@ export function createMutationFingerprint(preview: GitHubMutationPreview): strin
     recipients: [...preview.recipients].map((value) => value.trim()).sort(),
     affectedResources: [...preview.affectedResources].map((value) => value.trim()).sort(),
     destructive: preview.destructive,
+    ...(preview.mutationTitle === undefined
+      ? {}
+      : { mutationTitle: preview.mutationTitle.trim() }),
+    ...(preview.mutationBody === undefined
+      ? {}
+      : { mutationBody: preview.mutationBody.trim() }),
+    ...(preview.mutationState === undefined
+      ? {}
+      : { mutationState: preview.mutationState.trim() }),
   });
 }
 
