@@ -16,6 +16,7 @@ function preview(
   kind: "issueCreate" | "issueUpdate",
   resource: string,
   destructive = false,
+  mutation: { title?: string; body?: string; state?: string } = {},
 ): GitHubMutationPreview {
   return {
     kind,
@@ -26,6 +27,9 @@ function preview(
     recipients: [],
     affectedResources: [resource],
     destructive,
+    mutationTitle: mutation.title,
+    mutationBody: mutation.body,
+    mutationState: mutation.state,
   };
 }
 
@@ -42,11 +46,15 @@ describe("GitHub issue mutations", () => {
       audit: {},
     });
 
+    const mutationPreview = preview("issueCreate", "issue:new", false, {
+      title: "Bug",
+      body: "Details",
+    });
     await createGitHubIssue(
       " octo/repo ",
       " Bug ",
       " Details ",
-      preview("issueCreate", "issue:new"),
+      mutationPreview,
       confirmation,
       " github.com ",
     );
@@ -56,9 +64,25 @@ describe("GitHub issue mutations", () => {
       title: "Bug",
       body: "Details",
       hostname: "github.com",
-      preview: preview("issueCreate", "issue:new"),
+      preview: mutationPreview,
       confirmation,
     });
+  });
+
+  it("rejects preview content that differs from the mutation", async () => {
+    await expect(
+      createGitHubIssue(
+        "octo/repo",
+        "Tampered",
+        "Details",
+        preview("issueCreate", "issue:new", false, {
+          title: "Safe",
+          body: "Details",
+        }),
+        confirmation,
+      ),
+    ).rejects.toThrow("preview content must match");
+    expect(invoke).not.toHaveBeenCalled();
   });
 
   it("requires destructive confirmation only when closing", async () => {
@@ -67,7 +91,7 @@ describe("GitHub issue mutations", () => {
         "octo/repo",
         42,
         { state: "closed" },
-        preview("issueUpdate", "issue:42"),
+        preview("issueUpdate", "issue:42", false, { state: "closed" }),
         confirmation,
       ),
     ).rejects.toThrow("destructive preview");
@@ -77,7 +101,7 @@ describe("GitHub issue mutations", () => {
         "octo/repo",
         42,
         { title: "Updated" },
-        preview("issueUpdate", "issue:42", true),
+        preview("issueUpdate", "issue:42", true, { title: "Updated" }),
         confirmation,
       ),
     ).rejects.toThrow("must not be marked destructive");
@@ -91,7 +115,7 @@ describe("GitHub issue mutations", () => {
         "octo/repo",
         0,
         { title: "Updated" },
-        preview("issueUpdate", "issue:0"),
+        preview("issueUpdate", "issue:0", false, { title: "Updated" }),
         confirmation,
       ),
     ).rejects.toThrow("positive integer");
