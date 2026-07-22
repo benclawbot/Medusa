@@ -133,27 +133,43 @@ fn simple_entry(path: &str, untracked: bool, ignored: bool) -> DesktopWorktreeEn
 
 fn parse_tracked_entry(line: &str) -> Result<DesktopWorktreeEntry, String> {
     let kind = line.as_bytes()[0] as char;
-    let mut fields = line.splitn(if kind == '2' { 10 } else { 9 }, ' ');
-    let _record = fields.next();
-    let xy = fields
+    let (xy, path_field) = match kind {
+        '1' => {
+            let fields: Vec<&str> = line.splitn(9, ' ').collect();
+            (required_field(&fields, 1, line)?, required_field(&fields, 8, line)?)
+        }
+        '2' => {
+            let fields: Vec<&str> = line.splitn(10, ' ').collect();
+            (required_field(&fields, 1, line)?, required_field(&fields, 9, line)?)
+        }
+        'u' => {
+            let fields: Vec<&str> = line.splitn(11, ' ').collect();
+            (required_field(&fields, 1, line)?, required_field(&fields, 10, line)?)
+        }
+        _ => return Err(format!("invalid worktree status record: {line}")),
+    };
+
+    let staged = xy
+        .chars()
         .next()
-        .ok_or_else(|| format!("invalid worktree status record: {line}"))?;
-    let staged = xy.chars().next().map(change).unwrap_or(DesktopWorktreeChange::Unknown);
-    let unstaged = xy.chars().nth(1).map(change).unwrap_or(DesktopWorktreeChange::Unknown);
-    let conflicted = kind == 'u' || matches!(staged, DesktopWorktreeChange::Unmerged)
+        .map(change)
+        .unwrap_or(DesktopWorktreeChange::Unknown);
+    let unstaged = xy
+        .chars()
+        .nth(1)
+        .map(change)
+        .unwrap_or(DesktopWorktreeChange::Unknown);
+    let conflicted = kind == 'u'
+        || matches!(staged, DesktopWorktreeChange::Unmerged)
         || matches!(unstaged, DesktopWorktreeChange::Unmerged);
 
-    let remaining: Vec<&str> = fields.collect();
-    let path_field = remaining
-        .last()
-        .ok_or_else(|| format!("invalid worktree status record: {line}"))?;
     let (path, original_path) = if kind == '2' {
         let (path, original) = path_field
             .split_once('\t')
             .ok_or_else(|| format!("invalid rename status record: {line}"))?;
         (path.to_owned(), Some(original.to_owned()))
     } else {
-        ((*path_field).to_owned(), None)
+        (path_field.to_owned(), None)
     };
 
     Ok(DesktopWorktreeEntry {
@@ -165,6 +181,13 @@ fn parse_tracked_entry(line: &str) -> Result<DesktopWorktreeEntry, String> {
         conflicted,
         ignored: false,
     })
+}
+
+fn required_field<'a>(fields: &'a [&str], index: usize, line: &str) -> Result<&'a str, String> {
+    fields
+        .get(index)
+        .copied()
+        .ok_or_else(|| format!("invalid worktree status record: {line}"))
 }
 
 fn change(value: char) -> DesktopWorktreeChange {
