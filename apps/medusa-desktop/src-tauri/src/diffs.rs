@@ -67,8 +67,8 @@ pub fn runtime_read_diff(repo: String) -> Result<DesktopDiff, String> {
 }
 
 fn canonical_repo(repo: &str) -> Result<PathBuf, String> {
-    let repo =
-        fs::canonicalize(Path::new(repo)).map_err(|error| format!("cannot open {repo}: {error}"))?;
+    let repo = fs::canonicalize(Path::new(repo))
+        .map_err(|error| format!("cannot open {repo}: {error}"))?;
     if !repo.is_dir() {
         return Err(format!("{} is not a directory", repo.display()));
     }
@@ -168,12 +168,7 @@ fn parse_diff(source: &str) -> Result<DesktopDiff, String> {
                 let new = new_line;
                 old_line += 1;
                 new_line += 1;
-                (
-                    DesktopDiffLineKind::Context,
-                    Some(old),
-                    Some(new),
-                    text,
-                )
+                (DesktopDiffLineKind::Context, Some(old), Some(new), text)
             } else {
                 (DesktopDiffLineKind::Meta, None, None, line)
             };
