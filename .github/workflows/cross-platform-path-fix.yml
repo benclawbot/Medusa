@@ -52,7 +52,7 @@ jobs:
                 || has_parent_segment
                 || path.starts_with('-')
             {'''
-          source, count = pattern.subn(replacement, source, count=1)
+          source, count = pattern.subn(lambda _match: replacement, source, count=1)
           if count != 1:
               raise SystemExit(f"expected one validation block, replaced {count}")
           target.write_text(source)
