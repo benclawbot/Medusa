@@ -8,9 +8,9 @@ mod runtime {
     include!("runtime_resume.rs");
 }
 mod sessions;
-mod worktree;
 #[cfg(test)]
 mod test_tempfile;
+mod worktree;
 #[cfg(test)]
 extern crate self as tempfile;
 #[cfg(test)]
