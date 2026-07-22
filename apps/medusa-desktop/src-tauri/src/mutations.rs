@@ -42,6 +42,19 @@ pub struct GitMutationResult {
     pub checkpoint_ref: Option<String>,
 }
 
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct Fingerprint<'a> {
+    kind: GitMutationKind,
+    repository: &'a str,
+    branch: &'a str,
+    title: &'a str,
+    body: &'a str,
+    recipients: Vec<String>,
+    affected_resources: Vec<String>,
+    destructive: bool,
+}
+
 #[tauri::command]
 pub fn runtime_create_branch(
     repo: String,
@@ -51,8 +64,11 @@ pub fn runtime_create_branch(
 ) -> Result<GitMutationResult, String> {
     let repo = canonical_repo(&repo)?;
     require_confirmation(&preview, &confirmation)?;
-    require_preview(&preview, GitMutationKind::Branch, &repo, &branch)?;
-    validate_ref_name(&repo, &branch)?;
+    require_repository_and_kind(&preview, GitMutationKind::Branch, &repo)?;
+    if preview.branch.trim() != branch.trim() {
+        return Err("mutation preview branch does not match requested branch".to_owned());
+    }
+    validate_branch_name(&repo, &branch)?;
     run_git(&repo, ["switch", "-c", branch.as_str()])?;
     mutation_result(&repo, None)
 }
@@ -67,9 +83,9 @@ pub fn runtime_create_checkpoint(
     let repo = canonical_repo(&repo)?;
     require_confirmation(&preview, &confirmation)?;
     let branch = current_branch(&repo)?;
-    require_preview(&preview, GitMutationKind::Checkpoint, &repo, &branch)?;
+    require_active_branch_preview(&preview, GitMutationKind::Checkpoint, &repo, &branch)?;
     let full_ref = format!("refs/medusa/checkpoints/{checkpoint_ref}");
-    validate_ref_name(&repo, &full_ref)?;
+    validate_full_ref(&repo, &full_ref)?;
     run_git(&repo, ["update-ref", full_ref.as_str(), "HEAD"])?;
     mutation_result(&repo, Some(full_ref))
 }
@@ -85,7 +101,7 @@ pub fn runtime_commit_changes(
     let repo = canonical_repo(&repo)?;
     require_confirmation(&preview, &confirmation)?;
     let branch = current_branch(&repo)?;
-    require_preview(&preview, GitMutationKind::Commit, &repo, &branch)?;
+    require_active_branch_preview(&preview, GitMutationKind::Commit, &repo, &branch)?;
     let message = message.trim();
     if message.is_empty() {
         return Err("commit message is required".to_owned());
@@ -93,7 +109,7 @@ pub fn runtime_commit_changes(
     if paths.is_empty() {
         return Err("at least one explicit path is required for commit".to_owned());
     }
-    let normalized = validate_paths(&repo, &paths)?;
+    let normalized = validate_paths(&paths)?;
     let mut add_args = vec!["add".to_owned(), "--".to_owned()];
     add_args.extend(normalized);
     run_git_vec(&repo, &add_args)?;
@@ -111,9 +127,9 @@ pub fn runtime_push_branch(
     let repo = canonical_repo(&repo)?;
     require_confirmation(&preview, &confirmation)?;
     let branch = current_branch(&repo)?;
-    require_preview(&preview, GitMutationKind::Push, &repo, &branch)?;
+    require_active_branch_preview(&preview, GitMutationKind::Push, &repo, &branch)?;
     let remote = remote.as_deref().unwrap_or("origin").trim();
-    if remote.is_empty() || remote.starts_with('-') {
+    if remote.is_empty() || remote.starts_with('-') || remote.chars().any(char::is_whitespace) {
         return Err("invalid remote name".to_owned());
     }
     run_git(&repo, ["push", "--set-upstream", remote, branch.as_str()])?;
@@ -142,11 +158,10 @@ fn require_confirmation(
     Ok(())
 }
 
-fn require_preview(
+fn require_repository_and_kind(
     preview: &GitMutationPreview,
     expected_kind: GitMutationKind,
     repo: &Path,
-    branch: &str,
 ) -> Result<(), String> {
     if std::mem::discriminant(&preview.kind) != std::mem::discriminant(&expected_kind) {
         return Err("mutation preview kind does not match requested operation".to_owned());
@@ -156,6 +171,16 @@ fn require_preview(
     if canonical_preview_repo != repo {
         return Err("mutation preview repository does not match requested repository".to_owned());
     }
+    Ok(())
+}
+
+fn require_active_branch_preview(
+    preview: &GitMutationPreview,
+    expected_kind: GitMutationKind,
+    repo: &Path,
+    branch: &str,
+) -> Result<(), String> {
+    require_repository_and_kind(preview, expected_kind, repo)?;
     if preview.branch.trim() != branch {
         return Err("mutation preview branch does not match active branch".to_owned());
     }
@@ -193,16 +218,16 @@ fn mutation_fingerprint(preview: &GitMutationPreview) -> Result<String, String> 
         .map(|value| value.trim().to_owned())
         .collect::<Vec<_>>();
     affected_resources.sort();
-    serde_json::to_string(&serde_json::json!({
-        "kind": preview.kind,
-        "repository": preview.repository.trim(),
-        "branch": preview.branch.trim(),
-        "title": preview.title.trim(),
-        "body": preview.body.as_deref().unwrap_or("").trim(),
-        "recipients": recipients,
-        "affectedResources": affected_resources,
-        "destructive": preview.destructive,
-    }))
+    serde_json::to_string(&Fingerprint {
+        kind: preview.kind,
+        repository: preview.repository.trim(),
+        branch: preview.branch.trim(),
+        title: preview.title.trim(),
+        body: preview.body.as_deref().unwrap_or("").trim(),
+        recipients,
+        affected_resources,
+        destructive: preview.destructive,
+    })
     .map_err(|error| format!("cannot encode mutation preview: {error}"))
 }
 
@@ -218,25 +243,33 @@ fn current_branch(repo: &Path) -> Result<String, String> {
     Ok(branch)
 }
 
-fn validate_ref_name(repo: &Path, name: &str) -> Result<(), String> {
+fn validate_branch_name(repo: &Path, name: &str) -> Result<(), String> {
     if name.trim().is_empty() || name.starts_with('-') {
-        return Err("invalid git reference name".to_owned());
+        return Err("invalid branch name".to_owned());
     }
     run_git(repo, ["check-ref-format", "--branch", name])?;
     Ok(())
 }
 
-fn validate_paths(repo: &Path, paths: &[String]) -> Result<Vec<String>, String> {
+fn validate_full_ref(repo: &Path, name: &str) -> Result<(), String> {
+    if name.trim().is_empty() || name.starts_with('-') {
+        return Err("invalid git reference name".to_owned());
+    }
+    run_git(repo, ["check-ref-format", name])?;
+    Ok(())
+}
+
+fn validate_paths(paths: &[String]) -> Result<Vec<String>, String> {
     paths
         .iter()
         .map(|path| {
             let path = path.trim();
-            if path.is_empty() || Path::new(path).is_absolute() || path.split('/').any(|part| part == "..") {
+            if path.is_empty()
+                || Path::new(path).is_absolute()
+                || path.split('/').any(|part| part == "..")
+                || path.starts_with('-')
+            {
                 return Err(format!("invalid repository-relative path: {path}"));
-            }
-            let candidate = repo.join(path);
-            if !candidate.exists() {
-                return Err(format!("path does not exist: {path}"));
             }
             Ok(path.to_owned())
         })
@@ -297,7 +330,7 @@ mod tests {
         let fingerprint = mutation_fingerprint(&preview()).expect("fingerprint");
         assert_eq!(
             fingerprint,
-            r#"{"affectedResources":["file:src/main.rs"],"body":"","branch":"feature/safe","destructive":false,"kind":"commit","recipients":["reviewers"],"repository":"/repo","title":"Commit verified changes"}"#
+            r#"{"kind":"commit","repository":"/repo","branch":"feature/safe","title":"Commit verified changes","body":"","recipients":["reviewers"],"affectedResources":["file:src/main.rs"],"destructive":false}"#
         );
     }
 
@@ -312,9 +345,12 @@ mod tests {
     }
 
     #[test]
-    fn path_validation_rejects_absolute_and_parent_paths() {
-        let repo = Path::new("/repo");
-        assert!(validate_paths(repo, &["/etc/passwd".to_owned()]).is_err());
-        assert!(validate_paths(repo, &["../secret".to_owned()]).is_err());
+    fn path_validation_allows_deleted_files_but_rejects_escape_paths() {
+        assert_eq!(
+            validate_paths(&["src/deleted.rs".to_owned()]).expect("valid path"),
+            vec!["src/deleted.rs"]
+        );
+        assert!(validate_paths(&["/etc/passwd".to_owned()]).is_err());
+        assert!(validate_paths(&["../secret".to_owned()]).is_err());
     }
 }
