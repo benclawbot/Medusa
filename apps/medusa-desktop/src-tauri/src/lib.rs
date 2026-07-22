@@ -2,6 +2,7 @@ mod credentials;
 mod diffs;
 mod dto;
 mod github_auth;
+mod github_repository;
 mod memories;
 mod mutations;
 mod pull_requests;
@@ -20,6 +21,7 @@ pub(crate) use test_tempfile::tempdir;
 
 use diffs::runtime_read_diff;
 use github_auth::runtime_github_auth_status;
+use github_repository::runtime_github_repository_access;
 use memories::runtime_list_memories;
 use mutations::{
     runtime_commit_changes, runtime_create_branch, runtime_create_checkpoint, runtime_push_branch,
@@ -57,6 +59,7 @@ pub fn run() -> tauri::Result<()> {
             runtime_push_branch,
             runtime_create_draft_pull_request,
             runtime_github_auth_status,
+            runtime_github_repository_access,
             runtime_list_memories,
         ])
         .run(tauri::generate_context!())
