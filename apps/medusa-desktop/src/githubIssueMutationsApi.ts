@@ -35,6 +35,7 @@ export async function createGitHubIssue(
 ): Promise<GitHubIssueMutationResult> {
   const normalizedRepository = repository.trim();
   const normalizedTitle = title.trim();
+  const normalizedBody = body?.trim() || "";
   if (!normalizedRepository) throw new Error("GitHub repository is required");
   if (!normalizedTitle) throw new Error("GitHub issue title is required");
   if (preview.kind !== "issueCreate") {
@@ -43,10 +44,17 @@ export async function createGitHubIssue(
   if (preview.destructive) {
     throw new Error("GitHub issue creation must not be marked destructive");
   }
+  if (
+    preview.mutationTitle?.trim() !== normalizedTitle ||
+    preview.mutationBody?.trim() !== normalizedBody ||
+    preview.mutationState !== undefined
+  ) {
+    throw new Error("GitHub issue preview content must match the requested mutation");
+  }
   return invoke<GitHubIssueMutationResult>("runtime_create_github_issue", {
     repository: normalizedRepository,
     title: normalizedTitle,
-    body: body?.trim() || null,
+    body: normalizedBody || null,
     hostname: hostname?.trim() || null,
     preview,
     confirmation,
@@ -80,6 +88,13 @@ export async function updateGitHubIssue(
   }
   if (changes.state !== "closed" && preview.destructive) {
     throw new Error("Non-closing GitHub issue updates must not be marked destructive");
+  }
+  if (
+    preview.mutationTitle?.trim() !== title ||
+    preview.mutationBody?.trim() !== body ||
+    preview.mutationState?.trim() !== changes.state
+  ) {
+    throw new Error("GitHub issue preview content must match the requested mutation");
   }
   return invoke<GitHubIssueMutationResult>("runtime_update_github_issue", {
     repository: normalizedRepository,
