@@ -1,0 +1,26 @@
+name: Desktop Format Artifact
+
+on:
+  pull_request:
+    paths:
+      - "apps/medusa-desktop/src-tauri/**/*.rs"
+      - ".github/workflows/desktop-format-artifact.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  format:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@1.88.0
+        with:
+          components: rustfmt
+      - name: Format desktop Rust adapter
+        run: cargo fmt --manifest-path apps/medusa-desktop/src-tauri/Cargo.toml
+      - name: Upload formatted desktop Rust sources
+        uses: actions/upload-artifact@v4
+        with:
+          name: desktop-formatted-rust
+          path: apps/medusa-desktop/src-tauri/src
