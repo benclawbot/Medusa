@@ -28,9 +28,8 @@ pub struct DesktopSessionMessage {
 
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
-pub struct DesktopSessionTranscript {
-    pub id: String,
-    pub objective: String,
+pub struct DesktopSessionDetail {
+    pub summary: DesktopSessionSummary,
     pub messages: Vec<DesktopSessionMessage>,
 }
 
@@ -54,28 +53,11 @@ pub fn runtime_list_sessions(repo: String) -> Result<Vec<DesktopSessionSummary>,
 pub fn runtime_read_session(
     repo: String,
     session_id: String,
-) -> Result<DesktopSessionTranscript, String> {
+) -> Result<DesktopSessionDetail, String> {
     let repo = canonical_repo(&repo)?;
-    validate_session_id(&session_id)?;
-    let path = session_path(&repo, &session_id)
-        .ok_or_else(|| format!("session {session_id} was not found for {}", repo.display()))?;
-    let value: Value = serde_json::from_slice(
-        &fs::read(&path).map_err(|error| format!("cannot read {}: {error}", path.display()))?,
-    )
-    .map_err(|error| format!("cannot parse {}: {error}", path.display()))?;
-    let id = value
-        .get("id")
-        .and_then(Value::as_str)
-        .ok_or_else(|| format!("{} has no session id", path.display()))?
-        .to_owned();
-    if id != session_id {
-        return Err(format!("session id mismatch in {}", path.display()));
-    }
-    let objective = value
-        .get("objective")
-        .and_then(Value::as_str)
-        .unwrap_or_default()
-        .to_owned();
+    let value = read_session_value(&repo, &session_id)?;
+    let summary = summary_from_value(&value)
+        .ok_or_else(|| format!("session {session_id} is missing required metadata"))?;
     let messages = value
         .get("messages")
         .and_then(Value::as_array)
@@ -83,11 +65,7 @@ pub fn runtime_read_session(
         .flatten()
         .filter_map(message_from_value)
         .collect();
-    Ok(DesktopSessionTranscript {
-        id,
-        objective,
-        messages,
-    })
+    Ok(DesktopSessionDetail { summary, messages })
 }
 
 fn canonical_repo(repo: &str) -> Result<PathBuf, String> {
@@ -99,57 +77,31 @@ fn canonical_repo(repo: &str) -> Result<PathBuf, String> {
     Ok(repo)
 }
 
-fn validate_session_id(session_id: &str) -> Result<(), String> {
+fn read_session_value(repo: &Path, session_id: &str) -> Result<Value, String> {
     if session_id.is_empty()
         || !session_id
             .bytes()
-            .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-')
+            .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-' || byte == b'_')
     {
         return Err("invalid session id".to_owned());
     }
-    Ok(())
-}
-
-fn session_path(repo: &Path, session_id: &str) -> Option<PathBuf> {
-    let filename = format!("{session_id}.json");
-    [
-        repo.join(".medusa/sessions").join(&filename),
-        fallback_session_root(repo).join(filename),
-    ]
-    .into_iter()
-    .find(|path| path.is_file())
-}
-
-fn message_from_value(value: &Value) -> Option<DesktopSessionMessage> {
-    let role = value.get("role")?.as_str()?.to_owned();
-    let mut text = Vec::new();
-    collect_text(value.get("content")?, &mut text);
-    let text = text
-        .into_iter()
-        .filter(|part| !part.trim().is_empty())
-        .collect::<Vec<_>>()
-        .join("\n");
-    (!text.is_empty()).then_some(DesktopSessionMessage { role, text })
-}
-
-fn collect_text(value: &Value, output: &mut Vec<String>) {
-    match value {
-        Value::Array(items) => {
-            for item in items {
-                collect_text(item, output);
-            }
+    for root in [repo.join(".medusa/sessions"), fallback_session_root(repo)] {
+        let path = root.join(format!("{session_id}.json"));
+        if !path.is_file() {
+            continue;
         }
-        Value::Object(map) => {
-            if let Some(text) = map.get("text").and_then(Value::as_str) {
-                output.push(text.to_owned());
-                return;
-            }
-            for nested in map.values() {
-                collect_text(nested, output);
-            }
+        let value: Value = serde_json::from_slice(
+            &fs::read(&path).map_err(|error| format!("cannot read {}: {error}", path.display()))?,
+        )
+        .map_err(|error| format!("cannot parse {}: {error}", path.display()))?;
+        if value.get("id").and_then(Value::as_str) == Some(session_id) {
+            return Ok(value);
         }
-        _ => {}
     }
+    Err(format!(
+        "session {session_id} was not found for {}",
+        repo.display()
+    ))
 }
 
 fn collect_sessions(
@@ -196,6 +148,34 @@ fn summary_from_value(value: &Value) -> Option<DesktopSessionSummary> {
             .is_some_and(|question| !question.is_null()),
         turn: u32::try_from(value.get("turn")?.as_u64()?).ok()?,
     })
+}
+
+fn message_from_value(value: &Value) -> Option<DesktopSessionMessage> {
+    let role = value.get("role")?.as_str()?.to_owned();
+    let text = value
+        .get("content")?
+        .as_array()?
+        .iter()
+        .filter_map(block_text)
+        .collect::<Vec<_>>()
+        .join("\n");
+    (!text.trim().is_empty()).then_some(DesktopSessionMessage { role, text })
+}
+
+fn block_text(value: &Value) -> Option<String> {
+    match value.get("type")?.as_str()? {
+        "text" => value.get("text")?.as_str().map(str::to_owned),
+        "image" => Some("[Image attachment]".to_owned()),
+        "tool_use" => Some(format!(
+            "Tool: {}",
+            value
+                .get("name")
+                .and_then(Value::as_str)
+                .unwrap_or("unknown")
+        )),
+        "tool_result" => value.get("content")?.as_str().map(str::to_owned),
+        _ => None,
+    }
 }
 
 fn fallback_session_root(repo: &Path) -> PathBuf {
