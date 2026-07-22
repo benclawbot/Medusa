@@ -87,12 +87,16 @@ fn read_session_value(repo: &Path, session_id: &str) -> Result<Value, String> {
     }
     for root in [repo.join(".medusa/sessions"), fallback_session_root(repo)] {
         let path = root.join(format!("{session_id}.json"));
-        if path.is_file() {
-            return serde_json::from_slice(
-                &fs::read(&path)
-                    .map_err(|error| format!("cannot read {}: {error}", path.display()))?,
-            )
-            .map_err(|error| format!("cannot parse {}: {error}", path.display()));
+        if !path.is_file() {
+            continue;
+        }
+        let value: Value = serde_json::from_slice(
+            &fs::read(&path)
+                .map_err(|error| format!("cannot read {}: {error}", path.display()))?,
+        )
+        .map_err(|error| format!("cannot parse {}: {error}", path.display()))?;
+        if value.get("id").and_then(Value::as_str) == Some(session_id) {
+            return Ok(value);
         }
     }
     Err(format!(
