@@ -113,6 +113,29 @@ export type RuntimeEvent =
   | { type: "cancelled" }
   | { type: "failed"; message: string };
 
+export interface DesktopMemory {
+  id: string;
+  memoryType: string;
+  title: string;
+  body: string;
+  createdAt: string;
+  updatedAt: string;
+  scope: string;
+  projectId?: string;
+  sessionId?: string;
+  status: string;
+  confidenceMilli: number;
+  validation: string;
+  sources: string[];
+  supersedes: string[];
+  supersededBy: string[];
+  tags: string[];
+  expiresAt?: string;
+  lastValidatedAt: string;
+  successfulReuseCount: number;
+  path: string;
+}
+
 export interface ModelConfiguration {
   provider: string;
   model: string;
@@ -141,6 +164,14 @@ export async function listRuntimeSessions(repo: string): Promise<SessionSummary[
 
 export async function readRuntimeSession(repo: string, sessionId: string): Promise<SessionDetail> {
   return invoke<SessionDetail>("runtime_read_session", { repo, sessionId });
+}
+
+export async function listRuntimeMemories(
+  repo: string,
+  query = "",
+  includeInactive = false,
+): Promise<DesktopMemory[]> {
+  return invoke<DesktopMemory[]>("runtime_list_memories", { repo, query, includeInactive });
 }
 
 export async function closeRuntime(runtimeId: string): Promise<void> {
