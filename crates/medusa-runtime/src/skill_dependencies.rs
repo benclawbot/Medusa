@@ -65,7 +65,9 @@ fn resolve_project_skill_unverified(
         }
         let content = String::from_utf8(bytes)
             .map_err(|_| format!("skill file is not UTF-8: {}", path.display()))?;
-        sections.push(format!("--- approved project skill: {name} ---\n{content}\n--- end approved project skill: {name} ---"));
+        sections.push(format!(
+            "--- approved project skill: {name} ---\n{content}\n--- end approved project skill: {name} ---"
+        ));
     }
     Ok(ResolvedSkillGraph {
         selected: selected.to_owned(),
@@ -162,28 +164,32 @@ fn read_dependencies(root: &Path, name: &str) -> Result<Vec<String>, String> {
             "dependency manifest for `{name}` escapes approved skill root"
         ));
     }
+    parse_dependencies(&canonical, name)
+}
+
+fn parse_dependencies(manifest: &Path, name: &str) -> Result<Vec<String>, String> {
     let value: Value = serde_json::from_slice(
-        &fs::read(&canonical).map_err(|error| format!("read {}: {error}", canonical.display()))?,
+        &fs::read(manifest).map_err(|error| format!("read {}: {error}", manifest.display()))?,
     )
-    .map_err(|error| format!("parse {}: {error}", canonical.display()))?;
+    .map_err(|error| format!("parse {}: {error}", manifest.display()))?;
     let object = value
         .as_object()
-        .ok_or_else(|| format!("{} must contain a JSON object", canonical.display()))?;
+        .ok_or_else(|| format!("{} must contain a JSON object", manifest.display()))?;
     if object.get("schema_version").and_then(Value::as_u64) != Some(1) {
-        return Err(format!("{} requires schema_version 1", canonical.display()));
+        return Err(format!("{} requires schema_version 1", manifest.display()));
     }
     let requires = match object.get("requires") {
         None => return Ok(Vec::new()),
         Some(value) => value
             .as_array()
-            .ok_or_else(|| format!("{}.requires must be an array", canonical.display()))?,
+            .ok_or_else(|| format!("{}.requires must be an array", manifest.display()))?,
     };
     let mut dependencies = Vec::with_capacity(requires.len());
     let mut seen = BTreeSet::new();
     for value in requires {
         let dependency = value
             .as_str()
-            .ok_or_else(|| format!("{}.requires entries must be strings", canonical.display()))?;
+            .ok_or_else(|| format!("{}.requires entries must be strings", manifest.display()))?;
         validate_name(dependency)?;
         if !seen.insert(dependency.to_owned()) {
             return Err(format!(
@@ -261,6 +267,7 @@ fn reverse_dependents_in_graph(
 fn confined_skill_path(root: &Path, name: &str) -> Result<PathBuf, String> {
     Ok(confined_directory(root, name)?.join(SKILL_FILE))
 }
+
 fn confined_directory(root: &Path, name: &str) -> Result<PathBuf, String> {
     validate_name(name)?;
     let directory = root.join(name);
@@ -271,6 +278,7 @@ fn confined_directory(root: &Path, name: &str) -> Result<PathBuf, String> {
     }
     Ok(canonical)
 }
+
 fn validate_name(name: &str) -> Result<(), String> {
     let path = Path::new(name);
     if name.is_empty()
@@ -300,57 +308,34 @@ pub fn validate_restorable_skill(
     validate_name(name)?;
     let graph = load_graph(active_root)?;
     let manifest = candidate.join(MANIFEST);
-    if !manifest.exists() {
-        return Ok(());
-    }
-    let canonical_candidate = fs::canonicalize(candidate)
-        .map_err(|error| format!("resolve {}: {error}", candidate.display()))?;
-    let canonical_manifest = fs::canonicalize(&manifest)
-        .map_err(|error| format!("resolve {}: {error}", manifest.display()))?;
-    if !canonical_manifest.starts_with(&canonical_candidate) {
-        return Err(format!(
-            "dependency manifest for `{name}` escapes quarantined skill directory"
-        ));
-    }
-    let value: Value = serde_json::from_slice(
-        &fs::read(&canonical_manifest)
-            .map_err(|error| format!("read {}: {error}", canonical_manifest.display()))?,
-    )
-    .map_err(|error| format!("parse {}: {error}", canonical_manifest.display()))?;
-    if value.get("schema_version").and_then(Value::as_u64) != Some(1) {
-        return Err(format!(
-            "{} requires schema_version 1",
-            canonical_manifest.display()
-        ));
-    }
-    let requires = value.get("requires").map_or(Ok(&[][..]), |value| {
-        value
-            .as_array()
-            .map(Vec::as_slice)
-            .ok_or_else(|| format!("{}.requires must be an array", canonical_manifest.display()))
-    })?;
-    let mut seen = BTreeSet::new();
-    for value in requires {
-        let dependency = value.as_str().ok_or_else(|| {
-            format!(
-                "{}.requires entries must be strings",
-                canonical_manifest.display()
-            )
-        })?;
-        validate_name(dependency)?;
+    let requires = if manifest.exists() {
+        let canonical_candidate = fs::canonicalize(candidate)
+            .map_err(|error| format!("resolve {}: {error}", candidate.display()))?;
+        let canonical_manifest = fs::canonicalize(&manifest)
+            .map_err(|error| format!("resolve {}: {error}", manifest.display()))?;
+        if !canonical_manifest.starts_with(&canonical_candidate) {
+            return Err(format!(
+                "dependency manifest for `{name}` escapes quarantined skill directory"
+            ));
+        }
+        parse_dependencies(&canonical_manifest, name)?
+    } else {
+        Vec::new()
+    };
+    for dependency in requires {
         if dependency == name {
             return Err(format!("skill `{name}` cannot depend on itself"));
         }
-        if !seen.insert(dependency) {
-            return Err(format!(
-                "skill `{name}` declares duplicate dependency `{dependency}`"
-            ));
-        }
-        if !graph.contains_key(dependency) {
+        if !graph.contains_key(&dependency) {
             return Err(format!(
                 "skill `{name}` requires unavailable approved project skill `{dependency}`"
             ));
         }
     }
+    crate::skill_dependency_locks::verify_restorable_dependency_lock(
+        active_root,
+        candidate,
+        name,
+    )?;
     Ok(())
 }
