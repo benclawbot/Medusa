@@ -81,7 +81,9 @@ fn collect_markdown(
             collect_markdown(&path, root, query, include_inactive, output)?;
             continue;
         }
-        if path.extension().and_then(|value| value.to_str()) != Some("md") {
+        if path.extension().and_then(|value| value.to_str()) != Some("md")
+            || path.file_name().is_some_and(|name| name == "README.md")
+        {
             continue;
         }
         let text = fs::read_to_string(&path)
@@ -196,6 +198,23 @@ mod tests {
         assert_eq!(items[0].validation, "test-verified");
         assert_eq!(items[0].sources.len(), 1);
         assert_eq!(items[0].successful_reuse_count, 2);
+    }
+
+    #[test]
+    fn skips_generated_memory_readme() {
+        let directory = crate::tempdir().expect("tempdir");
+        let root = directory.path().join(".medusa/memory");
+        let lessons = root.join("lessons");
+        fs::create_dir_all(&lessons).expect("create lessons");
+        fs::write(root.join("README.md"), "# Memory layout\n").expect("write readme");
+        fs::write(lessons.join("memory.md"), memory("Decision", "active"))
+            .expect("write memory");
+
+        let items = runtime_list_memories(directory.path().display().to_string(), None, None)
+            .expect("list");
+
+        assert_eq!(items.len(), 1);
+        assert_eq!(items[0].title, "Decision");
     }
 
     #[test]
