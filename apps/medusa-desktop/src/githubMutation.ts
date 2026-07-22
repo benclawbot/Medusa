@@ -4,6 +4,8 @@ export type GitHubMutationKind =
   | "commit"
   | "push"
   | "pullRequest"
+  | "issueCreate"
+  | "issueUpdate"
   | "actionsRetry"
   | "pullRequestMerge";
 
