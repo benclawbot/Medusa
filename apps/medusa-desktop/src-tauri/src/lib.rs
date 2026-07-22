@@ -2,6 +2,7 @@ mod credentials;
 mod diffs;
 mod dto;
 mod memories;
+mod mutations;
 mod runtime {
     include!("runtime.rs");
     include!("runtime_resume.rs");
@@ -17,6 +18,9 @@ pub(crate) use test_tempfile::tempdir;
 
 use diffs::runtime_read_diff;
 use memories::runtime_list_memories;
+use mutations::{
+    runtime_commit_changes, runtime_create_branch, runtime_create_checkpoint, runtime_push_branch,
+};
 use runtime::{
     RuntimeRegistry, runtime_cancel, runtime_close, runtime_command, runtime_command_suggestions,
     runtime_configure_model, runtime_poll, runtime_resume, runtime_start, runtime_submit,
@@ -43,6 +47,10 @@ pub fn run() -> tauri::Result<()> {
             runtime_read_session,
             runtime_read_diff,
             runtime_read_worktree,
+            runtime_create_branch,
+            runtime_create_checkpoint,
+            runtime_commit_changes,
+            runtime_push_branch,
             runtime_list_memories,
         ])
         .run(tauri::generate_context!())
