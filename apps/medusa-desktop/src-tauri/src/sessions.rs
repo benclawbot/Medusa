@@ -50,7 +50,10 @@ pub fn runtime_list_sessions(repo: String) -> Result<Vec<DesktopSessionSummary>,
 }
 
 #[tauri::command]
-pub fn runtime_read_session(repo: String, session_id: String) -> Result<DesktopSessionDetail, String> {
+pub fn runtime_read_session(
+    repo: String,
+    session_id: String,
+) -> Result<DesktopSessionDetail, String> {
     let repo = canonical_repo(&repo)?;
     let value = read_session_value(&repo, &session_id)?;
     let summary = summary_from_value(&value)
@@ -86,12 +89,16 @@ fn read_session_value(repo: &Path, session_id: &str) -> Result<Value, String> {
         let path = root.join(format!("{session_id}.json"));
         if path.is_file() {
             return serde_json::from_slice(
-                &fs::read(&path).map_err(|error| format!("cannot read {}: {error}", path.display()))?,
+                &fs::read(&path)
+                    .map_err(|error| format!("cannot read {}: {error}", path.display()))?,
             )
             .map_err(|error| format!("cannot parse {}: {error}", path.display()));
         }
     }
-    Err(format!("session {session_id} was not found for {}", repo.display()))
+    Err(format!(
+        "session {session_id} was not found for {}",
+        repo.display()
+    ))
 }
 
 fn collect_sessions(
@@ -158,7 +165,10 @@ fn block_text(value: &Value) -> Option<String> {
         "image" => Some("[Image attachment]".to_owned()),
         "tool_use" => Some(format!(
             "Tool: {}",
-            value.get("name").and_then(Value::as_str).unwrap_or("unknown")
+            value
+                .get("name")
+                .and_then(Value::as_str)
+                .unwrap_or("unknown")
         )),
         "tool_result" => value.get("content")?.as_str().map(str::to_owned),
         _ => None,
