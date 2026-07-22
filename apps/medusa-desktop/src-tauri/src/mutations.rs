@@ -132,10 +132,7 @@ pub fn runtime_push_branch(
     if remote.is_empty() || remote.starts_with('-') || remote.chars().any(char::is_whitespace) {
         return Err("invalid remote name".to_owned());
     }
-    run_git(
-        &repo,
-        ["push", "--set-upstream", remote, branch.as_str()],
-    )?;
+    run_git(&repo, ["push", "--set-upstream", remote, branch.as_str()])?;
     mutation_result(&repo, None)
 }
 
@@ -282,10 +279,7 @@ fn validate_paths(paths: &[String]) -> Result<Vec<String>, String> {
         .collect()
 }
 
-fn mutation_result(
-    repo: &Path,
-    checkpoint_ref: Option<String>,
-) -> Result<GitMutationResult, String> {
+fn mutation_result(repo: &Path, checkpoint_ref: Option<String>) -> Result<GitMutationResult, String> {
     let branch = current_branch(repo)?;
     let output = run_git(repo, ["rev-parse", "HEAD"])?;
     let commit_sha = String::from_utf8(output.stdout)
