@@ -136,24 +136,15 @@ fn parse_tracked_entry(line: &str) -> Result<DesktopWorktreeEntry, String> {
     let (xy, path_field) = match kind {
         '1' => {
             let fields: Vec<&str> = line.splitn(9, ' ').collect();
-            (
-                required_field(&fields, 1, line)?,
-                required_field(&fields, 8, line)?,
-            )
+            (required_field(&fields, 1, line)?, required_field(&fields, 8, line)?)
         }
         '2' => {
             let fields: Vec<&str> = line.splitn(10, ' ').collect();
-            (
-                required_field(&fields, 1, line)?,
-                required_field(&fields, 9, line)?,
-            )
+            (required_field(&fields, 1, line)?, required_field(&fields, 9, line)?)
         }
         'u' => {
             let fields: Vec<&str> = line.splitn(11, ' ').collect();
-            (
-                required_field(&fields, 1, line)?,
-                required_field(&fields, 10, line)?,
-            )
+            (required_field(&fields, 1, line)?, required_field(&fields, 10, line)?)
         }
         _ => return Err(format!("invalid worktree status record: {line}")),
     };
@@ -192,11 +183,7 @@ fn parse_tracked_entry(line: &str) -> Result<DesktopWorktreeEntry, String> {
     })
 }
 
-fn required_field<'a>(
-    fields: &'a [&str],
-    index: usize,
-    line: &str,
-) -> Result<&'a str, String> {
+fn required_field<'a>(fields: &'a [&str], index: usize, line: &str) -> Result<&'a str, String> {
     fields
         .get(index)
         .copied()
@@ -229,10 +216,7 @@ mod tests {
         assert_eq!((status.ahead, status.behind), (2, 1));
         assert_eq!(status.entries.len(), 4);
         assert_eq!(status.entries[0].staged, DesktopWorktreeChange::Modified);
-        assert_eq!(
-            status.entries[1].unstaged,
-            DesktopWorktreeChange::Modified
-        );
+        assert_eq!(status.entries[1].unstaged, DesktopWorktreeChange::Modified);
         assert!(status.entries[2].untracked);
         assert!(status.entries[3].ignored);
     }
@@ -242,10 +226,7 @@ mod tests {
         let source = "2 R. N... 100644 100644 100644 abc abc R100 src/new.rs\tsrc/old.rs\nu UU N... 100644 100644 100644 100644 abc abc abc src/conflict.rs\n";
         let status = parse_worktree_status(source).expect("parse status");
         assert_eq!(status.entries[0].path, "src/new.rs");
-        assert_eq!(
-            status.entries[0].original_path.as_deref(),
-            Some("src/old.rs")
-        );
+        assert_eq!(status.entries[0].original_path.as_deref(), Some("src/old.rs"));
         assert!(status.entries[1].conflicted);
     }
 
