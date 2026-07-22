@@ -1,8 +1,8 @@
 use std::{fs, path::Path};
 
 use medusa_runtime::skill_dependency_locks::{
-    verify_dependency_lock, verify_dependency_lock_if_present,
-    verify_restorable_dependency_lock, write_dependency_lock, LOCK_FILE,
+    LOCK_FILE, verify_dependency_lock, verify_dependency_lock_if_present,
+    verify_restorable_dependency_lock, write_dependency_lock,
 };
 
 fn write_skill(root: &Path, name: &str, body: &str, requires: &[&str]) {
@@ -30,9 +30,11 @@ fn lock_round_trip_is_deterministic_and_optional_before_rollout() {
     write_skill(&root, "base", "# Base\n", &[]);
     write_skill(&root, "release", "# Release\n", &["base"]);
 
-    assert!(verify_dependency_lock_if_present(&root, "release")
-        .expect("optional verification")
-        .is_none());
+    assert!(
+        verify_dependency_lock_if_present(&root, "release")
+            .expect("optional verification")
+            .is_none()
+    );
 
     let first = write_dependency_lock(&root, "release").expect("first lock");
     let second = write_dependency_lock(&root, "release").expect("replacement lock");
