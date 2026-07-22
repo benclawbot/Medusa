@@ -9,6 +9,7 @@ mod github_issues;
 mod github_logs;
 #[rustfmt::skip]
 mod github_merge;
+mod github_private_repository;
 mod github_pull_request_mutations;
 mod github_repository;
 mod memories;
@@ -35,6 +36,7 @@ use github_issue_mutations::{runtime_create_github_issue, runtime_update_github_
 use github_issues::runtime_github_issues;
 use github_logs::runtime_github_actions_job_log;
 use github_merge::runtime_merge_github_pull_request;
+use github_private_repository::{runtime_clone_github_repository, runtime_fetch_github_repository};
 use github_pull_request_mutations::{
     runtime_review_github_pull_request, runtime_update_github_pull_request,
 };
@@ -77,6 +79,8 @@ pub fn run() -> tauri::Result<()> {
             runtime_create_draft_pull_request,
             runtime_github_auth_status,
             runtime_github_repository_access,
+            runtime_clone_github_repository,
+            runtime_fetch_github_repository,
             runtime_github_commit_checks,
             runtime_github_issues,
             runtime_create_github_issue,
