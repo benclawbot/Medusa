@@ -220,9 +220,10 @@ fn receipt_from_order(
     for name in &order {
         validate_name(name)?;
         let directory = if name == selected {
-            selected_directory
-                .map(Path::to_path_buf)
-                .unwrap_or(confined_directory(active_root, name)?)
+            match selected_directory {
+                Some(directory) => directory.to_path_buf(),
+                None => confined_directory(active_root, name)?,
+            }
         } else {
             confined_directory(active_root, name)?
         };
