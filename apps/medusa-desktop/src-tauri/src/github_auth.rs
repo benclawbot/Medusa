@@ -41,7 +41,10 @@ pub fn runtime_github_auth_status(hostname: Option<String>) -> GithubAuthStatus 
             hostname,
             None,
             Vec::new(),
-            REQUIRED_SCOPES.iter().map(|value| (*value).to_owned()).collect(),
+            REQUIRED_SCOPES
+                .iter()
+                .map(|value| (*value).to_owned())
+                .collect(),
             "invalid GitHub hostname".to_owned(),
         );
     }
@@ -65,7 +68,10 @@ pub fn runtime_github_auth_status(hostname: Option<String>) -> GithubAuthStatus 
                 hostname,
                 None,
                 Vec::new(),
-                REQUIRED_SCOPES.iter().map(|value| (*value).to_owned()).collect(),
+                REQUIRED_SCOPES
+                    .iter()
+                    .map(|value| (*value).to_owned())
+                    .collect(),
                 "GitHub CLI is not installed".to_owned(),
             );
         }
@@ -75,7 +81,10 @@ pub fn runtime_github_auth_status(hostname: Option<String>) -> GithubAuthStatus 
                 hostname,
                 None,
                 Vec::new(),
-                REQUIRED_SCOPES.iter().map(|value| (*value).to_owned()).collect(),
+                REQUIRED_SCOPES
+                    .iter()
+                    .map(|value| (*value).to_owned())
+                    .collect(),
                 "cannot inspect GitHub authentication".to_owned(),
             );
         }
