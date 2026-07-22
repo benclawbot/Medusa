@@ -14,7 +14,7 @@ fn github_skill_is_discoverable_from_the_tui_command_palette() {
         .find(|suggestion| suggestion.name == "github")
         .expect("github parity command should be discoverable");
 
-    assert_eq!(github.usage, "/github");
+    assert_eq!(github.usage, "/github [task]");
     assert!(github.description.contains("typed GitHub capability"));
 }
 
