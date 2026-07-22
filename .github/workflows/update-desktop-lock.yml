@@ -1,0 +1,26 @@
+name: Update desktop lockfile
+
+on:
+  push:
+    branches:
+      - agent/desktop-memory-browser
+
+permissions:
+  contents: write
+
+jobs:
+  lock:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: agent/desktop-memory-browser
+      - uses: dtolnay/rust-toolchain@1.88.0
+      - run: cargo generate-lockfile --manifest-path apps/medusa-desktop/src-tauri/Cargo.toml
+      - run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add apps/medusa-desktop/src-tauri/Cargo.lock
+          git commit -m "Refresh desktop dependency lock" || exit 0
+          git push origin HEAD:agent/desktop-memory-browser
