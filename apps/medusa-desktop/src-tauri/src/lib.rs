@@ -5,6 +5,7 @@ mod github_actions;
 mod github_auth;
 mod github_checks;
 mod github_issues;
+#[rustfmt::skip]
 mod github_merge;
 mod github_repository;
 mod memories;
