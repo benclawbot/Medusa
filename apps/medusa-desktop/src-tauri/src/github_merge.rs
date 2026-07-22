@@ -95,8 +95,16 @@ pub fn runtime_merge_github_pull_request(
 ) -> Result<PullRequestMergeResult, String> {
     let repository = repository.trim().to_owned();
     let expected_head_sha = expected_head_sha.trim().to_owned();
-    let hostname = hostname.as_deref().unwrap_or("github.com").trim().to_owned();
-    let merge_method = merge_method.as_deref().unwrap_or("squash").trim().to_owned();
+    let hostname = hostname
+        .as_deref()
+        .unwrap_or("github.com")
+        .trim()
+        .to_owned();
+    let merge_method = merge_method
+        .as_deref()
+        .unwrap_or("squash")
+        .trim()
+        .to_owned();
 
     validate_repository(&repository)?;
     validate_hostname(&hostname)?;
@@ -123,6 +131,8 @@ pub fn runtime_merge_github_pull_request(
     }
 
     let merge_endpoint = format!("{endpoint}/merge");
+    let expected_head_sha_field = expected_head_sha_field(&expected_head_sha);
+    let merge_method_field = merge_method_field(&merge_method);
     let merge_response = gh_json::<MergeResponse>(
         &hostname,
         &merge_endpoint,
@@ -130,13 +140,16 @@ pub fn runtime_merge_github_pull_request(
             "--method",
             "PUT",
             "-f",
-            expected_head_sha_field(&expected_head_sha).as_str(),
+            expected_head_sha_field.as_str(),
             "-f",
-            merge_method_field(&merge_method).as_str(),
+            merge_method_field.as_str(),
         ],
     )?;
     if !merge_response.merged {
-        return Err(format!("GitHub did not merge the pull request: {}", merge_response.message));
+        return Err(format!(
+            "GitHub did not merge the pull request: {}",
+            merge_response.message
+        ));
     }
     let merge_commit_sha = merge_response
         .sha
@@ -172,7 +185,9 @@ fn gh_json<T: for<'de> Deserialize<'de>>(
         .output()
         .map_err(|error| format!("cannot run GitHub CLI: {error}"))?;
     if !output.status.success() {
-        return Err("GitHub operation failed; verify authentication and repository permissions".to_owned());
+        return Err(
+            "GitHub operation failed; verify authentication and repository permissions".to_owned(),
+        );
     }
     serde_json::from_slice(&output.stdout)
         .map_err(|_| "GitHub response could not be read".to_owned())
@@ -270,7 +285,11 @@ fn validate_hostname(value: &str) -> Result<(), String> {
 }
 
 fn validate_sha(value: &str) -> Result<(), String> {
-    if !(7..=64).contains(&value.len()) || !value.chars().all(|character| character.is_ascii_hexdigit()) {
+    if !(7..=64).contains(&value.len())
+        || !value
+            .chars()
+            .all(|character| character.is_ascii_hexdigit())
+    {
         return Err("invalid pull request head SHA".to_owned());
     }
     Ok(())
