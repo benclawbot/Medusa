@@ -178,7 +178,7 @@ fn parse_tracked_entry(line: &str) -> Result<DesktopWorktreeEntry, String> {
             .ok_or_else(|| format!("invalid rename status record: {line}"))?;
         (path.to_owned(), Some(original.to_owned()))
     } else {
-        (path_field.to_owned(), None)
+        (path_field, None)
     };
 
     Ok(DesktopWorktreeEntry {
@@ -192,10 +192,10 @@ fn parse_tracked_entry(line: &str) -> Result<DesktopWorktreeEntry, String> {
     })
 }
 
-fn required_field<'a>(fields: &'a [&str], index: usize, line: &str) -> Result<&'a str, String> {
+fn required_field(fields: &[&str], index: usize, line: &str) -> Result<String, String> {
     fields
         .get(index)
-        .copied()
+        .map(|value| (*value).to_owned())
         .ok_or_else(|| format!("invalid worktree status record: {line}"))
 }
 
