@@ -1,6 +1,6 @@
 use std::process::Command;
 
-use serde::{Deserialize, Serialize};
+use serde::Serialize;
 use serde_json::Value;
 
 const REQUIRED_SCOPES: [&str; 3] = ["repo", "read:org", "workflow"];
@@ -183,7 +183,7 @@ fn parse_auth_status(
 fn active_account(host: &Value) -> Option<String> {
     host.as_array()?
         .iter()
-        .find(|entry| entry.get("active")?.as_bool() == Some(true))
+        .find(|entry| entry.get("active").and_then(Value::as_bool) == Some(true))
         .and_then(|entry| entry.get("login"))
         .and_then(Value::as_str)
         .map(str::to_owned)
@@ -192,7 +192,7 @@ fn active_account(host: &Value) -> Option<String> {
 fn active_scopes(host: &Value) -> Option<Vec<String>> {
     host.as_array()?
         .iter()
-        .find(|entry| entry.get("active")?.as_bool() == Some(true))
+        .find(|entry| entry.get("active").and_then(Value::as_bool) == Some(true))
         .and_then(|entry| entry.get("scopes"))
         .and_then(Value::as_array)
         .map(|values| {
