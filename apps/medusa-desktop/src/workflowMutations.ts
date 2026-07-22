@@ -1,4 +1,5 @@
 import type { GitMutationResult } from "./gitMutations";
+import type { DraftPullRequestResult } from "./pullRequestApi";
 import {
   transitionWorkflow,
   type DesktopCodingWorkflow,
@@ -69,4 +70,28 @@ export function applyPushResult(
     throw new Error("Push result commit does not match the committed workflow state.");
   }
   return transitionWorkflow(workflow, { type: "pushed" });
+}
+
+export function applyPullRequestResult(
+  workflow: DesktopCodingWorkflow,
+  result: DraftPullRequestResult,
+): DesktopCodingWorkflow {
+  if (workflow.phase !== "pushed") {
+    throw new Error("Pull request creation can only advance a pushed workflow.");
+  }
+  if (workflow.branch !== result.branch) {
+    throw new Error("Pull request result branch does not match the workflow branch.");
+  }
+  if (workflow.commitSha !== result.commitSha) {
+    throw new Error("Pull request result commit does not match the pushed workflow state.");
+  }
+  const url = result.pullRequestUrl.trim();
+  if (!url.startsWith("https://")) {
+    throw new Error("Pull request creation did not return a valid HTTPS URL.");
+  }
+  const opened = transitionWorkflow(workflow, {
+    type: "pullRequestOpened",
+    url,
+  });
+  return transitionWorkflow(opened, { type: "completed" });
 }
