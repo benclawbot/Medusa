@@ -1,7 +1,8 @@
 use std::{
+    collections::BTreeSet,
     fs,
     io::Write,
-    path::{Component, Path},
+    path::{Component, Path, PathBuf},
 };
 
 use serde::{Deserialize, Serialize};
@@ -48,47 +49,7 @@ pub fn compute_dependency_lock(
     let resolved = resolve_project_skill(root, selected, usize::MAX)?;
     let canonical_root = fs::canonicalize(root)
         .map_err(|error| format!("resolve approved skill root {}: {error}", root.display()))?;
-    let mut skills = Vec::with_capacity(resolved.order.len());
-    for name in &resolved.order {
-        validate_name(name)?;
-        let directory = confined_directory(&canonical_root, name)?;
-        let skill = confined_file(
-            &canonical_root,
-            &directory.join(SKILL_FILE),
-            name,
-            "skill file",
-        )?;
-        let skill_bytes =
-            fs::read(&skill).map_err(|error| format!("read {}: {error}", skill.display()))?;
-        let manifest = directory.join(MANIFEST_FILE);
-        let manifest_bytes = if manifest.exists() {
-            let manifest = confined_file(&canonical_root, &manifest, name, "dependency manifest")?;
-            let bytes = fs::read(&manifest)
-                .map_err(|error| format!("read {}: {error}", manifest.display()))?;
-            canonical_manifest(&bytes, &manifest)?
-        } else {
-            EMPTY_MANIFEST.to_vec()
-        };
-        skills.push(LockedSkill {
-            name: name.clone(),
-            skill_sha256: sha256(&skill_bytes),
-            manifest_sha256: sha256(&manifest_bytes),
-        });
-    }
-    let canonical = serde_json::to_vec(&serde_json::json!({
-        "schema_version": 1,
-        "selected": selected,
-        "order": resolved.order,
-        "skills": skills,
-    }))
-    .map_err(|error| format!("serialize dependency lock payload: {error}"))?;
-    Ok(DependencyLockReceipt {
-        schema_version: 1,
-        selected: selected.to_owned(),
-        order: resolved.order,
-        skills,
-        graph_sha256: sha256(&canonical),
-    })
+    receipt_from_order(&canonical_root, None, selected, resolved.order)
 }
 
 pub fn write_dependency_lock(root: &Path, selected: &str) -> Result<DependencyLockReceipt, String> {
@@ -131,7 +92,7 @@ pub fn write_dependency_lock(root: &Path, selected: &str) -> Result<DependencyLo
 }
 
 pub fn verify_dependency_lock(root: &Path, selected: &str) -> Result<LockVerification, String> {
-    verify_dependency_lock_required(root, selected, true)
+    verify_dependency_lock_required(root, selected)
 }
 
 pub fn verify_dependency_lock_if_present(
@@ -144,13 +105,55 @@ pub fn verify_dependency_lock_if_present(
     if !directory.join(LOCK_FILE).exists() {
         return Ok(None);
     }
-    verify_dependency_lock_required(root, selected, true).map(Some)
+    verify_dependency_lock_required(root, selected).map(Some)
+}
+
+pub fn verify_restorable_dependency_lock(
+    active_root: &Path,
+    candidate: &Path,
+    selected: &str,
+) -> Result<Option<LockVerification>, String> {
+    validate_name(selected)?;
+    let canonical_active = fs::canonicalize(active_root).map_err(|error| {
+        format!(
+            "resolve approved skill root {}: {error}",
+            active_root.display()
+        )
+    })?;
+    let canonical_candidate = fs::canonicalize(candidate)
+        .map_err(|error| format!("resolve {}: {error}", candidate.display()))?;
+    let lock_path = canonical_candidate.join(LOCK_FILE);
+    if !lock_path.exists() {
+        return Ok(None);
+    }
+    let lock_path = confined_file(&canonical_candidate, &lock_path, selected, "dependency lock")?;
+    let stored = read_receipt(&lock_path, selected)?;
+    let direct = candidate_dependencies(&canonical_candidate, selected)?;
+    let mut order = Vec::new();
+    let mut seen = BTreeSet::new();
+    for dependency in direct {
+        let resolved = resolve_project_skill(&canonical_active, &dependency, usize::MAX)?;
+        for name in resolved.order {
+            if seen.insert(name.clone()) {
+                order.push(name);
+            }
+        }
+    }
+    if seen.insert(selected.to_owned()) {
+        order.push(selected.to_owned());
+    }
+    let current = receipt_from_order(
+        &canonical_active,
+        Some(&canonical_candidate),
+        selected,
+        order,
+    )?;
+    ensure_current(selected, stored, current).map(Some)
 }
 
 fn verify_dependency_lock_required(
     root: &Path,
     selected: &str,
-    required: bool,
 ) -> Result<LockVerification, String> {
     validate_name(selected)?;
     let canonical_root = fs::canonicalize(root)
@@ -158,19 +161,17 @@ fn verify_dependency_lock_required(
     let directory = confined_directory(&canonical_root, selected)?;
     let path = directory.join(LOCK_FILE);
     if !path.exists() {
-        if required {
-            return Err(format!("dependency lock is missing for `{selected}`"));
-        }
-        return Ok(LockVerification {
-            selected: selected.to_owned(),
-            graph_sha256: String::new(),
-            locked: false,
-            valid: true,
-        });
+        return Err(format!("dependency lock is missing for `{selected}`"));
     }
     let path = confined_file(&canonical_root, &path, selected, "dependency lock")?;
+    let stored = read_receipt(&path, selected)?;
+    let current = compute_dependency_lock(root, selected)?;
+    ensure_current(selected, stored, current)
+}
+
+fn read_receipt(path: &Path, selected: &str) -> Result<DependencyLockReceipt, String> {
     let stored: DependencyLockReceipt = serde_json::from_slice(
-        &fs::read(&path).map_err(|error| format!("read {}: {error}", path.display()))?,
+        &fs::read(path).map_err(|error| format!("read {}: {error}", path.display()))?,
     )
     .map_err(|error| format!("parse {}: {error}", path.display()))?;
     if stored.schema_version != 1 {
@@ -182,7 +183,14 @@ fn verify_dependency_lock_required(
             stored.selected
         ));
     }
-    let current = compute_dependency_lock(root, selected)?;
+    Ok(stored)
+}
+
+fn ensure_current(
+    selected: &str,
+    stored: DependencyLockReceipt,
+    current: DependencyLockReceipt,
+) -> Result<LockVerification, String> {
     if stored != current {
         return Err(format!(
             "dependency lock for `{selected}` is stale: expected {}, found {}",
@@ -197,13 +205,110 @@ fn verify_dependency_lock_required(
     })
 }
 
+fn receipt_from_order(
+    active_root: &Path,
+    selected_directory: Option<&Path>,
+    selected: &str,
+    order: Vec<String>,
+) -> Result<DependencyLockReceipt, String> {
+    let mut skills = Vec::with_capacity(order.len());
+    for name in &order {
+        validate_name(name)?;
+        let directory = if name == selected {
+            selected_directory
+                .map(Path::to_path_buf)
+                .unwrap_or(confined_directory(active_root, name)?)
+        } else {
+            confined_directory(active_root, name)?
+        };
+        let confinement_root = if name == selected {
+            selected_directory.unwrap_or(active_root)
+        } else {
+            active_root
+        };
+        skills.push(locked_skill(confinement_root, &directory, name)?);
+    }
+    let canonical = serde_json::to_vec(&serde_json::json!({
+        "schema_version": 1,
+        "selected": selected,
+        "order": order,
+        "skills": skills,
+    }))
+    .map_err(|error| format!("serialize dependency lock payload: {error}"))?;
+    Ok(DependencyLockReceipt {
+        schema_version: 1,
+        selected: selected.to_owned(),
+        order,
+        skills,
+        graph_sha256: sha256(&canonical),
+    })
+}
+
+fn locked_skill(root: &Path, directory: &Path, name: &str) -> Result<LockedSkill, String> {
+    let skill = confined_file(root, &directory.join(SKILL_FILE), name, "skill file")?;
+    let skill_bytes =
+        fs::read(&skill).map_err(|error| format!("read {}: {error}", skill.display()))?;
+    let manifest = directory.join(MANIFEST_FILE);
+    let manifest_bytes = if manifest.exists() {
+        let manifest = confined_file(root, &manifest, name, "dependency manifest")?;
+        let bytes = fs::read(&manifest)
+            .map_err(|error| format!("read {}: {error}", manifest.display()))?;
+        canonical_manifest(&bytes, &manifest)?
+    } else {
+        EMPTY_MANIFEST.to_vec()
+    };
+    Ok(LockedSkill {
+        name: name.to_owned(),
+        skill_sha256: sha256(&skill_bytes),
+        manifest_sha256: sha256(&manifest_bytes),
+    })
+}
+
+fn candidate_dependencies(candidate: &Path, selected: &str) -> Result<Vec<String>, String> {
+    let manifest = candidate.join(MANIFEST_FILE);
+    if !manifest.exists() {
+        return Ok(Vec::new());
+    }
+    let manifest = confined_file(candidate, &manifest, selected, "dependency manifest")?;
+    let value: serde_json::Value = serde_json::from_slice(
+        &fs::read(&manifest).map_err(|error| format!("read {}: {error}", manifest.display()))?,
+    )
+    .map_err(|error| format!("parse {}: {error}", manifest.display()))?;
+    if value.get("schema_version").and_then(serde_json::Value::as_u64) != Some(1) {
+        return Err(format!("{} requires schema_version 1", manifest.display()));
+    }
+    let mut dependencies = value
+        .get("requires")
+        .map_or(Ok(Vec::new()), |value| {
+            value
+                .as_array()
+                .ok_or_else(|| format!("{}.requires must be an array", manifest.display()))?
+                .iter()
+                .map(|value| {
+                    value
+                        .as_str()
+                        .map(str::to_owned)
+                        .ok_or_else(|| {
+                            format!("{}.requires entries must be strings", manifest.display())
+                        })
+                })
+                .collect::<Result<Vec<_>, String>>()
+        })?;
+    for dependency in &dependencies {
+        validate_name(dependency)?;
+    }
+    dependencies.sort();
+    dependencies.dedup();
+    Ok(dependencies)
+}
+
 fn canonical_manifest(bytes: &[u8], path: &Path) -> Result<Vec<u8>, String> {
     let value: serde_json::Value = serde_json::from_slice(bytes)
         .map_err(|error| format!("parse {}: {error}", path.display()))?;
     serde_json::to_vec(&value).map_err(|error| format!("canonicalize {}: {error}", path.display()))
 }
 
-fn confined_directory(root: &Path, name: &str) -> Result<std::path::PathBuf, String> {
+fn confined_directory(root: &Path, name: &str) -> Result<PathBuf, String> {
     validate_name(name)?;
     let directory = root.join(name);
     let canonical = fs::canonicalize(&directory)
@@ -219,7 +324,7 @@ fn confined_file(
     path: &Path,
     name: &str,
     label: &str,
-) -> Result<std::path::PathBuf, String> {
+) -> Result<PathBuf, String> {
     let metadata = fs::symlink_metadata(path)
         .map_err(|error| format!("inspect {}: {error}", path.display()))?;
     if metadata.file_type().is_symlink() || !metadata.is_file() {
