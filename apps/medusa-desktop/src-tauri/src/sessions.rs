@@ -85,7 +85,10 @@ fn read_session_value(repo: &Path, session_id: &str) -> Result<Value, String> {
     {
         return Err("invalid session id".to_owned());
     }
-    for root in [repo.join(".medusa/sessions"), fallback_session_root(repo)] {
+    for root in [
+        repo.join(".medusa/sessions"),
+        fallback_session_root(repo),
+    ] {
         let path = root.join(format!("{session_id}.json"));
         if !path.is_file() {
             continue;
