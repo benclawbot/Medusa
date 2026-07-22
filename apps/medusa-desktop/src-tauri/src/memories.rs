@@ -1,4 +1,7 @@
-use std::{fs, path::{Path, PathBuf}};
+use std::{
+    fs,
+    path::{Path, PathBuf},
+};
 
 use medusa_memory::{MemoryDocument, Scope, Status, Validation};
 use serde::Serialize;
@@ -43,7 +46,12 @@ pub fn runtime_list_memories(
     let include_inactive = include_inactive.unwrap_or(false);
     let mut entries = Vec::new();
     collect_markdown(&root, &root, &query, include_inactive, &mut entries)?;
-    entries.sort_by(|left, right| right.updated_at.cmp(&left.updated_at).then_with(|| left.title.cmp(&right.title)));
+    entries.sort_by(|left, right| {
+        right
+            .updated_at
+            .cmp(&left.updated_at)
+            .then_with(|| left.title.cmp(&right.title))
+    });
     Ok(entries)
 }
 
@@ -61,7 +69,9 @@ fn collect_markdown(
     include_inactive: bool,
     output: &mut Vec<DesktopMemory>,
 ) -> Result<(), String> {
-    for entry in fs::read_dir(directory).map_err(|error| format!("Could not read memory directory: {error}"))? {
+    for entry in fs::read_dir(directory)
+        .map_err(|error| format!("Could not read memory directory: {error}"))?
+    {
         let entry = entry.map_err(|error| format!("Could not read memory entry: {error}"))?;
         let path = entry.path();
         if path.is_dir() {
@@ -74,7 +84,8 @@ fn collect_markdown(
         if path.extension().and_then(|value| value.to_str()) != Some("md") {
             continue;
         }
-        let text = fs::read_to_string(&path).map_err(|error| format!("Could not read {}: {error}", path.display()))?;
+        let text = fs::read_to_string(&path)
+            .map_err(|error| format!("Could not read {}: {error}", path.display()))?;
         let document = MemoryDocument::from_markdown(&text)
             .map_err(|error| format!("Invalid canonical memory {}: {error}", path.display()))?;
         if !include_inactive && document.status != Status::Active {
@@ -92,8 +103,14 @@ fn matches_query(document: &MemoryDocument, query: &str) -> bool {
     document.title.to_lowercase().contains(query)
         || document.body.to_lowercase().contains(query)
         || document.memory_type.to_lowercase().contains(query)
-        || document.tags.iter().any(|tag| tag.to_lowercase().contains(query))
-        || document.sources.iter().any(|source| source.to_lowercase().contains(query))
+        || document
+            .tags
+            .iter()
+            .any(|tag| tag.to_lowercase().contains(query))
+        || document
+            .sources
+            .iter()
+            .any(|source| source.to_lowercase().contains(query))
 }
 
 fn to_desktop(document: MemoryDocument, root: &Path, path: &Path) -> DesktopMemory {
@@ -117,16 +134,27 @@ fn to_desktop(document: MemoryDocument, root: &Path, path: &Path) -> DesktopMemo
         expires_at: document.expires_at,
         last_validated_at: document.last_validated_at,
         successful_reuse_count: document.successful_reuse_count,
-        path: path.strip_prefix(root).unwrap_or(path).display().to_string(),
+        path: path
+            .strip_prefix(root)
+            .unwrap_or(path)
+            .display()
+            .to_string(),
     }
 }
 
 fn scope_name(value: Scope) -> &'static str {
-    match value { Scope::Project => "project", Scope::User => "user" }
+    match value {
+        Scope::Project => "project",
+        Scope::User => "user",
+    }
 }
 
 fn status_name(value: Status) -> &'static str {
-    match value { Status::Active => "active", Status::Superseded => "superseded", Status::Archived => "archived" }
+    match value {
+        Status::Active => "active",
+        Status::Superseded => "superseded",
+        Status::Archived => "archived",
+    }
 }
 
 fn validation_name(value: Validation) -> &'static str {
@@ -147,7 +175,9 @@ mod tests {
     use std::fs;
 
     fn memory(title: &str, status: &str) -> String {
-        format!("---\nid: mem-1\ntype: decision\ntitle: {title}\ncreated_at: 2026-07-22T00:00:00Z\nupdated_at: 2026-07-22T01:00:00Z\nscope: project\nproject_id: sha256:test\nsession_id: ses-1\nstatus: {status}\nconfidence_milli: 940\nvalidation: test-verified\nsources: artifact://sessions/ses-1/test\nsupersedes: \nsuperseded_by: \ntags: rust, desktop\nexpires_at: \nlast_validated_at: 2026-07-22T01:00:00Z\nsuccessful_reuse_count: 2\n---\n\nUse the verified path.\n")
+        format!(
+            "---\nid: mem-1\ntype: decision\ntitle: {title}\ncreated_at: 2026-07-22T00:00:00Z\nupdated_at: 2026-07-22T01:00:00Z\nscope: project\nproject_id: sha256:test\nsession_id: ses-1\nstatus: {status}\nconfidence_milli: 940\nvalidation: test-verified\nsources: artifact://sessions/ses-1/test\nsupersedes: \nsuperseded_by: \ntags: rust, desktop\nexpires_at: \nlast_validated_at: 2026-07-22T01:00:00Z\nsuccessful_reuse_count: 2\n---\n\nUse the verified path.\n"
+        )
     }
 
     #[test]
@@ -155,8 +185,13 @@ mod tests {
         let directory = crate::tempdir().expect("tempdir");
         let lessons = directory.path().join(".medusa/memory/lessons");
         fs::create_dir_all(&lessons).expect("create lessons");
-        fs::write(lessons.join("memory.md"), memory("Verified decision", "active")).expect("write memory");
-        let items = runtime_list_memories(directory.path().display().to_string(), None, None).expect("list");
+        fs::write(
+            lessons.join("memory.md"),
+            memory("Verified decision", "active"),
+        )
+        .expect("write memory");
+        let items = runtime_list_memories(directory.path().display().to_string(), None, None)
+            .expect("list");
         assert_eq!(items.len(), 1);
         assert_eq!(items[0].validation, "test-verified");
         assert_eq!(items[0].sources.len(), 1);
@@ -168,11 +203,22 @@ mod tests {
         let directory = crate::tempdir().expect("tempdir");
         let lessons = directory.path().join(".medusa/memory/lessons");
         fs::create_dir_all(&lessons).expect("create lessons");
-        fs::write(lessons.join("active.md"), memory("Cargo workflow", "active")).expect("write active");
-        fs::write(lessons.join("old.md"), memory("Old workflow", "archived")).expect("write archived");
-        let active = runtime_list_memories(directory.path().display().to_string(), Some("cargo".into()), None).expect("search");
+        fs::write(
+            lessons.join("active.md"),
+            memory("Cargo workflow", "active"),
+        )
+        .expect("write active");
+        fs::write(lessons.join("old.md"), memory("Old workflow", "archived"))
+            .expect("write archived");
+        let active = runtime_list_memories(
+            directory.path().display().to_string(),
+            Some("cargo".into()),
+            None,
+        )
+        .expect("search");
         assert_eq!(active.len(), 1);
-        let all = runtime_list_memories(directory.path().display().to_string(), None, Some(true)).expect("all");
+        let all = runtime_list_memories(directory.path().display().to_string(), None, Some(true))
+            .expect("all");
         assert_eq!(all.len(), 2);
     }
 }
