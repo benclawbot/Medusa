@@ -22,26 +22,23 @@ jobs:
       - name: Apply portable path validation
         shell: python
         run: |
+          import re
           from pathlib import Path
+
           target = Path("apps/medusa-desktop/src-tauri/src/mutations.rs")
           source = target.read_text()
           source = source.replace(
               '    path::{Component, Path, PathBuf},',
               '    path::{Path, PathBuf},',
           )
-          old = '''            let has_unsafe_component = Path::new(path).components().any(|component| {
-                matches!(
-                    component,
-                    Component::Prefix(_) | Component::RootDir | Component::ParentDir
-                )
-            });
-            if path.is_empty()
-                || path.starts_with('/')
-                || path.starts_with('\\\\')
-                || has_unsafe_component
-                || path.starts_with('-')
-            {'''
-          new = '''            let bytes = path.as_bytes();
+          pattern = re.compile(
+              r"            let has_unsafe_component = Path::new\(path\)\.components\(\)\.any\(\|component\| \{.*?"
+              r"            if path\.is_empty\(\).*?"
+              r"                \|\| path\.starts_with\('-'\)\n"
+              r"            \{",
+              re.DOTALL,
+          )
+          replacement = '''            let bytes = path.as_bytes();
             let has_drive_prefix = bytes.len() >= 2
                 && bytes[0].is_ascii_alphabetic()
                 && bytes[1] == b':';
@@ -55,9 +52,10 @@ jobs:
                 || has_parent_segment
                 || path.starts_with('-')
             {'''
-          if old not in source:
-              raise SystemExit("expected validation block not found")
-          target.write_text(source.replace(old, new))
+          source, count = pattern.subn(replacement, source, count=1)
+          if count != 1:
+              raise SystemExit(f"expected one validation block, replaced {count}")
+          target.write_text(source)
       - name: Format and commit
         run: |
           cargo fmt --manifest-path apps/medusa-desktop/src-tauri/Cargo.toml
