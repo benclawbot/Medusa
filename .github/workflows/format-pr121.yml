@@ -1,0 +1,37 @@
+name: Format PR121
+
+on:
+  push:
+    branches:
+      - automation/format-pr121
+    paths:
+      - .github/workflows/format-pr121.yml
+
+permissions:
+  contents: write
+
+jobs:
+  format:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: agent/desktop-session-history
+          fetch-depth: 0
+      - uses: dtolnay/rust-toolchain@1.88.0
+        with:
+          components: rustfmt
+      - name: Format desktop adapter
+        run: cargo fmt --manifest-path apps/medusa-desktop/src-tauri/Cargo.toml
+      - name: Commit canonical formatting
+        run: |
+          set -euo pipefail
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          if git diff --quiet; then
+            echo "No formatting changes required"
+            exit 0
+          fi
+          git add apps/medusa-desktop/src-tauri/src/sessions.rs
+          git commit -m "Format desktop session adapter"
+          git push origin HEAD:agent/desktop-session-history
