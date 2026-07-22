@@ -1,4 +1,9 @@
-export type GitHubMutationKind = "commit" | "push" | "pullRequest";
+export type GitHubMutationKind =
+  | "branch"
+  | "checkpoint"
+  | "commit"
+  | "push"
+  | "pullRequest";
 
 export interface GitHubMutationPreview {
   kind: GitHubMutationKind;
