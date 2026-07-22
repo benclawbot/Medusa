@@ -1,10 +1,14 @@
 import { BookOpen, X } from "lucide-react";
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { MemoryBrowser } from "./MemoryBrowser";
+import { useDialogFocus } from "./useDialogFocus";
 
 export function MemoryDock() {
   const [open, setOpen] = useState(false);
   const [repo, setRepo] = useState(() => window.localStorage.getItem("medusa.desktop.repo") ?? "");
+  const dialogRef = useRef<HTMLDivElement>(null);
+  const close = useCallback(() => setOpen(false), []);
+  useDialogFocus(open, dialogRef, close);
 
   useEffect(() => {
     const sync = () => setRepo(window.localStorage.getItem("medusa.desktop.repo") ?? "");
@@ -18,13 +22,14 @@ export function MemoryDock() {
 
   return (
     <>
-      <button className="memory-dock-trigger" onClick={() => setOpen(true)} aria-label="Open memory browser" title="Memory browser">
+      <button className="memory-dock-trigger" onClick={() => setOpen(true)} aria-label="Open memory browser" aria-haspopup="dialog" aria-expanded={open} title="Memory browser">
         <BookOpen size={17} />
       </button>
       {open && (
-        <div className="memory-dock-backdrop" role="dialog" aria-modal="true" aria-label="Medusa memory browser">
+        <div ref={dialogRef} className="memory-dock-backdrop" role="dialog" aria-modal="true" aria-labelledby="memory-browser-title" tabIndex={-1}>
           <section className="memory-dock-panel">
-            <button className="memory-dock-close" onClick={() => setOpen(false)} aria-label="Close memory browser"><X size={17} /></button>
+            <h1 id="memory-browser-title" className="sr-only">Medusa memory browser</h1>
+            <button className="memory-dock-close" onClick={close} aria-label="Close memory browser"><X size={17} /></button>
             <MemoryBrowser repo={repo} />
           </section>
         </div>
