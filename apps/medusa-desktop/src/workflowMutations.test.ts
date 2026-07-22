@@ -9,6 +9,7 @@ import {
   applyBranchResult,
   applyCheckpointResult,
   applyCommitResult,
+  applyPullRequestResult,
   applyPushResult,
 } from "./workflowMutations";
 
@@ -32,31 +33,40 @@ function verifiedWorkflow(): DesktopCodingWorkflow {
   return workflow;
 }
 
+function pushedWorkflow(): DesktopCodingWorkflow {
+  let workflow = verifiedWorkflow();
+  workflow = applyCheckpointResult(workflow, {
+    branch: "main",
+    commitSha: "base123",
+    checkpointRef: "refs/medusa/checkpoints/session-1",
+  });
+  workflow = applyBranchResult(workflow, {
+    branch: "feature/safe",
+    commitSha: "base123",
+  });
+  workflow = applyCommitResult(workflow, {
+    branch: "feature/safe",
+    commitSha: "commit456",
+  });
+  return applyPushResult(workflow, {
+    branch: "feature/safe",
+    commitSha: "commit456",
+  });
+}
+
 describe("workflow mutation binding", () => {
-  it("advances only from matching successful mutation results", () => {
-    let workflow = verifiedWorkflow();
-    workflow = applyCheckpointResult(workflow, {
-      branch: "main",
-      commitSha: "base123",
-      checkpointRef: "refs/medusa/checkpoints/session-1",
-    });
-    workflow = applyBranchResult(workflow, {
-      branch: "feature/safe",
-      commitSha: "base123",
-    });
-    workflow = applyCommitResult(workflow, {
+  it("advances matching successful mutation results through completion", () => {
+    const workflow = applyPullRequestResult(pushedWorkflow(), {
       branch: "feature/safe",
       commitSha: "commit456",
-    });
-    workflow = applyPushResult(workflow, {
-      branch: "feature/safe",
-      commitSha: "commit456",
+      pullRequestUrl: "https://github.com/example/repo/pull/42",
     });
 
-    expect(workflow.phase).toBe("pushed");
+    expect(workflow.phase).toBe("completed");
     expect(workflow.checkpointId).toBe("refs/medusa/checkpoints/session-1");
     expect(workflow.branch).toBe("feature/safe");
     expect(workflow.commitSha).toBe("commit456");
+    expect(workflow.pullRequestUrl).toBe("https://github.com/example/repo/pull/42");
   });
 
   it("rejects a commit result from another branch", () => {
@@ -99,5 +109,25 @@ describe("workflow mutation binding", () => {
         commitSha: "different",
       }),
     ).toThrow("Push result commit does not match");
+  });
+
+  it("rejects a pull request result for another commit", () => {
+    expect(() =>
+      applyPullRequestResult(pushedWorkflow(), {
+        branch: "feature/safe",
+        commitSha: "different",
+        pullRequestUrl: "https://github.com/example/repo/pull/42",
+      }),
+    ).toThrow("Pull request result commit does not match");
+  });
+
+  it("rejects a pull request result without an HTTPS URL", () => {
+    expect(() =>
+      applyPullRequestResult(pushedWorkflow(), {
+        branch: "feature/safe",
+        commitSha: "commit456",
+        pullRequestUrl: "javascript:alert(1)",
+      }),
+    ).toThrow("valid HTTPS URL");
   });
 });
