@@ -134,6 +134,7 @@ pub fn runtime_create_github_issue(
 }
 
 #[tauri::command]
+#[allow(clippy::too_many_arguments)]
 pub fn runtime_update_github_issue(
     repository: String,
     issue_number: u64,
