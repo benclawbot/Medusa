@@ -7,7 +7,9 @@ export type GitHubMutationKind =
   | "actionsRetry"
   | "pullRequestMerge"
   | "issueCreate"
-  | "issueUpdate";
+  | "issueUpdate"
+  | "pullRequestUpdate"
+  | "pullRequestReview";
 
 export interface GitHubMutationPreview {
   kind: GitHubMutationKind;
@@ -60,6 +62,9 @@ export function validateMutationPreview(preview: GitHubMutationPreview): string[
   }
   if (preview.kind === "pullRequestMerge" && !preview.destructive) {
     errors.push("pull request merge must be marked destructive");
+  }
+  if (preview.kind === "pullRequestReview" && preview.destructive) {
+    errors.push("pull request review must not be marked destructive");
   }
   if (preview.affectedResources.length === 0) {
     errors.push("at least one affected resource is required");
