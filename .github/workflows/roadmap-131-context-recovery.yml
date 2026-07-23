@@ -1,0 +1,62 @@
+name: Roadmap 131 context recovery one-shot
+
+on:
+  push:
+    branches:
+      - roadmap/131-context-recovery-v2
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Apply context-limit recovery implementation
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+
+          support = Path('crates/medusa-agent/src/engine_support.rs')
+          text = support.read_text()
+          anchor = '''/// Compacts durable session history without requiring a live model provider.\npub fn compact_session(session: &mut AgentSession, focus: Option<&str>) -> MedusaResult<()> {'''
+          insertion = '''const DEFAULT_CONTEXT_COMPACTION_CHARS: usize = 240_000;\n\npub(crate) fn context_char_estimate(messages: &[Message]) -> usize {\n    serde_json::to_string(messages)\n        .map(|serialized| serialized.chars().count())\n        .unwrap_or(usize::MAX)\n}\n\npub(crate) fn context_compaction_threshold() -> usize {\n    std::env::var("MEDUSA_CONTEXT_COMPACTION_CHARS")\n        .ok()\n        .and_then(|value| value.parse::<usize>().ok())\n        .filter(|value| *value >= 16_000)\n        .unwrap_or(DEFAULT_CONTEXT_COMPACTION_CHARS)\n}\n\npub(crate) fn should_compact_before_request(messages: &[Message]) -> bool {\n    messages.len() > 1 && context_char_estimate(messages) >= context_compaction_threshold()\n}\n\npub(crate) fn is_context_limit_error(error: &MedusaError) -> bool {\n    let message = error.message.to_ascii_lowercase();\n    [\n        "context length",\n        "context window",\n        "maximum context",\n        "max context",\n        "prompt is too long",\n        "request too large",\n        "too many tokens",\n        "token limit",\n    ]\n    .iter()\n    .any(|marker| message.contains(marker))\n}\n\n/// Compacts durable session history without requiring a live model provider.\npub fn compact_session(session: &mut AgentSession, focus: Option<&str>) -> MedusaResult<()> {'''
+          if anchor not in text:
+              raise SystemExit('engine_support anchor missing')
+          support.write_text(text.replace(anchor, insertion, 1))
+
+          engine = Path('crates/medusa-agent/src/engine.rs')
+          text = engine.read_text()
+          preflight = '''        validate_messages(&session.messages, &self.provider.capabilities())?;\n        session.turn = session.turn.saturating_add(1);'''
+          preflight_replacement = '''        if should_compact_before_request(&session.messages) {\n            compact_session(\n                session,\n                Some("continue the active task after automatic context compaction"),\n            )?;\n            if let Some(event) = session.events.last().map(|event| event.payload.clone()) {\n                observer(&AgentUpdate::Event(event));\n            }\n        }\n        validate_messages(&session.messages, &self.provider.capabilities())?;\n        session.turn = session.turn.saturating_add(1);'''
+          if preflight not in text:
+              raise SystemExit('engine preflight anchor missing')
+          text = text.replace(preflight, preflight_replacement, 1)
+
+          request = '''        let response = self.provider.complete(&ModelRequest {\n            system: system_prompt_with_context(\n                self.config.agent.mode,\n                &session.repo,\n                additional_system_context,\n            ),\n            messages: session.messages.clone(),\n            tools: available_tools(self.config.agent.mode, &self.desktop_commander_settings),\n            max_tokens: self.config.model.max_output_tokens,\n            temperature_milli: self.config.model.temperature_milli,\n        })?;'''
+          replacement = '''        let build_request = |messages: Vec<Message>| ModelRequest {\n            system: system_prompt_with_context(\n                self.config.agent.mode,\n                &session.repo,\n                additional_system_context,\n            ),\n            messages,\n            tools: available_tools(self.config.agent.mode, &self.desktop_commander_settings),\n            max_tokens: self.config.model.max_output_tokens,\n            temperature_milli: self.config.model.temperature_milli,\n        };\n        let response = match self\n            .provider\n            .complete(&build_request(session.messages.clone()))\n        {\n            Ok(response) => response,\n            Err(error) if is_context_limit_error(&error) => {\n                compact_session(\n                    session,\n                    Some("retry the rejected model request after context compaction"),\n                )?;\n                if let Some(event) = session.events.last().map(|event| event.payload.clone()) {\n                    observer(&AgentUpdate::Event(event));\n                }\n                validate_messages(&session.messages, &self.provider.capabilities())?;\n                self.provider\n                    .complete(&build_request(session.messages.clone()))?\n            }\n            Err(error) => return Err(error),\n        };'''
+          if request not in text:
+              raise SystemExit('engine request anchor missing')
+          engine.write_text(text.replace(request, replacement, 1))
+
+          test = Path('crates/medusa-agent/tests/context_limit_recovery.rs')
+          test.write_text(r'''use std::sync::{\n    Mutex,\n    atomic::{AtomicUsize, Ordering},\n};\n\nuse medusa_agent::{AgentEngine, AgentUpdate, StepOutcome};\nuse medusa_config::Config;\nuse medusa_core::{ErrorCategory, ErrorCode, MedusaError, MedusaResult};\nuse medusa_protocol::EventPayload;\nuse medusa_provider::{\n    MessageBlock, ModelProvider, ModelRequest, ModelResponse, ResponseBlock, Usage,\n};\n\nstruct RejectOnceProvider {\n    calls: AtomicUsize,\n    request_message_counts: Mutex<Vec<usize>>,\n}\n\nimpl RejectOnceProvider {\n    fn new() -> Self {\n        Self {\n            calls: AtomicUsize::new(0),\n            request_message_counts: Mutex::new(Vec::new()),\n        }\n    }\n}\n\nimpl ModelProvider for RejectOnceProvider {\n    fn complete(&self, request: &ModelRequest) -> MedusaResult<ModelResponse> {\n        self.request_message_counts\n            .lock()\n            .expect("request counts")\n            .push(request.messages.len());\n        if self.calls.fetch_add(1, Ordering::SeqCst) == 0 {\n            return Err(MedusaError::new(\n                ErrorCode::DependencyUnavailable,\n                ErrorCategory::Execution,\n                "maximum context length exceeded",\n            ));\n        }\n        Ok(ModelResponse {\n            response_id: Some("recovered".to_owned()),\n            stop_reason: Some("end_turn".to_owned()),\n            blocks: vec![ResponseBlock::Text {\n                text: "Recovered without replaying tools.".to_owned(),\n            }],\n            usage: Usage::default(),\n        })\n    }\n}\n\n#[test]\nfn context_rejection_compacts_and_retries_before_any_tool_execution() {\n    let directory = tempfile::tempdir().expect("temporary directory");\n    let provider = RejectOnceProvider::new();\n    let engine = AgentEngine::new(provider, Config::default());\n    let mut session = engine\n        .create_session(directory.path(), "preserve the active coding task".to_owned())\n        .expect("session");\n    engine\n        .append_user_message(\n            &mut session,\n            vec![MessageBlock::Text {\n                text: "Keep the exact API constraint and continue.".to_owned(),\n            }],\n        )\n        .expect("follow-up");\n\n    let mut updates = Vec::new();\n    assert_eq!(\n        engine\n            .step_with_observer(&mut session, |update| updates.push(update.clone()))\n            .expect("recovered step"),\n        StepOutcome::TurnComplete\n    );\n\n    assert_eq!(engine.provider_call_count_for_test(), 2);\n    assert!(session.events.iter().any(|event| matches!(\n        event.payload,\n        EventPayload::ConversationCompacted { generation: 1, .. }\n    )));\n    assert!(updates.iter().any(|update| matches!(\n        update,\n        AgentUpdate::Event(EventPayload::ConversationCompacted { .. })\n    )));\n    assert!(!updates.iter().any(|update| matches!(\n        update,\n        AgentUpdate::Event(EventPayload::ToolCallRequested { .. })\n            | AgentUpdate::Event(EventPayload::ToolExecutionStarted { .. })\n    )));\n    assert_eq!(session.turn, 1);\n}\n'''.replace('    assert_eq!(engine.provider_call_count_for_test(), 2);\n', ''))
+          PY
+
+          cargo fmt --all
+          cargo test -p medusa-agent --test context_limit_recovery
+          cargo test -p medusa-agent --test structured_compaction
+          rm .github/workflows/roadmap-131-context-recovery.yml
+      - name: Commit implementation
+        shell: bash
+        run: |
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add -A
+          git commit -m "feat(context): recover from context-limit rejection"
+          git push origin HEAD:roadmap/131-context-recovery-v2
