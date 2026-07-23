@@ -3,7 +3,7 @@ name: Roadmap 133 Publish Runtime
 # One-shot PR branch commit preparation; removed after runtime import.
 on:
   pull_request:
-    types: [ready_for_review]
+    types: [synchronize, ready_for_review]
 
 permissions:
   contents: write
