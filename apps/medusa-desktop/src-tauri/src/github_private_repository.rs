@@ -1,4 +1,8 @@
-use std::{fs, path::{Path, PathBuf}, process::{Command, Output}};
+use std::{
+    fs,
+    path::{Path, PathBuf},
+    process::{Command, Output},
+};
 
 use serde::Serialize;
 
@@ -201,12 +205,24 @@ pub fn runtime_fetch_github_repository(
 }
 
 fn normalize_hostname(hostname: Option<String>) -> String {
-    hostname.as_deref().unwrap_or("github.com").trim().to_owned()
+    hostname
+        .as_deref()
+        .unwrap_or("github.com")
+        .trim()
+        .to_owned()
 }
 
 fn verify_access(repository: &str, hostname: &str) -> Result<(), GithubRepositoryTransferState> {
     let output = Command::new("gh")
-        .args(["repo", "view", repository, "--hostname", hostname, "--json", "nameWithOwner"])
+        .args([
+            "repo",
+            "view",
+            repository,
+            "--hostname",
+            hostname,
+            "--json",
+            "nameWithOwner",
+        ])
         .output()
         .map_err(|error| {
             if error.kind() == std::io::ErrorKind::NotFound {
@@ -224,11 +240,17 @@ fn verify_access(repository: &str, hostname: &str) -> Result<(), GithubRepositor
 
 fn classify_failure(stderr: &str) -> GithubRepositoryTransferState {
     let value = stderr.to_ascii_lowercase();
-    if value.contains("not logged") || value.contains("authentication") || value.contains("bad credentials") {
+    if value.contains("not logged")
+        || value.contains("authentication")
+        || value.contains("bad credentials")
+    {
         GithubRepositoryTransferState::AuthenticationRequired
     } else if value.contains("not found") || value.contains("404") {
         GithubRepositoryTransferState::NotFound
-    } else if value.contains("forbidden") || value.contains("403") || value.contains("permission denied") {
+    } else if value.contains("forbidden")
+        || value.contains("403")
+        || value.contains("permission denied")
+    {
         GithubRepositoryTransferState::Forbidden
     } else {
         GithubRepositoryTransferState::Failed
@@ -251,14 +273,18 @@ fn validate_clone_destination(path: &Path) -> Result<(), String> {
             return Err("clone destination must be empty".to_owned());
         }
     } else {
-        let parent = path.parent().ok_or_else(|| "clone destination parent is required".to_owned())?;
-        fs::canonicalize(parent).map_err(|_| "clone destination parent does not exist".to_owned())?;
+        let parent = path
+            .parent()
+            .ok_or_else(|| "clone destination parent is required".to_owned())?;
+        fs::canonicalize(parent)
+            .map_err(|_| "clone destination parent does not exist".to_owned())?;
     }
     Ok(())
 }
 
 fn canonical_repository(path: &Path) -> Result<PathBuf, String> {
-    let path = fs::canonicalize(path).map_err(|_| "local repository path does not exist".to_owned())?;
+    let path =
+        fs::canonicalize(path).map_err(|_| "local repository path does not exist".to_owned())?;
     if !path.is_dir() {
         return Err("local repository path is not a directory".to_owned());
     }
@@ -282,17 +308,27 @@ fn has_in_progress_git_operation(path: &Path) -> bool {
         .filter(Output::status_success)
         .and_then(|output| String::from_utf8(output.stdout).ok())
         .map(|value| path.join(value.trim()));
-    let Some(git_dir) = git_dir else { return true; };
-    ["MERGE_HEAD", "CHERRY_PICK_HEAD", "REBASE_HEAD", "rebase-merge", "rebase-apply"]
-        .iter()
-        .any(|name| git_dir.join(name).exists())
+    let Some(git_dir) = git_dir else {
+        return true;
+    };
+    [
+        "MERGE_HEAD",
+        "CHERRY_PICK_HEAD",
+        "REBASE_HEAD",
+        "rebase-merge",
+        "rebase-apply",
+    ]
+    .iter()
+    .any(|name| git_dir.join(name).exists())
 }
 
 trait OutputStatus {
     fn status_success(&self) -> bool;
 }
 impl OutputStatus for Output {
-    fn status_success(&self) -> bool { self.status.success() }
+    fn status_success(&self) -> bool {
+        self.status.success()
+    }
 }
 
 fn valid_hostname(value: &str) -> bool {
@@ -338,9 +374,18 @@ mod tests {
 
     #[test]
     fn classifies_auth_and_permission_failures_without_returning_secret_text() {
-        assert_eq!(classify_failure("HTTP 401 bad credentials token ghp_secret"), GithubRepositoryTransferState::AuthenticationRequired);
-        assert_eq!(classify_failure("HTTP 403 permission denied"), GithubRepositoryTransferState::Forbidden);
-        assert_eq!(classify_failure("HTTP 404 not found"), GithubRepositoryTransferState::NotFound);
+        assert_eq!(
+            classify_failure("HTTP 401 bad credentials token ghp_secret"),
+            GithubRepositoryTransferState::AuthenticationRequired
+        );
+        assert_eq!(
+            classify_failure("HTTP 403 permission denied"),
+            GithubRepositoryTransferState::Forbidden
+        );
+        assert_eq!(
+            classify_failure("HTTP 404 not found"),
+            GithubRepositoryTransferState::NotFound
+        );
     }
 
     #[test]

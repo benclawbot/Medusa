@@ -65,8 +65,8 @@ fn persist_receipt(path: &Path, receipt: &GithubMutationAuditReceipt) -> Result<
         .parent()
         .ok_or_else(|| "invalid GitHub audit receipt path".to_owned())?;
     fs::create_dir_all(parent).map_err(|_| "cannot create GitHub audit directory".to_owned())?;
-    let mut encoded = serde_json::to_vec(receipt)
-        .map_err(|_| "cannot encode GitHub audit receipt".to_owned())?;
+    let mut encoded =
+        serde_json::to_vec(receipt).map_err(|_| "cannot encode GitHub audit receipt".to_owned())?;
     encoded.push(b'\n');
     let mut file = OpenOptions::new()
         .create(true)
@@ -108,7 +108,9 @@ fn validate_field(name: &str, value: &str, max_bytes: usize) -> Result<(), Strin
         return Err(format!("GitHub audit {name} is too large"));
     }
     if value.contains('\0') || value.contains('\n') || value.contains('\r') {
-        return Err(format!("GitHub audit {name} contains invalid control characters"));
+        return Err(format!(
+            "GitHub audit {name} contains invalid control characters"
+        ));
     }
     Ok(())
 }

@@ -308,13 +308,17 @@ fn validate_preview(
     mutation_state: Option<&str>,
 ) -> Result<(), String> {
     if std::mem::discriminant(&preview.kind) != std::mem::discriminant(&kind) {
-        return Err("mutation preview kind does not match requested pull request operation".to_owned());
+        return Err(
+            "mutation preview kind does not match requested pull request operation".to_owned(),
+        );
     }
     if preview.repository.trim() != repository {
         return Err("mutation preview repository does not match requested repository".to_owned());
     }
     if preview.destructive != destructive {
-        return Err("mutation preview destructive flag does not match pull request operation".to_owned());
+        return Err(
+            "mutation preview destructive flag does not match pull request operation".to_owned(),
+        );
     }
     if !preview
         .affected_resources
@@ -327,7 +331,9 @@ fn validate_preview(
         || normalized_str(preview.mutation_body.as_deref()) != mutation_body
         || normalized_str(preview.mutation_state.as_deref()) != mutation_state
     {
-        return Err("mutation preview content does not match requested pull request mutation".to_owned());
+        return Err(
+            "mutation preview content does not match requested pull request mutation".to_owned(),
+        );
     }
     if confirmation.confirmed_at.trim().is_empty() {
         return Err("mutation confirmation timestamp is required".to_owned());
@@ -378,7 +384,11 @@ fn normalized_str(value: Option<&str>) -> Option<&str> {
 fn encode_update_state(state: Option<&str>, base: Option<&str>) -> Option<String> {
     match (state, base) {
         (None, None) => None,
-        (state, base) => Some(format!("state={};base={}", state.unwrap_or(""), base.unwrap_or(""))),
+        (state, base) => Some(format!(
+            "state={};base={}",
+            state.unwrap_or(""),
+            base.unwrap_or("")
+        )),
     }
 }
 
@@ -592,7 +602,9 @@ mod tests {
     #[test]
     fn unsafe_urls_and_refs_are_rejected() {
         assert!(safe_https_url("https://github.com/octo/repo/pull/42".to_owned()).is_ok());
-        assert!(safe_https_url("https://user@example.com/pull/42?token=secret".to_owned()).is_err());
+        assert!(
+            safe_https_url("https://user@example.com/pull/42?token=secret".to_owned()).is_err()
+        );
         assert!(validate_ref("feature/safe").is_ok());
         assert!(validate_ref("../main").is_err());
     }
