@@ -4,6 +4,7 @@ use medusa_core::MedusaResult;
 use medusa_protocol::EventPayload;
 use medusa_provider::{MessageBlock, ModelProvider, ModelRequest, ModelResponse};
 
+// These regressions define the durable state and semantic-stability contract for compaction.
 struct IdleProvider;
 impl ModelProvider for IdleProvider {
     fn complete(&self, _: &ModelRequest) -> MedusaResult<ModelResponse> {
