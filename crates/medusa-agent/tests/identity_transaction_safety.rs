@@ -22,8 +22,14 @@ fn claude_compatibility_context_is_non_authoritative() {
 #[test]
 fn transaction_preview_contains_files_risk_tests_and_checkpoint() {
     let mutations = vec![
-        FileMutation { path: "src/a.rs".into(), content: "a".into() },
-        FileMutation { path: "src/b.rs".into(), content: "b".into() },
+        FileMutation {
+            path: "src/a.rs".into(),
+            content: "a".into(),
+        },
+        FileMutation {
+            path: "src/b.rs".into(),
+            content: "b".into(),
+        },
     ];
     let preview = preview(&mutations, "checkpoint-1", vec!["cargo test".into()]);
     assert_eq!(preview.affected_files, vec!["src/a.rs", "src/b.rs"]);
@@ -35,10 +41,19 @@ fn transaction_preview_contains_files_risk_tests_and_checkpoint() {
 #[test]
 fn invalid_transaction_is_rejected_before_partial_write() {
     let directory = tempfile::tempdir().expect("tempdir");
-    let result = apply_atomic(directory.path(), &[
-        FileMutation { path: "safe.txt".into(), content: "safe".into() },
-        FileMutation { path: "../escape.txt".into(), content: "bad".into() },
-    ]);
+    let result = apply_atomic(
+        directory.path(),
+        &[
+            FileMutation {
+                path: "safe.txt".into(),
+                content: "safe".into(),
+            },
+            FileMutation {
+                path: "../escape.txt".into(),
+                content: "bad".into(),
+            },
+        ],
+    );
     assert!(result.is_err());
     assert!(!directory.path().join("safe.txt").exists());
 }
