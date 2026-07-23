@@ -117,7 +117,9 @@ impl<P> ProviderManager<P> {
     /// Returns the configured provider position that completed the latest uncached request.
     #[must_use]
     pub fn last_completed_provider(&self) -> Option<usize> {
-        self.last_completed_provider.lock().map_or(None, |value| *value)
+        self.last_completed_provider
+            .lock()
+            .map_or(None, |value| *value)
     }
 
     /// Returns the total number of responses served from the manager cache.
