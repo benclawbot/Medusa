@@ -7,7 +7,7 @@ use std::{
 use medusa_config::Config;
 use medusa_provider::{
     ConfiguredProvider, ImageSource, Message, MessageBlock, ModelProvider, ModelRequest,
-    OpenAiProvider, ResponseBlock, Role, ToolDefinition,
+    OpenAiProvider, ProviderManager, ResponseBlock, Role, ToolDefinition,
 };
 use serde_json::json;
 
@@ -172,7 +172,7 @@ fn openai_handles_no_auth_empty_choices_and_policy_errors() {
 }
 
 #[test]
-fn openai_retries_transient_statuses_and_accepts_session_configuration() {
+fn manager_retries_transient_openai_statuses_and_accepts_session_configuration() {
     let (url, server) = serve(vec![
         ("500 Internal Server Error", r#"{"error":"one"}"#),
         ("429 Too Many Requests", r#"{"error":"two"}"#),
@@ -190,8 +190,11 @@ fn openai_retries_transient_statuses_and_accepts_session_configuration() {
             .supported_image_media_types
             .is_empty()
     );
-    let response = provider.complete(&request()).expect("completion");
+    let manager = ProviderManager::new(vec![provider]).with_retries(2);
+    let response = manager.complete(&request()).expect("completion");
     assert!(matches!(&response.blocks[0], ResponseBlock::Text { text } if text == "done"));
+    assert_eq!(manager.health()[0].attempts, 3);
+    assert_eq!(manager.health()[0].retries, 2);
     assert_eq!(server.join().expect("server").len(), 3);
 }
 
