@@ -66,11 +66,50 @@ jobs:
           text = replace_once(text, 'use crate::{\n    engine_support::*,\n', 'use crate::{\n    approval::{ApprovalDecision, ApprovalGrant, ApprovalReceipt},\n    engine_support::*,\n', 'engine approval import')
           text = replace_once(text, '    evidence::append_event,\n', '    evidence::append_event,\n    identity_guard::validate_provider_text,\n', 'engine identity import')
           text = replace_once(text, '            tool_artifacts: Vec::new(),\n', '            tool_artifacts: Vec::new(),\n            approval_grants: Vec::new(),\n            approval_receipts: Vec::new(),\n            rollback_receipts: Vec::new(),\n', 'engine session initialization')
-          text = replace_once(text, '                ResponseBlock::Text { text } => {\n                    assistant_text.push(text.clone());', '                ResponseBlock::Text { text } => {\n                    validate_provider_text(&text)?;\n                    assistant_text.push(text.clone());', 'provider text validation')
+          text = replace_once(text, '                ResponseBlock::Text { text } => {\n                    assistant_text.push(text.clone());', '                ResponseBlock::Text { text } => {\n                    let text = if validate_provider_text(&text).is_ok() {\n                        text\n                    } else {\n                        "[provider output rejected: identity or policy contamination]".to_owned()\n                    };\n                    assistant_text.push(text.clone());', 'provider text validation')
           text = replace_once(text, '                    } else {\n                        session.plan = plan.clone();\n                        observer(&AgentUpdate::Plan(plan));', '                    } else {\n                        if session.plan != plan {\n                            let recorded_at = OffsetDateTime::now_utc();\n                            for grant in session.approval_grants.drain(..) {\n                                session.approval_receipts.push(ApprovalReceipt {\n                                    decision: ApprovalDecision::Invalidated,\n                                    scope: grant.scope,\n                                    recorded_at,\n                                    reason: "visible plan changed".to_owned(),\n                                });\n                            }\n                        }\n                        session.plan = plan.clone();\n                        observer(&AgentUpdate::Plan(plan));', 'plan invalidation')
           text = replace_once(text, '                            approval: Some(PendingToolApproval {\n                                tool_use_id: id,\n                                tool: name,\n                                input,\n                            }),', '                            approval: Some(PendingToolApproval {\n                                grant: ApprovalGrant::exact_action(\n                                    &name,\n                                    &input,\n                                    &session.plan,\n                                    OffsetDateTime::now_utc(),\n                                ),\n                                tool_use_id: id,\n                                tool: name,\n                                input,\n                            }),', 'pending approval grant creation')
-          old = '''            let (content, is_error) = if approved {\n                match execute_approved_tool(&session.repo, &approval.tool, &approval.input) {\n                    Ok(output) => (format!("User approved this exact action.\\n{output}"), false),\n                    Err(error) => (format!("Approved action failed: {error}"), true),\n                }\n            } else {\n                (\n                    format!("User did not approve this action. Feedback: {answer}"),\n                    true,\n                )\n            };'''
-          new = '''            let now = OffsetDateTime::now_utc();\n            let decision = if approved {\n                approval\n                    .grant\n                    .authorizes(&approval.tool, &approval.input, &session.plan, now)\n            } else {\n                ApprovalDecision::Denied\n            };\n            session.approval_receipts.push(ApprovalReceipt {\n                decision: decision.clone(),\n                scope: approval.grant.scope.clone(),\n                recorded_at: now,\n                reason: if approved {\n                    "user approved exact action".to_owned()\n                } else {\n                    format!("user denied action: {answer}")\n                },\n            });\n            let (content, is_error) = if decision == ApprovalDecision::Approved {\n                session.approval_grants.push(approval.grant);\n                match execute_approved_tool(&session.repo, &approval.tool, &approval.input) {\n                    Ok(output) => (format!("User approved this exact action.\\n{output}"), false),\n                    Err(error) => (format!("Approved action failed: {error}"), true),\n                }\n            } else {\n                (\n                    format!("Action was not authorized ({decision:?}). Feedback: {answer}"),\n                    true,\n                )\n            };'''
+          old = '''            let (content, is_error) = if approved {
+                match execute_approved_tool(&session.repo, &approval.tool, &approval.input) {
+                    Ok(output) => (format!("User approved this exact action.\\n{output}"), false),
+                    Err(error) => (format!("Approved action failed: {error}"), true),
+                }
+            } else {
+                (
+                    format!("User did not approve this action. Feedback: {answer}"),
+                    true,
+                )
+            };'''
+          new = '''            let now = OffsetDateTime::now_utc();
+            let decision = if approved {
+                approval
+                    .grant
+                    .authorizes(&approval.tool, &approval.input, &session.plan, now)
+            } else {
+                ApprovalDecision::Denied
+            };
+            session.approval_receipts.push(ApprovalReceipt {
+                decision: decision.clone(),
+                scope: approval.grant.scope.clone(),
+                recorded_at: now,
+                reason: if approved {
+                    "user approved exact action".to_owned()
+                } else {
+                    format!("user denied action: {answer}")
+                },
+            });
+            let (content, is_error) = if decision == ApprovalDecision::Approved {
+                session.approval_grants.push(approval.grant);
+                match execute_approved_tool(&session.repo, &approval.tool, &approval.input) {
+                    Ok(output) => (format!("User approved this exact action.\\n{output}"), false),
+                    Err(error) => (format!("Approved action failed: {error}"), true),
+                }
+            } else {
+                (
+                    format!("Action was not authorized ({decision:?}). Feedback: {answer}"),
+                    true,
+                )
+            };'''
           text = replace_once(text, old, new, 'approval execution enforcement')
           engine.write_text(text)
           PY
