@@ -72,7 +72,9 @@ fn failover_completes_planning_tool_and_final_turns_once_each() {
     ]);
 
     for phase in ["planning", "tool_use", "final_response"] {
-        let response = manager.complete(&request(phase)).expect("fallback response");
+        let response = manager
+            .complete(&request(phase))
+            .expect("fallback response");
         assert_eq!(response.response_id, Some(format!("response-{phase}")));
 
         let status = manager.execution_status().expect("execution status");
