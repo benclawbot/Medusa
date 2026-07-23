@@ -113,6 +113,9 @@ pub enum EventPayload {
         response_id: Option<String>,
         usage: Value,
     },
+    ProviderExecutionRecorded {
+        status: Value,
+    },
     ToolCallRequested {
         tool: String,
         arguments: Value,
