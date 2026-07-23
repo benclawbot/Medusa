@@ -1,0 +1,37 @@
+name: Apply context budget patch
+
+on:
+  push:
+    branches:
+      - roadmap/131-context-budget-recovery
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Apply implementation patch
+        run: |
+          if git apply --check .medusa-patches/131-context-budget-v2.patch; then
+            git apply .medusa-patches/131-context-budget-v2.patch
+          else
+            echo 'Patch is already applied or no longer clean.'
+            exit 0
+          fi
+      - name: Format and test
+        run: |
+          cargo fmt --all -- --check
+          cargo test -p medusa-agent context_budget
+      - name: Commit implementation
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add crates/medusa-agent/src/context_budget.rs crates/medusa-agent/src/lib.rs crates/medusa-agent/src/engine.rs
+          git commit -m 'feat(context): add proactive prompt budget compaction'
+          git push
