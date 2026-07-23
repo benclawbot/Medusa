@@ -26,8 +26,13 @@ const CONTEXT_RECOVERY_REQUEST_BLOCK: &str = r#"        let system = system_prom
             self.config.model.max_output_tokens,
             context_budget::configured_context_window_tokens(),
         );
+        let _remaining_context_tokens = budget.remaining_tokens();
+        let _request_exceeds_context_window = budget.exceeds_context_window();
         let mut compacted = false;
-        if budget.requires_compaction() {
+        if matches!(
+            budget.decision(),
+            context_budget::PromptBudgetDecision::Compact
+        ) {
             compact_session(
                 session,
                 Some("preserve the current objective, decisions, tool results, and pending work"),
