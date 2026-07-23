@@ -59,7 +59,7 @@ describe("GitHub pull request mutations", () => {
         url: "https://github.com/octo/repo/pull/42",
         audit,
       })
-      .mockResolvedValueOnce(undefined);
+      .mockResolvedValueOnce({ persisted: true, receiptPath: "/tmp/audit.jsonl" });
 
     const mutationPreview = preview("pullRequestUpdate", false, {
       title: "Updated",
@@ -86,7 +86,7 @@ describe("GitHub pull request mutations", () => {
       preview: mutationPreview,
       confirmation,
     });
-    expect(invoke).toHaveBeenNthCalledWith(2, "runtime_persist_github_audit", {
+    expect(invoke).toHaveBeenNthCalledWith(2, "runtime_persist_github_mutation_audit", {
       receipt: {
         operation: "pullRequestUpdate",
         repository: "octo/repo",
@@ -145,7 +145,7 @@ describe("GitHub pull request mutations", () => {
         reviewId: 1,
         audit,
       })
-      .mockResolvedValueOnce(undefined);
+      .mockResolvedValueOnce({ persisted: true, receiptPath: "/tmp/audit.jsonl" });
 
     const mutationPreview = preview("pullRequestReview", false, {
       body: "Looks good",
@@ -171,7 +171,7 @@ describe("GitHub pull request mutations", () => {
       preview: mutationPreview,
       confirmation,
     });
-    expect(invoke).toHaveBeenNthCalledWith(2, "runtime_persist_github_audit", {
+    expect(invoke).toHaveBeenNthCalledWith(2, "runtime_persist_github_mutation_audit", {
       receipt: {
         operation: "pullRequestReview",
         repository: "octo/repo",
