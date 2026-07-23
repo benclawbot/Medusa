@@ -36,15 +36,25 @@ function preview(
 describe("GitHub issue mutations", () => {
   beforeEach(() => invoke.mockReset());
 
-  it("normalizes confirmed issue creation", async () => {
-    invoke.mockResolvedValue({
+  it("normalizes confirmed issue creation and persists its audit", async () => {
+    const audit = {
+      operation: "issueCreate" as const,
       repository: "octo/repo",
       issueNumber: 42,
-      title: "Bug",
-      state: "open",
-      url: "https://github.com/octo/repo/issues/42",
-      audit: {},
-    });
+      previewFingerprint: "confirmed",
+      confirmedAt: "2026-07-22T00:00:00Z",
+      outcome: "created" as const,
+    };
+    invoke
+      .mockResolvedValueOnce({
+        repository: "octo/repo",
+        issueNumber: 42,
+        title: "Bug",
+        state: "open",
+        url: "https://github.com/octo/repo/issues/42",
+        audit,
+      })
+      .mockResolvedValueOnce({ persisted: true, receiptPath: "/tmp/audit.jsonl" });
 
     const mutationPreview = preview("issueCreate", "issue:new", false, {
       title: "Bug",
@@ -59,13 +69,23 @@ describe("GitHub issue mutations", () => {
       " github.com ",
     );
 
-    expect(invoke).toHaveBeenCalledWith("runtime_create_github_issue", {
+    expect(invoke).toHaveBeenNthCalledWith(1, "runtime_create_github_issue", {
       repository: "octo/repo",
       title: "Bug",
       body: "Details",
       hostname: "github.com",
       preview: mutationPreview,
       confirmation,
+    });
+    expect(invoke).toHaveBeenNthCalledWith(2, "runtime_persist_github_mutation_audit", {
+      receipt: {
+        operation: "issueCreate",
+        repository: "octo/repo",
+        resource: "issue:42",
+        previewFingerprint: "confirmed",
+        confirmedAt: "2026-07-22T00:00:00Z",
+        outcome: "created",
+      },
     });
   });
 
