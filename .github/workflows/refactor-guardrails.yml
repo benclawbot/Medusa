@@ -38,7 +38,7 @@ concurrency:
 
 jobs:
   source-size:
-    name: Production source files <= 800 lines
+    name: Production source files <= 1000 lines
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
