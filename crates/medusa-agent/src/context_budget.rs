@@ -42,9 +42,8 @@ impl PromptBudget {
             .saturating_add(conversation_tokens)
             .saturating_add(tool_tokens)
             .saturating_add(reserved_response_tokens);
-        let compaction_threshold_tokens = context_window_tokens
-            .saturating_mul(COMPACTION_THRESHOLD_PERCENT)
-            / 100;
+        let compaction_threshold_tokens =
+            context_window_tokens.saturating_mul(COMPACTION_THRESHOLD_PERCENT) / 100;
 
         Self {
             context_window_tokens,
