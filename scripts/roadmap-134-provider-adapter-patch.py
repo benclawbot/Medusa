@@ -204,3 +204,4 @@ if 'max_retries' in text or 'thread::sleep' in text:
     raise SystemExit("adapter retry authority was not fully removed")
 
 path.write_text(text)
+# Trigger the verified branch-only patch workflow.
