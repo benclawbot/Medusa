@@ -64,7 +64,7 @@ pub fn configured_context_window_tokens() -> u64 {
         .unwrap_or(DEFAULT_CONTEXT_WINDOW_TOKENS)
 }
 
-fn estimate_serialized_tokens<T: serde::Serialize>(value: &T) -> u64 {
+fn estimate_serialized_tokens<T: serde::Serialize + ?Sized>(value: &T) -> u64 {
     serde_json::to_vec(value)
         .map(|bytes| estimate_bytes_tokens(bytes.len()))
         .unwrap_or(u64::MAX)
