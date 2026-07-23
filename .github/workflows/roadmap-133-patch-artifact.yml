@@ -1,6 +1,10 @@
 name: Roadmap 133 Patch Artifact
 
 on:
+  pull_request:
+    paths:
+      - 'crates/medusa-agent/**'
+      - '.github/workflows/roadmap-133-patch-artifact.yml'
   push:
     branches:
       - roadmap/133-identity-approval-transactions
