@@ -66,6 +66,8 @@ pub struct ProviderManager<P> {
     policy: RetryPolicy,
     cache: Mutex<BTreeMap<String, ModelResponse>>,
     health: Mutex<Vec<ProviderHealth>>,
+    last_completed_provider: Mutex<Option<usize>>,
+    cache_hits: Mutex<u64>,
     sleeper: fn(Duration),
 }
 
@@ -79,6 +81,8 @@ impl<P> ProviderManager<P> {
             policy: RetryPolicy::default(),
             cache: Mutex::new(BTreeMap::new()),
             health: Mutex::new(health),
+            last_completed_provider: Mutex::new(None),
+            cache_hits: Mutex::new(0),
             sleeper: thread::sleep,
         }
     }
@@ -110,6 +114,18 @@ impl<P> ProviderManager<P> {
             .unwrap_or_default()
     }
 
+    /// Returns the configured provider position that completed the latest uncached request.
+    #[must_use]
+    pub fn last_completed_provider(&self) -> Option<usize> {
+        self.last_completed_provider.lock().map_or(None, |value| *value)
+    }
+
+    /// Returns the total number of responses served from the manager cache.
+    #[must_use]
+    pub fn cache_hits(&self) -> u64 {
+        self.cache_hits.lock().map_or(0, |value| *value)
+    }
+
     fn with_health(&self, index: usize, update: impl FnOnce(&mut ProviderHealth)) {
         if let Ok(mut health) = self.health.lock()
             && let Some(entry) = health.get_mut(index)
@@ -130,6 +146,15 @@ impl<P> ProviderManager<P> {
             entry.last_error = None;
             entry.last_delay_ms = None;
         });
+        if let Ok(mut completed) = self.last_completed_provider.lock() {
+            *completed = Some(index);
+        }
+    }
+
+    fn record_cache_hit(&self) {
+        if let Ok(mut hits) = self.cache_hits.lock() {
+            *hits = hits.saturating_add(1);
+        }
     }
 
     fn record_error(&self, index: usize, error: &MedusaError) {
@@ -164,6 +189,7 @@ impl<P: ModelProvider> ModelProvider for ProviderManager<P> {
         if let Ok(cache) = self.cache.lock()
             && let Some(response) = cache.get(&key)
         {
+            self.record_cache_hit();
             return Ok(response.clone());
         }
 
@@ -337,6 +363,19 @@ mod tests {
         assert_eq!(manager.health()[0].retries, 1);
         assert_eq!(manager.health()[0].failovers, 1);
         assert_eq!(manager.health()[1].successes, 1);
+        assert_eq!(manager.last_completed_provider(), Some(1));
+        assert_eq!(manager.cache_hits(), 1);
+    }
+
+    #[test]
+    fn primary_success_is_attributed_to_primary_provider() {
+        let (primary, _) = provider(Ok(success()));
+        let manager = ProviderManager::new(vec![primary]).without_sleep();
+
+        manager.complete(&request()).expect("primary response");
+
+        assert_eq!(manager.last_completed_provider(), Some(0));
+        assert_eq!(manager.cache_hits(), 0);
     }
 
     #[test]
@@ -348,6 +387,7 @@ mod tests {
         assert!(manager.complete(&request()).is_err());
         assert_eq!(primary_calls.load(Ordering::SeqCst), 1);
         assert_eq!(fallback_calls.load(Ordering::SeqCst), 0);
+        assert_eq!(manager.last_completed_provider(), None);
     }
 
     #[test]
@@ -360,6 +400,7 @@ mod tests {
         assert_eq!(primary_calls.load(Ordering::SeqCst), 1);
         assert_eq!(fallback_calls.load(Ordering::SeqCst), 1);
         assert_eq!(manager.health()[0].failovers, 1);
+        assert_eq!(manager.last_completed_provider(), Some(1));
     }
 
     #[test]
