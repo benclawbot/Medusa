@@ -1,4 +1,7 @@
-use std::{fs, path::{Path, PathBuf}};
+use std::{
+    fs,
+    path::{Path, PathBuf},
+};
 
 use medusa_core::{ErrorCategory, ErrorCode, MedusaError, MedusaResult};
 use serde::{Deserialize, Serialize};
@@ -24,10 +27,22 @@ pub struct TransactionOutcome {
     pub detail: String,
 }
 
-pub fn preview(mutations: &[FileMutation], checkpoint: &str, test_plan: Vec<String>) -> TransactionPreview {
+pub fn preview(
+    mutations: &[FileMutation],
+    checkpoint: &str,
+    test_plan: Vec<String>,
+) -> TransactionPreview {
     TransactionPreview {
-        affected_files: mutations.iter().map(|mutation| mutation.path.clone()).collect(),
-        risk: if mutations.len() > 1 { "multi_file_write" } else { "single_file_write" }.to_owned(),
+        affected_files: mutations
+            .iter()
+            .map(|mutation| mutation.path.clone())
+            .collect(),
+        risk: if mutations.len() > 1 {
+            "multi_file_write"
+        } else {
+            "single_file_write"
+        }
+        .to_owned(),
         test_plan,
         rollback_checkpoint: checkpoint.to_owned(),
     }
@@ -47,7 +62,11 @@ pub fn apply_atomic(repo: &Path, mutations: &[FileMutation]) -> MedusaResult<Tra
 
     for (index, mutation) in mutations.iter().enumerate() {
         let relative = Path::new(&mutation.path);
-        if relative.is_absolute() || relative.components().any(|component| matches!(component, std::path::Component::ParentDir)) {
+        if relative.is_absolute()
+            || relative
+                .components()
+                .any(|component| matches!(component, std::path::Component::ParentDir))
+        {
             cleanup_staged(&staged);
             return Err(MedusaError::new(
                 ErrorCode::PolicyDenied,
@@ -56,7 +75,11 @@ pub fn apply_atomic(repo: &Path, mutations: &[FileMutation]) -> MedusaResult<Tra
             ));
         }
         let target = repo.join(relative);
-        let original = if target.exists() { Some(fs::read(&target)?) } else { None };
+        let original = if target.exists() {
+            Some(fs::read(&target)?)
+        } else {
+            None
+        };
         backups.push((target.clone(), original));
         if let Some(parent) = target.parent() {
             fs::create_dir_all(parent)?;
@@ -82,7 +105,10 @@ pub fn apply_atomic(repo: &Path, mutations: &[FileMutation]) -> MedusaResult<Tra
     }
 
     Ok(TransactionOutcome {
-        affected_files: mutations.iter().map(|mutation| mutation.path.clone()).collect(),
+        affected_files: mutations
+            .iter()
+            .map(|mutation| mutation.path.clone())
+            .collect(),
         rolled_back: false,
         detail: "all file mutations committed atomically".to_owned(),
     })
@@ -92,7 +118,13 @@ fn rollback(backups: &[(PathBuf, Option<Vec<u8>>)]) -> &'static str {
     for (path, original) in backups.iter().rev() {
         let result = match original {
             Some(content) => fs::write(path, content),
-            None => if path.exists() { fs::remove_file(path) } else { Ok(()) },
+            None => {
+                if path.exists() {
+                    fs::remove_file(path)
+                } else {
+                    Ok(())
+                }
+            }
         };
         if result.is_err() {
             return "failed";
@@ -114,22 +146,47 @@ mod tests {
     #[test]
     fn commits_multiple_files() {
         let directory = tempfile::tempdir().expect("tempdir");
-        let outcome = apply_atomic(directory.path(), &[
-            FileMutation { path: "a.txt".into(), content: "a".into() },
-            FileMutation { path: "nested/b.txt".into(), content: "b".into() },
-        ]).expect("transaction");
+        let outcome = apply_atomic(
+            directory.path(),
+            &[
+                FileMutation {
+                    path: "a.txt".into(),
+                    content: "a".into(),
+                },
+                FileMutation {
+                    path: "nested/b.txt".into(),
+                    content: "b".into(),
+                },
+            ],
+        )
+        .expect("transaction");
         assert!(!outcome.rolled_back);
-        assert_eq!(fs::read_to_string(directory.path().join("a.txt")).unwrap(), "a");
-        assert_eq!(fs::read_to_string(directory.path().join("nested/b.txt")).unwrap(), "b");
+        assert_eq!(
+            fs::read_to_string(directory.path().join("a.txt")).unwrap(),
+            "a"
+        );
+        assert_eq!(
+            fs::read_to_string(directory.path().join("nested/b.txt")).unwrap(),
+            "b"
+        );
     }
 
     #[test]
     fn rejects_escape_before_any_write() {
         let directory = tempfile::tempdir().expect("tempdir");
-        let result = apply_atomic(directory.path(), &[
-            FileMutation { path: "safe.txt".into(), content: "safe".into() },
-            FileMutation { path: "../escape.txt".into(), content: "bad".into() },
-        ]);
+        let result = apply_atomic(
+            directory.path(),
+            &[
+                FileMutation {
+                    path: "safe.txt".into(),
+                    content: "safe".into(),
+                },
+                FileMutation {
+                    path: "../escape.txt".into(),
+                    content: "bad".into(),
+                },
+            ],
+        );
         assert!(result.is_err());
         assert!(!directory.path().join("safe.txt").exists());
     }
