@@ -2,9 +2,7 @@ use medusa_agent::{AgentEngine, AgentUpdate, StepOutcome};
 use medusa_config::Config;
 use medusa_core::MedusaResult;
 use medusa_protocol::EventPayload;
-use medusa_provider::{
-    ModelProvider, ModelRequest, ModelResponse, ResponseBlock, Usage,
-};
+use medusa_provider::{ModelProvider, ModelRequest, ModelResponse, ResponseBlock, Usage};
 use serde_json::json;
 
 struct StatusProvider;
