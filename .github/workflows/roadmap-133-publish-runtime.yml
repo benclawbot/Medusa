@@ -1,0 +1,92 @@
+name: Roadmap 133 Publish Runtime
+
+on:
+  push:
+    branches:
+      - roadmap/133-identity-approval-transactions
+    paths:
+      - '.github/workflows/roadmap-133-publish-runtime.yml'
+      - 'docs/workflow-write-allowlist.txt'
+
+permissions:
+  contents: write
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: roadmap/133-identity-approval-transactions
+      - uses: dtolnay/rust-toolchain@1.88.0
+      - name: Recreate reviewed and validated runtime patch
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          import textwrap
+
+          workflow = Path('.github/workflows/roadmap-133-patch-artifact-v2.yml').read_text()
+          start = workflow.index("          python3 - <<'PY'\n") + len("          python3 - <<'PY'\n")
+          end = workflow.index("\n          PY\n", start)
+          script = textwrap.dedent(workflow[start:end])
+          exec(compile(script, 'roadmap-133-runtime-patch-v2', 'exec'))
+          PY
+          cargo fmt --all
+          cargo test -p medusa-agent
+      - name: Publish one atomic Git data commit
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPOSITORY: ${{ github.repository }}
+          BRANCH: roadmap/133-identity-approval-transactions
+        run: |
+          python3 - <<'PY'
+          import base64
+          import json
+          import os
+          import subprocess
+          import urllib.request
+          from pathlib import Path
+
+          repository = os.environ['REPOSITORY']
+          branch = os.environ['BRANCH']
+          token = os.environ['GH_TOKEN']
+          head = subprocess.check_output(['git', 'rev-parse', 'HEAD'], text=True).strip()
+          base_tree = subprocess.check_output(['git', 'rev-parse', 'HEAD^{tree}'], text=True).strip()
+          paths = [
+              'crates/medusa-agent/src/lib.rs',
+              'crates/medusa-agent/src/session.rs',
+              'crates/medusa-agent/src/engine.rs',
+              'crates/medusa-agent/src/session/lessons.rs',
+              'crates/medusa-agent/src/session/recall.rs',
+              'crates/medusa-agent/src/session/skill_outcomes.rs',
+          ]
+
+          def api(method, endpoint, payload):
+              request = urllib.request.Request(
+                  f'https://api.github.com/repos/{repository}/{endpoint}',
+                  data=json.dumps(payload).encode(),
+                  method=method,
+                  headers={
+                      'Authorization': f'Bearer {token}',
+                      'Accept': 'application/vnd.github+json',
+                      'X-GitHub-Api-Version': '2022-11-28',
+                      'Content-Type': 'application/json',
+                  },
+              )
+              with urllib.request.urlopen(request) as response:
+                  return json.load(response)
+
+          entries = []
+          for path in paths:
+              content = base64.b64encode(Path(path).read_bytes()).decode()
+              blob = api('POST', 'git/blobs', {'content': content, 'encoding': 'base64'})
+              entries.append({'path': path, 'mode': '100644', 'type': 'blob', 'sha': blob['sha']})
+          tree = api('POST', 'git/trees', {'base_tree': base_tree, 'tree': entries})
+          commit = api('POST', 'git/commits', {
+              'message': 'feat(safety): wire durable runtime authority guards',
+              'tree': tree['sha'],
+              'parents': [head],
+          })
+          api('PATCH', f'git/refs/heads/{branch}', {'sha': commit['sha'], 'force': False})
+          print(commit['sha'])
+          PY
