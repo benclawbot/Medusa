@@ -59,11 +59,19 @@ jobs:
           engine.write_text(text)
           PY
           cargo fmt --all
-          cargo test -p medusa-agent
+          set +e
+          cargo test -p medusa-agent 2>&1 | tee roadmap-133-test.log
+          echo ${PIPESTATUS[0]} > roadmap-133-test-status
+          exit 0
       - uses: actions/upload-artifact@v4
+        if: always()
         with:
           name: roadmap-133-runtime-files
           path: |
             crates/medusa-agent/src/lib.rs
             crates/medusa-agent/src/session.rs
             crates/medusa-agent/src/engine.rs
+            roadmap-133-test.log
+            roadmap-133-test-status
+      - name: Enforce focused test result
+        run: test "$(cat roadmap-133-test-status)" = "0"
