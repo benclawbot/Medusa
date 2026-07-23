@@ -1,6 +1,6 @@
 //! Provider routing with bounded retry, failover, response caching, and health snapshots.
 
-use std::{collections::BTreeMap, sync::Mutex};
+use std::{collections::BTreeMap, sync::Mutex, thread, time::Duration};
 
 use medusa_core::{ErrorCategory, ErrorCode, MedusaError, MedusaResult};
 use serde::{Deserialize, Serialize};
@@ -11,16 +11,62 @@ use crate::{ModelProvider, ModelRequest, ModelResponse, ProviderCapabilities};
 #[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
 pub struct ProviderHealth {
     pub attempts: u64,
+    pub retries: u64,
+    pub failovers: u64,
     pub successes: u64,
+    pub last_delay_ms: Option<u64>,
     pub last_error: Option<String>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum RetryDisposition {
+    Retry,
+    Failover,
+    Permanent,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct RetryPolicy {
+    max_retries_per_provider: u8,
+    base_delay_ms: u64,
+    max_delay_ms: u64,
+    jitter_ms: u64,
+}
+
+impl Default for RetryPolicy {
+    fn default() -> Self {
+        Self {
+            max_retries_per_provider: 1,
+            base_delay_ms: 250,
+            max_delay_ms: 8_000,
+            jitter_ms: 100,
+        }
+    }
+}
+
+impl RetryPolicy {
+    fn delay_ms(&self, error: &MedusaError, provider_index: usize, attempt: u8) -> u64 {
+        if let Some(delay) = retry_after_ms(error) {
+            return delay.min(self.max_delay_ms);
+        }
+        let exponent = u32::from(attempt.min(20));
+        let exponential = self.base_delay_ms.saturating_mul(1_u64 << exponent);
+        let jitter = if self.jitter_ms == 0 {
+            0
+        } else {
+            stable_jitter(provider_index, attempt) % (self.jitter_ms + 1)
+        };
+        exponential.saturating_add(jitter).min(self.max_delay_ms)
+    }
 }
 
 /// Routes requests through a primary provider followed by optional fallbacks.
 pub struct ProviderManager<P> {
     providers: Vec<P>,
-    retries_per_provider: u8,
+    policy: RetryPolicy,
     cache: Mutex<BTreeMap<String, ModelResponse>>,
     health: Mutex<Vec<ProviderHealth>>,
+    sleeper: fn(Duration),
 }
 
 impl<P> ProviderManager<P> {
@@ -30,15 +76,28 @@ impl<P> ProviderManager<P> {
         let health = vec![ProviderHealth::default(); providers.len()];
         Self {
             providers,
-            retries_per_provider: 1,
+            policy: RetryPolicy::default(),
             cache: Mutex::new(BTreeMap::new()),
             health: Mutex::new(health),
+            sleeper: thread::sleep,
         }
     }
 
     #[must_use]
     pub fn with_retries(mut self, retries_per_provider: u8) -> Self {
-        self.retries_per_provider = retries_per_provider;
+        self.policy.max_retries_per_provider = retries_per_provider;
+        self
+    }
+
+    #[cfg(test)]
+    fn with_policy(mut self, policy: RetryPolicy) -> Self {
+        self.policy = policy;
+        self
+    }
+
+    #[cfg(test)]
+    fn without_sleep(mut self) -> Self {
+        self.sleeper = |_| {};
         self
     }
 
@@ -49,6 +108,47 @@ impl<P> ProviderManager<P> {
             .lock()
             .map(|health| health.clone())
             .unwrap_or_default()
+    }
+
+    fn with_health(&self, index: usize, update: impl FnOnce(&mut ProviderHealth)) {
+        if let Ok(mut health) = self.health.lock()
+            && let Some(entry) = health.get_mut(index)
+        {
+            update(entry);
+        }
+    }
+
+    fn record_attempt(&self, index: usize) {
+        self.with_health(index, |entry| {
+            entry.attempts = entry.attempts.saturating_add(1);
+        });
+    }
+
+    fn record_success(&self, index: usize) {
+        self.with_health(index, |entry| {
+            entry.successes = entry.successes.saturating_add(1);
+            entry.last_error = None;
+            entry.last_delay_ms = None;
+        });
+    }
+
+    fn record_error(&self, index: usize, error: &MedusaError) {
+        self.with_health(index, |entry| {
+            entry.last_error = Some(error.to_string());
+        });
+    }
+
+    fn record_retry(&self, index: usize, delay_ms: u64) {
+        self.with_health(index, |entry| {
+            entry.retries = entry.retries.saturating_add(1);
+            entry.last_delay_ms = Some(delay_ms);
+        });
+    }
+
+    fn record_failover(&self, index: usize) {
+        self.with_health(index, |entry| {
+            entry.failovers = entry.failovers.saturating_add(1);
+        });
     }
 }
 
@@ -66,43 +166,47 @@ impl<P: ModelProvider> ModelProvider for ProviderManager<P> {
         {
             return Ok(response.clone());
         }
+
         let mut final_error = None;
         for (index, provider) in self.providers.iter().enumerate() {
-            for attempt in 0..=self.retries_per_provider {
-                if let Ok(mut health) = self.health.lock()
-                    && let Some(entry) = health.get_mut(index)
-                {
-                    entry.attempts = entry.attempts.saturating_add(1);
-                }
+            let has_fallback = index + 1 < self.providers.len();
+            for attempt in 0..=self.policy.max_retries_per_provider {
+                self.record_attempt(index);
                 match provider.complete(request) {
                     Ok(response) => {
-                        if let Ok(mut health) = self.health.lock()
-                            && let Some(entry) = health.get_mut(index)
-                        {
-                            entry.successes = entry.successes.saturating_add(1);
-                            entry.last_error = None;
-                        }
+                        self.record_success(index);
                         if let Ok(mut cache) = self.cache.lock() {
-                            cache.insert(key, response.clone());
+                            cache.insert(key.clone(), response.clone());
                         }
                         return Ok(response);
                     }
                     Err(error) => {
-                        let retryable = error.retryable;
-                        let message = error.to_string();
-                        if let Ok(mut health) = self.health.lock()
-                            && let Some(entry) = health.get_mut(index)
-                        {
-                            entry.last_error = Some(message);
-                        }
-                        final_error = Some(error);
-                        if !retryable || attempt == self.retries_per_provider {
-                            break;
+                        self.record_error(index, &error);
+                        final_error = Some(error.clone());
+                        match classify_error(&error, has_fallback) {
+                            RetryDisposition::Retry
+                                if attempt < self.policy.max_retries_per_provider =>
+                            {
+                                let delay_ms = self.policy.delay_ms(&error, index, attempt);
+                                self.record_retry(index, delay_ms);
+                                (self.sleeper)(Duration::from_millis(delay_ms));
+                            }
+                            RetryDisposition::Retry | RetryDisposition::Failover
+                                if has_fallback =>
+                            {
+                                self.record_failover(index);
+                                break;
+                            }
+                            RetryDisposition::Permanent | RetryDisposition::Failover => {
+                                return Err(error);
+                            }
+                            RetryDisposition::Retry => return Err(error),
                         }
                     }
                 }
             }
         }
+
         Err(final_error.unwrap_or_else(|| {
             MedusaError::new(
                 ErrorCode::DependencyUnavailable,
@@ -119,6 +223,40 @@ impl<P: ModelProvider> ModelProvider for ProviderManager<P> {
     }
 }
 
+fn classify_error(error: &MedusaError, has_fallback: bool) -> RetryDisposition {
+    if error.retryable || error.category == ErrorCategory::Transient {
+        RetryDisposition::Retry
+    } else if has_fallback && error.category == ErrorCategory::Environment {
+        RetryDisposition::Failover
+    } else {
+        RetryDisposition::Permanent
+    }
+}
+
+fn retry_after_ms(error: &MedusaError) -> Option<u64> {
+    error
+        .context
+        .get("retry_after_ms")
+        .and_then(serde_json::Value::as_u64)
+        .or_else(|| {
+            error
+                .context
+                .get("retry_after_seconds")
+                .and_then(serde_json::Value::as_u64)
+                .map(|seconds| seconds.saturating_mul(1_000))
+        })
+}
+
+fn stable_jitter(provider_index: usize, attempt: u8) -> u64 {
+    let mut value = (provider_index as u64).wrapping_add(1);
+    value ^= u64::from(attempt).wrapping_add(0x9e37_79b9_7f4a_7c15);
+    value ^= value >> 30;
+    value = value.wrapping_mul(0xbf58_476d_1ce4_e5b9);
+    value ^= value >> 27;
+    value = value.wrapping_mul(0x94d0_49bb_1331_11eb);
+    value ^ (value >> 31)
+}
+
 #[cfg(test)]
 mod tests {
     use std::sync::{
@@ -127,6 +265,7 @@ mod tests {
     };
 
     use medusa_core::{ErrorCategory, ErrorCode, MedusaError};
+    use serde_json::json;
 
     use super::*;
     use crate::{Message, MessageBlock, Role, Usage};
@@ -168,28 +307,76 @@ mod tests {
         }
     }
 
+    fn failure(category: ErrorCategory, retryable: bool) -> MedusaError {
+        MedusaError::new(ErrorCode::DependencyUnavailable, category, "offline")
+            .with_retryable(retryable)
+    }
+
+    fn provider(response: MedusaResult<ModelResponse>) -> (StubProvider, Arc<AtomicUsize>) {
+        let calls = Arc::new(AtomicUsize::new(0));
+        (
+            StubProvider {
+                calls: calls.clone(),
+                response,
+            },
+            calls,
+        )
+    }
+
     #[test]
-    fn retryable_primary_failure_falls_back_and_caches_the_response() {
-        let primary_calls = Arc::new(AtomicUsize::new(0));
-        let fallback_calls = Arc::new(AtomicUsize::new(0));
-        let primary = StubProvider {
-            calls: primary_calls.clone(),
-            response: Err(MedusaError::new(
-                ErrorCode::DependencyUnavailable,
-                ErrorCategory::Transient,
-                "offline",
-            )
-            .with_retryable(true)),
-        };
-        let fallback = StubProvider {
-            calls: fallback_calls.clone(),
-            response: Ok(success()),
-        };
-        let manager = ProviderManager::new(vec![primary, fallback]);
+    fn retryable_primary_failure_falls_back_and_caches_response() {
+        let (primary, primary_calls) = provider(Err(failure(ErrorCategory::Transient, true)));
+        let (fallback, fallback_calls) = provider(Ok(success()));
+        let manager = ProviderManager::new(vec![primary, fallback]).without_sleep();
+
         manager.complete(&request()).expect("fallback response");
         manager.complete(&request()).expect("cached response");
+
         assert_eq!(primary_calls.load(Ordering::SeqCst), 2);
         assert_eq!(fallback_calls.load(Ordering::SeqCst), 1);
+        assert_eq!(manager.health()[0].retries, 1);
+        assert_eq!(manager.health()[0].failovers, 1);
         assert_eq!(manager.health()[1].successes, 1);
+    }
+
+    #[test]
+    fn permanent_validation_failure_is_not_retried_or_failed_over() {
+        let (primary, primary_calls) = provider(Err(failure(ErrorCategory::Validation, false)));
+        let (fallback, fallback_calls) = provider(Ok(success()));
+        let manager = ProviderManager::new(vec![primary, fallback]).without_sleep();
+
+        assert!(manager.complete(&request()).is_err());
+        assert_eq!(primary_calls.load(Ordering::SeqCst), 1);
+        assert_eq!(fallback_calls.load(Ordering::SeqCst), 0);
+    }
+
+    #[test]
+    fn environment_failure_fails_over_without_retry() {
+        let (primary, primary_calls) = provider(Err(failure(ErrorCategory::Environment, false)));
+        let (fallback, fallback_calls) = provider(Ok(success()));
+        let manager = ProviderManager::new(vec![primary, fallback]).without_sleep();
+
+        manager.complete(&request()).expect("fallback response");
+        assert_eq!(primary_calls.load(Ordering::SeqCst), 1);
+        assert_eq!(fallback_calls.load(Ordering::SeqCst), 1);
+        assert_eq!(manager.health()[0].failovers, 1);
+    }
+
+    #[test]
+    fn retry_after_metadata_controls_recorded_delay() {
+        let mut error = failure(ErrorCategory::Transient, true);
+        error.context.insert("retry_after_seconds".into(), json!(3));
+        let (provider, _) = provider(Err(error));
+        let manager = ProviderManager::new(vec![provider])
+            .with_policy(RetryPolicy {
+                max_retries_per_provider: 1,
+                base_delay_ms: 1,
+                max_delay_ms: 5_000,
+                jitter_ms: 0,
+            })
+            .without_sleep();
+
+        assert!(manager.complete(&request()).is_err());
+        assert_eq!(manager.health()[0].last_delay_ms, Some(3_000));
     }
 }
