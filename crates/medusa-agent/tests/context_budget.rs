@@ -45,9 +45,13 @@ fn request_budget_exposes_stable_allocations() {
 
 #[test]
 fn compaction_boundary_is_deterministic() {
-    let below = PromptBudget::for_request("", &[], &[], 84, 100);
-    let at_boundary = PromptBudget::for_request("", &[], &[], 85, 100);
+    // Empty message and tool arrays still serialize as `[]`, accounting for one
+    // estimated token each. Keep the total request at 84 and 85 tokens.
+    let below = PromptBudget::for_request("", &[], &[], 82, 100);
+    let at_boundary = PromptBudget::for_request("", &[], &[], 83, 100);
 
+    assert_eq!(below.estimated_total_tokens, 84);
+    assert_eq!(at_boundary.estimated_total_tokens, 85);
     assert_eq!(below.decision(), PromptBudgetDecision::Proceed);
     assert_eq!(at_boundary.decision(), PromptBudgetDecision::Compact);
     assert!(!below.requires_compaction());
@@ -56,11 +60,14 @@ fn compaction_boundary_is_deterministic() {
 
 #[test]
 fn remaining_capacity_saturates_after_overflow() {
-    let within = PromptBudget::for_request("", &[], &[], 40, 100);
-    let beyond = PromptBudget::for_request("", &[], &[], 101, 100);
+    // Empty serialized arrays contribute two estimated tokens in total.
+    let within = PromptBudget::for_request("", &[], &[], 38, 100);
+    let beyond = PromptBudget::for_request("", &[], &[], 99, 100);
 
+    assert_eq!(within.estimated_total_tokens, 40);
     assert_eq!(within.remaining_tokens(), 60);
     assert!(!within.exceeds_context_window());
+    assert_eq!(beyond.estimated_total_tokens, 101);
     assert_eq!(beyond.remaining_tokens(), 0);
     assert!(beyond.exceeds_context_window());
 }
