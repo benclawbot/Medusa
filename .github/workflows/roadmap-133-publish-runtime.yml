@@ -1,6 +1,11 @@
 name: Roadmap 133 Publish Runtime
 
 on:
+  pull_request:
+    paths:
+      - '.github/workflows/roadmap-133-publish-runtime.yml'
+      - '.github/workflows/roadmap-133-patch-artifact*.yml'
+      - 'crates/medusa-agent/**'
   push:
     branches:
       - roadmap/133-identity-approval-transactions
@@ -19,7 +24,7 @@ jobs:
         with:
           ref: roadmap/133-identity-approval-transactions
       - uses: dtolnay/rust-toolchain@1.88.0
-      - name: Recreate reviewed and validated runtime patch
+      - name: Recreate reviewed runtime patch
         run: |
           python3 - <<'PY'
           from pathlib import Path
@@ -33,11 +38,10 @@ jobs:
           PY
           cargo fmt --all
           cargo test -p medusa-agent
-      - name: Publish one atomic Git data commit
+      - name: Prepare atomic Git commit
         env:
           GH_TOKEN: ${{ github.token }}
           REPOSITORY: ${{ github.repository }}
-          BRANCH: roadmap/133-identity-approval-transactions
         run: |
           python3 - <<'PY'
           import base64
@@ -48,7 +52,6 @@ jobs:
           from pathlib import Path
 
           repository = os.environ['REPOSITORY']
-          branch = os.environ['BRANCH']
           token = os.environ['GH_TOKEN']
           head = subprocess.check_output(['git', 'rev-parse', 'HEAD'], text=True).strip()
           base_tree = subprocess.check_output(['git', 'rev-parse', 'HEAD^{tree}'], text=True).strip()
@@ -87,6 +90,13 @@ jobs:
               'tree': tree['sha'],
               'parents': [head],
           })
-          api('PATCH', f'git/refs/heads/{branch}', {'sha': commit['sha'], 'force': False})
-          print(commit['sha'])
+          Path('runtime-publish.json').write_text(json.dumps({
+              'commit_sha': commit['sha'],
+              'parent_sha': head,
+              'tree_sha': tree['sha'],
+          }, indent=2))
           PY
+      - uses: actions/upload-artifact@v4
+        with:
+          name: roadmap-133-runtime-commit
+          path: runtime-publish.json
