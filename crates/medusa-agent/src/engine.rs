@@ -8,8 +8,10 @@ use medusa_provider::{Message, MessageBlock, ModelProvider, ModelRequest, Respon
 use time::OffsetDateTime;
 
 use crate::{
+    approval::{ApprovalDecision, ApprovalGrant, ApprovalReceipt},
     engine_support::*,
     evidence::append_event,
+    identity_guard::validate_provider_text,
     output_envelope::{OutputFormat, wrap as wrap_envelope},
     policy::validate_shell_command_hard_denials,
     session::{
@@ -189,6 +191,9 @@ impl<P: ModelProvider> AgentEngine<P> {
             events: Vec::new(),
             evidence: Vec::new(),
             tool_artifacts: Vec::new(),
+            approval_grants: Vec::new(),
+            approval_receipts: Vec::new(),
+            rollback_receipts: Vec::new(),
         };
         append_event(
             &mut session,
@@ -260,14 +265,33 @@ impl<P: ModelProvider> AgentEngine<P> {
         let content = if let Some(approval) = question.approval {
             let approved = answer.trim().eq_ignore_ascii_case("approve")
                 || answer.trim().to_ascii_lowercase().starts_with("approve ");
-            let (content, is_error) = if approved {
+            let now = OffsetDateTime::now_utc();
+            let decision = if approved {
+                approval
+                    .grant
+                    .authorizes(&approval.tool, &approval.input, &session.plan, now)
+            } else {
+                ApprovalDecision::Denied
+            };
+            session.approval_receipts.push(ApprovalReceipt {
+                decision: decision.clone(),
+                scope: approval.grant.scope.clone(),
+                recorded_at: now,
+                reason: if approved {
+                    "user approved exact action".to_owned()
+                } else {
+                    format!("user denied action: {answer}")
+                },
+            });
+            let (content, is_error) = if decision == ApprovalDecision::Approved {
+                session.approval_grants.push(approval.grant);
                 match execute_approved_tool(&session.repo, &approval.tool, &approval.input) {
                     Ok(output) => (format!("User approved this exact action.\n{output}"), false),
                     Err(error) => (format!("Approved action failed: {error}"), true),
                 }
             } else {
                 (
-                    format!("User did not approve this action. Feedback: {answer}"),
+                    format!("Action was not authorized ({decision:?}). Feedback: {answer}"),
                     true,
                 )
             };
@@ -411,6 +435,11 @@ impl<P: ModelProvider> AgentEngine<P> {
         for block in response.blocks {
             match block {
                 ResponseBlock::Text { text } => {
+                    let text = if validate_provider_text(&text).is_ok() {
+                        text
+                    } else {
+                        "[provider output rejected: identity or policy contamination]".to_owned()
+                    };
                     assistant_text.push(text.clone());
                     assistant_blocks.push(MessageBlock::Text { text });
                 }
@@ -483,6 +512,17 @@ impl<P: ModelProvider> AgentEngine<P> {
                     if plan.is_empty() {
                         Ok("Visible task plan update ignored because it was empty.".to_owned())
                     } else {
+                        if session.plan != plan {
+                            let recorded_at = OffsetDateTime::now_utc();
+                            for grant in session.approval_grants.drain(..) {
+                                session.approval_receipts.push(ApprovalReceipt {
+                                    decision: ApprovalDecision::Invalidated,
+                                    scope: grant.scope,
+                                    recorded_at,
+                                    reason: "visible plan changed".to_owned(),
+                                });
+                            }
+                        }
                         session.plan = plan.clone();
                         observer(&AgentUpdate::Plan(plan));
                         Ok("Visible task plan updated.".to_owned())
@@ -553,6 +593,12 @@ impl<P: ModelProvider> AgentEngine<P> {
                             legacy_question: None,
                             legacy_options: Vec::new(),
                             approval: Some(PendingToolApproval {
+                                grant: ApprovalGrant::exact_action(
+                                    &name,
+                                    &input,
+                                    &session.plan,
+                                    OffsetDateTime::now_utc(),
+                                ),
                                 tool_use_id: id,
                                 tool: name,
                                 input,

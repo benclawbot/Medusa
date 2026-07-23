@@ -9,7 +9,10 @@ use medusa_provider::Message;
 use serde::{Deserialize, Serialize};
 use time::OffsetDateTime;
 
-use crate::evidence::verify_chain;
+use crate::{
+    approval::{ApprovalGrant, ApprovalReceipt, RollbackReceipt},
+    evidence::verify_chain,
+};
 
 mod lessons;
 mod recall;
@@ -69,6 +72,7 @@ pub(crate) struct PendingToolApproval {
     pub tool_use_id: String,
     pub tool: String,
     pub input: serde_json::Value,
+    pub grant: ApprovalGrant,
 }
 
 impl AgentQuestion {
@@ -119,6 +123,12 @@ pub struct AgentSession {
     pub evidence: Vec<String>,
     #[serde(default)]
     pub tool_artifacts: Vec<PathBuf>,
+    #[serde(default)]
+    pub approval_grants: Vec<ApprovalGrant>,
+    #[serde(default)]
+    pub approval_receipts: Vec<ApprovalReceipt>,
+    #[serde(default)]
+    pub rollback_receipts: Vec<RollbackReceipt>,
 }
 
 /// Creates the on-disk Medusa layout and repository map.
