@@ -4,6 +4,7 @@ import type {
   GitHubMutationConfirmation,
   GitHubMutationPreview,
 } from "./githubMutation";
+import { persistGitHubMutationAudit } from "./githubMutationAuditApi";
 
 export type GitHubIssueState = "open" | "closed";
 
@@ -23,6 +24,17 @@ export interface GitHubIssueMutationResult {
   state: GitHubIssueState;
   url: string;
   audit: GitHubIssueMutationAudit;
+}
+
+async function persistResultAudit(result: GitHubIssueMutationResult): Promise<void> {
+  await persistGitHubMutationAudit({
+    operation: result.audit.operation,
+    repository: result.audit.repository,
+    resource: `issue:${result.audit.issueNumber}`,
+    previewFingerprint: result.audit.previewFingerprint,
+    confirmedAt: result.audit.confirmedAt,
+    outcome: result.audit.outcome,
+  });
 }
 
 export async function createGitHubIssue(
@@ -51,7 +63,7 @@ export async function createGitHubIssue(
   ) {
     throw new Error("GitHub issue preview content must match the requested mutation");
   }
-  return invoke<GitHubIssueMutationResult>("runtime_create_github_issue", {
+  const result = await invoke<GitHubIssueMutationResult>("runtime_create_github_issue", {
     repository: normalizedRepository,
     title: normalizedTitle,
     body: normalizedBody || null,
@@ -59,6 +71,8 @@ export async function createGitHubIssue(
     preview,
     confirmation,
   });
+  await persistResultAudit(result);
+  return result;
 }
 
 export async function updateGitHubIssue(
@@ -96,7 +110,7 @@ export async function updateGitHubIssue(
   ) {
     throw new Error("GitHub issue preview content must match the requested mutation");
   }
-  return invoke<GitHubIssueMutationResult>("runtime_update_github_issue", {
+  const result = await invoke<GitHubIssueMutationResult>("runtime_update_github_issue", {
     repository: normalizedRepository,
     issueNumber,
     title: title ?? null,
@@ -106,4 +120,6 @@ export async function updateGitHubIssue(
     preview,
     confirmation,
   });
+  await persistResultAudit(result);
+  return result;
 }
