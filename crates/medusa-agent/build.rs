@@ -72,15 +72,12 @@ fn main() {
     let source = fs::read_to_string(&source_path).expect("read engine source");
     let occurrences = source.matches(ORIGINAL_REQUEST_BLOCK).count();
     assert_eq!(
-        occurrences, 1,
+        occurrences,
+        1,
         "expected exactly one model request block in {}",
         source_path.display()
     );
-    let generated = source.replacen(
-        ORIGINAL_REQUEST_BLOCK,
-        CONTEXT_RECOVERY_REQUEST_BLOCK,
-        1,
-    );
+    let generated = source.replacen(ORIGINAL_REQUEST_BLOCK, CONTEXT_RECOVERY_REQUEST_BLOCK, 1);
     let output_path = PathBuf::from(env::var_os("OUT_DIR").expect("out dir")).join("engine.rs");
     fs::write(output_path, generated).expect("write generated engine source");
 }
