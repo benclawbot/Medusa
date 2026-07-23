@@ -5,28 +5,28 @@ on:
     paths:
       - 'Cargo.toml'
       - 'crates/**'
+      - 'apps/**'
+      - 'README.md'
       - 'scripts/check-source-size.sh'
       - 'scripts/check-workflow-hygiene.sh'
       - 'scripts/test-workflow-hygiene.sh'
-      - 'docs/REFACTOR-BASELINE.md'
-      - 'docs/PUBLIC-API-BASELINE.md'
-      - 'docs/BENCHMARKS.md'
-      - 'docs/source-size-exceptions.txt'
-      - 'docs/workflow-write-allowlist.txt'
+      - 'scripts/check-capability-evidence.py'
+      - 'scripts/test-capability-evidence.py'
+      - 'docs/**'
       - '.github/workflows/**'
   push:
     branches: [main]
     paths:
       - 'Cargo.toml'
       - 'crates/**'
+      - 'apps/**'
+      - 'README.md'
       - 'scripts/check-source-size.sh'
       - 'scripts/check-workflow-hygiene.sh'
       - 'scripts/test-workflow-hygiene.sh'
-      - 'docs/REFACTOR-BASELINE.md'
-      - 'docs/PUBLIC-API-BASELINE.md'
-      - 'docs/BENCHMARKS.md'
-      - 'docs/source-size-exceptions.txt'
-      - 'docs/workflow-write-allowlist.txt'
+      - 'scripts/check-capability-evidence.py'
+      - 'scripts/test-capability-evidence.py'
+      - 'docs/**'
       - '.github/workflows/**'
 
 permissions:
@@ -72,3 +72,16 @@ jobs:
           grep -q '5%' docs/BENCHMARKS.md
           grep -q 'medusa-agent' docs/PUBLIC-API-BASELINE.md
           echo refactor-baseline-ok
+
+  capability-evidence:
+    name: Capability claims match code, tests, gates, and docs
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Run adversarial synchronization fixtures
+        run: python3 scripts/test-capability-evidence.py
+      - name: Validate repository capability evidence
+        run: python3 scripts/check-capability-evidence.py

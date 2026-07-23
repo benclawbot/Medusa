@@ -1,0 +1,92 @@
+{
+  "schema_version": 1,
+  "authority": {
+    "source": "production code and tests on main",
+    "ledger": "docs/CAPABILITY-EVIDENCE.md",
+    "overview": "README.md"
+  },
+  "required_documents": [
+    "README.md",
+    "docs/CAPABILITY-EVIDENCE.md",
+    "docs/RELEASE.md",
+    "docs/COMPATIBILITY.md",
+    "docs/REFACTOR-BASELINE.md",
+    "docs/PUBLIC-API-BASELINE.md",
+    "docs/BENCHMARKS.md"
+  ],
+  "claims": [
+    {
+      "id": "shared-runtime",
+      "status": "shipped",
+      "summary": "TUI and desktop use the shared frontend-neutral runtime.",
+      "production_paths": ["crates/medusa-runtime", "crates/medusa-tui", "apps/medusa-desktop"],
+      "test_paths": ["crates/medusa-runtime", "crates/medusa-tui", "apps/medusa-desktop"],
+      "gates": ["CI", "Desktop", "Refactor Guardrails"]
+    },
+    {
+      "id": "durable-sessions-memory",
+      "status": "shipped",
+      "summary": "Sessions, prompts, memory, provenance, lifecycle state, and recall are durable.",
+      "production_paths": ["crates/medusa-agent/src/session.rs", "crates/medusa-memory"],
+      "test_paths": ["crates/medusa-agent/src/session", "crates/medusa-memory"],
+      "gates": ["CI", "Release Gates"]
+    },
+    {
+      "id": "github-service",
+      "status": "shipped",
+      "summary": "GitHub authentication, repository, branch, commit, push, pull-request, issue, review, checks, and Actions operations are exposed through a guarded service boundary.",
+      "production_paths": ["crates/medusa-github"],
+      "test_paths": ["crates/medusa-github"],
+      "gates": ["CI", "Release Gates"]
+    },
+    {
+      "id": "provider-context-resilience",
+      "status": "shipped",
+      "summary": "Provider configuration, retries, failover, capability authority, context accounting, and compaction are runtime concerns rather than frontend-specific behavior.",
+      "production_paths": ["crates/medusa-provider", "crates/medusa-runtime", "crates/medusa-agent"],
+      "test_paths": ["crates/medusa-provider", "crates/medusa-runtime", "crates/medusa-agent/tests"],
+      "gates": ["CI", "Release Gates"]
+    },
+    {
+      "id": "identity-approval-transactions",
+      "status": "shipped",
+      "summary": "Medusa identity remains authoritative; approvals are exact-action, plan-bound, expiring, durable, and enforced before execution; multi-file transactions support rollback evidence.",
+      "production_paths": [
+        "crates/medusa-agent/src/identity_guard.rs",
+        "crates/medusa-agent/src/approval.rs",
+        "crates/medusa-agent/src/transaction.rs",
+        "crates/medusa-agent/src/engine.rs"
+      ],
+      "test_paths": [
+        "crates/medusa-agent/tests/approval_safety.rs",
+        "crates/medusa-agent/tests/identity_transaction_safety.rs",
+        "crates/medusa-agent/tests/identity_grounding.rs"
+      ],
+      "gates": ["CI", "Release Gates", "Refactor Guardrails"]
+    },
+    {
+      "id": "daemon",
+      "status": "shipped",
+      "summary": "The daemon provides bounded concurrency, reconnect, cancellation, process-tree termination, graceful drain, and durable recovery on Linux, macOS, and Windows.",
+      "production_paths": ["crates/medusa-daemon"],
+      "test_paths": ["crates/medusa-daemon"],
+      "gates": ["Daemon", "Desktop", "CI"]
+    },
+    {
+      "id": "release-trust",
+      "status": "shipped",
+      "summary": "Version tags produce validated cross-platform artifacts, deterministic checksums and SBOMs, provenance attestations, and a draft-only release.",
+      "production_paths": ["scripts/release-evidence.py", ".github/workflows/publish-release.yml"],
+      "test_paths": ["scripts/release-evidence.py"],
+      "gates": ["CI", "Desktop", "Release Gates", "Refactor Guardrails"]
+    },
+    {
+      "id": "self-update",
+      "status": "shipped",
+      "summary": "The CLI can check and apply verified updates from immutable main while respecting package-manager ownership and rollback constraints.",
+      "production_paths": ["crates/medusa-cli"],
+      "test_paths": ["crates/medusa-cli"],
+      "gates": ["CI", "Desktop", "Release Gates"]
+    }
+  ]
+}
