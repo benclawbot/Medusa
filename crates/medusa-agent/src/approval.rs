@@ -1,3 +1,5 @@
+//! Plan-bound, expiring approval grants and durable decision receipts.
+
 use serde::{Deserialize, Serialize};
 use time::OffsetDateTime;
 
