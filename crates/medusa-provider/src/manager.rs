@@ -4,6 +4,7 @@ use std::{collections::BTreeMap, sync::Mutex, thread, time::Duration};
 
 use medusa_core::{ErrorCategory, ErrorCode, MedusaError, MedusaResult};
 use serde::{Deserialize, Serialize};
+use serde_json::{Value, json};
 
 use crate::{ModelProvider, ModelRequest, ModelResponse, ProviderCapabilities};
 
@@ -68,6 +69,7 @@ pub struct ProviderManager<P> {
     health: Mutex<Vec<ProviderHealth>>,
     last_completed_provider: Mutex<Option<usize>>,
     cache_hits: Mutex<u64>,
+    last_execution: Mutex<Option<Value>>,
     sleeper: fn(Duration),
 }
 
@@ -83,6 +85,7 @@ impl<P> ProviderManager<P> {
             health: Mutex::new(health),
             last_completed_provider: Mutex::new(None),
             cache_hits: Mutex::new(0),
+            last_execution: Mutex::new(None),
             sleeper: thread::sleep,
         }
     }
@@ -128,6 +131,37 @@ impl<P> ProviderManager<P> {
         self.cache_hits.lock().map_or(0, |value| *value)
     }
 
+    /// Returns the latest completed request snapshot for durable engine reporting.
+    #[must_use]
+    pub fn execution_status(&self) -> Option<Value> {
+        self.last_execution
+            .lock()
+            .map_or(None, |value| value.clone())
+    }
+
+    fn record_execution(&self, index: usize, cache_hit: bool) {
+        let health = self
+            .health
+            .lock()
+            .ok()
+            .and_then(|health| health.get(index).cloned())
+            .unwrap_or_default();
+        let snapshot = json!({
+            "provider_index": index,
+            "cache_hit": cache_hit,
+            "cache_hits": self.cache_hits(),
+            "attempts": health.attempts,
+            "retries": health.retries,
+            "failovers": health.failovers,
+            "successes": health.successes,
+            "last_delay_ms": health.last_delay_ms,
+            "last_error": health.last_error,
+        });
+        if let Ok(mut execution) = self.last_execution.lock() {
+            *execution = Some(snapshot);
+        }
+    }
+
     fn with_health(&self, index: usize, update: impl FnOnce(&mut ProviderHealth)) {
         if let Ok(mut health) = self.health.lock()
             && let Some(entry) = health.get_mut(index)
@@ -151,11 +185,15 @@ impl<P> ProviderManager<P> {
         if let Ok(mut completed) = self.last_completed_provider.lock() {
             *completed = Some(index);
         }
+        self.record_execution(index, false);
     }
 
     fn record_cache_hit(&self) {
         if let Ok(mut hits) = self.cache_hits.lock() {
             *hits = hits.saturating_add(1);
+        }
+        if let Some(index) = self.last_completed_provider() {
+            self.record_execution(index, true);
         }
     }
 
@@ -358,7 +396,9 @@ mod tests {
         let manager = ProviderManager::new(vec![primary, fallback]).without_sleep();
 
         manager.complete(&request()).expect("fallback response");
+        let uncached = manager.execution_status().expect("uncached status");
         manager.complete(&request()).expect("cached response");
+        let cached = manager.execution_status().expect("cached status");
 
         assert_eq!(primary_calls.load(Ordering::SeqCst), 2);
         assert_eq!(fallback_calls.load(Ordering::SeqCst), 1);
@@ -367,6 +407,11 @@ mod tests {
         assert_eq!(manager.health()[1].successes, 1);
         assert_eq!(manager.last_completed_provider(), Some(1));
         assert_eq!(manager.cache_hits(), 1);
+        assert_eq!(uncached["provider_index"], json!(1));
+        assert_eq!(uncached["cache_hit"], json!(false));
+        assert_eq!(cached["provider_index"], json!(1));
+        assert_eq!(cached["cache_hit"], json!(true));
+        assert_eq!(cached["cache_hits"], json!(1));
     }
 
     #[test]
@@ -378,6 +423,10 @@ mod tests {
 
         assert_eq!(manager.last_completed_provider(), Some(0));
         assert_eq!(manager.cache_hits(), 0);
+        let status = manager.execution_status().expect("execution status");
+        assert_eq!(status["provider_index"], json!(0));
+        assert_eq!(status["attempts"], json!(1));
+        assert_eq!(status["successes"], json!(1));
     }
 
     #[test]
@@ -390,6 +439,7 @@ mod tests {
         assert_eq!(primary_calls.load(Ordering::SeqCst), 1);
         assert_eq!(fallback_calls.load(Ordering::SeqCst), 0);
         assert_eq!(manager.last_completed_provider(), None);
+        assert_eq!(manager.execution_status(), None);
     }
 
     #[test]
@@ -403,6 +453,9 @@ mod tests {
         assert_eq!(fallback_calls.load(Ordering::SeqCst), 1);
         assert_eq!(manager.health()[0].failovers, 1);
         assert_eq!(manager.last_completed_provider(), Some(1));
+        let status = manager.execution_status().expect("execution status");
+        assert_eq!(status["provider_index"], json!(1));
+        assert_eq!(status["cache_hit"], json!(false));
     }
 
     #[test]
@@ -421,5 +474,6 @@ mod tests {
 
         assert!(manager.complete(&request()).is_err());
         assert_eq!(manager.health()[0].last_delay_ms, Some(3_000));
+        assert_eq!(manager.execution_status(), None);
     }
 }
