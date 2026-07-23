@@ -1,0 +1,118 @@
+name: Apply context limit recovery
+on:
+  push:
+    branches: [roadmap/131-context-limit-recovery]
+permissions:
+  contents: write
+  pull-requests: write
+jobs:
+  apply:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: roadmap/131-context-limit-recovery
+          fetch-depth: 0
+      - uses: dtolnay/rust-toolchain@1.88.0
+      - name: Apply focused source changes
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+
+          p = Path('crates/medusa-agent/src/engine_support.rs')
+          s = p.read_text()
+          s = s.replace('use medusa_config::Mode;', 'use medusa_config::{Config, Mode};')
+          s = s.replace('use medusa_provider::{ImageSource, Message, MessageBlock, ProviderCapabilities, Role};', 'use medusa_provider::{ImageSource, Message, MessageBlock, ProviderCapabilities, Role, ToolDefinition};')
+          anchor = '''pub(crate) fn append_observed<F>(\n'''
+          insert = '''pub(crate) fn estimated_request_tokens(\n    system: &str,\n    messages: &[Message],\n    tools: &[ToolDefinition],\n) -> u64 {\n    let serialized_bytes = system.len()\n        .saturating_add(serde_json::to_vec(messages).map_or(0, |value| value.len()))\n        .saturating_add(serde_json::to_vec(tools).map_or(0, |value| value.len()));\n    u64::try_from(serialized_bytes.saturating_add(3) / 4).unwrap_or(u64::MAX)\n}\n\npub(crate) fn request_exceeds_auto_compact_budget(\n    config: &Config,\n    system: &str,\n    messages: &[Message],\n    tools: &[ToolDefinition],\n) -> bool {\n    let input_capacity = config\n        .model\n        .context_window_tokens\n        .saturating_sub(u64::from(config.model.max_output_tokens));\n    let threshold = input_capacity\n        .saturating_mul(u64::from(config.model.auto_compact_percent))\n        / 100;\n    threshold > 0 && estimated_request_tokens(system, messages, tools) >= threshold\n}\n\npub(crate) fn is_context_limit_error(error: &MedusaError) -> bool {\n    let message = error.to_string().to_ascii_lowercase();\n    [\n        "context length",\n        "context window",\n        "maximum context",\n        "max context",\n        "too many tokens",\n        "token limit",\n    ]\n    .iter()\n    .any(|needle| message.contains(needle))\n}\n\n'''
+          assert anchor in s
+          s = s.replace(anchor, insert + anchor, 1)
+          p.write_text(s)
+
+          p = Path('crates/medusa-protocol/src/lib.rs')
+          s = p.read_text()
+          anchor = '''    ConversationCompacted {\n        original_messages: u32,\n        retained_messages: u32,\n        #[serde(default)]\n        generation: u32,\n        #[serde(default)]\n        source_event_sequences: Vec<u64>,\n        #[serde(default)]\n        preserved_sections: Vec<String>,\n    },\n'''
+          replacement = anchor + '''    ContextLimitRecoveryAttempted {\n        estimated_tokens_before: u64,\n        estimated_tokens_after: u64,\n    },\n'''
+          assert anchor in s
+          s = s.replace(anchor, replacement, 1)
+          p.write_text(s)
+
+          p = Path('crates/medusa-agent/src/engine.rs')
+          s = p.read_text()
+          old = '''        validate_messages(&session.messages, &self.provider.capabilities())?;\n        session.turn = session.turn.saturating_add(1);\n        append_observed(\n            session,\n            EventPayload::ModelRequestStarted {\n                provider: self.config.model.provider.clone(),\n                model: self.config.model.name.clone(),\n            },\n            &mut observer,\n        )?;\n        let response = self.provider.complete(&ModelRequest {\n            system: system_prompt_with_context(\n                self.config.agent.mode,\n                &session.repo,\n                additional_system_context,\n            ),\n            messages: session.messages.clone(),\n            tools: available_tools(self.config.agent.mode, &self.desktop_commander_settings),\n            max_tokens: self.config.model.max_output_tokens,\n            temperature_milli: self.config.model.temperature_milli,\n        })?;\n'''
+          new = '''        validate_messages(&session.messages, &self.provider.capabilities())?;\n        let system = system_prompt_with_context(\n            self.config.agent.mode,\n            &session.repo,\n            additional_system_context,\n        );\n        let tools = available_tools(self.config.agent.mode, &self.desktop_commander_settings);\n        if session.messages.len() > 1\n            && request_exceeds_auto_compact_budget(\n                &self.config,\n                &system,\n                &session.messages,\n                &tools,\n            )\n        {\n            compact_session(session, Some("automatic pre-limit compaction"))?;\n        }\n        session.turn = session.turn.saturating_add(1);\n        append_observed(\n            session,\n            EventPayload::ModelRequestStarted {\n                provider: self.config.model.provider.clone(),\n                model: self.config.model.name.clone(),\n            },\n            &mut observer,\n        )?;\n        let mut request = ModelRequest {\n            system,\n            messages: session.messages.clone(),\n            tools,\n            max_tokens: self.config.model.max_output_tokens,\n            temperature_milli: self.config.model.temperature_milli,\n        };\n        let response = match self.provider.complete(&request) {\n            Ok(response) => response,\n            Err(error) if is_context_limit_error(&error) => {\n                let estimated_tokens_before = estimated_request_tokens(\n                    &request.system,\n                    &request.messages,\n                    &request.tools,\n                );\n                compact_session(\n                    session,\n                    Some("automatic recovery after provider context-length rejection"),\n                )?;\n                request.messages = session.messages.clone();\n                let estimated_tokens_after = estimated_request_tokens(\n                    &request.system,\n                    &request.messages,\n                    &request.tools,\n                );\n                append_observed(\n                    session,\n                    EventPayload::ContextLimitRecoveryAttempted {\n                        estimated_tokens_before,\n                        estimated_tokens_after,\n                    },\n                    &mut observer,\n                )?;\n                self.provider.complete(&request)?\n            }\n            Err(error) => return Err(error),\n        };\n'''
+          assert old in s
+          s = s.replace(old, new, 1)
+          p.write_text(s)
+
+          Path('crates/medusa-agent/tests/context_limit_recovery.rs').write_text(r'''use std::sync::{Arc, atomic::{AtomicUsize, Ordering}};
+
+use medusa_agent::{AgentEngine, AgentUpdate, StepOutcome};
+use medusa_config::Config;
+use medusa_core::{ErrorCategory, ErrorCode, MedusaError, MedusaResult};
+use medusa_protocol::EventPayload;
+use medusa_provider::{Message, MessageBlock, ModelProvider, ModelRequest, ModelResponse, ResponseBlock, Role, Usage};
+use serde_json::json;
+
+struct RejectOnceProvider { calls: Arc<AtomicUsize> }
+
+impl ModelProvider for RejectOnceProvider {
+    fn complete(&self, _request: &ModelRequest) -> MedusaResult<ModelResponse> {
+        if self.calls.fetch_add(1, Ordering::SeqCst) == 0 {
+            return Err(MedusaError::new(
+                ErrorCode::DependencyUnavailable,
+                ErrorCategory::Validation,
+                "provider rejected request: maximum context length exceeded",
+            ));
+        }
+        Ok(ModelResponse {
+            response_id: Some("recovered".to_owned()),
+            stop_reason: Some("tool_use".to_owned()),
+            blocks: vec![ResponseBlock::ToolUse {
+                id: "read-root".to_owned(),
+                name: "fs_read".to_owned(),
+                input: json!({"path": "."}),
+            }],
+            usage: Usage::default(),
+        })
+    }
+}
+
+#[test]
+fn context_rejection_compacts_and_retries_once_before_tool_execution() {
+    let directory = tempfile::tempdir().expect("temporary repository");
+    let calls = Arc::new(AtomicUsize::new(0));
+    let mut config = Config::default();
+    config.model.context_window_tokens = 1_000_000;
+    config.model.auto_compact_percent = 100;
+    let engine = AgentEngine::new(RejectOnceProvider { calls: calls.clone() }, config);
+    let mut session = engine.create_session(directory.path(), "inspect repository".to_owned()).expect("session");
+    session.messages.push(Message { role: Role::User, content: vec![MessageBlock::Text { text: "preserve this unresolved instruction".to_owned() }] });
+    let mut updates = Vec::new();
+
+    assert_eq!(engine.step_with_observer(&mut session, |update| updates.push(update.clone())).expect("recovered step"), StepOutcome::Continue);
+    assert_eq!(calls.load(Ordering::SeqCst), 2);
+
+    let recovery = updates.iter().position(|update| matches!(update, AgentUpdate::Event(EventPayload::ContextLimitRecoveryAttempted { .. }))).expect("recovery event");
+    let tool = updates.iter().position(|update| matches!(update, AgentUpdate::Event(EventPayload::ToolCallRequested { .. }))).expect("tool event");
+    assert!(recovery < tool);
+    assert!(session.events.iter().any(|event| matches!(event.payload, EventPayload::ConversationCompacted { .. })));
+    assert!(session.events.iter().any(|event| matches!(event.payload, EventPayload::ContextLimitRecoveryAttempted { .. })));
+    assert!(session.messages.iter().flat_map(|message| &message.content).any(|block| matches!(block, MessageBlock::Text { text } if text.contains("preserve this unresolved instruction"))));
+}
+''')
+          PY
+          rm .github/workflows/apply-context-limit-recovery.yml
+          cargo fmt --all -- --check || cargo fmt --all
+          cargo test -p medusa-agent --test context_limit_recovery
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add -A
+          git commit -m "feat(context): recover from context limit rejection"
+          git push origin HEAD:roadmap/131-context-limit-recovery
+      - name: Open draft pull request
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh pr view roadmap/131-context-limit-recovery >/dev/null 2>&1 || gh pr create --draft --base main --head roadmap/131-context-limit-recovery --title "feat(context): recover from context limit rejection" --body $'## Scope\n\nSecond focused implementation slice for #131.\n\n- deterministically estimate request token pressure\n- compact before configured context thresholds\n- recover once from real context-length rejection\n- emit durable shared recovery evidence\n- ensure no tool execution occurs before successful recovery\n- preserve unresolved instructions through compaction\n\nContributes to #131 and #86.'
