@@ -6,4 +6,3 @@
 # and workflow self-deletion are forbidden even for registered entries.
 .github/workflows/publish-release.yml|Creates a draft GitHub Release and uploads validated assets for an existing version tag; it never pushes commits or publishes the release.
 .github/workflows/refresh-cli-release-assets.yml|Replaces only the three CLI archives on an already-created draft release with validated dual-binary packages built from the immutable tagged commit; it never pushes commits or publishes the release.
-.github/workflows/roadmap-133-publish-runtime.yml|Publishes only the six rustfmt-formatted runtime files after the full medusa-agent suite passes, using one Git data API commit on the dedicated PR branch; it never uses git push or deletes itself.
