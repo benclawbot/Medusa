@@ -41,15 +41,25 @@ function preview(
 describe("GitHub pull request mutations", () => {
   beforeEach(() => invoke.mockReset());
 
-  it("normalizes a confirmed pull request update", async () => {
-    invoke.mockResolvedValue({
+  it("normalizes a confirmed pull request update and persists its audit", async () => {
+    const audit = {
+      operation: "pullRequestUpdate" as const,
       repository: "octo/repo",
       pullRequestNumber: 42,
-      title: "Updated",
-      state: "open",
-      url: "https://github.com/octo/repo/pull/42",
-      audit: {},
-    });
+      previewFingerprint: "confirmed",
+      confirmedAt: "2026-07-22T00:00:00Z",
+      outcome: "updated" as const,
+    };
+    invoke
+      .mockResolvedValueOnce({
+        repository: "octo/repo",
+        pullRequestNumber: 42,
+        title: "Updated",
+        state: "open",
+        url: "https://github.com/octo/repo/pull/42",
+        audit,
+      })
+      .mockResolvedValueOnce(undefined);
 
     const mutationPreview = preview("pullRequestUpdate", false, {
       title: "Updated",
@@ -65,7 +75,7 @@ describe("GitHub pull request mutations", () => {
       " github.com ",
     );
 
-    expect(invoke).toHaveBeenCalledWith("runtime_update_github_pull_request", {
+    expect(invoke).toHaveBeenNthCalledWith(1, "runtime_update_github_pull_request", {
       repository: "octo/repo",
       pullRequestNumber: 42,
       title: "Updated",
@@ -75,6 +85,16 @@ describe("GitHub pull request mutations", () => {
       hostname: "github.com",
       preview: mutationPreview,
       confirmation,
+    });
+    expect(invoke).toHaveBeenNthCalledWith(2, "runtime_persist_github_audit", {
+      receipt: {
+        operation: "pullRequestUpdate",
+        repository: "octo/repo",
+        resource: "pullRequest:42",
+        previewFingerprint: "confirmed",
+        confirmedAt: "2026-07-22T00:00:00Z",
+        outcome: "updated",
+      },
     });
   });
 
@@ -106,16 +126,26 @@ describe("GitHub pull request mutations", () => {
     expect(invoke).not.toHaveBeenCalled();
   });
 
-  it("normalizes a commit-bound review", async () => {
+  it("normalizes a commit-bound review and persists its audit", async () => {
     const commitId = "a".repeat(40);
-    invoke.mockResolvedValue({
+    const audit = {
+      operation: "pullRequestReview" as const,
       repository: "octo/repo",
       pullRequestNumber: 42,
-      state: "APPROVED",
-      url: "https://github.com/octo/repo/pull/42#pullrequestreview-1",
-      reviewId: 1,
-      audit: {},
-    });
+      previewFingerprint: "confirmed",
+      confirmedAt: "2026-07-22T00:00:00Z",
+      outcome: "submitted" as const,
+    };
+    invoke
+      .mockResolvedValueOnce({
+        repository: "octo/repo",
+        pullRequestNumber: 42,
+        state: "APPROVED",
+        url: "https://github.com/octo/repo/pull/42#pullrequestreview-1",
+        reviewId: 1,
+        audit,
+      })
+      .mockResolvedValueOnce(undefined);
 
     const mutationPreview = preview("pullRequestReview", false, {
       body: "Looks good",
@@ -131,7 +161,7 @@ describe("GitHub pull request mutations", () => {
       confirmation,
     );
 
-    expect(invoke).toHaveBeenCalledWith("runtime_review_github_pull_request", {
+    expect(invoke).toHaveBeenNthCalledWith(1, "runtime_review_github_pull_request", {
       repository: "octo/repo",
       pullRequestNumber: 42,
       action: "approve",
@@ -140,6 +170,16 @@ describe("GitHub pull request mutations", () => {
       hostname: null,
       preview: mutationPreview,
       confirmation,
+    });
+    expect(invoke).toHaveBeenNthCalledWith(2, "runtime_persist_github_audit", {
+      receipt: {
+        operation: "pullRequestReview",
+        repository: "octo/repo",
+        resource: "pullRequest:42",
+        previewFingerprint: "confirmed",
+        confirmedAt: "2026-07-22T00:00:00Z",
+        outcome: "submitted",
+      },
     });
   });
 
