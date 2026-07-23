@@ -1,7 +1,7 @@
 #[path = "../src/context_budget.rs"]
 mod context_budget;
 
-use context_budget::PromptBudget;
+use context_budget::{PromptBudget, PromptBudgetDecision};
 use medusa_provider::{Message, MessageBlock, Role, ToolDefinition};
 use serde_json::json;
 
@@ -48,8 +48,40 @@ fn compaction_boundary_is_deterministic() {
     let below = PromptBudget::for_request("", &[], &[], 84, 100);
     let at_boundary = PromptBudget::for_request("", &[], &[], 85, 100);
 
+    assert_eq!(below.decision(), PromptBudgetDecision::Proceed);
+    assert_eq!(at_boundary.decision(), PromptBudgetDecision::Compact);
     assert!(!below.requires_compaction());
     assert!(at_boundary.requires_compaction());
+}
+
+#[test]
+fn remaining_capacity_saturates_after_overflow() {
+    let within = PromptBudget::for_request("", &[], &[], 40, 100);
+    let beyond = PromptBudget::for_request("", &[], &[], 101, 100);
+
+    assert_eq!(within.remaining_tokens(), 60);
+    assert!(!within.exceeds_context_window());
+    assert_eq!(beyond.remaining_tokens(), 0);
+    assert!(beyond.exceeds_context_window());
+}
+
+#[test]
+fn provider_context_rejections_are_detected_without_matching_unrelated_errors() {
+    for message in [
+        "maximum context length exceeded",
+        "Prompt is too long for this model",
+        "request rejected: too many tokens",
+        "context window limit reached",
+    ] {
+        assert!(context_budget::is_context_limit_rejection(message));
+    }
+
+    assert!(!context_budget::is_context_limit_rejection(
+        "provider authentication failed"
+    ));
+    assert!(!context_budget::is_context_limit_rejection(
+        "tool execution timed out"
+    ));
 }
 
 #[test]
