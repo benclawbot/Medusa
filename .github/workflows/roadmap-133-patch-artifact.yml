@@ -69,18 +69,11 @@ jobs:
           text = replace_once(text, '                ResponseBlock::Text { text } => {\n                    assistant_text.push(text.clone());', '                ResponseBlock::Text { text } => {\n                    let text = if validate_provider_text(&text).is_ok() {\n                        text\n                    } else {\n                        "[provider output rejected: identity or policy contamination]".to_owned()\n                    };\n                    assistant_text.push(text.clone());', 'provider text validation')
           text = replace_once(text, '                    } else {\n                        session.plan = plan.clone();\n                        observer(&AgentUpdate::Plan(plan));', '                    } else {\n                        if session.plan != plan {\n                            let recorded_at = OffsetDateTime::now_utc();\n                            for grant in session.approval_grants.drain(..) {\n                                session.approval_receipts.push(ApprovalReceipt {\n                                    decision: ApprovalDecision::Invalidated,\n                                    scope: grant.scope,\n                                    recorded_at,\n                                    reason: "visible plan changed".to_owned(),\n                                });\n                            }\n                        }\n                        session.plan = plan.clone();\n                        observer(&AgentUpdate::Plan(plan));', 'plan invalidation')
           text = replace_once(text, '                            approval: Some(PendingToolApproval {\n                                tool_use_id: id,\n                                tool: name,\n                                input,\n                            }),', '                            approval: Some(PendingToolApproval {\n                                grant: ApprovalGrant::exact_action(\n                                    &name,\n                                    &input,\n                                    &session.plan,\n                                    OffsetDateTime::now_utc(),\n                                ),\n                                tool_use_id: id,\n                                tool: name,\n                                input,\n                            }),', 'pending approval grant creation')
-          old = '''            let (content, is_error) = if approved {
-                match execute_approved_tool(&session.repo, &approval.tool, &approval.input) {
-                    Ok(output) => (format!("User approved this exact action.\\n{output}"), false),
-                    Err(error) => (format!("Approved action failed: {error}"), true),
-                }
-            } else {
-                (
-                    format!("User did not approve this action. Feedback: {answer}"),
-                    true,
-                )
-            };'''
-          new = '''            let now = OffsetDateTime::now_utc();
+          start_marker = '            let (content, is_error) = if approved {'
+          end_marker = '            vec![MessageBlock::ToolResult {'
+          start = text.index(start_marker)
+          end = text.index(end_marker, start)
+          replacement = '''            let now = OffsetDateTime::now_utc();
             let decision = if approved {
                 approval
                     .grant
@@ -109,8 +102,9 @@ jobs:
                     format!("Action was not authorized ({decision:?}). Feedback: {answer}"),
                     true,
                 )
-            };'''
-          text = replace_once(text, old, new, 'approval execution enforcement')
+            };
+'''
+          text = text[:start] + replacement + text[end:]
           engine.write_text(text)
           PY
           cargo fmt --all
