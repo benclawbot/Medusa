@@ -1,0 +1,249 @@
+name: Apply structured compaction foundation
+
+on:
+  push:
+    branches:
+      - roadmap/131-structured-compaction
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  apply:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: roadmap/131-structured-compaction
+          fetch-depth: 0
+      - uses: dtolnay/rust-toolchain@1.88.0
+        with:
+          components: rustfmt
+      - name: Apply exact source transformations
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+
+          protocol = Path('crates/medusa-protocol/src/lib.rs')
+          text = protocol.read_text()
+          old = '''    ConversationCompacted {
+        original_messages: u32,
+        retained_messages: u32,
+    },'''
+          new = '''    ConversationCompacted {
+        original_messages: u32,
+        retained_messages: u32,
+        #[serde(default)]
+        generation: u32,
+        #[serde(default)]
+        source_event_sequences: Vec<u64>,
+        #[serde(default)]
+        preserved_sections: Vec<String>,
+    },'''
+          assert old in text
+          protocol.write_text(text.replace(old, new, 1))
+
+          support = Path('crates/medusa-agent/src/engine_support.rs')
+          text = support.read_text()
+          start = text.index('/// Compacts durable session history without requiring a live model provider.\npub fn compact_session')
+          end = text.index('\npub(crate) fn compact_message_text', start)
+          replacement = r'''/// Compacts durable session history without requiring a live model provider.
+pub fn compact_session(session: &mut AgentSession, focus: Option<&str>) -> MedusaResult<()> {
+    const COMPACTION_MARKER: &str = "[medusa-compaction-v1]";
+    const MAX_ENTRIES: usize = 24;
+
+    let original_messages = session.messages.len();
+    let generation = session
+        .events
+        .iter()
+        .filter(|event| matches!(event.payload, EventPayload::ConversationCompacted { .. }))
+        .count()
+        .saturating_add(1);
+    let generation = u32::try_from(generation).unwrap_or(u32::MAX);
+    let source_event_sequences = session.events.iter().map(|event| event.sequence).collect::<Vec<_>>();
+
+    let mut entries = session
+        .messages
+        .iter()
+        .flat_map(|message| {
+            message
+                .content
+                .iter()
+                .map(move |block| (message.role, block))
+        })
+        .filter(|(_, block)| {
+            !matches!(block, MessageBlock::Text { text } if text.starts_with(COMPACTION_MARKER))
+        })
+        .map(|(role, block)| {
+            let speaker = match role {
+                Role::User => "User",
+                Role::Assistant => "Assistant",
+            };
+            format!("{speaker}: {}", compact_block_text(block))
+        })
+        .collect::<Vec<_>>();
+    if entries.len() > MAX_ENTRIES {
+        entries = entries.split_off(entries.len() - MAX_ENTRIES);
+    }
+
+    let focus = focus
+        .filter(|value| !value.trim().is_empty())
+        .map(str::trim)
+        .unwrap_or("none");
+    let plan = serde_json::to_string(&session.plan).map_err(json_error)?;
+    let pending_question = serde_json::to_string(&session.pending_question).map_err(json_error)?;
+    let approval_grants = serde_json::to_string(&session.approval_grants).map_err(json_error)?;
+    let approval_receipts = serde_json::to_string(&session.approval_receipts).map_err(json_error)?;
+    let evidence = serde_json::to_string(&session.evidence).map_err(json_error)?;
+    let artifacts = session
+        .tool_artifacts
+        .iter()
+        .map(|path| path.display().to_string())
+        .collect::<Vec<_>>();
+    let artifacts = serde_json::to_string(&artifacts).map_err(json_error)?;
+    let recent_context = if entries.is_empty() {
+        "none".to_owned()
+    } else {
+        entries.join("\n")
+    };
+    let preserved_sections = vec![
+        "objective".to_owned(),
+        "focus".to_owned(),
+        "plan".to_owned(),
+        "pending_question".to_owned(),
+        "approval_grants".to_owned(),
+        "approval_receipts".to_owned(),
+        "verification_evidence".to_owned(),
+        "tool_artifacts".to_owned(),
+        "recent_context".to_owned(),
+    ];
+    let summary = format!(
+        "{COMPACTION_MARKER}\nGeneration: {generation}\nCurrent goal: {}\nFocus for the next turn: {focus}\n\nActive plan (JSON):\n{plan}\n\nPending question and approval state (JSON):\n{pending_question}\n\nApproval grants (JSON):\n{approval_grants}\n\nApproval receipts (JSON):\n{approval_receipts}\n\nVerification evidence (JSON):\n{evidence}\n\nTool artifacts and edited-file references (JSON):\n{artifacts}\n\nRecent uncompacted context:\n{recent_context}",
+        session.objective,
+    );
+    session.messages = vec![Message {
+        role: Role::User,
+        content: vec![MessageBlock::Text { text: summary }],
+    }];
+    append_event(
+        session,
+        Actor::Coordinator,
+        EventPayload::ConversationCompacted {
+            original_messages: u32::try_from(original_messages).unwrap_or(u32::MAX),
+            retained_messages: 1,
+            generation,
+            source_event_sequences,
+            preserved_sections,
+        },
+    )?;
+    session.updated_at = OffsetDateTime::now_utc();
+    persist(session)
+}
+'''
+          support.write_text(text[:start] + replacement + text[end:])
+
+          test = Path('crates/medusa-agent/tests/structured_compaction.rs')
+          test.write_text(r'''use medusa_agent::{AgentEngine, AgentPlanStep, AgentPlanStepStatus};
+use medusa_config::Config;
+use medusa_core::MedusaResult;
+use medusa_protocol::EventPayload;
+use medusa_provider::{MessageBlock, ModelProvider, ModelRequest, ModelResponse, Usage};
+
+struct IdleProvider;
+
+impl ModelProvider for IdleProvider {
+    fn complete(&self, _request: &ModelRequest) -> MedusaResult<ModelResponse> {
+        unreachable!("compaction does not call the provider")
+    }
+}
+
+#[test]
+fn structured_compaction_preserves_durable_state_and_provenance() {
+    let directory = tempfile::tempdir().expect("temporary repository");
+    let engine = AgentEngine::new(IdleProvider, Config::default());
+    let mut session = engine
+        .create_session(directory.path(), "preserve the exact migration".to_owned())
+        .expect("session");
+    session.plan = vec![AgentPlanStep {
+        title: "Run cargo test -p medusa-agent".to_owned(),
+        status: AgentPlanStepStatus::InProgress,
+    }];
+    session.evidence.push("migration failed at src/store.rs:42".to_owned());
+    session.tool_artifacts.push(directory.path().join("src/store.rs"));
+    engine
+        .append_user_message(
+            &mut session,
+            vec![MessageBlock::Text {
+                text: "Do not rename SessionId; keep the exact symbol.".to_owned(),
+            }],
+        )
+        .expect("append correction");
+    let source_sequences = session.events.iter().map(|event| event.sequence).collect::<Vec<_>>();
+
+    engine
+        .compact_session(&mut session, Some("finish migration safely"))
+        .expect("compact session");
+
+    let summary = match &session.messages[0].content[0] {
+        MessageBlock::Text { text } => text,
+        _ => panic!("expected compacted text"),
+    };
+    assert!(summary.contains("[medusa-compaction-v1]"));
+    assert!(summary.contains("Run cargo test -p medusa-agent"));
+    assert!(summary.contains("migration failed at src/store.rs:42"));
+    assert!(summary.contains("src/store.rs"));
+    assert!(summary.contains("Do not rename SessionId; keep the exact symbol."));
+    assert!(session.events.iter().any(|event| matches!(
+        &event.payload,
+        EventPayload::ConversationCompacted {
+            generation: 1,
+            source_event_sequences,
+            preserved_sections,
+            ..
+        } if source_event_sequences == &source_sequences
+            && preserved_sections.contains(&"verification_evidence".to_owned())
+    )));
+}
+
+#[test]
+fn repeated_compaction_does_not_nest_prior_summary() {
+    let directory = tempfile::tempdir().expect("temporary repository");
+    let engine = AgentEngine::new(IdleProvider, Config::default());
+    let mut session = engine
+        .create_session(directory.path(), "stable summary".to_owned())
+        .expect("session");
+
+    engine.compact_session(&mut session, None).expect("first compaction");
+    engine.compact_session(&mut session, None).expect("second compaction");
+
+    let summary = match &session.messages[0].content[0] {
+        MessageBlock::Text { text } => text,
+        _ => panic!("expected compacted text"),
+    };
+    assert_eq!(summary.matches("[medusa-compaction-v1]").count(), 1);
+    assert!(summary.contains("Generation: 2"));
+    assert!(session.events.iter().any(|event| matches!(
+        event.payload,
+        EventPayload::ConversationCompacted { generation: 2, .. }
+    )));
+}
+''')
+          PY
+          cargo fmt --all
+          rm .github/workflows/apply-structured-compaction.yml
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add -A
+          git commit -m "feat(context): add structured compaction snapshots"
+          git push origin HEAD:roadmap/131-structured-compaction
+      - name: Open pull request
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh pr create --draft \
+            --base main \
+            --head roadmap/131-structured-compaction \
+            --title "feat(context): add structured compaction snapshots" \
+            --body $'## Scope\n\nFirst focused implementation slice for #131.\n\nImplemented:\n- structured deterministic compaction summary\n- preservation of objective, focus, plan, pending question/approval state, approval history, evidence, artifact paths, and recent context\n- durable compaction generation and source-event provenance\n- repeated-compaction protection against nested prior summaries\n- compatibility defaults for historical compacted events\n- deterministic preservation and semantic-drift regressions\n\nContributes to #131 and #86.'
