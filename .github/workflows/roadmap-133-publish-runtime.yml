@@ -3,16 +3,7 @@ name: Roadmap 133 Publish Runtime
 # One-shot PR branch commit preparation; removed after runtime import.
 on:
   pull_request:
-    paths:
-      - '.github/workflows/roadmap-133-publish-runtime.yml'
-      - '.github/workflows/roadmap-133-patch-artifact*.yml'
-      - 'crates/medusa-agent/**'
-  push:
-    branches:
-      - roadmap/133-identity-approval-transactions
-    paths:
-      - '.github/workflows/roadmap-133-publish-runtime.yml'
-      - 'docs/workflow-write-allowlist.txt'
+    types: [ready_for_review]
 
 permissions:
   contents: write
