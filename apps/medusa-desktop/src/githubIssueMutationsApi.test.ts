@@ -54,7 +54,7 @@ describe("GitHub issue mutations", () => {
         url: "https://github.com/octo/repo/issues/42",
         audit,
       })
-      .mockResolvedValueOnce(undefined);
+      .mockResolvedValueOnce({ persisted: true, receiptPath: "/tmp/audit.jsonl" });
 
     const mutationPreview = preview("issueCreate", "issue:new", false, {
       title: "Bug",
@@ -77,7 +77,7 @@ describe("GitHub issue mutations", () => {
       preview: mutationPreview,
       confirmation,
     });
-    expect(invoke).toHaveBeenNthCalledWith(2, "runtime_persist_github_audit", {
+    expect(invoke).toHaveBeenNthCalledWith(2, "runtime_persist_github_mutation_audit", {
       receipt: {
         operation: "issueCreate",
         repository: "octo/repo",
