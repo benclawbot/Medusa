@@ -627,7 +627,10 @@ impl OpenAiProvider {
 impl ModelProvider for OpenAiProvider {
     fn complete(&self, request: &ModelRequest) -> MedusaResult<ModelResponse> {
         let endpoint = format!("{}/chat/completions", self.base_url);
-        let mut builder = self.client.post(&endpoint).json(&self.request_body(request));
+        let mut builder = self
+            .client
+            .post(&endpoint)
+            .json(&self.request_body(request));
         if let Some(key) = &self.api_key {
             builder = builder.bearer_auth(key);
         }
@@ -764,18 +767,12 @@ mod tests {
 
     #[test]
     fn rate_limit_is_retryable() {
-        assert!(
-            classify_status(StatusCode::TOO_MANY_REQUESTS, "slow down".into(), None).retryable
-        );
+        assert!(classify_status(StatusCode::TOO_MANY_REQUESTS, "slow down".into(), None).retryable);
     }
 
     #[test]
     fn retry_after_seconds_are_preserved_for_the_manager() {
-        let error = classify_status(
-            StatusCode::TOO_MANY_REQUESTS,
-            "slow down".into(),
-            Some(7),
-        );
+        let error = classify_status(StatusCode::TOO_MANY_REQUESTS, "slow down".into(), Some(7));
         assert_eq!(
             error.context.get("retry_after_seconds"),
             Some(&serde_json::Value::from(7_u64))
