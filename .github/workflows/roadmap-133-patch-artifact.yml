@@ -1,0 +1,65 @@
+name: Roadmap 133 Patch Artifact
+
+on:
+  push:
+    branches:
+      - roadmap/133-identity-approval-transactions
+
+permissions:
+  contents: read
+
+jobs:
+  build-patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@1.88.0
+      - name: Apply runtime safety wiring
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+
+          def replace_once(text, old, new, label):
+              if old not in text:
+                  raise SystemExit(f'missing patch anchor: {label}')
+              return text.replace(old, new, 1)
+
+          lib = Path('crates/medusa-agent/src/lib.rs')
+          text = lib.read_text()
+          text = replace_once(text, 'mod engine;\n', 'mod approval;\nmod engine;\n', 'lib approval module')
+          text = replace_once(text, 'mod evidence;\n', 'mod evidence;\nmod identity_guard;\n', 'lib identity module')
+          text = replace_once(text, 'pub mod tools;\n', 'pub mod tools;\nmod transaction;\n', 'lib transaction module')
+          text = replace_once(text, 'pub use engine::{AgentEngine, AgentUpdate, StepOutcome};\n', 'pub use approval::{ApprovalDecision, ApprovalGrant, ApprovalReceipt, ApprovalScope, RollbackOutcome, RollbackReceipt};\npub use engine::{AgentEngine, AgentUpdate, StepOutcome};\n', 'lib approval exports')
+          text = replace_once(text, 'pub use policy::validate_shell_command;\n', 'pub use identity_guard::{compatibility_context, validate_provider_text};\npub use policy::validate_shell_command;\n', 'lib identity exports')
+          text = replace_once(text, 'pub use verification::{VerificationResult, targeted_verification};\n', 'pub use transaction::{FileMutation, TransactionOutcome, TransactionPreview, apply_atomic, preview};\npub use verification::{VerificationResult, targeted_verification};\n', 'lib transaction exports')
+          lib.write_text(text)
+
+          session = Path('crates/medusa-agent/src/session.rs')
+          text = session.read_text()
+          text = replace_once(text, 'use crate::evidence::verify_chain;\n', 'use crate::{\n    approval::{ApprovalGrant, ApprovalReceipt, RollbackReceipt},\n    evidence::verify_chain,\n};\n', 'session approval import')
+          text = replace_once(text, '    pub input: serde_json::Value,\n}', '    pub input: serde_json::Value,\n    pub grant: ApprovalGrant,\n}', 'pending approval grant')
+          text = replace_once(text, '    #[serde(default)]\n    pub tool_artifacts: Vec<PathBuf>,\n}', '    #[serde(default)]\n    pub tool_artifacts: Vec<PathBuf>,\n    #[serde(default)]\n    pub approval_grants: Vec<ApprovalGrant>,\n    #[serde(default)]\n    pub approval_receipts: Vec<ApprovalReceipt>,\n    #[serde(default)]\n    pub rollback_receipts: Vec<RollbackReceipt>,\n}', 'session durable approvals')
+          session.write_text(text)
+
+          engine = Path('crates/medusa-agent/src/engine.rs')
+          text = engine.read_text()
+          text = replace_once(text, 'use crate::{\n    engine_support::*,\n', 'use crate::{\n    approval::{ApprovalDecision, ApprovalGrant, ApprovalReceipt},\n    engine_support::*,\n', 'engine approval import')
+          text = replace_once(text, '    evidence::append_event,\n', '    evidence::append_event,\n    identity_guard::validate_provider_text,\n', 'engine identity import')
+          text = replace_once(text, '            tool_artifacts: Vec::new(),\n', '            tool_artifacts: Vec::new(),\n            approval_grants: Vec::new(),\n            approval_receipts: Vec::new(),\n            rollback_receipts: Vec::new(),\n', 'engine session initialization')
+          text = replace_once(text, '                ResponseBlock::Text { text } => {\n                    assistant_text.push(text.clone());', '                ResponseBlock::Text { text } => {\n                    validate_provider_text(&text)?;\n                    assistant_text.push(text.clone());', 'provider text validation')
+          text = replace_once(text, '                    } else {\n                        session.plan = plan.clone();\n                        observer(&AgentUpdate::Plan(plan));', '                    } else {\n                        if session.plan != plan {\n                            let recorded_at = OffsetDateTime::now_utc();\n                            for grant in session.approval_grants.drain(..) {\n                                session.approval_receipts.push(ApprovalReceipt {\n                                    decision: ApprovalDecision::Invalidated,\n                                    scope: grant.scope,\n                                    recorded_at,\n                                    reason: "visible plan changed".to_owned(),\n                                });\n                            }\n                        }\n                        session.plan = plan.clone();\n                        observer(&AgentUpdate::Plan(plan));', 'plan invalidation')
+          text = replace_once(text, '                            approval: Some(PendingToolApproval {\n                                tool_use_id: id,\n                                tool: name,\n                                input,\n                            }),', '                            approval: Some(PendingToolApproval {\n                                grant: ApprovalGrant::exact_action(\n                                    &name,\n                                    &input,\n                                    &session.plan,\n                                    OffsetDateTime::now_utc(),\n                                ),\n                                tool_use_id: id,\n                                tool: name,\n                                input,\n                            }),', 'pending approval grant creation')
+          old = '''            let (content, is_error) = if approved {\n                match execute_approved_tool(&session.repo, &approval.tool, &approval.input) {\n                    Ok(output) => (format!("User approved this exact action.\\n{output}"), false),\n                    Err(error) => (format!("Approved action failed: {error}"), true),\n                }\n            } else {\n                (\n                    format!("User did not approve this action. Feedback: {answer}"),\n                    true,\n                )\n            };'''
+          new = '''            let now = OffsetDateTime::now_utc();\n            let decision = if approved {\n                approval\n                    .grant\n                    .authorizes(&approval.tool, &approval.input, &session.plan, now)\n            } else {\n                ApprovalDecision::Denied\n            };\n            session.approval_receipts.push(ApprovalReceipt {\n                decision: decision.clone(),\n                scope: approval.grant.scope.clone(),\n                recorded_at: now,\n                reason: if approved {\n                    "user approved exact action".to_owned()\n                } else {\n                    format!("user denied action: {answer}")\n                },\n            });\n            let (content, is_error) = if decision == ApprovalDecision::Approved {\n                session.approval_grants.push(approval.grant);\n                match execute_approved_tool(&session.repo, &approval.tool, &approval.input) {\n                    Ok(output) => (format!("User approved this exact action.\\n{output}"), false),\n                    Err(error) => (format!("Approved action failed: {error}"), true),\n                }\n            } else {\n                (\n                    format!("Action was not authorized ({decision:?}). Feedback: {answer}"),\n                    true,\n                )\n            };'''
+          text = replace_once(text, old, new, 'approval execution enforcement')
+          engine.write_text(text)
+          PY
+          cargo fmt --all
+          cargo test -p medusa-agent
+      - uses: actions/upload-artifact@v4
+        with:
+          name: roadmap-133-runtime-files
+          path: |
+            crates/medusa-agent/src/lib.rs
+            crates/medusa-agent/src/session.rs
+            crates/medusa-agent/src/engine.rs
