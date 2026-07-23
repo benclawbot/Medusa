@@ -1,7 +1,7 @@
 //! Provider-neutral model contracts and the MiniMax Anthropic-compatible adapter.
 
 mod manager;
-use std::{env, sync::OnceLock, thread, time::Duration};
+use std::{env, sync::OnceLock, time::Duration};
 
 use medusa_config::Config;
 use medusa_core::{ErrorCategory, ErrorCode, MedusaError, MedusaResult};
@@ -11,7 +11,6 @@ use serde_json::{Value, json};
 
 pub use manager::{ProviderHealth, ProviderManager};
 const PROVIDER_REQUEST_TIMEOUT: Duration = Duration::from_secs(120);
-const MAX_PROVIDER_RETRIES: u8 = 2;
 
 /// Strict tool definition sent to the model.
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
@@ -134,7 +133,6 @@ pub struct MiniMaxProvider {
     base_url: String,
     api_key: String,
     model: String,
-    max_retries: u8,
     capabilities: ProviderCapabilities,
 }
 
@@ -167,7 +165,6 @@ impl MiniMaxProvider {
             base_url: base_url.trim_end_matches('/').to_owned(),
             api_key,
             model: config.model.name.clone(),
-            max_retries: MAX_PROVIDER_RETRIES,
             capabilities: (settings.capabilities)(),
         })
     }
@@ -273,38 +270,19 @@ impl ModelProvider for MiniMaxProvider {
     fn complete(&self, request: &ModelRequest) -> MedusaResult<ModelResponse> {
         self.validate_request(request)?;
         let endpoint = format!("{}/v1/messages", self.base_url);
-        let body = self.request_body(request);
-        let mut attempt = 0_u8;
-        loop {
-            let response = self
-                .client
-                .post(&endpoint)
-                .header("x-api-key", &self.api_key)
-                .header("anthropic-version", "2023-06-01")
-                .json(&body)
-                .send();
-            match response {
-                Ok(response) if response.status().is_success() => {
-                    let wire: WireResponse = response.json().map_err(provider_error)?;
-                    return Ok(wire.into_model_response());
-                }
-                Ok(response) => {
-                    let status = response.status();
-                    let text = response.text().unwrap_or_default();
-                    let error = classify_status(status, text);
-                    if !error.retryable || attempt >= self.max_retries {
-                        return Err(error);
-                    }
-                }
-                Err(error) => {
-                    if attempt >= self.max_retries {
-                        return Err(provider_error(error));
-                    }
-                }
-            }
-            attempt = attempt.saturating_add(1);
-            thread::sleep(Duration::from_millis(250 * u64::from(attempt)));
+        let response = self
+            .client
+            .post(&endpoint)
+            .header("x-api-key", &self.api_key)
+            .header("anthropic-version", "2023-06-01")
+            .json(&self.request_body(request))
+            .send()
+            .map_err(provider_error)?;
+        if response.status().is_success() {
+            let wire: WireResponse = response.json().map_err(provider_error)?;
+            return Ok(wire.into_model_response());
         }
+        Err(response_error(response))
     }
 
     fn capabilities(&self) -> ProviderCapabilities {
@@ -419,7 +397,22 @@ impl WireResponse {
     }
 }
 
-fn classify_status(status: StatusCode, body: String) -> MedusaError {
+fn response_error(response: reqwest::blocking::Response) -> MedusaError {
+    let status = response.status();
+    let retry_after_seconds = response
+        .headers()
+        .get(reqwest::header::RETRY_AFTER)
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| value.trim().parse::<u64>().ok());
+    let body = response.text().unwrap_or_default();
+    classify_status(status, body, retry_after_seconds)
+}
+
+fn classify_status(
+    status: StatusCode,
+    body: String,
+    retry_after_seconds: Option<u64>,
+) -> MedusaError {
     let retryable = status == StatusCode::TOO_MANY_REQUESTS || status.is_server_error();
     let category = if retryable {
         ErrorCategory::Transient
@@ -428,12 +421,19 @@ fn classify_status(status: StatusCode, body: String) -> MedusaError {
     } else {
         ErrorCategory::Validation
     };
-    MedusaError::new(
+    let mut error = MedusaError::new(
         ErrorCode::DependencyUnavailable,
         category,
         format!("provider returned HTTP {status}: {body}"),
     )
-    .with_retryable(retryable)
+    .with_retryable(retryable);
+    if let Some(seconds) = retry_after_seconds {
+        error.context.insert(
+            "retry_after_seconds".to_owned(),
+            serde_json::Value::from(seconds),
+        );
+    }
+    error
 }
 
 fn provider_error(error: reqwest::Error) -> MedusaError {
@@ -534,7 +534,6 @@ pub struct OpenAiProvider {
     base_url: String,
     api_key: Option<String>,
     model: String,
-    max_retries: u8,
 }
 
 impl OpenAiProvider {
@@ -574,7 +573,6 @@ impl OpenAiProvider {
             base_url: base_url.trim_end_matches('/').to_owned(),
             api_key,
             model: config.model.name.clone(),
-            max_retries: MAX_PROVIDER_RETRIES,
         })
     }
 
@@ -629,32 +627,19 @@ impl OpenAiProvider {
 impl ModelProvider for OpenAiProvider {
     fn complete(&self, request: &ModelRequest) -> MedusaResult<ModelResponse> {
         let endpoint = format!("{}/chat/completions", self.base_url);
-        let body = self.request_body(request);
-        let mut attempt = 0_u8;
-        loop {
-            let mut builder = self.client.post(&endpoint).json(&body);
-            if let Some(key) = &self.api_key {
-                builder = builder.bearer_auth(key);
-            }
-            match builder.send() {
-                Ok(response) if response.status().is_success() => {
-                    let wire: OpenAiWireResponse = response.json().map_err(provider_error)?;
-                    return wire.into_model_response();
-                }
-                Ok(response) => {
-                    let status = response.status();
-                    let text = response.text().unwrap_or_default();
-                    let error = classify_status(status, text);
-                    if !error.retryable || attempt >= self.max_retries {
-                        return Err(error);
-                    }
-                }
-                Err(error) if attempt >= self.max_retries => return Err(provider_error(error)),
-                Err(_) => {}
-            }
-            attempt = attempt.saturating_add(1);
-            thread::sleep(Duration::from_millis(250 * u64::from(attempt)));
+        let mut builder = self
+            .client
+            .post(&endpoint)
+            .json(&self.request_body(request));
+        if let Some(key) = &self.api_key {
+            builder = builder.bearer_auth(key);
         }
+        let response = builder.send().map_err(provider_error)?;
+        if response.status().is_success() {
+            let wire: OpenAiWireResponse = response.json().map_err(provider_error)?;
+            return wire.into_model_response();
+        }
+        Err(response_error(response))
     }
 }
 
@@ -782,7 +767,16 @@ mod tests {
 
     #[test]
     fn rate_limit_is_retryable() {
-        assert!(classify_status(StatusCode::TOO_MANY_REQUESTS, "slow down".into()).retryable);
+        assert!(classify_status(StatusCode::TOO_MANY_REQUESTS, "slow down".into(), None).retryable);
+    }
+
+    #[test]
+    fn retry_after_seconds_are_preserved_for_the_manager() {
+        let error = classify_status(StatusCode::TOO_MANY_REQUESTS, "slow down".into(), Some(7));
+        assert_eq!(
+            error.context.get("retry_after_seconds"),
+            Some(&serde_json::Value::from(7_u64))
+        );
     }
 
     #[test]

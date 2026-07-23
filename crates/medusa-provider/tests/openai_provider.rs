@@ -193,9 +193,9 @@ fn manager_retries_transient_openai_statuses_and_accepts_session_configuration()
     let manager = ProviderManager::new(vec![provider]).with_retries(2);
     let response = manager.complete(&request()).expect("completion");
     assert!(matches!(&response.blocks[0], ResponseBlock::Text { text } if text == "done"));
-    assert_eq!(manager.health()[0].attempts, 3);
-    assert_eq!(manager.health()[0].retries, 2);
     assert_eq!(server.join().expect("server").len(), 3);
+    assert_eq!(manager.health()[0].retries, 2);
+    assert_eq!(manager.health()[0].successes, 1);
 }
 
 #[test]
