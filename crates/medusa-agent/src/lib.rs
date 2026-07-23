@@ -1,21 +1,32 @@
 //! Persistent single-agent orchestration and built-in tools.
 
+mod approval;
 mod engine;
 mod engine_support;
 mod evidence;
+mod identity_guard;
 pub mod output_envelope;
 mod policy;
 mod session;
 pub mod session_browser;
 pub mod tools;
+mod transaction;
 mod verification;
 
+pub use approval::{
+    ApprovalDecision, ApprovalGrant, ApprovalReceipt, ApprovalScope, RollbackOutcome,
+    RollbackReceipt,
+};
 pub use engine::{AgentEngine, AgentUpdate, StepOutcome};
 pub use engine_support::{compact_session, update_session_objective};
+pub use identity_guard::{compatibility_context, validate_provider_text};
 pub use policy::validate_shell_command;
 pub use session::{
     AgentPlanStep, AgentPlanStepStatus, AgentQuestion, AgentQuestionItem, AgentQuestionOption,
     AgentSession, bootstrap,
+};
+pub use transaction::{
+    FileMutation, TransactionOutcome, TransactionPreview, apply_atomic, preview,
 };
 pub use verification::{VerificationResult, targeted_verification};
 

@@ -286,6 +286,9 @@ mod tests {
                 "Windows package smoke passed".to_owned(),
             ],
             tool_artifacts: Vec::new(),
+            approval_grants: Vec::new(),
+            approval_receipts: Vec::new(),
+            rollback_receipts: Vec::new(),
         }
     }
 
