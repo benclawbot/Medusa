@@ -471,7 +471,24 @@ pub fn update_session_objective(session: &mut AgentSession, objective: String) -
 
 /// Compacts durable session history without requiring a live model provider.
 pub fn compact_session(session: &mut AgentSession, focus: Option<&str>) -> MedusaResult<()> {
+    const MARKER: &str = "[medusa-compaction-v1]";
+    const MAX_ENTRIES: usize = 24;
+
     let original_messages = session.messages.len();
+    let generation = u32::try_from(
+        session
+            .events
+            .iter()
+            .filter(|event| matches!(event.payload, EventPayload::ConversationCompacted { .. }))
+            .count()
+            .saturating_add(1),
+    )
+    .unwrap_or(u32::MAX);
+    let source_event_sequences = session
+        .events
+        .iter()
+        .map(|event| event.sequence)
+        .collect::<Vec<_>>();
     let mut entries = session
         .messages
         .iter()
@@ -481,6 +498,9 @@ pub fn compact_session(session: &mut AgentSession, focus: Option<&str>) -> Medus
                 .iter()
                 .map(move |block| (message.role, block))
         })
+        .filter(
+            |(_, block)| !matches!(block, MessageBlock::Text { text } if text.starts_with(MARKER)),
+        )
         .map(|(role, block)| {
             let speaker = match role {
                 Role::User => "User",
@@ -489,19 +509,47 @@ pub fn compact_session(session: &mut AgentSession, focus: Option<&str>) -> Medus
             format!("{speaker}: {}", compact_block_text(block))
         })
         .collect::<Vec<_>>();
-    const MAX_ENTRIES: usize = 24;
     if entries.len() > MAX_ENTRIES {
         entries = entries.split_off(entries.len() - MAX_ENTRIES);
     }
+
     let focus = focus
         .filter(|value| !value.trim().is_empty())
-        .map(|value| format!("\nFocus for the next turn: {value}"))
-        .unwrap_or_default();
-    let summary = format!(
-        "This is a compacted Medusa session.\nCurrent goal: {}{}\n\nRecent durable context:\n{}",
-        session.objective,
-        focus,
+        .map(str::trim)
+        .unwrap_or("none");
+    let plan = serde_json::to_string(&session.plan).map_err(json_error)?;
+    let pending_question = serde_json::to_string(&session.pending_question).map_err(json_error)?;
+    let approval_grants = serde_json::to_string(&session.approval_grants).map_err(json_error)?;
+    let approval_receipts =
+        serde_json::to_string(&session.approval_receipts).map_err(json_error)?;
+    let evidence = serde_json::to_string(&session.evidence).map_err(json_error)?;
+    let artifacts = serde_json::to_string(
+        &session
+            .tool_artifacts
+            .iter()
+            .map(|path| path.display().to_string())
+            .collect::<Vec<_>>(),
+    )
+    .map_err(json_error)?;
+    let recent_context = if entries.is_empty() {
+        "none".to_owned()
+    } else {
         entries.join("\n")
+    };
+    let preserved_sections = vec![
+        "objective".to_owned(),
+        "focus".to_owned(),
+        "plan".to_owned(),
+        "pending_question".to_owned(),
+        "approval_grants".to_owned(),
+        "approval_receipts".to_owned(),
+        "verification_evidence".to_owned(),
+        "tool_artifacts".to_owned(),
+        "recent_context".to_owned(),
+    ];
+    let summary = format!(
+        "{MARKER}\nGeneration: {generation}\nCurrent goal: {}\nFocus for the next turn: {focus}\n\nActive plan (JSON):\n{plan}\n\nPending question and approval state (JSON):\n{pending_question}\n\nApproval grants (JSON):\n{approval_grants}\n\nApproval receipts (JSON):\n{approval_receipts}\n\nVerification evidence (JSON):\n{evidence}\n\nTool artifacts and edited-file references (JSON):\n{artifacts}\n\nRecent uncompacted context:\n{recent_context}",
+        session.objective,
     );
     session.messages = vec![Message {
         role: Role::User,
@@ -513,6 +561,9 @@ pub fn compact_session(session: &mut AgentSession, focus: Option<&str>) -> Medus
         EventPayload::ConversationCompacted {
             original_messages: u32::try_from(original_messages).unwrap_or(u32::MAX),
             retained_messages: 1,
+            generation,
+            source_event_sequences,
+            preserved_sections,
         },
     )?;
     session.updated_at = OffsetDateTime::now_utc();

@@ -94,6 +94,12 @@ pub enum EventPayload {
     ConversationCompacted {
         original_messages: u32,
         retained_messages: u32,
+        #[serde(default)]
+        generation: u32,
+        #[serde(default)]
+        source_event_sequences: Vec<u64>,
+        #[serde(default)]
+        preserved_sections: Vec<String>,
     },
     AssumptionRecorded {
         assumption: String,
