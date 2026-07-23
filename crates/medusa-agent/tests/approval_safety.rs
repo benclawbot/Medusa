@@ -1,5 +1,5 @@
 mod session {
-    pub use medusa_agent::AgentPlanStep;
+    pub use medusa_agent::{AgentPlanStep, AgentPlanStepStatus};
 }
 
 #[path = "../src/approval.rs"]
