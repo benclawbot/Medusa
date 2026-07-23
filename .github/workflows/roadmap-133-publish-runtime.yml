@@ -1,5 +1,6 @@
 name: Roadmap 133 Publish Runtime
 
+# One-shot PR branch commit preparation; removed after runtime import.
 on:
   pull_request:
     paths:
