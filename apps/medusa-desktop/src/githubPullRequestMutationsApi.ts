@@ -4,6 +4,7 @@ import type {
   GitHubMutationConfirmation,
   GitHubMutationPreview,
 } from "./githubMutation";
+import { persistGitHubMutationAudit } from "./githubMutationAuditApi";
 
 export type GitHubPullRequestState = "open" | "closed";
 export type GitHubPullRequestReviewAction = "approve" | "comment" | "request_changes";
@@ -39,6 +40,17 @@ function requireTarget(repository: string, pullRequestNumber: number): string {
 function encodedUpdateState(state?: GitHubPullRequestState, base?: string): string | undefined {
   if (state === undefined && base === undefined) return undefined;
   return `state=${state ?? ""};base=${base?.trim() ?? ""}`;
+}
+
+async function persistResultAudit(result: GitHubPullRequestMutationResult): Promise<void> {
+  await persistGitHubMutationAudit({
+    operation: result.audit.operation,
+    repository: result.audit.repository,
+    resource: `pullRequest:${result.audit.pullRequestNumber}`,
+    previewFingerprint: result.audit.previewFingerprint,
+    confirmedAt: result.audit.confirmedAt,
+    outcome: result.audit.outcome,
+  });
 }
 
 export async function updateGitHubPullRequest(
@@ -78,7 +90,7 @@ export async function updateGitHubPullRequest(
     throw new Error("GitHub pull request preview content must match the requested update");
   }
 
-  return invoke<GitHubPullRequestMutationResult>("runtime_update_github_pull_request", {
+  const result = await invoke<GitHubPullRequestMutationResult>("runtime_update_github_pull_request", {
     repository: normalizedRepository,
     pullRequestNumber,
     title: title ?? null,
@@ -89,6 +101,8 @@ export async function updateGitHubPullRequest(
     preview,
     confirmation,
   });
+  await persistResultAudit(result);
+  return result;
 }
 
 export async function reviewGitHubPullRequest(
@@ -125,7 +139,7 @@ export async function reviewGitHubPullRequest(
     throw new Error("GitHub pull request preview content must match the requested review");
   }
 
-  return invoke<GitHubPullRequestMutationResult>("runtime_review_github_pull_request", {
+  const result = await invoke<GitHubPullRequestMutationResult>("runtime_review_github_pull_request", {
     repository: normalizedRepository,
     pullRequestNumber,
     action,
@@ -135,4 +149,6 @@ export async function reviewGitHubPullRequest(
     preview,
     confirmation,
   });
+  await persistResultAudit(result);
+  return result;
 }
