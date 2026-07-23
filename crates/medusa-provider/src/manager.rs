@@ -287,6 +287,10 @@ impl<P: ModelProvider> ModelProvider for ProviderManager<P> {
             .first()
             .map_or_else(ProviderCapabilities::default, ModelProvider::capabilities)
     }
+
+    fn execution_status(&self) -> Option<Value> {
+        ProviderManager::execution_status(self)
+    }
 }
 
 fn classify_error(error: &MedusaError, has_fallback: bool) -> RetryDisposition {

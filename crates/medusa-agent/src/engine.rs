@@ -428,6 +428,13 @@ impl<P: ModelProvider> AgentEngine<P> {
             },
             &mut observer,
         )?;
+        if let Some(status) = self.provider.execution_status() {
+            append_observed(
+                session,
+                EventPayload::ProviderExecutionRecorded { status },
+                &mut observer,
+            )?;
+        }
 
         let mut assistant_blocks = Vec::new();
         let mut assistant_text = Vec::new();

@@ -125,6 +125,11 @@ pub trait ModelProvider {
     fn capabilities(&self) -> ProviderCapabilities {
         ProviderCapabilities::default()
     }
+
+    /// Returns metadata for the most recently completed provider execution.
+    fn execution_status(&self) -> Option<Value> {
+        None
+    }
 }
 
 /// Anthropic Messages API adapter for MiniMax, Anthropic, and compatible providers.

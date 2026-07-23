@@ -74,7 +74,7 @@ fn failover_completes_planning_tool_and_final_turns_once_each() {
             .expect("fallback response");
         assert_eq!(response.response_id, Some(format!("response-{phase}")));
 
-        let status = manager.execution_status().expect("execution status");
+        let status = ModelProvider::execution_status(&manager).expect("execution status");
         assert_eq!(status["provider_index"], json!(1));
         assert_eq!(status["cache_hit"], json!(false));
     }
