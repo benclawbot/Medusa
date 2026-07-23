@@ -6,13 +6,6 @@ const DEFAULT_CONTEXT_WINDOW_TOKENS: u64 = 128_000;
 const COMPACTION_THRESHOLD_PERCENT: u64 = 85;
 const BYTES_PER_ESTIMATED_TOKEN: u64 = 4;
 
-/// Deterministic action selected before sending a provider request.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum PromptBudgetDecision {
-    Proceed,
-    Compact,
-}
-
 /// Deterministic, provider-neutral estimate of how one request consumes context.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct PromptBudget {
@@ -57,28 +50,8 @@ impl PromptBudget {
     }
 
     #[must_use]
-    pub fn decision(self) -> PromptBudgetDecision {
-        if self.requires_compaction() {
-            PromptBudgetDecision::Compact
-        } else {
-            PromptBudgetDecision::Proceed
-        }
-    }
-
-    #[must_use]
     pub fn requires_compaction(self) -> bool {
         self.estimated_total_tokens >= self.compaction_threshold_tokens
-    }
-
-    #[must_use]
-    pub fn exceeds_context_window(self) -> bool {
-        self.estimated_total_tokens > self.context_window_tokens
-    }
-
-    #[must_use]
-    pub fn remaining_tokens(self) -> u64 {
-        self.context_window_tokens
-            .saturating_sub(self.estimated_total_tokens)
     }
 }
 
