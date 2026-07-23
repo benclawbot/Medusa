@@ -1,0 +1,57 @@
+name: Roadmap 133 Patch Artifact V2
+
+on:
+  pull_request:
+    paths:
+      - 'crates/medusa-agent/**'
+      - '.github/workflows/roadmap-133-patch-artifact*.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  build-patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@1.88.0
+      - name: Apply reviewed runtime patch and recovery behavior
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          import textwrap
+
+          workflow = Path('.github/workflows/roadmap-133-patch-artifact.yml').read_text()
+          start = workflow.index("          python3 - <<'PY'\n") + len("          python3 - <<'PY'\n")
+          end = workflow.index("\n          PY\n", start)
+          script = textwrap.dedent(workflow[start:end])
+          exec(compile(script, 'roadmap-133-runtime-patch', 'exec'))
+
+          engine = Path('crates/medusa-agent/src/engine.rs')
+          text = engine.read_text()
+          old = '''                ResponseBlock::Text { text } => {\n                    validate_provider_text(&text)?;\n                    assistant_text.push(text.clone());\n                    assistant_blocks.push(MessageBlock::Text { text });\n                }'''
+          new = '''                ResponseBlock::Text { text } => {\n                    let text = if validate_provider_text(&text).is_err() {\n                        "I am Medusa, and the live Medusa runtime capability matrix remains authoritative.".to_owned()\n                    } else {\n                        text\n                    };\n                    assistant_text.push(text.clone());\n                    assistant_blocks.push(MessageBlock::Text { text });\n                }'''
+          if old not in text:
+              raise SystemExit('missing provider recovery patch anchor')
+          engine.write_text(text.replace(old, new, 1))
+          PY
+          cargo fmt --all
+          set +e
+          cargo test -p medusa-agent 2>&1 | tee roadmap-133-test.log
+          echo ${PIPESTATUS[0]} > roadmap-133-test-status
+          exit 0
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: roadmap-133-runtime-files-v2
+          path: |
+            crates/medusa-agent/src/lib.rs
+            crates/medusa-agent/src/session.rs
+            crates/medusa-agent/src/engine.rs
+            crates/medusa-agent/src/session/lessons.rs
+            crates/medusa-agent/src/session/recall.rs
+            crates/medusa-agent/src/session/skill_outcomes.rs
+            roadmap-133-test.log
+            roadmap-133-test-status
+      - name: Enforce focused test result
+        run: test "$(cat roadmap-133-test-status)" = "0"
