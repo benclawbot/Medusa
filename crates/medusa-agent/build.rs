@@ -1,4 +1,4 @@
-use std::{env, fs, path::PathBuf};
+use std::{env, error::Error, fs, path::PathBuf};
 
 const ORIGINAL_REQUEST_BLOCK: &str = r#"        let response = self.provider.complete(&ModelRequest {
             system: system_prompt_with_context(
@@ -66,25 +66,27 @@ const CONTEXT_RECOVERY_REQUEST_BLOCK: &str = r#"        let system = system_prom
         };
 "#;
 
-fn main() {
+fn main() -> Result<(), Box<dyn Error>> {
     println!("cargo:rerun-if-changed=src/engine_base.rs");
     println!("cargo:rerun-if-changed=src/context_budget.rs");
     println!("cargo:rerun-if-changed=build.rs");
 
-    let manifest_dir = PathBuf::from(env::var_os("CARGO_MANIFEST_DIR").expect("manifest dir"));
+    let manifest_dir = PathBuf::from(env::var("CARGO_MANIFEST_DIR")?);
     let source_path = manifest_dir.join("src/engine_base.rs");
-    let source = fs::read_to_string(&source_path).expect("read engine source");
+    let source = fs::read_to_string(&source_path)?;
     let occurrences = source.matches(ORIGINAL_REQUEST_BLOCK).count();
-    assert_eq!(
-        occurrences,
-        1,
-        "expected exactly one model request block in {}",
-        source_path.display()
-    );
+    if occurrences != 1 {
+        return Err(format!(
+            "expected exactly one model request block in {}, found {occurrences}",
+            source_path.display()
+        )
+        .into());
+    }
     let engine = source.replacen(ORIGINAL_REQUEST_BLOCK, CONTEXT_RECOVERY_REQUEST_BLOCK, 1);
     let generated = format!(
         "mod context_budget {{ include!(concat!(env!(\"CARGO_MANIFEST_DIR\"), \"/src/context_budget.rs\")); }}\n{engine}"
     );
-    let output_path = PathBuf::from(env::var_os("OUT_DIR").expect("out dir")).join("engine.rs");
-    fs::write(output_path, generated).expect("write generated engine source");
+    let output_path = PathBuf::from(env::var("OUT_DIR")?).join("engine.rs");
+    fs::write(output_path, generated)?;
+    Ok(())
 }
