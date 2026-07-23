@@ -19,12 +19,12 @@ const CONTEXT_RECOVERY_REQUEST_BLOCK: &str = r#"        let system = system_prom
             additional_system_context,
         );
         let tools = available_tools(self.config.agent.mode, &self.desktop_commander_settings);
-        let budget = crate::context_budget::PromptBudget::for_request(
+        let budget = context_budget::PromptBudget::for_request(
             &system,
             &session.messages,
             &tools,
             self.config.model.max_output_tokens,
-            crate::context_budget::configured_context_window_tokens(),
+            context_budget::configured_context_window_tokens(),
         );
         let mut compacted = false;
         if budget.requires_compaction() {
@@ -44,9 +44,7 @@ const CONTEXT_RECOVERY_REQUEST_BLOCK: &str = r#"        let system = system_prom
         };
         let response = match self.provider.complete(&request) {
             Ok(response) => response,
-            Err(error)
-                if crate::context_budget::is_context_limit_rejection(&error.to_string()) =>
-            {
+            Err(error) if context_budget::is_context_limit_rejection(&error.to_string()) => {
                 if !compacted {
                     compact_session(
                         session,
@@ -65,6 +63,7 @@ const CONTEXT_RECOVERY_REQUEST_BLOCK: &str = r#"        let system = system_prom
 
 fn main() {
     println!("cargo:rerun-if-changed=src/engine_base.rs");
+    println!("cargo:rerun-if-changed=src/context_budget.rs");
     println!("cargo:rerun-if-changed=build.rs");
 
     let manifest_dir = PathBuf::from(env::var_os("CARGO_MANIFEST_DIR").expect("manifest dir"));
@@ -77,7 +76,10 @@ fn main() {
         "expected exactly one model request block in {}",
         source_path.display()
     );
-    let generated = source.replacen(ORIGINAL_REQUEST_BLOCK, CONTEXT_RECOVERY_REQUEST_BLOCK, 1);
+    let engine = source.replacen(ORIGINAL_REQUEST_BLOCK, CONTEXT_RECOVERY_REQUEST_BLOCK, 1);
+    let generated = format!(
+        "mod context_budget {{ include!(concat!(env!(\"CARGO_MANIFEST_DIR\"), \"/src/context_budget.rs\")); }}\n{engine}"
+    );
     let output_path = PathBuf::from(env::var_os("OUT_DIR").expect("out dir")).join("engine.rs");
     fs::write(output_path, generated).expect("write generated engine source");
 }
