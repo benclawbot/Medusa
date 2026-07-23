@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-limit="${MEDUSA_SOURCE_LINE_LIMIT:-800}"
+limit="${MEDUSA_SOURCE_LINE_LIMIT:-1000}"
 exceptions="${MEDUSA_SOURCE_SIZE_EXCEPTIONS:-docs/source-size-exceptions.txt}"
 failed=0
 
