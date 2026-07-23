@@ -22,12 +22,15 @@ jobs:
           {
             python3 - <<'PY'
           from pathlib import Path
-          import textwrap
 
           workflow = Path('.github/workflows/roadmap-133-patch-artifact.yml').read_text()
           start = workflow.index("          python3 - <<'PY'\n") + len("          python3 - <<'PY'\n")
           end = workflow.index("\n          PY\n", start)
-          script = textwrap.dedent(workflow[start:end])
+          raw = workflow[start:end]
+          script = "\n".join(
+              line[10:] if line.startswith("          ") else line
+              for line in raw.splitlines()
+          )
           exec(compile(script, 'roadmap-133-runtime-patch', 'exec'))
           PY
             patch_status=$?
