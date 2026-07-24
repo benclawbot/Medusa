@@ -6,6 +6,7 @@ use std::{
 use medusa_core::{ErrorCategory, ErrorCode, MedusaError, MedusaResult, SessionId};
 use medusa_protocol::EventEnvelope;
 use medusa_provider::Message;
+use medusa_world_model::WorldModelRef;
 use serde::{Deserialize, Serialize};
 use time::OffsetDateTime;
 
@@ -129,6 +130,8 @@ pub struct AgentSession {
     pub evidence: Vec<String>,
     #[serde(default)]
     pub tool_artifacts: Vec<PathBuf>,
+    #[serde(default)]
+    pub world_model: Option<WorldModelRef>,
     #[serde(default)]
     pub approval_grants: Vec<ApprovalGrant>,
     #[serde(default)]
