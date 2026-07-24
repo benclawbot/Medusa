@@ -205,7 +205,7 @@ mod tests {
         let index = CodeIndex::build(directory.path()).expect("index");
         let report = index.retrieve(
             directory.path(),
-            "session_budget",
+            "session_budget budget",
             RetrievalBudget::default(),
         );
         assert_eq!(report.results[0].symbol, "session_budget");
