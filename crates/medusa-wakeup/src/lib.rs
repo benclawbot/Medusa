@@ -56,7 +56,9 @@ impl WakeupSubscription {
             | WakeupSource::HeartbeatStale(v)
             | WakeupSource::FileChanged(v)
             | WakeupSource::Timer(v)
-            | WakeupSource::ExternalSignal(v) if v.trim().is_empty() => {
+            | WakeupSource::ExternalSignal(v)
+                if v.trim().is_empty() =>
+            {
                 Err("wakeup source value cannot be empty")
             }
             _ => Ok(()),
@@ -99,7 +101,8 @@ impl WakeupRouter {
         if self.subscriptions.contains_key(&subscription.id) {
             return Err("duplicate wakeup subscription id");
         }
-        self.subscriptions.insert(subscription.id.clone(), subscription);
+        self.subscriptions
+            .insert(subscription.id.clone(), subscription);
         Ok(())
     }
 
@@ -113,7 +116,9 @@ impl WakeupRouter {
     }
 
     pub fn route(&mut self, event: WakeupEvent) -> Result<Vec<WakeupDelivery>, &'static str> {
-        let expected = self.last_sequence.map_or(1, |value| value.saturating_add(1));
+        let expected = self
+            .last_sequence
+            .map_or(1, |value| value.saturating_add(1));
         if event.sequence != expected {
             return Err("wakeup event sequence must be contiguous and start at one");
         }
@@ -207,10 +212,7 @@ mod tests {
             ))
             .expect("subscribe");
         let deliveries = router
-            .route(event(
-                1,
-                WakeupSource::ProcessExited("build".to_owned()),
-            ))
+            .route(event(1, WakeupSource::ProcessExited("build".to_owned())))
             .expect("route");
         assert_eq!(deliveries.len(), 1);
         assert_eq!(deliveries[0].owner, "session-1");
@@ -226,10 +228,12 @@ mod tests {
                 false,
             ))
             .expect("subscribe");
-        assert!(router
-            .route(event(1, WakeupSource::Timer("retry".to_owned())))
-            .expect("route")
-            .is_empty());
+        assert!(
+            router
+                .route(event(1, WakeupSource::Timer("retry".to_owned())))
+                .expect("route")
+                .is_empty()
+        );
     }
 
     #[test]
@@ -239,7 +243,10 @@ mod tests {
         router
             .subscribe(subscription("approval", source.clone(), true))
             .expect("subscribe");
-        assert_eq!(router.route(event(1, source.clone())).expect("route").len(), 1);
+        assert_eq!(
+            router.route(event(1, source.clone())).expect("route").len(),
+            1
+        );
         assert!(router.route(event(2, source)).expect("route").is_empty());
     }
 
