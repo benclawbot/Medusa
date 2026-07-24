@@ -1,0 +1,57 @@
+name: Memory consolidation staging
+
+on:
+  push:
+    branches: [agent/memory-consolidation-main]
+
+permissions:
+  contents: write
+
+jobs:
+  stage:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: dtolnay/rust-toolchain@1.88.0
+        with:
+          components: rustfmt
+      - name: Copy isolated feature and remove production panic
+        run: |
+          git fetch origin agent/memory-consolidation
+          mkdir -p crates/medusa-memory-consolidation/src
+          git show origin/agent/memory-consolidation:crates/medusa-memory-consolidation/Cargo.toml > crates/medusa-memory-consolidation/Cargo.toml
+          git show origin/agent/memory-consolidation:crates/medusa-memory-consolidation/src/lib.rs > crates/medusa-memory-consolidation/src/lib.rs
+          python3 - <<'PY'
+          from pathlib import Path
+          path = Path('crates/medusa-memory-consolidation/src/lib.rs')
+          text = path.read_text()
+          old = '''fn fingerprint<T: Serialize>(value: &T) -> String {
+    let bytes = serde_json::to_vec(value).expect("serializable memory consolidation state");
+    hex::encode(Sha256::digest(bytes))
+}'''
+          new = '''fn fingerprint<T: Serialize + std::fmt::Debug>(value: &T) -> String {
+    let bytes = serde_json::to_vec(value).unwrap_or_else(|_| format!("{value:?}").into_bytes());
+    hex::encode(Sha256::digest(bytes))
+}'''
+          if old not in text:
+              raise SystemExit('fingerprint helper not found')
+          path.write_text(text.replace(old, new))
+          PY
+      - name: Format and validate
+        run: |
+          cargo fmt --all
+          cargo generate-lockfile
+          cargo test -p medusa-memory-consolidation
+          cargo clippy -p medusa-memory-consolidation --all-targets -- -D warnings
+          ! grep -nE '\b(unwrap|expect|panic!|todo!|unimplemented!)\b' crates/medusa-memory-consolidation/src/lib.rs | grep -v '#\[cfg(test)\]' || true
+      - name: Commit final staging output and remove workflow
+        run: |
+          rm .github/workflows/memory-consolidation-staging.yml
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add Cargo.lock Cargo.toml crates/medusa-memory-consolidation .github/workflows/memory-consolidation-staging.yml
+          git commit -m 'Stage memory consolidation feature'
+          git push
