@@ -20,6 +20,7 @@ members = [
   "crates/medusa-context-retrieval",
   "crates/medusa-turn-assembly",
   "crates/medusa-mcp-cache",
+  "crates/medusa-markdown-memory",
   "crates/medusa-agent",
   "crates/medusa-browser-client",
   "crates/medusa-browserd",
