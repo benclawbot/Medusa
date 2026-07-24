@@ -73,7 +73,7 @@ fn main() -> Result<(), Box<dyn Error>> {
 
     let manifest_dir = PathBuf::from(env::var("CARGO_MANIFEST_DIR")?);
     let source_path = manifest_dir.join("src/engine_base.rs");
-    let source = fs::read_to_string(&source_path)?;
+    let source = fs::read_to_string(&source_path)?.replace("\r\n", "\n");
     let occurrences = source.matches(ORIGINAL_REQUEST_BLOCK).count();
     if occurrences != 1 {
         return Err(format!(
