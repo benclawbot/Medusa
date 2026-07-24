@@ -19,6 +19,7 @@ members = [
   "crates/medusa-prompt-cache",
   "crates/medusa-mcp-cache",
   "crates/medusa-markdown-memory",
+  "crates/medusa-memory-consolidation",
   "crates/medusa-agent",
   "crates/medusa-browser-client",
   "crates/medusa-browserd",
