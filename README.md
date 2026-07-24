@@ -10,6 +10,7 @@ Medusa is a production-grade autonomous coding agent written in Rust. It combine
 
 - **Interactive by default** — run `medusa` in a repository to open the terminal interface.
 - **Autonomous coding loop** — inspect, plan, edit, verify, and iterate until completion evidence is available.
+- **Minimal coding by default** — every implementation turn follows a native decision ladder that favors reuse, standard and platform capabilities, the smallest correct diff, root-cause fixes, and explicit dependency justification.
 - **Shared frontend runtime** — the TUI and Zeus-derived desktop entry point use the same `medusa-runtime` controller instead of separate agent stacks.
 - **Validated desktop packages** — CI builds unsigned Linux DEB/AppImage, macOS app/DMG, and Windows NSIS artifacts with synchronized version metadata and SHA-256 evidence.
 - **Attested draft releases** — pushed version tags build CLI and desktop assets on all three platforms, generate deterministic CycloneDX and SHA-256 evidence, attach GitHub/Sigstore provenance, and create a draft release without automatic publication.
@@ -23,6 +24,51 @@ Medusa is a production-grade autonomous coding agent written in Rust. It combine
 - **Parallel workers** — isolated worktrees, deterministic merge behavior, conflict detection, and cleanup safeguards.
 - **Extensions and MCP** — skills, hooks, MCP isolation, optional Desktop Commander integration, redaction, and checksummed provenance.
 - **Production hardening** — panic-free production targets, source-size and workflow guardrails, dependency metrics, migrations, rollback evidence, fuzzing, chaos recovery, security checks, cross-platform packages, and live-provider validation.
+
+## Minimal coding philosophy
+
+Medusa is designed to produce the **smallest correct change**, not the largest generated solution. For every non-read-only coding turn, the agent receives an always-on implementation policy before it plans or edits code. The default policy level is `full`.
+
+Medusa stops at the first applicable option in this order:
+
+1. Do not implement speculative or unnecessary functionality.
+2. Reuse an existing repository helper, type, component, command, or established pattern.
+3. Prefer the language standard library.
+4. Prefer a native platform, browser, operating-system, database, or framework capability.
+5. Reuse an already-installed dependency.
+6. Use a direct expression when it remains clear and correct.
+7. Otherwise, implement the smallest complete solution.
+
+Before choosing, Medusa inspects the affected flow and relevant callers. Bug fixes should repair the shared root cause once rather than accumulate symptom guards. New abstractions, wrappers, configuration, scaffolding, and dependencies must earn their place; consolidation and deletion are preferred when they leave the code clearer and complete.
+
+Minimalism never overrides correctness or required safeguards. Medusa must preserve security controls, trust-boundary validation, accessibility, data integrity, loss-preventing error handling, concurrency correctness, compatibility requirements, and anything explicitly requested. It must not weaken or rewrite tests merely to hide a broken implementation. Tests change only when intended behavior changes or new behavior needs coverage, and the smallest relevant verification should always be run.
+
+| Typical coding-agent tendency | Medusa default |
+|---|---|
+| Generate a fresh solution immediately | Inspect and reuse the repository first |
+| Add abstractions for possible future needs | Implement only demonstrated requirements |
+| Add a dependency for convenience | Prefer stdlib, native capabilities, and installed dependencies |
+| Patch each visible symptom | Trace and fix the shared root cause |
+| Touch broad areas to make the design “cleaner” | Prefer the fewest files and shortest correct diff |
+| Change tests until CI passes | Preserve the intended contract and fix product code |
+
+The policy can be overridden for a process with `MEDUSA_CODING_POLICY`:
+
+```bash
+export MEDUSA_CODING_POLICY=full
+medusa
+```
+
+Supported values are:
+
+| Value | Behavior |
+|---|---|
+| `off` | Do not inject the minimal coding policy. |
+| `lite` | Build the requested change, while briefly surfacing a materially simpler alternative when one exists. |
+| `full` | Default. Enforce the complete decision ladder and prefer the shortest correct diff with the fewest touched files. |
+| `ultra` | Apply strict YAGNI, challenge speculative requirements, and prefer deletion over addition while still shipping the smallest useful result. |
+
+Read-only sessions do not receive this implementation policy because they cannot change the repository.
 
 ## Current status and evidence
 
@@ -253,6 +299,10 @@ Project configuration is loaded from `.medusa/config.toml`. Provider credentials
 
 Run `medusa doctor` to validate tools, repository access, writable state, schema compatibility, provider credentials, the configured model, and enabled integrations.
 
+### Coding policy
+
+`MEDUSA_CODING_POLICY` controls the always-on implementation policy for non-read-only model turns. It defaults to `full`; valid values are `off`, `lite`, `full`, and `ultra`. Invalid or unset values fall back to `full`.
+
 ## Safety model
 
 Medusa is autonomous, but not boundary-free. The runtime enforces:
@@ -266,7 +316,6 @@ Medusa is autonomous, but not boundary-free. The runtime enforces:
 - reversible migrations and rollback receipts
 - explicit verification evidence before completion
 
-
 ## Architecture
 
 | Crate | Responsibility |
@@ -275,7 +324,7 @@ Medusa is autonomous, but not boundary-free. The runtime enforces:
 | `medusa-runtime` | Frontend-neutral interactive session control, commands, events, cancellation, follow-ups, and manager composition |
 | `medusa-tui` | Terminal presentation, composer, clipboard, drafts, rendering, and daemon lifecycle visibility |
 | `medusa-daemon` | Cross-platform IPC, shared lifecycle supervision, bounded scheduling, overload backpressure, race-safe cancellation, descendant-safe immediate shutdown, persistence, recovery, and graceful draining |
-| `medusa-agent` | Agent Orchestrator: session lifecycle, planning, policy, completion verification, and the shared Tool Manager |
+| `medusa-agent` | Agent Orchestrator: session lifecycle, planning, minimal coding policy injection, completion verification, and the shared Tool Manager |
 | `medusa-capabilities` | Capability Manager: one discovered capability matrix for CLI, TUI, desktop, and model context |
 | `medusa-provider` | Provider Manager: provider-neutral contracts, bounded retry/failover, response cache, and health snapshots |
 | `medusa-github` | GitHub Manager: authenticated repository, pull request, issue, and Actions operations via GitHub CLI credential storage |
@@ -356,4 +405,3 @@ Supported protocols:
 - OpenAI Chat Completions API: OpenAI-compatible gateways, OmniRoute, Ollama-compatible servers, and local endpoints
 
 Credentials are never written to `provider.toml`. Use a provider-specific `<PROVIDER>_API_KEY`, `OPENAI_API_KEY`, `MEDUSA_API_KEY`, or the selected gateway's existing authentication. `medusa config show` displays only non-secret settings and `medusa config reset` removes the profile.
-
