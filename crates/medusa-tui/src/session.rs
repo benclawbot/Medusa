@@ -400,14 +400,22 @@ pub(super) fn drain_runtime_events(
                 output_tokens,
                 cache_read_input_tokens,
                 cache_creation_input_tokens,
-                model_elapsed_millis,
+                total_tokens,
+                duration_ms,
+                tokens_per_second_milli,
+                estimated_cost_microusd,
+                provenance,
             } => {
-                app.record_usage(
+                app.record_turn_usage(
                     input_tokens,
                     output_tokens,
                     cache_read_input_tokens,
                     cache_creation_input_tokens,
-                    model_elapsed_millis,
+                    total_tokens,
+                    duration_ms,
+                    tokens_per_second_milli,
+                    estimated_cost_microusd,
+                    provenance,
                 );
             }
             RuntimeEvent::Progress { turn } => {

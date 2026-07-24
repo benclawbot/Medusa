@@ -354,7 +354,34 @@ mod tests {
         assert_eq!(running_status(&app), "Working (0s · turn 3)");
         assert_eq!(
             session_metrics_line(&app),
-            "session 0s · input 700 · output 1.5k · cache-read 200 · cache-write 100 · 600.0 tok/s"
+            "session 0s · total 2.5k · input 700 · output 1.5k · cache-read 200 · cache-write 100 · cost — · estimated · 600.0 tok/s"
+        );
+    }
+
+    #[test]
+    fn authoritative_usage_renders_cost_rate_and_provider_provenance() {
+        let directory = tempfile::tempdir().expect("tempdir");
+        let mut app = AppState::new(
+            directory.path().to_path_buf(),
+            "authoritative-usage",
+            "",
+            Arc::new(UnsupportedClipboard),
+        )
+        .expect("app");
+        app.record_turn_usage(
+            1_000,
+            500,
+            100,
+            50,
+            1_650,
+            2_000,
+            825_000,
+            12_345,
+            "provider".to_owned(),
+        );
+        assert_eq!(
+            session_metrics_line(&app),
+            "session 0s · total 1.6k · input 1.0k · output 500 · cache-read 100 · cache-write 50 · cost $0.0123 · provider · 825.0 tok/s"
         );
     }
 

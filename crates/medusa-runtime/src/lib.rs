@@ -11,8 +11,8 @@ use std::{
 };
 
 use medusa_agent::{
-    AgentEngine, AgentPlanStep, AgentQuestion, AgentSession, StepOutcome, compact_session,
-    update_session_objective,
+    AgentEngine, AgentPlanStep, AgentQuestion, AgentSession, StepOutcome, TurnUsage,
+    compact_session, update_session_objective,
 };
 use medusa_capabilities::CapabilityRegistry;
 use medusa_config::{Config, Mode};
@@ -35,6 +35,7 @@ mod tests;
 pub use error::RuntimeError;
 pub use medusa_agent::{
     AgentPlanStep as RuntimePlanStep, AgentPlanStepStatus, AgentQuestionItem, AgentQuestionOption,
+    UsageProvenance,
 };
 
 use support::{
@@ -63,7 +64,11 @@ pub enum RuntimeEvent {
         output_tokens: u64,
         cache_read_input_tokens: u64,
         cache_creation_input_tokens: u64,
-        model_elapsed_millis: u64,
+        total_tokens: u64,
+        duration_ms: u64,
+        tokens_per_second_milli: u64,
+        estimated_cost_microusd: u64,
+        provenance: UsageProvenance,
     },
     Progress {
         turn: u32,
