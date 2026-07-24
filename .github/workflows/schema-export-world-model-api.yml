@@ -1,0 +1,39 @@
+name: Export World Model API
+
+on:
+  push:
+    branches:
+      - agent/schema-harness-foundation
+
+permissions:
+  contents: write
+
+jobs:
+  export:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: agent/schema-harness-foundation
+      - uses: dtolnay/rust-toolchain@1.88.0
+        with:
+          components: rustfmt
+      - shell: python
+        run: |
+          from pathlib import Path
+          path = Path('crates/medusa-agent/src/lib.rs')
+          text = path.read_text()
+          marker = 'mod verification;\n'
+          addition = 'pub mod world_model_session;\n'
+          if addition not in text:
+              text = text.replace(marker, marker + addition, 1)
+          path.write_text(text)
+          Path('.github/workflows/schema-export-world-model-api.yml').unlink()
+      - run: cargo fmt --all
+      - run: |
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add -A
+          git commit -m "Export session world model mutation API"
+          git push origin HEAD:agent/schema-harness-foundation
