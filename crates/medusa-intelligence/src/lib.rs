@@ -11,6 +11,7 @@ mod support;
 
 pub use format::format_changed;
 pub use impact::{TestImpact, select_tests};
+pub use index::IndexRefresh;
 pub use language::{CodeIndex, Language, Reference, Symbol, SymbolKind};
 pub use patch::{PatchTransaction, TextEdit, TransactionReceipt};
 pub use retrieval::{RetrievalBudget, RetrievalExclusion, RetrievalReport, RetrievalResult};
