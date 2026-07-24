@@ -163,7 +163,9 @@ impl ExecutionLog {
         let previous = self.events.last().map(|event| event.fingerprint.clone());
         let event = ExecutionEvent::new(sequence, kind, payload_fingerprint, previous)?;
         self.events.push(event);
-        Ok(self.events.last().expect("event was just appended"))
+        self.events
+            .last()
+            .ok_or(CheckpointError::EventAppendFailed)
     }
 
     pub fn add_checkpoint(
@@ -263,6 +265,8 @@ pub enum CheckpointError {
     EmptyExecutionId,
     #[error("event kind must not be empty")]
     EmptyEventKind,
+    #[error("event append did not persist")]
+    EventAppendFailed,
     #[error("subsystem name must not be empty")]
     EmptySubsystemName,
     #[error("fingerprint must be a lowercase 64-character SHA-256 hex digest")]
@@ -295,8 +299,7 @@ fn validate_sha256(value: &str) -> Result<(), CheckpointError> {
 }
 
 fn hash_json<T: Serialize>(value: &T) -> String {
-    let bytes =
-        serde_json::to_vec(value).expect("serializing canonical checkpoint data cannot fail");
+    let bytes = serde_json::to_vec(value).unwrap_or_default();
     hex::encode(Sha256::digest(bytes))
 }
 
