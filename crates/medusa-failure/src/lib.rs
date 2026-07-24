@@ -274,10 +274,7 @@ mod tests {
             &signal(FailureDomain::Network, "timeout").transient(),
             RetryPolicy::default(),
         );
-        assert_eq!(
-            decision.disposition,
-            FailureDisposition::RetryWithBackoff
-        );
+        assert_eq!(decision.disposition, FailureDisposition::RetryWithBackoff);
         assert_eq!(decision.backoff_ms, Some(500));
     }
 
