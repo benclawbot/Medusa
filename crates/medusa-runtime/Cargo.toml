@@ -15,7 +15,6 @@ base64 = "0.22"
 medusa-agent = { path = "../medusa-agent" }
 medusa-capabilities = { path = "../medusa-capabilities" }
 medusa-config = { path = "../medusa-config" }
-medusa-intelligence = { path = "../medusa-intelligence" }
 medusa-protocol = { path = "../medusa-protocol" }
 medusa-provider = { path = "../medusa-provider" }
 png = "0.17"
