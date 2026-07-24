@@ -12,9 +12,7 @@ pub use format::format_changed;
 pub use impact::{TestImpact, select_tests};
 pub use language::{CodeIndex, Language, Reference, Symbol, SymbolKind};
 pub use patch::{PatchTransaction, TextEdit, TransactionReceipt};
-pub use retrieval::{
-    RetrievalBudget, RetrievalExclusion, RetrievalReport, RetrievalResult,
-};
+pub use retrieval::{RetrievalBudget, RetrievalExclusion, RetrievalReport, RetrievalResult};
 
 #[cfg(test)]
 mod tests {
