@@ -6,7 +6,6 @@ use std::{
 use medusa_core::{ErrorCategory, ErrorCode, MedusaError, MedusaResult, SessionId};
 use medusa_protocol::EventEnvelope;
 use medusa_provider::Message;
-use medusa_world_model::WorldModelRef;
 use serde::{Deserialize, Serialize};
 use time::OffsetDateTime;
 
@@ -136,8 +135,6 @@ pub struct AgentSession {
     pub approval_receipts: Vec<ApprovalReceipt>,
     #[serde(default)]
     pub rollback_receipts: Vec<RollbackReceipt>,
-    #[serde(default)]
-    pub world_model: Option<WorldModelRef>,
 }
 
 /// Creates the on-disk Medusa layout and repository map.
