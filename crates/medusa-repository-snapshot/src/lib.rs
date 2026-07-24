@@ -45,7 +45,7 @@ impl RepositorySnapshot {
             validate_digest(parent)?;
         }
         let files = canonical_files(files)?;
-        let fingerprint = fingerprint(&(&files, &parent_snapshot));
+        let fingerprint = fingerprint(&(&files, &parent_snapshot))?;
         Ok(Self {
             files,
             parent_snapshot,
@@ -152,7 +152,7 @@ impl ExecutionManifest {
             &tool_output_fingerprints,
             &transaction_fingerprints,
             final_result_fingerprint.as_str(),
-        ));
+        ))?;
         Ok(Self {
             execution_id,
             snapshot_fingerprint,
@@ -240,17 +240,21 @@ pub fn compare_replay(
         &expected.memory_fingerprint,
         &actual.memory_fingerprint,
     );
+    let expected_tool_outputs = fingerprint(&expected.tool_output_fingerprints)?;
+    let actual_tool_outputs = fingerprint(&actual.tool_output_fingerprints)?;
     compare_field(
         &mut divergences,
         ReplayDivergenceKind::ToolOutputs,
-        &fingerprint(&expected.tool_output_fingerprints),
-        &fingerprint(&actual.tool_output_fingerprints),
+        &expected_tool_outputs,
+        &actual_tool_outputs,
     );
+    let expected_transactions = fingerprint(&expected.transaction_fingerprints)?;
+    let actual_transactions = fingerprint(&actual.transaction_fingerprints)?;
     compare_field(
         &mut divergences,
         ReplayDivergenceKind::Transactions,
-        &fingerprint(&expected.transaction_fingerprints),
-        &fingerprint(&actual.transaction_fingerprints),
+        &expected_transactions,
+        &actual_transactions,
     );
     compare_field(
         &mut divergences,
@@ -263,7 +267,7 @@ pub fn compare_replay(
         expected.fingerprint.as_str(),
         actual.fingerprint.as_str(),
         &divergences,
-    ));
+    ))?;
     Ok(ReplayReport {
         reproducible,
         divergences,
@@ -313,10 +317,9 @@ fn validate_digest(value: &str) -> Result<(), &'static str> {
     Ok(())
 }
 
-fn fingerprint<T: Serialize>(value: &T) -> String {
-    let bytes =
-        serde_json::to_vec(value).expect("serializing deterministic snapshot data cannot fail");
-    fingerprint_bytes(&bytes)
+fn fingerprint<T: Serialize>(value: &T) -> Result<String, &'static str> {
+    let bytes = serde_json::to_vec(value).map_err(|_| "snapshot serialization failed")?;
+    Ok(fingerprint_bytes(&bytes))
 }
 
 fn fingerprint_bytes(bytes: &[u8]) -> String {
