@@ -1093,6 +1093,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "medusa-commit-barrier"
+version = "1.0.0"
+dependencies = [
+ "hex",
+ "serde",
+ "serde_json",
+ "sha2",
+]
+
+[[package]]
 name = "medusa-confidence"
 version = "1.0.0"
 dependencies = [
@@ -1109,6 +1119,46 @@ dependencies = [
  "serial_test",
  "tempfile",
  "toml",
+]
+
+[[package]]
+name = "medusa-conflict-resolution"
+version = "1.0.0"
+dependencies = [
+ "hex",
+ "serde",
+ "sha2",
+ "thiserror",
+]
+
+[[package]]
+name = "medusa-consensus"
+version = "1.0.0"
+dependencies = [
+ "hex",
+ "serde",
+ "sha2",
+ "thiserror",
+]
+
+[[package]]
+name = "medusa-context"
+version = "1.0.0"
+dependencies = [
+ "hex",
+ "serde",
+ "sha2",
+ "time",
+]
+
+[[package]]
+name = "medusa-context-retrieval"
+version = "1.0.0"
+dependencies = [
+ "hex",
+ "medusa-context",
+ "serde",
+ "sha2",
 ]
 
 [[package]]
@@ -1156,6 +1206,40 @@ dependencies = [
  "sha2",
  "tempfile",
  "time",
+]
+
+[[package]]
+name = "medusa-execution-checkpoint"
+version = "1.0.0"
+dependencies = [
+ "hex",
+ "serde",
+ "serde_json",
+ "sha2",
+ "thiserror",
+]
+
+[[package]]
+name = "medusa-execution-orchestrator"
+version = "1.0.0"
+dependencies = [
+ "hex",
+ "medusa-repository-snapshot",
+ "medusa-worker-read-set",
+ "medusa-worker-transaction",
+ "serde",
+ "serde_json",
+ "sha2",
+]
+
+[[package]]
+name = "medusa-execution-replay"
+version = "1.0.0"
+dependencies = [
+ "hex",
+ "serde",
+ "serde_json",
+ "sha2",
 ]
 
 [[package]]
@@ -1282,6 +1366,27 @@ dependencies = [
 ]
 
 [[package]]
+name = "medusa-memory-writeback"
+version = "1.0.0"
+dependencies = [
+ "hex",
+ "medusa-memory-consolidation",
+ "serde",
+ "serde_json",
+ "sha2",
+]
+
+[[package]]
+name = "medusa-multi-agent-scheduler"
+version = "1.0.0"
+dependencies = [
+ "hex",
+ "serde",
+ "serde_json",
+ "sha2",
+]
+
+[[package]]
 name = "medusa-process-containment"
 version = "1.0.0"
 dependencies = [
@@ -1346,6 +1451,36 @@ dependencies = [
 ]
 
 [[package]]
+name = "medusa-recovery-coordinator"
+version = "1.0.0"
+dependencies = [
+ "hex",
+ "serde",
+ "sha2",
+ "thiserror",
+]
+
+[[package]]
+name = "medusa-repository-rollback"
+version = "1.0.0"
+dependencies = [
+ "hex",
+ "serde",
+ "serde_json",
+ "sha2",
+]
+
+[[package]]
+name = "medusa-repository-snapshot"
+version = "1.0.0"
+dependencies = [
+ "hex",
+ "serde",
+ "serde_json",
+ "sha2",
+]
+
+[[package]]
 name = "medusa-runtime"
 version = "1.0.0"
 dependencies = [
@@ -1363,12 +1498,45 @@ dependencies = [
 ]
 
 [[package]]
+name = "medusa-runtime-supervisor"
+version = "1.0.0"
+dependencies = [
+ "hex",
+ "serde",
+ "serde_json",
+ "sha2",
+]
+
+[[package]]
 name = "medusa-testkit"
 version = "1.0.0"
 dependencies = [
  "medusa-core",
  "medusa-protocol",
  "time",
+]
+
+[[package]]
+name = "medusa-time-travel"
+version = "1.0.0"
+dependencies = [
+ "hex",
+ "serde",
+ "serde_json",
+ "sha2",
+ "tempfile",
+ "thiserror",
+]
+
+[[package]]
+name = "medusa-transaction-coordinator"
+version = "1.0.0"
+dependencies = [
+ "hex",
+ "serde",
+ "serde_json",
+ "sha2",
+ "thiserror",
 ]
 
 [[package]]
@@ -1386,6 +1554,19 @@ dependencies = [
  "serde_json",
  "sha2",
  "tempfile",
+]
+
+[[package]]
+name = "medusa-turn-assembly"
+version = "1.0.0"
+dependencies = [
+ "hex",
+ "medusa-context",
+ "medusa-context-retrieval",
+ "medusa-prompt-cache",
+ "serde",
+ "sha2",
+ "time",
 ]
 
 [[package]]
@@ -1411,6 +1592,37 @@ version = "1.0.0"
 dependencies = [
  "serde",
  "time",
+]
+
+[[package]]
+name = "medusa-worker-leases"
+version = "1.0.0"
+dependencies = [
+ "hex",
+ "serde",
+ "serde_json",
+ "sha2",
+]
+
+[[package]]
+name = "medusa-worker-read-set"
+version = "1.0.0"
+dependencies = [
+ "hex",
+ "serde",
+ "serde_json",
+ "sha2",
+]
+
+[[package]]
+name = "medusa-worker-transaction"
+version = "1.0.0"
+dependencies = [
+ "hex",
+ "medusa-worker-read-set",
+ "serde",
+ "serde_json",
+ "sha2",
 ]
 
 [[package]]

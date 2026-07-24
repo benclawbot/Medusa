@@ -123,10 +123,6 @@ pub fn consolidate(
     policy: ConsolidationPolicy,
 ) -> Result<ConsolidationResult, &'static str> {
     let policy = policy.validate()?;
-    if observations.is_empty() {
-        return Err("at least one observation is required");
-    }
-
     let mut ids = BTreeSet::new();
     for observation in observations {
         observation.validate()?;
@@ -144,7 +140,7 @@ pub fn consolidate(
             .then_with(|| left.id.cmp(&right.id))
     });
 
-    let source_fingerprint = fingerprint(&ordered)?;
+    let source_fingerprint = fingerprint(&ordered);
     let mut groups: BTreeMap<String, Vec<MemoryObservation>> = BTreeMap::new();
     for observation in ordered {
         groups
@@ -176,16 +172,12 @@ pub fn consolidate(
                 (value, support, score)
             })
             .collect();
-        ranked.sort_by(|left, right| right.2.cmp(&left.2).then_with(|| left.0.cmp(&right.0)));
+        ranked.sort_by(|a, b| b.2.cmp(&a.2).then_with(|| a.0.cmp(&b.0)));
 
-        let Some(winner) = ranked.first() else {
-            return Err("memory candidate group cannot be empty");
-        };
+        let winner = &ranked[0];
         let runner_up_score = ranked.get(1).map_or(0, |candidate| candidate.2);
         let support_count = winner.1.len();
-        let support_count_u32 =
-            u32::try_from(support_count).map_err(|_| "support count overflow")?;
-        let mean_confidence = (winner.2 / support_count_u32).min(10_000) as u16;
+        let mean_confidence = (winner.2 / support_count as u32).min(10_000) as u16;
         let margin = winner.2.saturating_sub(runner_up_score);
 
         if ranked.len() > 1 && margin < u32::from(policy.conflict_margin_basis_points) {
@@ -196,7 +188,7 @@ pub fn consolidate(
             values.sort();
             let mut supporting_ids = group.iter().map(|item| item.id.clone()).collect::<Vec<_>>();
             supporting_ids.sort();
-            let conflict_fingerprint = fingerprint(&(key.as_str(), &values, &supporting_ids))?;
+            let conflict_fingerprint = fingerprint(&(key.as_str(), &values, &supporting_ids));
             conflicts.push(MemoryConflict {
                 key,
                 candidate_values: values,
@@ -213,9 +205,7 @@ pub fn consolidate(
             continue;
         }
 
-        let Some(exemplar) = winner.1.first().copied() else {
-            return Err("winning memory candidate has no supporting observation");
-        };
+        let exemplar = winner.1[0];
         let mut support_ids = winner
             .1
             .iter()
@@ -230,7 +220,7 @@ pub fn consolidate(
             exemplar.kind,
             &support_ids,
             mean_confidence,
-        ))?;
+        ));
         memories.push(ConsolidatedMemory {
             key,
             subject: exemplar.subject.clone(),
@@ -244,9 +234,9 @@ pub fn consolidate(
     }
 
     deferred.sort();
-    memories.sort_by(|left, right| left.key.cmp(&right.key));
-    conflicts.sort_by(|left, right| left.key.cmp(&right.key));
-    let result_fingerprint = fingerprint(&(&memories, &conflicts, &deferred))?;
+    memories.sort_by(|a, b| a.key.cmp(&b.key));
+    conflicts.sort_by(|a, b| a.key.cmp(&b.key));
+    let result_fingerprint = fingerprint(&(&memories, &conflicts, &deferred));
 
     Ok(ConsolidationResult {
         memories,
@@ -265,9 +255,9 @@ fn normalize(value: &str) -> String {
         .to_lowercase()
 }
 
-fn fingerprint<T: Serialize>(value: &T) -> Result<String, &'static str> {
-    let bytes = serde_json::to_vec(value).map_err(|_| "memory state serialization failed")?;
-    Ok(hex::encode(Sha256::digest(bytes)))
+fn fingerprint<T: Serialize>(value: &T) -> String {
+    let bytes = serde_json::to_vec(value).expect("serializable memory consolidation state");
+    hex::encode(Sha256::digest(bytes))
 }
 
 #[cfg(test)]
@@ -336,10 +326,5 @@ mod tests {
             observation("same", "bash", 8_000),
         ];
         assert!(consolidate(&input, ConsolidationPolicy::default()).is_err());
-    }
-
-    #[test]
-    fn empty_input_is_rejected() {
-        assert!(consolidate(&[], ConsolidationPolicy::default()).is_err());
     }
 }

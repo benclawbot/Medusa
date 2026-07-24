@@ -73,7 +73,7 @@ impl ServerConfig {
 
     #[must_use]
     pub fn fingerprint(&self) -> String {
-        let bytes = serde_json::to_vec(self).unwrap_or_default();
+        let bytes = serde_json::to_vec(self).expect("server config is serializable");
         hex::encode(Sha256::digest(bytes))
     }
 }
@@ -393,7 +393,7 @@ impl McpManager {
 }
 
 fn fingerprint_tools(tools: &[ToolSchema]) -> String {
-    let bytes = serde_json::to_vec(tools).unwrap_or_default();
+    let bytes = serde_json::to_vec(tools).expect("tool schemas are serializable");
     hex::encode(Sha256::digest(bytes))
 }
 

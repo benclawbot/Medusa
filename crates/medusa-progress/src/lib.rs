@@ -1,6 +1,9 @@
 //! Durable structured progress events and restart-safe checkpoints.
 
-use std::{fs, path::PathBuf};
+use std::{
+    fs,
+    path::{Path, PathBuf},
+};
 
 use medusa_core::{ErrorCategory, ErrorCode, MedusaError, MedusaResult, SessionId};
 use medusa_goal::{CompletionEvidence, GoalContract};
@@ -260,7 +263,7 @@ mod tests {
             ProgressEvent::new(1, ProgressKind::CheckpointCreated, "saved").unwrap(),
         ];
         assert!(
-            ExecutionCheckpoint::new(SessionId::new(), 2, goal(), Vec::new(), events, json!({}),)
+            ExecutionCheckpoint::new(SessionId::new(), 2, goal(), Vec::new(), events, json!({}))
                 .is_err()
         );
     }
