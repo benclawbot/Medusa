@@ -7,3 +7,5 @@ Worker transaction fingerprinting follows the same non-panicking error-propagati
 Memory consolidation fingerprinting also propagates serialization errors.
 
 Repository snapshot and memory writeback fingerprinting are non-panicking and error-aware.
+
+The final serialization repair is verified against the exact current source blocks before commit.
