@@ -38,6 +38,22 @@ jobs:
               )
           cargo.write_text(text)
 
+          agent_lib = Path('crates/medusa-agent/src/lib.rs')
+          text = agent_lib.read_text()
+          old = '''    AgentPlanStep, AgentPlanStepStatus, AgentQuestion, AgentQuestionItem, AgentQuestionOption,
+              AgentSession, SessionUsage, TurnUsage, UsageProvenance, bootstrap, session_usage,
+          '''
+          new = '''    AgentPlanStep, AgentPlanStepStatus, AgentQuestion, AgentQuestionItem, AgentQuestionOption,
+              AgentSession, BrowserAssistedLaunch, EscalationJournal, EscalationStatus,
+              SessionEscalation, SessionUsage, TurnUsage, UsageProvenance, bootstrap,
+              export_manual_escalation, import_manual_advice, launch_browser_assisted_escalation,
+              load_escalation_journal, persist_escalation_journal, render_chatgpt_prompt,
+              session_usage,
+          '''
+          if 'BrowserAssistedLaunch' not in text:
+              text = text.replace(old, new, 1)
+          agent_lib.write_text(text)
+
           main = Path('crates/medusa-cli/src/main.rs')
           text = main.read_text()
           text = text.replace(
@@ -130,6 +146,6 @@ jobs:
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add Cargo.lock crates/medusa-cli/Cargo.toml crates/medusa-cli/src/main.rs
+          git add Cargo.lock crates/medusa-agent/src/lib.rs crates/medusa-cli/Cargo.toml crates/medusa-cli/src/main.rs
           git commit -m "feat: add browser-assisted escalation CLI"
           git push origin HEAD:agent/chatgpt-escalation-bridge
