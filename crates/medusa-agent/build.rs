@@ -13,10 +13,13 @@ const ORIGINAL_REQUEST_BLOCK: &str = r#"        let response = self.provider.com
         })?;
 "#;
 
-const CONTEXT_RECOVERY_REQUEST_BLOCK: &str = r#"        let system = system_prompt_with_context(
+const CONTEXT_RECOVERY_REQUEST_BLOCK: &str = r#"        let system = coding_policy::apply(
+            system_prompt_with_context(
+                self.config.agent.mode,
+                &session.repo,
+                additional_system_context,
+            ),
             self.config.agent.mode,
-            &session.repo,
-            additional_system_context,
         );
         let tools = available_tools(self.config.agent.mode, &self.desktop_commander_settings);
         let budget = context_budget::PromptBudget::for_request(
@@ -69,6 +72,7 @@ const CONTEXT_RECOVERY_REQUEST_BLOCK: &str = r#"        let system = system_prom
 fn main() -> Result<(), Box<dyn Error>> {
     println!("cargo:rerun-if-changed=src/engine_base.rs");
     println!("cargo:rerun-if-changed=src/context_budget.rs");
+    println!("cargo:rerun-if-changed=src/coding_policy.rs");
     println!("cargo:rerun-if-changed=build.rs");
 
     let manifest_dir = PathBuf::from(env::var("CARGO_MANIFEST_DIR")?);
@@ -84,7 +88,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     }
     let engine = source.replacen(ORIGINAL_REQUEST_BLOCK, CONTEXT_RECOVERY_REQUEST_BLOCK, 1);
     let generated = format!(
-        "mod context_budget {{ include!(concat!(env!(\"CARGO_MANIFEST_DIR\"), \"/src/context_budget.rs\")); }}\n{engine}"
+        "mod context_budget {{ include!(concat!(env!(\"CARGO_MANIFEST_DIR\"), \"/src/context_budget.rs\")); }}\nmod coding_policy {{ include!(concat!(env!(\"CARGO_MANIFEST_DIR\"), \"/src/coding_policy.rs\")); }}\n{engine}"
     );
     let output_path = PathBuf::from(env::var("OUT_DIR")?).join("engine.rs");
     fs::write(output_path, generated)?;
