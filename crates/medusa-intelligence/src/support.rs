@@ -10,13 +10,22 @@ pub(crate) fn source_files(repo: &Path) -> Vec<PathBuf> {
         .filter_map(Result::ok)
         .filter(|entry| entry.file_type().is_file())
         .map(|entry| entry.into_path())
-        .filter(|path| path.extension().is_some_and(|ext| ext == "rs"))
+        .filter(|path| {
+            path.extension()
+                .and_then(|extension| extension.to_str())
+                .is_some_and(|extension| matches!(extension, "rs" | "py"))
+        })
         .filter(|path| {
             !path.components().any(|component| {
                 matches!(
                     component,
                     Component::Normal(name)
-                        if name == ".git" || name == "target" || name == ".medusa"
+                        if name == ".git"
+                            || name == "target"
+                            || name == ".medusa"
+                            || name == ".venv"
+                            || name == "venv"
+                            || name == "__pycache__"
                 )
             })
         })
