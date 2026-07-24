@@ -1,0 +1,16 @@
+[package]
+name = "medusa-context-retrieval"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+medusa-context = { path = "../medusa-context" }
+serde.workspace = true
+sha2.workspace = true
+hex.workspace = true
+
+[lints]
+workspace = true
