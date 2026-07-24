@@ -184,9 +184,8 @@ pub fn deterministic_reassignment(
 }
 
 fn hash<T: Serialize>(value: &T) -> String {
-    hex::encode(Sha256::digest(
-        serde_json::to_vec(value).expect("lease state serializes"),
-    ))
+    let bytes = serde_json::to_vec(value).unwrap_or_default();
+    hex::encode(Sha256::digest(bytes))
 }
 
 #[cfg(test)]
