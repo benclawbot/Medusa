@@ -1,10 +1,21 @@
-use std::{fs, path::{Path, PathBuf}};
+use std::{
+    fs,
+    path::{Path, PathBuf},
+};
 
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use time::OffsetDateTime;
 
 use crate::EscalationPacket;
+
+/// One repository input that changed after an escalation packet was exported.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct StaleReadSetEntry {
+    pub path: String,
+    pub expected_sha256: String,
+    pub actual_sha256: Option<String>,
+}
 
 /// User-supplied advice bound to one exported escalation packet.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -24,7 +35,10 @@ impl AdviceEnvelope {
         advice: impl Into<String>,
         imported_at: OffsetDateTime,
     ) -> Result<Self, &'static str> {
-        if !packet.verify_digest().map_err(|_| "could not verify packet digest")? {
+        if !packet
+            .verify_digest()
+            .map_err(|_| "could not verify packet digest")?
+        {
             return Err("escalation packet digest is invalid");
         }
         let advice = advice.into();
@@ -59,10 +73,47 @@ impl AdviceEnvelope {
         }
         Ok(())
     }
+
+    /// Refuses to use advice when any file read to build the packet has changed or disappeared.
+    pub fn validate_fresh_read_set(
+        &self,
+        packet: &EscalationPacket,
+        repo: &Path,
+    ) -> Result<(), Vec<StaleReadSetEntry>> {
+        let stale = stale_read_set(packet, repo);
+        if stale.is_empty() {
+            Ok(())
+        } else {
+            Err(stale)
+        }
+    }
+}
+
+/// Compares every packet read-set digest against the current repository state.
+#[must_use]
+pub fn stale_read_set(packet: &EscalationPacket, repo: &Path) -> Vec<StaleReadSetEntry> {
+    packet
+        .read_set
+        .iter()
+        .filter_map(|entry| {
+            let path = repo.join(&entry.path);
+            let actual = fs::read(path).ok().map(|bytes| sha256_hex(&bytes));
+            (actual.as_deref() != Some(entry.content_sha256.as_str())).then(|| {
+                StaleReadSetEntry {
+                    path: entry.path.clone(),
+                    expected_sha256: entry.content_sha256.clone(),
+                    actual_sha256: actual,
+                }
+            })
+        })
+        .collect()
 }
 
 /// Writes a pretty JSON packet for copy/paste or attachment to a ChatGPT conversation.
-pub fn export_packet(directory: &Path, packet: &EscalationPacket) -> Result<PathBuf, std::io::Error> {
+pub fn export_packet(
+    directory: &Path,
+    packet: &EscalationPacket,
+) -> Result<PathBuf, std::io::Error> {
     if !packet.verify_digest().unwrap_or(false) {
         return Err(std::io::Error::new(
             std::io::ErrorKind::InvalidData,
@@ -71,13 +122,20 @@ pub fn export_packet(directory: &Path, packet: &EscalationPacket) -> Result<Path
     }
     fs::create_dir_all(directory)?;
     let path = directory.join(format!("{}.packet.json", safe_name(&packet.packet_id)));
-    atomic_write(&path, &serde_json::to_vec_pretty(packet).map_err(json_io_error)?)?;
+    atomic_write(
+        &path,
+        &serde_json::to_vec_pretty(packet).map_err(json_io_error)?,
+    )?;
     Ok(path)
 }
 
 /// Loads and validates an advice envelope against the exact exported packet.
-pub fn import_advice(path: &Path, packet: &EscalationPacket) -> Result<AdviceEnvelope, std::io::Error> {
-    let envelope: AdviceEnvelope = serde_json::from_slice(&fs::read(path)?).map_err(json_io_error)?;
+pub fn import_advice(
+    path: &Path,
+    packet: &EscalationPacket,
+) -> Result<AdviceEnvelope, std::io::Error> {
+    let envelope: AdviceEnvelope =
+        serde_json::from_slice(&fs::read(path)?).map_err(json_io_error)?;
     envelope
         .validate_for(packet)
         .map_err(|message| std::io::Error::new(std::io::ErrorKind::InvalidData, message))?;
@@ -116,7 +174,7 @@ mod tests {
     use std::collections::BTreeSet;
 
     use super::*;
-    use crate::{EscalationMode, EscalationReason};
+    use crate::{EscalationMode, EscalationReason, ReadSetEntry};
 
     fn packet() -> EscalationPacket {
         EscalationPacket::new(
@@ -135,8 +193,12 @@ mod tests {
     #[test]
     fn advice_is_bound_to_exact_packet() {
         let packet = packet();
-        let envelope = AdviceEnvelope::new(&packet, "Inspect token boundaries.", OffsetDateTime::UNIX_EPOCH)
-            .expect("envelope");
+        let envelope = AdviceEnvelope::new(
+            &packet,
+            "Inspect token boundaries.",
+            OffsetDateTime::UNIX_EPOCH,
+        )
+        .expect("envelope");
         envelope.validate_for(&packet).expect("valid");
 
         let mut other = packet.clone();
@@ -151,8 +213,9 @@ mod tests {
     #[test]
     fn tampered_advice_is_rejected() {
         let packet = packet();
-        let mut envelope = AdviceEnvelope::new(&packet, "Original", OffsetDateTime::UNIX_EPOCH)
-            .expect("envelope");
+        let mut envelope =
+            AdviceEnvelope::new(&packet, "Original", OffsetDateTime::UNIX_EPOCH)
+                .expect("envelope");
         envelope.advice = "Tampered".into();
         assert_eq!(
             envelope.validate_for(&packet),
@@ -167,10 +230,47 @@ mod tests {
         let packet_path = export_packet(directory.path(), &packet).expect("export");
         assert!(packet_path.is_file());
 
-        let envelope = AdviceEnvelope::new(&packet, "Use the shared parser helper.", OffsetDateTime::UNIX_EPOCH)
-            .expect("envelope");
+        let envelope = AdviceEnvelope::new(
+            &packet,
+            "Use the shared parser helper.",
+            OffsetDateTime::UNIX_EPOCH,
+        )
+        .expect("envelope");
         let advice_path = directory.path().join("answer.advice.json");
-        fs::write(&advice_path, serde_json::to_vec_pretty(&envelope).unwrap()).unwrap();
-        assert_eq!(import_advice(&advice_path, &packet).expect("import"), envelope);
+        fs::write(
+            &advice_path,
+            serde_json::to_vec_pretty(&envelope).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(
+            import_advice(&advice_path, &packet).expect("import"),
+            envelope
+        );
+    }
+
+    #[test]
+    fn changed_or_missing_reads_are_reported_as_stale() {
+        let directory = tempfile::tempdir().expect("tempdir");
+        fs::write(directory.path().join("parser.rs"), "old").expect("fixture");
+        let mut packet = packet();
+        packet.read_set.insert(ReadSetEntry {
+            path: "parser.rs".into(),
+            content_sha256: sha256_hex(b"old"),
+        });
+        packet.read_set.insert(ReadSetEntry {
+            path: "missing.rs".into(),
+            content_sha256: sha256_hex(b"present before export"),
+        });
+        packet.refresh_digest().expect("digest");
+        let envelope = AdviceEnvelope::new(&packet, "Review parser state.", OffsetDateTime::UNIX_EPOCH)
+            .expect("envelope");
+
+        fs::write(directory.path().join("parser.rs"), "new").expect("mutation");
+        let stale = envelope
+            .validate_fresh_read_set(&packet, directory.path())
+            .expect_err("stale");
+        assert_eq!(stale.len(), 2);
+        assert!(stale.iter().any(|entry| entry.path == "parser.rs"));
+        assert!(stale.iter().any(|entry| entry.path == "missing.rs" && entry.actual_sha256.is_none()));
     }
 }
