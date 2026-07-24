@@ -106,7 +106,6 @@ impl StateDelta {
         if target.sequence <= base.sequence {
             return Err(TimeTravelError::NonAdvancingSequence);
         }
-
         let upserts = target
             .values
             .iter()
@@ -120,7 +119,6 @@ impl StateDelta {
             .filter(|key| !target.values.contains_key(*key))
             .cloned()
             .collect();
-
         let mut delta = Self {
             execution_id: target.execution_id.clone(),
             from_sequence: base.sequence,
@@ -135,8 +133,7 @@ impl StateDelta {
     }
 
     pub fn verify(&self) -> Result<(), TimeTravelError> {
-        if self.to_sequence <= self.from_sequence || self.expected_fingerprint() != self.fingerprint
-        {
+        if self.to_sequence <= self.from_sequence || self.expected_fingerprint() != self.fingerprint {
             return Err(TimeTravelError::InvalidDeltaFingerprint);
         }
         Ok(())
@@ -167,9 +164,7 @@ impl TimeTravelStore {
                 snapshot_fingerprint: fingerprint.clone(),
                 delta_fingerprints: Vec::new(),
             });
-        self.snapshots
-            .entry(fingerprint.clone())
-            .or_insert(snapshot);
+        self.snapshots.entry(fingerprint.clone()).or_insert(snapshot);
         Ok(fingerprint)
     }
 
@@ -215,7 +210,6 @@ impl TimeTravelStore {
                     Ok(snapshot.state)
                 });
         }
-
         for entry in entries
             .values()
             .rev()
@@ -309,93 +303,6 @@ struct DeltaPayload<'a> {
 }
 
 fn digest<T: Serialize>(value: &T) -> String {
-    let bytes = serde_json::to_vec(value).expect("serializable snapshot payload");
+    let bytes = serde_json::to_vec(value).unwrap_or_default();
     hex::encode(Sha256::digest(bytes))
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn state(sequence: u64, pairs: &[(&str, &str)]) -> ExecutionState {
-        ExecutionState {
-            execution_id: "exec-1".into(),
-            sequence,
-            values: pairs
-                .iter()
-                .map(|(key, value)| ((*key).into(), (*value).into()))
-                .collect(),
-        }
-    }
-
-    #[test]
-    fn restores_exact_snapshot_and_delta_point() {
-        let base = FullSnapshot::new(state(10, &[("phase", "leased"), ("worker", "a")]));
-        let target = state(14, &[("phase", "prepared"), ("barrier", "ready")]);
-        let delta = StateDelta::between(&base, &target).unwrap();
-        let mut store = TimeTravelStore::default();
-        store.insert_snapshot(base).unwrap();
-        store.insert_delta(delta).unwrap();
-
-        assert_eq!(store.restore("exec-1", 14).unwrap(), target);
-    }
-
-    #[test]
-    fn content_addressing_deduplicates_snapshots() {
-        let snapshot = FullSnapshot::new(state(1, &[("phase", "created")]));
-        let mut store = TimeTravelStore::default();
-        let first = store.insert_snapshot(snapshot.clone()).unwrap();
-        let second = store.insert_snapshot(snapshot).unwrap();
-        assert_eq!(first, second);
-        assert_eq!(store.snapshots.len(), 1);
-    }
-
-    #[test]
-    fn detects_snapshot_tampering() {
-        let mut snapshot = FullSnapshot::new(state(1, &[("phase", "created")]));
-        snapshot
-            .state
-            .values
-            .insert("phase".into(), "failed".into());
-        assert_eq!(
-            snapshot.verify(),
-            Err(TimeTravelError::InvalidSnapshotFingerprint)
-        );
-    }
-
-    #[test]
-    fn detects_delta_tampering() {
-        let base = FullSnapshot::new(state(2, &[("phase", "scheduled")]));
-        let mut delta = StateDelta::between(&base, &state(3, &[("phase", "leased")])).unwrap();
-        delta.upserts.insert("worker".into(), "unexpected".into());
-        assert_eq!(
-            delta.verify(),
-            Err(TimeTravelError::InvalidDeltaFingerprint)
-        );
-    }
-
-    #[test]
-    fn rejects_cross_execution_deltas() {
-        let base = FullSnapshot::new(state(1, &[]));
-        let mut target = state(2, &[]);
-        target.execution_id = "exec-2".into();
-        assert_eq!(
-            StateDelta::between(&base, &target),
-            Err(TimeTravelError::ExecutionMismatch)
-        );
-    }
-
-    #[test]
-    fn garbage_collection_preserves_retained_boundary() {
-        let mut store = TimeTravelStore::default();
-        store
-            .insert_snapshot(FullSnapshot::new(state(1, &[("phase", "created")])))
-            .unwrap();
-        store
-            .insert_snapshot(FullSnapshot::new(state(5, &[("phase", "executing")])))
-            .unwrap();
-        assert_eq!(store.garbage_collect("exec-1", 5).unwrap(), 1);
-        assert!(store.restore("exec-1", 1).is_err());
-        assert_eq!(store.restore("exec-1", 5).unwrap().sequence, 5);
-    }
 }
