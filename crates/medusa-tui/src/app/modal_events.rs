@@ -176,9 +176,9 @@ impl AppState {
                     if let Some(modal) = self.question_modal.as_mut()
                         && !modal.is_reviewing()
                     {
-                        let is_multi_select = modal
-                            .active_prompt()
-                            .is_some_and(|prompt| prompt.multi_select && !prompt.options.is_empty());
+                        let is_multi_select = modal.active_prompt().is_some_and(|prompt| {
+                            prompt.multi_select && !prompt.options.is_empty()
+                        });
                         if is_multi_select {
                             modal.toggle_current_option();
                         } else {
@@ -286,11 +286,8 @@ mod limitations_regression_tests {
     fn space_is_inserted_in_free_text_question_answers() {
         let mut app = app_with_question(false);
         for code in [KeyCode::Char('a'), KeyCode::Char(' '), KeyCode::Char('b')] {
-            app.handle_question_modal_event(Event::Key(KeyEvent::new(
-                code,
-                KeyModifiers::NONE,
-            )))
-            .expect("type answer");
+            app.handle_question_modal_event(Event::Key(KeyEvent::new(code, KeyModifiers::NONE)))
+                .expect("type answer");
         }
         assert_eq!(
             app.question_modal
@@ -310,10 +307,7 @@ mod limitations_regression_tests {
         )))
         .expect("toggle option");
         assert_eq!(
-            app.question_modal
-                .as_ref()
-                .expect("question")
-                .answer_for(0),
+            app.question_modal.as_ref().expect("question").answer_for(0),
             Some("Fix it".to_owned())
         );
     }
