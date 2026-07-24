@@ -1,0 +1,34 @@
+name: Prompt Cache Prepare Temp
+
+on:
+  push:
+    branches:
+      - agent/prompt-cache-main
+
+permissions:
+  contents: write
+
+jobs:
+  prepare:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: agent/prompt-cache-main
+          fetch-depth: 0
+      - uses: dtolnay/rust-toolchain@1.88.0
+      - name: Generate lockfile
+        run: cargo generate-lockfile
+      - name: Format workspace
+        run: cargo fmt --all
+      - name: Remove temporary workflow
+        run: rm .github/workflows/prompt-cache-prepare-temp.yml
+      - name: Commit finalized branch
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add Cargo.lock Cargo.toml crates/medusa-prompt-cache .github/workflows/prompt-cache-prepare-temp.yml
+          if ! git diff --cached --quiet; then
+            git commit -m "Finalize prompt cache instrumentation"
+            git push origin HEAD:agent/prompt-cache-main
+          fi
