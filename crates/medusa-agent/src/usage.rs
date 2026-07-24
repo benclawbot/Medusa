@@ -146,19 +146,22 @@ fn estimate_bytes(bytes: usize) -> u64 {
 }
 
 fn estimated_cost_microusd(usage: &Usage) -> u64 {
-    cost_component(usage.input_tokens, rate("MEDUSA_INPUT_COST_MICROUSD_PER_MILLION"))
-        .saturating_add(cost_component(
-            usage.output_tokens,
-            rate("MEDUSA_OUTPUT_COST_MICROUSD_PER_MILLION"),
-        ))
-        .saturating_add(cost_component(
-            usage.cache_read_input_tokens,
-            rate("MEDUSA_CACHE_READ_COST_MICROUSD_PER_MILLION"),
-        ))
-        .saturating_add(cost_component(
-            usage.cache_creation_input_tokens,
-            rate("MEDUSA_CACHE_WRITE_COST_MICROUSD_PER_MILLION"),
-        ))
+    cost_component(
+        usage.input_tokens,
+        rate("MEDUSA_INPUT_COST_MICROUSD_PER_MILLION"),
+    )
+    .saturating_add(cost_component(
+        usage.output_tokens,
+        rate("MEDUSA_OUTPUT_COST_MICROUSD_PER_MILLION"),
+    ))
+    .saturating_add(cost_component(
+        usage.cache_read_input_tokens,
+        rate("MEDUSA_CACHE_READ_COST_MICROUSD_PER_MILLION"),
+    ))
+    .saturating_add(cost_component(
+        usage.cache_creation_input_tokens,
+        rate("MEDUSA_CACHE_WRITE_COST_MICROUSD_PER_MILLION"),
+    ))
 }
 
 fn rate(name: &str) -> u64 {
