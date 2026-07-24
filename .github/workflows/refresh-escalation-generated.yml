@@ -1,0 +1,42 @@
+name: Refresh Escalation Generated Files
+
+on:
+  push:
+    branches:
+      - agent/chatgpt-escalation-bridge
+    paths:
+      - crates/medusa-escalation/**
+      - crates/medusa-agent/src/session/**
+      - crates/medusa-agent/Cargo.toml
+      - Cargo.toml
+      - .github/workflows/refresh-escalation-generated.yml
+
+permissions:
+  contents: write
+
+jobs:
+  refresh:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: agent/chatgpt-escalation-bridge
+          fetch-depth: 0
+      - uses: dtolnay/rust-toolchain@1.88.0
+        with:
+          components: rustfmt
+      - name: Refresh generated files
+        run: |
+          cargo fmt --all
+          cargo generate-lockfile
+      - name: Commit refreshed files
+        run: |
+          if git diff --quiet; then
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add Cargo.lock crates/medusa-escalation crates/medusa-agent/src/session
+          git commit -m "chore: refresh escalation formatting and lockfile"
+          git push origin HEAD:agent/chatgpt-escalation-bridge
