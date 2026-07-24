@@ -1271,6 +1271,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "medusa-memory-consolidation"
+version = "1.0.0"
+dependencies = [
+ "hex",
+ "serde",
+ "serde_json",
+ "sha2",
+ "time",
+]
+
+[[package]]
 name = "medusa-process-containment"
 version = "1.0.0"
 dependencies = [
