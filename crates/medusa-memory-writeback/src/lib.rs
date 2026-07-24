@@ -202,12 +202,12 @@ pub fn plan_writeback(
         &canonical_conflicts,
         &canonical_documents,
         policy,
-    ));
+    ))?;
     let plan_fingerprint = fingerprint(&(
         &patches,
         &unresolved_conflict_fingerprints,
         &source_fingerprint,
-    ));
+    ))?;
     Ok(WritebackPlan {
         patches,
         unresolved_conflict_fingerprints,
@@ -305,11 +305,11 @@ fn kind_heading(kind: MemoryKind) -> &'static str {
     }
 }
 
-fn fingerprint<T: Serialize>(value: &T) -> String {
-    fingerprint_bytes(
-        &serde_json::to_vec(value).expect("in-memory writeback serialization cannot fail"),
-    )
+fn fingerprint<T: Serialize>(value: &T) -> Result<String, &'static str> {
+    let bytes = serde_json::to_vec(value).map_err(|_| "memory writeback serialization failed")?;
+    Ok(fingerprint_bytes(&bytes))
 }
+
 fn fingerprint_bytes(bytes: &[u8]) -> String {
     hex::encode(Sha256::digest(bytes))
 }
