@@ -14,7 +14,11 @@ pub struct PromptSegment {
 }
 
 impl PromptSegment {
-    pub fn new(name: impl Into<String>, content: impl Into<String>, stable: bool) -> Result<Self, &'static str> {
+    pub fn new(
+        name: impl Into<String>,
+        content: impl Into<String>,
+        stable: bool,
+    ) -> Result<Self, &'static str> {
         let name = name.into();
         let content = content.into();
         if name.trim().is_empty() {
@@ -23,7 +27,11 @@ impl PromptSegment {
         if content.trim().is_empty() {
             return Err("prompt segment content cannot be empty");
         }
-        Ok(Self { name, content, stable })
+        Ok(Self {
+            name,
+            content,
+            stable,
+        })
     }
 }
 
@@ -69,7 +77,12 @@ impl PromptEnvelope {
         self.segments
             .iter()
             .take_while(|segment| segment.stable)
-            .map(|segment| format!("<{}>\n{}\n</{}>", segment.name, segment.content, segment.name))
+            .map(|segment| {
+                format!(
+                    "<{}>\n{}\n</{}>",
+                    segment.name, segment.content, segment.name
+                )
+            })
             .collect::<Vec<_>>()
             .join("\n")
     }
@@ -78,7 +91,12 @@ impl PromptEnvelope {
     pub fn rendered(&self) -> String {
         self.segments
             .iter()
-            .map(|segment| format!("<{}>\n{}\n</{}>", segment.name, segment.content, segment.name))
+            .map(|segment| {
+                format!(
+                    "<{}>\n{}\n</{}>",
+                    segment.name, segment.content, segment.name
+                )
+            })
             .collect::<Vec<_>>()
             .join("\n")
     }
@@ -165,7 +183,10 @@ pub struct CacheTelemetry {
 impl CacheTelemetry {
     pub fn append(&mut self, observation: CacheObservation) -> Result<(), &'static str> {
         observation.validate()?;
-        let expected = self.observations.last().map_or(1, |item| item.sequence.saturating_add(1));
+        let expected = self
+            .observations
+            .last()
+            .map_or(1, |item| item.sequence.saturating_add(1));
         if observation.sequence != expected {
             return Err("cache observation sequence must be contiguous");
         }
@@ -273,8 +294,13 @@ mod tests {
     #[test]
     fn stable_segment_after_dynamic_is_rejected() {
         let mut value = envelope("task");
-        value.segments.push(PromptSegment::new("late", "stable", true).expect("segment"));
-        assert_eq!(value.validate(), Err("stable prompt segments must form a contiguous prefix"));
+        value
+            .segments
+            .push(PromptSegment::new("late", "stable", true).expect("segment"));
+        assert_eq!(
+            value.validate(),
+            Err("stable prompt segments must form a contiguous prefix")
+        );
     }
 
     #[test]
@@ -293,7 +319,13 @@ mod tests {
                     prompt_bytes: 200,
                     input_tokens: 100,
                     cached_input_tokens: cached,
-                    outcome: if cached == 100 { CacheOutcome::Hit } else if cached > 0 { CacheOutcome::PartialHit } else { CacheOutcome::Miss },
+                    outcome: if cached == 100 {
+                        CacheOutcome::Hit
+                    } else if cached > 0 {
+                        CacheOutcome::PartialHit
+                    } else {
+                        CacheOutcome::Miss
+                    },
                     provider_metadata: BTreeMap::new(),
                 })
                 .expect("append");
@@ -319,6 +351,9 @@ mod tests {
             outcome: CacheOutcome::Hit,
             provider_metadata: BTreeMap::new(),
         };
-        assert_eq!(observation.validate(), Err("cached input tokens cannot exceed input tokens"));
+        assert_eq!(
+            observation.validate(),
+            Err("cached input tokens cannot exceed input tokens")
+        );
     }
 }
