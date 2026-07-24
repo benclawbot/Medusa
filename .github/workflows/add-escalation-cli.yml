@@ -4,6 +4,9 @@ on:
   push:
     branches:
       - agent/chatgpt-escalation-bridge
+  pull_request:
+    branches:
+      - main
 
 permissions:
   contents: write
@@ -48,74 +51,74 @@ jobs:
               1,
           )
           marker = '''    Resume {
-        session: String,
-    },
-'''
+              session: String,
+          },
+          '''
           addition = '''    Resume {
-        session: String,
-    },
-    /// Open a validated escalation packet in ChatGPT using the normal browser profile.
-    Escalate {
-        /// Session that owns the escalation packet.
-        #[arg(long)]
-        session: String,
-        /// Path to the signed escalation packet JSON.
-        #[arg(long)]
-        packet: PathBuf,
-    },
-'''
+              session: String,
+          },
+              /// Open a validated escalation packet in ChatGPT using the normal browser profile.
+              Escalate {
+                  /// Session that owns the escalation packet.
+                  #[arg(long)]
+                  session: String,
+                  /// Path to the signed escalation packet JSON.
+                  #[arg(long)]
+                  packet: PathBuf,
+              },
+          '''
           if '    Escalate {' not in text:
               text = text.replace(marker, addition, 1)
 
           marker = '''        CommandKind::Resume { session } => {
-            let provider = ConfiguredProvider::manager_from_config(&config, None)?;
-            let engine = AgentEngine::new(provider, config);
-            let mut session = engine.load_session(&repo, &session)?;
-            println!("session {} resumed", session.id);
-            engine.run_to_completion(&mut session)?;
-            print_completion(&session);
-            Ok(())
-        }
-'''
+              let provider = ConfiguredProvider::manager_from_config(&config, None)?;
+              let engine = AgentEngine::new(provider, config);
+              let mut session = engine.load_session(&repo, &session)?;
+              println!("session {} resumed", session.id);
+              engine.run_to_completion(&mut session)?;
+              print_completion(&session);
+              Ok(())
+          }
+          '''
           addition = marker + '''        CommandKind::Escalate { session, packet } => {
-            browser_assisted_escalation(&repo, &session, &packet)
-        }
-'''
+              browser_assisted_escalation(&repo, &session, &packet)
+          }
+          '''
           if 'CommandKind::Escalate { session, packet }' not in text:
               text = text.replace(marker, addition, 1)
 
           insertion = '''
-fn browser_assisted_escalation(
-    repo: &Path,
-    session: &str,
-    packet_path: &Path,
-) -> MedusaResult<()> {
-    let session_id = SessionId::parse(session).map_err(|message| {
-        MedusaError::new(
-            ErrorCode::InvalidConfiguration,
-            ErrorCategory::Validation,
-            message,
-        )
-    })?;
-    let packet_path = if packet_path.is_absolute() {
-        packet_path.to_path_buf()
-    } else {
-        repo.join(packet_path)
-    };
-    let packet: EscalationPacket = serde_json::from_slice(&fs::read(&packet_path)?)?;
-    let launch = launch_browser_assisted_escalation(repo, &session_id, &packet)?;
-    println!("ChatGPT opened for escalation packet {}.", packet.packet_id);
-    if launch.clipboard_ready {
-        println!("Prompt copied to clipboard; paste it into ChatGPT and submit.");
-    } else {
-        println!("Clipboard unavailable; prompt saved at {}.", launch.prompt_path.display());
-    }
-    println!("Signed packet: {}", launch.packet_path.display());
-    println!("Prompt recovery file: {}", launch.prompt_path.display());
-    Ok(())
-}
+          fn browser_assisted_escalation(
+              repo: &Path,
+              session: &str,
+              packet_path: &Path,
+          ) -> MedusaResult<()> {
+              let session_id = SessionId::parse(session).map_err(|message| {
+                  MedusaError::new(
+                      ErrorCode::InvalidConfiguration,
+                      ErrorCategory::Validation,
+                      message,
+                  )
+              })?;
+              let packet_path = if packet_path.is_absolute() {
+                  packet_path.to_path_buf()
+              } else {
+                  repo.join(packet_path)
+              };
+              let packet: EscalationPacket = serde_json::from_slice(&fs::read(&packet_path)?)?;
+              let launch = launch_browser_assisted_escalation(repo, &session_id, &packet)?;
+              println!("ChatGPT opened for escalation packet {}.", packet.packet_id);
+              if launch.clipboard_ready {
+                  println!("Prompt copied to clipboard; paste it into ChatGPT and submit.");
+              } else {
+                  println!("Clipboard unavailable; prompt saved at {}.", launch.prompt_path.display());
+              }
+              println!("Signed packet: {}", launch.packet_path.display());
+              println!("Prompt recovery file: {}", launch.prompt_path.display());
+              Ok(())
+          }
 
-'''
+          '''
           if 'fn browser_assisted_escalation(' not in text:
               text = text.replace('fn update(repo: &Path, check_only: bool, automatic: bool) -> MedusaResult<()> {', insertion + 'fn update(repo: &Path, check_only: bool, automatic: bool) -> MedusaResult<()> {', 1)
           main.write_text(text)
