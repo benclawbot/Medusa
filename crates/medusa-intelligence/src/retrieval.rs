@@ -184,3 +184,52 @@ fn exclusion(symbol: &Symbol, reason: &str) -> RetrievalExclusion {
         reason: reason.to_owned(),
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use std::fs;
+
+    use super::*;
+
+    #[test]
+    fn exact_symbol_matches_rank_first_deterministically() {
+        let directory = tempfile::tempdir().expect("tempdir");
+        fs::write(
+            directory.path().join("lib.rs"),
+            "pub fn session_budget() -> usize { 8 }\npub fn budget_helper() -> usize { 4 }\n",
+        )
+        .expect("source");
+        let index = CodeIndex::build(directory.path()).expect("index");
+        let report = index.retrieve(
+            directory.path(),
+            "session_budget",
+            RetrievalBudget::default(),
+        );
+        assert_eq!(report.results[0].symbol, "session_budget");
+        assert!(report.results[0].score > report.results[1].score);
+        assert_eq!(report.used_tokens, report.results.iter().map(|r| r.estimated_tokens).sum());
+    }
+
+    #[test]
+    fn hard_budget_excludes_lower_ranked_context_with_reason() {
+        let directory = tempfile::tempdir().expect("tempdir");
+        fs::write(
+            directory.path().join("lib.rs"),
+            "pub fn retrieve_alpha() -> usize { 1 }\npub fn retrieve_beta() -> usize { 2 }\n",
+        )
+        .expect("source");
+        let index = CodeIndex::build(directory.path()).expect("index");
+        let report = index.retrieve(
+            directory.path(),
+            "retrieve",
+            RetrievalBudget {
+                max_tokens: 12,
+                max_results: 8,
+                max_tokens_per_result: 12,
+            },
+        );
+        assert!(report.used_tokens <= 12);
+        assert_eq!(report.results.len(), 1);
+        assert!(report.exclusions.iter().any(|item| item.reason == "total token budget exhausted"));
+    }
+}
