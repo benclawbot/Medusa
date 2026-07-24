@@ -301,6 +301,7 @@ mod tests {
             approval_grants: Vec::new(),
             approval_receipts: Vec::new(),
             rollback_receipts: Vec::new(),
+            world_model: None,
         };
         let aggregate = session_usage(&session);
         assert_eq!(aggregate.turns.len(), 1);

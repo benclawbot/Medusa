@@ -5,6 +5,7 @@ use medusa_core::{ErrorCategory, ErrorCode, MedusaError, MedusaResult, SessionId
 use medusa_extensions::{DesktopCommanderClient, DesktopCommanderSettings};
 use medusa_protocol::{Actor, EventPayload};
 use medusa_provider::{Message, MessageBlock, ModelProvider, ModelRequest, ResponseBlock, Role};
+use medusa_world_model::{WorkspaceModel, create_for_session, load as load_world_model};
 use time::OffsetDateTime;
 
 use crate::{
@@ -174,6 +175,7 @@ impl<P: ModelProvider> AgentEngine<P> {
         bootstrap(repo)?;
         let now = OffsetDateTime::now_utc();
         let id = SessionId::new();
+        let world_model = create_for_session(repo, id.as_str(), objective.clone()).ok();
         let mut session = AgentSession {
             id: id.clone(),
             objective: objective.clone(),
@@ -191,6 +193,7 @@ impl<P: ModelProvider> AgentEngine<P> {
             events: Vec::new(),
             evidence: Vec::new(),
             tool_artifacts: Vec::new(),
+            world_model,
             approval_grants: Vec::new(),
             approval_receipts: Vec::new(),
             rollback_receipts: Vec::new(),
@@ -206,6 +209,23 @@ impl<P: ModelProvider> AgentEngine<P> {
 
     pub fn load_session(&self, repo: &Path, session: &str) -> MedusaResult<AgentSession> {
         load(repo, session)
+    }
+
+    /// Loads the durable evidence model associated with a session, when enabled.
+    pub fn load_session_world_model(
+        &self,
+        session: &AgentSession,
+    ) -> MedusaResult<Option<WorkspaceModel>> {
+        let Some(reference) = &session.world_model else {
+            return Ok(None);
+        };
+        load_world_model(&session.repo, reference).map(Some).map_err(|error| {
+            MedusaError::new(
+                ErrorCode::InternalInvariant,
+                ErrorCategory::Internal,
+                format!("failed to load session world model: {error}"),
+            )
+        })
     }
 
     /// Adds a follow-up prompt to an existing session so later turns retain context.

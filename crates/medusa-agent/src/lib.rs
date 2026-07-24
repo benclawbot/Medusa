@@ -12,6 +12,7 @@ pub mod session_browser;
 pub mod tools;
 mod transaction;
 mod verification;
+pub mod world_model_session;
 
 pub use approval::{
     ApprovalDecision, ApprovalGrant, ApprovalReceipt, ApprovalScope, RollbackOutcome,
