@@ -1,7 +1,7 @@
 use std::{
     collections::{BTreeMap, BTreeSet},
     fs,
-    path::{Component, Path, PathBuf},
+    path::{Path, PathBuf},
 };
 
 use medusa_core::MedusaResult;
@@ -62,7 +62,7 @@ impl RepositorySnapshot {
         let mut files = BTreeMap::new();
         for entry in WalkDir::new(repo)
             .into_iter()
-            .filter_entry(|entry| !ignored_entry(entry))
+            .filter_entry(|entry| !ignored_entry(repo, entry))
             .filter_map(Result::ok)
             .filter(|entry| entry.file_type().is_file())
         {
@@ -115,22 +115,54 @@ impl RepositorySnapshot {
     }
 }
 
-fn ignored_entry(entry: &DirEntry) -> bool {
-    entry.path().components().any(|component| {
-        matches!(
-            component,
-            Component::Normal(name)
-                if IGNORED_DIRECTORIES.iter().any(|ignored| name == *ignored)
-        )
-    })
+fn ignored_entry(repo: &Path, entry: &DirEntry) -> bool {
+    entry.file_type().is_dir()
+        && entry.path() != repo
+        && IGNORED_DIRECTORIES
+            .iter()
+            .any(|ignored| entry.file_name() == *ignored)
 }
 
 fn indexed_extension(path: &Path) -> bool {
     path.extension()
         .and_then(|extension| extension.to_str())
-        .is_some_and(|extension| INDEXED_EXTENSIONS.binary_search(&extension).is_ok())
+        .is_some_and(|extension| INDEXED_EXTENSIONS.contains(&extension))
 }
 
 fn looks_binary(bytes: &[u8]) -> bool {
     bytes.iter().take(8 * 1024).any(|byte| *byte == 0)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn indexes_json_and_jsx_extensions() {
+        let directory = tempfile::tempdir().expect("tempdir");
+        fs::write(directory.path().join("config.json"), "{}\n").expect("json");
+        fs::write(directory.path().join("component.jsx"), "export default null;\n").expect("jsx");
+
+        let snapshot = RepositorySnapshot::scan(directory.path()).expect("snapshot");
+
+        assert!(snapshot.files.contains_key(&PathBuf::from("config.json")));
+        assert!(snapshot.files.contains_key(&PathBuf::from("component.jsx")));
+    }
+
+    #[test]
+    fn repository_root_named_like_ignored_directory_is_not_pruned() {
+        let parent = tempfile::tempdir().expect("parent");
+        let repository = parent.path().join("vendor");
+        fs::create_dir(&repository).expect("repository");
+        fs::write(repository.join("lib.rs"), "pub fn indexed() {}\n").expect("source");
+        fs::create_dir(repository.join("target")).expect("target");
+        fs::write(repository.join("target/generated.rs"), "ignored\n").expect("generated");
+
+        let snapshot = RepositorySnapshot::scan(&repository).expect("snapshot");
+
+        assert_eq!(
+            snapshot.files.keys().cloned().collect::<Vec<_>>(),
+            vec![PathBuf::from("lib.rs")]
+        );
+    }
 }
