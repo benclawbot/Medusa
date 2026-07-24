@@ -1,5 +1,14 @@
 use std::{env, error::Error, fs, path::PathBuf};
 
+const ORIGINAL_SESSION_USAGE_BLOCK: &str = r#"            rollback_receipts: Vec::new(),
+        };
+"#;
+
+const SESSION_USAGE_BLOCK: &str = r#"            rollback_receipts: Vec::new(),
+            usage: crate::session::SessionUsage::default(),
+        };
+"#;
+
 const ORIGINAL_REQUEST_BLOCK: &str = r#"        let response = self.provider.complete(&ModelRequest {
             system: system_prompt_with_context(
                 self.config.agent.mode,
@@ -47,6 +56,7 @@ const CONTEXT_RECOVERY_REQUEST_BLOCK: &str = r#"        let system = system_prom
             max_tokens: self.config.model.max_output_tokens,
             temperature_milli: self.config.model.temperature_milli,
         };
+        let request_started = std::time::Instant::now();
         let response = match self.provider.complete(&request) {
             Ok(response) => response,
             Err(error) if context_budget::is_context_limit_rejection(&error.to_string()) => {
@@ -64,25 +74,67 @@ const CONTEXT_RECOVERY_REQUEST_BLOCK: &str = r#"        let system = system_prom
             }
             Err(error) => return Err(error),
         };
+        let turn_usage = crate::session::record_turn_usage(
+            session,
+            &request,
+            &response,
+            request_started.elapsed(),
+        );
 "#;
+
+const ORIGINAL_USAGE_EVENT: &str =
+    "                usage: serde_json::to_value(response.usage).map_err(json_error)?,";
+const ACCOUNTED_USAGE_EVENT: &str =
+    "                usage: serde_json::to_value(turn_usage).map_err(json_error)?,";
+
+fn replace_once(
+    source: String,
+    original: &str,
+    replacement: &str,
+    description: &str,
+    source_path: &std::path::Path,
+) -> Result<String, Box<dyn Error>> {
+    let occurrences = source.matches(original).count();
+    if occurrences != 1 {
+        return Err(format!(
+            "expected exactly one {description} in {}, found {occurrences}",
+            source_path.display()
+        )
+        .into());
+    }
+    Ok(source.replacen(original, replacement, 1))
+}
 
 fn main() -> Result<(), Box<dyn Error>> {
     println!("cargo:rerun-if-changed=src/engine_base.rs");
     println!("cargo:rerun-if-changed=src/context_budget.rs");
+    println!("cargo:rerun-if-changed=src/usage.rs");
     println!("cargo:rerun-if-changed=build.rs");
 
     let manifest_dir = PathBuf::from(env::var("CARGO_MANIFEST_DIR")?);
     let source_path = manifest_dir.join("src/engine_base.rs");
     let source = fs::read_to_string(&source_path)?.replace("\r\n", "\n");
-    let occurrences = source.matches(ORIGINAL_REQUEST_BLOCK).count();
-    if occurrences != 1 {
-        return Err(format!(
-            "expected exactly one model request block in {}, found {occurrences}",
-            source_path.display()
-        )
-        .into());
-    }
-    let engine = source.replacen(ORIGINAL_REQUEST_BLOCK, CONTEXT_RECOVERY_REQUEST_BLOCK, 1);
+    let engine = replace_once(
+        source,
+        ORIGINAL_SESSION_USAGE_BLOCK,
+        SESSION_USAGE_BLOCK,
+        "session initialization block",
+        &source_path,
+    )?;
+    let engine = replace_once(
+        engine,
+        ORIGINAL_REQUEST_BLOCK,
+        CONTEXT_RECOVERY_REQUEST_BLOCK,
+        "model request block",
+        &source_path,
+    )?;
+    let engine = replace_once(
+        engine,
+        ORIGINAL_USAGE_EVENT,
+        ACCOUNTED_USAGE_EVENT,
+        "model usage event",
+        &source_path,
+    )?;
     let generated = format!(
         "mod context_budget {{ include!(concat!(env!(\"CARGO_MANIFEST_DIR\"), \"/src/context_budget.rs\")); }}\n{engine}"
     );
