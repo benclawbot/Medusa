@@ -125,10 +125,16 @@ impl GoalContract {
             return Err("goal objective cannot be empty");
         }
         let mut ids = BTreeSet::new();
-        if criteria.iter().any(|criterion| !ids.insert(criterion.id.clone())) {
+        if criteria
+            .iter()
+            .any(|criterion| !ids.insert(criterion.id.clone()))
+        {
             return Err("goal contains duplicate acceptance criterion identifiers");
         }
-        Ok(Self { objective, criteria })
+        Ok(Self {
+            objective,
+            criteria,
+        })
     }
 
     #[must_use]
@@ -264,12 +270,14 @@ mod tests {
     fn unknown_evidence_is_reported_and_does_not_satisfy_the_goal() {
         let contract = GoalContract::new(
             "objective",
-            vec![AcceptanceCriterion::new(id("known"), "condition", [EvidenceKind::Test])
-                .expect("criterion")],
+            vec![
+                AcceptanceCriterion::new(id("known"), "condition", [EvidenceKind::Test])
+                    .expect("criterion"),
+            ],
         )
         .expect("contract");
-        let evidence = CompletionEvidence::new(id("unknown"), EvidenceKind::Test, "passed")
-            .expect("evidence");
+        let evidence =
+            CompletionEvidence::new(id("unknown"), EvidenceKind::Test, "passed").expect("evidence");
         let assessment = contract.evaluate(&[evidence]);
         assert!(!assessment.complete);
         assert_eq!(assessment.orphan_evidence.len(), 1);
