@@ -4,12 +4,6 @@ on:
   push:
     branches:
       - agent/chatgpt-escalation-bridge
-    paths:
-      - crates/medusa-escalation/**
-      - crates/medusa-agent/src/session/**
-      - crates/medusa-agent/Cargo.toml
-      - Cargo.toml
-      - .github/workflows/refresh-escalation-generated.yml
 
 permissions:
   contents: write
