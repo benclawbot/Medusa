@@ -1,4 +1,7 @@
-use std::{fs, path::{Path, PathBuf}};
+use std::{
+    fs,
+    path::{Path, PathBuf},
+};
 
 use medusa_core::MedusaResult;
 use serde::{Deserialize, Serialize};
@@ -65,7 +68,8 @@ impl CodeIndex {
         for references in self.references.values_mut() {
             references.retain(|reference| !paths.contains(&reference.path));
         }
-        self.references.retain(|_, references| !references.is_empty());
+        self.references
+            .retain(|_, references| !references.is_empty());
     }
 
     fn normalize(&mut self) {
@@ -217,21 +221,34 @@ mod tests {
     fn incremental_refresh_matches_clean_rebuild() {
         let directory = tempfile::tempdir().expect("tempdir");
         fs::write(directory.path().join("a.rs"), "pub fn old() -> u8 { 1 }\n").expect("a");
-        fs::write(directory.path().join("b.rs"), "pub fn stable() -> u8 { old() }\n").expect("b");
+        fs::write(
+            directory.path().join("b.rs"),
+            "pub fn stable() -> u8 { old() }\n",
+        )
+        .expect("b");
         let before = IndexSnapshot::capture(directory.path()).expect("before");
         let mut incremental = CodeIndex::build(directory.path()).expect("index");
 
         fs::write(directory.path().join("a.rs"), "pub fn new() -> u8 { 2 }\n").expect("modify");
         fs::remove_file(directory.path().join("b.rs")).expect("remove");
-        fs::write(directory.path().join("c.rs"), "pub fn caller() -> u8 { new() }\n").expect("add");
+        fs::write(
+            directory.path().join("c.rs"),
+            "pub fn caller() -> u8 { new() }\n",
+        )
+        .expect("add");
         let after = IndexSnapshot::capture(directory.path()).expect("after");
         let delta = before.diff(&after);
 
-        let refresh = incremental.refresh(directory.path(), &delta).expect("refresh");
+        let refresh = incremental
+            .refresh(directory.path(), &delta)
+            .expect("refresh");
         let rebuilt = CodeIndex::build(directory.path()).expect("rebuilt");
 
         assert_eq!(incremental, rebuilt);
-        assert_eq!(refresh.reindexed, vec![PathBuf::from("a.rs"), PathBuf::from("c.rs")]);
+        assert_eq!(
+            refresh.reindexed,
+            vec![PathBuf::from("a.rs"), PathBuf::from("c.rs")]
+        );
         assert_eq!(refresh.removed, vec![PathBuf::from("b.rs")]);
     }
 
