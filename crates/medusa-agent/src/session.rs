@@ -22,9 +22,9 @@ mod skill_probation;
 #[path = "usage.rs"]
 mod usage;
 
+pub(crate) use usage::record_turn_usage;
 #[allow(unused_imports)]
 pub use usage::{SessionUsage, TurnUsage, UsageProvenance, session_usage};
-pub(crate) use usage::record_turn_usage;
 
 /// A durable model-authored task plan step.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
