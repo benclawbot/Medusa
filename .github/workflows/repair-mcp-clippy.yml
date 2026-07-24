@@ -1,0 +1,46 @@
+name: Repair MCP Clippy
+
+on:
+  push:
+    branches:
+      - agent/local-execution-bridge
+
+permissions:
+  contents: write
+
+jobs:
+  repair:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: agent/local-execution-bridge
+      - name: Apply Clippy simplifications
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          path = Path('crates/medusa-mcp-cache/src/lib.rs')
+          text = path.read_text()
+          old1 = '''        let bytes = match serde_json::to_vec(self) {
+            Ok(bytes) => bytes,
+            Err(_) => Vec::new(),
+        };'''
+          new1 = '        let bytes = serde_json::to_vec(self).unwrap_or_default();'
+          old2 = '''    let bytes = match serde_json::to_vec(tools) {
+        Ok(bytes) => bytes,
+        Err(_) => Vec::new(),
+    };'''
+          new2 = '    let bytes = serde_json::to_vec(tools).unwrap_or_default();'
+          if old1 not in text or old2 not in text:
+              raise SystemExit('expected MCP Clippy targets not found')
+          text = text.replace(old1, new1, 1).replace(old2, new2, 1)
+          path.write_text(text)
+          PY
+      - name: Commit repair
+        run: |
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add crates/medusa-mcp-cache/src/lib.rs
+          git commit -m "Fix MCP cache Clippy warnings"
+          git push origin HEAD:agent/local-execution-bridge
