@@ -1,5 +1,6 @@
 //! Provider-neutral escalation policy and bounded reasoning packets.
 
+mod lifecycle;
 mod manual;
 
 use std::collections::{BTreeMap, BTreeSet};
@@ -8,6 +9,7 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use time::OffsetDateTime;
 
+pub use lifecycle::EscalationLifecycleEvent;
 pub use manual::{AdviceEnvelope, export_packet, import_advice};
 
 /// Supported transport boundary for an escalation request.
