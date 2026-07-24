@@ -1,0 +1,74 @@
+name: Schema Observation Integration
+
+on:
+  push:
+    branches:
+      - agent/schema-harness-foundation
+
+permissions:
+  contents: write
+
+jobs:
+  integrate:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: agent/schema-harness-foundation
+          fetch-depth: 0
+      - uses: dtolnay/rust-toolchain@1.88.0
+        with:
+          components: rustfmt
+      - name: Wire passive observations into tool execution
+        shell: python
+        run: |
+          from pathlib import Path
+
+          lib = Path('crates/medusa-agent/src/lib.rs')
+          text = lib.read_text()
+          marker = 'mod verification;\n'
+          if 'mod world_model_observation;\n' not in text:
+              text = text.replace(marker, marker + 'mod world_model_observation;\n', 1)
+          lib.write_text(text)
+
+          engine = Path('crates/medusa-agent/src/engine_base.rs')
+          text = engine.read_text()
+          marker = '    verification::targeted_verification_for_paths,\n};\n'
+          replacement = '    verification::targeted_verification_for_paths,\n    world_model_observation::record_tool_observation,\n};\n'
+          if 'world_model_observation::record_tool_observation' not in text:
+              if marker not in text:
+                  raise SystemExit('engine import marker not found')
+              text = text.replace(marker, replacement, 1)
+
+          marker = '''                let (raw_content, is_error, exit_code) = match result {
+                    Ok(output) => (output, false, Some(0)),
+                    Err(error) => (error.to_string(), true, Some(1)),
+                };
+'''
+          replacement = marker + '''                record_tool_observation(
+                    session,
+                    &name,
+                    &input,
+                    &raw_content,
+                    if is_error { 1 } else { 0 },
+                );
+'''
+          if 'record_tool_observation(\n                    session,' not in text:
+              if marker not in text:
+                  raise SystemExit('tool result marker not found')
+              text = text.replace(marker, replacement, 1)
+          engine.write_text(text)
+
+          Path('.github/workflows/schema-observation-integration.yml').unlink()
+      - name: Format and test focused crates
+        run: |
+          cargo fmt --all
+          cargo test -p medusa-world-model -p medusa-agent world_model --no-fail-fast
+      - name: Commit integration
+        run: |
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add crates/medusa-agent/src/lib.rs crates/medusa-agent/src/engine_base.rs crates/medusa-agent/src/world_model_observation.rs .github/workflows/schema-observation-integration.yml
+          git commit -m "Record passive tool observations in world models"
+          git push origin HEAD:agent/schema-harness-foundation
