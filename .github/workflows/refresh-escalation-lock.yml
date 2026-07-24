@@ -19,8 +19,10 @@ jobs:
           ref: agent/chatgpt-escalation-bridge
           fetch-depth: 0
       - uses: dtolnay/rust-toolchain@1.88.0
-      - run: cargo generate-lockfile
-      - run: |
+      - name: Regenerate lockfile
+        run: cargo generate-lockfile
+      - name: Commit refreshed lockfile
+        run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add Cargo.lock
