@@ -4,6 +4,9 @@ on:
   push:
     branches:
       - fix/medusa-limitations-batch
+  pull_request:
+    branches:
+      - main
 
 permissions:
   contents: write
@@ -16,6 +19,7 @@ jobs:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
+          ref: ${{ github.head_ref || github.ref_name }}
       - uses: dtolnay/rust-toolchain@1.88.0
         with:
           components: rustfmt, clippy
@@ -215,4 +219,4 @@ The July 2026 limitations audit was checked against the current runtime. Browser
           git config user.email 41898282+github-actions[bot]@users.noreply.github.com
           git add README.md crates/medusa-tui/src/app/modal_events.rs .github/workflows/medusa-limitations-fix.yml
           git commit -m "fix(tui): resolve limitations audit regressions"
-          git push
+          git push origin HEAD:fix/medusa-limitations-batch
