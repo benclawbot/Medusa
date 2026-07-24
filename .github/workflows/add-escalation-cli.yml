@@ -27,57 +27,38 @@ jobs:
         run: |
           python - <<'PY'
           from pathlib import Path
+          import re
 
           cargo = Path('crates/medusa-cli/Cargo.toml')
           text = cargo.read_text()
           if 'medusa-escalation = { path = "../medusa-escalation" }' not in text:
-              text = text.replace(
-                  'medusa-core.workspace = true\n',
-                  'medusa-core.workspace = true\nmedusa-escalation = { path = "../medusa-escalation" }\n',
-                  1,
-              )
+              text = text.replace('medusa-core.workspace = true\n', 'medusa-core.workspace = true\nmedusa-escalation = { path = "../medusa-escalation" }\n', 1)
           cargo.write_text(text)
 
           agent_lib = Path('crates/medusa-agent/src/lib.rs')
           text = agent_lib.read_text()
-          old = '''pub use session::{
-              AgentPlanStep, AgentPlanStepStatus, AgentQuestion, AgentQuestionItem, AgentQuestionOption,
-              AgentSession, SessionUsage, TurnUsage, UsageProvenance, bootstrap, session_usage,
-          };'''
-          new = '''pub use session::{
-              AgentPlanStep, AgentPlanStepStatus, AgentQuestion, AgentQuestionItem, AgentQuestionOption,
-              AgentSession, BrowserAssistedLaunch, EscalationJournal, EscalationStatus,
-              SessionEscalation, SessionUsage, TurnUsage, UsageProvenance, bootstrap,
-              export_manual_escalation, import_manual_advice, launch_browser_assisted_escalation,
-              load_escalation_journal, persist_escalation_journal, render_chatgpt_prompt,
-              session_usage,
-          };'''
           if 'BrowserAssistedLaunch' not in text:
-              if old not in text:
-                  raise SystemExit('medusa-agent session export block not found')
-              text = text.replace(old, new, 1)
+              pattern = r'(pub use session::\{\n)(.*?)(\n\};)'
+              match = re.search(pattern, text, flags=re.S)
+              if not match:
+                  raise SystemExit('session export block not found')
+              body = match.group(2).rstrip()
+              additions = '''
+              BrowserAssistedLaunch, EscalationJournal, EscalationStatus, SessionEscalation,
+              export_manual_escalation, import_manual_advice, launch_browser_assisted_escalation,
+              load_escalation_journal, persist_escalation_journal, render_chatgpt_prompt,'''
+              replacement = match.group(1) + body + additions + match.group(3)
+              text = text[:match.start()] + replacement + text[match.end():]
           agent_lib.write_text(text)
 
           main = Path('crates/medusa-cli/src/main.rs')
           text = main.read_text()
-          text = text.replace(
-              'use medusa_agent::{AgentEngine, bootstrap};',
-              'use medusa_agent::{AgentEngine, bootstrap, launch_browser_assisted_escalation};',
-              1,
-          )
-          text = text.replace(
-              'use medusa_core::{ErrorCategory, ErrorCode, MedusaError, MedusaResult};',
-              'use medusa_core::{ErrorCategory, ErrorCode, MedusaError, MedusaResult, SessionId};\nuse medusa_escalation::EscalationPacket;',
-              1,
-          )
+          text = text.replace('use medusa_agent::{AgentEngine, bootstrap};', 'use medusa_agent::{AgentEngine, bootstrap, launch_browser_assisted_escalation};', 1)
+          text = text.replace('use medusa_core::{ErrorCategory, ErrorCode, MedusaError, MedusaResult};', 'use medusa_core::{ErrorCategory, ErrorCode, MedusaError, MedusaResult, SessionId};\nuse medusa_escalation::EscalationPacket;', 1)
 
-          resume_variant = '''    Resume {
-              session: String,
-          },'''
-          escalate_variant = '''    Resume {
-              session: String,
-          },
-              /// Open a validated escalation packet in ChatGPT using the normal browser profile.
+          if '    Escalate {' not in text:
+              marker = '    #[command(name = "__daemon-serve", hide = true)]'
+              variant = '''    /// Open a validated escalation packet in ChatGPT using the normal browser profile.
               Escalate {
                   /// Session that owns the escalation packet.
                   #[arg(long)]
@@ -85,32 +66,25 @@ jobs:
                   /// Path to the signed escalation packet JSON.
                   #[arg(long)]
                   packet: PathBuf,
-              },'''
-          if '    Escalate {' not in text:
-              if resume_variant not in text:
-                  raise SystemExit('CLI Resume variant not found')
-              text = text.replace(resume_variant, escalate_variant, 1)
+              },
+              '''
+              if marker not in text:
+                  raise SystemExit('daemon variant marker not found')
+              text = text.replace(marker, variant + marker, 1)
 
-          resume_arm = '''        CommandKind::Resume { session } => {
-              let provider = ConfiguredProvider::manager_from_config(&config, None)?;
-              let engine = AgentEngine::new(provider, config);
-              let mut session = engine.load_session(&repo, &session)?;
-              println!("session {} resumed", session.id);
-              engine.run_to_completion(&mut session)?;
-              print_completion(&session);
-              Ok(())
-          }'''
-          escalation_arm = resume_arm + '''
-              CommandKind::Escalate { session, packet } => {
-                  browser_assisted_escalation(&repo, &session, &packet)
-              }'''
           if 'CommandKind::Escalate { session, packet }' not in text:
-              if resume_arm not in text:
-                  raise SystemExit('CLI Resume match arm not found')
-              text = text.replace(resume_arm, escalation_arm, 1)
+              marker = '        CommandKind::Config { .. } => unreachable!("handled before runtime config loading"),'
+              arm = '''        CommandKind::Escalate { session, packet } => {
+                  browser_assisted_escalation(&repo, &session, &packet)
+              }
+              '''
+              if marker not in text:
+                  raise SystemExit('match insertion marker not found')
+              text = text.replace(marker, arm + marker, 1)
 
-          helper = '''
-          fn browser_assisted_escalation(
+          if 'fn browser_assisted_escalation(' not in text:
+              marker = 'fn update(repo: &Path, check_only: bool, automatic: bool) -> MedusaResult<()> {'
+              helper = '''fn browser_assisted_escalation(
               repo: &Path,
               session: &str,
               packet_path: &Path,
@@ -144,11 +118,9 @@ jobs:
           }
 
           '''
-          update_marker = 'fn update(repo: &Path, check_only: bool, automatic: bool) -> MedusaResult<()> {'
-          if 'fn browser_assisted_escalation(' not in text:
-              if update_marker not in text:
-                  raise SystemExit('CLI update function marker not found')
-              text = text.replace(update_marker, helper + update_marker, 1)
+              if marker not in text:
+                  raise SystemExit('update function marker not found')
+              text = text.replace(marker, helper + marker, 1)
           main.write_text(text)
           PY
           cargo fmt --all
