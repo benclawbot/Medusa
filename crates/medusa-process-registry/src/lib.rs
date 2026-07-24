@@ -146,11 +146,7 @@ impl ProcessRecord {
         Ok(())
     }
 
-    pub fn mark_running(
-        &mut self,
-        pid: u32,
-        now: OffsetDateTime,
-    ) -> Result<(), RegistryError> {
+    pub fn mark_running(&mut self, pid: u32, now: OffsetDateTime) -> Result<(), RegistryError> {
         if pid == 0 {
             return Err(RegistryError::InvalidPid);
         }
@@ -164,7 +160,10 @@ impl ProcessRecord {
         if self.state != ProcessState::Running {
             return Err(RegistryError::HeartbeatForInactiveProcess);
         }
-        if self.last_heartbeat_at.is_some_and(|previous| now < previous) {
+        if self
+            .last_heartbeat_at
+            .is_some_and(|previous| now < previous)
+        {
             return Err(RegistryError::TimestampRegression);
         }
         self.last_heartbeat_at = Some(now);
@@ -240,7 +239,10 @@ impl ProcessRegistry {
     ) -> Vec<ProcessId> {
         let mut orphaned = Vec::new();
         for record in self.records.values_mut() {
-            if !matches!(record.state, ProcessState::Starting | ProcessState::Running | ProcessState::Stopping) {
+            if !matches!(
+                record.state,
+                ProcessState::Starting | ProcessState::Running | ProcessState::Stopping
+            ) {
                 continue;
             }
             let alive = record.pid.is_some_and(&is_alive);
@@ -307,7 +309,10 @@ pub enum RegistryError {
     #[error("unknown process: {0:?}")]
     UnknownProcess(ProcessId),
     #[error("invalid process transition from {from:?} to {to:?}")]
-    InvalidTransition { from: ProcessState, to: ProcessState },
+    InvalidTransition {
+        from: ProcessState,
+        to: ProcessState,
+    },
     #[error("heartbeat recorded for an inactive process")]
     HeartbeatForInactiveProcess,
     #[error("timestamp regressed")]
@@ -353,9 +358,11 @@ mod tests {
             .mark_running(42, datetime!(2026-07-24 12:01 UTC))
             .expect("running");
         assert_eq!(process.state, ProcessState::Running);
-        assert!(process
-            .transition(ProcessState::Starting, datetime!(2026-07-24 12:02 UTC))
-            .is_err());
+        assert!(
+            process
+                .transition(ProcessState::Starting, datetime!(2026-07-24 12:02 UTC))
+                .is_err()
+        );
     }
 
     #[test]
@@ -373,7 +380,10 @@ mod tests {
         );
         assert_eq!(changed.len(), 1);
         assert_eq!(
-            registry.get(&ProcessId::parse("server").expect("id")).expect("record").state,
+            registry
+                .get(&ProcessId::parse("server").expect("id"))
+                .expect("record")
+                .state,
             ProcessState::Orphaned
         );
     }
@@ -392,7 +402,10 @@ mod tests {
             |_| true,
         );
         assert_eq!(
-            registry.get(&ProcessId::parse("watcher").expect("id")).expect("record").state,
+            registry
+                .get(&ProcessId::parse("watcher").expect("id"))
+                .expect("record")
+                .state,
             ProcessState::Orphaned
         );
     }
