@@ -354,7 +354,7 @@ mod tests {
         assert_eq!(running_status(&app), "Working (0s · turn 3)");
         assert_eq!(
             session_metrics_line(&app),
-            "session 0s · total 2.5k · input 700 · output 1.5k · cache-read 200 · cache-write 100 · cost — · estimated · 600.0 tok/s"
+            "session 0s · total 2.5k · input 700 · output 1.5k · cache-read 200 · cache-write 100 · cost — · estimated · 1.2k tok/s"
         );
     }
 
