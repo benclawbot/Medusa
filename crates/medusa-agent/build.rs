@@ -1,14 +1,5 @@
 use std::{env, error::Error, fs, path::PathBuf};
 
-const ORIGINAL_SESSION_USAGE_BLOCK: &str = r#"            rollback_receipts: Vec::new(),
-        };
-"#;
-
-const SESSION_USAGE_BLOCK: &str = r#"            rollback_receipts: Vec::new(),
-            usage: crate::session::SessionUsage::default(),
-        };
-"#;
-
 const ORIGINAL_REQUEST_BLOCK: &str = r#"        let response = self.provider.complete(&ModelRequest {
             system: system_prompt_with_context(
                 self.config.agent.mode,
@@ -75,7 +66,7 @@ const CONTEXT_RECOVERY_REQUEST_BLOCK: &str = r#"        let system = system_prom
             Err(error) => return Err(error),
         };
         let turn_usage = crate::session::record_turn_usage(
-            session,
+            session.turn,
             &request,
             &response,
             request_started.elapsed(),
@@ -116,13 +107,6 @@ fn main() -> Result<(), Box<dyn Error>> {
     let source = fs::read_to_string(&source_path)?.replace("\r\n", "\n");
     let engine = replace_once(
         source,
-        ORIGINAL_SESSION_USAGE_BLOCK,
-        SESSION_USAGE_BLOCK,
-        "session initialization block",
-        &source_path,
-    )?;
-    let engine = replace_once(
-        engine,
         ORIGINAL_REQUEST_BLOCK,
         CONTEXT_RECOVERY_REQUEST_BLOCK,
         "model request block",
