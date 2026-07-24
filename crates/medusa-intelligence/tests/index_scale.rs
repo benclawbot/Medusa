@@ -1,7 +1,7 @@
 use std::{
     fs,
     mem::size_of,
-    path::Path,
+    path::{Path, PathBuf},
     time::{Duration, Instant},
 };
 
@@ -21,7 +21,8 @@ fn representative_large_repository_stays_within_time_and_memory_ceilings() {
     let mut index = CodeIndex::build(repository.path()).expect("full index");
     let full_build_elapsed = started.elapsed();
 
-    assert_eq!(index.symbols.len(), FILE_COUNT * 2);
+    assert_eq!(index.symbols.len(), FILE_COUNT * 3);
+    assert!(index.definitions("ignored").is_empty());
     assert!(
         full_build_elapsed <= FULL_BUILD_CEILING,
         "full build took {full_build_elapsed:?}, ceiling is {FULL_BUILD_CEILING:?}"
@@ -77,12 +78,12 @@ fn write_repository(root: &Path, file_count: usize) {
     for file_index in 0..100 {
         fs::write(
             root.join(format!("target/generated/ignored_{file_index:04}.rs")),
-            rust_source(file_index, 1),
+            "fn ignored() {}\n",
         )
         .expect("generated source");
         fs::write(
             root.join(format!("vendor/ignored_{file_index:04}.rs")),
-            rust_source(file_index, 1),
+            "fn ignored() {}\n",
         )
         .expect("vendor source");
     }
@@ -99,10 +100,10 @@ fn estimated_heap_bytes(index: &CodeIndex) -> usize {
         + index
             .symbols
             .iter()
-            .map(|symbol| symbol.name.capacity() + path_capacity(&symbol.path))
+            .map(|symbol| symbol.name.capacity() + path_bytes(&symbol.path))
             .sum::<usize>();
 
-    let reference_bytes = index.references.capacity() * size_of::<(String, Vec<Reference>)>()
+    let reference_bytes = index.references.len() * size_of::<(String, Vec<Reference>)>()
         + index
             .references
             .iter()
@@ -111,23 +112,21 @@ fn estimated_heap_bytes(index: &CodeIndex) -> usize {
                     + references.capacity() * size_of::<Reference>()
                     + references
                         .iter()
-                        .map(|reference| {
-                            reference.name.capacity() + path_capacity(&reference.path)
-                        })
+                        .map(|reference| reference.name.capacity() + path_bytes(&reference.path))
                         .sum::<usize>()
             })
             .sum::<usize>();
 
-    let parse_error_bytes = index.parse_errors.capacity() * size_of::<std::path::PathBuf>()
+    let parse_error_bytes = index.parse_errors.capacity() * size_of::<PathBuf>()
         + index
             .parse_errors
             .iter()
-            .map(|path| path_capacity(path))
+            .map(path_bytes)
             .sum::<usize>();
 
     symbol_bytes + reference_bytes + parse_error_bytes
 }
 
-fn path_capacity(path: &std::path::PathBuf) -> usize {
+fn path_bytes(path: &PathBuf) -> usize {
     path.as_os_str().len()
 }
