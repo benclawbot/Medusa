@@ -226,7 +226,6 @@ impl ProcessRegistry {
             .ok_or_else(|| RegistryError::UnknownProcess(id.clone()))
     }
 
-    #[must_use]
     pub fn records(&self) -> impl Iterator<Item = &ProcessRecord> {
         self.records.values()
     }
