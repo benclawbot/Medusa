@@ -302,7 +302,7 @@ mod tests {
     use super::*;
 
     fn fp(byte: u8) -> String {
-        format!("{:02x}", byte).repeat(32)
+        format!("{byte:02x}").repeat(32)
     }
     fn participant(id: &str, epoch: u64, byte: u8) -> Participant {
         Participant {
