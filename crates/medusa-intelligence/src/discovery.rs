@@ -11,8 +11,8 @@ use walkdir::{DirEntry, WalkDir};
 use crate::support::{hash, relative};
 
 const INDEXED_EXTENSIONS: &[&str] = &[
-    "c", "cc", "cpp", "cs", "go", "h", "hpp", "java", "js", "jsx", "json", "kt",
-    "kts", "md", "py", "rs", "sh", "swift", "toml", "ts", "tsx", "yaml", "yml",
+    "c", "cc", "cpp", "cs", "go", "h", "hpp", "java", "js", "jsx", "json", "kt", "kts", "md", "py",
+    "rs", "sh", "swift", "toml", "ts", "tsx", "yaml", "yml",
 ];
 
 const IGNORED_DIRECTORIES: &[&str] = &[
