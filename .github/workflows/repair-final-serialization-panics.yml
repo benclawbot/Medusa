@@ -1,0 +1,88 @@
+name: Repair Final Serialization Panics
+
+on:
+  push:
+    branches:
+      - agent/local-execution-bridge
+
+permissions:
+  contents: write
+
+jobs:
+  repair:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: agent/local-execution-bridge
+      - uses: dtolnay/rust-toolchain@1.88.0
+        with:
+          components: rustfmt
+      - name: Propagate snapshot and writeback serialization errors
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+
+          snapshot = Path('crates/medusa-repository-snapshot/src/lib.rs')
+          text = snapshot.read_text()
+          text = text.replace('let fingerprint = fingerprint(&(&files, &parent_snapshot));', 'let fingerprint = fingerprint(&(&files, &parent_snapshot))?;', 1)
+          text = text.replace('        ));\n        Ok(Self {', '        ))?;\n        Ok(Self {', 1)
+          old = '''    compare_field(
+        &mut divergences,
+        ReplayDivergenceKind::ToolOutputs,
+        &fingerprint(&expected.tool_output_fingerprints),
+        &fingerprint(&actual.tool_output_fingerprints),
+    );
+    compare_field(
+        &mut divergences,
+        ReplayDivergenceKind::Transactions,
+        &fingerprint(&expected.transaction_fingerprints),
+        &fingerprint(&actual.transaction_fingerprints),
+    );'''
+          new = '''    let expected_tool_outputs = fingerprint(&expected.tool_output_fingerprints)?;
+    let actual_tool_outputs = fingerprint(&actual.tool_output_fingerprints)?;
+    compare_field(
+        &mut divergences,
+        ReplayDivergenceKind::ToolOutputs,
+        &expected_tool_outputs,
+        &actual_tool_outputs,
+    );
+    let expected_transactions = fingerprint(&expected.transaction_fingerprints)?;
+    let actual_transactions = fingerprint(&actual.transaction_fingerprints)?;
+    compare_field(
+        &mut divergences,
+        ReplayDivergenceKind::Transactions,
+        &expected_transactions,
+        &actual_transactions,
+    );'''
+          if old not in text:
+              raise SystemExit('snapshot replay comparison block not found')
+          text = text.replace(old, new, 1)
+          text = text.replace('    ));\n    Ok(ReplayReport {', '    ))?;\n    Ok(ReplayReport {', 1)
+          text = text.replace(
+              'fn fingerprint<T: Serialize>(value: &T) -> String {\n    let bytes =\n        serde_json::to_vec(value).expect("serializing deterministic snapshot data cannot fail");\n    fingerprint_bytes(&bytes)\n}',
+              'fn fingerprint<T: Serialize>(value: &T) -> Result<String, &\'static str> {\n    let bytes = serde_json::to_vec(value).map_err(|_| "snapshot serialization failed")?;\n    Ok(fingerprint_bytes(&bytes))\n}',
+              1,
+          )
+          snapshot.write_text(text)
+
+          writeback = Path('crates/medusa-memory-writeback/src/lib.rs')
+          text = writeback.read_text()
+          text = text.replace('    ));\n    let plan_fingerprint = fingerprint(&(', '    ))?;\n    let plan_fingerprint = fingerprint(&(', 1)
+          text = text.replace('        &source_fingerprint,\n    ));\n    Ok(WritebackPlan {', '        &source_fingerprint,\n    ))?;\n    Ok(WritebackPlan {', 1)
+          text = text.replace(
+              'fn fingerprint<T: Serialize>(value: &T) -> String {\n    fingerprint_bytes(\n        &serde_json::to_vec(value).expect("in-memory writeback serialization cannot fail"),\n    )\n}',
+              'fn fingerprint<T: Serialize>(value: &T) -> Result<String, &\'static str> {\n    let bytes = serde_json::to_vec(value).map_err(|_| "memory writeback serialization failed")?;\n    Ok(fingerprint_bytes(&bytes))\n}',
+              1,
+          )
+          writeback.write_text(text)
+          PY
+          cargo fmt --all
+      - name: Commit repairs
+        run: |
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add crates/medusa-repository-snapshot/src/lib.rs crates/medusa-memory-writeback/src/lib.rs
+          git commit -m "Propagate snapshot and writeback serialization errors"
+          git push origin HEAD:agent/local-execution-bridge
