@@ -51,6 +51,10 @@ pub(super) struct PortableRenderSnapshot {
     input_tokens: u64,
     output_tokens: u64,
     timed_output_tokens: u64,
+    total_tokens: u64,
+    estimated_cost_microusd: u64,
+    tokens_per_second_milli: u64,
+    usage_provenance: Option<String>,
     cache_read_input_tokens: u64,
     cache_creation_input_tokens: u64,
     current_context_tokens: u64,
@@ -83,6 +87,10 @@ pub(super) fn portable_render_snapshot(
         input_tokens: app.input_tokens,
         output_tokens: app.output_tokens,
         timed_output_tokens: app.timed_output_tokens,
+        total_tokens: app.total_tokens,
+        estimated_cost_microusd: app.estimated_cost_microusd,
+        tokens_per_second_milli: app.tokens_per_second_milli,
+        usage_provenance: app.usage_provenance.clone(),
         cache_read_input_tokens: app.cache_read_input_tokens,
         cache_creation_input_tokens: app.cache_creation_input_tokens,
         current_context_tokens: app.current_context_tokens(),
@@ -117,12 +125,15 @@ pub(super) fn session_metrics_line(app: &AppState) -> String {
         .output_tokens_per_second()
         .map_or_else(|| "—".to_owned(), format_token_rate);
     format!(
-        "session {} · input {} · output {} · cache-read {} · cache-write {} · {rate} tok/s",
+        "session {} · total {} · input {} · output {} · cache-read {} · cache-write {} · cost {} · {} · {rate} tok/s",
         format_elapsed(app.session_elapsed_seconds()),
+        format_token_count(app.total_tokens),
         format_token_count(app.input_tokens),
         format_token_count(app.output_tokens),
         format_token_count(app.cache_read_input_tokens),
         format_token_count(app.cache_creation_input_tokens),
+        format_cost(app.estimated_cost_microusd),
+        app.usage_provenance.as_deref().unwrap_or("—"),
     )
 }
 
@@ -151,6 +162,13 @@ pub(super) fn context_meter_line(app: &AppState) -> String {
         format_token_count(window),
         app.auto_compact_percent(),
     )
+}
+
+fn format_cost(microusd: u64) -> String {
+    if microusd == 0 {
+        return "—".to_owned();
+    }
+    format!("${:.4}", microusd as f64 / 1_000_000.0)
 }
 
 fn format_token_rate(tokens_per_second: f64) -> String {

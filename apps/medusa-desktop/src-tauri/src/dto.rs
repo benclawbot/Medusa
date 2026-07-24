@@ -76,7 +76,11 @@ pub enum DesktopRuntimeEvent {
         output_tokens: u64,
         cache_read_input_tokens: u64,
         cache_creation_input_tokens: u64,
-        model_elapsed_millis: u64,
+        total_tokens: u64,
+        duration_ms: u64,
+        tokens_per_second_milli: u64,
+        estimated_cost_microusd: u64,
+        provenance: String,
     },
     Progress {
         turn: u32,
@@ -215,13 +219,21 @@ impl From<RuntimeEvent> for DesktopRuntimeEvent {
                 output_tokens,
                 cache_read_input_tokens,
                 cache_creation_input_tokens,
-                model_elapsed_millis,
+                total_tokens,
+                duration_ms,
+                tokens_per_second_milli,
+                estimated_cost_microusd,
+                provenance,
             } => Self::Usage {
                 input_tokens,
                 output_tokens,
                 cache_read_input_tokens,
                 cache_creation_input_tokens,
-                model_elapsed_millis,
+                total_tokens,
+                duration_ms,
+                tokens_per_second_milli,
+                estimated_cost_microusd,
+                provenance: format!("{provenance:?}").to_ascii_lowercase(),
             },
             RuntimeEvent::Progress { turn } => Self::Progress { turn },
             RuntimeEvent::Settings {
@@ -280,14 +292,22 @@ mod tests {
             output_tokens: 7,
             cache_read_input_tokens: 3,
             cache_creation_input_tokens: 2,
-            model_elapsed_millis: 900,
+            total_tokens: 23,
+            duration_ms: 900,
+            tokens_per_second_milli: 25_555,
+            estimated_cost_microusd: 123,
+            provenance: "providerreported".to_owned(),
         })
         .expect("serialize usage event");
         assert_eq!(usage["inputTokens"], 11);
         assert_eq!(usage["outputTokens"], 7);
         assert_eq!(usage["cacheReadInputTokens"], 3);
         assert_eq!(usage["cacheCreationInputTokens"], 2);
-        assert_eq!(usage["modelElapsedMillis"], 900);
+        assert_eq!(usage["totalTokens"], 23);
+        assert_eq!(usage["durationMs"], 900);
+        assert_eq!(usage["tokensPerSecondMilli"], 25_555);
+        assert_eq!(usage["estimatedCostMicrousd"], 123);
+        assert_eq!(usage["provenance"], "providerreported");
         assert!(usage.get("input_tokens").is_none());
 
         let settings = serde_json::to_value(DesktopRuntimeEvent::Settings {

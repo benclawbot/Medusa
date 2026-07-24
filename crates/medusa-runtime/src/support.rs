@@ -17,7 +17,10 @@ use crate::{
     prompt::{ImageAttachment, PromptAttachment, PromptDraft},
 };
 
-use super::{RuntimeActivity, RuntimeActivityKind, RuntimeError, RuntimeEvent, RuntimeState};
+use super::{
+    RuntimeActivity, RuntimeActivityKind, RuntimeError, RuntimeEvent, RuntimeState, TurnUsage,
+    UsageProvenance,
+};
 
 const MAX_FILE_CONTEXT_BYTES: usize = 2 * 1024 * 1024;
 const MAX_SKILL_CONTEXT_BYTES: usize = 64_000;
@@ -329,36 +332,67 @@ pub(super) fn forward_update(
             state.model_started_at = Some(Instant::now());
         }
         AgentUpdate::Event(EventPayload::ModelResponseReceived { usage, .. }) => {
-            let model_elapsed_millis = state.model_started_at.take().map_or(0, |started_at| {
+            let measured_duration_ms = state.model_started_at.take().map_or(0, |started_at| {
                 u64::try_from(started_at.elapsed().as_millis())
                     .unwrap_or(u64::MAX)
                     .max(1)
             });
-            let input_tokens = usage
-                .get("input_tokens")
-                .and_then(Value::as_u64)
-                .unwrap_or_default();
-            let output_tokens = usage
-                .get("output_tokens")
-                .and_then(Value::as_u64)
-                .unwrap_or_default();
-            let cache_read_input_tokens = usage
-                .get("cache_read_input_tokens")
-                .and_then(Value::as_u64)
-                .unwrap_or_default();
-            let cache_creation_input_tokens = usage
-                .get("cache_creation_input_tokens")
-                .and_then(Value::as_u64)
-                .unwrap_or_default();
-            state.current_context_tokens = input_tokens
-                .saturating_add(cache_read_input_tokens)
-                .saturating_add(cache_creation_input_tokens);
+            let usage = serde_json::from_value::<TurnUsage>(usage.clone()).unwrap_or_else(|_| {
+                let input_tokens = usage
+                    .get("input_tokens")
+                    .and_then(Value::as_u64)
+                    .unwrap_or_default();
+                let output_tokens = usage
+                    .get("output_tokens")
+                    .and_then(Value::as_u64)
+                    .unwrap_or_default();
+                let cache_read_input_tokens = usage
+                    .get("cache_read_input_tokens")
+                    .and_then(Value::as_u64)
+                    .unwrap_or_default();
+                let cache_creation_input_tokens = usage
+                    .get("cache_creation_input_tokens")
+                    .and_then(Value::as_u64)
+                    .unwrap_or_default();
+                let total_tokens = input_tokens
+                    .saturating_add(output_tokens)
+                    .saturating_add(cache_read_input_tokens)
+                    .saturating_add(cache_creation_input_tokens);
+                TurnUsage {
+                    turn: 0,
+                    input_tokens,
+                    output_tokens,
+                    cache_read_input_tokens,
+                    cache_creation_input_tokens,
+                    total_tokens,
+                    duration_ms: measured_duration_ms,
+                    tokens_per_second_milli: if measured_duration_ms == 0 {
+                        0
+                    } else {
+                        total_tokens.saturating_mul(1_000_000) / measured_duration_ms
+                    },
+                    estimated_cost_microusd: 0,
+                    provenance: if total_tokens == 0 {
+                        UsageProvenance::Estimated
+                    } else {
+                        UsageProvenance::ProviderReported
+                    },
+                }
+            });
+            state.current_context_tokens = usage
+                .input_tokens
+                .saturating_add(usage.cache_read_input_tokens)
+                .saturating_add(usage.cache_creation_input_tokens);
             let _ = events.send(RuntimeEvent::Usage {
-                input_tokens,
-                output_tokens,
-                cache_read_input_tokens,
-                cache_creation_input_tokens,
-                model_elapsed_millis,
+                input_tokens: usage.input_tokens,
+                output_tokens: usage.output_tokens,
+                cache_read_input_tokens: usage.cache_read_input_tokens,
+                cache_creation_input_tokens: usage.cache_creation_input_tokens,
+                total_tokens: usage.total_tokens,
+                duration_ms: usage.duration_ms,
+                tokens_per_second_milli: usage.tokens_per_second_milli,
+                estimated_cost_microusd: usage.estimated_cost_microusd,
+                provenance: usage.provenance,
             });
         }
         AgentUpdate::Event(EventPayload::ToolCallRequested { tool, arguments }) => {
