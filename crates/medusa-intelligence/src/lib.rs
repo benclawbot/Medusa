@@ -1,5 +1,6 @@
 //! Syntax-aware indexing, reference discovery, transactional patches, and test impact.
 
+mod discovery;
 mod format;
 mod impact;
 mod index;
@@ -7,6 +8,7 @@ mod language;
 mod patch;
 mod support;
 
+pub use discovery::{FileFingerprint, RepositorySnapshot, SnapshotChanges};
 pub use format::format_changed;
 pub use impact::{TestImpact, select_tests};
 pub use language::{CodeIndex, Language, Reference, Symbol, SymbolKind};
@@ -32,6 +34,54 @@ mod tests {
         assert_eq!(index.definitions("old_name").len(), 1);
         assert_eq!(index.references("old_name").len(), 2);
         assert!(index.parse_errors.is_empty());
+    }
+
+    #[test]
+    fn repository_snapshot_ignores_generated_vendor_and_binary_content() {
+        let directory = tempfile::tempdir().expect("tempdir");
+        fs::create_dir_all(directory.path().join("src")).expect("src");
+        fs::create_dir_all(directory.path().join("node_modules/pkg")).expect("node_modules");
+        fs::create_dir_all(directory.path().join("vendor/lib")).expect("vendor");
+        fs::create_dir_all(directory.path().join("dist")).expect("dist");
+        fs::write(directory.path().join("src/lib.rs"), "pub fn kept() {}\n").expect("source");
+        fs::write(directory.path().join("README.md"), "kept\n").expect("readme");
+        fs::write(
+            directory.path().join("node_modules/pkg/index.js"),
+            "ignored\n",
+        )
+        .expect("node module");
+        fs::write(directory.path().join("vendor/lib/code.rs"), "ignored\n").expect("vendor");
+        fs::write(directory.path().join("dist/app.js"), "ignored\n").expect("dist");
+        fs::write(directory.path().join("src/blob.rs"), b"pub\0binary").expect("binary");
+
+        let snapshot = RepositorySnapshot::scan(directory.path()).expect("snapshot");
+        assert_eq!(
+            snapshot.files.keys().cloned().collect::<Vec<_>>(),
+            vec![PathBuf::from("README.md"), PathBuf::from("src/lib.rs")]
+        );
+    }
+
+    #[test]
+    fn repository_snapshot_reports_stable_incremental_changes() {
+        let directory = tempfile::tempdir().expect("tempdir");
+        fs::create_dir(directory.path().join("src")).expect("src");
+        fs::write(directory.path().join("src/a.rs"), "fn a() {}\n").expect("a");
+        fs::write(directory.path().join("src/b.rs"), "fn b() {}\n").expect("b");
+        let previous = RepositorySnapshot::scan(directory.path()).expect("previous");
+
+        fs::write(directory.path().join("src/a.rs"), "fn a() -> u8 { 1 }\n").expect("modify");
+        fs::remove_file(directory.path().join("src/b.rs")).expect("remove");
+        fs::write(directory.path().join("src/c.rs"), "fn c() {}\n").expect("add");
+        let current = RepositorySnapshot::scan(directory.path()).expect("current");
+
+        assert_eq!(
+            current.changes_since(&previous),
+            SnapshotChanges {
+                added: vec![PathBuf::from("src/c.rs")],
+                modified: vec![PathBuf::from("src/a.rs")],
+                removed: vec![PathBuf::from("src/b.rs")],
+            }
+        );
     }
 
     #[test]
@@ -120,7 +170,6 @@ mod tests {
         let path = directory.path().join("script.rs");
         fs::write(&path, "abcdef").expect("file");
         fs::set_permissions(&path, fs::Permissions::from_mode(0o744)).expect("permissions");
-
         let mut transaction = PatchTransaction::new();
         transaction
             .add_edit(TextEdit {
