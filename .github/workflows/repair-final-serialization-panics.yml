@@ -26,8 +26,20 @@ jobs:
 
           snapshot = Path('crates/medusa-repository-snapshot/src/lib.rs')
           text = snapshot.read_text()
-          text = text.replace('let fingerprint = fingerprint(&(&files, &parent_snapshot));', 'let fingerprint = fingerprint(&(&files, &parent_snapshot))?;', 1)
-          text = text.replace('        ));\n        Ok(Self {', '        ))?;\n        Ok(Self {', 1)
+          replacements = [
+              ('let fingerprint = fingerprint(&(&files, &parent_snapshot));',
+               'let fingerprint = fingerprint(&(&files, &parent_snapshot))?;'),
+              ('            final_result_fingerprint.as_str(),\n        ));',
+               '            final_result_fingerprint.as_str(),\n        ))?;'),
+              ('    let report_fingerprint = fingerprint(&(\n        expected.fingerprint.as_str(),\n        actual.fingerprint.as_str(),\n        &divergences,\n    ));',
+               '    let report_fingerprint = fingerprint(&(\n        expected.fingerprint.as_str(),\n        actual.fingerprint.as_str(),\n        &divergences,\n    ))?;'),
+              ('fn fingerprint<T: Serialize>(value: &T) -> String {\n    let bytes =\n        serde_json::to_vec(value).expect("serializing deterministic snapshot data cannot fail");\n    fingerprint_bytes(&bytes)\n}',
+               'fn fingerprint<T: Serialize>(value: &T) -> Result<String, &\'static str> {\n    let bytes = serde_json::to_vec(value).map_err(|_| "snapshot serialization failed")?;\n    Ok(fingerprint_bytes(&bytes))\n}'),
+          ]
+          for old, new in replacements:
+              if old not in text:
+                  raise SystemExit(f'snapshot target not found: {old[:60]}')
+              text = text.replace(old, new, 1)
           old = '''    compare_field(
         &mut divergences,
         ReplayDivergenceKind::ToolOutputs,
@@ -58,27 +70,26 @@ jobs:
     );'''
           if old not in text:
               raise SystemExit('snapshot replay comparison block not found')
-          text = text.replace(old, new, 1)
-          text = text.replace('    ));\n    Ok(ReplayReport {', '    ))?;\n    Ok(ReplayReport {', 1)
-          text = text.replace(
-              'fn fingerprint<T: Serialize>(value: &T) -> String {\n    let bytes =\n        serde_json::to_vec(value).expect("serializing deterministic snapshot data cannot fail");\n    fingerprint_bytes(&bytes)\n}',
-              'fn fingerprint<T: Serialize>(value: &T) -> Result<String, &\'static str> {\n    let bytes = serde_json::to_vec(value).map_err(|_| "snapshot serialization failed")?;\n    Ok(fingerprint_bytes(&bytes))\n}',
-              1,
-          )
-          snapshot.write_text(text)
+          snapshot.write_text(text.replace(old, new, 1))
 
           writeback = Path('crates/medusa-memory-writeback/src/lib.rs')
           text = writeback.read_text()
-          text = text.replace('    ));\n    let plan_fingerprint = fingerprint(&(', '    ))?;\n    let plan_fingerprint = fingerprint(&(', 1)
-          text = text.replace('        &source_fingerprint,\n    ));\n    Ok(WritebackPlan {', '        &source_fingerprint,\n    ))?;\n    Ok(WritebackPlan {', 1)
-          text = text.replace(
-              'fn fingerprint<T: Serialize>(value: &T) -> String {\n    fingerprint_bytes(\n        &serde_json::to_vec(value).expect("in-memory writeback serialization cannot fail"),\n    )\n}',
-              'fn fingerprint<T: Serialize>(value: &T) -> Result<String, &\'static str> {\n    let bytes = serde_json::to_vec(value).map_err(|_| "memory writeback serialization failed")?;\n    Ok(fingerprint_bytes(&bytes))\n}',
-              1,
-          )
+          replacements = [
+              ('    let source_fingerprint = fingerprint(&(\n        &canonical_memories,\n        &canonical_conflicts,\n        &canonical_documents,\n        policy,\n    ));',
+               '    let source_fingerprint = fingerprint(&(\n        &canonical_memories,\n        &canonical_conflicts,\n        &canonical_documents,\n        policy,\n    ))?;'),
+              ('    let plan_fingerprint = fingerprint(&(\n        &patches,\n        &unresolved_conflict_fingerprints,\n        &source_fingerprint,\n    ));',
+               '    let plan_fingerprint = fingerprint(&(\n        &patches,\n        &unresolved_conflict_fingerprints,\n        &source_fingerprint,\n    ))?;'),
+              ('fn fingerprint<T: Serialize>(value: &T) -> String {\n    fingerprint_bytes(\n        &serde_json::to_vec(value).expect("in-memory writeback serialization cannot fail"),\n    )\n}',
+               'fn fingerprint<T: Serialize>(value: &T) -> Result<String, &\'static str> {\n    let bytes = serde_json::to_vec(value).map_err(|_| "memory writeback serialization failed")?;\n    Ok(fingerprint_bytes(&bytes))\n}'),
+          ]
+          for old, new in replacements:
+              if old not in text:
+                  raise SystemExit(f'writeback target not found: {old[:60]}')
+              text = text.replace(old, new, 1)
           writeback.write_text(text)
           PY
           cargo fmt --all
+          ! grep -R --line-number --include='*.rs' -E 'expect\("(serializing deterministic snapshot data|in-memory writeback serialization)' crates/medusa-repository-snapshot crates/medusa-memory-writeback
       - name: Commit repairs
         run: |
           git config user.name github-actions[bot]
