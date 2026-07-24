@@ -34,23 +34,11 @@ The session stores only a relative-path and revision reference. This keeps conve
 
 ## Epistemic rules
 
-The API deliberately separates:
+The API deliberately separates observations, hypotheses, predictions, experiment outcomes, and invariants. Hypotheses cannot cite unknown observations. Refuted hypotheses cannot be promoted to leading or supported state without first adding new evidence.
 
-- observations, which come from users or tools;
-- hypotheses, which are falsifiable explanations;
-- predictions, which must exist before experiment reconciliation;
-- experiment outcomes;
-- invariants, which represent repository properties that must remain true.
+## Failure isolation and compatibility
 
-Hypotheses cannot cite unknown observations. Refuted hypotheses cannot be promoted to leading or supported state without first adding new evidence.
-
-## Failure isolation
-
-World-model creation is additive. A model-storage failure does not prevent a session from being created; the session receives no model reference and the existing Medusa loop continues normally. Loading an explicitly referenced but corrupt model returns a structured Medusa error rather than silently discarding evidence.
-
-## Compatibility
-
-The new `world_model` session field uses `serde(default)`, so older session JSON loads with no model reference. New sessions create their model before the first session persistence operation. The model is stored independently and can evolve without embedding its complete contents in the conversation record.
+World-model creation is additive. A model-storage failure does not prevent a session from being created; the session receives no model reference and the existing Medusa loop continues normally. The new `world_model` field uses `serde(default)`, so older session JSON loads with no model reference. Loading an explicitly referenced but corrupt model returns a structured Medusa error rather than silently discarding evidence.
 
 ## Current boundary
 
@@ -58,10 +46,4 @@ This layer does not yet change normal model tool selection. The next implementat
 
 ## Validation
 
-The crate includes tests for:
-
-- persistence round trips;
-- evidence-link preservation;
-- fabricated observation rejection;
-- invalid hypothesis promotion;
-- durable session creation and restart loading.
+The crate includes tests for persistence round trips, evidence-link preservation, fabricated observation rejection, invalid hypothesis promotion, and durable session creation and restart loading.
