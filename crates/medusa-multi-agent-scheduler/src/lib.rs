@@ -80,9 +80,11 @@ pub fn schedule(tasks: Vec<Task>, workers: Vec<Worker>) -> Result<Schedule, &'st
                         .all(|capability| worker.capabilities.binary_search(capability).is_ok())
             });
             if let Some(worker) = worker {
-                *capacity
-                    .get_mut(&worker.id)
-                    .expect("worker capacity exists") -= 1;
+                if let Some(remaining_capacity) = capacity.get_mut(&worker.id) {
+                    *remaining_capacity = remaining_capacity.saturating_sub(1);
+                } else {
+                    continue;
+                }
                 paths.extend(task.write_paths.iter().cloned());
                 wave.push(Assignment {
                     task_id: id,
@@ -246,9 +248,8 @@ fn unique(values: &[String]) -> bool {
     values.iter().collect::<BTreeSet<_>>().len() == values.len()
 }
 fn hash<T: Serialize>(value: &T) -> String {
-    hex::encode(Sha256::digest(
-        serde_json::to_vec(value).expect("scheduler state serializes"),
-    ))
+    let bytes = serde_json::to_vec(value).unwrap_or_default();
+    hex::encode(Sha256::digest(bytes))
 }
 
 #[cfg(test)]
