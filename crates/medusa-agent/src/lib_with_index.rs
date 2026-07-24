@@ -1,4 +1,7 @@
-include!("lib.rs");
+#[path = "lib.rs"]
+mod agent;
+
+pub use agent::*;
 
 mod index_cache;
 
