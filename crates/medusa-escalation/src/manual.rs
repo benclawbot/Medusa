@@ -81,11 +81,7 @@ impl AdviceEnvelope {
         repo: &Path,
     ) -> Result<(), Vec<StaleReadSetEntry>> {
         let stale = stale_read_set(packet, repo);
-        if stale.is_empty() {
-            Ok(())
-        } else {
-            Err(stale)
-        }
+        if stale.is_empty() { Ok(()) } else { Err(stale) }
     }
 }
 
@@ -98,12 +94,10 @@ pub fn stale_read_set(packet: &EscalationPacket, repo: &Path) -> Vec<StaleReadSe
         .filter_map(|entry| {
             let path = repo.join(&entry.path);
             let actual = fs::read(path).ok().map(|bytes| sha256_hex(&bytes));
-            (actual.as_deref() != Some(entry.content_sha256.as_str())).then(|| {
-                StaleReadSetEntry {
-                    path: entry.path.clone(),
-                    expected_sha256: entry.content_sha256.clone(),
-                    actual_sha256: actual,
-                }
+            (actual.as_deref() != Some(entry.content_sha256.as_str())).then(|| StaleReadSetEntry {
+                path: entry.path.clone(),
+                expected_sha256: entry.content_sha256.clone(),
+                actual_sha256: actual,
             })
         })
         .collect()
@@ -214,8 +208,7 @@ mod tests {
     fn tampered_advice_is_rejected() {
         let packet = packet();
         let mut envelope =
-            AdviceEnvelope::new(&packet, "Original", OffsetDateTime::UNIX_EPOCH)
-                .expect("envelope");
+            AdviceEnvelope::new(&packet, "Original", OffsetDateTime::UNIX_EPOCH).expect("envelope");
         envelope.advice = "Tampered".into();
         assert_eq!(
             envelope.validate_for(&packet),
@@ -237,11 +230,7 @@ mod tests {
         )
         .expect("envelope");
         let advice_path = directory.path().join("answer.advice.json");
-        fs::write(
-            &advice_path,
-            serde_json::to_vec_pretty(&envelope).unwrap(),
-        )
-        .unwrap();
+        fs::write(&advice_path, serde_json::to_vec_pretty(&envelope).unwrap()).unwrap();
         assert_eq!(
             import_advice(&advice_path, &packet).expect("import"),
             envelope
@@ -262,8 +251,9 @@ mod tests {
             content_sha256: sha256_hex(b"present before export"),
         });
         packet.refresh_digest().expect("digest");
-        let envelope = AdviceEnvelope::new(&packet, "Review parser state.", OffsetDateTime::UNIX_EPOCH)
-            .expect("envelope");
+        let envelope =
+            AdviceEnvelope::new(&packet, "Review parser state.", OffsetDateTime::UNIX_EPOCH)
+                .expect("envelope");
 
         fs::write(directory.path().join("parser.rs"), "new").expect("mutation");
         let stale = envelope
@@ -271,6 +261,10 @@ mod tests {
             .expect_err("stale");
         assert_eq!(stale.len(), 2);
         assert!(stale.iter().any(|entry| entry.path == "parser.rs"));
-        assert!(stale.iter().any(|entry| entry.path == "missing.rs" && entry.actual_sha256.is_none()));
+        assert!(
+            stale
+                .iter()
+                .any(|entry| entry.path == "missing.rs" && entry.actual_sha256.is_none())
+        );
     }
 }

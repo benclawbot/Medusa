@@ -135,8 +135,7 @@ impl EscalationLifecycleEvent {
             {
                 return Err("advice lifecycle digest must be SHA-256 hex");
             }
-            Self::AdviceRejected { reason, .. }
-            | Self::Superseded { reason, .. }
+            Self::AdviceRejected { reason, .. } | Self::Superseded { reason, .. }
                 if reason.trim().is_empty() =>
             {
                 return Err("rejected or superseded lifecycle event requires a reason");

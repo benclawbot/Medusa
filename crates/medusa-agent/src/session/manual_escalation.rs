@@ -73,19 +73,13 @@ pub fn import_manual_advice(
         ));
     }
     entry
-        .import_advice(
-            envelope.advice_digest_sha256.clone(),
-            envelope.imported_at,
-        )
+        .import_advice(envelope.advice_digest_sha256.clone(), envelope.imported_at)
         .map_err(exchange_error)?;
     persist_escalation_journal(repo, session_id, &journal)?;
     Ok(envelope)
 }
 
-fn validate_session_binding(
-    session_id: &SessionId,
-    packet: &EscalationPacket,
-) -> MedusaResult<()> {
+fn validate_session_binding(session_id: &SessionId, packet: &EscalationPacket) -> MedusaResult<()> {
     if packet.session_id != session_id.as_str() {
         return Err(exchange_error(
             "escalation packet belongs to another session",
@@ -109,15 +103,12 @@ fn exchange_error(message: impl ToString) -> MedusaError {
 mod tests {
     use std::{collections::BTreeSet, fs};
 
-    use medusa_escalation::{
-        AdviceEnvelope, EscalationMode, EscalationReason, ReadSetEntry,
-    };
+    use medusa_escalation::{AdviceEnvelope, EscalationMode, EscalationReason, ReadSetEntry};
     use sha2::{Digest, Sha256};
 
     use super::*;
     use crate::session::{
-        EscalationJournal, EscalationStatus, SessionEscalation,
-        persist_escalation_journal,
+        EscalationJournal, EscalationStatus, SessionEscalation, persist_escalation_journal,
     };
 
     fn packet(session_id: &SessionId) -> EscalationPacket {
@@ -170,13 +161,8 @@ mod tests {
         )
         .expect("envelope");
         let advice_path = directory.path().join("advice.json");
-        fs::write(
-            &advice_path,
-            serde_json::to_vec_pretty(&envelope).unwrap(),
-        )
-        .unwrap();
-        import_manual_advice(directory.path(), &session_id, &packet, &advice_path)
-            .expect("import");
+        fs::write(&advice_path, serde_json::to_vec_pretty(&envelope).unwrap()).unwrap();
+        import_manual_advice(directory.path(), &session_id, &packet, &advice_path).expect("import");
 
         let journal = load_escalation_journal(directory.path(), &session_id).expect("load");
         assert_eq!(journal.entries[0].status, EscalationStatus::AdviceImported);
@@ -210,13 +196,8 @@ mod tests {
         fs::write(&advice_path, serde_json::to_vec_pretty(&envelope).unwrap()).unwrap();
         fs::write(directory.path().join("parser.rs"), "new").expect("mutation");
 
-        let error = import_manual_advice(
-            directory.path(),
-            &session_id,
-            &packet,
-            &advice_path,
-        )
-        .expect_err("stale advice");
+        let error = import_manual_advice(directory.path(), &session_id, &packet, &advice_path)
+            .expect_err("stale advice");
         assert!(error.message.contains("parser.rs"));
         let journal = load_escalation_journal(directory.path(), &session_id).expect("load");
         assert_eq!(journal.entries[0].status, EscalationStatus::AwaitingAdvice);

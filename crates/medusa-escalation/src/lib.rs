@@ -80,8 +80,12 @@ impl Default for EscalationPolicy {
 #[serde(rename_all = "snake_case")]
 pub enum EscalationDecision {
     ContinueLocally,
-    Escalate { reasons: BTreeSet<EscalationReason> },
-    Blocked { reasons: BTreeSet<EscalationBlockReason> },
+    Escalate {
+        reasons: BTreeSet<EscalationReason>,
+    },
+    Blocked {
+        reasons: BTreeSet<EscalationBlockReason>,
+    },
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize)]
@@ -230,7 +234,9 @@ impl EscalationPacket {
             digest_sha256: String::new(),
         };
         packet.validate()?;
-        packet.refresh_digest().map_err(|_| "could not hash packet")?;
+        packet
+            .refresh_digest()
+            .map_err(|_| "could not hash packet")?;
         Ok(packet)
     }
 
@@ -318,8 +324,7 @@ mod tests {
     fn low_confidence_escalates_after_local_spike() {
         let mut input = context();
         input.confidence_basis_points = Some(5_000);
-        let EscalationDecision::Escalate { reasons } =
-            EscalationPolicy::default().evaluate(&input)
+        let EscalationDecision::Escalate { reasons } = EscalationPolicy::default().evaluate(&input)
         else {
             panic!("expected escalation");
         };

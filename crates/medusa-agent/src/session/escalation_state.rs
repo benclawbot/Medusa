@@ -193,7 +193,9 @@ pub fn load_escalation_journal(
     let journal: EscalationJournal = serde_json::from_slice(&fs::read(path)?)?;
     journal.validate().map_err(persistence_error)?;
     if journal.session_id != session_id.as_str() {
-        return Err(persistence_error("escalation journal belongs to another session"));
+        return Err(persistence_error(
+            "escalation journal belongs to another session",
+        ));
     }
     Ok(journal)
 }
@@ -205,7 +207,9 @@ pub fn persist_escalation_journal(
 ) -> MedusaResult<()> {
     journal.validate().map_err(persistence_error)?;
     if journal.session_id != session_id.as_str() {
-        return Err(persistence_error("escalation journal belongs to another session"));
+        return Err(persistence_error(
+            "escalation journal belongs to another session",
+        ));
     }
     let path = journal_path(repo, session_id);
     if let Some(parent) = path.parent() {
