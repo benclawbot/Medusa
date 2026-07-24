@@ -125,8 +125,9 @@ mod tests {
         let directory = tempfile::tempdir().expect("repository");
         let mut session = session(directory.path().to_path_buf());
         let initial_revision = session.world_model.as_ref().expect("model").revision;
-        let observation = record_user_observation(&mut session, "the failing test is deterministic")
-            .expect("observation");
+        let observation =
+            record_user_observation(&mut session, "the failing test is deterministic")
+                .expect("observation");
         let hypothesis = add_hypothesis(
             &mut session,
             "the failure is caused by deterministic state",
