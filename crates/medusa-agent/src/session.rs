@@ -15,6 +15,7 @@ use crate::{
     evidence::verify_chain,
 };
 
+mod browser_assisted_escalation;
 mod escalation_state;
 mod lessons;
 mod manual_escalation;
@@ -25,6 +26,9 @@ mod skill_probation;
 #[path = "usage.rs"]
 mod usage;
 
+pub use browser_assisted_escalation::{
+    BrowserAssistedLaunch, launch_browser_assisted_escalation, render_chatgpt_prompt,
+};
 pub use escalation_state::{
     EscalationJournal, EscalationStatus, SessionEscalation, load_escalation_journal,
     persist_escalation_journal,
