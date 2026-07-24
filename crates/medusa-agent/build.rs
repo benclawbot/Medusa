@@ -20,7 +20,7 @@ const CONTEXT_RECOVERY_REQUEST_BLOCK: &str = r#"        if let Some(refresh) = r
                 is_error: false,
             });
         }
-        let system = coding_policy::apply(
+        let mut system = coding_policy::apply(
             system_prompt_with_context(
                 self.config.agent.mode,
                 &session.repo,
@@ -29,13 +29,36 @@ const CONTEXT_RECOVERY_REQUEST_BLOCK: &str = r#"        if let Some(refresh) = r
             self.config.agent.mode,
         );
         let tools = available_tools(self.config.agent.mode, &self.desktop_commander_settings);
-        let budget = context_budget::PromptBudget::for_request(
+        let mut budget = context_budget::PromptBudget::for_request(
             &system,
             &session.messages,
             &tools,
             self.config.model.max_output_tokens,
             context_budget::configured_context_window_tokens(),
         );
+        let repository_capacity = budget
+            .compaction_threshold_tokens
+            .saturating_sub(budget.estimated_total_tokens);
+        if let Some(retrieval) = repository_index::retrieve_context(
+            &session.repo,
+            &session.objective,
+            repository_capacity,
+        )? {
+            system.push_str("\n\n");
+            system.push_str(&retrieval.system_fragment);
+            observer(&AgentUpdate::ToolOutput {
+                tool: "repository_context".to_owned(),
+                output: retrieval.status,
+                is_error: false,
+            });
+            budget = context_budget::PromptBudget::for_request(
+                &system,
+                &session.messages,
+                &tools,
+                self.config.model.max_output_tokens,
+                context_budget::configured_context_window_tokens(),
+            );
+        }
         let _remaining_context_tokens = budget.remaining_tokens();
         let _request_exceeds_context_window = budget.exceeds_context_window();
         let mut compacted = false;
