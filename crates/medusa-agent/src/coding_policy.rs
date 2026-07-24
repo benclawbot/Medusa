@@ -1,5 +1,4 @@
-//! Always-on minimal implementation policy inspired by Ponytail's decision ladder.
-
+/// Always-on minimal implementation policy inspired by Ponytail's decision ladder.
 use medusa_config::Mode;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
