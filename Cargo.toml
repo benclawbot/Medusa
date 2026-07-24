@@ -38,6 +38,7 @@ members = [
   "crates/medusa-conflict-resolution",
   "crates/medusa-transaction-coordinator",
   "crates/medusa-recovery-coordinator",
+  "crates/medusa-consensus",
   "crates/medusa-agent",
   "crates/medusa-browser-client",
   "crates/medusa-browserd",
