@@ -24,7 +24,10 @@ mod skill_probation;
 #[path = "usage.rs"]
 mod usage;
 
-pub use escalation_state::{EscalationStatus, SessionEscalation};
+pub use escalation_state::{
+    EscalationJournal, EscalationStatus, SessionEscalation, load_escalation_journal,
+    persist_escalation_journal,
+};
 pub(crate) use usage::record_turn_usage;
 #[allow(unused_imports)]
 pub use usage::{SessionUsage, TurnUsage, UsageProvenance, session_usage};
@@ -140,8 +143,6 @@ pub struct AgentSession {
     pub approval_receipts: Vec<ApprovalReceipt>,
     #[serde(default)]
     pub rollback_receipts: Vec<RollbackReceipt>,
-    #[serde(default)]
-    pub escalations: Vec<SessionEscalation>,
 }
 
 /// Creates the on-disk Medusa layout and repository map.
@@ -150,6 +151,7 @@ pub fn bootstrap(repo: &Path) -> MedusaResult<()> {
         fs::create_dir_all(fallback_session_root(repo))?;
     }
     let _ = fs::create_dir_all(repo.join(".medusa/world-models"));
+    let _ = fs::create_dir_all(repo.join(".medusa/escalations"));
     let map = repo.join("REPOSITORY_MAP.md");
     if !map.exists() {
         let _ = fs::write(
@@ -176,28 +178,10 @@ pub(crate) fn load(repo: &Path, session: &str) -> MedusaResult<AgentSession> {
     };
     let session: AgentSession = serde_json::from_slice(&fs::read(path)?)?;
     verify_chain(&session.events)?;
-    for escalation in &session.escalations {
-        escalation.validate().map_err(|message| {
-            MedusaError::new(
-                ErrorCode::InvalidConfiguration,
-                ErrorCategory::Persistence,
-                message,
-            )
-        })?;
-    }
     Ok(session)
 }
 
 pub(crate) fn persist(session: &AgentSession) -> MedusaResult<()> {
-    for escalation in &session.escalations {
-        escalation.validate().map_err(|message| {
-            MedusaError::new(
-                ErrorCode::InvalidConfiguration,
-                ErrorCategory::Persistence,
-                message,
-            )
-        })?;
-    }
     let primary = session_path(&session.repo, &session.id);
     let persisted = match persist_at(&primary, session) {
         Ok(()) => Ok(()),
