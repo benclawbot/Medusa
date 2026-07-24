@@ -5,3 +5,5 @@ Production panic-audit findings must propagate serialization errors instead of p
 Worker transaction fingerprinting follows the same non-panicking error-propagation rule.
 
 Memory consolidation fingerprinting also propagates serialization errors.
+
+Repository snapshot and memory writeback fingerprinting are non-panicking and error-aware.
