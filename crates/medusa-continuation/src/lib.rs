@@ -1,6 +1,8 @@
 //! Deterministic continuation decisions for incomplete autonomous plans.
 
-use medusa_confidence::{GateDecision, SpikeGatePolicy, SpikeRequest, TodoConfidenceHistory, TodoId};
+use medusa_confidence::{
+    GateDecision, SpikeGatePolicy, SpikeRequest, TodoConfidenceHistory, TodoId,
+};
 use medusa_failure::{FailureDecision, FailureDisposition};
 use serde::{Deserialize, Serialize};
 use time::OffsetDateTime;
@@ -44,13 +46,25 @@ impl PlanSnapshot {
             return Err("plan must contain at least one todo");
         }
         for (index, todo) in self.todos.iter().enumerate() {
-            if self.todos[..index].iter().any(|candidate| candidate.id == todo.id) {
+            if self.todos[..index]
+                .iter()
+                .any(|candidate| candidate.id == todo.id)
+            {
                 return Err("plan contains duplicate todo identifiers");
             }
-            if todo.dependencies.iter().any(|dependency| dependency == &todo.id) {
+            if todo
+                .dependencies
+                .iter()
+                .any(|dependency| dependency == &todo.id)
+            {
                 return Err("todo cannot depend on itself");
             }
-            if todo.dependencies.iter().any(|dependency| !self.todos.iter().any(|candidate| &candidate.id == dependency)) {
+            if todo.dependencies.iter().any(|dependency| {
+                !self
+                    .todos
+                    .iter()
+                    .any(|candidate| &candidate.id == dependency)
+            }) {
                 return Err("todo references an unknown dependency");
             }
         }
@@ -59,7 +73,9 @@ impl PlanSnapshot {
 
     #[must_use]
     pub fn complete(&self) -> bool {
-        self.todos.iter().all(|todo| todo.state == TodoState::Completed)
+        self.todos
+            .iter()
+            .all(|todo| todo.state == TodoState::Completed)
     }
 
     #[must_use]
@@ -77,7 +93,9 @@ impl PlanSnapshot {
 
     #[must_use]
     pub fn has_unresolved_blocker(&self) -> bool {
-        self.todos.iter().any(|todo| todo.state == TodoState::Blocked)
+        self.todos
+            .iter()
+            .any(|todo| todo.state == TodoState::Blocked)
     }
 }
 
@@ -162,12 +180,19 @@ impl ContinuationController {
         })
     }
 
-    pub fn decide(&self, context: ContinuationContext<'_>) -> Result<ContinuationDecision, &'static str> {
+    pub fn decide(
+        &self,
+        context: ContinuationContext<'_>,
+    ) -> Result<ContinuationDecision, &'static str> {
         context.plan.validate()?;
         context.confidence.validate()?;
 
         if context.plan.complete() {
-            return Ok(self.decision(context.plan, ContinuationAction::Complete, "all plan items are complete"));
+            return Ok(self.decision(
+                context.plan,
+                ContinuationAction::Complete,
+                "all plan items are complete",
+            ));
         }
 
         if context.plan.has_unresolved_blocker() {
@@ -210,7 +235,10 @@ impl ContinuationController {
                     ));
                 }
                 FailureDisposition::RetryImmediately | FailureDisposition::RetryWithBackoff => {
-                    let todo = context.plan.next_runnable().ok_or("incomplete plan has no runnable todo")?;
+                    let todo = context
+                        .plan
+                        .next_runnable()
+                        .ok_or("incomplete plan has no runnable todo")?;
                     return Ok(self.decision(
                         context.plan,
                         ContinuationAction::Retry {
@@ -223,7 +251,10 @@ impl ContinuationController {
             }
         }
 
-        let todo = context.plan.next_runnable().ok_or("incomplete plan has no runnable todo")?;
+        let todo = context
+            .plan
+            .next_runnable()
+            .ok_or("incomplete plan has no runnable todo")?;
         if todo.id != context.confidence.todo_id {
             return Err("confidence history does not match the next runnable todo");
         }
@@ -315,7 +346,10 @@ mod tests {
         history
     }
 
-    fn context<'a>(plan: &'a PlanSnapshot, confidence: &'a TodoConfidenceHistory) -> ContinuationContext<'a> {
+    fn context<'a>(
+        plan: &'a PlanSnapshot,
+        confidence: &'a TodoConfidenceHistory,
+    ) -> ContinuationContext<'a> {
         ContinuationContext {
             plan,
             confidence,
@@ -328,25 +362,38 @@ mod tests {
 
     #[test]
     fn resumes_incomplete_plan_from_checkpoint() {
-        let controller = ContinuationController::new(ContinuationPolicy::default()).expect("controller");
+        let controller =
+            ContinuationController::new(ContinuationPolicy::default()).expect("controller");
         let plan = plan(TodoState::InProgress);
         let confidence = confidence(8_000);
-        let decision = controller.decide(context(&plan, &confidence)).expect("decision");
-        assert!(matches!(decision.action, ContinuationAction::Resume { from_checkpoint: true, .. }));
+        let decision = controller
+            .decide(context(&plan, &confidence))
+            .expect("decision");
+        assert!(matches!(
+            decision.action,
+            ContinuationAction::Resume {
+                from_checkpoint: true,
+                ..
+            }
+        ));
     }
 
     #[test]
     fn low_confidence_requires_spike() {
-        let controller = ContinuationController::new(ContinuationPolicy::default()).expect("controller");
+        let controller =
+            ContinuationController::new(ContinuationPolicy::default()).expect("controller");
         let plan = plan(TodoState::Pending);
         let confidence = confidence(4_000);
-        let decision = controller.decide(context(&plan, &confidence)).expect("decision");
+        let decision = controller
+            .decide(context(&plan, &confidence))
+            .expect("decision");
         assert!(matches!(decision.action, ContinuationAction::Spike(_)));
     }
 
     #[test]
     fn retryable_failure_preserves_backoff() {
-        let controller = ContinuationController::new(ContinuationPolicy::default()).expect("controller");
+        let controller =
+            ContinuationController::new(ContinuationPolicy::default()).expect("controller");
         let plan = plan(TodoState::InProgress);
         let confidence = confidence(8_000);
         let failure = FailureDecision {
@@ -359,12 +406,19 @@ mod tests {
         let mut context = context(&plan, &confidence);
         context.latest_failure = Some(&failure);
         let decision = controller.decide(context).expect("decision");
-        assert!(matches!(decision.action, ContinuationAction::Retry { backoff_ms: Some(500), .. }));
+        assert!(matches!(
+            decision.action,
+            ContinuationAction::Retry {
+                backoff_ms: Some(500),
+                ..
+            }
+        ));
     }
 
     #[test]
     fn terminal_failure_stops_continuation() {
-        let controller = ContinuationController::new(ContinuationPolicy::default()).expect("controller");
+        let controller =
+            ContinuationController::new(ContinuationPolicy::default()).expect("controller");
         let plan = plan(TodoState::InProgress);
         let confidence = confidence(8_000);
         let failure = FailureDecision {
@@ -382,7 +436,8 @@ mod tests {
 
     #[test]
     fn stalled_resume_forces_replan() {
-        let controller = ContinuationController::new(ContinuationPolicy::default()).expect("controller");
+        let controller =
+            ContinuationController::new(ContinuationPolicy::default()).expect("controller");
         let plan = plan(TodoState::InProgress);
         let confidence = confidence(8_000);
         let mut context = context(&plan, &confidence);
@@ -393,10 +448,13 @@ mod tests {
 
     #[test]
     fn explicit_blocker_is_not_bypassed() {
-        let controller = ContinuationController::new(ContinuationPolicy::default()).expect("controller");
+        let controller =
+            ContinuationController::new(ContinuationPolicy::default()).expect("controller");
         let plan = plan(TodoState::Blocked);
         let confidence = confidence(8_000);
-        let decision = controller.decide(context(&plan, &confidence)).expect("decision");
+        let decision = controller
+            .decide(context(&plan, &confidence))
+            .expect("decision");
         assert!(matches!(decision.action, ContinuationAction::Block { .. }));
     }
 }
