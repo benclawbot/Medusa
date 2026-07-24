@@ -21,9 +21,13 @@ pub fn export_manual_escalation(
         .entries
         .iter_mut()
         .find(|entry| entry.packet_id == packet.packet_id)
-        .ok_or_else(|| exchange_error("escalation packet is not registered in the session journal"))?;
+        .ok_or_else(|| {
+            exchange_error("escalation packet is not registered in the session journal")
+        })?;
     if entry.packet_digest_sha256 != packet.digest_sha256 {
-        return Err(exchange_error("journal packet digest does not match exported packet"));
+        return Err(exchange_error(
+            "journal packet digest does not match exported packet",
+        ));
     }
     entry
         .mark_exported(OffsetDateTime::now_utc())
@@ -33,6 +37,9 @@ pub fn export_manual_escalation(
 }
 
 /// Imports advice bound to a packet and advances the durable journal entry.
+///
+/// Advice is rejected before the journal changes when any file in the packet read set changed or
+/// disappeared after export. The caller must rebuild and re-export a fresh packet instead.
 pub fn import_manual_advice(
     repo: &Path,
     session_id: &SessionId,
@@ -41,18 +48,35 @@ pub fn import_manual_advice(
 ) -> MedusaResult<AdviceEnvelope> {
     validate_session_binding(session_id, packet)?;
     let envelope = import_advice(advice_path, packet).map_err(exchange_error)?;
+    if let Err(stale) = envelope.validate_fresh_read_set(packet, repo) {
+        let paths = stale
+            .iter()
+            .map(|entry| entry.path.as_str())
+            .collect::<Vec<_>>()
+            .join(", ");
+        return Err(exchange_error(format!(
+            "escalation advice is stale because repository inputs changed: {paths}"
+        )));
+    }
 
     let mut journal = load_escalation_journal(repo, session_id)?;
     let entry = journal
         .entries
         .iter_mut()
         .find(|entry| entry.packet_id == packet.packet_id)
-        .ok_or_else(|| exchange_error("escalation packet is not registered in the session journal"))?;
+        .ok_or_else(|| {
+            exchange_error("escalation packet is not registered in the session journal")
+        })?;
     if entry.packet_digest_sha256 != packet.digest_sha256 {
-        return Err(exchange_error("journal packet digest does not match imported advice"));
+        return Err(exchange_error(
+            "journal packet digest does not match imported advice",
+        ));
     }
     entry
-        .import_advice(envelope.advice_digest_sha256.clone(), envelope.imported_at)
+        .import_advice(
+            envelope.advice_digest_sha256.clone(),
+            envelope.imported_at,
+        )
         .map_err(exchange_error)?;
     persist_escalation_journal(repo, session_id, &journal)?;
     Ok(envelope)
@@ -63,7 +87,9 @@ fn validate_session_binding(
     packet: &EscalationPacket,
 ) -> MedusaResult<()> {
     if packet.session_id != session_id.as_str() {
-        return Err(exchange_error("escalation packet belongs to another session"));
+        return Err(exchange_error(
+            "escalation packet belongs to another session",
+        ));
     }
     if !packet.verify_digest().map_err(exchange_error)? {
         return Err(exchange_error("escalation packet digest is invalid"));
@@ -83,11 +109,15 @@ fn exchange_error(message: impl ToString) -> MedusaError {
 mod tests {
     use std::{collections::BTreeSet, fs};
 
-    use medusa_escalation::{AdviceEnvelope, EscalationMode, EscalationReason};
+    use medusa_escalation::{
+        AdviceEnvelope, EscalationMode, EscalationReason, ReadSetEntry,
+    };
+    use sha2::{Digest, Sha256};
 
     use super::*;
     use crate::session::{
-        EscalationJournal, EscalationStatus, SessionEscalation, persist_escalation_journal,
+        EscalationJournal, EscalationStatus, SessionEscalation,
+        persist_escalation_journal,
     };
 
     fn packet(session_id: &SessionId) -> EscalationPacket {
@@ -129,8 +159,8 @@ mod tests {
         let packet = packet(&session_id);
         register(directory.path(), &session_id, &packet);
 
-        let exported = export_manual_escalation(directory.path(), &session_id, &packet)
-            .expect("export");
+        let exported =
+            export_manual_escalation(directory.path(), &session_id, &packet).expect("export");
         assert!(exported.is_file());
 
         let envelope = AdviceEnvelope::new(
@@ -140,7 +170,11 @@ mod tests {
         )
         .expect("envelope");
         let advice_path = directory.path().join("advice.json");
-        fs::write(&advice_path, serde_json::to_vec_pretty(&envelope).unwrap()).unwrap();
+        fs::write(
+            &advice_path,
+            serde_json::to_vec_pretty(&envelope).unwrap(),
+        )
+        .unwrap();
         import_manual_advice(directory.path(), &session_id, &packet, &advice_path)
             .expect("import");
 
@@ -150,6 +184,42 @@ mod tests {
             journal.entries[0].advice_digest_sha256.as_deref(),
             Some(envelope.advice_digest_sha256.as_str())
         );
+    }
+
+    #[test]
+    fn stale_read_set_rejects_advice_without_advancing_journal() {
+        let directory = tempfile::tempdir().expect("tempdir");
+        let session_id = SessionId::new();
+        fs::write(directory.path().join("parser.rs"), "old").expect("fixture");
+        let mut packet = packet(&session_id);
+        packet.read_set.insert(ReadSetEntry {
+            path: "parser.rs".into(),
+            content_sha256: hex::encode(Sha256::digest(b"old")),
+        });
+        packet.refresh_digest().expect("digest");
+        register(directory.path(), &session_id, &packet);
+        export_manual_escalation(directory.path(), &session_id, &packet).expect("export");
+
+        let envelope = AdviceEnvelope::new(
+            &packet,
+            "Use the shared parser helper.",
+            OffsetDateTime::UNIX_EPOCH,
+        )
+        .expect("envelope");
+        let advice_path = directory.path().join("advice.json");
+        fs::write(&advice_path, serde_json::to_vec_pretty(&envelope).unwrap()).unwrap();
+        fs::write(directory.path().join("parser.rs"), "new").expect("mutation");
+
+        let error = import_manual_advice(
+            directory.path(),
+            &session_id,
+            &packet,
+            &advice_path,
+        )
+        .expect_err("stale advice");
+        assert!(error.message.contains("parser.rs"));
+        let journal = load_escalation_journal(directory.path(), &session_id).expect("load");
+        assert_eq!(journal.entries[0].status, EscalationStatus::AwaitingAdvice);
     }
 
     #[test]
