@@ -23,7 +23,7 @@ pub use identity_guard::{compatibility_context, validate_provider_text};
 pub use policy::validate_shell_command;
 pub use session::{
     AgentPlanStep, AgentPlanStepStatus, AgentQuestion, AgentQuestionItem, AgentQuestionOption,
-    AgentSession, bootstrap,
+    AgentSession, SessionUsage, TurnUsage, UsageProvenance, bootstrap, session_usage,
 };
 pub use transaction::{
     FileMutation, TransactionOutcome, TransactionPreview, apply_atomic, preview,
