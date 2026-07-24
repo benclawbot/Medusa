@@ -1,7 +1,7 @@
 use std::{env, time::Duration};
 
 use medusa_protocol::EventPayload;
-use medusa_provider::{MessageBlock, ModelRequest, ModelResponse, ResponseBlock, Usage};
+use medusa_provider::{ModelRequest, ModelResponse, ResponseBlock, Usage};
 use serde::{Deserialize, Serialize};
 
 use crate::session::AgentSession;
@@ -48,6 +48,7 @@ pub struct SessionUsage {
     pub estimated_cost_microusd: u64,
 }
 
+#[allow(dead_code)]
 impl SessionUsage {
     fn push(&mut self, turn: TurnUsage) {
         self.input_tokens = self.input_tokens.saturating_add(turn.input_tokens);
@@ -69,6 +70,7 @@ impl SessionUsage {
 
 /// Reconstructs cumulative usage from normalized model-response events.
 #[must_use]
+#[allow(dead_code)]
 pub fn session_usage(session: &AgentSession) -> SessionUsage {
     let mut aggregate = SessionUsage::default();
     for event in &session.events {
@@ -197,7 +199,7 @@ mod tests {
     use super::*;
     use medusa_core::SessionId;
     use medusa_protocol::{Actor, EventEnvelope};
-    use medusa_provider::{Message, Role, ToolDefinition};
+    use medusa_provider::{Message, MessageBlock, Role, ToolDefinition};
     use serde_json::json;
     use time::OffsetDateTime;
 
