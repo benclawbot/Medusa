@@ -1,0 +1,78 @@
+name: Schema Session Integration
+
+on:
+  push:
+    branches:
+      - agent/schema-harness-foundation
+
+permissions:
+  contents: write
+
+jobs:
+  integrate:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: agent/schema-harness-foundation
+          fetch-depth: 0
+      - uses: dtolnay/rust-toolchain@1.88.0
+        with:
+          components: rustfmt
+      - name: Wire world models into durable sessions
+        shell: python
+        run: |
+          from pathlib import Path
+
+          session = Path('crates/medusa-agent/src/session.rs')
+          text = session.read_text()
+          text = text.replace(
+              'use medusa_provider::Message;\n',
+              'use medusa_provider::Message;\nuse medusa_world_model::WorldModelRef;\n',
+              1,
+          )
+          text = text.replace(
+              '    pub tool_artifacts: Vec<PathBuf>,\n',
+              '    pub tool_artifacts: Vec<PathBuf>,\n    #[serde(default)]\n    pub world_model: Option<WorldModelRef>,\n',
+              1,
+          )
+          session.write_text(text)
+
+          engine = Path('crates/medusa-agent/src/engine_base.rs')
+          text = engine.read_text()
+          text = text.replace(
+              'use medusa_provider::{Message, MessageBlock, ModelProvider, ModelRequest, ResponseBlock, Role};\n',
+              'use medusa_provider::{Message, MessageBlock, ModelProvider, ModelRequest, ResponseBlock, Role};\nuse medusa_world_model::{WorkspaceModel, create_for_session, load as load_world_model};\n',
+              1,
+          )
+          text = text.replace(
+              '        let id = SessionId::new();\n        let mut session = AgentSession {\n',
+              '        let id = SessionId::new();\n        let world_model = create_for_session(repo, id.as_str(), objective.clone()).ok();\n        let mut session = AgentSession {\n',
+              1,
+          )
+          text = text.replace(
+              '            tool_artifacts: Vec::new(),\n',
+              '            tool_artifacts: Vec::new(),\n            world_model,\n',
+              1,
+          )
+          marker = '    pub fn load_session(&self, repo: &Path, session: &str) -> MedusaResult<AgentSession> {\n        load(repo, session)\n    }\n'
+          replacement = marker + '''\n    /// Loads the durable evidence model associated with a session, when enabled.\n    pub fn load_session_world_model(\n        &self,\n        session: &AgentSession,\n    ) -> MedusaResult<Option<WorkspaceModel>> {\n        let Some(reference) = &session.world_model else {\n            return Ok(None);\n        };\n        load_world_model(&session.repo, reference).map(Some).map_err(|error| {\n            MedusaError::new(\n                ErrorCode::InternalInvariant,\n                ErrorCategory::Internal,\n                format!("failed to load session world model: {error}"),\n            )\n        })\n    }\n'''
+          if marker not in text:
+              raise SystemExit('load_session marker not found')
+          text = text.replace(marker, replacement, 1)
+          engine.write_text(text)
+
+          workflow = Path('.github/workflows/schema-session-integration.yml')
+          workflow.unlink()
+      - name: Format and validate lockfile
+        run: |
+          cargo fmt --all
+          cargo generate-lockfile
+      - name: Commit integration
+        run: |
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add Cargo.lock crates/medusa-agent/src/session.rs crates/medusa-agent/src/engine_base.rs .github/workflows/schema-session-integration.yml
+          git commit -m "Wire world models into durable sessions"
+          git push origin HEAD:agent/schema-harness-foundation
