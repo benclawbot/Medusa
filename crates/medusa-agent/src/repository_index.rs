@@ -6,9 +6,7 @@ use std::{
 };
 
 use medusa_core::{ErrorCategory, ErrorCode, MedusaError, MedusaResult};
-use medusa_intelligence::{
-    IndexRefresh, IndexSnapshot, RetrievalBudget, RetrievalReport,
-};
+use medusa_intelligence::{IndexRefresh, IndexSnapshot, RetrievalBudget, RetrievalReport};
 
 use crate::session_browser::RepositoryIndexCache;
 
@@ -317,7 +315,7 @@ mod tests {
         let repository = tempfile::tempdir().expect("repository");
         fs::write(
             repository.path().join("lib.rs"),
-            "pub fn retrieve_alpha() -> usize { 1 }\npub fn retrieve_beta() -> usize { 2 }\n",
+            "pub fn retrieve_alpha() -> usize { 1 }\npub fn retrieve_beta() -> usize { let oversized_repository_context_fragment = [0usize; 256]; oversized_repository_context_fragment.iter().copied().sum() }\n",
         )
         .expect("source");
         assert!(refresh(repository.path()).expect("load").is_none());
