@@ -71,12 +71,18 @@ impl SessionEscalation {
         if self.packet_id.trim().is_empty() || self.task_id.trim().is_empty() {
             return Err("escalation identifiers cannot be empty");
         }
-        validate_digest(&self.packet_digest_sha256, "packet digest")?;
+        if !valid_digest(&self.packet_digest_sha256) {
+            return Err("packet digest must be a 64-character SHA-256 hex value");
+        }
         if self.reasons.is_empty() {
             return Err("durable escalation requires at least one reason");
         }
-        if let Some(digest) = &self.advice_digest_sha256 {
-            validate_digest(digest, "advice digest")?;
+        if self
+            .advice_digest_sha256
+            .as_ref()
+            .is_some_and(|digest| !valid_digest(digest))
+        {
+            return Err("advice digest must be a 64-character SHA-256 hex value");
         }
         Ok(())
     }
@@ -128,7 +134,7 @@ impl SessionEscalation {
     }
 }
 
-/// Session-keyed append-only logical journal. Entries may change lifecycle state, but packet IDs are unique.
+/// Session-keyed journal. Entries retain packet provenance while their lifecycle advances.
 #[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
 pub struct EscalationJournal {
     pub session_id: String,
@@ -216,12 +222,8 @@ fn journal_path(repo: &Path, session_id: &SessionId) -> std::path::PathBuf {
         .join(format!("{session_id}.json"))
 }
 
-fn validate_digest<'a>(digest: &str, label: &'a str) -> Result<(), &'a str> {
-    if digest.len() == 64 && digest.bytes().all(|byte| byte.is_ascii_hexdigit()) {
-        Ok(())
-    } else {
-        Err(label)
-    }
+fn valid_digest(digest: &str) -> bool {
+    digest.len() == 64 && digest.bytes().all(|byte| byte.is_ascii_hexdigit())
 }
 
 fn persistence_error(message: impl Into<String>) -> MedusaError {
