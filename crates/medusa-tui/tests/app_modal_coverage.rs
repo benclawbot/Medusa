@@ -84,7 +84,7 @@ fn public_model_modal_flow_covers_provider_effort_and_key_boundaries() {
 }
 
 #[test]
-fn public_question_modal_flow_covers_multiselect_custom_and_review_paths() {
+fn public_question_modal_flow_covers_multiselect_custom_and_immediate_submit_paths() {
     let repository = tempdir().expect("temporary repository");
     let mut app = AppState::new(
         repository.path().to_path_buf(),
@@ -121,13 +121,19 @@ fn public_question_modal_flow_covers_multiselect_custom_and_review_paths() {
         Some("A, B")
     );
 
-    app.handle_event(key(KeyCode::Enter))
-        .expect("review answers");
-    assert!(app.question_modal().expect("modal").is_reviewing());
-    app.handle_event(key(KeyCode::Esc))
-        .expect("return to question");
-    assert!(!app.question_modal().expect("modal").is_reviewing());
+    assert_eq!(
+        app.handle_event(key(KeyCode::Enter))
+            .expect("submit multiselect answer"),
+        AppAction::AnswerQuestion("Scope: A, B".to_owned())
+    );
+    assert!(app.question_modal().is_none());
 
+    app.open_question(vec![QuestionPrompt {
+        header: "Details".to_owned(),
+        question: "Add context".to_owned(),
+        options: Vec::new(),
+        multi_select: false,
+    }]);
     app.handle_event(Event::Paste("custom".to_owned()))
         .expect("enter custom answer");
     app.handle_event(key(KeyCode::Backspace))
@@ -136,6 +142,12 @@ fn public_question_modal_flow_covers_multiselect_custom_and_review_paths() {
         app.question_modal().expect("modal").active_custom_answer(),
         "custo"
     );
+    assert_eq!(
+        app.handle_event(key(KeyCode::Enter))
+            .expect("submit custom answer"),
+        AppAction::AnswerQuestion("Details: custo".to_owned())
+    );
+    assert!(app.question_modal().is_none());
 }
 
 #[test]
