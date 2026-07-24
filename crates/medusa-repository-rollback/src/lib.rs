@@ -192,20 +192,16 @@ impl RecoveryJournal {
             .iter()
             .map(|entry| (entry.path.as_str(), entry))
             .collect::<BTreeMap<_, _>>();
-        let mut actions = self
-            .applied_paths
-            .iter()
-            .rev()
-            .map(|path| {
-                let entry = entries
-                    .get(path.as_str())
-                    .expect("validated applied path exists");
-                RecoveryAction::Restore {
-                    path: path.clone(),
-                    state: entry.before.clone(),
-                }
-            })
-            .collect::<Vec<_>>();
+        let mut actions = Vec::with_capacity(self.applied_paths.len() + 1);
+        for path in self.applied_paths.iter().rev() {
+            let entry = entries
+                .get(path.as_str())
+                .ok_or("applied path is not present in journal")?;
+            actions.push(RecoveryAction::Restore {
+                path: path.clone(),
+                state: entry.before.clone(),
+            });
+        }
         actions.push(RecoveryAction::VerifySnapshot {
             expected_fingerprint: self.base_snapshot.clone(),
         });
@@ -276,7 +272,7 @@ fn is_sorted_unique(values: &[String]) -> bool {
 
 fn hash<T: Serialize>(value: &T) -> String {
     hex::encode(Sha256::digest(
-        serde_json::to_vec(value).expect("rollback state serializes"),
+        serde_json::to_vec(value).unwrap_or_default(),
     ))
 }
 
