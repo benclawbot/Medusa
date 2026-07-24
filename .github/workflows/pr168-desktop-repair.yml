@@ -1,15 +1,15 @@
 name: PR 168 Desktop Repair
 
 on:
-  pull_request:
-    types: [ready_for_review, reopened, synchronize]
+  push:
+    branches: [roadmap/161-frontend-telemetry-v2]
 
 permissions:
   contents: write
 
 jobs:
   repair:
-    if: github.event.pull_request.number == 168 && github.actor != 'github-actions[bot]'
+    if: github.actor != 'github-actions[bot]'
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
@@ -19,13 +19,15 @@ jobs:
       - uses: dtolnay/rust-toolchain@1.88.0
         with:
           components: rustfmt, clippy
-      - run: python scripts/fix_pr168_desktop.py
-      - run: |
-          cargo fmt --all
-          cargo clippy --manifest-path apps/medusa-desktop/src-tauri/Cargo.toml --all-targets -- -D warnings
-      - name: Commit clean repair
+      - name: Apply normalized desktop telemetry repair
+        run: python scripts/fix_pr168_desktop.py
+      - name: Validate desktop adapter
         run: |
-          rm scripts/fix_pr168_desktop.py .github/workflows/pr168-desktop-repair.yml
+          cargo fmt --all --check
+          cargo clippy --manifest-path apps/medusa-desktop/src-tauri/Cargo.toml --all-targets -- -D warnings
+      - name: Publish clean repair
+        run: |
+          rm scripts/fix_pr168_desktop.py scripts/fix_pr168_desktop_usage.py .github/workflows/pr168-desktop-repair.yml
           git config user.name github-actions[bot]
           git config user.email 41898282+github-actions[bot]@users.noreply.github.com
           git add -A
