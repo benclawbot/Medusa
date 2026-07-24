@@ -1,0 +1,132 @@
+name: Add Escalation CLI
+
+on:
+  push:
+    branches:
+      - agent/chatgpt-escalation-bridge
+
+permissions:
+  contents: write
+
+jobs:
+  implement:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: agent/chatgpt-escalation-bridge
+          fetch-depth: 0
+      - uses: dtolnay/rust-toolchain@1.88.0
+        with:
+          components: rustfmt,clippy
+      - name: Add CLI command
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          cargo = Path('crates/medusa-cli/Cargo.toml')
+          text = cargo.read_text()
+          if 'medusa-escalation = { path = "../medusa-escalation" }' not in text:
+              text = text.replace(
+                  'medusa-core.workspace = true\n',
+                  'medusa-core.workspace = true\nmedusa-escalation = { path = "../medusa-escalation" }\n',
+                  1,
+              )
+          cargo.write_text(text)
+
+          main = Path('crates/medusa-cli/src/main.rs')
+          text = main.read_text()
+          text = text.replace(
+              'use medusa_agent::{AgentEngine, bootstrap};',
+              'use medusa_agent::{AgentEngine, bootstrap, launch_browser_assisted_escalation};',
+              1,
+          )
+          text = text.replace(
+              'use medusa_core::{ErrorCategory, ErrorCode, MedusaError, MedusaResult};',
+              'use medusa_core::{ErrorCategory, ErrorCode, MedusaError, MedusaResult, SessionId};\nuse medusa_escalation::EscalationPacket;',
+              1,
+          )
+          marker = '''    Resume {
+        session: String,
+    },
+'''
+          addition = '''    Resume {
+        session: String,
+    },
+    /// Open a validated escalation packet in ChatGPT using the normal browser profile.
+    Escalate {
+        /// Session that owns the escalation packet.
+        #[arg(long)]
+        session: String,
+        /// Path to the signed escalation packet JSON.
+        #[arg(long)]
+        packet: PathBuf,
+    },
+'''
+          if '    Escalate {' not in text:
+              text = text.replace(marker, addition, 1)
+
+          marker = '''        CommandKind::Resume { session } => {
+            let provider = ConfiguredProvider::manager_from_config(&config, None)?;
+            let engine = AgentEngine::new(provider, config);
+            let mut session = engine.load_session(&repo, &session)?;
+            println!("session {} resumed", session.id);
+            engine.run_to_completion(&mut session)?;
+            print_completion(&session);
+            Ok(())
+        }
+'''
+          addition = marker + '''        CommandKind::Escalate { session, packet } => {
+            browser_assisted_escalation(&repo, &session, &packet)
+        }
+'''
+          if 'CommandKind::Escalate { session, packet }' not in text:
+              text = text.replace(marker, addition, 1)
+
+          insertion = '''
+fn browser_assisted_escalation(
+    repo: &Path,
+    session: &str,
+    packet_path: &Path,
+) -> MedusaResult<()> {
+    let session_id = SessionId::parse(session).map_err(|message| {
+        MedusaError::new(
+            ErrorCode::InvalidConfiguration,
+            ErrorCategory::Validation,
+            message,
+        )
+    })?;
+    let packet_path = if packet_path.is_absolute() {
+        packet_path.to_path_buf()
+    } else {
+        repo.join(packet_path)
+    };
+    let packet: EscalationPacket = serde_json::from_slice(&fs::read(&packet_path)?)?;
+    let launch = launch_browser_assisted_escalation(repo, &session_id, &packet)?;
+    println!("ChatGPT opened for escalation packet {}.", packet.packet_id);
+    if launch.clipboard_ready {
+        println!("Prompt copied to clipboard; paste it into ChatGPT and submit.");
+    } else {
+        println!("Clipboard unavailable; prompt saved at {}.", launch.prompt_path.display());
+    }
+    println!("Signed packet: {}", launch.packet_path.display());
+    println!("Prompt recovery file: {}", launch.prompt_path.display());
+    Ok(())
+}
+
+'''
+          if 'fn browser_assisted_escalation(' not in text:
+              text = text.replace('fn update(repo: &Path, check_only: bool, automatic: bool) -> MedusaResult<()> {', insertion + 'fn update(repo: &Path, check_only: bool, automatic: bool) -> MedusaResult<()> {', 1)
+          main.write_text(text)
+          PY
+          cargo fmt --all
+          cargo clippy -p medusa-cli --all-targets -- -D warnings
+          cargo test -p medusa-cli
+      - name: Commit CLI integration
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add Cargo.lock crates/medusa-cli/Cargo.toml crates/medusa-cli/src/main.rs
+          git commit -m "feat: add browser-assisted escalation CLI"
+          git push origin HEAD:agent/chatgpt-escalation-bridge
