@@ -7,6 +7,7 @@ use serde::{Deserialize, Serialize};
 #[serde(rename_all = "snake_case")]
 pub enum Language {
     Rust,
+    Python,
 }
 
 /// Kind of indexed symbol.
@@ -14,6 +15,7 @@ pub enum Language {
 #[serde(rename_all = "snake_case")]
 pub enum SymbolKind {
     Function,
+    Class,
     Struct,
     Enum,
     Trait,
