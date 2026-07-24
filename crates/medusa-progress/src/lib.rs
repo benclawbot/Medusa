@@ -260,7 +260,7 @@ mod tests {
             ProgressEvent::new(1, ProgressKind::CheckpointCreated, "saved").unwrap(),
         ];
         assert!(
-            ExecutionCheckpoint::new(SessionId::new(), 2, goal(), Vec::new(), events, json!({}),)
+            ExecutionCheckpoint::new(SessionId::new(), 2, goal(), Vec::new(), events, json!({}))
                 .is_err()
         );
     }
