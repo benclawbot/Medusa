@@ -93,7 +93,10 @@ impl CodeIndex {
             };
             let estimated_tokens = estimate_tokens(fragment);
             if estimated_tokens > budget.max_tokens_per_result {
-                exclusions.push(exclusion(candidate.symbol, "per-result token limit exceeded"));
+                exclusions.push(exclusion(
+                    candidate.symbol,
+                    "per-result token limit exceeded",
+                ));
                 continue;
             }
             if used_tokens.saturating_add(estimated_tokens) > budget.max_tokens {
@@ -207,7 +210,10 @@ mod tests {
         );
         assert_eq!(report.results[0].symbol, "session_budget");
         assert!(report.results[0].score > report.results[1].score);
-        assert_eq!(report.used_tokens, report.results.iter().map(|r| r.estimated_tokens).sum());
+        assert_eq!(
+            report.used_tokens,
+            report.results.iter().map(|r| r.estimated_tokens).sum()
+        );
     }
 
     #[test]
@@ -230,6 +236,11 @@ mod tests {
         );
         assert!(report.used_tokens <= 12);
         assert_eq!(report.results.len(), 1);
-        assert!(report.exclusions.iter().any(|item| item.reason == "total token budget exhausted"));
+        assert!(
+            report
+                .exclusions
+                .iter()
+                .any(|item| item.reason == "total token budget exhausted")
+        );
     }
 }
