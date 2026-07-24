@@ -117,7 +117,9 @@ fn open_chatgpt() -> std::io::Result<()> {
         .args(["/C", "start", "", CHATGPT_NEW_CHAT_URL])
         .status()?;
     #[cfg(all(unix, not(target_os = "macos")))]
-    let status = Command::new("xdg-open").arg(CHATGPT_NEW_CHAT_URL).status()?;
+    let status = Command::new("xdg-open")
+        .arg(CHATGPT_NEW_CHAT_URL)
+        .status()?;
 
     if status.success() {
         Ok(())
