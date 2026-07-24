@@ -1,3 +1,6 @@
+use std::{fs, path::Path};
+
+use medusa_core::{ErrorCategory, ErrorCode, MedusaError, MedusaResult, SessionId};
 use medusa_escalation::{EscalationMode, EscalationReason};
 use serde::{Deserialize, Serialize};
 use time::OffsetDateTime;
@@ -7,7 +10,6 @@ use time::OffsetDateTime;
 #[serde(rename_all = "snake_case")]
 pub enum EscalationStatus {
     Prepared,
-    Exported,
     AwaitingAdvice,
     AdviceImported,
     Applied,
@@ -69,23 +71,12 @@ impl SessionEscalation {
         if self.packet_id.trim().is_empty() || self.task_id.trim().is_empty() {
             return Err("escalation identifiers cannot be empty");
         }
-        if self.packet_digest_sha256.len() != 64
-            || !self
-                .packet_digest_sha256
-                .bytes()
-                .all(|byte| byte.is_ascii_hexdigit())
-        {
-            return Err("packet digest must be a 64-character SHA-256 hex value");
-        }
+        validate_digest(&self.packet_digest_sha256, "packet digest")?;
         if self.reasons.is_empty() {
             return Err("durable escalation requires at least one reason");
         }
-        if self
-            .advice_digest_sha256
-            .as_ref()
-            .is_some_and(|digest| digest.len() != 64 || !digest.bytes().all(|b| b.is_ascii_hexdigit()))
-        {
-            return Err("advice digest must be a 64-character SHA-256 hex value");
+        if let Some(digest) = &self.advice_digest_sha256 {
+            validate_digest(digest, "advice digest")?;
         }
         Ok(())
     }
@@ -137,6 +128,110 @@ impl SessionEscalation {
     }
 }
 
+/// Session-keyed append-only logical journal. Entries may change lifecycle state, but packet IDs are unique.
+#[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+pub struct EscalationJournal {
+    pub session_id: String,
+    #[serde(default)]
+    pub entries: Vec<SessionEscalation>,
+}
+
+impl EscalationJournal {
+    #[must_use]
+    pub fn new(session_id: impl Into<String>) -> Self {
+        Self {
+            session_id: session_id.into(),
+            entries: Vec::new(),
+        }
+    }
+
+    pub fn push(&mut self, escalation: SessionEscalation) -> Result<(), &'static str> {
+        escalation.validate()?;
+        if self.session_id.trim().is_empty() {
+            return Err("journal session identifier cannot be empty");
+        }
+        if self
+            .entries
+            .iter()
+            .any(|existing| existing.packet_id == escalation.packet_id)
+        {
+            return Err("escalation packet identifier already exists in journal");
+        }
+        self.entries.push(escalation);
+        Ok(())
+    }
+
+    pub fn validate(&self) -> Result<(), &'static str> {
+        if self.session_id.trim().is_empty() {
+            return Err("journal session identifier cannot be empty");
+        }
+        let mut packet_ids = std::collections::BTreeSet::new();
+        for entry in &self.entries {
+            entry.validate()?;
+            if !packet_ids.insert(entry.packet_id.as_str()) {
+                return Err("escalation journal contains duplicate packet identifiers");
+            }
+        }
+        Ok(())
+    }
+}
+
+pub fn load_escalation_journal(
+    repo: &Path,
+    session_id: &SessionId,
+) -> MedusaResult<EscalationJournal> {
+    let path = journal_path(repo, session_id);
+    if !path.is_file() {
+        return Ok(EscalationJournal::new(session_id.as_str()));
+    }
+    let journal: EscalationJournal = serde_json::from_slice(&fs::read(path)?)?;
+    journal.validate().map_err(persistence_error)?;
+    if journal.session_id != session_id.as_str() {
+        return Err(persistence_error("escalation journal belongs to another session"));
+    }
+    Ok(journal)
+}
+
+pub fn persist_escalation_journal(
+    repo: &Path,
+    session_id: &SessionId,
+    journal: &EscalationJournal,
+) -> MedusaResult<()> {
+    journal.validate().map_err(persistence_error)?;
+    if journal.session_id != session_id.as_str() {
+        return Err(persistence_error("escalation journal belongs to another session"));
+    }
+    let path = journal_path(repo, session_id);
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent)?;
+    }
+    let temporary = path.with_extension("json.tmp");
+    fs::write(&temporary, serde_json::to_vec_pretty(journal)?)?;
+    fs::rename(temporary, path)?;
+    Ok(())
+}
+
+fn journal_path(repo: &Path, session_id: &SessionId) -> std::path::PathBuf {
+    repo.join(".medusa/escalations")
+        .join(format!("{session_id}.json"))
+}
+
+fn validate_digest<'a>(digest: &str, label: &'a str) -> Result<(), &'a str> {
+    if digest.len() == 64 && digest.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+        Ok(())
+    } else {
+        Err(label)
+    }
+}
+
+fn persistence_error(message: impl Into<String>) -> MedusaError {
+    MedusaError::new(
+        ErrorCode::InvalidConfiguration,
+        ErrorCategory::Persistence,
+        message,
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -145,9 +240,8 @@ mod tests {
         std::iter::repeat_n(character, 64).collect()
     }
 
-    #[test]
-    fn lifecycle_round_trips_through_json() {
-        let mut state = SessionEscalation::new(
+    fn escalation() -> SessionEscalation {
+        SessionEscalation::new(
             "packet-1",
             digest('a'),
             "task-1",
@@ -155,7 +249,12 @@ mod tests {
             vec![EscalationReason::LowConfidence],
             OffsetDateTime::UNIX_EPOCH,
         )
-        .expect("state");
+        .expect("state")
+    }
+
+    #[test]
+    fn lifecycle_round_trips_through_json() {
+        let mut state = escalation();
         state
             .mark_exported(OffsetDateTime::UNIX_EPOCH + time::Duration::seconds(1))
             .expect("export");
@@ -181,18 +280,32 @@ mod tests {
 
     #[test]
     fn invalid_transitions_are_rejected() {
-        let mut state = SessionEscalation::new(
-            "packet-1",
-            digest('a'),
-            "task-1",
-            EscalationMode::Manual,
-            vec![EscalationReason::LowConfidence],
-            OffsetDateTime::UNIX_EPOCH,
-        )
-        .expect("state");
+        let mut state = escalation();
         assert_eq!(
             state.import_advice(digest('b'), OffsetDateTime::UNIX_EPOCH),
             Err("advice can only be imported for an awaiting escalation")
+        );
+    }
+
+    #[test]
+    fn journal_survives_atomic_disk_round_trip() {
+        let directory = tempfile::tempdir().expect("tempdir");
+        let session_id = SessionId::new();
+        let mut journal = EscalationJournal::new(session_id.as_str());
+        journal.push(escalation()).expect("push");
+        persist_escalation_journal(directory.path(), &session_id, &journal).expect("persist");
+        let restored =
+            load_escalation_journal(directory.path(), &session_id).expect("load journal");
+        assert_eq!(restored, journal);
+    }
+
+    #[test]
+    fn duplicate_packet_ids_are_rejected() {
+        let mut journal = EscalationJournal::new("session-1");
+        journal.push(escalation()).expect("first");
+        assert_eq!(
+            journal.push(escalation()),
+            Err("escalation packet identifier already exists in journal")
         );
     }
 }
