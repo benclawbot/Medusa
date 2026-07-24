@@ -128,9 +128,8 @@ impl ConsensusRecord {
         }
         let winners: Vec<String> = counts
             .into_iter()
-            .filter_map(|(candidate, count)| {
-                (count >= self.quorum_size()).then(|| candidate.to_owned())
-            })
+            .filter(|(_, count)| *count >= self.quorum_size())
+            .map(|(candidate, _)| candidate.to_owned())
             .collect();
         match winners.as_slice() {
             [] => Ok(None),
