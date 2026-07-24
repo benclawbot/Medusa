@@ -1220,6 +1220,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "medusa-markdown-memory"
+version = "1.0.0"
+dependencies = [
+ "hex",
+ "serde",
+ "sha2",
+]
+
+[[package]]
 name = "medusa-mcp-cache"
 version = "1.0.0"
 dependencies = [
