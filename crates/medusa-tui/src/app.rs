@@ -618,7 +618,7 @@ impl AppState {
         self.estimated_cost_microusd = self
             .estimated_cost_microusd
             .saturating_add(estimated_cost_microusd);
-        self.tokens_per_second_milli = tokens_per_second_milli;
+        let _ = tokens_per_second_milli;
         self.usage_provenance = Some(provenance);
         self.cache_read_input_tokens = self
             .cache_read_input_tokens
@@ -630,6 +630,11 @@ impl AppState {
             .saturating_add(cache_read_input_tokens)
             .saturating_add(cache_creation_input_tokens);
         self.model_elapsed_millis = self.model_elapsed_millis.saturating_add(duration_ms);
+        self.tokens_per_second_milli = if self.model_elapsed_millis == 0 {
+            0
+        } else {
+            self.total_tokens.saturating_mul(1_000_000) / self.model_elapsed_millis
+        };
     }
 
     #[must_use]

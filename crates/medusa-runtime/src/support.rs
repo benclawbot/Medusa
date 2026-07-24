@@ -3,6 +3,7 @@ use std::{
     env, fs,
     path::{Path, PathBuf},
     sync::mpsc::Sender,
+    time::Instant,
 };
 
 use base64::{Engine as _, engine::general_purpose::STANDARD};
@@ -18,6 +19,7 @@ use crate::{
 
 use super::{
     RuntimeActivity, RuntimeActivityKind, RuntimeError, RuntimeEvent, RuntimeState, TurnUsage,
+    UsageProvenance,
 };
 
 const MAX_FILE_CONTEXT_BYTES: usize = 2 * 1024 * 1024;
@@ -299,6 +301,7 @@ fn skill_description(path: &Path) -> Option<String> {
 pub(super) struct UpdateState {
     next_tool_id: u64,
     pending_tools: VecDeque<PendingTool>,
+    model_started_at: Option<Instant>,
     pub(super) current_context_tokens: u64,
 }
 
@@ -307,6 +310,7 @@ impl UpdateState {
         Self {
             next_tool_id: 0,
             pending_tools: VecDeque::new(),
+            model_started_at: None,
             current_context_tokens: 0,
         }
     }
@@ -324,10 +328,57 @@ pub(super) fn forward_update(
     state: &mut UpdateState,
 ) {
     match update {
+        AgentUpdate::Event(EventPayload::ModelRequestStarted { .. }) => {
+            state.model_started_at = Some(Instant::now());
+        }
         AgentUpdate::Event(EventPayload::ModelResponseReceived { usage, .. }) => {
-            let Ok(usage) = serde_json::from_value::<TurnUsage>(usage.clone()) else {
-                return;
-            };
+            let measured_duration_ms = state.model_started_at.take().map_or(0, |started_at| {
+                u64::try_from(started_at.elapsed().as_millis())
+                    .unwrap_or(u64::MAX)
+                    .max(1)
+            });
+            let usage = serde_json::from_value::<TurnUsage>(usage.clone()).unwrap_or_else(|_| {
+                let input_tokens = usage
+                    .get("input_tokens")
+                    .and_then(Value::as_u64)
+                    .unwrap_or_default();
+                let output_tokens = usage
+                    .get("output_tokens")
+                    .and_then(Value::as_u64)
+                    .unwrap_or_default();
+                let cache_read_input_tokens = usage
+                    .get("cache_read_input_tokens")
+                    .and_then(Value::as_u64)
+                    .unwrap_or_default();
+                let cache_creation_input_tokens = usage
+                    .get("cache_creation_input_tokens")
+                    .and_then(Value::as_u64)
+                    .unwrap_or_default();
+                let total_tokens = input_tokens
+                    .saturating_add(output_tokens)
+                    .saturating_add(cache_read_input_tokens)
+                    .saturating_add(cache_creation_input_tokens);
+                TurnUsage {
+                    turn: 0,
+                    input_tokens,
+                    output_tokens,
+                    cache_read_input_tokens,
+                    cache_creation_input_tokens,
+                    total_tokens,
+                    duration_ms: measured_duration_ms,
+                    tokens_per_second_milli: if measured_duration_ms == 0 {
+                        0
+                    } else {
+                        total_tokens.saturating_mul(1_000_000) / measured_duration_ms
+                    },
+                    estimated_cost_microusd: 0,
+                    provenance: if total_tokens == 0 {
+                        UsageProvenance::Estimated
+                    } else {
+                        UsageProvenance::ProviderReported
+                    },
+                }
+            });
             state.current_context_tokens = usage
                 .input_tokens
                 .saturating_add(usage.cache_read_input_tokens)

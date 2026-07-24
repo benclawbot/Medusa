@@ -70,7 +70,7 @@ fn attached_utf8_file_is_bounded_and_included() {
 }
 
 #[test]
-fn provider_usage_forwards_input_output_cache_and_model_time() {
+fn provider_usage_forwards_legacy_and_normalized_telemetry() {
     let (sender, receiver) = mpsc::channel();
     let mut state = UpdateState::new();
     forward_update(
@@ -83,7 +83,7 @@ fn provider_usage_forwards_input_output_cache_and_model_time() {
     );
     forward_update(
         &AgentUpdate::Event(EventPayload::ModelResponseReceived {
-            response_id: Some("response-1".to_owned()),
+            response_id: Some("legacy-response".to_owned()),
             usage: json!({
                 "input_tokens": 120,
                 "output_tokens": 30,
@@ -94,32 +94,48 @@ fn provider_usage_forwards_input_output_cache_and_model_time() {
         &sender,
         &mut state,
     );
-
     assert!(matches!(
-        receiver.recv().expect("usage event"),
+        receiver.recv().expect("legacy usage event"),
         RuntimeEvent::Usage {
             input_tokens: 120,
             output_tokens: 30,
             cache_read_input_tokens: 80,
             cache_creation_input_tokens: 20,
-            model_elapsed_millis,
-        } if model_elapsed_millis >= 1
+            total_tokens: 250,
+            duration_ms,
+            provenance: UsageProvenance::ProviderReported,
+            ..
+        } if duration_ms >= 1
     ));
     assert_eq!(state.current_context_tokens, 220);
 
     forward_update(
         &AgentUpdate::Event(EventPayload::ModelResponseReceived {
-            response_id: Some("unpaired-response".to_owned()),
-            usage: json!({"output_tokens": 5}),
+            response_id: Some("normalized-response".to_owned()),
+            usage: json!({
+                "turn": 2,
+                "input_tokens": 10,
+                "output_tokens": 5,
+                "cache_read_input_tokens": 2,
+                "cache_creation_input_tokens": 1,
+                "total_tokens": 18,
+                "duration_ms": 100,
+                "tokens_per_second_milli": 180_000,
+                "estimated_cost_microusd": 7,
+                "provenance": "provider_reported"
+            }),
         }),
         &sender,
         &mut state,
     );
     assert!(matches!(
-        receiver.recv().expect("unpaired usage event"),
+        receiver.recv().expect("normalized usage event"),
         RuntimeEvent::Usage {
-            output_tokens: 5,
-            model_elapsed_millis: 0,
+            total_tokens: 18,
+            duration_ms: 100,
+            tokens_per_second_milli: 180_000,
+            estimated_cost_microusd: 7,
+            provenance: UsageProvenance::ProviderReported,
             ..
         }
     ));
