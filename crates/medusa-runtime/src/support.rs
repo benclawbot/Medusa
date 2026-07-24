@@ -16,7 +16,9 @@ use crate::{
     prompt::{ImageAttachment, PromptAttachment, PromptDraft},
 };
 
-use super::{RuntimeActivity, RuntimeActivityKind, RuntimeError, RuntimeEvent, RuntimeState};
+use super::{
+    RuntimeActivity, RuntimeActivityKind, RuntimeError, RuntimeEvent, RuntimeState, TurnUsage,
+};
 
 const MAX_FILE_CONTEXT_BYTES: usize = 2 * 1024 * 1024;
 const MAX_SKILL_CONTEXT_BYTES: usize = 64_000;

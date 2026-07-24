@@ -359,6 +359,33 @@ mod tests {
     }
 
     #[test]
+    fn authoritative_usage_renders_cost_rate_and_provider_provenance() {
+        let directory = tempfile::tempdir().expect("tempdir");
+        let mut app = AppState::new(
+            directory.path().to_path_buf(),
+            "authoritative-usage",
+            "",
+            Arc::new(UnsupportedClipboard),
+        )
+        .expect("app");
+        app.record_turn_usage(
+            1_000,
+            500,
+            100,
+            50,
+            1_650,
+            2_000,
+            825_000,
+            12_345,
+            "provider".to_owned(),
+        );
+        assert_eq!(
+            session_metrics_line(&app),
+            "session 0s · total 1.6k · input 1.0k · output 500 · cache-read 100 · cache-write 50 · cost $0.0123 · provider · 825.0 tok/s"
+        );
+    }
+
+    #[test]
     fn context_meter_shows_current_window_use_and_progress() {
         let directory = tempfile::tempdir().expect("tempdir");
         let mut app = AppState::new(
