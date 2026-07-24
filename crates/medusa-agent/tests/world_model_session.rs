@@ -16,7 +16,10 @@ fn session_world_model_survives_restart() {
     let repository = tempfile::tempdir().expect("repository");
     let engine = AgentEngine::new(UnusedProvider, Config::default());
     let session = engine
-        .create_session(repository.path(), "diagnose a cancellation failure".to_owned())
+        .create_session(
+            repository.path(),
+            "diagnose a cancellation failure".to_owned(),
+        )
         .expect("create session");
 
     let reference = session
