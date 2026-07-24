@@ -36,7 +36,11 @@ pub struct ProgressEvent {
 }
 
 impl ProgressEvent {
-    pub fn new(sequence: u64, kind: ProgressKind, message: impl Into<String>) -> MedusaResult<Self> {
+    pub fn new(
+        sequence: u64,
+        kind: ProgressKind,
+        message: impl Into<String>,
+    ) -> MedusaResult<Self> {
         let message = message.into();
         if message.trim().is_empty() {
             return Err(validation("progress message cannot be empty"));
@@ -147,7 +151,10 @@ impl CheckpointStore {
         let mut paths = fs::read_dir(directory)?
             .filter_map(Result::ok)
             .map(|entry| entry.path())
-            .filter(|path| path.extension().is_some_and(|extension| extension == "json"))
+            .filter(|path| {
+                path.extension()
+                    .is_some_and(|extension| extension == "json")
+            })
             .collect::<Vec<_>>();
         paths.sort();
         let Some(path) = paths.pop() else {
@@ -212,12 +219,7 @@ mod tests {
                 goal(),
                 Vec::new(),
                 vec![
-                    ProgressEvent::new(
-                        sequence,
-                        ProgressKind::CheckpointCreated,
-                        "saved",
-                    )
-                    .unwrap(),
+                    ProgressEvent::new(sequence, ProgressKind::CheckpointCreated, "saved").unwrap(),
                 ],
                 json!({"turn": sequence}),
             )
@@ -261,15 +263,8 @@ mod tests {
             ProgressEvent::new(1, ProgressKind::CheckpointCreated, "saved").unwrap(),
         ];
         assert!(
-            ExecutionCheckpoint::new(
-                SessionId::new(),
-                2,
-                goal(),
-                Vec::new(),
-                events,
-                json!({}),
-            )
-            .is_err()
+            ExecutionCheckpoint::new(SessionId::new(), 2, goal(), Vec::new(), events, json!({}),)
+                .is_err()
         );
     }
 }
