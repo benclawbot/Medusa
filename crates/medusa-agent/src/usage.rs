@@ -1,6 +1,7 @@
 use std::{env, time::Duration};
 
-use medusa_provider::{ModelRequest, ModelResponse, ResponseBlock, Usage};
+use medusa_protocol::EventPayload;
+use medusa_provider::{MessageBlock, ModelRequest, ModelResponse, ResponseBlock, Usage};
 use serde::{Deserialize, Serialize};
 
 use crate::session::AgentSession;
@@ -11,6 +12,12 @@ use crate::session::AgentSession;
 pub enum UsageProvenance {
     ProviderReported,
     Estimated,
+}
+
+impl Default for UsageProvenance {
+    fn default() -> Self {
+        Self::Estimated
+    }
 }
 
 /// Usage and performance telemetry for one successful model turn.
@@ -28,13 +35,7 @@ pub struct TurnUsage {
     pub provenance: UsageProvenance,
 }
 
-impl Default for UsageProvenance {
-    fn default() -> Self {
-        Self::Estimated
-    }
-}
-
-/// Cumulative usage for a durable session.
+/// Cumulative usage reconstructed from a durable session event stream.
 #[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
 pub struct SessionUsage {
     pub turns: Vec<TurnUsage>,
@@ -66,8 +67,23 @@ impl SessionUsage {
     }
 }
 
+/// Reconstructs cumulative usage from normalized model-response events.
+#[must_use]
+pub fn session_usage(session: &AgentSession) -> SessionUsage {
+    let mut aggregate = SessionUsage::default();
+    for event in &session.events {
+        let EventPayload::ModelResponseReceived { usage, .. } = &event.payload else {
+            continue;
+        };
+        if let Ok(turn) = serde_json::from_value::<TurnUsage>(usage.clone()) {
+            aggregate.push(turn);
+        }
+    }
+    aggregate
+}
+
 pub(crate) fn record_turn_usage(
-    session: &mut AgentSession,
+    turn: u32,
     request: &ModelRequest,
     response: &ModelResponse,
     elapsed: Duration,
@@ -84,8 +100,8 @@ pub(crate) fn record_turn_usage(
     } else {
         total_tokens.saturating_mul(1_000_000) / duration_ms
     };
-    let turn = TurnUsage {
-        turn: session.turn,
+    TurnUsage {
+        turn,
         input_tokens: usage.input_tokens,
         output_tokens: usage.output_tokens,
         cache_read_input_tokens: usage.cache_read_input_tokens,
@@ -95,9 +111,7 @@ pub(crate) fn record_turn_usage(
         tokens_per_second_milli,
         estimated_cost_microusd: estimated_cost_microusd(&usage),
         provenance,
-    };
-    session.usage.push(turn.clone());
-    turn
+    }
 }
 
 fn normalized_usage(request: &ModelRequest, response: &ModelResponse) -> (Usage, UsageProvenance) {
@@ -181,8 +195,11 @@ fn cost_component(tokens: u64, microusd_per_million: u64) -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use medusa_provider::{Message, MessageBlock, Role, ToolDefinition};
+    use medusa_core::SessionId;
+    use medusa_protocol::{Actor, EventEnvelope};
+    use medusa_provider::{Message, Role, ToolDefinition};
     use serde_json::json;
+    use time::OffsetDateTime;
 
     fn request() -> ModelRequest {
         ModelRequest {
@@ -236,5 +253,56 @@ mod tests {
         assert_eq!(first, second);
         assert_eq!(first.output_tokens, 2);
         assert_eq!(provenance, UsageProvenance::Estimated);
+    }
+
+    #[test]
+    fn cumulative_usage_is_reconstructed_from_events() {
+        let directory = tempfile::tempdir().expect("tempdir");
+        let id = SessionId::new();
+        let usage = TurnUsage {
+            turn: 1,
+            input_tokens: 10,
+            output_tokens: 5,
+            total_tokens: 15,
+            duration_ms: 100,
+            tokens_per_second_milli: 150_000,
+            provenance: UsageProvenance::ProviderReported,
+            ..TurnUsage::default()
+        };
+        let event = EventEnvelope::new(
+            0,
+            id.clone(),
+            Actor::Coordinator,
+            medusa_core::CorrelationId::new(),
+            EventPayload::ModelResponseReceived {
+                response_id: Some("fixture".to_owned()),
+                usage: serde_json::to_value(usage).expect("usage json"),
+            },
+            None,
+            OffsetDateTime::now_utc(),
+        )
+        .expect("event");
+        let session = AgentSession {
+            id,
+            objective: "test".to_owned(),
+            repo: directory.path().to_path_buf(),
+            created_at: OffsetDateTime::now_utc(),
+            updated_at: OffsetDateTime::now_utc(),
+            completed: false,
+            turn: 1,
+            plan: Vec::new(),
+            pending_question: None,
+            messages: Vec::new(),
+            events: vec![event],
+            evidence: Vec::new(),
+            tool_artifacts: Vec::new(),
+            approval_grants: Vec::new(),
+            approval_receipts: Vec::new(),
+            rollback_receipts: Vec::new(),
+        };
+        let aggregate = session_usage(&session);
+        assert_eq!(aggregate.turns.len(), 1);
+        assert_eq!(aggregate.total_tokens, 15);
+        assert_eq!(aggregate.duration_ms, 100);
     }
 }
