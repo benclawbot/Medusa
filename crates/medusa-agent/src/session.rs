@@ -19,6 +19,11 @@ mod recall;
 mod skill_drafts;
 mod skill_outcomes;
 mod skill_probation;
+#[path = "usage.rs"]
+mod usage;
+
+pub use usage::{SessionUsage, TurnUsage, UsageProvenance};
+pub(crate) use usage::record_turn_usage;
 
 /// A durable model-authored task plan step.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -129,6 +134,8 @@ pub struct AgentSession {
     pub approval_receipts: Vec<ApprovalReceipt>,
     #[serde(default)]
     pub rollback_receipts: Vec<RollbackReceipt>,
+    #[serde(default)]
+    pub usage: SessionUsage,
 }
 
 /// Creates the on-disk Medusa layout and repository map.
