@@ -7,9 +7,6 @@ rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
 
-[lib]
-path = "src/lib_with_index.rs"
-
 [dependencies]
 base64 = "0.22"
 medusa-agent = { path = "../medusa-agent" }
