@@ -53,6 +53,9 @@ pub struct AppState {
     pub input_tokens: u64,
     pub output_tokens: u64,
     pub timed_output_tokens: u64,
+    pub total_tokens: u64,
+    pub estimated_cost_microusd: u64,
+    pub usage_provenance: Option<String>,
     pub cache_read_input_tokens: u64,
     pub cache_creation_input_tokens: u64,
     current_context_tokens: u64,
@@ -128,6 +131,9 @@ impl AppState {
             input_tokens: 0,
             output_tokens: 0,
             timed_output_tokens: 0,
+            total_tokens: 0,
+            estimated_cost_microusd: 0,
+            usage_provenance: None,
             cache_read_input_tokens: 0,
             cache_creation_input_tokens: 0,
             current_context_tokens: 0,
@@ -312,6 +318,9 @@ impl AppState {
         self.input_tokens = 0;
         self.output_tokens = 0;
         self.timed_output_tokens = 0;
+        self.total_tokens = 0;
+        self.estimated_cost_microusd = 0;
+        self.usage_provenance = None;
         self.cache_read_input_tokens = 0;
         self.cache_creation_input_tokens = 0;
         self.current_context_tokens = 0;
@@ -565,11 +574,44 @@ impl AppState {
         cache_creation_input_tokens: u64,
         model_elapsed_millis: u64,
     ) {
+        let total_tokens = input_tokens
+            .saturating_add(output_tokens)
+            .saturating_add(cache_read_input_tokens)
+            .saturating_add(cache_creation_input_tokens);
+        self.record_turn_usage(
+            input_tokens,
+            output_tokens,
+            cache_read_input_tokens,
+            cache_creation_input_tokens,
+            total_tokens,
+            model_elapsed_millis,
+            0,
+            0,
+            "estimated".to_owned(),
+        );
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn record_turn_usage(
+        &mut self,
+        input_tokens: u64,
+        output_tokens: u64,
+        cache_read_input_tokens: u64,
+        cache_creation_input_tokens: u64,
+        total_tokens: u64,
+        duration_ms: u64,
+        _tokens_per_second_milli: u64,
+        estimated_cost_microusd: u64,
+        provenance: String,
+    ) {
         self.input_tokens = self.input_tokens.saturating_add(input_tokens);
         self.output_tokens = self.output_tokens.saturating_add(output_tokens);
-        if model_elapsed_millis > 0 {
-            self.timed_output_tokens = self.timed_output_tokens.saturating_add(output_tokens);
-        }
+        self.timed_output_tokens = self.timed_output_tokens.saturating_add(output_tokens);
+        self.total_tokens = self.total_tokens.saturating_add(total_tokens);
+        self.estimated_cost_microusd = self
+            .estimated_cost_microusd
+            .saturating_add(estimated_cost_microusd);
+        self.usage_provenance = Some(provenance);
         self.cache_read_input_tokens = self
             .cache_read_input_tokens
             .saturating_add(cache_read_input_tokens);
@@ -579,9 +621,7 @@ impl AppState {
         self.current_context_tokens = input_tokens
             .saturating_add(cache_read_input_tokens)
             .saturating_add(cache_creation_input_tokens);
-        self.model_elapsed_millis = self
-            .model_elapsed_millis
-            .saturating_add(model_elapsed_millis);
+        self.model_elapsed_millis = self.model_elapsed_millis.saturating_add(duration_ms);
     }
 
     #[must_use]
@@ -618,7 +658,7 @@ impl AppState {
     #[must_use]
     pub fn output_tokens_per_second(&self) -> Option<f64> {
         (self.model_elapsed_millis > 0)
-            .then(|| self.timed_output_tokens as f64 * 1_000.0 / self.model_elapsed_millis as f64)
+            .then(|| self.total_tokens as f64 * 1_000.0 / self.model_elapsed_millis as f64)
     }
 
     #[must_use]

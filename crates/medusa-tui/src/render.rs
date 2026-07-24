@@ -117,12 +117,15 @@ pub(super) fn session_metrics_line(app: &AppState) -> String {
         .output_tokens_per_second()
         .map_or_else(|| "—".to_owned(), format_token_rate);
     format!(
-        "session {} · input {} · output {} · cache-read {} · cache-write {} · {rate} tok/s",
+        "session {} · total {} · input {} · output {} · cache-read {} · cache-write {} · cost {} · {} · {rate} tok/s",
         format_elapsed(app.session_elapsed_seconds()),
+        format_token_count(app.total_tokens),
         format_token_count(app.input_tokens),
         format_token_count(app.output_tokens),
         format_token_count(app.cache_read_input_tokens),
         format_token_count(app.cache_creation_input_tokens),
+        format_cost(app.estimated_cost_microusd),
+        app.usage_provenance.as_deref().unwrap_or("—"),
     )
 }
 
@@ -151,6 +154,13 @@ pub(super) fn context_meter_line(app: &AppState) -> String {
         format_token_count(window),
         app.auto_compact_percent(),
     )
+}
+
+fn format_cost(microusd: u64) -> String {
+    if microusd == 0 {
+        return "—".to_owned();
+    }
+    format!("${:.4}", microusd as f64 / 1_000_000.0)
 }
 
 fn format_token_rate(tokens_per_second: f64) -> String {

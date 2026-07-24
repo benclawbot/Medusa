@@ -3,7 +3,6 @@ use std::{
     env, fs,
     path::{Path, PathBuf},
     sync::mpsc::Sender,
-    time::Instant,
 };
 
 use base64::{Engine as _, engine::general_purpose::STANDARD};
@@ -298,7 +297,6 @@ fn skill_description(path: &Path) -> Option<String> {
 pub(super) struct UpdateState {
     next_tool_id: u64,
     pending_tools: VecDeque<PendingTool>,
-    model_started_at: Option<Instant>,
     pub(super) current_context_tokens: u64,
 }
 
@@ -307,7 +305,6 @@ impl UpdateState {
         Self {
             next_tool_id: 0,
             pending_tools: VecDeque::new(),
-            model_started_at: None,
             current_context_tokens: 0,
         }
     }
@@ -325,40 +322,24 @@ pub(super) fn forward_update(
     state: &mut UpdateState,
 ) {
     match update {
-        AgentUpdate::Event(EventPayload::ModelRequestStarted { .. }) => {
-            state.model_started_at = Some(Instant::now());
-        }
         AgentUpdate::Event(EventPayload::ModelResponseReceived { usage, .. }) => {
-            let model_elapsed_millis = state.model_started_at.take().map_or(0, |started_at| {
-                u64::try_from(started_at.elapsed().as_millis())
-                    .unwrap_or(u64::MAX)
-                    .max(1)
-            });
-            let input_tokens = usage
-                .get("input_tokens")
-                .and_then(Value::as_u64)
-                .unwrap_or_default();
-            let output_tokens = usage
-                .get("output_tokens")
-                .and_then(Value::as_u64)
-                .unwrap_or_default();
-            let cache_read_input_tokens = usage
-                .get("cache_read_input_tokens")
-                .and_then(Value::as_u64)
-                .unwrap_or_default();
-            let cache_creation_input_tokens = usage
-                .get("cache_creation_input_tokens")
-                .and_then(Value::as_u64)
-                .unwrap_or_default();
-            state.current_context_tokens = input_tokens
-                .saturating_add(cache_read_input_tokens)
-                .saturating_add(cache_creation_input_tokens);
+            let Ok(usage) = serde_json::from_value::<TurnUsage>(usage.clone()) else {
+                return;
+            };
+            state.current_context_tokens = usage
+                .input_tokens
+                .saturating_add(usage.cache_read_input_tokens)
+                .saturating_add(usage.cache_creation_input_tokens);
             let _ = events.send(RuntimeEvent::Usage {
-                input_tokens,
-                output_tokens,
-                cache_read_input_tokens,
-                cache_creation_input_tokens,
-                model_elapsed_millis,
+                input_tokens: usage.input_tokens,
+                output_tokens: usage.output_tokens,
+                cache_read_input_tokens: usage.cache_read_input_tokens,
+                cache_creation_input_tokens: usage.cache_creation_input_tokens,
+                total_tokens: usage.total_tokens,
+                duration_ms: usage.duration_ms,
+                tokens_per_second_milli: usage.tokens_per_second_milli,
+                estimated_cost_microusd: usage.estimated_cost_microusd,
+                provenance: usage.provenance,
             });
         }
         AgentUpdate::Event(EventPayload::ToolCallRequested { tool, arguments }) => {
