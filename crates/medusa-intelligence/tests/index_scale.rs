@@ -1,7 +1,7 @@
 use std::{
     fs,
     mem::size_of,
-    path::{Path, PathBuf},
+    path::Path,
     time::{Duration, Instant},
 };
 
@@ -37,9 +37,7 @@ fn representative_large_repository_stays_within_time_and_memory_ceilings() {
     let before = IndexSnapshot::capture(repository.path()).expect("before snapshot");
     for file_index in 0..10 {
         fs::write(
-            repository
-                .path()
-                .join(format!("src/module_{file_index:04}.rs")),
+            repository.path().join(format!("src/module_{file_index:04}.rs")),
             rust_source(file_index, 2),
         )
         .expect("modify source");
@@ -119,12 +117,16 @@ fn estimated_heap_bytes(index: &CodeIndex) -> usize {
             })
             .sum::<usize>();
 
-    let parse_error_bytes = index.parse_errors.capacity() * size_of::<PathBuf>()
-        + index.parse_errors.iter().map(path_bytes).sum::<usize>();
+    let parse_error_bytes = index.parse_errors.capacity() * size_of::<std::path::PathBuf>()
+        + index
+            .parse_errors
+            .iter()
+            .map(|path| path_bytes(path))
+            .sum::<usize>();
 
     symbol_bytes + reference_bytes + parse_error_bytes
 }
 
-fn path_bytes(path: &PathBuf) -> usize {
+fn path_bytes(path: &Path) -> usize {
     path.as_os_str().len()
 }
