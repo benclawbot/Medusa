@@ -13,7 +13,14 @@ const ORIGINAL_REQUEST_BLOCK: &str = r#"        let response = self.provider.com
         })?;
 "#;
 
-const CONTEXT_RECOVERY_REQUEST_BLOCK: &str = r#"        let system = coding_policy::apply(
+const CONTEXT_RECOVERY_REQUEST_BLOCK: &str = r#"        if let Some(refresh) = repository_index::refresh(&session.repo)? {
+            observer(&AgentUpdate::ToolOutput {
+                tool: "code_index".to_owned(),
+                output: repository_index::summary(&refresh),
+                is_error: false,
+            });
+        }
+        let system = coding_policy::apply(
             system_prompt_with_context(
                 self.config.agent.mode,
                 &session.repo,
@@ -122,6 +129,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     println!("cargo:rerun-if-changed=src/engine_base.rs");
     println!("cargo:rerun-if-changed=src/context_budget.rs");
     println!("cargo:rerun-if-changed=src/coding_policy.rs");
+    println!("cargo:rerun-if-changed=src/repository_index.rs");
     println!("cargo:rerun-if-changed=src/usage.rs");
     println!("cargo:rerun-if-changed=src/world_model_observation.rs");
     println!("cargo:rerun-if-changed=build.rs");
