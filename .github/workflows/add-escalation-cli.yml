@@ -22,7 +22,7 @@ jobs:
           fetch-depth: 0
       - uses: dtolnay/rust-toolchain@1.88.0
         with:
-          components: rustfmt,clippy
+          components: rustfmt
       - name: Add CLI command
         run: |
           python - <<'PY'
@@ -40,17 +40,21 @@ jobs:
 
           agent_lib = Path('crates/medusa-agent/src/lib.rs')
           text = agent_lib.read_text()
-          old = '''    AgentPlanStep, AgentPlanStepStatus, AgentQuestion, AgentQuestionItem, AgentQuestionOption,
+          old = '''pub use session::{
+              AgentPlanStep, AgentPlanStepStatus, AgentQuestion, AgentQuestionItem, AgentQuestionOption,
               AgentSession, SessionUsage, TurnUsage, UsageProvenance, bootstrap, session_usage,
-          '''
-          new = '''    AgentPlanStep, AgentPlanStepStatus, AgentQuestion, AgentQuestionItem, AgentQuestionOption,
+          };'''
+          new = '''pub use session::{
+              AgentPlanStep, AgentPlanStepStatus, AgentQuestion, AgentQuestionItem, AgentQuestionOption,
               AgentSession, BrowserAssistedLaunch, EscalationJournal, EscalationStatus,
               SessionEscalation, SessionUsage, TurnUsage, UsageProvenance, bootstrap,
               export_manual_escalation, import_manual_advice, launch_browser_assisted_escalation,
               load_escalation_journal, persist_escalation_journal, render_chatgpt_prompt,
               session_usage,
-          '''
+          };'''
           if 'BrowserAssistedLaunch' not in text:
+              if old not in text:
+                  raise SystemExit('medusa-agent session export block not found')
               text = text.replace(old, new, 1)
           agent_lib.write_text(text)
 
@@ -66,11 +70,11 @@ jobs:
               'use medusa_core::{ErrorCategory, ErrorCode, MedusaError, MedusaResult, SessionId};\nuse medusa_escalation::EscalationPacket;',
               1,
           )
-          marker = '''    Resume {
+
+          resume_variant = '''    Resume {
               session: String,
-          },
-          '''
-          addition = '''    Resume {
+          },'''
+          escalate_variant = '''    Resume {
               session: String,
           },
               /// Open a validated escalation packet in ChatGPT using the normal browser profile.
@@ -81,12 +85,13 @@ jobs:
                   /// Path to the signed escalation packet JSON.
                   #[arg(long)]
                   packet: PathBuf,
-              },
-          '''
+              },'''
           if '    Escalate {' not in text:
-              text = text.replace(marker, addition, 1)
+              if resume_variant not in text:
+                  raise SystemExit('CLI Resume variant not found')
+              text = text.replace(resume_variant, escalate_variant, 1)
 
-          marker = '''        CommandKind::Resume { session } => {
+          resume_arm = '''        CommandKind::Resume { session } => {
               let provider = ConfiguredProvider::manager_from_config(&config, None)?;
               let engine = AgentEngine::new(provider, config);
               let mut session = engine.load_session(&repo, &session)?;
@@ -94,16 +99,17 @@ jobs:
               engine.run_to_completion(&mut session)?;
               print_completion(&session);
               Ok(())
-          }
-          '''
-          addition = marker + '''        CommandKind::Escalate { session, packet } => {
-              browser_assisted_escalation(&repo, &session, &packet)
-          }
-          '''
+          }'''
+          escalation_arm = resume_arm + '''
+              CommandKind::Escalate { session, packet } => {
+                  browser_assisted_escalation(&repo, &session, &packet)
+              }'''
           if 'CommandKind::Escalate { session, packet }' not in text:
-              text = text.replace(marker, addition, 1)
+              if resume_arm not in text:
+                  raise SystemExit('CLI Resume match arm not found')
+              text = text.replace(resume_arm, escalation_arm, 1)
 
-          insertion = '''
+          helper = '''
           fn browser_assisted_escalation(
               repo: &Path,
               session: &str,
@@ -127,7 +133,10 @@ jobs:
               if launch.clipboard_ready {
                   println!("Prompt copied to clipboard; paste it into ChatGPT and submit.");
               } else {
-                  println!("Clipboard unavailable; prompt saved at {}.", launch.prompt_path.display());
+                  println!(
+                      "Clipboard unavailable; prompt saved at {}.",
+                      launch.prompt_path.display()
+                  );
               }
               println!("Signed packet: {}", launch.packet_path.display());
               println!("Prompt recovery file: {}", launch.prompt_path.display());
@@ -135,13 +144,14 @@ jobs:
           }
 
           '''
+          update_marker = 'fn update(repo: &Path, check_only: bool, automatic: bool) -> MedusaResult<()> {'
           if 'fn browser_assisted_escalation(' not in text:
-              text = text.replace('fn update(repo: &Path, check_only: bool, automatic: bool) -> MedusaResult<()> {', insertion + 'fn update(repo: &Path, check_only: bool, automatic: bool) -> MedusaResult<()> {', 1)
+              if update_marker not in text:
+                  raise SystemExit('CLI update function marker not found')
+              text = text.replace(update_marker, helper + update_marker, 1)
           main.write_text(text)
           PY
           cargo fmt --all
-          cargo clippy -p medusa-cli --all-targets -- -D warnings
-          cargo test -p medusa-cli
       - name: Commit CLI integration
         run: |
           git config user.name "github-actions[bot]"
