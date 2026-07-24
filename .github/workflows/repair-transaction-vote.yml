@@ -1,0 +1,53 @@
+name: Repair Transaction Vote Ownership
+
+on:
+  push:
+    branches:
+      - agent/local-execution-bridge
+
+permissions:
+  contents: write
+
+jobs:
+  repair:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: agent/local-execution-bridge
+      - uses: dtolnay/rust-toolchain@1.88.0
+        with:
+          components: rustfmt
+      - name: Fix owned worker identifier
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          path = Path('crates/medusa-transaction-coordinator/src/lib.rs')
+          text = path.read_text()
+          old = '''            } => (worker_id, *lease_epoch),
+        };
+        let participant = record
+            .participants
+            .iter()
+            .find(|p| &p.worker_id == worker_id)
+'''
+          new = '''            } => (worker_id.clone(), *lease_epoch),
+        };
+        let participant = record
+            .participants
+            .iter()
+            .find(|p| p.worker_id == worker_id)
+'''
+          if old not in text:
+              raise SystemExit('expected transaction vote block not found')
+          path.write_text(text.replace(old, new, 1))
+          PY
+          cargo fmt --all
+      - name: Commit repair
+        run: |
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add crates/medusa-transaction-coordinator/src/lib.rs
+          git commit -m "Fix transaction vote ownership"
+          git push origin HEAD:agent/local-execution-bridge
