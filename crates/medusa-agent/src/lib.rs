@@ -24,7 +24,10 @@ pub use identity_guard::{compatibility_context, validate_provider_text};
 pub use policy::validate_shell_command;
 pub use session::{
     AgentPlanStep, AgentPlanStepStatus, AgentQuestion, AgentQuestionItem, AgentQuestionOption,
-    AgentSession, SessionUsage, TurnUsage, UsageProvenance, bootstrap, session_usage,
+    AgentSession, BrowserAssistedLaunch, EscalationJournal, EscalationStatus, SessionEscalation,
+    SessionUsage, TurnUsage, UsageProvenance, bootstrap, export_manual_escalation,
+    import_manual_advice, launch_browser_assisted_escalation, load_escalation_journal,
+    persist_escalation_journal, render_chatgpt_prompt, session_usage,
 };
 pub use transaction::{
     FileMutation, TransactionOutcome, TransactionPreview, apply_atomic, preview,

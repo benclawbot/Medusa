@@ -16,6 +16,7 @@ clap = { version = "4.5", features = ["derive"] }
 medusa-agent = { path = "../medusa-agent" }
 medusa-config = { path = "../medusa-config" }
 medusa-core.workspace = true
+medusa-escalation = { path = "../medusa-escalation" }
 medusa-daemon = { path = "../medusa-daemon" }
 medusa-extensions = { path = "../medusa-extensions" }
 medusa-hardening = { path = "../medusa-hardening" }

@@ -11,6 +11,7 @@ medusa-browser-client = { path = "../medusa-browser-client" }
 medusa-capabilities = { path = "../medusa-capabilities" }
 medusa-config = { path = "../medusa-config" }
 medusa-core.workspace = true
+medusa-escalation = { path = "../medusa-escalation" }
 medusa-extensions = { path = "../medusa-extensions" }
 medusa-intelligence = { path = "../medusa-intelligence" }
 medusa-protocol.workspace = true
@@ -24,6 +25,8 @@ ulid.workspace = true
 walkdir = "2.5"
 
 [dev-dependencies]
+hex.workspace = true
+sha2.workspace = true
 tempfile.workspace = true
 
 [lints]

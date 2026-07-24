@@ -1018,10 +1018,12 @@ checksum = "112b39cec0b298b6c1999fee3e31427f74f676e4cb9879ed1a121b43661a4154"
 name = "medusa-agent"
 version = "1.0.0"
 dependencies = [
+ "hex",
  "medusa-browser-client",
  "medusa-capabilities",
  "medusa-config",
  "medusa-core",
+ "medusa-escalation",
  "medusa-extensions",
  "medusa-intelligence",
  "medusa-protocol",
@@ -1030,6 +1032,7 @@ dependencies = [
  "reqwest",
  "serde",
  "serde_json",
+ "sha2",
  "tempfile",
  "time",
  "ulid",
@@ -1075,6 +1078,7 @@ dependencies = [
  "medusa-config",
  "medusa-core",
  "medusa-daemon",
+ "medusa-escalation",
  "medusa-extensions",
  "medusa-hardening",
  "medusa-provider",
@@ -1140,6 +1144,18 @@ dependencies = [
  "tempfile",
  "time",
  "ulid",
+]
+
+[[package]]
+name = "medusa-escalation"
+version = "1.0.0"
+dependencies = [
+ "hex",
+ "serde",
+ "serde_json",
+ "sha2",
+ "tempfile",
+ "time",
 ]
 
 [[package]]

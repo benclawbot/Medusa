@@ -15,7 +15,10 @@ use crate::{
     evidence::verify_chain,
 };
 
+mod browser_assisted_escalation;
+mod escalation_state;
 mod lessons;
+mod manual_escalation;
 mod recall;
 mod skill_drafts;
 mod skill_outcomes;
@@ -23,6 +26,14 @@ mod skill_probation;
 #[path = "usage.rs"]
 mod usage;
 
+pub use browser_assisted_escalation::{
+    BrowserAssistedLaunch, launch_browser_assisted_escalation, render_chatgpt_prompt,
+};
+pub use escalation_state::{
+    EscalationJournal, EscalationStatus, SessionEscalation, load_escalation_journal,
+    persist_escalation_journal,
+};
+pub use manual_escalation::{export_manual_escalation, import_manual_advice};
 pub(crate) use usage::record_turn_usage;
 #[allow(unused_imports)]
 pub use usage::{SessionUsage, TurnUsage, UsageProvenance, session_usage};
@@ -146,6 +157,7 @@ pub fn bootstrap(repo: &Path) -> MedusaResult<()> {
         fs::create_dir_all(fallback_session_root(repo))?;
     }
     let _ = fs::create_dir_all(repo.join(".medusa/world-models"));
+    let _ = fs::create_dir_all(repo.join(".medusa/escalations"));
     let map = repo.join("REPOSITORY_MAP.md");
     if !map.exists() {
         let _ = fs::write(
