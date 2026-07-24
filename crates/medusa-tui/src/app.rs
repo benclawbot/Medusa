@@ -55,6 +55,7 @@ pub struct AppState {
     pub timed_output_tokens: u64,
     pub total_tokens: u64,
     pub estimated_cost_microusd: u64,
+    pub tokens_per_second_milli: u64,
     pub usage_provenance: Option<String>,
     pub cache_read_input_tokens: u64,
     pub cache_creation_input_tokens: u64,
@@ -133,6 +134,7 @@ impl AppState {
             timed_output_tokens: 0,
             total_tokens: 0,
             estimated_cost_microusd: 0,
+            tokens_per_second_milli: 0,
             usage_provenance: None,
             cache_read_input_tokens: 0,
             cache_creation_input_tokens: 0,
@@ -320,6 +322,7 @@ impl AppState {
         self.timed_output_tokens = 0;
         self.total_tokens = 0;
         self.estimated_cost_microusd = 0;
+        self.tokens_per_second_milli = 0;
         self.usage_provenance = None;
         self.cache_read_input_tokens = 0;
         self.cache_creation_input_tokens = 0;
@@ -585,7 +588,11 @@ impl AppState {
             cache_creation_input_tokens,
             total_tokens,
             model_elapsed_millis,
-            0,
+            if model_elapsed_millis == 0 {
+                0
+            } else {
+                output_tokens.saturating_mul(1_000_000) / model_elapsed_millis
+            },
             0,
             "estimated".to_owned(),
         );
@@ -600,7 +607,7 @@ impl AppState {
         cache_creation_input_tokens: u64,
         total_tokens: u64,
         duration_ms: u64,
-        _tokens_per_second_milli: u64,
+        tokens_per_second_milli: u64,
         estimated_cost_microusd: u64,
         provenance: String,
     ) {
@@ -611,6 +618,7 @@ impl AppState {
         self.estimated_cost_microusd = self
             .estimated_cost_microusd
             .saturating_add(estimated_cost_microusd);
+        self.tokens_per_second_milli = tokens_per_second_milli;
         self.usage_provenance = Some(provenance);
         self.cache_read_input_tokens = self
             .cache_read_input_tokens
@@ -657,8 +665,7 @@ impl AppState {
 
     #[must_use]
     pub fn output_tokens_per_second(&self) -> Option<f64> {
-        (self.model_elapsed_millis > 0)
-            .then(|| self.total_tokens as f64 * 1_000.0 / self.model_elapsed_millis as f64)
+        (self.tokens_per_second_milli > 0).then(|| self.tokens_per_second_milli as f64 / 1_000.0)
     }
 
     #[must_use]

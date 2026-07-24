@@ -357,8 +357,6 @@ Supported protocols:
 
 Credentials are never written to `provider.toml`. Use a provider-specific `<PROVIDER>_API_KEY`, `OPENAI_API_KEY`, `MEDUSA_API_KEY`, or the selected gateway's existing authentication. `medusa config show` displays only non-secret settings and `medusa config reset` removes the profile.
 
-
-
 ## Usage telemetry
 
 Medusa records normalized per-turn usage in the durable session event stream and surfaces cumulative totals in the TUI header. The display includes input, output, cache-read, cache-write, total tokens, measured throughput, estimated cost, and whether counts were provider-reported or deterministically estimated. Cost rates are configured with `MEDUSA_INPUT_COST_MICROUSD_PER_MILLION`, `MEDUSA_OUTPUT_COST_MICROUSD_PER_MILLION`, `MEDUSA_CACHE_READ_COST_MICROUSD_PER_MILLION`, and `MEDUSA_CACHE_WRITE_COST_MICROUSD_PER_MILLION`.

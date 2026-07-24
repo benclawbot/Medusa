@@ -12,7 +12,7 @@ use std::{
 
 use medusa_agent::{
     AgentEngine, AgentPlanStep, AgentQuestion, AgentSession, StepOutcome, TurnUsage,
-    UsageProvenance, compact_session, update_session_objective,
+    compact_session, update_session_objective,
 };
 use medusa_capabilities::CapabilityRegistry;
 use medusa_config::{Config, Mode};
@@ -35,6 +35,7 @@ mod tests;
 pub use error::RuntimeError;
 pub use medusa_agent::{
     AgentPlanStep as RuntimePlanStep, AgentPlanStepStatus, AgentQuestionItem, AgentQuestionOption,
+    UsageProvenance,
 };
 
 use support::{

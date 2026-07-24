@@ -163,8 +163,8 @@ fn map_event(event: medusa_runtime::RuntimeEvent) -> RuntimeEvent {
             tokens_per_second_milli,
             estimated_cost_microusd,
             provenance: match provenance {
-                medusa_agent::UsageProvenance::ProviderReported => "provider".to_owned(),
-                medusa_agent::UsageProvenance::Estimated => "estimated".to_owned(),
+                medusa_runtime::UsageProvenance::ProviderReported => "provider".to_owned(),
+                medusa_runtime::UsageProvenance::Estimated => "estimated".to_owned(),
             },
         },
         medusa_runtime::RuntimeEvent::Progress { turn } => RuntimeEvent::Progress { turn },
