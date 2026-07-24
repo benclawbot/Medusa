@@ -6,6 +6,9 @@ rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
 
+[lib]
+path = "src/lib_with_index.rs"
+
 [dependencies]
 medusa-browser-client = { path = "../medusa-browser-client" }
 medusa-capabilities = { path = "../medusa-capabilities" }
