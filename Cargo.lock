@@ -1242,6 +1242,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "medusa-process-registry"
+version = "1.0.0"
+dependencies = [
+ "serde",
+ "serde_json",
+ "thiserror",
+ "time",
+]
+
+[[package]]
 name = "medusa-progress"
 version = "1.0.0"
 dependencies = [
