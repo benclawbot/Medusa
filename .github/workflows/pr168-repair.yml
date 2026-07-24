@@ -1,19 +1,15 @@
 name: PR 168 Repair
 
 on:
-  push:
-    branches:
-      - roadmap/161-frontend-telemetry-v2
-    paths:
-      - .github/workflows/pr168-repair.yml
-      - scripts/fix_pr168.py
+  pull_request:
+    types: [ready_for_review, reopened, synchronize]
 
 permissions:
   contents: write
 
 jobs:
   repair:
-    if: github.actor != 'github-actions[bot]'
+    if: github.event.pull_request.number == 168 && github.actor != 'github-actions[bot]'
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
