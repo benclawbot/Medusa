@@ -37,7 +37,9 @@ fn representative_large_repository_stays_within_time_and_memory_ceilings() {
     let before = IndexSnapshot::capture(repository.path()).expect("before snapshot");
     for file_index in 0..10 {
         fs::write(
-            repository.path().join(format!("src/module_{file_index:04}.rs")),
+            repository
+                .path()
+                .join(format!("src/module_{file_index:04}.rs")),
             rust_source(file_index, 2),
         )
         .expect("modify source");
