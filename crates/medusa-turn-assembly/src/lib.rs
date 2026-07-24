@@ -253,7 +253,7 @@ fn is_execution_critical(item: &ContextItem) -> bool {
 
 #[must_use]
 pub fn estimate_tokens(content: &str) -> usize {
-    content.len().saturating_add(3) / 4
+    content.len()
 }
 
 fn fingerprint(bytes: &[u8]) -> String {
