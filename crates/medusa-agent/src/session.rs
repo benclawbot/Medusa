@@ -17,6 +17,7 @@ use crate::{
 
 mod escalation_state;
 mod lessons;
+mod manual_escalation;
 mod recall;
 mod skill_drafts;
 mod skill_outcomes;
@@ -28,6 +29,7 @@ pub use escalation_state::{
     EscalationJournal, EscalationStatus, SessionEscalation, load_escalation_journal,
     persist_escalation_journal,
 };
+pub use manual_escalation::{export_manual_escalation, import_manual_advice};
 pub(crate) use usage::record_turn_usage;
 #[allow(unused_imports)]
 pub use usage::{SessionUsage, TurnUsage, UsageProvenance, session_usage};
