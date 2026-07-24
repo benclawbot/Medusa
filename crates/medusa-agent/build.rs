@@ -81,6 +81,25 @@ const ORIGINAL_USAGE_EVENT: &str =
 const ACCOUNTED_USAGE_EVENT: &str =
     "                usage: serde_json::to_value(turn_usage).map_err(json_error)?,";
 
+const ORIGINAL_TOOL_RESULT_BLOCK: &str = r#"                let (raw_content, is_error, exit_code) = match result {
+                    Ok(output) => (output, false, Some(0)),
+                    Err(error) => (error.to_string(), true, Some(1)),
+                };
+"#;
+
+const OBSERVED_TOOL_RESULT_BLOCK: &str = r#"                let (raw_content, is_error, exit_code) = match result {
+                    Ok(output) => (output, false, Some(0)),
+                    Err(error) => (error.to_string(), true, Some(1)),
+                };
+                world_model_observation::record_tool_observation(
+                    session,
+                    &name,
+                    &input,
+                    &raw_content,
+                    if is_error { 1 } else { 0 },
+                );
+"#;
+
 fn replace_once(
     source: String,
     original: &str,
@@ -104,6 +123,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     println!("cargo:rerun-if-changed=src/context_budget.rs");
     println!("cargo:rerun-if-changed=src/coding_policy.rs");
     println!("cargo:rerun-if-changed=src/usage.rs");
+    println!("cargo:rerun-if-changed=src/world_model_observation.rs");
     println!("cargo:rerun-if-changed=build.rs");
 
     let manifest_dir = PathBuf::from(env::var("CARGO_MANIFEST_DIR")?);
@@ -123,8 +143,15 @@ fn main() -> Result<(), Box<dyn Error>> {
         "model usage event",
         &source_path,
     )?;
+    let engine = replace_once(
+        engine,
+        ORIGINAL_TOOL_RESULT_BLOCK,
+        OBSERVED_TOOL_RESULT_BLOCK,
+        "tool result observation block",
+        &source_path,
+    )?;
     let generated = format!(
-        "mod context_budget {{ include!(concat!(env!(\"CARGO_MANIFEST_DIR\"), \"/src/context_budget.rs\")); }}\nmod coding_policy {{ include!(concat!(env!(\"CARGO_MANIFEST_DIR\"), \"/src/coding_policy.rs\")); }}\n{engine}"
+        "mod context_budget {{ include!(concat!(env!(\"CARGO_MANIFEST_DIR\"), \"/src/context_budget.rs\")); }}\nmod coding_policy {{ include!(concat!(env!(\"CARGO_MANIFEST_DIR\"), \"/src/coding_policy.rs\")); }}\nmod world_model_observation {{ include!(concat!(env!(\"CARGO_MANIFEST_DIR\"), \"/src/world_model_observation.rs\")); }}\n{engine}"
     );
     let output_path = PathBuf::from(env::var("OUT_DIR")?).join("engine.rs");
     fs::write(output_path, generated)?;
