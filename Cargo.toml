@@ -18,6 +18,7 @@ members = [
   "crates/medusa-prompt-cache",
   "crates/medusa-context",
   "crates/medusa-context-retrieval",
+  "crates/medusa-turn-assembly",
   "crates/medusa-agent",
   "crates/medusa-browser-client",
   "crates/medusa-browserd",
