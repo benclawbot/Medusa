@@ -1,4 +1,8 @@
-use std::{collections::BTreeMap, fs, path::{Path, PathBuf}};
+use std::{
+    collections::BTreeMap,
+    fs,
+    path::{Path, PathBuf},
+};
 
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -98,8 +102,11 @@ mod tests {
         fs::write(directory.path().join("b.rs"), "fn b() {}\n").expect("b");
         let before = IndexSnapshot::capture(directory.path()).expect("before");
 
-        fs::write(directory.path().join("a.rs"), "fn a() { println!(\"changed\"); }\n")
-            .expect("modify a");
+        fs::write(
+            directory.path().join("a.rs"),
+            "fn a() { println!(\"changed\"); }\n",
+        )
+        .expect("modify a");
         fs::remove_file(directory.path().join("b.rs")).expect("remove b");
         fs::write(directory.path().join("c.rs"), "fn c() {}\n").expect("add c");
         let after = IndexSnapshot::capture(directory.path()).expect("after");
@@ -110,7 +117,11 @@ mod tests {
         assert_eq!(delta.removed, vec![PathBuf::from("b.rs")]);
         assert_eq!(
             delta.invalidated_paths(),
-            vec![PathBuf::from("a.rs"), PathBuf::from("b.rs"), PathBuf::from("c.rs")]
+            vec![
+                PathBuf::from("a.rs"),
+                PathBuf::from("b.rs"),
+                PathBuf::from("c.rs")
+            ]
         );
     }
 
@@ -120,12 +131,21 @@ mod tests {
         fs::create_dir_all(directory.path().join("target")).expect("target");
         fs::create_dir_all(directory.path().join(".medusa")).expect("medusa");
         fs::write(directory.path().join("lib.rs"), "fn live() {}\n").expect("lib");
-        fs::write(directory.path().join("target/generated.rs"), "fn generated() {}\n")
-            .expect("generated");
-        fs::write(directory.path().join(".medusa/cache.rs"), "fn cached() {}\n")
-            .expect("cache");
+        fs::write(
+            directory.path().join("target/generated.rs"),
+            "fn generated() {}\n",
+        )
+        .expect("generated");
+        fs::write(
+            directory.path().join(".medusa/cache.rs"),
+            "fn cached() {}\n",
+        )
+        .expect("cache");
 
         let snapshot = IndexSnapshot::capture(directory.path()).expect("snapshot");
-        assert_eq!(snapshot.files.keys().cloned().collect::<Vec<_>>(), vec![PathBuf::from("lib.rs")]);
+        assert_eq!(
+            snapshot.files.keys().cloned().collect::<Vec<_>>(),
+            vec![PathBuf::from("lib.rs")]
+        );
     }
 }
