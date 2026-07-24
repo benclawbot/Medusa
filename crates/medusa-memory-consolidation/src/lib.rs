@@ -140,7 +140,7 @@ pub fn consolidate(
             .then_with(|| left.id.cmp(&right.id))
     });
 
-    let source_fingerprint = fingerprint(&ordered);
+    let source_fingerprint = fingerprint(&ordered)?;
     let mut groups: BTreeMap<String, Vec<MemoryObservation>> = BTreeMap::new();
     for observation in ordered {
         groups
@@ -188,7 +188,7 @@ pub fn consolidate(
             values.sort();
             let mut supporting_ids = group.iter().map(|item| item.id.clone()).collect::<Vec<_>>();
             supporting_ids.sort();
-            let conflict_fingerprint = fingerprint(&(key.as_str(), &values, &supporting_ids));
+            let conflict_fingerprint = fingerprint(&(key.as_str(), &values, &supporting_ids))?;
             conflicts.push(MemoryConflict {
                 key,
                 candidate_values: values,
@@ -220,7 +220,7 @@ pub fn consolidate(
             exemplar.kind,
             &support_ids,
             mean_confidence,
-        ));
+        ))?;
         memories.push(ConsolidatedMemory {
             key,
             subject: exemplar.subject.clone(),
@@ -236,7 +236,7 @@ pub fn consolidate(
     deferred.sort();
     memories.sort_by(|a, b| a.key.cmp(&b.key));
     conflicts.sort_by(|a, b| a.key.cmp(&b.key));
-    let result_fingerprint = fingerprint(&(&memories, &conflicts, &deferred));
+    let result_fingerprint = fingerprint(&(&memories, &conflicts, &deferred))?;
 
     Ok(ConsolidationResult {
         memories,
@@ -255,9 +255,10 @@ fn normalize(value: &str) -> String {
         .to_lowercase()
 }
 
-fn fingerprint<T: Serialize>(value: &T) -> String {
-    let bytes = serde_json::to_vec(value).expect("serializable memory consolidation state");
-    hex::encode(Sha256::digest(bytes))
+fn fingerprint<T: Serialize>(value: &T) -> Result<String, &'static str> {
+    let bytes =
+        serde_json::to_vec(value).map_err(|_| "memory consolidation serialization failed")?;
+    Ok(hex::encode(Sha256::digest(bytes)))
 }
 
 #[cfg(test)]
