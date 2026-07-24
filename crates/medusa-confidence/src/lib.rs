@@ -269,9 +269,8 @@ impl SpikeGatePolicy {
                 "Which assumption has the highest chance of being wrong?".to_owned(),
             ];
             if reasons.contains(&SpikeGateReason::ConfidenceCollapsed) {
-                questions.push(
-                    "What changed since the highest recent confidence estimate?".to_owned(),
-                );
+                questions
+                    .push("What changed since the highest recent confidence estimate?".to_owned());
             }
             GateDecision::Spike(SpikeRequest {
                 todo_id: history.todo_id.clone(),
