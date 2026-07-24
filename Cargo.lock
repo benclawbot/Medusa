@@ -1349,6 +1349,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "medusa-wakeup"
+version = "1.0.0"
+dependencies = [
+ "serde",
+ "time",
+]
+
+[[package]]
 name = "medusa-workers"
 version = "1.0.0"
 dependencies = [
