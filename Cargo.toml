@@ -7,6 +7,7 @@ members = [
   "crates/medusa-testkit",
   "crates/medusa-provider",
   "crates/medusa-intelligence",
+  "crates/medusa-world-model",
   "crates/medusa-agent",
   "crates/medusa-browser-client",
   "crates/medusa-browserd",
@@ -36,6 +37,7 @@ repository = "https://github.com/benclawbot/Medusa"
 medusa-core = { path = "crates/medusa-core" }
 medusa-protocol = { path = "crates/medusa-protocol" }
 medusa-process-containment = { path = "crates/medusa-process-containment" }
+medusa-world-model = { path = "crates/medusa-world-model" }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 toml = "0.8"
