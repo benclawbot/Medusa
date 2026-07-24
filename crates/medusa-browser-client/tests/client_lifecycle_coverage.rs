@@ -1,6 +1,10 @@
 #![cfg(unix)]
 
-use std::{fs, os::unix::fs::PermissionsExt};
+use std::{
+    fs::{self, File},
+    io::Write,
+    os::unix::fs::PermissionsExt,
+};
 
 use medusa_browser_client::{BrowserClient, BrowserRequest, BrowserResponse};
 use medusa_core::ErrorCode;
@@ -9,11 +13,14 @@ use medusa_core::ErrorCode;
 fn browser_client_spawns_stdio_sidecar_round_trips_and_terminates_it() {
     let directory = tempfile::tempdir().expect("tempdir");
     let sidecar = directory.path().join("fake-browserd.sh");
-    fs::write(
-        &sidecar,
-        "#!/bin/sh\nread request\nprintf '%s\\n' '{\"kind\":\"ok\"}'\nread request || true\n",
-    )
-    .expect("write sidecar");
+    {
+        let mut file = File::create(&sidecar).expect("create sidecar");
+        file.write_all(
+            b"#!/bin/sh\nread request\nprintf '%s\\n' '{\"kind\":\"ok\"}'\nread request || true\n",
+        )
+        .expect("write sidecar");
+        file.sync_all().expect("flush sidecar");
+    }
     let mut permissions = fs::metadata(&sidecar).expect("metadata").permissions();
     permissions.set_mode(0o755);
     fs::set_permissions(&sidecar, permissions).expect("make executable");
