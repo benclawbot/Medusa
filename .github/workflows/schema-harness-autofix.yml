@@ -1,0 +1,34 @@
+name: Schema Harness Autofix
+
+on:
+  push:
+    branches:
+      - agent/schema-harness-foundation
+
+permissions:
+  contents: write
+
+jobs:
+  autofix:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: agent/schema-harness-foundation
+          fetch-depth: 0
+      - uses: dtolnay/rust-toolchain@1.88.0
+        with:
+          components: rustfmt
+      - name: Format and refresh lockfile
+        run: |
+          cargo fmt --all
+          cargo generate-lockfile
+          rm .github/workflows/schema-harness-autofix.yml
+      - name: Commit generated fixes
+        run: |
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add Cargo.lock crates/medusa-world-model/src/lib.rs .github/workflows/schema-harness-autofix.yml
+          git commit -m "Format world model and refresh lockfile"
+          git push origin HEAD:agent/schema-harness-foundation
