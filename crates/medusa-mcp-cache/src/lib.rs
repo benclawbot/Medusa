@@ -54,10 +54,18 @@ impl ServerConfig {
         if self.endpoint.trim().is_empty() {
             return Err("server endpoint cannot be empty");
         }
-        if self.startup_arguments.iter().any(|value| value.trim().is_empty()) {
+        if self
+            .startup_arguments
+            .iter()
+            .any(|value| value.trim().is_empty())
+        {
             return Err("startup arguments cannot contain empty values");
         }
-        if self.environment_keys.iter().any(|value| value.trim().is_empty()) {
+        if self
+            .environment_keys
+            .iter()
+            .any(|value| value.trim().is_empty())
+        {
             return Err("environment keys cannot contain empty values");
         }
         Ok(())
@@ -158,7 +166,11 @@ impl SchemaSnapshot {
         for tool in &self.tools {
             tool.validate()?;
         }
-        if self.tools.windows(2).any(|items| items[0].name >= items[1].name) {
+        if self
+            .tools
+            .windows(2)
+            .any(|items| items[0].name >= items[1].name)
+        {
             return Err("tool schemas must be uniquely sorted by name");
         }
         if self.schema_fingerprint != fingerprint_tools(&self.tools) {
@@ -256,7 +268,10 @@ impl McpManager {
         requires_live_connection: bool,
         now: OffsetDateTime,
     ) -> Result<AccessPlan, &'static str> {
-        let entry = self.servers.get(server_id).ok_or("MCP server is not registered")?;
+        let entry = self
+            .servers
+            .get(server_id)
+            .ok_or("MCP server is not registered")?;
         let fresh_schema = entry
             .schema
             .as_ref()
@@ -273,7 +288,10 @@ impl McpManager {
     }
 
     pub fn mark_connecting(&mut self, server_id: &ServerId) -> Result<u32, &'static str> {
-        let entry = self.servers.get_mut(server_id).ok_or("MCP server is not registered")?;
+        let entry = self
+            .servers
+            .get_mut(server_id)
+            .ok_or("MCP server is not registered")?;
         if entry.connection.state == ConnectionState::Connecting {
             return Err("MCP server is already connecting");
         }
@@ -289,7 +307,10 @@ impl McpManager {
         generation: u32,
         now: OffsetDateTime,
     ) -> Result<(), &'static str> {
-        let entry = self.servers.get_mut(server_id).ok_or("MCP server is not registered")?;
+        let entry = self
+            .servers
+            .get_mut(server_id)
+            .ok_or("MCP server is not registered")?;
         if entry.connection.state != ConnectionState::Connecting
             || entry.connection.generation != generation
         {
@@ -310,7 +331,10 @@ impl McpManager {
         if error.trim().is_empty() {
             return Err("connection failure must include an error");
         }
-        let entry = self.servers.get_mut(server_id).ok_or("MCP server is not registered")?;
+        let entry = self
+            .servers
+            .get_mut(server_id)
+            .ok_or("MCP server is not registered")?;
         if entry.connection.generation != generation {
             return Err("stale MCP connection generation");
         }
@@ -355,7 +379,11 @@ impl McpManager {
                 }
             }
             if entry.connection.state == ConnectionState::Failed
-                && entry.connection.last_error.as_deref().is_none_or(str::is_empty)
+                && entry
+                    .connection
+                    .last_error
+                    .as_deref()
+                    .is_none_or(str::is_empty)
             {
                 return Err("failed MCP connection must retain an error");
             }
