@@ -1,9 +1,9 @@
 name: Generate Lockfile Temp
 
 on:
-  push:
+  pull_request:
     branches:
-      - agent/goal-completion-evidence-model
+      - main
 
 permissions:
   contents: read
