@@ -11,6 +11,7 @@ members = [
   "crates/medusa-goal",
   "crates/medusa-progress",
   "crates/medusa-confidence",
+  "crates/medusa-failure",
   "crates/medusa-agent",
   "crates/medusa-browser-client",
   "crates/medusa-browserd",

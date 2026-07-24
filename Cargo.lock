@@ -1146,6 +1146,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "medusa-failure"
+version = "1.0.0"
+dependencies = [
+ "serde",
+ "thiserror",
+ "time",
+]
+
+[[package]]
 name = "medusa-github"
 version = "1.0.0"
 dependencies = [
