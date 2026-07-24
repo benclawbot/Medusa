@@ -163,9 +163,7 @@ impl ExecutionLog {
         let previous = self.events.last().map(|event| event.fingerprint.clone());
         let event = ExecutionEvent::new(sequence, kind, payload_fingerprint, previous)?;
         self.events.push(event);
-        self.events
-            .last()
-            .ok_or(CheckpointError::EventAppendFailed)
+        self.events.last().ok_or(CheckpointError::EventAppendFailed)
     }
 
     pub fn add_checkpoint(
