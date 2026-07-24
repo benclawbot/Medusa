@@ -49,6 +49,7 @@ pub struct ReplayReport {
 }
 
 impl ExecutionTrace {
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         execution_id: impl Into<String>,
         snapshot: impl Into<String>,
