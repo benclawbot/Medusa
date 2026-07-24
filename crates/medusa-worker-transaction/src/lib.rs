@@ -88,7 +88,7 @@ impl PatchTransaction {
             read_set.task_id.as_str(),
             read_set.fingerprint.as_str(),
             &patches,
-        ));
+        ))?;
         Ok(Self {
             transaction_id,
             worker_id: read_set.worker_id.clone(),
@@ -169,7 +169,7 @@ pub fn validate_transaction(
         &read_set_validation,
         &conflicting_paths,
         decision,
-    ));
+    ))?;
     Ok(TransactionValidation {
         decision,
         read_set_validation,
@@ -227,9 +227,9 @@ fn validate_fingerprint(value: &str) -> Result<(), &'static str> {
     Ok(())
 }
 
-fn fingerprint<T: Serialize>(value: &T) -> String {
-    let bytes = serde_json::to_vec(value).expect("serializing transaction data cannot fail");
-    hex::encode(Sha256::digest(bytes))
+fn fingerprint<T: Serialize>(value: &T) -> Result<String, &'static str> {
+    let bytes = serde_json::to_vec(value).map_err(|_| "transaction serialization failed")?;
+    Ok(hex::encode(Sha256::digest(bytes)))
 }
 
 #[cfg(test)]
