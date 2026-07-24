@@ -1146,6 +1146,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "medusa-goal"
+version = "1.0.0"
+dependencies = [
+ "serde",
+]
+
+[[package]]
 name = "medusa-hardening"
 version = "1.0.0"
 dependencies = [
