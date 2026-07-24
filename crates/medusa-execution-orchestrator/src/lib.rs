@@ -68,7 +68,7 @@ impl StageFailure {
         if code.trim().is_empty() || message.trim().is_empty() {
             return Err("failure code and message cannot be empty");
         }
-        let fingerprint = fingerprint(&(stage, code.as_str(), message.as_str(), disposition));
+        let fingerprint = fingerprint(&(stage, code.as_str(), message.as_str(), disposition))?;
         Ok(Self {
             stage,
             code,
@@ -114,7 +114,7 @@ impl Checkpoint {
             snapshot_fingerprint.as_str(),
             &artifact_fingerprints,
             attempt,
-        ));
+        ))?;
         Ok(Self {
             execution_id,
             completed_stage,
@@ -171,7 +171,7 @@ impl ExecutionState {
             attempt: 1,
             fingerprint: String::new(),
         };
-        state.refresh();
+        state.refresh()?;
         Ok(state)
     }
 
@@ -195,8 +195,10 @@ impl ExecutionState {
         self.current_stage = stage
             .next()
             .ok_or("completed execution has no next stage")?;
-        self.refresh();
-        Ok(self.checkpoints.last().expect("checkpoint was appended"))
+        self.refresh()?;
+        self.checkpoints
+            .last()
+            .ok_or("checkpoint append did not persist")
     }
 
     pub fn record_failure(&mut self, failure: StageFailure) -> Result<(), &'static str> {
@@ -208,7 +210,7 @@ impl ExecutionState {
             self.attempt = self.attempt.saturating_add(1);
         }
         self.failures.push(failure);
-        self.refresh();
+        self.refresh()?;
         Ok(())
     }
 
@@ -227,7 +229,7 @@ impl ExecutionState {
             failures: Vec::new(),
             fingerprint: String::new(),
         };
-        state.refresh();
+        state.refresh()?;
         Ok(state)
     }
 
@@ -243,14 +245,14 @@ impl ExecutionState {
             &self.checkpoints,
             &self.failures,
             self.attempt,
-        ));
+        ))?;
         if expected != self.fingerprint {
             return Err("execution state fingerprint does not match its contents");
         }
         Ok(())
     }
 
-    fn refresh(&mut self) {
+    fn refresh(&mut self) -> Result<(), &'static str> {
         self.fingerprint = fingerprint(&(
             self.execution_id.as_str(),
             self.current_stage,
@@ -258,7 +260,8 @@ impl ExecutionState {
             &self.checkpoints,
             &self.failures,
             self.attempt,
-        ));
+        ))?;
+        Ok(())
     }
 }
 
@@ -300,10 +303,9 @@ fn validate_digest(value: &str) -> Result<(), &'static str> {
     Ok(())
 }
 
-fn fingerprint<T: Serialize>(value: &T) -> String {
-    fingerprint_bytes(
-        &serde_json::to_vec(value).expect("serializing orchestration data cannot fail"),
-    )
+fn fingerprint<T: Serialize>(value: &T) -> Result<String, &'static str> {
+    let bytes = serde_json::to_vec(value).map_err(|_| "orchestration serialization failed")?;
+    Ok(fingerprint_bytes(&bytes))
 }
 
 fn fingerprint_bytes(bytes: &[u8]) -> String {
