@@ -1,28 +1,16 @@
-use std::path::{Component, Path, PathBuf};
+use std::path::{Path, PathBuf};
 
 use medusa_core::{ErrorCategory, ErrorCode, MedusaError, MedusaResult};
 use sha2::{Digest, Sha256};
-use walkdir::WalkDir;
 
-pub(crate) fn source_files(repo: &Path) -> Vec<PathBuf> {
-    let mut paths = WalkDir::new(repo)
+use crate::discovery::RepositorySnapshot;
+
+pub(crate) fn source_files(repo: &Path) -> MedusaResult<Vec<PathBuf>> {
+    Ok(RepositorySnapshot::scan(repo)?
+        .paths_with_extension("rs")
         .into_iter()
-        .filter_map(Result::ok)
-        .filter(|entry| entry.file_type().is_file())
-        .map(|entry| entry.into_path())
-        .filter(|path| path.extension().is_some_and(|ext| ext == "rs"))
-        .filter(|path| {
-            !path.components().any(|component| {
-                matches!(
-                    component,
-                    Component::Normal(name)
-                        if name == ".git" || name == "target" || name == ".medusa"
-                )
-            })
-        })
-        .collect::<Vec<_>>();
-    paths.sort();
-    paths
+        .map(|path| repo.join(path))
+        .collect())
 }
 
 pub(crate) fn valid_identifier(value: &str) -> bool {
@@ -39,7 +27,9 @@ pub(crate) fn validate_relative(path: &Path) -> MedusaResult<()> {
         || path.components().any(|component| {
             matches!(
                 component,
-                Component::ParentDir | Component::RootDir | Component::Prefix(_)
+                std::path::Component::ParentDir
+                    | std::path::Component::RootDir
+                    | std::path::Component::Prefix(_)
             )
         })
     {
