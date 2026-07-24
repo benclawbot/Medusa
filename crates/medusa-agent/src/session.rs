@@ -15,6 +15,7 @@ use crate::{
     evidence::verify_chain,
 };
 
+mod escalation_state;
 mod lessons;
 mod recall;
 mod skill_drafts;
@@ -23,6 +24,7 @@ mod skill_probation;
 #[path = "usage.rs"]
 mod usage;
 
+pub use escalation_state::{EscalationStatus, SessionEscalation};
 pub(crate) use usage::record_turn_usage;
 #[allow(unused_imports)]
 pub use usage::{SessionUsage, TurnUsage, UsageProvenance, session_usage};
@@ -138,6 +140,8 @@ pub struct AgentSession {
     pub approval_receipts: Vec<ApprovalReceipt>,
     #[serde(default)]
     pub rollback_receipts: Vec<RollbackReceipt>,
+    #[serde(default)]
+    pub escalations: Vec<SessionEscalation>,
 }
 
 /// Creates the on-disk Medusa layout and repository map.
@@ -172,10 +176,28 @@ pub(crate) fn load(repo: &Path, session: &str) -> MedusaResult<AgentSession> {
     };
     let session: AgentSession = serde_json::from_slice(&fs::read(path)?)?;
     verify_chain(&session.events)?;
+    for escalation in &session.escalations {
+        escalation.validate().map_err(|message| {
+            MedusaError::new(
+                ErrorCode::InvalidConfiguration,
+                ErrorCategory::Persistence,
+                message,
+            )
+        })?;
+    }
     Ok(session)
 }
 
 pub(crate) fn persist(session: &AgentSession) -> MedusaResult<()> {
+    for escalation in &session.escalations {
+        escalation.validate().map_err(|message| {
+            MedusaError::new(
+                ErrorCode::InvalidConfiguration,
+                ErrorCategory::Persistence,
+                message,
+            )
+        })?;
+    }
     let primary = session_path(&session.repo, &session.id);
     let persisted = match persist_at(&primary, session) {
         Ok(()) => Ok(()),
