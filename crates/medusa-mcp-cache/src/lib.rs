@@ -73,10 +73,7 @@ impl ServerConfig {
 
     #[must_use]
     pub fn fingerprint(&self) -> String {
-        let bytes = match serde_json::to_vec(self) {
-            Ok(bytes) => bytes,
-            Err(_) => Vec::new(),
-        };
+        let bytes = serde_json::to_vec(self).unwrap_or_default();
         hex::encode(Sha256::digest(bytes))
     }
 }
@@ -396,10 +393,7 @@ impl McpManager {
 }
 
 fn fingerprint_tools(tools: &[ToolSchema]) -> String {
-    let bytes = match serde_json::to_vec(tools) {
-        Ok(bytes) => bytes,
-        Err(_) => Vec::new(),
-    };
+    let bytes = serde_json::to_vec(tools).unwrap_or_default();
     hex::encode(Sha256::digest(bytes))
 }
 
