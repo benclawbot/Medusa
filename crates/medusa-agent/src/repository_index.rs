@@ -2,13 +2,18 @@ use std::{
     collections::{BTreeMap, BTreeSet},
     fs,
     path::{Path, PathBuf},
-    sync::{Mutex, OnceLock},
+    sync::{Mutex, MutexGuard, OnceLock},
 };
 
 use medusa_core::{ErrorCategory, ErrorCode, MedusaError, MedusaResult};
-use medusa_intelligence::{IndexRefresh, IndexSnapshot};
+use medusa_intelligence::{
+    IndexRefresh, IndexSnapshot, RetrievalBudget, RetrievalReport,
+};
 
 use crate::session_browser::RepositoryIndexCache;
+
+const MAX_RETRIEVAL_TOKENS: u64 = 8_000;
+const RETRIEVAL_WRAPPER_RESERVE_TOKENS: u64 = 256;
 
 #[derive(Debug)]
 struct CachedRepository {
@@ -17,7 +22,26 @@ struct CachedRepository {
     cache: RepositoryIndexCache,
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct RetrievalContext {
+    pub system_fragment: String,
+    pub status: String,
+}
+
 static REPOSITORY_INDEXES: OnceLock<Mutex<BTreeMap<PathBuf, CachedRepository>>> = OnceLock::new();
+
+fn indexes() -> MedusaResult<MutexGuard<'static, BTreeMap<PathBuf, CachedRepository>>> {
+    REPOSITORY_INDEXES
+        .get_or_init(|| Mutex::new(BTreeMap::new()))
+        .lock()
+        .map_err(|_| {
+            MedusaError::new(
+                ErrorCode::InternalInvariant,
+                ErrorCategory::Internal,
+                "repository index cache lock was poisoned",
+            )
+        })
+}
 
 /// Refreshes the process-wide index for one repository before a model turn.
 ///
@@ -25,14 +49,7 @@ static REPOSITORY_INDEXES: OnceLock<Mutex<BTreeMap<PathBuf, CachedRepository>>> 
 /// incrementally. A branch, fetch, pull, or detached-HEAD transition forces a complete reload even
 /// when the repository path is unchanged.
 pub(crate) fn refresh(repo: &Path) -> MedusaResult<Option<IndexRefresh>> {
-    let indexes = REPOSITORY_INDEXES.get_or_init(|| Mutex::new(BTreeMap::new()));
-    let mut indexes = indexes.lock().map_err(|_| {
-        MedusaError::new(
-            ErrorCode::InternalInvariant,
-            ErrorCategory::Internal,
-            "repository index cache lock was poisoned",
-        )
-    })?;
+    let mut indexes = indexes()?;
     let key = repo.to_path_buf();
     let identity = git_identity(repo)?;
 
@@ -76,6 +93,105 @@ pub(crate) fn refresh(repo: &Path) -> MedusaResult<Option<IndexRefresh>> {
         },
     );
     Ok(None)
+}
+
+/// Retrieves repository context within capacity left after protected prompt allocations.
+pub(crate) fn retrieve_context(
+    repo: &Path,
+    query: &str,
+    available_tokens: u64,
+) -> MedusaResult<Option<RetrievalContext>> {
+    let max_tokens = retrieval_token_budget(available_tokens);
+    if max_tokens == 0 || query.trim().is_empty() {
+        return Ok(None);
+    }
+
+    let mut indexes = indexes()?;
+    let key = repo.to_path_buf();
+    if !indexes.contains_key(&key) {
+        let snapshot = IndexSnapshot::capture(repo)?;
+        indexes.insert(
+            key.clone(),
+            CachedRepository {
+                git_identity: git_identity(repo)?,
+                source_paths: snapshot.files.into_keys().collect(),
+                cache: RepositoryIndexCache::load(key.clone())?,
+            },
+        );
+    }
+    let entry = indexes.get(&key).ok_or_else(|| {
+        MedusaError::new(
+            ErrorCode::InternalInvariant,
+            ErrorCategory::Internal,
+            "repository index cache was not initialized",
+        )
+    })?;
+    let report = entry.cache.index().retrieve(
+        repo,
+        query,
+        RetrievalBudget {
+            max_tokens: usize::try_from(max_tokens).unwrap_or(usize::MAX),
+            max_results: 24,
+            max_tokens_per_result: 1_200,
+        },
+    );
+    if report.results.is_empty() && report.exclusions.is_empty() {
+        return Ok(None);
+    }
+    Ok(Some(RetrievalContext {
+        system_fragment: format_retrieval_context(&report),
+        status: retrieval_summary(&report, available_tokens),
+    }))
+}
+
+fn retrieval_token_budget(available_tokens: u64) -> u64 {
+    available_tokens
+        .saturating_sub(RETRIEVAL_WRAPPER_RESERVE_TOKENS)
+        .min(MAX_RETRIEVAL_TOKENS)
+}
+
+fn format_retrieval_context(report: &RetrievalReport) -> String {
+    let mut context = String::from(
+        "REPOSITORY RETRIEVAL CONTEXT\nUse these ranked source fragments as evidence. Read files with tools before editing when broader context is needed.\n",
+    );
+    for result in &report.results {
+        context.push_str(&format!(
+            "\n--- {}:{}-{} · symbol {} · score {} ---\n{}\n",
+            result.path.display(),
+            result.start_line,
+            result.end_line,
+            result.symbol,
+            result.score,
+            result.content
+        ));
+    }
+    context
+}
+
+fn retrieval_summary(report: &RetrievalReport, available_tokens: u64) -> String {
+    let exclusions = report
+        .exclusions
+        .iter()
+        .fold(BTreeMap::<&str, usize>::new(), |mut counts, exclusion| {
+            *counts.entry(exclusion.reason.as_str()).or_default() += 1;
+            counts
+        })
+        .into_iter()
+        .map(|(reason, count)| format!("{reason}: {count}"))
+        .collect::<Vec<_>>();
+    format!(
+        "Repository context: included {} fragment(s), used {}/{} retrieval tokens, protected capacity {} tokens, excluded {} fragment(s){}.",
+        report.results.len(),
+        report.used_tokens,
+        report.budget.max_tokens,
+        available_tokens.saturating_sub(u64::try_from(report.budget.max_tokens).unwrap_or(u64::MAX)),
+        report.exclusions.len(),
+        if exclusions.is_empty() {
+            String::new()
+        } else {
+            format!(" ({})", exclusions.join(", "))
+        }
+    )
 }
 
 fn git_identity(repo: &Path) -> std::io::Result<Vec<u8>> {
@@ -187,6 +303,32 @@ mod tests {
         let report = refresh(repository.path()).expect("refresh").expect("changed");
         assert_eq!(report.reindexed, vec![PathBuf::from("lib.rs")]);
         assert!(summary(&report).contains("lib.rs"));
+    }
+
+    #[test]
+    fn retrieval_budget_preserves_wrapper_and_non_repository_capacity() {
+        assert_eq!(retrieval_token_budget(200), 0);
+        assert_eq!(retrieval_token_budget(1_000), 744);
+        assert_eq!(retrieval_token_budget(20_000), MAX_RETRIEVAL_TOKENS);
+    }
+
+    #[test]
+    fn retrieval_context_reports_inclusions_exclusions_and_protected_capacity() {
+        let repository = tempfile::tempdir().expect("repository");
+        fs::write(
+            repository.path().join("lib.rs"),
+            "pub fn retrieve_alpha() -> usize { 1 }\npub fn retrieve_beta() -> usize { 2 }\n",
+        )
+        .expect("source");
+        assert!(refresh(repository.path()).expect("load").is_none());
+
+        let context = retrieve_context(repository.path(), "retrieve", 300)
+            .expect("retrieval")
+            .expect("context");
+        assert!(context.system_fragment.contains("retrieve_alpha"));
+        assert!(context.status.contains("included 1 fragment(s)"));
+        assert!(context.status.contains("excluded 1 fragment(s)"));
+        assert!(context.status.contains("protected capacity 256 tokens"));
     }
 
     #[test]
