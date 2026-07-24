@@ -1078,6 +1078,7 @@ dependencies = [
  "medusa-config",
  "medusa-core",
  "medusa-daemon",
+ "medusa-escalation",
  "medusa-extensions",
  "medusa-hardening",
  "medusa-provider",
