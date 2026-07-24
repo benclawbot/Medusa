@@ -1,70 +1,70 @@
 # Schema-inspired harness foundation
 
-This change introduces the durable data layer for evidence-driven debugging without replacing Medusa's current agent loop.
+Medusa now has a durable, explicit world-model layer for evidence-driven engineering work.
+
+## Implemented
+
+- versioned workspace models;
+- objective and acceptance-criteria state;
+- direct observations with typed provenance;
+- evidence-linked hypotheses;
+- guarded hypothesis transitions;
+- predictions recorded against hypotheses;
+- structured experiments and outcomes;
+- repository invariants;
+- atomic persistence under `.medusa/world-models/<session-id>/model.json`;
+- automatic world-model creation for new agent sessions;
+- backward-compatible loading for sessions created before world models existed;
+- restart-safe model loading through `AgentEngine::load_session_world_model`.
 
 ## Storage
 
-World models are stored under:
+Each model is stored separately from the main session JSON:
 
 ```text
-.medusa/world-models/<session-id>/model.json
+.medusa/
+├── sessions/
+│   └── <session-id>.json
+└── world-models/
+    └── <session-id>/
+        └── model.json
 ```
 
-Writes use a temporary file followed by an atomic rename. Session bootstrap creates the world-model root while preserving the existing session format.
+The session stores only a relative-path and revision reference. This keeps conversation persistence bounded while allowing the model schema to evolve independently.
 
-## Epistemic model
+## Epistemic rules
 
-The `medusa-world-model` crate distinguishes:
+The API deliberately separates:
 
-- observations produced by tools or users;
-- hypotheses linked to existing observations;
-- predictions recorded on proposed experiments;
+- observations, which come from users or tools;
+- hypotheses, which are falsifiable explanations;
+- predictions, which must exist before experiment reconciliation;
 - experiment outcomes;
-- repository invariants.
+- invariants, which represent repository properties that must remain true.
 
-Hypotheses cannot cite unknown observation IDs. Refuted hypotheses cannot be promoted back to leading or supported without first adding new evidence and revising their state. Model files carry an explicit schema version and monotonically increasing revision.
+Hypotheses cannot cite unknown observations. Refuted hypotheses cannot be promoted to leading or supported state without first adding new evidence.
 
-## Public API
+## Failure isolation
 
-```rust
-use medusa_world_model::{
-    Experiment, ExperimentAction, ObservationSource, WorkspaceModel,
-    create_for_session, load, persist,
-};
+World-model creation is additive. A model-storage failure does not prevent a session from being created; the session receives no model reference and the existing Medusa loop continues normally. Loading an explicitly referenced but corrupt model returns a structured Medusa error rather than silently discarding evidence.
 
-let reference = create_for_session(repo, session_id, objective)?;
-let mut model = load(repo, &reference)?;
-let observation = model.record_observation(
-    ObservationSource::TestRun {
-        command: "cargo test cancellation".into(),
-        exit_code: 1,
-    },
-    "the cancellation test timed out",
-);
-model.add_hypothesis(
-    "the child process is not receiving cancellation",
-    vec![observation],
-)?;
-model.add_experiment(Experiment::new(
-    "does the child process receive the cancellation signal?",
-    ExperimentAction::RunTest {
-        command: "cargo test cancellation_stops_child_process".into(),
-    },
-))?;
-persist(repo, &reference.relative_path, &model)?;
-```
+## Current boundary
 
-## Rollout
+This layer does not yet change normal model tool selection. It supplies the durable substrate required for follow-up work:
 
-This is deliberately a foundation PR. It does not yet alter tool selection or source-mutation policy. Follow-up work should add:
+1. passive tool-result observation adapters;
+2. protocol events for model revisions;
+3. hypothesis and experiment selection;
+4. prediction-before-execution gates;
+5. proposed-change and invariant verification gates;
+6. compact TUI rendering.
 
-1. passive tool-output observation adapters;
-2. hypothesis and experiment protocol events;
-3. prediction-before-execution gates;
-4. adaptive activation for ambiguous debugging tasks;
-5. change proposals and post-edit reconciliation;
-6. TUI views for structured evidence, not private chain-of-thought.
+## Validation
 
-## Compatibility
+The crate includes tests for:
 
-Existing session JSON remains unchanged. The new storage directory is additive, and the harness can be disabled simply by not creating a world model for a session.
+- persistence round trips;
+- evidence-link preservation;
+- fabricated observation rejection;
+- invalid hypothesis promotion;
+- durable session creation and restart loading.
