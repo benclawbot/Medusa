@@ -8,6 +8,7 @@ members = [
   "crates/medusa-provider",
   "crates/medusa-intelligence",
   "crates/medusa-world-model",
+  "crates/medusa-goal",
   "crates/medusa-agent",
   "crates/medusa-browser-client",
   "crates/medusa-browserd",
