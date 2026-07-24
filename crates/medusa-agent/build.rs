@@ -159,7 +159,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         &source_path,
     )?;
     let generated = format!(
-        "mod context_budget {{ include!(concat!(env!(\"CARGO_MANIFEST_DIR\"), \"/src/context_budget.rs\")); }}\nmod coding_policy {{ include!(concat!(env!(\"CARGO_MANIFEST_DIR\"), \"/src/coding_policy.rs\")); }}\nmod world_model_observation {{ include!(concat!(env!(\"CARGO_MANIFEST_DIR\"), \"/src/world_model_observation.rs\")); }}\n{engine}"
+        "mod context_budget {{ include!(concat!(env!(\"CARGO_MANIFEST_DIR\"), \"/src/context_budget.rs\")); }}\nmod coding_policy {{ include!(concat!(env!(\"CARGO_MANIFEST_DIR\"), \"/src/coding_policy.rs\")); }}\nmod repository_index {{ include!(concat!(env!(\"CARGO_MANIFEST_DIR\"), \"/src/repository_index.rs\")); }}\nmod world_model_observation {{ include!(concat!(env!(\"CARGO_MANIFEST_DIR\"), \"/src/world_model_observation.rs\")); }}\n{engine}"
     );
     let output_path = PathBuf::from(env::var("OUT_DIR")?).join("engine.rs");
     fs::write(output_path, generated)?;
