@@ -205,6 +205,7 @@ struct UnsignedPacket<'a> {
 }
 
 impl EscalationPacket {
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         packet_id: impl Into<String>,
         session_id: impl Into<String>,
