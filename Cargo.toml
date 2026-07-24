@@ -13,6 +13,7 @@ members = [
   "crates/medusa-confidence",
   "crates/medusa-failure",
   "crates/medusa-continuation",
+  "crates/medusa-escalation",
   "crates/medusa-process-registry",
   "crates/medusa-agent",
   "crates/medusa-browser-client",
