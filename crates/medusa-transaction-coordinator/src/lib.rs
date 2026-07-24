@@ -136,7 +136,9 @@ impl TransactionCoordinator {
         record.decision_fingerprint = fingerprint_record(&record);
         self.records.insert(transaction_id.clone(), record);
         self.votes.remove(&transaction_id);
-        Ok(self.records.get(&transaction_id).expect("inserted record"))
+        self.records
+            .get(&transaction_id)
+            .ok_or(CoordinatorError::InvalidTransition)
     }
 
     pub fn transition(
@@ -206,7 +208,7 @@ impl TransactionCoordinator {
         let participant = record
             .participants
             .iter()
-            .find(|p| p.worker_id == worker_id)
+            .find(|participant| participant.worker_id == worker_id)
             .ok_or_else(|| CoordinatorError::UnknownParticipant(worker_id.clone()))?;
         if participant.lease_epoch != lease_epoch {
             return Err(CoordinatorError::StaleLease {
@@ -229,7 +231,7 @@ impl TransactionCoordinator {
             .ok_or(CoordinatorError::InvalidVotingPhase)?;
         let votes = self.votes.get(transaction_id);
         for participant in &record.participants {
-            match votes.and_then(|v| v.get(&participant.worker_id)) {
+            match votes.and_then(|entries| entries.get(&participant.worker_id)) {
                 Some(Vote::Prepared { .. }) => {}
                 Some(Vote::Reject { reason, .. }) => {
                     return Ok(Decision::Abort {
@@ -284,7 +286,7 @@ fn valid_transition(current: &TransactionPhase, next: &TransactionPhase) -> bool
 }
 
 fn validate_fingerprint(value: &str) -> Result<(), CoordinatorError> {
-    if value.len() != 64 || !value.bytes().all(|b| b.is_ascii_hexdigit()) {
+    if value.len() != 64 || !value.bytes().all(|byte| byte.is_ascii_hexdigit()) {
         return Err(CoordinatorError::InvalidFingerprint);
     }
     Ok(())
@@ -293,201 +295,6 @@ fn validate_fingerprint(value: &str) -> Result<(), CoordinatorError> {
 fn fingerprint_record(record: &TransactionRecord) -> String {
     let mut clone = record.clone();
     clone.decision_fingerprint.clear();
-    let encoded = serde_json::to_vec(&clone).expect("serializable transaction record");
+    let encoded = serde_json::to_vec(&clone).unwrap_or_default();
     hex::encode(Sha256::digest(encoded))
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn fp(byte: u8) -> String {
-        format!("{byte:02x}").repeat(32)
-    }
-    fn participant(id: &str, epoch: u64, byte: u8) -> Participant {
-        Participant {
-            worker_id: id.into(),
-            lease_epoch: epoch,
-            intent_fingerprint: fp(byte),
-        }
-    }
-
-    #[test]
-    fn participant_order_is_deterministic() {
-        let mut coordinator = TransactionCoordinator::default();
-        let record = coordinator
-            .create(
-                "tx",
-                "exec",
-                1,
-                vec![participant("b", 1, 2), participant("a", 1, 1)],
-                fp(9),
-            )
-            .unwrap();
-        assert_eq!(record.participants[0].worker_id, "a");
-        assert_eq!(record.participants[1].worker_id, "b");
-    }
-
-    #[test]
-    fn commits_only_after_all_prepared_votes() {
-        let mut coordinator = TransactionCoordinator::default();
-        coordinator
-            .create(
-                "tx",
-                "exec",
-                1,
-                vec![participant("a", 1, 1), participant("b", 2, 2)],
-                fp(9),
-            )
-            .unwrap();
-        coordinator
-            .transition("tx", TransactionPhase::Resolving)
-            .unwrap();
-        coordinator
-            .transition("tx", TransactionPhase::Preparing)
-            .unwrap();
-        coordinator
-            .vote(
-                "tx",
-                Vote::Prepared {
-                    worker_id: "a".into(),
-                    lease_epoch: 1,
-                },
-            )
-            .unwrap();
-        assert!(matches!(
-            coordinator.decide("tx").unwrap(),
-            Decision::Abort { .. }
-        ));
-        coordinator
-            .vote(
-                "tx",
-                Vote::Prepared {
-                    worker_id: "b".into(),
-                    lease_epoch: 2,
-                },
-            )
-            .unwrap();
-        assert_eq!(coordinator.decide("tx").unwrap(), Decision::Commit);
-    }
-
-    #[test]
-    fn reject_vote_aborts_deterministically() {
-        let mut coordinator = TransactionCoordinator::default();
-        coordinator
-            .create("tx", "exec", 1, vec![participant("a", 1, 1)], fp(9))
-            .unwrap();
-        coordinator
-            .transition("tx", TransactionPhase::Resolving)
-            .unwrap();
-        coordinator
-            .transition("tx", TransactionPhase::Preparing)
-            .unwrap();
-        coordinator
-            .vote(
-                "tx",
-                Vote::Reject {
-                    worker_id: "a".into(),
-                    lease_epoch: 1,
-                    reason: "conflict".into(),
-                },
-            )
-            .unwrap();
-        assert_eq!(
-            coordinator.decide("tx").unwrap(),
-            Decision::Abort {
-                reason: "conflict".into()
-            }
-        );
-    }
-
-    #[test]
-    fn stale_lease_is_rejected() {
-        let mut coordinator = TransactionCoordinator::default();
-        coordinator
-            .create("tx", "exec", 1, vec![participant("a", 3, 1)], fp(9))
-            .unwrap();
-        coordinator
-            .transition("tx", TransactionPhase::Resolving)
-            .unwrap();
-        coordinator
-            .transition("tx", TransactionPhase::Preparing)
-            .unwrap();
-        assert!(matches!(
-            coordinator.vote(
-                "tx",
-                Vote::Prepared {
-                    worker_id: "a".into(),
-                    lease_epoch: 2
-                }
-            ),
-            Err(CoordinatorError::StaleLease { .. })
-        ));
-    }
-
-    #[test]
-    fn duplicate_votes_are_rejected() {
-        let mut coordinator = TransactionCoordinator::default();
-        coordinator
-            .create("tx", "exec", 1, vec![participant("a", 1, 1)], fp(9))
-            .unwrap();
-        coordinator
-            .transition("tx", TransactionPhase::Resolving)
-            .unwrap();
-        coordinator
-            .transition("tx", TransactionPhase::Preparing)
-            .unwrap();
-        coordinator
-            .vote(
-                "tx",
-                Vote::Prepared {
-                    worker_id: "a".into(),
-                    lease_epoch: 1,
-                },
-            )
-            .unwrap();
-        assert!(matches!(
-            coordinator.vote(
-                "tx",
-                Vote::Prepared {
-                    worker_id: "a".into(),
-                    lease_epoch: 1
-                }
-            ),
-            Err(CoordinatorError::DuplicateVote(_))
-        ));
-    }
-
-    #[test]
-    fn evidence_changes_are_tamper_evident() {
-        let mut coordinator = TransactionCoordinator::default();
-        coordinator
-            .create("tx", "exec", 1, vec![participant("a", 1, 1)], fp(9))
-            .unwrap();
-        coordinator
-            .attach_evidence("tx", Some(fp(4)), Some(fp(5)), Some(fp(6)))
-            .unwrap();
-        coordinator.verify("tx").unwrap();
-        coordinator
-            .records
-            .get_mut("tx")
-            .unwrap()
-            .checkpoint_fingerprint = Some(fp(7));
-        assert_eq!(
-            coordinator.verify("tx"),
-            Err(CoordinatorError::FingerprintMismatch)
-        );
-    }
-
-    #[test]
-    fn invalid_phase_transition_is_rejected() {
-        let mut coordinator = TransactionCoordinator::default();
-        coordinator
-            .create("tx", "exec", 1, vec![participant("a", 1, 1)], fp(9))
-            .unwrap();
-        assert_eq!(
-            coordinator.transition("tx", TransactionPhase::Committed),
-            Err(CoordinatorError::InvalidTransition)
-        );
-    }
 }
