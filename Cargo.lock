@@ -1265,6 +1265,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "medusa-prompt-cache"
+version = "1.0.0"
+dependencies = [
+ "hex",
+ "serde",
+ "sha2",
+ "time",
+]
+
+[[package]]
 name = "medusa-protocol"
 version = "1.0.0"
 dependencies = [
