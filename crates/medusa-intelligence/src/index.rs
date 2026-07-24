@@ -289,9 +289,8 @@ fn python_identifiers(source: &str) -> Vec<PythonIdentifier<'_>> {
             continue;
         }
         if matches!(byte, b'\'' | b'"') {
-            triple = index + 2 < bytes.len()
-                && bytes[index + 1] == byte
-                && bytes[index + 2] == byte;
+            triple =
+                index + 2 < bytes.len() && bytes[index + 1] == byte && bytes[index + 2] == byte;
             quote = Some(byte);
             index += if triple { 3 } else { 1 };
             continue;
@@ -322,7 +321,11 @@ fn python_identifiers(source: &str) -> Vec<PythonIdentifier<'_>> {
 
 fn leading_identifier(value: &str) -> Option<&str> {
     let bytes = value.as_bytes();
-    if bytes.first().copied().is_none_or(|byte| !is_identifier_start(byte)) {
+    if bytes
+        .first()
+        .copied()
+        .is_none_or(|byte| !is_identifier_start(byte))
+    {
         return None;
     }
     let end = bytes
@@ -362,15 +365,7 @@ fn push_definition(
         start_line,
         end_line,
     });
-    push_reference(
-        index,
-        path,
-        name,
-        name_start,
-        name_end,
-        start_line,
-        true,
-    );
+    push_reference(index, path, name, name_start, name_end, start_line, true);
 }
 
 fn push_reference(
