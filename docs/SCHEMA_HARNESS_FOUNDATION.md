@@ -54,14 +54,7 @@ The new `world_model` session field uses `serde(default)`, so older session JSON
 
 ## Current boundary
 
-This layer does not yet change normal model tool selection. It supplies the durable substrate required for follow-up work:
-
-1. passive tool-result observation adapters;
-2. protocol events for model revisions;
-3. hypothesis and experiment selection;
-4. prediction-before-execution gates;
-5. proposed-change and invariant verification gates;
-6. compact TUI rendering.
+This layer does not yet change normal model tool selection. The next implementation layer will record passive tool observations and emit model-revision events before hypothesis-driven experiment selection is enabled.
 
 ## Validation
 
