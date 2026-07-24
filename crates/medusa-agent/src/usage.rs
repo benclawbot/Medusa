@@ -1,6 +1,6 @@
 use std::{env, time::Duration};
 
-use medusa_provider::{MessageBlock, ModelRequest, ModelResponse, ResponseBlock, Usage};
+use medusa_provider::{ModelRequest, ModelResponse, ResponseBlock, Usage};
 use serde::{Deserialize, Serialize};
 
 use crate::session::AgentSession;
@@ -178,7 +178,7 @@ fn cost_component(tokens: u64, microusd_per_million: u64) -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use medusa_provider::{Message, Role, ToolDefinition};
+    use medusa_provider::{Message, MessageBlock, Role, ToolDefinition};
     use serde_json::json;
 
     fn request() -> ModelRequest {
