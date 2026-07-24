@@ -33,7 +33,10 @@ jobs:
     hex::encode(Sha256::digest(bytes))
 }'''
           new = '''fn fingerprint<T: Serialize + std::fmt::Debug>(value: &T) -> String {
-    let bytes = serde_json::to_vec(value).unwrap_or_else(|_| format!("{value:?}").into_bytes());
+    let bytes = match serde_json::to_vec(value) {
+        Ok(bytes) => bytes,
+        Err(_) => format!("{value:?}").into_bytes(),
+    };
     hex::encode(Sha256::digest(bytes))
 }'''
           if old not in text:
@@ -46,7 +49,7 @@ jobs:
           cargo generate-lockfile
           cargo test -p medusa-memory-consolidation
           cargo clippy -p medusa-memory-consolidation --all-targets -- -D warnings
-          ! grep -nE '\b(unwrap|expect|panic!|todo!|unimplemented!)\b' crates/medusa-memory-consolidation/src/lib.rs | grep -v '#\[cfg(test)\]' || true
+          test -z "$(sed '/#\[cfg(test)\]/,$d' crates/medusa-memory-consolidation/src/lib.rs | grep -nE '\b(unwrap|expect|panic!|todo!|unimplemented!)\b' || true)"
       - name: Commit final staging output and remove workflow
         run: |
           rm .github/workflows/memory-consolidation-staging.yml
