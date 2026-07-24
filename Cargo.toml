@@ -32,6 +32,7 @@ members = [
   "crates/medusa-commit-barrier",
   "crates/medusa-repository-rollback",
   "crates/medusa-execution-replay",
+  "crates/medusa-runtime-supervisor",
   "crates/medusa-agent",
   "crates/medusa-browser-client",
   "crates/medusa-browserd",
