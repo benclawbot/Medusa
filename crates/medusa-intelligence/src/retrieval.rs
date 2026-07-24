@@ -212,7 +212,11 @@ mod tests {
         assert!(report.results[0].score > report.results[1].score);
         assert_eq!(
             report.used_tokens,
-            report.results.iter().map(|r| r.estimated_tokens).sum()
+            report
+                .results
+                .iter()
+                .map(|result| result.estimated_tokens)
+                .sum::<usize>()
         );
     }
 
