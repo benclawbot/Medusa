@@ -12,10 +12,11 @@ use clap::{Parser, Subcommand};
 use config_command::{
     configure_interactive, ensure_first_run, reset as reset_config, show as show_config,
 };
-use medusa_agent::{AgentEngine, bootstrap};
+use medusa_agent::{AgentEngine, bootstrap, launch_browser_assisted_escalation};
 use medusa_config::Config;
-use medusa_core::{ErrorCategory, ErrorCode, MedusaError, MedusaResult};
+use medusa_core::{ErrorCategory, ErrorCode, MedusaError, MedusaResult, SessionId};
 use medusa_daemon::{DaemonClient, DaemonPaths, Request, serve};
+use medusa_escalation::EscalationPacket;
 use medusa_extensions::{DesktopCommanderClient, DesktopCommanderSettings};
 use medusa_hardening::{CURRENT_SCHEMA_VERSION, Migrator};
 use medusa_provider::ConfiguredProvider;
@@ -80,6 +81,15 @@ enum CommandKind {
     },
     Resume {
         session: String,
+    },
+    /// Open a validated escalation packet in ChatGPT using the normal browser profile.
+    Escalate {
+        /// Session that owns the escalation packet.
+        #[arg(long)]
+        session: String,
+        /// Path to the signed escalation packet JSON.
+        #[arg(long)]
+        packet: PathBuf,
     },
     #[command(name = "__daemon-serve", hide = true)]
     DaemonServe,
@@ -183,9 +193,41 @@ fn run() -> MedusaResult<()> {
             print_completion(&session);
             Ok(())
         }
+        CommandKind::Escalate { session, packet } => {
+            browser_assisted_escalation(&repo, &session, &packet)
+        }
         CommandKind::Config { .. } => unreachable!("handled before runtime config loading"),
         CommandKind::DaemonServe => serve(DaemonPaths::for_repo(&repo)),
     }
+}
+
+fn browser_assisted_escalation(repo: &Path, session: &str, packet_path: &Path) -> MedusaResult<()> {
+    let session_id = SessionId::parse(session).map_err(|message| {
+        MedusaError::new(
+            ErrorCode::InvalidConfiguration,
+            ErrorCategory::Validation,
+            message,
+        )
+    })?;
+    let packet_path = if packet_path.is_absolute() {
+        packet_path.to_path_buf()
+    } else {
+        repo.join(packet_path)
+    };
+    let packet: EscalationPacket = serde_json::from_slice(&fs::read(&packet_path)?)?;
+    let launch = launch_browser_assisted_escalation(repo, &session_id, &packet)?;
+    println!("ChatGPT opened for escalation packet {}.", packet.packet_id);
+    if launch.clipboard_ready {
+        println!("Prompt copied to clipboard; paste it into ChatGPT and submit.");
+    } else {
+        println!(
+            "Clipboard unavailable; prompt saved at {}.",
+            launch.prompt_path.display()
+        );
+    }
+    println!("Signed packet: {}", launch.packet_path.display());
+    println!("Prompt recovery file: {}", launch.prompt_path.display());
+    Ok(())
 }
 
 fn update(repo: &Path, check_only: bool, automatic: bool) -> MedusaResult<()> {
