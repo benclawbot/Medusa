@@ -116,7 +116,6 @@ mod tests {
             rollback_receipts: Vec::new(),
             tool_artifacts: Vec::new(),
             world_model,
-            usage: Default::default(),
         }
     }
 
