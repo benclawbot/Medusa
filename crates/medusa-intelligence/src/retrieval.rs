@@ -73,7 +73,7 @@ impl CodeIndex {
             )
         });
 
-        let mut used_tokens = 0;
+        let mut used_tokens: usize = 0;
         let mut results = Vec::new();
         let mut exclusions = Vec::new();
         for candidate in candidates {
