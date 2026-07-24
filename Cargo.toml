@@ -35,6 +35,7 @@ members = [
   "crates/medusa-runtime-supervisor",
   "crates/medusa-execution-checkpoint",
   "crates/medusa-time-travel",
+  "crates/medusa-conflict-resolution",
   "crates/medusa-agent",
   "crates/medusa-browser-client",
   "crates/medusa-browserd",
