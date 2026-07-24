@@ -48,6 +48,10 @@ Hypotheses cannot cite unknown observations. Refuted hypotheses cannot be promot
 
 World-model creation is additive. A model-storage failure does not prevent a session from being created; the session receives no model reference and the existing Medusa loop continues normally. Loading an explicitly referenced but corrupt model returns a structured Medusa error rather than silently discarding evidence.
 
+## Compatibility
+
+The new `world_model` session field uses `serde(default)`, so older session JSON loads with no model reference. New sessions create their model before the first session persistence operation. The model is stored independently and can evolve without embedding its complete contents in the conversation record.
+
 ## Current boundary
 
 This layer does not yet change normal model tool selection. It supplies the durable substrate required for follow-up work:
