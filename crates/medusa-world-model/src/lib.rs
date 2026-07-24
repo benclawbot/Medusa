@@ -115,9 +115,14 @@ impl WorkspaceModel {
             .hypotheses
             .iter_mut()
             .find(|hypothesis| hypothesis.id == id)
-            .ok_or_else(|| WorldModelError::InvalidTransition(format!("unknown hypothesis {id}")))?;
+            .ok_or_else(|| {
+                WorldModelError::InvalidTransition(format!("unknown hypothesis {id}"))
+            })?;
         if hypothesis.status == HypothesisStatus::Refuted
-            && matches!(status, HypothesisStatus::Leading | HypothesisStatus::Supported)
+            && matches!(
+                status,
+                HypothesisStatus::Leading | HypothesisStatus::Supported
+            )
         {
             return Err(WorldModelError::InvalidTransition(
                 "refuted hypotheses require new evidence before promotion".to_owned(),
@@ -160,7 +165,11 @@ impl WorkspaceModel {
 
     fn validate_observation_ids(&self, ids: &[String]) -> WorldModelResult<()> {
         for id in ids {
-            if !self.observations.iter().any(|observation| &observation.id == id) {
+            if !self
+                .observations
+                .iter()
+                .any(|observation| &observation.id == id)
+            {
                 return Err(WorldModelError::MissingObservation(id.clone()));
             }
         }
@@ -197,10 +206,21 @@ pub struct Observation {
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum ObservationSource {
-    FileRead { path: PathBuf, content_hash: Option<String> },
-    SearchResult { query: String },
-    ShellCommand { command: String, exit_code: i32 },
-    TestRun { command: String, exit_code: i32 },
+    FileRead {
+        path: PathBuf,
+        content_hash: Option<String>,
+    },
+    SearchResult {
+        query: String,
+    },
+    ShellCommand {
+        command: String,
+        exit_code: i32,
+    },
+    TestRun {
+        command: String,
+        exit_code: i32,
+    },
     UserStatement,
     Derived,
 }
@@ -342,16 +362,13 @@ pub fn create_for_session(
 }
 
 pub fn load(repo: &Path, reference: &WorldModelRef) -> WorldModelResult<WorkspaceModel> {
-    let model: WorkspaceModel = serde_json::from_slice(&fs::read(repo.join(&reference.relative_path))?)?;
+    let model: WorkspaceModel =
+        serde_json::from_slice(&fs::read(repo.join(&reference.relative_path))?)?;
     model.validate()?;
     Ok(model)
 }
 
-pub fn persist(
-    repo: &Path,
-    relative_path: &Path,
-    model: &WorkspaceModel,
-) -> WorldModelResult<()> {
+pub fn persist(repo: &Path, relative_path: &Path, model: &WorkspaceModel) -> WorldModelResult<()> {
     model.validate()?;
     let path = repo.join(relative_path);
     if let Some(parent) = path.parent() {
@@ -409,11 +426,7 @@ mod tests {
             .expect("refute");
         assert!(
             model
-                .transition_hypothesis(
-                    &hypothesis,
-                    HypothesisStatus::Leading,
-                    Confidence::High,
-                )
+                .transition_hypothesis(&hypothesis, HypothesisStatus::Leading, Confidence::High,)
                 .is_err()
         );
     }
