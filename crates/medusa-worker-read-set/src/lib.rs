@@ -65,7 +65,7 @@ impl WorkerReadSet {
             }
         }
         let files = by_path.into_values().collect::<Vec<_>>();
-        let fingerprint = fingerprint(&(worker_id.as_str(), task_id.as_str(), &files));
+        let fingerprint = fingerprint(&(worker_id.as_str(), task_id.as_str(), &files))?;
         Ok(Self {
             worker_id,
             task_id,
@@ -138,7 +138,7 @@ pub fn validate_read_set(
         read_set.fingerprint.as_str(),
         &stale_reads,
         &unchanged_paths,
-    ));
+    ))?;
     Ok(ReadSetValidation {
         valid,
         stale_reads,
@@ -175,9 +175,9 @@ fn validate_path(path: &str) -> Result<(), &'static str> {
     Ok(())
 }
 
-fn fingerprint<T: Serialize>(value: &T) -> String {
-    let bytes = serde_json::to_vec(value).expect("serializing read-set data cannot fail");
-    fingerprint_bytes(&bytes)
+fn fingerprint<T: Serialize>(value: &T) -> Result<String, &'static str> {
+    let bytes = serde_json::to_vec(value).map_err(|_| "read-set serialization failed")?;
+    Ok(fingerprint_bytes(&bytes))
 }
 
 fn fingerprint_bytes(bytes: &[u8]) -> String {
