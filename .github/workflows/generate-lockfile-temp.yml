@@ -1,0 +1,23 @@
+name: Generate Lockfile Temp
+
+on:
+  push:
+    branches:
+      - agent/goal-completion-evidence-model
+
+permissions:
+  contents: read
+
+jobs:
+  generate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@1.88.0
+      - name: Generate lockfile
+        run: cargo generate-lockfile
+      - name: Upload lockfile
+        uses: actions/upload-artifact@v4
+        with:
+          name: generated-cargo-lock
+          path: Cargo.lock
