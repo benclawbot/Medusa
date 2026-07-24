@@ -16,7 +16,7 @@ impl CodeIndex {
             .set_language(&tree_sitter_rust::LANGUAGE.into())
             .map_err(|error| internal(format!("configure Rust parser: {error}")))?;
         let mut index = Self::default();
-        for path in source_files(repo) {
+        for path in source_files(repo)? {
             let source = fs::read_to_string(&path)?;
             let Some(tree) = parser.parse(&source, None) else {
                 index.parse_errors.push(relative(repo, &path));
