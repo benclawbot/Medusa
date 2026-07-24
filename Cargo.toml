@@ -28,6 +28,7 @@ members = [
   "crates/medusa-repository-snapshot",
   "crates/medusa-execution-orchestrator",
   "crates/medusa-multi-agent-scheduler",
+  "crates/medusa-worker-leases",
   "crates/medusa-agent",
   "crates/medusa-browser-client",
   "crates/medusa-browserd",
