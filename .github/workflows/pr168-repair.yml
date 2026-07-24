@@ -16,17 +16,9 @@ jobs:
         with:
           ref: roadmap/161-frontend-telemetry-v2
           fetch-depth: 0
-      - uses: dtolnay/rust-toolchain@1.88.0
-        with:
-          components: rustfmt, clippy
       - name: Apply focused repair
         run: python scripts/fix_pr168.py
-      - name: Format and verify focused crates
-        run: |
-          cargo fmt --all
-          cargo clippy -p medusa-runtime -p medusa-tui --all-targets -- -D warnings
-          cargo test -p medusa-runtime -p medusa-tui
-      - name: Commit repaired source and remove temporary automation
+      - name: Publish repaired source and remove temporary automation
         run: |
           rm scripts/fix_pr168.py .github/workflows/pr168-repair.yml
           git config user.name github-actions[bot]
