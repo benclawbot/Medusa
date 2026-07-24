@@ -201,12 +201,12 @@ impl TransactionCoordinator {
                 worker_id,
                 lease_epoch,
                 ..
-            } => (worker_id, *lease_epoch),
+            } => (worker_id.clone(), *lease_epoch),
         };
         let participant = record
             .participants
             .iter()
-            .find(|p| &p.worker_id == worker_id)
+            .find(|p| p.worker_id == worker_id)
             .ok_or_else(|| CoordinatorError::UnknownParticipant(worker_id.clone()))?;
         if participant.lease_epoch != lease_epoch {
             return Err(CoordinatorError::StaleLease {
@@ -217,7 +217,7 @@ impl TransactionCoordinator {
         }
         let votes = self.votes.entry(transaction_id.to_string()).or_default();
         if votes.insert(worker_id.clone(), vote).is_some() {
-            return Err(CoordinatorError::DuplicateVote(worker_id.clone()));
+            return Err(CoordinatorError::DuplicateVote(worker_id));
         }
         Ok(())
     }
