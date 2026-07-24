@@ -6,6 +6,7 @@ use std::{
 use medusa_core::{ErrorCategory, ErrorCode, MedusaError, MedusaResult, SessionId};
 use medusa_protocol::EventEnvelope;
 use medusa_provider::Message;
+use medusa_world_model::WorldModelRef;
 use serde::{Deserialize, Serialize};
 use time::OffsetDateTime;
 
@@ -135,6 +136,8 @@ pub struct AgentSession {
     pub approval_receipts: Vec<ApprovalReceipt>,
     #[serde(default)]
     pub rollback_receipts: Vec<RollbackReceipt>,
+    #[serde(default)]
+    pub world_model: Option<WorldModelRef>,
 }
 
 /// Creates the on-disk Medusa layout and repository map.
@@ -142,6 +145,7 @@ pub fn bootstrap(repo: &Path) -> MedusaResult<()> {
     if fs::create_dir_all(repo.join(".medusa/sessions")).is_err() {
         fs::create_dir_all(fallback_session_root(repo))?;
     }
+    let _ = fs::create_dir_all(repo.join(".medusa/world-models"));
     let map = repo.join("REPOSITORY_MAP.md");
     if !map.exists() {
         let _ = fs::write(
