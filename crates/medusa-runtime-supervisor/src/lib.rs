@@ -193,9 +193,8 @@ impl SupervisorState {
     fn calculate_fingerprint(&self) -> String {
         let mut copy = self.clone();
         copy.fingerprint.clear();
-        hex::encode(Sha256::digest(
-            serde_json::to_vec(&copy).expect("supervisor state serializes"),
-        ))
+        let bytes = serde_json::to_vec(&copy).unwrap_or_default();
+        hex::encode(Sha256::digest(bytes))
     }
 
     fn seal(&mut self) {
