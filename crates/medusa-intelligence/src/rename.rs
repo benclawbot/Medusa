@@ -31,13 +31,25 @@ pub struct RustRenameConflict {
 }
 
 /// A reviewable, non-mutating multi-file rename proposal.
-#[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct RustRenamePlan {
     pub target: RustSymbolId,
     pub old_name: String,
     pub new_name: String,
     pub edits: Vec<TextEdit>,
     pub conflicts: Vec<RustRenameConflict>,
+}
+
+impl Default for RustRenamePlan {
+    fn default() -> Self {
+        Self {
+            target: RustSymbolId(String::new()),
+            old_name: String::new(),
+            new_name: String::new(),
+            edits: Vec::new(),
+            conflicts: Vec::new(),
+        }
+    }
 }
 
 impl RustRenamePlan {
@@ -203,7 +215,7 @@ mod tests {
     use super::*;
     use crate::{RustAstDocument, RustResolutionIndex, RustSymbolTable};
 
-    fn indexed<'a>(path: &str, source: &'a str) -> (RustSymbolTable, RustResolutionIndex) {
+    fn indexed(path: &str, source: &str) -> (RustSymbolTable, RustResolutionIndex) {
         let ast = RustAstDocument::parse(path, source).expect("ast");
         let table = RustSymbolTable::build(&ast, source);
         let resolution = RustResolutionIndex::build(&ast, source, &table);
