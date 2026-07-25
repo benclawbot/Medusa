@@ -19,6 +19,7 @@ Medusa is a production-grade autonomous coding agent written in Rust. It combine
 - **Mid-turn guidance** — submit extra detail while Medusa is working; it is preserved immediately and injected at the next safe agent-turn boundary.
 - **Clipboard-native input** — paste text or screenshots with `Ctrl+V`; supported providers receive screenshots as image context.
 - **Repository-aware tooling** — bounded file access, search, atomic writes, patch transactions, shell execution, Git checkpoints, and targeted verification.
+- **Semantic targeted verification** — after successful mutations, Medusa builds a repository code index, analyzes changed symbols and affected files, selects impacted tests, surfaces API-risk signals, executes graph-selected validation commands directly, and preserves broad verification fallbacks when semantic selection is unavailable.
 - **Persistent background jobs** — bounded daemon workers and queues, overload backpressure, race-safe cancellation, graceful draining, descendant-safe forced shutdown, reconnect, and restart recovery on Linux, macOS, and Windows.
 - **Browser verification** — a persistent Playwright sidecar can navigate, click, fill, press, capture screenshots, evaluate JavaScript, and manage tabs.
 - **Persistent memory** — Markdown-first storage with validation, indexing, retrieval, lifecycle management, and provenance controls.
@@ -77,6 +78,7 @@ Read-only sessions do not receive this implementation policy because they cannot
 - the Zeus-derived React/Tauri desktop entry point
 - durable sessions, prompt drafts, and Markdown memory
 - guarded repository tools, browser verification, and parallel workers
+- semantic code indexing and mutation-aware targeted verification
 - Markdown rendering, user/assistant transcript separation, and mid-turn follow-ups
 - optional Desktop Commander MCP integration
 - panic-free production targets and least-privilege workflow guards
@@ -91,6 +93,7 @@ Read-only sessions do not receive this implementation policy because they cannot
 |---|---|
 | Interactive product surface | `medusa` launches the TUI; transcript preservation, Markdown rendering, clipboard input, cancellation, metrics, skills, queued follow-ups, questions, plans, and daemon lifecycle transitions are implemented in `medusa-tui`. |
 | Agent and repository runtime | `medusa-runtime` owns frontend-neutral interactive session control. Planning, tools, policy, verification, intelligence, memory, and persistence remain implemented across the Rust workspace. |
+| Semantic verification | The runtime builds a `CodeIndex` after successful mutations and analyzes persisted changed paths with `ReviewImpact`. Verification evidence records changed symbols, affected files, impacted tests, API-risk signals, selection reasons, executed commands, output, and exit status. Existing repository-wide, static-site, and standalone-artifact verification paths remain available as fallbacks. |
 | Background daemon | `medusa-daemon` provides one durable contract on Linux, macOS, and Windows. It has four fixed workers and a 32-job queue by default, `daemon_busy` backpressure, finite IPC limits, shared frontend supervision, graceful draining, per-job cancellation, and immediate process-tree shutdown. |
 | Desktop | `apps/medusa-desktop` adapts the same runtime commands, events, plans, questions, cancellation, follow-ups, skills, provider settings, policy, and daemon lifecycle as the TUI. The activity-first UI projects live plans, runtime activity, approvals, and working state into the central transcript. CI builds and validates unsigned DEB/AppImage, app/DMG, and NSIS artifacts. |
 | Dependency hygiene | PR #52 removed five proven-unused direct dependency edges while preserving the resolved package graph. Read-only base/current metrics run in CI. |
