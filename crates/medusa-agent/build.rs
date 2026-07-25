@@ -148,6 +148,12 @@ fn replace_once(
     Ok(source.replacen(original, replacement, 1))
 }
 
+fn module_source(path: &std::path::Path) -> Result<String, Box<dyn Error>> {
+    Ok(fs::read_to_string(path)?
+        .replace("\r\n", "\n")
+        .replacen("//!", "//", 1))
+}
+
 fn main() -> Result<(), Box<dyn Error>> {
     println!("cargo:rerun-if-changed=src/engine_base.rs");
     println!("cargo:rerun-if-changed=src/autonomous_execution.rs");
@@ -184,8 +190,10 @@ fn main() -> Result<(), Box<dyn Error>> {
         "tool result observation block",
         &source_path,
     )?;
+    let scheduler = module_source(&manifest_dir.join("../medusa-multi-agent-scheduler/src/lib.rs"))?;
+    let autonomous = module_source(&manifest_dir.join("src/autonomous_execution.rs"))?;
     let generated = format!(
-        "mod dynamic_scheduler {{ include!(concat!(env!(\"CARGO_MANIFEST_DIR\"), \"/../medusa-multi-agent-scheduler/src/lib.rs\")); }}\nmod autonomous_execution {{ use super::dynamic_scheduler as medusa_multi_agent_scheduler; include!(concat!(env!(\"CARGO_MANIFEST_DIR\"), \"/src/autonomous_execution.rs\")); }}\nmod context_budget {{ include!(concat!(env!(\"CARGO_MANIFEST_DIR\"), \"/src/context_budget.rs\")); }}\nmod coding_policy {{ include!(concat!(env!(\"CARGO_MANIFEST_DIR\"), \"/src/coding_policy.rs\")); }}\nmod repository_index {{ include!(concat!(env!(\"CARGO_MANIFEST_DIR\"), \"/src/repository_index.rs\")); }}\nmod world_model_observation {{ include!(concat!(env!(\"CARGO_MANIFEST_DIR\"), \"/src/world_model_observation.rs\")); }}\n{engine}\ninclude!(concat!(env!(\"CARGO_MANIFEST_DIR\"), \"/src/autonomous_engine.rs\"));"
+        "mod dynamic_scheduler {{\n{scheduler}\n}}\nmod autonomous_execution {{\nuse super::dynamic_scheduler as medusa_multi_agent_scheduler;\n{autonomous}\n}}\nmod context_budget {{ include!(concat!(env!(\"CARGO_MANIFEST_DIR\"), \"/src/context_budget.rs\")); }}\nmod coding_policy {{ include!(concat!(env!(\"CARGO_MANIFEST_DIR\"), \"/src/coding_policy.rs\")); }}\nmod repository_index {{ include!(concat!(env!(\"CARGO_MANIFEST_DIR\"), \"/src/repository_index.rs\")); }}\nmod world_model_observation {{ include!(concat!(env!(\"CARGO_MANIFEST_DIR\"), \"/src/world_model_observation.rs\")); }}\n{engine}\ninclude!(concat!(env!(\"CARGO_MANIFEST_DIR\"), \"/src/autonomous_engine.rs\"));"
     );
     let output_path = PathBuf::from(env::var("OUT_DIR")?).join("engine.rs");
     fs::write(output_path, generated)?;
