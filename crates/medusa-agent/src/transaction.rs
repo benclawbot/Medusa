@@ -1,10 +1,13 @@
 use std::{
+    collections::BTreeSet,
     fs,
     path::{Path, PathBuf},
 };
 
 use medusa_core::{ErrorCategory, ErrorCode, MedusaError, MedusaResult};
 use serde::{Deserialize, Serialize};
+
+use crate::policy::safe_path;
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct FileMutation {
@@ -25,6 +28,13 @@ pub struct TransactionOutcome {
     pub affected_files: Vec<String>,
     pub rolled_back: bool,
     pub detail: String,
+}
+
+#[derive(Debug)]
+struct Backup {
+    path: PathBuf,
+    content: Option<Vec<u8>>,
+    permissions: Option<fs::Permissions>,
 }
 
 pub fn preview(
@@ -48,6 +58,10 @@ pub fn preview(
     }
 }
 
+/// Applies every repository file mutation through one symlink-aware, rollback-capable boundary.
+///
+/// All targets are resolved and validated before parent directories or temporary files are
+/// created. This prevents a later invalid mutation from leaving earlier staging artifacts behind.
 pub fn apply_atomic(repo: &Path, mutations: &[FileMutation]) -> MedusaResult<TransactionOutcome> {
     if mutations.is_empty() {
         return Err(MedusaError::new(
@@ -57,30 +71,37 @@ pub fn apply_atomic(repo: &Path, mutations: &[FileMutation]) -> MedusaResult<Tra
         ));
     }
 
-    let mut backups: Vec<(PathBuf, Option<Vec<u8>>)> = Vec::with_capacity(mutations.len());
-    let mut staged: Vec<(PathBuf, PathBuf)> = Vec::with_capacity(mutations.len());
-
-    for (index, mutation) in mutations.iter().enumerate() {
-        let relative = Path::new(&mutation.path);
-        if relative.is_absolute()
-            || relative
-                .components()
-                .any(|component| matches!(component, std::path::Component::ParentDir))
-        {
-            cleanup_staged(&staged);
+    let mut resolved = Vec::with_capacity(mutations.len());
+    let mut unique_targets = BTreeSet::new();
+    for mutation in mutations {
+        let target = safe_path(repo, &mutation.path)?;
+        if !unique_targets.insert(target.clone()) {
             return Err(MedusaError::new(
-                ErrorCode::PolicyDenied,
-                ErrorCategory::Policy,
-                format!("transaction path escapes repository: {}", mutation.path),
+                ErrorCode::InvalidConfiguration,
+                ErrorCategory::Validation,
+                format!("transaction contains duplicate target: {}", mutation.path),
             ));
         }
-        let target = repo.join(relative);
-        let original = if target.exists() {
-            Some(fs::read(&target)?)
+        resolved.push((mutation, target));
+    }
+
+    let mut backups = Vec::with_capacity(mutations.len());
+    let mut staged = Vec::with_capacity(mutations.len());
+
+    for (index, (mutation, target)) in resolved.iter().enumerate() {
+        let metadata = fs::metadata(target).ok();
+        let original = if metadata.is_some() {
+            Some(fs::read(target)?)
         } else {
             None
         };
-        backups.push((target.clone(), original));
+        let permissions = metadata.map(|metadata| metadata.permissions());
+        backups.push(Backup {
+            path: target.clone(),
+            content: original,
+            permissions: permissions.clone(),
+        });
+
         if let Some(parent) = target.parent() {
             fs::create_dir_all(parent)?;
         }
@@ -89,7 +110,14 @@ pub fn apply_atomic(repo: &Path, mutations: &[FileMutation]) -> MedusaResult<Tra
             cleanup_staged(&staged);
             return Err(error.into());
         }
-        staged.push((target, temporary));
+        if let Some(permissions) = permissions {
+            if let Err(error) = fs::set_permissions(&temporary, permissions) {
+                let _ = fs::remove_file(&temporary);
+                cleanup_staged(&staged);
+                return Err(error.into());
+            }
+        }
+        staged.push((target.clone(), temporary));
     }
 
     for (index, (target, temporary)) in staged.iter().enumerate() {
@@ -110,17 +138,23 @@ pub fn apply_atomic(repo: &Path, mutations: &[FileMutation]) -> MedusaResult<Tra
             .map(|mutation| mutation.path.clone())
             .collect(),
         rolled_back: false,
-        detail: "all file mutations committed atomically".to_owned(),
+        detail: "all file mutations committed through the repository boundary".to_owned(),
     })
 }
 
-fn rollback(backups: &[(PathBuf, Option<Vec<u8>>)]) -> &'static str {
-    for (path, original) in backups.iter().rev() {
-        let result = match original {
-            Some(content) => fs::write(path, content),
+fn rollback(backups: &[Backup]) -> &'static str {
+    for backup in backups.iter().rev() {
+        let result = match &backup.content {
+            Some(content) => fs::write(&backup.path, content).and_then(|()| {
+                if let Some(permissions) = &backup.permissions {
+                    fs::set_permissions(&backup.path, permissions.clone())
+                } else {
+                    Ok(())
+                }
+            }),
             None => {
-                if path.exists() {
-                    fs::remove_file(path)
+                if backup.path.exists() {
+                    fs::remove_file(&backup.path)
                 } else {
                     Ok(())
                 }
@@ -189,5 +223,68 @@ mod tests {
         );
         assert!(result.is_err());
         assert!(!directory.path().join("safe.txt").exists());
+    }
+
+    #[test]
+    fn rejects_duplicate_targets_before_staging() {
+        let directory = tempfile::tempdir().expect("tempdir");
+        let result = apply_atomic(
+            directory.path(),
+            &[
+                FileMutation {
+                    path: "same.txt".into(),
+                    content: "first".into(),
+                },
+                FileMutation {
+                    path: "same.txt".into(),
+                    content: "second".into(),
+                },
+            ],
+        );
+        assert!(result.is_err());
+        assert!(!directory.path().join("same.txt").exists());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn rejects_symlink_traversal_before_staging() {
+        use std::os::unix::fs::symlink;
+
+        let directory = tempfile::tempdir().expect("tempdir");
+        let outside = tempfile::tempdir().expect("outside");
+        symlink(outside.path(), directory.path().join("linked")).expect("symlink");
+
+        let result = apply_atomic(
+            directory.path(),
+            &[FileMutation {
+                path: "linked/escape.txt".into(),
+                content: "bad".into(),
+            }],
+        );
+
+        assert!(result.is_err());
+        assert!(!outside.path().join("escape.txt").exists());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn preserves_existing_file_permissions() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let directory = tempfile::tempdir().expect("tempdir");
+        let path = directory.path().join("script.sh");
+        fs::write(&path, "old").expect("fixture");
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o750)).expect("permissions");
+
+        apply_atomic(
+            directory.path(),
+            &[FileMutation {
+                path: "script.sh".into(),
+                content: "new".into(),
+            }],
+        )
+        .expect("transaction");
+
+        assert_eq!(fs::metadata(path).unwrap().permissions().mode() & 0o777, 0o750);
     }
 }
