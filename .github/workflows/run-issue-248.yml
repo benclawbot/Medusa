@@ -22,12 +22,34 @@ jobs:
           fetch-depth: 1
       - name: Apply coordinated source transformation
         run: python .github/scripts/implement_issue_248.py
+      - name: Update activity renderer test call
+        shell: python
+        run: |
+          from pathlib import Path
+          path = Path('crates/medusa-tui/src/lib.rs')
+          text = path.read_text()
+          old = '''            let lines = activity_lines(&TranscriptActivity {
+                id: None,
+                kind,
+                title: "High-level step".to_owned(),
+                details: vec!["argument: private detail".to_owned()],
+            });'''
+          new = '''            let lines = activity_lines(&TranscriptActivity {
+                id: None,
+                kind,
+                title: "High-level step".to_owned(),
+                details: vec!["argument: private detail".to_owned()],
+            }, false);'''
+          if old not in text:
+              raise SystemExit('activity_lines test call anchor not found')
+          path.write_text(text.replace(old, new, 1))
       - uses: dtolnay/rust-toolchain@1.88.0
         with:
           components: rustfmt
       - name: Format
         run: cargo fmt --all
       - name: Test focused TUI crate
+        shell: bash
         run: |
           set -o pipefail
           cargo test -p medusa-tui 2>&1 | tee issue248-test.log
