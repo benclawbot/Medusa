@@ -211,14 +211,25 @@ impl AutonomousExecution {
     ) -> MedusaResult<()> {
         self.ensure_session(session)?;
         if self.worker_roles.get(worker_id) == Some(&WorkerRole::Reviewer) {
-            return Err(validation_error("reviewers cannot submit implementation work"));
+            return Err(validation_error(
+                "reviewers cannot submit implementation work",
+            ));
         }
         match self.scheduler.state(task_id) {
-            Some(TaskState::Running { worker_id: assigned, .. }) if assigned == worker_id => {}
-            _ => return Err(validation_error("only the assigned running worker can submit work")),
+            Some(TaskState::Running {
+                worker_id: assigned,
+                ..
+            }) if assigned == worker_id => {}
+            _ => {
+                return Err(validation_error(
+                    "only the assigned running worker can submit work",
+                ));
+            }
         }
         if summary.trim().is_empty() {
-            return Err(validation_error("review submission summary cannot be empty"));
+            return Err(validation_error(
+                "review submission summary cannot be empty",
+            ));
         }
         self.pending_reviews.insert(
             task_id.to_owned(),
@@ -241,7 +252,9 @@ impl AutonomousExecution {
     ) -> MedusaResult<()> {
         self.ensure_session(session)?;
         if self.worker_roles.get(reviewer_id) != Some(&WorkerRole::Reviewer) {
-            return Err(validation_error("review decision requires a reviewer worker"));
+            return Err(validation_error(
+                "review decision requires a reviewer worker",
+            ));
         }
         let pending = self
             .pending_reviews
@@ -388,7 +401,10 @@ fn step_capability(title: &str) -> &'static str {
     let title = title.to_ascii_lowercase();
     if title.contains("plan") || title.contains("design") || title.contains("architect") {
         "planning"
-    } else if title.contains("inspect") || title.contains("research") || title.contains("investigate") {
+    } else if title.contains("inspect")
+        || title.contains("research")
+        || title.contains("investigate")
+    {
         "research"
     } else if title.contains("test") || title.contains("verify") || title.contains("validate") {
         "testing"

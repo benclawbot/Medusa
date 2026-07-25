@@ -1,10 +1,27 @@
 #[allow(dead_code)]
 #[path = "autonomous_execution.rs"]
 mod autonomous_execution;
-mod context_budget { include!(concat!(env!("CARGO_MANIFEST_DIR"), "/src/context_budget.rs")); }
-mod coding_policy { include!(concat!(env!("CARGO_MANIFEST_DIR"), "/src/coding_policy.rs")); }
-mod repository_index { include!(concat!(env!("CARGO_MANIFEST_DIR"), "/src/repository_index.rs")); }
-mod world_model_observation { include!(concat!(env!("CARGO_MANIFEST_DIR"), "/src/world_model_observation.rs")); }
+mod context_budget {
+    include!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/src/context_budget.rs"
+    ));
+}
+mod coding_policy {
+    include!(concat!(env!("CARGO_MANIFEST_DIR"), "/src/coding_policy.rs"));
+}
+mod repository_index {
+    include!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/src/repository_index.rs"
+    ));
+}
+mod world_model_observation {
+    include!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/src/world_model_observation.rs"
+    ));
+}
 use std::{collections::VecDeque, path::Path, sync::Mutex, thread};
 
 use medusa_config::{Config, Mode};
@@ -228,13 +245,15 @@ impl<P: ModelProvider> AgentEngine<P> {
         let Some(reference) = &session.world_model else {
             return Ok(None);
         };
-        load_world_model(&session.repo, reference).map(Some).map_err(|error| {
-            MedusaError::new(
-                ErrorCode::InternalInvariant,
-                ErrorCategory::Internal,
-                format!("failed to load session world model: {error}"),
-            )
-        })
+        load_world_model(&session.repo, reference)
+            .map(Some)
+            .map_err(|error| {
+                MedusaError::new(
+                    ErrorCode::InternalInvariant,
+                    ErrorCategory::Internal,
+                    format!("failed to load session world model: {error}"),
+                )
+            })
     }
 
     /// Adds a follow-up prompt to an existing session so later turns retain context.
@@ -816,13 +835,15 @@ impl<P: ModelProvider> AgentEngine<P> {
                 &session.repo,
                 verification.passed,
             )?;
-            verification.evidence.extend(transaction_ids.into_iter().map(|transaction_id| {
-                if verification.passed {
-                    format!("patch_transaction_committed={transaction_id}")
-                } else {
-                    format!("patch_transaction_rolled_back={transaction_id}")
-                }
-            }));
+            verification
+                .evidence
+                .extend(transaction_ids.into_iter().map(|transaction_id| {
+                    if verification.passed {
+                        format!("patch_transaction_committed={transaction_id}")
+                    } else {
+                        format!("patch_transaction_rolled_back={transaction_id}")
+                    }
+                }));
             append_observed(
                 session,
                 EventPayload::VerificationCompleted {
@@ -930,4 +951,7 @@ fn interactively_approvable(name: &str, input: &serde_json::Value) -> bool {
     }
 }
 
-include!(concat!(env!("CARGO_MANIFEST_DIR"), "/src/autonomous_engine.rs"));
+include!(concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/src/autonomous_engine.rs"
+));
