@@ -1,0 +1,242 @@
+diff --git a/crates/medusa-tui/src/runtime.rs b/crates/medusa-tui/src/runtime.rs
+index 041eb63..0000000 100644
+--- a/crates/medusa-tui/src/runtime.rs
++++ b/crates/medusa-tui/src/runtime.rs
+@@ -10,8 +10,6 @@ use crate::commands::{ModelConfiguration, SlashCommand};
+ 
+ pub use medusa_runtime::{RuntimeActivity, RuntimeActivityKind, RuntimeError, SubmitDisposition};
+ 
+-const MAX_PRESENTED_ACTIVITY_DETAILS: usize = 6;
+-
+ #[derive(Debug)]
+ pub enum RuntimeEvent {
+@@ -204,7 +202,7 @@ fn map_event(event: medusa_runtime::RuntimeEvent) -> RuntimeEvent {
+ }
+ 
+ fn presentation_activity(mut activity: RuntimeActivity) -> RuntimeActivity {
+-    compact_activity_details(&mut activity.details);
++    activity.details.retain(|detail| !detail.trim().is_empty());
+     let (kind, label) = match activity.kind {
+         RuntimeActivityKind::Assistant if !activity.details.is_empty() => {
+             (RuntimeActivityKind::Progress, Some("Assistant"))
+@@ -222,17 +220,6 @@ fn presentation_activity(mut activity: RuntimeActivity) -> RuntimeActivity {
+     activity
+ }
+ 
+-fn compact_activity_details(details: &mut Vec<String>) {
+-    details.retain(|detail| !detail.trim().is_empty());
+-    if details.len() <= MAX_PRESENTED_ACTIVITY_DETAILS {
+-        return;
+-    }
+-
+-    let omitted = details.len() - (MAX_PRESENTED_ACTIVITY_DETAILS - 1);
+-    details.truncate(MAX_PRESENTED_ACTIVITY_DETAILS - 1);
+-    details.push(format!("… {omitted} more lines"));
+-}
+-
+ fn tool_activity_label(title: &str) -> &'static str {
+@@ -326,17 +313,16 @@ mod tests {
+     }
+ 
+     #[test]
+-    fn verbose_activity_details_are_compacted() {
++    fn verbose_activity_details_are_preserved() {
+         let activity = presentation_activity(RuntimeActivity {
+             id: Some("tool-verbose".to_owned()),
+             kind: RuntimeActivityKind::Tool,
+             title: "Run workspace tests".to_owned(),
+             details: (1..=10).map(|line| format!("line {line}")).collect(),
+         });
+-        assert_eq!(activity.details.len(), MAX_PRESENTED_ACTIVITY_DETAILS);
+-        assert_eq!(activity.details[4], "line 5");
+-        assert_eq!(activity.details[5], "… 5 more lines");
++        assert_eq!(activity.details.len(), 10);
++        assert_eq!(activity.details[9], "line 10");
+     }
+ 
+     #[test]
+diff --git a/crates/medusa-tui/src/app.rs b/crates/medusa-tui/src/app.rs
+index cc95348..0000000 100644
+--- a/crates/medusa-tui/src/app.rs
++++ b/crates/medusa-tui/src/app.rs
+@@ -71,6 +71,7 @@ pub struct AppState {
+     pub effort_label: Option<String>,
+     pub plan_mode: bool,
+     pub task_list_visible: bool,
++    pub activity_details_expanded: bool,
+     pub spinner_frame: u8,
+     pub scrollback: Scrollback,
+@@ -150,6 +151,7 @@ impl AppState {
+             effort_label: None,
+             plan_mode: false,
+             task_list_visible: true,
++            activity_details_expanded: false,
+             spinner_frame: 0,
+             scrollback: Scrollback::default(),
+@@ -202,6 +204,10 @@ impl AppState {
+                 self.task_list_visible = !self.task_list_visible;
+                 return Ok(AppAction::Redraw);
+             }
++            if key.code == KeyCode::Char('e') && key.modifiers.contains(KeyModifiers::CONTROL) {
++                self.activity_details_expanded = !self.activity_details_expanded;
++                return Ok(AppAction::Redraw);
++            }
+             if key.code == KeyCode::Char('v') && key.modifiers.contains(KeyModifiers::CONTROL) {
+                 self.paste_from_clipboard()?;
+@@ -336,6 +342,7 @@ impl AppState {
+         self.status = "new session".to_owned();
+         self.plan_mode = false;
+         self.task_list_visible = true;
++        self.activity_details_expanded = false;
+         self.question_modal = None;
+         self.selection = None;
+diff --git a/crates/medusa-tui/src/app/tests.rs b/crates/medusa-tui/src/app/tests.rs
+index cee1c43..0000000 100644
+--- a/crates/medusa-tui/src/app/tests.rs
++++ b/crates/medusa-tui/src/app/tests.rs
+@@ -57,6 +57,33 @@ fn ctrl_v_pastes_clipboard_content() {
+     assert_eq!(app.composer.draft.text, "before pasted");
+ }
+ 
++#[test]
++fn ctrl_e_toggles_activity_details_and_new_session_resets_it() {
++    let repository = tempdir().expect("temporary repository");
++    let mut app = AppState::new(
++        repository.path().to_path_buf(),
++        "session_ctrl_e",
++        "",
++        Arc::new(FakeClipboard(ClipboardContent::Empty)),
++    )
++    .expect("create app");
++
++    assert!(!app.activity_details_expanded);
++    let action = app
++        .handle_event(Event::Key(KeyEvent::new(
++            KeyCode::Char('e'),
++            KeyModifiers::CONTROL,
++        )))
++        .expect("handle Ctrl+E");
++    assert_eq!(action, AppAction::Redraw);
++    assert!(app.activity_details_expanded);
++
++    app.clear_for_new_session();
++    assert!(!app.activity_details_expanded);
++}
++
+ #[test]
+ fn screenshot_paste_creates_visible_attachment_state() {
+diff --git a/crates/medusa-tui/src/render.rs b/crates/medusa-tui/src/render.rs
+index 4978fcf..0000000 100644
+--- a/crates/medusa-tui/src/render.rs
++++ b/crates/medusa-tui/src/render.rs
+@@ -68,6 +68,7 @@ pub(super) struct PortableRenderSnapshot {
+     effort_label: Option<String>,
+     plan_mode: bool,
++    activity_details_expanded: bool,
+     spinner_frame: u8,
+     selection: Option<TextSelection>,
+@@ -104,6 +105,7 @@ pub(super) fn portable_render_snapshot(
+         effort_label: app.effort_label.clone(),
+         plan_mode: app.plan_mode,
++        activity_details_expanded: app.activity_details_expanded,
+         spinner_frame: app.spinner_frame,
+         selection: app.selection,
+@@ -86,7 +86,9 @@ pub(crate) fn transcript_lines(app: &AppState, width: u16) -> Vec<StyledLine> {
+             TranscriptEntry::Assistant(text) => lines.extend(
+                 super::markdown::markdown_block_lines("Medusa  ", Color::Magenta, text, width),
+             ),
+-            TranscriptEntry::Activity(activity) => lines.extend(activity_lines(activity)),
++            TranscriptEntry::Activity(activity) => {
++                lines.extend(activity_lines(activity, app.activity_details_expanded));
++            }
+             TranscriptEntry::System(message) => lines.push(system_line(message)),
+         }
+@@ -458,9 +460,9 @@ pub(super) fn render_frame(
+             Color::Magenta,
+             if app.is_running() {
+-                "enter queue follow-up - ctrl+c interrupt - ctrl+t tasks"
++                "enter queue follow-up - ctrl+c interrupt - ctrl+t tasks - ctrl+e details"
+             } else {
+-                "enter submit - ctrl+v paste - tab commands - ctrl+t tasks"
++                "enter submit - ctrl+v paste - tab commands - ctrl+t tasks - ctrl+e details"
+             },
+             Color::DarkGrey,
+diff --git a/crates/medusa-tui/src/render/support.rs b/crates/medusa-tui/src/render/support.rs
+index 0ca17d4..0000000 100644
+--- a/crates/medusa-tui/src/render/support.rs
++++ b/crates/medusa-tui/src/render/support.rs
+@@ -1,3 +1,5 @@
+ use super::*;
++
++const MAX_COMPACT_ACTIVITY_DETAILS: usize = 6;
+@@ -611,7 +613,7 @@ pub(super) fn system_line(message: &str) -> StyledLine {
+     }
+ }
+ 
+-pub(crate) fn activity_lines(activity: &TranscriptActivity) -> Vec<StyledLine> {
++pub(crate) fn activity_lines(activity: &TranscriptActivity, expanded: bool) -> Vec<StyledLine> {
+     let color = match activity.kind {
+@@ -641,14 +643,29 @@ pub(crate) fn activity_lines(activity: &TranscriptActivity) -> Vec<StyledLine> {
+     if !matches!(
+         activity.kind,
+         TranscriptActivityKind::Assistant | TranscriptActivityKind::Tool
+     ) {
+-        lines.extend(
+-            activity
+-                .details
+-                .iter()
+-                .map(|detail| StyledLine::new(format!("  └ {detail}"), Color::DarkGrey)),
+-        );
++        let details = activity
++            .details
++            .iter()
++            .filter(|detail| !detail.trim().is_empty())
++            .collect::<Vec<_>>();
++        let visible = if expanded || details.len() <= MAX_COMPACT_ACTIVITY_DETAILS {
++            details
++                .into_iter()
++                .map(ToString::to_string)
++                .collect::<Vec<_>>()
++        } else {
++            let omitted = details.len() - (MAX_COMPACT_ACTIVITY_DETAILS - 1);
++            let mut visible = details
++                .into_iter()
++                .take(MAX_COMPACT_ACTIVITY_DETAILS - 1)
++                .map(ToString::to_string)
++                .collect::<Vec<_>>();
++            visible.push(format!("… {omitted} more lines"));
++            visible
++        };
++        lines.extend(visible.into_iter().map(|detail| {
++            StyledLine::new(format!("  └ {detail}"), Color::DarkGrey)
++        }));
+     }
+     lines
+diff --git a/crates/medusa-tui/src/render/support_tests.rs b/crates/medusa-tui/src/render/support_tests.rs
+index 0d1b0ca..0000000 100644
+--- a/crates/medusa-tui/src/render/support_tests.rs
++++ b/crates/medusa-tui/src/render/support_tests.rs
+@@ -31,3 +31,35 @@ fn conversation_urls_are_emitted_as_terminal_hyperlinks() {
+     assert!(rendered.contains("\x1b]8;;https://example.com/docs\x1b\\"));
+     assert!(rendered.ends_with("\x1b]8;;\x1b\\."));
+ }
++
++#[test]
++fn activity_details_are_compact_by_default_and_expand_without_data_loss() {
++    let activity = TranscriptActivity {
++        id: Some("tool-verbose".to_owned()),
++        kind: TranscriptActivityKind::Verification,
++        title: "Run tests".to_owned(),
++        details: (1..=10).map(|line| format!("line {line}")).collect(),
++    };
++
++    let compact = activity_lines(&activity, false);
++    assert_eq!(compact.len(), 7);
++    assert_eq!(compact[5].text, "  └ line 5");
++    assert_eq!(compact[6].text, "  └ … 5 more lines");
++
++    let expanded = activity_lines(&activity, true);
++    assert_eq!(expanded.len(), 11);
++    assert_eq!(expanded[10].text, "  └ line 10");
++    assert_eq!(activity.details.len(), 10);
++}
