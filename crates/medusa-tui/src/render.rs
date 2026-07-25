@@ -2,7 +2,6 @@ pub(super) mod markdown;
 pub(super) mod support;
 
 use super::*;
-use support::wrap_to_width;
 pub(crate) use support::*;
 
 #[cfg(unix)]
@@ -111,10 +110,28 @@ pub(super) fn portable_render_snapshot(
     }
 }
 
+fn active_status(app: &AppState) -> &str {
+    app.transcript
+        .iter()
+        .rev()
+        .find_map(|entry| match entry {
+            TranscriptEntry::Activity(activity)
+                if matches!(
+                    activity.kind,
+                    TranscriptActivityKind::Assistant
+                        | TranscriptActivityKind::Progress
+                        | TranscriptActivityKind::Tool
+                        | TranscriptActivityKind::Verification
+                ) => Some(activity.title.as_str()),
+            _ => None,
+        })
+        .unwrap_or(&app.status)
+}
+
 pub(super) fn running_status(app: &AppState) -> String {
     format!(
         "{} ({} · turn {})",
-        app.status,
+        active_status(app),
         format_elapsed(app.elapsed_seconds().unwrap_or_default()),
         app.active_turn
     )
@@ -233,169 +250,6 @@ pub(super) fn draw_common(
     let (width, height) = size()?;
     let frame = render_frame(identity, app, width, height);
     draw_frame(stdout, width, &frame, None)?;
-    stdout.flush()
-}
-
-#[allow(dead_code)]
-pub(super) fn legacy_draw_common(
-    stdout: &mut io::Stdout,
-    identity: &UiIdentity,
-    app: &AppState,
-) -> io::Result<()> {
-    let (width, height) = size()?;
-    queue!(
-        stdout,
-        MoveTo(0, 0),
-        Clear(ClearType::CurrentLine),
-        MoveTo(0, HEADER_TOP_PADDING)
-    )?;
-    for logo_line in MEDUSA_LOGO {
-        print_styled_line(stdout, width, logo_line, Color::Cyan, Attribute::Bold)?;
-    }
-    queue!(
-        stdout,
-        Clear(ClearType::UntilNewLine),
-        SetForegroundColor(Color::Magenta),
-        SetAttribute(Attribute::Bold),
-        Print(wrap_to_width(
-            &format!(
-                "{} {}",
-                app.model_label.as_deref().unwrap_or(&identity.model),
-                app.effort_label.as_deref().unwrap_or(&identity.effort)
-            ),
-            width
-        )),
-        SetAttribute(Attribute::Reset),
-        ResetColor,
-        Print("\r\n"),
-    )?;
-    StyledLine::new(session_metrics_line(app), Color::DarkGrey).print(stdout, width)?;
-    let header_height = HEADER_TOP_PADDING + 5;
-    let model_modal = app.model_modal();
-    let modal_lines = model_modal.map(model_modal_lines).unwrap_or_default();
-    let suggestions = if model_modal.is_none() {
-        command_suggestions(&app.composer.draft.text, app.repository())
-    } else {
-        Vec::new()
-    };
-    let available_suggestion_rows = height.saturating_sub(header_height.saturating_add(5));
-    let suggestion_rows = usize::from(available_suggestion_rows);
-    let suggestion_start = app
-        .command_selection
-        .saturating_sub(suggestion_rows.saturating_sub(1))
-        .min(suggestions.len().saturating_sub(suggestion_rows));
-    let visible_suggestions = suggestions
-        .iter()
-        .skip(suggestion_start)
-        .take(suggestion_rows)
-        .collect::<Vec<_>>();
-    let requested_composer_height = if model_modal.is_some() {
-        3_u16.saturating_add(u16::try_from(modal_lines.len()).unwrap_or(u16::MAX))
-    } else {
-        5_u16.saturating_add(u16::try_from(visible_suggestions.len()).unwrap_or(u16::MAX))
-    };
-    let composer_height = requested_composer_height.min(height.saturating_sub(header_height));
-    let content_rows = height.saturating_sub(composer_height + header_height) as usize;
-    let mut lines = transcript_lines(app, width);
-    if app.is_running() {
-        lines.push(StyledLine::with_marker(
-            spinner_marker(app.spinner_frame),
-            Color::Magenta,
-            running_status(app),
-            Color::Grey,
-        ));
-    }
-    if let Some(plan) = &app.plan {
-        lines.extend(plan_lines(plan));
-    }
-    let visible_content = lines
-        .iter()
-        .rev()
-        .skip(
-            app.scrollback_offset()
-                .min(lines.len().saturating_sub(content_rows)),
-        )
-        .take(content_rows)
-        .rev()
-        .collect::<Vec<_>>();
-    for line in &visible_content {
-        line.print(stdout, width)?;
-    }
-    for _ in visible_content.len()..content_rows {
-        queue!(stdout, Clear(ClearType::UntilNewLine), Print("\r\n"))?;
-    }
-
-    let composer_top = height.saturating_sub(composer_height);
-    queue!(
-        stdout,
-        MoveTo(0, composer_top),
-        SetForegroundColor(Color::DarkGrey),
-        Print("─".repeat(width as usize)),
-        ResetColor,
-        Print("\r\n")
-    )?;
-    if model_modal.is_some() {
-        let available_modal_rows = composer_height.saturating_sub(3);
-        for line in modal_lines.iter().take(usize::from(available_modal_rows)) {
-            line.print(stdout, width)?;
-        }
-        print_separator(stdout, width)?;
-        StyledLine::with_marker(
-            "› ",
-            Color::Magenta,
-            "up/down choose · tab focus · enter set for this session · esc cancel",
-            Color::DarkGrey,
-        )
-        .print(stdout, width)?;
-        return stdout.flush();
-    }
-    for (index, suggestion) in visible_suggestions.iter().enumerate() {
-        let selected = suggestion_start + index == app.command_selection;
-        StyledLine::with_marker(
-            if selected { "> " } else { "  " },
-            if selected {
-                Color::Magenta
-            } else {
-                Color::DarkGrey
-            },
-            format!("{:<34} {}", suggestion.usage, suggestion.description),
-            if selected { Color::White } else { Color::Grey },
-        )
-        .print(stdout, width)?;
-    }
-    let prompt = if app.composer.draft.text.is_empty() {
-        if app.is_running() {
-            "Add a follow-up for the next turn...".to_owned()
-        } else {
-            "Describe a coding task...".to_owned()
-        }
-    } else {
-        composer_prompt_text(&app.composer.draft.text)
-    };
-    StyledLine::with_marker(
-        "> ",
-        Color::Cyan,
-        format!("{USER_INPUT_INDENT}{prompt}"),
-        if app.composer.draft.text.is_empty() {
-            Color::DarkGrey
-        } else {
-            Color::White
-        },
-    )
-    .print(stdout, width)?;
-    StyledLine::new(context_meter_line(app), Color::Grey).print(stdout, width)?;
-    print_separator(stdout, width)?;
-    StyledLine::with_marker(
-        "› ",
-        Color::Magenta,
-        if app.is_running() {
-            "enter queues a follow-up · ctrl+c interrupt · esc exit"
-        } else {
-            "enter selects/submits · ctrl+v paste · tab also completes commands · esc exit"
-        },
-        Color::DarkGrey,
-    )
-    .print(stdout, width)?;
     stdout.flush()
 }
 
