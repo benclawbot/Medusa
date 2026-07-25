@@ -24,7 +24,9 @@ pub fn answer(value: u8) -> u8 { value + 1 }
         planner
             .set_visibility("struct_item", "Item", "pub(crate)")
             .expect("visibility"),
-        planner.add_import("std::collections::BTreeMap").expect("import"),
+        planner
+            .add_import("std::collections::BTreeMap")
+            .expect("import"),
         planner.add_module("domain", false).expect("module"),
     ];
 
