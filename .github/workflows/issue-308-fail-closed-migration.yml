@@ -24,15 +24,15 @@ jobs:
           core = Path('crates/medusa-core/src/lib.rs')
           text = core.read_text()
           old = '''    #[error("policy denied")]
-    PolicyDenied,
-    #[error("dependency unavailable")]
-'''
+          PolicyDenied,
+          #[error("dependency unavailable")]
+          '''
           new = '''    #[error("policy denied")]
-    PolicyDenied,
-    #[error("sandbox unavailable")]
-    SandboxUnavailable,
-    #[error("dependency unavailable")]
-'''
+          PolicyDenied,
+          #[error("sandbox unavailable")]
+          SandboxUnavailable,
+          #[error("dependency unavailable")]
+          '''
           if old not in text:
               raise SystemExit('ErrorCode insertion anchor missing')
           core.write_text(text.replace(old, new, 1))
@@ -40,106 +40,106 @@ jobs:
           policy = Path('crates/medusa-agent/src/policy.rs')
           text = policy.read_text()
           old = '''    #[cfg(not(any(target_os = "linux", target_os = "macos")))]
-    {
-        let root = repo.canonicalize()?;
-        #[cfg(windows)]
-        if program.eq_ignore_ascii_case("ls") {
-            let mut command = Command::new("cmd");
-            command.args(["/C", "dir"]).current_dir(root);
-            return output_with_timeout(&mut command, "Windows directory listing");
-        }
-        let mut command = Command::new(program);
-        command.args(args).current_dir(root);
-        output_with_timeout(&mut command, "local shell command")
-    }
-}
-'''
+              {
+                  let root = repo.canonicalize()?;
+                  #[cfg(windows)]
+                  if program.eq_ignore_ascii_case("ls") {
+                      let mut command = Command::new("cmd");
+                      command.args(["/C", "dir"]).current_dir(root);
+                      return output_with_timeout(&mut command, "Windows directory listing");
+                  }
+                  let mut command = Command::new(program);
+                  command.args(args).current_dir(root);
+                  output_with_timeout(&mut command, "local shell command")
+              }
+          }
+          '''
           new = '''    #[cfg(not(any(target_os = "linux", target_os = "macos")))]
-    {
-        let _ = (repo, program, args);
-        Err(sandbox_unavailable(
-            "no containment backend is available for this platform",
-        ))
-    }
-}
+              {
+                  let _ = (repo, program, args);
+                  Err(sandbox_unavailable(
+                      "no containment backend is available for this platform",
+                  ))
+              }
+          }
 
-/// Runs a command without containment only after a caller has obtained explicit approval.
-///
-/// This function is deliberately named as unsandboxed and must never be used as an
-/// implementation detail of `sandboxed_command`.
-pub(crate) fn unsandboxed_command(
-    repo: &Path,
-    program: &str,
-    args: &[String],
-    explicitly_approved: bool,
-) -> MedusaResult<Output> {
-    if !explicitly_approved {
-        return Err(policy_denied(
-            "unsandboxed command execution requires explicit approval",
-        ));
-    }
-    let root = repo.canonicalize()?;
-    let mut command = Command::new(program);
-    command
-        .args(args)
-        .current_dir(root)
-        .env_clear()
-        .env("PATH", std::env::var_os("PATH").unwrap_or_default());
-    output_with_timeout(&mut command, "explicitly approved unsandboxed command")
-}
-'''
+          /// Runs a command without containment only after a caller has obtained explicit approval.
+          ///
+          /// This function is deliberately named as unsandboxed and must never be used as an
+          /// implementation detail of `sandboxed_command`.
+          pub(crate) fn unsandboxed_command(
+              repo: &Path,
+              program: &str,
+              args: &[String],
+              explicitly_approved: bool,
+          ) -> MedusaResult<Output> {
+              if !explicitly_approved {
+                  return Err(policy_denied(
+                      "unsandboxed command execution requires explicit approval",
+                  ));
+              }
+              let root = repo.canonicalize()?;
+              let mut command = Command::new(program);
+              command
+                  .args(args)
+                  .current_dir(root)
+                  .env_clear()
+                  .env("PATH", std::env::var_os("PATH").unwrap_or_default());
+              output_with_timeout(&mut command, "explicitly approved unsandboxed command")
+          }
+          '''
           if old not in text:
               raise SystemExit('sandbox fallback anchor missing')
           text = text.replace(old, new, 1)
           old = '''fn policy_denied(message: impl Into<String>) -> MedusaError {
-    MedusaError::new(ErrorCode::PolicyDenied, ErrorCategory::Policy, message)
-}
-'''
+              MedusaError::new(ErrorCode::PolicyDenied, ErrorCategory::Policy, message)
+          }
+          '''
           new = '''fn sandbox_unavailable(message: impl Into<String>) -> MedusaError {
-    let mut error = MedusaError::new(
-        ErrorCode::SandboxUnavailable,
-        ErrorCategory::Environment,
-        message,
-    );
-    error.context.insert(
-        "sandbox_backend".into(),
-        serde_json::Value::String("unavailable".into()),
-    );
-    error.context.insert(
-        "effective_restrictions".into(),
-        serde_json::json!([]),
-    );
-    error
-}
+              let mut error = MedusaError::new(
+                  ErrorCode::SandboxUnavailable,
+                  ErrorCategory::Environment,
+                  message,
+              );
+              error.context.insert(
+                  "sandbox_backend".into(),
+                  serde_json::Value::String("unavailable".into()),
+              );
+              error.context.insert(
+                  "effective_restrictions".into(),
+                  serde_json::json!([]),
+              );
+              error
+          }
 
-fn policy_denied(message: impl Into<String>) -> MedusaError {
-    MedusaError::new(ErrorCode::PolicyDenied, ErrorCategory::Policy, message)
-}
+          fn policy_denied(message: impl Into<String>) -> MedusaError {
+              MedusaError::new(ErrorCode::PolicyDenied, ErrorCategory::Policy, message)
+          }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
+          #[cfg(test)]
+          mod tests {
+              use super::*;
 
-    #[test]
-    fn unsandboxed_execution_requires_explicit_approval() {
-        let error = unsandboxed_command(Path::new("."), "cargo", &["--version".into()], false)
-            .expect_err("unapproved unsandboxed execution must fail");
-        assert_eq!(error.code, ErrorCode::PolicyDenied);
-    }
+              #[test]
+              fn unsandboxed_execution_requires_explicit_approval() {
+                  let error = unsandboxed_command(Path::new("."), "cargo", &["--version".into()], false)
+                      .expect_err("unapproved unsandboxed execution must fail");
+                  assert_eq!(error.code, ErrorCode::PolicyDenied);
+              }
 
-    #[cfg(not(any(target_os = "linux", target_os = "macos")))]
-    #[test]
-    fn sandboxed_execution_fails_closed_without_backend() {
-        let error = sandboxed_command(Path::new("."), "cargo", &["--version".into()])
-            .expect_err("unsupported platforms must not launch a bare process");
-        assert_eq!(error.code, ErrorCode::SandboxUnavailable);
-        assert_eq!(
-            error.context.get("sandbox_backend"),
-            Some(&serde_json::Value::String("unavailable".into()))
-        );
-    }
-}
-'''
+              #[cfg(not(any(target_os = "linux", target_os = "macos")))]
+              #[test]
+              fn sandboxed_execution_fails_closed_without_backend() {
+                  let error = sandboxed_command(Path::new("."), "cargo", &["--version".into()])
+                      .expect_err("unsupported platforms must not launch a bare process");
+                  assert_eq!(error.code, ErrorCode::SandboxUnavailable);
+                  assert_eq!(
+                      error.context.get("sandbox_backend"),
+                      Some(&serde_json::Value::String("unavailable".into()))
+                  );
+              }
+          }
+          '''
           if old not in text:
               raise SystemExit('policy helper anchor missing')
           policy.write_text(text.replace(old, new, 1))
