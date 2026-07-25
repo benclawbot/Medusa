@@ -1026,6 +1026,7 @@ dependencies = [
  "medusa-escalation",
  "medusa-extensions",
  "medusa-intelligence",
+ "medusa-multi-agent-scheduler",
  "medusa-protocol",
  "medusa-provider",
  "medusa-world-model",

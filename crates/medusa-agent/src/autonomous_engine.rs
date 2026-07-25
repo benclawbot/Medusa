@@ -109,7 +109,9 @@ impl<P: ModelProvider> AgentEngine<P> {
     }
 }
 
-fn autonomous_workers(worker_ids: Vec<String>) -> MedusaResult<Vec<dynamic_scheduler::Worker>> {
+fn autonomous_workers(
+    worker_ids: Vec<String>,
+) -> MedusaResult<Vec<medusa_multi_agent_scheduler::Worker>> {
     if worker_ids.is_empty() {
         return Err(MedusaError::new(
             ErrorCode::InvalidConfiguration,
@@ -121,7 +123,7 @@ fn autonomous_workers(worker_ids: Vec<String>) -> MedusaResult<Vec<dynamic_sched
         .into_iter()
         .map(|id| {
             validate_worker_id(&id)?;
-            Ok(dynamic_scheduler::Worker {
+            Ok(medusa_multi_agent_scheduler::Worker {
                 id,
                 capabilities: vec!["coding".to_owned()],
                 healthy: true,
@@ -183,7 +185,9 @@ fn validate_worker_id(id: &str) -> MedusaResult<()> {
     }
 }
 
-fn assignment_pairs(assignments: Vec<dynamic_scheduler::Assignment>) -> Vec<(String, String)> {
+fn assignment_pairs(
+    assignments: Vec<medusa_multi_agent_scheduler::Assignment>,
+) -> Vec<(String, String)> {
     assignments
         .into_iter()
         .map(|assignment| (assignment.task_id, assignment.worker_id))
