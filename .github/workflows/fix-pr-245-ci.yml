@@ -1,0 +1,61 @@
+name: Fix PR 245 CI
+
+on:
+  push:
+    branches:
+      - agent/desktop-main-updater
+
+permissions:
+  contents: write
+
+jobs:
+  fix:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: agent/desktop-main-updater
+          fetch-depth: 0
+      - name: Repair TUI call sites and legacy helpers
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          lib = Path('crates/medusa-tui/src/lib.rs')
+          text = lib.read_text()
+          text = text.replace('session_metrics_line(&app),', 'session_metrics_line(&app, 120),')
+          lib.write_text(text)
+
+          support = Path('crates/medusa-tui/src/render/support.rs')
+          text = support.read_text()
+          text = text.replace(
+              '    pub(super) fn print(&self, stdout: &mut io::Stdout, width: u16) -> io::Result<()> {',
+              '    #[allow(dead_code)]\n    pub(super) fn print(&self, stdout: &mut io::Stdout, width: u16) -> io::Result<()> {',
+              1,
+          )
+          text = text.replace(
+              'pub(super) fn print_separator(stdout: &mut io::Stdout, width: u16) -> io::Result<()> {',
+              '#[allow(dead_code)]\npub(super) fn print_separator(stdout: &mut io::Stdout, width: u16) -> io::Result<()> {',
+              1,
+          )
+          text = text.replace(
+              'pub(super) fn print_styled_line(',
+              '#[allow(dead_code)]\npub(super) fn print_styled_line(',
+              1,
+          )
+          support.write_text(text)
+          PY
+          cargo fmt --all
+      - name: Remove one-shot repair workflow
+        run: rm -f .github/workflows/fix-pr-245-ci.yml
+      - name: Commit repaired branch
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          if git diff --cached --quiet; then
+            exit 0
+          fi
+          git commit -m "fix(tui): repair responsive metrics compile regressions"
+          git push origin HEAD:agent/desktop-main-updater
