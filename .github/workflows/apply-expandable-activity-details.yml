@@ -35,3 +35,4 @@ jobs:
           git add -A
           git commit -m "feat(tui): expand and collapse activity details"
           git push origin HEAD:agent/tui-expandable-activity-details
+# Trigger after workflow registration.
