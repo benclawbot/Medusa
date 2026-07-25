@@ -503,6 +503,7 @@ impl StyledLine {
         Ok(())
     }
 
+    #[allow(dead_code)]
     pub(super) fn print(&self, stdout: &mut io::Stdout, width: u16) -> io::Result<()> {
         queue!(
             stdout,
@@ -666,6 +667,7 @@ pub(super) fn plan_lines(plan: &app::TranscriptPlan) -> Vec<StyledLine> {
         .collect()
 }
 
+#[allow(dead_code)]
 pub(super) fn print_separator(stdout: &mut io::Stdout, width: u16) -> io::Result<()> {
     queue!(
         stdout,
@@ -679,6 +681,7 @@ pub(super) fn print_separator(stdout: &mut io::Stdout, width: u16) -> io::Result
     )
 }
 
+#[allow(dead_code)]
 pub(super) fn print_styled_line(
     stdout: &mut io::Stdout,
     width: u16,
