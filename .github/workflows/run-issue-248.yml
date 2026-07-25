@@ -23,6 +23,13 @@ jobs:
           fetch-depth: 1
       - name: Apply coordinated source transformation
         run: python .github/scripts/run_issue_248.py
+      - name: Upload transformation traceback
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: issue248-traceback
+          path: issue248-error.txt
+          if-no-files-found: error
       - uses: dtolnay/rust-toolchain@1.88.0
         with:
           components: rustfmt
