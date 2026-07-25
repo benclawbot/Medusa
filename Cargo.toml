@@ -31,8 +31,6 @@ members = [
   "crates/medusa-memory",
   "crates/medusa-extensions",
   "crates/medusa-improvement",
-  "crates/medusa-evals",
-  "crates/medusa-session-feedback",
   "crates/medusa-hardening",
   "crates/medusa-update",
   "crates/medusa-github",
