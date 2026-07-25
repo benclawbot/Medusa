@@ -17,10 +17,19 @@ Medusa Desktop follows an activity-first interaction model: the conversation is 
 The desktop shell uses two isolated presentation layers:
 
 - `desktop-ux-overhaul.css` defines the premium visual hierarchy, message treatment, composer, plan tree, activity cards, inspector, and responsive focus mode.
-- `DesktopTimelineBridge.tsx` projects the live plan and runtime activity into the central transcript without changing runtime event contracts.
+- `DesktopTimelineBridge.tsx` renders the live plan and runtime activity into the central transcript from the typed runtime timeline store.
 - `desktop-timeline.css` styles the unified execution timeline and expandable activity details.
 
-The bridge observes the already-rendered plan and activity state and mounts a React portal before the approval card or working indicator. This preserves the existing `App` ownership of polling, approvals, session lifecycle, commands, attachments, and settings while establishing the visual contract for a future direct shared-state timeline.
+`runtime.ts` reduces the same typed `RuntimeEvent` values consumed by `App` into a small external timeline snapshot. The timeline subscribes with `useSyncExternalStore`, so plan, activity, and working state no longer depend on DOM text extraction or a document-wide `MutationObserver`. The portal remains only as a layout boundary that places execution state inside the transcript without changing approval, command, attachment, or session contracts.
+
+## Timeline state rules
+
+- a new runtime or `/new` session resets plan, activity, and busy state
+- activity entries with stable IDs update in place instead of duplicating
+- plan events replace the current typed plan snapshot
+- start events set the active state
+- questions, completion, cancellation, turn completion, and failures clear the active state
+- the central timeline keeps only the latest twelve activity cards visible while the inspector retains its existing summary behavior
 
 ## Validation
 
@@ -35,12 +44,13 @@ The Desktop GitHub Actions workflow validates:
 
 The Rust adapter matrix refreshes the dependency lock for the merged pull-request graph before running locked checks. This matches the workspace-quality workflow and prevents unrelated base-branch dependency changes from producing a stale nested lockfile failure.
 
-## Follow-up architecture
+The timeline store has focused frontend tests covering typed event reduction, stable activity replacement, busy-state completion, subscriber notification, and runtime reset behavior.
 
-A later refactor can replace DOM projection with a typed timeline model owned by `App` or a session store. That migration should preserve the current component-level visual contract:
+## Remaining UX validation
 
-- plan summary and connected steps
-- chronological activity cards
-- collapsed details by default
-- approval cards in the central flow
-- explicit active, completed, and failed states
+The visual contract is now backed by typed state. Remaining UX work is verification and polish rather than timeline architecture:
+
+- headed end-to-end sessions on Linux, macOS, and Windows
+- keyboard-only and screen-reader passes across timeline, approvals, and composer
+- dense-session testing with long plans, large tool details, failures, and hundreds of events
+- onboarding, empty-state, settings, and session-history consistency
