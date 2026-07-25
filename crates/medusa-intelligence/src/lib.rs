@@ -7,6 +7,7 @@ mod graph;
 mod impact;
 mod index;
 mod language;
+mod module_graph;
 mod patch;
 mod resolution;
 mod retrieval;
@@ -22,6 +23,7 @@ pub use graph::{CallEdge, DependencyEdge, SemanticGraph, SymbolId};
 pub use impact::{TestImpact, select_tests, select_tests_with_index};
 pub use index::IndexRefresh;
 pub use language::{CodeIndex, Language, Reference, Symbol, SymbolKind};
+pub use module_graph::{RustDependencyEdge, RustDependencyKind, RustModuleGraph};
 pub use patch::{
     PatchTransaction, TextEdit, TransactionReceipt, finalize_patch_transactions,
     recover_patch_transactions,
