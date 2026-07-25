@@ -150,6 +150,8 @@ fn replace_once(
 
 fn main() -> Result<(), Box<dyn Error>> {
     println!("cargo:rerun-if-changed=src/engine_base.rs");
+    println!("cargo:rerun-if-changed=src/autonomous_execution.rs");
+    println!("cargo:rerun-if-changed=src/autonomous_engine.rs");
     println!("cargo:rerun-if-changed=src/context_budget.rs");
     println!("cargo:rerun-if-changed=src/coding_policy.rs");
     println!("cargo:rerun-if-changed=src/repository_index.rs");
@@ -182,7 +184,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         &source_path,
     )?;
     let generated = format!(
-        "mod context_budget {{ include!(concat!(env!(\"CARGO_MANIFEST_DIR\"), \"/src/context_budget.rs\")); }}\nmod coding_policy {{ include!(concat!(env!(\"CARGO_MANIFEST_DIR\"), \"/src/coding_policy.rs\")); }}\nmod repository_index {{ include!(concat!(env!(\"CARGO_MANIFEST_DIR\"), \"/src/repository_index.rs\")); }}\nmod world_model_observation {{ include!(concat!(env!(\"CARGO_MANIFEST_DIR\"), \"/src/world_model_observation.rs\")); }}\n{engine}"
+        "mod autonomous_execution {{ include!(concat!(env!(\"CARGO_MANIFEST_DIR\"), \"/src/autonomous_execution.rs\")); }}\nmod context_budget {{ include!(concat!(env!(\"CARGO_MANIFEST_DIR\"), \"/src/context_budget.rs\")); }}\nmod coding_policy {{ include!(concat!(env!(\"CARGO_MANIFEST_DIR\"), \"/src/coding_policy.rs\")); }}\nmod repository_index {{ include!(concat!(env!(\"CARGO_MANIFEST_DIR\"), \"/src/repository_index.rs\")); }}\nmod world_model_observation {{ include!(concat!(env!(\"CARGO_MANIFEST_DIR\"), \"/src/world_model_observation.rs\")); }}\n{engine}\ninclude!(concat!(env!(\"CARGO_MANIFEST_DIR\"), \"/src/autonomous_engine.rs\"));"
     );
     let output_path = PathBuf::from(env::var("OUT_DIR")?).join("engine.rs");
     fs::write(output_path, generated)?;
