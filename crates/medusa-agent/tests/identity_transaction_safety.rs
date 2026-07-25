@@ -1,5 +1,6 @@
 #[path = "../src/identity_guard.rs"]
 mod identity_guard;
+#[allow(dead_code)]
 #[path = "../src/policy.rs"]
 mod policy;
 #[path = "../src/transaction.rs"]
