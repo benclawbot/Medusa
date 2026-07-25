@@ -1,4 +1,8 @@
-use std::{collections::BTreeMap, fs, path::{Path, PathBuf}};
+use std::{
+    collections::BTreeMap,
+    fs,
+    path::{Path, PathBuf},
+};
 
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -84,7 +88,11 @@ pub fn persist_session_feedback(
 }
 
 fn evaluate(feedback: &CompletedSessionFeedback) -> CodingTaskOutcome {
-    let failures = feedback.signals.iter().filter(|signal| !signal.success).count() as u16;
+    let failures = feedback
+        .signals
+        .iter()
+        .filter(|signal| !signal.success)
+        .count() as u16;
     let verification = feedback
         .signals
         .iter()
@@ -101,7 +109,13 @@ fn evaluate(feedback: &CompletedSessionFeedback) -> CodingTaskOutcome {
         .iter()
         .filter(|signal| signal.kind == "tool_denied")
         .count() as u16;
-    let correctness = if verified { 1_000 } else if feedback.evidence_count > 0 { 700 } else { 250 };
+    let correctness = if verified {
+        1_000
+    } else if feedback.evidence_count > 0 {
+        700
+    } else {
+        250
+    };
     CodingTaskOutcome {
         task_id: feedback.session_id.clone(),
         correctness_milli: correctness,
@@ -109,15 +123,22 @@ fn evaluate(feedback: &CompletedSessionFeedback) -> CodingTaskOutcome {
         scope_milli: 850,
         diff_quality_milli: 800,
         maintainability_milli: 1_000_u16.saturating_sub(failures.saturating_mul(50)),
-        recovery_milli: if failures == 0 { 1_000 } else if retries > 0 { 750 } else { 350 },
+        recovery_milli: if failures == 0 {
+            1_000
+        } else if retries > 0 {
+            750
+        } else {
+            350
+        },
         planning_milli: if feedback.turns <= 8 { 900 } else { 650 },
-        efficiency_milli: 1_000_u16.saturating_sub(
-            feedback.turns.saturating_sub(3).saturating_mul(35).min(800) as u16,
-        ),
+        efficiency_milli: 1_000_u16
+            .saturating_sub(feedback.turns.saturating_sub(3).saturating_mul(35).min(800) as u16),
         user_burden_milli: if feedback.turns <= 5 { 950 } else { 750 },
         oracle_digest: oracle_digest(
             feedback.objective.as_bytes(),
-            serde_json::to_string(&feedback.signals).unwrap_or_default().as_bytes(),
+            serde_json::to_string(&feedback.signals)
+                .unwrap_or_default()
+                .as_bytes(),
         ),
         evidence: vec![format!(
             "{} durable evidence items; {} trajectory signals",
@@ -158,7 +179,8 @@ fn improvement_hints(
             risk: "medium".to_owned(),
             problem: "session quality is below the promotion floor".to_owned(),
             evidence: evaluation.evidence.clone(),
-            proposed_change: "review the trajectory and propose a bounded recovery update".to_owned(),
+            proposed_change: "review the trajectory and propose a bounded recovery update"
+                .to_owned(),
             requires_human_review: true,
         });
     }
@@ -208,8 +230,10 @@ mod tests {
             }],
         };
         let evaluation = evaluate(&feedback);
-        assert!(improvement_hints(&feedback, &evaluation)
-            .iter()
-            .any(|hint| hint.target == "test_discovery"));
+        assert!(
+            improvement_hints(&feedback, &evaluation)
+                .iter()
+                .any(|hint| hint.target == "test_discovery")
+        );
     }
 }
