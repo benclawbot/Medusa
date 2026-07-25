@@ -261,8 +261,14 @@ mod nested {
         let file = parse_rust_file("src/lib.rs".into(), source).expect("ast");
         assert!(!file.has_errors);
         assert_eq!(file.node(file.root).expect("root").kind, "source_file");
-        assert_eq!(file.nodes_of_kind("struct_item")[0].name.as_deref(), Some("User"));
-        assert_eq!(file.nodes_of_kind("trait_item")[0].name.as_deref(), Some("Read"));
+        assert_eq!(
+            file.nodes_of_kind("struct_item")[0].name.as_deref(),
+            Some("User")
+        );
+        assert_eq!(
+            file.nodes_of_kind("trait_item")[0].name.as_deref(),
+            Some("Read")
+        );
         let method = file
             .nodes_of_kind("function_item")
             .into_iter()
@@ -280,8 +286,15 @@ mod nested {
         )
         .expect("partial ast");
         assert!(file.has_errors);
-        assert_eq!(file.nodes_of_kind("struct_item")[0].name.as_deref(), Some("Good"));
-        assert!(file.nodes.iter().any(|node| node.has_error || node.is_missing));
+        assert_eq!(
+            file.nodes_of_kind("struct_item")[0].name.as_deref(),
+            Some("Good")
+        );
+        assert!(
+            file.nodes
+                .iter()
+                .any(|node| node.has_error || node.is_missing)
+        );
     }
 
     #[test]
@@ -299,7 +312,9 @@ mod nested {
         .expect("lib");
         let after = IndexSnapshot::capture(repository.path()).expect("after");
         let delta = SnapshotDelta::between(&before, &after);
-        incremental.refresh(repository.path(), &delta).expect("refresh");
+        incremental
+            .refresh(repository.path(), &delta)
+            .expect("refresh");
         let rebuilt = RustAstIndex::build(repository.path()).expect("rebuilt");
         assert_eq!(incremental, rebuilt);
     }
