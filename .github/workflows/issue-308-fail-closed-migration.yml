@@ -1,0 +1,161 @@
+name: Issue 308 Fail-Closed Migration
+
+on:
+  push:
+    branches:
+      - agent/issue-308-fail-closed-windows-sandbox
+
+permissions:
+  contents: write
+
+jobs:
+  migrate:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: agent/issue-308-fail-closed-windows-sandbox
+      - name: Apply fail-closed sandbox boundary
+        shell: python
+        run: |
+          from pathlib import Path
+
+          core = Path('crates/medusa-core/src/lib.rs')
+          text = core.read_text()
+          old = '''    #[error("policy denied")]
+    PolicyDenied,
+    #[error("dependency unavailable")]
+'''
+          new = '''    #[error("policy denied")]
+    PolicyDenied,
+    #[error("sandbox unavailable")]
+    SandboxUnavailable,
+    #[error("dependency unavailable")]
+'''
+          if old not in text:
+              raise SystemExit('ErrorCode insertion anchor missing')
+          core.write_text(text.replace(old, new, 1))
+
+          policy = Path('crates/medusa-agent/src/policy.rs')
+          text = policy.read_text()
+          old = '''    #[cfg(not(any(target_os = "linux", target_os = "macos")))]
+    {
+        let root = repo.canonicalize()?;
+        #[cfg(windows)]
+        if program.eq_ignore_ascii_case("ls") {
+            let mut command = Command::new("cmd");
+            command.args(["/C", "dir"]).current_dir(root);
+            return output_with_timeout(&mut command, "Windows directory listing");
+        }
+        let mut command = Command::new(program);
+        command.args(args).current_dir(root);
+        output_with_timeout(&mut command, "local shell command")
+    }
+}
+'''
+          new = '''    #[cfg(not(any(target_os = "linux", target_os = "macos")))]
+    {
+        let _ = (repo, program, args);
+        Err(sandbox_unavailable(
+            "no containment backend is available for this platform",
+        ))
+    }
+}
+
+/// Runs a command without containment only after a caller has obtained explicit approval.
+///
+/// This function is deliberately named as unsandboxed and must never be used as an
+/// implementation detail of `sandboxed_command`.
+pub(crate) fn unsandboxed_command(
+    repo: &Path,
+    program: &str,
+    args: &[String],
+    explicitly_approved: bool,
+) -> MedusaResult<Output> {
+    if !explicitly_approved {
+        return Err(policy_denied(
+            "unsandboxed command execution requires explicit approval",
+        ));
+    }
+    let root = repo.canonicalize()?;
+    let mut command = Command::new(program);
+    command
+        .args(args)
+        .current_dir(root)
+        .env_clear()
+        .env("PATH", std::env::var_os("PATH").unwrap_or_default());
+    output_with_timeout(&mut command, "explicitly approved unsandboxed command")
+}
+'''
+          if old not in text:
+              raise SystemExit('sandbox fallback anchor missing')
+          text = text.replace(old, new, 1)
+          old = '''fn policy_denied(message: impl Into<String>) -> MedusaError {
+    MedusaError::new(ErrorCode::PolicyDenied, ErrorCategory::Policy, message)
+}
+'''
+          new = '''fn sandbox_unavailable(message: impl Into<String>) -> MedusaError {
+    let mut error = MedusaError::new(
+        ErrorCode::SandboxUnavailable,
+        ErrorCategory::Environment,
+        message,
+    );
+    error.context.insert(
+        "sandbox_backend".into(),
+        serde_json::Value::String("unavailable".into()),
+    );
+    error.context.insert(
+        "effective_restrictions".into(),
+        serde_json::json!([]),
+    );
+    error
+}
+
+fn policy_denied(message: impl Into<String>) -> MedusaError {
+    MedusaError::new(ErrorCode::PolicyDenied, ErrorCategory::Policy, message)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn unsandboxed_execution_requires_explicit_approval() {
+        let error = unsandboxed_command(Path::new("."), "cargo", &["--version".into()], false)
+            .expect_err("unapproved unsandboxed execution must fail");
+        assert_eq!(error.code, ErrorCode::PolicyDenied);
+    }
+
+    #[cfg(not(any(target_os = "linux", target_os = "macos")))]
+    #[test]
+    fn sandboxed_execution_fails_closed_without_backend() {
+        let error = sandboxed_command(Path::new("."), "cargo", &["--version".into()])
+            .expect_err("unsupported platforms must not launch a bare process");
+        assert_eq!(error.code, ErrorCode::SandboxUnavailable);
+        assert_eq!(
+            error.context.get("sandbox_backend"),
+            Some(&serde_json::Value::String("unavailable".into()))
+        );
+    }
+}
+'''
+          if old not in text:
+              raise SystemExit('policy helper anchor missing')
+          policy.write_text(text.replace(old, new, 1))
+
+          doc = Path('docs/issue-308-windows-sandbox.md')
+          doc.write_text('''# Issue 308: Windows sandbox boundary\n\nThe command API now fails closed on Windows and every platform without a verified containment backend. `sandboxed_command` never launches a bare child process. The structured `sandbox_unavailable` error includes the active backend and effective restrictions for diagnostics.\n\nA separately named `unsandboxed_command` path exists only for explicitly approved execution, clears the inherited environment, and is not used by the sandboxed path.\n\nThis closes the misleading isolation guarantee immediately. A native restricted-token and Job Object backend remains required before Windows commands can run through the sandboxed path.\n''')
+      - name: Format and verify focused tests
+        run: |
+          cargo fmt --all
+          cargo test -p medusa-core
+          cargo test -p medusa-agent policy::tests
+      - name: Commit migration and remove workflow
+        run: |
+          rm .github/workflows/issue-308-fail-closed-migration.yml
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add crates/medusa-core/src/lib.rs crates/medusa-agent/src/policy.rs docs/issue-308-windows-sandbox.md .github/workflows/issue-308-fail-closed-migration.yml
+          git commit -m "Fail closed when command sandboxing is unavailable"
+          git push origin HEAD:agent/issue-308-fail-closed-windows-sandbox
