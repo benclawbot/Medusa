@@ -11,6 +11,7 @@ import "./diff-dock.css";
 import "./memory-browser.css";
 import "./accessibility.css";
 import "./desktop-ux-overhaul.css";
+import "./desktop-timeline.css";
 
 ReactDOM.createRoot(document.getElementById("root") as HTMLElement).render(
   <React.StrictMode>
