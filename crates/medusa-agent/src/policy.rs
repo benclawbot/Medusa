@@ -350,11 +350,10 @@ fn policy_denied(message: impl Into<String>) -> MedusaError {
     MedusaError::new(ErrorCode::PolicyDenied, ErrorCategory::Policy, message)
 }
 
-#[cfg(test)]
+#[cfg(all(test, not(any(target_os = "linux", target_os = "macos"))))]
 mod tests {
     use super::*;
 
-    #[cfg(not(any(target_os = "linux", target_os = "macos")))]
     #[test]
     fn sandboxed_execution_fails_closed_without_backend() {
         let error = sandboxed_command(Path::new("."), "cargo", &["--version".into()])
