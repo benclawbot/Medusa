@@ -353,7 +353,7 @@ mod tests {
         app.record_usage(700, 1_200, 200, 100, 2_000);
         assert_eq!(running_status(&app), "Working (0s · turn 3)");
         assert_eq!(
-            session_metrics_line(&app),
+            session_metrics_line(&app, 120),
             "session 0s · total 2.5k · input 700 · output 1.5k · cache-read 200 · cache-write 100 · cost — · estimated · 1.2k tok/s"
         );
     }
@@ -380,7 +380,7 @@ mod tests {
             "provider".to_owned(),
         );
         assert_eq!(
-            session_metrics_line(&app),
+            session_metrics_line(&app, 120),
             "session 0s · total 1.6k · input 1.0k · output 500 · cache-read 100 · cache-write 50 · cost $0.0123 · provider · 825.0 tok/s"
         );
     }

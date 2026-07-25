@@ -2,6 +2,7 @@ import React from "react";
 import ReactDOM from "react-dom/client";
 import { App } from "./App";
 import { DesktopTimelineBridge } from "./DesktopTimelineBridge";
+import { DesktopUpdateControl } from "./DesktopUpdateControl";
 import { DiffDock } from "./DiffDock";
 import { MemoryDock } from "./MemoryDock";
 import { SessionDock } from "./SessionDock";
@@ -12,6 +13,7 @@ import "./memory-browser.css";
 import "./accessibility.css";
 import "./desktop-ux-overhaul.css";
 import "./desktop-timeline.css";
+import "./desktop-update.css";
 
 ReactDOM.createRoot(document.getElementById("root") as HTMLElement).render(
   <React.StrictMode>
@@ -20,5 +22,6 @@ ReactDOM.createRoot(document.getElementById("root") as HTMLElement).render(
     <SessionDock />
     <DiffDock />
     <MemoryDock />
+    <DesktopUpdateControl />
   </React.StrictMode>,
 );
