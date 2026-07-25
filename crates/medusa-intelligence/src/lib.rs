@@ -19,6 +19,7 @@ mod retrieval;
 mod review;
 pub mod snapshot;
 mod structured_edit;
+mod structured_transaction;
 mod support;
 mod symbol_impact;
 mod symbol_table;
@@ -64,6 +65,10 @@ pub use snapshot::{FileFingerprint, IndexSnapshot, SnapshotDelta};
 pub use structured_edit::{
     EditMetadata, EditPreconditions, EditPreview, EditRange, FileSnapshot, StructuredEditAudit,
     StructuredEditError, StructuredEditPlan, StructuredFileOperation, StructuredTextEdit,
+};
+pub use structured_transaction::{
+    StructuredTransactionError, StructuredTransactionReceipt, StructuredTransactionState,
+    TransactionFailurePoint, apply_structured_transaction, recover_structured_transactions,
 };
 pub use symbol_impact::{RustImpactFile, RustSymbolImpact, analyze_rust_symbol_impact};
 pub use symbol_table::{
