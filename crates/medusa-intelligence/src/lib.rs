@@ -15,6 +15,7 @@ mod retrieval;
 mod review;
 pub mod snapshot;
 mod support;
+mod symbol_impact;
 mod symbol_table;
 
 pub use ast::{ParseDiagnostic, RustAstDocument, RustAstNode, SourcePosition, SourceRange};
@@ -36,6 +37,7 @@ pub use resolution::{ResolutionStatus, RustResolutionIndex, RustResolvedReferenc
 pub use retrieval::{RetrievalBudget, RetrievalExclusion, RetrievalReport, RetrievalResult};
 pub use review::ReviewImpact;
 pub use snapshot::{FileFingerprint, IndexSnapshot, SnapshotDelta};
+pub use symbol_impact::{RustImpactFile, RustSymbolImpact, analyze_rust_symbol_impact};
 pub use symbol_table::{
     RustScope, RustScopeKind, RustSymbol, RustSymbolId, RustSymbolKind, RustSymbolTable,
 };
