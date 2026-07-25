@@ -28,10 +28,18 @@ jobs:
       - name: Format
         run: cargo fmt --all
       - name: Test focused TUI crate
-        run: cargo test -p medusa-tui
+        run: |
+          set -o pipefail
+          cargo test -p medusa-tui 2>&1 | tee issue248-test.log
+      - name: Upload focused test log
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: issue248-test-log
+          path: issue248-test.log
       - name: Commit implementation
         run: |
-          rm -f .github/workflows/run-issue-248.yml .github/workflows/implement-issue-248.yml .github/scripts/run_issue_248.py .github/scripts/implement_issue_248.py issue248-error.txt
+          rm -f .github/workflows/run-issue-248.yml .github/workflows/implement-issue-248.yml .github/scripts/run_issue_248.py .github/scripts/implement_issue_248.py issue248-error.txt issue248-test.log
           git config user.name github-actions[bot]
           git config user.email 41898282+github-actions[bot]@users.noreply.github.com
           git add -A
