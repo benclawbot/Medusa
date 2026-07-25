@@ -17,6 +17,7 @@ mod rename;
 mod resolution;
 mod retrieval;
 mod review;
+mod rust_structured_edit;
 pub mod snapshot;
 mod structured_edit;
 mod structured_transaction;
@@ -61,6 +62,7 @@ pub use rename::{
 pub use resolution::{ResolutionStatus, RustResolutionIndex, RustResolvedReference};
 pub use retrieval::{RetrievalBudget, RetrievalExclusion, RetrievalReport, RetrievalResult};
 pub use review::ReviewImpact;
+pub use rust_structured_edit::RustStructuredEditPlanner;
 pub use snapshot::{FileFingerprint, IndexSnapshot, SnapshotDelta};
 pub use structured_edit::{
     EditMetadata, EditPreconditions, EditPreview, EditRange, FileSnapshot, StructuredEditAudit,
