@@ -1,4 +1,7 @@
-use std::{collections::BTreeSet, path::{Path, PathBuf}};
+use std::{
+    collections::BTreeSet,
+    path::{Path, PathBuf},
+};
 
 use serde::{Deserialize, Serialize};
 
@@ -77,8 +80,7 @@ pub fn select_tests_with_index(index: &CodeIndex, changed_paths: &[PathBuf]) -> 
                 commands.insert("cargo test --all-features".to_owned());
                 reasons.insert(format!("Changed root Rust source: {}", path.display()));
             }
-        } else if path.extension().is_some_and(|extension| extension == "py")
-            && commands.is_empty()
+        } else if path.extension().is_some_and(|extension| extension == "py") && commands.is_empty()
         {
             commands.insert("python -m pytest".to_owned());
             reasons.insert(format!("Changed Python source: {}", path.display()));
@@ -202,10 +204,7 @@ mod tests {
         .expect("test");
         let index = CodeIndex::build(repository.path()).expect("index");
 
-        let impact = select_tests_with_index(
-            &index,
-            &[PathBuf::from("crates/widget/src/lib.rs")],
-        );
+        let impact = select_tests_with_index(&index, &[PathBuf::from("crates/widget/src/lib.rs")]);
 
         assert_eq!(
             impact.commands,
@@ -214,6 +213,11 @@ mod tests {
                 "cargo test -p widget --test api",
             ]
         );
-        assert!(impact.reasons.iter().any(|reason| reason.contains("api.rs")));
+        assert!(
+            impact
+                .reasons
+                .iter()
+                .any(|reason| reason.contains("api.rs"))
+        );
     }
 }
