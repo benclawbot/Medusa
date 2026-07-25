@@ -1,148 +1,171 @@
-use std::collections::{BTreeSet, VecDeque};
+use std::{collections::{BTreeMap, BTreeSet, VecDeque}, path::PathBuf};
 
 use serde::{Deserialize, Serialize};
 
-use crate::{SemanticGraph, SymbolId};
+use crate::{RustCallGraph, RustSymbolId, RustSymbolKind, RustSymbolTable};
 
-/// Symbol-level impact derived from the semantic call and dependency graphs.
-#[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
-pub struct SymbolImpact {
-    /// Symbols explicitly changed by the edit.
-    pub changed: Vec<SymbolId>,
-    /// Direct and transitive callers that can observe the change.
-    pub callers: Vec<SymbolId>,
-    /// Test files reachable from the changed symbols and their callers.
-    pub test_files: Vec<std::path::PathBuf>,
+/// One indexed Rust source file participating in workspace impact analysis.
+pub struct RustImpactFile<'a> {
+    pub symbols: &'a RustSymbolTable,
+    pub call_graph: &'a RustCallGraph,
 }
 
-impl SemanticGraph {
-    /// Returns the symbols directly called by `caller`.
-    #[must_use]
-    pub fn direct_callees(&self, caller: &SymbolId) -> Vec<SymbolId> {
-        self.calls
-            .iter()
-            .filter(|edge| &edge.caller == caller)
-            .map(|edge| edge.callee.clone())
-            .collect::<BTreeSet<_>>()
-            .into_iter()
-            .collect()
+/// Deterministic verification scope derived from changed symbols rather than files alone.
+#[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+pub struct RustSymbolImpact {
+    pub changed_symbols: Vec<RustSymbolId>,
+    pub affected_symbols: Vec<RustSymbolId>,
+    pub affected_paths: Vec<PathBuf>,
+    pub test_symbols: Vec<RustSymbolId>,
+    pub commands: Vec<String>,
+    pub reasons: Vec<String>,
+}
+
+/// Compute reverse-call impact and the narrowest known Cargo verification commands.
+#[must_use]
+pub fn analyze_rust_symbol_impact(
+    files: &[RustImpactFile<'_>],
+    changed_symbols: &[RustSymbolId],
+) -> RustSymbolImpact {
+    let mut symbols = BTreeMap::new();
+    let mut callers = BTreeMap::<RustSymbolId, BTreeSet<RustSymbolId>>::new();
+
+    for file in files {
+        for (id, symbol) in &file.symbols.symbols {
+            symbols.insert(id.clone(), symbol);
+        }
+        for edge in &file.call_graph.edges {
+            callers
+                .entry(edge.callee.clone())
+                .or_default()
+                .insert(edge.caller.clone());
+        }
     }
 
-    /// Returns symbols that directly call `callee`.
-    #[must_use]
-    pub fn direct_callers(&self, callee: &SymbolId) -> Vec<SymbolId> {
-        self.calls
-            .iter()
-            .filter(|edge| &edge.callee == callee)
-            .map(|edge| edge.caller.clone())
-            .collect::<BTreeSet<_>>()
-            .into_iter()
-            .collect()
-    }
-
-    /// Returns direct and transitive callers in deterministic order.
-    #[must_use]
-    pub fn transitive_callers(&self, symbols: &[SymbolId]) -> Vec<SymbolId> {
-        let mut seen = symbols.iter().cloned().collect::<BTreeSet<_>>();
-        let mut callers = BTreeSet::new();
-        let mut pending = symbols.iter().cloned().collect::<VecDeque<_>>();
-
-        while let Some(symbol) = pending.pop_front() {
-            for caller in self.direct_callers(&symbol) {
-                if seen.insert(caller.clone()) {
-                    callers.insert(caller.clone());
-                    pending.push_back(caller);
-                }
+    let changed = changed_symbols.iter().cloned().collect::<BTreeSet<_>>();
+    let mut affected = changed.clone();
+    let mut queue = changed.iter().cloned().collect::<VecDeque<_>>();
+    while let Some(current) = queue.pop_front() {
+        for caller in callers.get(&current).into_iter().flatten() {
+            if affected.insert(caller.clone()) {
+                queue.push_back(caller.clone());
             }
         }
-
-        callers.into_iter().collect()
     }
 
-    /// Computes symbol-level blast radius and the narrowest known test files.
-    #[must_use]
-    pub fn impact_for_symbols(&self, changed: &[SymbolId]) -> SymbolImpact {
-        let changed = changed.iter().cloned().collect::<BTreeSet<_>>();
-        let callers = self.transitive_callers(&changed.iter().cloned().collect::<Vec<_>>());
-        let mut affected_paths = changed
-            .iter()
-            .map(|symbol| symbol.path.clone())
-            .collect::<BTreeSet<_>>();
-        affected_paths.extend(callers.iter().map(|symbol| symbol.path.clone()));
-        let test_files =
-            self.impacted_test_files(&affected_paths.iter().cloned().collect::<Vec<_>>());
+    let affected_paths = affected
+        .iter()
+        .filter_map(|id| symbols.get(id).map(|symbol| symbol.path.clone()))
+        .collect::<BTreeSet<_>>();
+    let test_symbols = affected
+        .iter()
+        .filter(|id| {
+            symbols.get(*id).is_some_and(|symbol| {
+                matches!(symbol.kind, RustSymbolKind::Function | RustSymbolKind::Method)
+                    && (symbol.name.starts_with("test_")
+                        || symbol.path.components().any(|part| part.as_os_str() == "tests"))
+            })
+        })
+        .cloned()
+        .collect::<BTreeSet<_>>();
 
-        SymbolImpact {
-            changed: changed.into_iter().collect(),
-            callers,
-            test_files,
+    let mut commands = BTreeSet::new();
+    let mut reasons = BTreeSet::new();
+    for test in &test_symbols {
+        let Some(symbol) = symbols.get(test) else { continue };
+        if let Some(package) = crate_name(&symbol.path) {
+            if symbol.path.components().any(|part| part.as_os_str() == "tests") {
+                if let Some(name) = symbol.path.file_stem().and_then(|name| name.to_str()) {
+                    commands.insert(format!("cargo test -p {package} --test {name}"));
+                }
+            } else {
+                commands.insert(format!("cargo test -p {package} {}", symbol.name));
+            }
+        } else {
+            commands.insert(format!("cargo test {}", symbol.name));
+        }
+        reasons.insert(format!(
+            "Changed symbol reaches test symbol {} in {}",
+            symbol.qualified_name,
+            symbol.path.display()
+        ));
+    }
+
+    if commands.is_empty() {
+        for path in &affected_paths {
+            if let Some(package) = crate_name(path) {
+                commands.insert(format!("cargo test -p {package} --all-features"));
+                reasons.insert(format!("Affected symbol belongs to package {package}: {}", path.display()));
+            }
         }
     }
+
+    RustSymbolImpact {
+        changed_symbols: changed.into_iter().collect(),
+        affected_symbols: affected.into_iter().collect(),
+        affected_paths: affected_paths.into_iter().collect(),
+        test_symbols: test_symbols.into_iter().collect(),
+        commands: commands.into_iter().collect(),
+        reasons: reasons.into_iter().collect(),
+    }
+}
+
+fn crate_name(path: &std::path::Path) -> Option<&str> {
+    let mut components = path.components();
+    while let Some(component) = components.next() {
+        if component.as_os_str() == "crates" {
+            return components.next()?.as_os_str().to_str();
+        }
+    }
+    None
 }
 
 #[cfg(test)]
 mod tests {
-    use std::{fs, path::PathBuf};
+    use super::*;
+    use crate::{RustAstDocument, RustResolutionIndex};
 
-    use crate::{CodeIndex, SemanticGraph, SymbolId};
+    fn indexed(path: &str, source: &str) -> (RustSymbolTable, RustCallGraph) {
+        let ast = RustAstDocument::parse(path, source).expect("ast");
+        let table = RustSymbolTable::build(&ast, source);
+        let resolution = RustResolutionIndex::build(&ast, source, &table);
+        let graph = RustCallGraph::build(&ast, &table, &resolution);
+        (table, graph)
+    }
 
     #[test]
-    fn exposes_reverse_call_graph_and_symbol_test_impact() {
-        let repository = tempfile::tempdir().expect("repository");
-        fs::create_dir_all(repository.path().join("src")).expect("src");
-        fs::create_dir_all(repository.path().join("tests")).expect("tests");
-        fs::write(
-            repository.path().join("src/core.rs"),
-            "pub fn leaf() -> u8 { 42 }\n",
-        )
-        .expect("core");
-        fs::write(
-            repository.path().join("src/lib.rs"),
-            "mod core;\npub fn middle() -> u8 { core::leaf() }\npub fn facade() -> u8 { middle() }\n",
-        )
-        .expect("lib");
-        fs::write(
-            repository.path().join("tests/api.rs"),
-            "use fixture::facade;\nfn api_test() { assert_eq!(facade(), 42); }\n",
-        )
-        .expect("test");
+    fn expands_reverse_callers_and_selects_targeted_test() {
+        let source = "fn leaf() {} fn middle() { leaf(); } fn test_leaf() { middle(); }";
+        let (table, graph) = indexed("crates/widget/src/lib.rs", source);
+        let leaf = table.find_simple("leaf")[0].id.clone();
+        let files = [RustImpactFile { symbols: &table, call_graph: &graph }];
+        let impact = analyze_rust_symbol_impact(&files, &[leaf]);
 
-        let index = CodeIndex::build(repository.path()).expect("index");
-        let graph = SemanticGraph::build(&index);
-        let leaf: SymbolId = index
-            .definitions("leaf")
-            .into_iter()
-            .next()
-            .map(Into::into)
-            .expect("leaf");
-        let middle: SymbolId = index
-            .definitions("middle")
-            .into_iter()
-            .next()
-            .map(Into::into)
-            .expect("middle");
-        let facade: SymbolId = index
-            .definitions("facade")
-            .into_iter()
-            .next()
-            .map(Into::into)
-            .expect("facade");
-        let api_test: SymbolId = index
-            .definitions("api_test")
-            .into_iter()
-            .next()
-            .map(Into::into)
-            .expect("api_test");
+        assert_eq!(impact.affected_symbols.len(), 3);
+        assert_eq!(impact.test_symbols.len(), 1);
+        assert_eq!(impact.commands, vec!["cargo test -p widget test_leaf"]);
+    }
 
-        assert_eq!(graph.direct_callers(&leaf), vec![middle.clone()]);
-        assert_eq!(graph.direct_callees(&middle), vec![leaf.clone()]);
-        assert_eq!(
-            graph.transitive_callers(std::slice::from_ref(&leaf)),
-            vec![api_test.clone(), facade.clone(), middle.clone()]
-        );
+    #[test]
+    fn falls_back_to_package_scope_when_no_test_symbol_is_known() {
+        let source = "fn leaf() {} fn caller() { leaf(); }";
+        let (table, graph) = indexed("crates/widget/src/lib.rs", source);
+        let leaf = table.find_simple("leaf")[0].id.clone();
+        let files = [RustImpactFile { symbols: &table, call_graph: &graph }];
+        let impact = analyze_rust_symbol_impact(&files, &[leaf]);
 
-        let impact = graph.impact_for_symbols(&[leaf]);
-        assert_eq!(impact.callers, vec![api_test, facade, middle]);
-        assert_eq!(impact.test_files, vec![PathBuf::from("tests/api.rs")]);
+        assert_eq!(impact.commands, vec!["cargo test -p widget --all-features"]);
+    }
+
+    #[test]
+    fn serialization_is_deterministic() {
+        let source = "fn changed() {}";
+        let (table, graph) = indexed("src/lib.rs", source);
+        let changed = table.find_simple("changed")[0].id.clone();
+        let files = [RustImpactFile { symbols: &table, call_graph: &graph }];
+        let impact = analyze_rust_symbol_impact(&files, &[changed]);
+        let encoded = serde_json::to_string(&impact).expect("serialize");
+        let decoded: RustSymbolImpact = serde_json::from_str(&encoded).expect("deserialize");
+        assert_eq!(decoded, impact);
     }
 }

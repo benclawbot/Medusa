@@ -1,44 +1,69 @@
 //! Syntax-aware indexing, reference discovery, transactional patches, and test impact.
 
 mod ast;
+mod call_graph;
 mod format;
 mod graph;
 mod impact;
 mod index;
 mod language;
+mod lsp;
+mod lsp_actions;
+mod lsp_navigation;
+mod lsp_semantics;
+mod module_graph;
 mod patch;
+mod rename;
+mod resolution;
 mod retrieval;
 mod review;
-mod rust_ast;
-#[rustfmt::skip]
-#[path = "rust_symbols_v2.rs"]
-mod rust_symbols;
 pub mod snapshot;
 mod support;
 mod symbol_impact;
+mod symbol_table;
 
 pub use ast::{ParseDiagnostic, RustAstDocument, RustAstNode, SourcePosition, SourceRange};
+pub use call_graph::{RustCallEdge, RustCallGraph};
 pub use format::format_changed;
 pub use graph::{CallEdge, DependencyEdge, SemanticGraph, SymbolId};
 pub use impact::{TestImpact, select_tests, select_tests_with_index};
 pub use index::IndexRefresh;
 pub use language::{CodeIndex, Language, Reference, Symbol, SymbolKind};
+pub use lsp::{
+    LspClient, LspError, LspServerConfig, LspServerManager, LspServerState,
+};
+pub use lsp_actions::{
+    LspAnnotatedTextEdit, LspCapabilityResult, LspChangeAnnotation, LspCodeAction, LspCommand,
+    LspCommandPolicy, LspRenameComparison, LspResourceOperation, LspWorkspaceEdit,
+    LspWorkspaceOperation, code_actions, compare_rename_paths, execute_command_guarded,
+    normalize_workspace_edit, prepare_rename, rename as lsp_rename, resolve_code_action,
+};
+pub use lsp_navigation::{
+    LspLocation, LspNavigationKind, LspNavigationResult, LspPosition, LspRange,
+    compare_with_static, document_symbols, find_references, go_to_declaration,
+    go_to_definition, workspace_symbols,
+};
+pub use lsp_semantics::{
+    DiagnosticSeverity, DiagnosticSnapshot, LspDiagnostic, LspHover, LspRelatedDiagnostic,
+    LspPosition as LspSemanticPosition, LspRange as LspSemanticRange, SemanticToken,
+    SemanticTokenState,
+};
+pub use module_graph::{RustDependencyEdge, RustDependencyKind, RustModuleGraph};
 pub use patch::{
     PatchTransaction, TextEdit, TransactionReceipt, finalize_patch_transactions,
     recover_patch_transactions,
 };
+pub use rename::{
+    RustRenameConflict, RustRenameConflictKind, RustRenameFile, RustRenamePlan, plan_rust_rename,
+};
+pub use resolution::{ResolutionStatus, RustResolutionIndex, RustResolvedReference};
 pub use retrieval::{RetrievalBudget, RetrievalExclusion, RetrievalReport, RetrievalResult};
 pub use review::ReviewImpact;
-pub use rust_ast::{
-    RustAstFile, RustAstIndex, RustAstNode, RustAstNodeId, SourcePosition, SourceRange,
-    parse_rust_file,
-};
-pub use rust_symbols::{
-    RustScope, RustScopeId, RustScopeKind, RustSymbol, RustSymbolId, RustSymbolKind,
-    RustSymbolTable,
-};
 pub use snapshot::{FileFingerprint, IndexSnapshot, SnapshotDelta};
-pub use symbol_impact::SymbolImpact;
+pub use symbol_impact::{RustImpactFile, RustSymbolImpact, analyze_rust_symbol_impact};
+pub use symbol_table::{
+    RustScope, RustScopeKind, RustSymbol, RustSymbolId, RustSymbolKind, RustSymbolTable,
+};
 
 #[cfg(test)]
 mod tests {
