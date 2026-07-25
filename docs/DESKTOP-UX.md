@@ -1,34 +1,46 @@
-# Medusa desktop UX
+# Medusa Desktop UX
 
-Medusa Desktop uses an activity-first visual hierarchy inspired by the strongest interaction patterns in modern AI desktop applications while retaining Medusa's coding-agent identity.
+Medusa Desktop follows an activity-first interaction model: the conversation is the primary surface, while execution detail remains visible without competing with the user's task.
 
-## Hierarchy
+## Design principles
 
-1. **Conversation and composer** remain the primary surface.
-2. **Runtime state** is visible but quiet in the header.
-3. **Plan and activity** are compact, scannable execution evidence in the inspector.
-4. **Settings, sessions, diffs, and memory** stay available without permanently competing with the active conversation.
+1. **Conversation first** — prompts, responses, approvals, plan state, and tool activity stay in one chronological workspace.
+2. **Progressive disclosure** — summaries remain scannable; detailed tool output is expandable.
+3. **Visible execution** — active work, completion, failure, and plan progress have distinct states.
+4. **Stable controls** — the composer, cancellation, attachments, slash commands, and approval actions remain predictable while work is running.
+5. **Low cognitive load** — the inspector summarizes session context and usage instead of duplicating execution details.
+6. **Responsive focus** — narrower windows remove secondary chrome before shrinking the primary conversation.
+7. **Accessible motion** — progress animation is subtle and disabled when reduced motion is requested.
 
-## Interaction principles
+## Current implementation
 
-- Progressive disclosure: default surfaces show status and summaries; dedicated docks retain deeper evidence.
-- Clear state: ready, working, completed, and failed states use consistent motion and semantic color.
-- Calm density: cards, spacing, and typography separate user intent, assistant output, runtime notices, plans, and tool activity.
-- Keyboard-first composition: the composer remains the dominant action target and preserves slash commands, attachments, cancellation, and queued guidance.
-- Responsive focus: narrow desktop windows prioritize conversation; secondary inspection surfaces become transient.
-- Accessibility: reduced-motion preferences disable decorative animation, focus states remain visible, and semantic runtime colors are never the only signal.
+The desktop shell uses two isolated presentation layers:
 
-## Visual system
+- `desktop-ux-overhaul.css` defines the premium visual hierarchy, message treatment, composer, plan tree, activity cards, inspector, and responsive focus mode.
+- `DesktopTimelineBridge.tsx` projects the live plan and runtime activity into the central transcript without changing runtime event contracts.
+- `desktop-timeline.css` styles the unified execution timeline and expandable activity details.
 
-The final override layer is `apps/medusa-desktop/src/desktop-ux-overhaul.css`. It is deliberately isolated from the legacy shared stylesheet so the desktop visual system can evolve without risking TUI/runtime behavior or unrelated Zeus-derived components.
+The bridge observes the already-rendered plan and activity state and mounts a React portal before the approval card or working indicator. This preserves the existing `App` ownership of polling, approvals, session lifecycle, commands, attachments, and settings while establishing the visual contract for a future direct shared-state timeline.
 
-The layer provides:
+## Validation
 
-- a calmer neutral canvas and restrained Medusa accent;
-- stronger conversation hierarchy and compact user bubbles;
-- a floating, high-affordance composer;
-- live working-state motion;
-- task-tree connectors for plan steps;
-- rich, scannable tool-activity cards;
-- responsive inspector behavior;
-- reduced-motion support.
+The Desktop GitHub Actions workflow validates:
+
+- npm dependency installation
+- TypeScript type checking
+- frontend tests
+- production frontend build
+- Rust adapter formatting, Clippy, panic audit, and tests on Linux, macOS, and Windows
+- unsigned Linux, macOS, and Windows package builds
+
+The Rust adapter matrix refreshes the dependency lock for the merged pull-request graph before running locked checks. This matches the workspace-quality workflow and prevents unrelated base-branch dependency changes from producing a stale nested lockfile failure.
+
+## Follow-up architecture
+
+A later refactor can replace DOM projection with a typed timeline model owned by `App` or a session store. That migration should preserve the current component-level visual contract:
+
+- plan summary and connected steps
+- chronological activity cards
+- collapsed details by default
+- approval cards in the central flow
+- explicit active, completed, and failed states
