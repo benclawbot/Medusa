@@ -4,4 +4,6 @@ The command API now fails closed on Windows and every platform without a verifie
 
 A separately named `unsandboxed_command` path requires explicit approval, clears the inherited environment, and is not used by the sandboxed path.
 
+Focused tests verify that unapproved unsandboxed execution is denied and that unsupported platforms return `SandboxUnavailable` before process launch. Linux bubblewrap and macOS Seatbelt paths remain unchanged and continue through the repository's cross-platform CI.
+
 A native restricted-token and Job Object backend remains required before Windows commands can run through the sandboxed path.
