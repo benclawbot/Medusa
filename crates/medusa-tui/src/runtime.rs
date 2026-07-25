@@ -204,9 +204,10 @@ fn presentation_activity(mut activity: RuntimeActivity) -> RuntimeActivity {
         RuntimeActivityKind::Assistant if !activity.details.is_empty() => {
             (RuntimeActivityKind::Progress, Some("Assistant"))
         }
-        RuntimeActivityKind::Tool if !activity.details.is_empty() => {
-            (RuntimeActivityKind::Verification, Some("Tool"))
-        }
+        RuntimeActivityKind::Tool if !activity.details.is_empty() => (
+            RuntimeActivityKind::Verification,
+            Some(tool_activity_label(&activity.title)),
+        ),
         _ => (activity.kind, None),
     };
     activity.kind = kind;
@@ -214,6 +215,38 @@ fn presentation_activity(mut activity: RuntimeActivity) -> RuntimeActivity {
         activity.title = format!("{label} · {}", activity.title);
     }
     activity
+}
+
+fn tool_activity_label(title: &str) -> &'static str {
+    let title = title.to_ascii_lowercase();
+    if ["test", "check", "verify", "lint", "clippy"]
+        .iter()
+        .any(|keyword| title.contains(keyword))
+    {
+        "Test"
+    } else if ["edit", "write", "patch", "update", "create", "delete"]
+        .iter()
+        .any(|keyword| title.contains(keyword))
+    {
+        "Edit"
+    } else if ["run", "shell", "command", "build", "cargo", "npm"]
+        .iter()
+        .any(|keyword| title.contains(keyword))
+    {
+        "Run"
+    } else if ["fetch", "download", "http", "web", "request"]
+        .iter()
+        .any(|keyword| title.contains(keyword))
+    {
+        "Fetch"
+    } else if ["read", "search", "find", "list", "inspect", "open"]
+        .iter()
+        .any(|keyword| title.contains(keyword))
+    {
+        "Read"
+    } else {
+        "Tool"
+    }
 }
 
 #[cfg(test)]
@@ -255,7 +288,7 @@ mod tests {
     }
 
     #[test]
-    fn detailed_tool_activity_uses_a_detail_capable_presentation_kind() {
+    fn detailed_tool_activity_uses_a_tool_specific_label() {
         let activity = presentation_activity(RuntimeActivity {
             id: Some("tool-1".to_owned()),
             kind: RuntimeActivityKind::Tool,
@@ -263,8 +296,18 @@ mod tests {
             details: vec!["crates/medusa-tui/src/render.rs".to_owned()],
         });
         assert_eq!(activity.kind, RuntimeActivityKind::Verification);
-        assert_eq!(activity.title, "Tool · Read render.rs");
+        assert_eq!(activity.title, "Read · Read render.rs");
         assert_eq!(activity.details.len(), 1);
+    }
+
+    #[test]
+    fn tool_activity_labels_cover_common_operations() {
+        assert_eq!(tool_activity_label("Edit app.rs"), "Edit");
+        assert_eq!(tool_activity_label("Run cargo build"), "Run");
+        assert_eq!(tool_activity_label("Verify workspace tests"), "Test");
+        assert_eq!(tool_activity_label("Fetch release metadata"), "Fetch");
+        assert_eq!(tool_activity_label("Inspect repository tree"), "Read");
+        assert_eq!(tool_activity_label("Invoke custom tool"), "Tool");
     }
 
     #[test]
