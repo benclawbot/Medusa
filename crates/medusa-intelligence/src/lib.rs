@@ -7,6 +7,7 @@ mod index;
 mod language;
 mod patch;
 mod retrieval;
+mod review;
 pub mod snapshot;
 mod support;
 
@@ -17,6 +18,7 @@ pub use index::IndexRefresh;
 pub use language::{CodeIndex, Language, Reference, Symbol, SymbolKind};
 pub use patch::{PatchTransaction, TextEdit, TransactionReceipt};
 pub use retrieval::{RetrievalBudget, RetrievalExclusion, RetrievalReport, RetrievalResult};
+pub use review::ReviewImpact;
 pub use snapshot::{FileFingerprint, IndexSnapshot, SnapshotDelta};
 
 #[cfg(test)]
