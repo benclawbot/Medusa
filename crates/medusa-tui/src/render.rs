@@ -122,7 +122,10 @@ fn active_status(app: &AppState) -> &str {
                         | TranscriptActivityKind::Progress
                         | TranscriptActivityKind::Tool
                         | TranscriptActivityKind::Verification
-                ) => Some(activity.title.as_str()),
+                ) =>
+            {
+                Some(activity.title.as_str())
+            }
             _ => None,
         })
         .unwrap_or(&app.status)
