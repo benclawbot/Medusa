@@ -1313,6 +1313,7 @@ dependencies = [
 name = "medusa-intelligence"
 version = "1.0.0"
 dependencies = [
+ "hex",
  "medusa-core",
  "serde",
  "serde_json",

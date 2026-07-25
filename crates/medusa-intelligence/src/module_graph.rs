@@ -167,9 +167,11 @@ fn dependency_targets(text: &str, kind: &RustDependencyKind) -> Vec<String> {
                 .split("::")
                 .next()
                 .unwrap_or_default();
-            (!root.is_empty())
-                .then(|| vec![root.to_owned()])
-                .unwrap_or_default()
+            if root.is_empty() {
+                Vec::new()
+            } else {
+                vec![root.to_owned()]
+            }
         }
     }
 }

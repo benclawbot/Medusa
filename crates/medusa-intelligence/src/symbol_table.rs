@@ -1,4 +1,7 @@
-use std::{collections::BTreeMap, path::PathBuf};
+use std::{
+    collections::BTreeMap,
+    path::{Path, PathBuf},
+};
 
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -280,10 +283,7 @@ fn first_named_identifier<'a>(
         })
 }
 
-fn ancestors<'a>(
-    document: &'a RustAstDocument,
-    node_id: usize,
-) -> impl Iterator<Item = &'a RustAstNode> {
+fn ancestors(document: &RustAstDocument, node_id: usize) -> impl Iterator<Item = &RustAstNode> {
     std::iter::successors(
         document.node(node_id).and_then(|node| node.parent),
         move |id| document.node(*id).and_then(|node| node.parent),
@@ -310,7 +310,7 @@ fn qualify(parent: &str, name: &str) -> String {
     }
 }
 
-fn stable_id(path: &PathBuf, kind: RustSymbolKind, qualified_name: &str) -> RustSymbolId {
+fn stable_id(path: &Path, kind: RustSymbolKind, qualified_name: &str) -> RustSymbolId {
     let mut digest = Sha256::new();
     digest.update(path.to_string_lossy().as_bytes());
     digest.update([0]);
