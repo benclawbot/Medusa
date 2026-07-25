@@ -20,9 +20,6 @@ jobs:
         with:
           ref: agent/tui-expandable-activity-details-v2
           fetch-depth: 1
-      - uses: dtolnay/rust-toolchain@1.88.0
-        with:
-          components: rustfmt
       - name: Extract and run implementation script
         shell: python
         run: |
@@ -34,6 +31,9 @@ jobs:
           script = '\n'.join(line[10:] if line.startswith('          ') else line for line in workflow[start:end]) + '\n'
           Path('/tmp/implement_issue_248.py').write_text(script)
           exec(compile(script, '/tmp/implement_issue_248.py', 'exec'))
+      - uses: dtolnay/rust-toolchain@1.88.0
+        with:
+          components: rustfmt
       - name: Format
         run: cargo fmt --all
       - name: Test focused TUI crate
