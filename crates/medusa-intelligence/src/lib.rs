@@ -1,6 +1,7 @@
 //! Syntax-aware indexing, reference discovery, transactional patches, and test impact.
 
 mod format;
+mod graph;
 mod impact;
 mod index;
 mod language;
@@ -10,7 +11,8 @@ pub mod snapshot;
 mod support;
 
 pub use format::format_changed;
-pub use impact::{TestImpact, select_tests};
+pub use graph::{CallEdge, DependencyEdge, SemanticGraph, SymbolId};
+pub use impact::{TestImpact, select_tests, select_tests_with_index};
 pub use index::IndexRefresh;
 pub use language::{CodeIndex, Language, Reference, Symbol, SymbolKind};
 pub use patch::{PatchTransaction, TextEdit, TransactionReceipt};
