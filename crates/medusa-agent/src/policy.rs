@@ -1,7 +1,7 @@
 use std::{
     fs,
     path::{Component, Path, PathBuf},
-    process::{Command, Output, Stdio},
+    process::{Child, Command, Output, Stdio},
     thread,
     time::{Duration, Instant},
 };
@@ -83,49 +83,11 @@ pub(crate) fn validate_shell_command_hard_denials(
         .unwrap_or(program)
         .to_ascii_lowercase();
     const DENIED_PROGRAMS: &[&str] = &[
-        "rm",
-        "sudo",
-        "doas",
-        "shutdown",
-        "reboot",
-        "halt",
-        "poweroff",
-        "mkfs",
-        "dd",
-        "mount",
-        "umount",
-        "chown",
-        "chmod",
-        "kill",
-        "pkill",
-        "killall",
-        "systemctl",
-        "launchctl",
-        "reg",
-        "reg.exe",
-        "sc",
-        "sc.exe",
-        "netsh",
-        "curl",
-        "wget",
-        "nc",
-        "ncat",
-        "socat",
-        "ssh",
-        "scp",
-        "sftp",
-        "rsync",
-        "env",
-        "printenv",
-        "set",
-        "bash",
-        "sh",
-        "zsh",
-        "fish",
-        "cmd",
-        "cmd.exe",
-        "powershell",
-        "pwsh",
+        "rm", "sudo", "doas", "shutdown", "reboot", "halt", "poweroff", "mkfs", "dd",
+        "mount", "umount", "chown", "chmod", "kill", "pkill", "killall", "systemctl",
+        "launchctl", "reg", "reg.exe", "sc", "sc.exe", "netsh", "curl", "wget", "nc",
+        "ncat", "socat", "ssh", "scp", "sftp", "rsync", "env", "printenv", "set",
+        "bash", "sh", "zsh", "fish", "cmd", "cmd.exe", "powershell", "pwsh",
     ];
     if DENIED_PROGRAMS.contains(&basename.as_str()) {
         return Err(policy_denied(format!("hard-denied command: {program}")));
@@ -133,27 +95,10 @@ pub(crate) fn validate_shell_command_hard_denials(
 
     let normalized = args.join(" ").to_ascii_lowercase();
     const DENIED_FRAGMENTS: &[&str] = &[
-        "curl | sh",
-        "curl|sh",
-        "wget | sh",
-        "wget|sh",
-        "/etc/shadow",
-        "/etc/passwd",
-        ".ssh/",
-        "id_rsa",
-        "id_ed25519",
-        "authorization:",
-        "api_key",
-        "api-key",
-        "secret_access_key",
-        "disable-defender",
-        "set-mppreference",
-        "tamper protection",
-        "endpoint protection",
-        "--no-verify",
-        "--force-with-lease",
-        "--force",
-        " -f ",
+        "curl | sh", "curl|sh", "wget | sh", "wget|sh", "/etc/shadow", "/etc/passwd",
+        ".ssh/", "id_rsa", "id_ed25519", "authorization:", "api_key", "api-key",
+        "secret_access_key", "disable-defender", "set-mppreference", "tamper protection",
+        "endpoint protection", "--no-verify", "--force-with-lease", "--force", " -f ",
     ];
     if DENIED_FRAGMENTS
         .iter()
@@ -228,12 +173,7 @@ pub(crate) fn sandboxed_command(
         let mut command = Command::new("bwrap");
         command
             .args([
-                "--die-with-parent",
-                "--new-session",
-                "--unshare-net",
-                "--ro-bind",
-                "/",
-                "/",
+                "--die-with-parent", "--new-session", "--unshare-net", "--ro-bind", "/", "/",
                 "--bind",
             ])
             .arg(&root)
@@ -247,23 +187,92 @@ pub(crate) fn sandboxed_command(
             .args(args);
         output_with_timeout(&mut command, "Linux bubblewrap sandbox")
     }
-    #[cfg(not(target_os = "linux"))]
+    #[cfg(target_os = "macos")]
     {
         let root = repo.canonicalize()?;
-        #[cfg(windows)]
-        if program.eq_ignore_ascii_case("ls") {
-            let mut command = Command::new("cmd");
-            command.args(["/C", "dir"]).current_dir(root);
-            return output_with_timeout(&mut command, "Windows directory listing");
-        }
+        let profile = format!(
+            "(version 1)\n(deny default)\n(allow process-exec* process-fork)\n\
+             (allow file-read* (subpath \"/\"))\n\
+             (allow file-write* (subpath \"{}\") (subpath \"/tmp\") (subpath \"/private/tmp\"))\n\
+             (deny network*)\n",
+            sandbox_profile_string(&root)
+        );
+        let profile_path = std::env::temp_dir().join(format!(
+            "medusa-sandbox-{}-{}.sb",
+            std::process::id(),
+            time::OffsetDateTime::now_utc().unix_timestamp_nanos()
+        ));
+        fs::write(&profile_path, profile)?;
+        let mut command = Command::new("sandbox-exec");
+        command
+            .arg("-f")
+            .arg(&profile_path)
+            .arg(program)
+            .args(args)
+            .current_dir(&root);
+        let result = output_with_timeout(&mut command, "macOS sandbox-exec sandbox");
+        let _ = fs::remove_file(&profile_path);
+        result
+    }
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+
+        const CREATE_SUSPENDED: u32 = 0x0000_0004;
+        let root = repo.canonicalize()?;
+        let (program, args) = if program.eq_ignore_ascii_case("ls") {
+            ("cmd", vec!["/C".to_owned(), "dir".to_owned()])
+        } else {
+            (program, args.to_vec())
+        };
+        let mut command = Command::new(program);
+        command
+            .args(args)
+            .current_dir(root)
+            .creation_flags(CREATE_SUSPENDED)
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped());
+        let child = command.spawn().map_err(|error| {
+            MedusaError::new(
+                ErrorCode::DependencyUnavailable,
+                ErrorCategory::Environment,
+                format!("Windows contained command unavailable: {error}"),
+            )
+        })?;
+        let job = medusa_process_containment::WindowsJob::assign(&child).map_err(|error| {
+            MedusaError::new(
+                ErrorCode::ToolExecutionFailed,
+                ErrorCategory::Execution,
+                format!("Windows Job Object assignment failed: {error}"),
+            )
+        })?;
+        job.resume(&child).map_err(|error| {
+            MedusaError::new(
+                ErrorCode::ToolExecutionFailed,
+                ErrorCategory::Execution,
+                format!("Windows contained command could not resume: {error}"),
+            )
+        })?;
+        collect_child_with_timeout(child, "Windows Job Object containment", Some(&job))
+    }
+    #[cfg(not(any(target_os = "linux", target_os = "macos", windows)))]
+    {
+        let root = repo.canonicalize()?;
         let mut command = Command::new(program);
         command.args(args).current_dir(root);
         output_with_timeout(&mut command, "local shell command")
     }
 }
 
+#[cfg(target_os = "macos")]
+fn sandbox_profile_string(path: &Path) -> String {
+    path.to_string_lossy()
+        .replace('\\', "\\\\")
+        .replace('"', "\\\"")
+}
+
 fn output_with_timeout(command: &mut Command, description: &str) -> MedusaResult<Output> {
-    let mut child = command
+    let child = command
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()
@@ -274,6 +283,15 @@ fn output_with_timeout(command: &mut Command, description: &str) -> MedusaResult
                 format!("{description} unavailable: {error}"),
             )
         })?;
+    collect_child_with_timeout(child, description, None)
+}
+
+fn collect_child_with_timeout(
+    mut child: Child,
+    description: &str,
+    #[cfg(windows)] windows_job: Option<&medusa_process_containment::WindowsJob>,
+    #[cfg(not(windows))] _windows_job: Option<&()>,
+) -> MedusaResult<Output> {
     let started = Instant::now();
     loop {
         if child.try_wait()?.is_some() {
@@ -286,6 +304,10 @@ fn output_with_timeout(command: &mut Command, description: &str) -> MedusaResult
             });
         }
         if started.elapsed() >= SHELL_COMMAND_TIMEOUT {
+            #[cfg(windows)]
+            if let Some(job) = windows_job {
+                let _ = job.terminate();
+            }
             let _ = child.kill();
             let _ = child.wait();
             return Err(MedusaError::new(
