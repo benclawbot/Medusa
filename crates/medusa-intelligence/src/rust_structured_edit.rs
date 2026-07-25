@@ -165,7 +165,7 @@ impl<'a> RustStructuredEditPlanner<'a> {
     fn child_of_kind<'b>(&'b self, node: &'b RustAstNode, kind: &str) -> Option<&'b RustAstNode> { node.children.iter().filter_map(|id| self.document.node(*id)).find(|child| child.kind == kind) }
     fn node_name<'b>(&'b self, node: &'b RustAstNode) -> Option<&'b str> { node.children.iter().filter_map(|id| self.document.node(*id)).find_map(|child| matches!(child.kind.as_str(), "identifier" | "type_identifier" | "field_identifier").then(|| self.source.get(child.range.start_byte..child.range.end_byte)).flatten()) }
 
-    fn resolve_unique(&self, kind: &str, name: &str) -> MedusaResult<&RustAstNode> {
+    fn resolve_unique<'b>(&'b self, kind: &str, name: &str) -> MedusaResult<&'b RustAstNode> {
         let matches = self.document.nodes_of_kind(kind).filter(|node| self.node_name(node) == Some(name)).collect::<Vec<_>>();
         match matches.len() {
             0 => Err(invalid(format!("Rust AST target not found: {kind} {name}"))),
