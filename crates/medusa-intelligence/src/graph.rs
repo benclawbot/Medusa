@@ -57,7 +57,10 @@ impl SemanticGraph {
         let mut dependencies = BTreeSet::new();
 
         for references in index.references.values() {
-            for reference in references.iter().filter(|reference| !reference.is_definition) {
+            for reference in references
+                .iter()
+                .filter(|reference| !reference.is_definition)
+            {
                 let Some(targets) = definitions.get(&reference.name) else {
                     continue;
                 };
@@ -72,7 +75,8 @@ impl SemanticGraph {
                     if !matches!(target.kind, SymbolKind::Function | SymbolKind::Macro) {
                         continue;
                     }
-                    for caller in containing_functions(index, &reference.path, reference.start_byte) {
+                    for caller in containing_functions(index, &reference.path, reference.start_byte)
+                    {
                         if caller.path != target.path || caller.start_byte != target.start_byte {
                             calls.insert(CallEdge {
                                 caller: SymbolId::from(caller),
@@ -204,9 +208,12 @@ mod tests {
         let index = CodeIndex::build(repository.path()).expect("index");
         let graph = SemanticGraph::build(&index);
 
-        assert!(graph.calls.iter().any(|edge| {
-            edge.caller.name == "facade" && edge.callee.name == "answer"
-        }));
+        assert!(
+            graph
+                .calls
+                .iter()
+                .any(|edge| { edge.caller.name == "facade" && edge.callee.name == "answer" })
+        );
         assert!(graph.dependencies.iter().any(|edge| {
             edge.source == PathBuf::from("tests/facade.rs")
                 && edge.target == PathBuf::from("src/lib.rs")
