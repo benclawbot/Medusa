@@ -6,6 +6,7 @@ use std::{
 };
 
 use medusa_core::{ErrorCategory, ErrorCode, MedusaError, MedusaResult};
+use medusa_intelligence::{CodeIndex, ReviewImpact};
 
 use crate::tools::format_command_output;
 
@@ -18,6 +19,13 @@ pub(crate) fn targeted_verification_for_paths(
     repo: &Path,
     artifact_paths: &[String],
 ) -> MedusaResult<VerificationResult> {
+    let changed_paths = artifact_paths.iter().map(PathBuf::from).collect::<Vec<_>>();
+    if !changed_paths.is_empty()
+        && let Some(result) = semantic_verification(repo, &changed_paths)?
+    {
+        return Ok(result);
+    }
+
     #[cfg(windows)]
     let command = if repo.join("verify.ps1").is_file() {
         Some(("powershell", vec!["-NoProfile", "-File", "verify.ps1"]))
@@ -53,6 +61,110 @@ pub(crate) fn targeted_verification_for_paths(
         passed: output.status.success(),
         evidence,
     })
+}
+
+fn semantic_verification(
+    repo: &Path,
+    changed_paths: &[PathBuf],
+) -> MedusaResult<Option<VerificationResult>> {
+    let index = match CodeIndex::build(repo) {
+        Ok(index) => index,
+        Err(_) => return Ok(None),
+    };
+    let impact = ReviewImpact::analyze(&index, changed_paths);
+    if impact.validation.commands.is_empty() {
+        return Ok(None);
+    }
+
+    let mut passed = true;
+    let mut evidence = vec![impact.reviewer_context()];
+    evidence.extend(
+        impact
+            .validation
+            .reasons
+            .iter()
+            .map(|reason| format!("validation_reason={reason}")),
+    );
+
+    for command in &impact.validation.commands {
+        let argv = parse_command_line(command).ok_or_else(|| {
+            MedusaError::new(
+                ErrorCode::InvalidConfiguration,
+                ErrorCategory::Validation,
+                format!("invalid semantic verification command: {command}"),
+            )
+        })?;
+        let (program, args) = argv.split_first().ok_or_else(|| {
+            MedusaError::new(
+                ErrorCode::InvalidConfiguration,
+                ErrorCategory::Validation,
+                "semantic verification command was empty",
+            )
+        })?;
+        let program = platform_program(program);
+        let output = Command::new(program)
+            .args(args)
+            .current_dir(repo)
+            .output()
+            .map_err(|error| command_error(program, error))?;
+        evidence.push(format!("semantic_command={command}"));
+        append_stream_evidence(&mut evidence, "stdout", &output.stdout);
+        append_stream_evidence(&mut evidence, "stderr", &output.stderr);
+        evidence.push(format!("exit_status={}", output.status));
+        passed &= output.status.success();
+    }
+
+    Ok(Some(VerificationResult { passed, evidence }))
+}
+
+fn parse_command_line(command: &str) -> Option<Vec<String>> {
+    let mut args = Vec::new();
+    let mut current = String::new();
+    let mut quote = None;
+    let mut escaped = false;
+
+    for character in command.chars() {
+        if escaped {
+            current.push(character);
+            escaped = false;
+            continue;
+        }
+        if character == '\\' && quote != Some('\'') {
+            escaped = true;
+            continue;
+        }
+        if matches!(character, '\'' | '"') {
+            if quote == Some(character) {
+                quote = None;
+            } else if quote.is_none() {
+                quote = Some(character);
+            } else {
+                current.push(character);
+            }
+            continue;
+        }
+        if character.is_whitespace() && quote.is_none() {
+            if !current.is_empty() {
+                args.push(std::mem::take(&mut current));
+            }
+        } else {
+            current.push(character);
+        }
+    }
+    if escaped || quote.is_some() {
+        return None;
+    }
+    if !current.is_empty() {
+        args.push(current);
+    }
+    Some(args)
+}
+
+fn append_stream_evidence(evidence: &mut Vec<String>, stream: &str, bytes: &[u8]) {
+    let text = String::from_utf8_lossy(bytes);
+    for line in text.lines().filter(|line| !line.trim().is_empty()) {
+        evidence.push(format!("{stream}={line}"));
+    }
 }
 
 fn inferred_command(repo: &Path) -> MedusaResult<Option<(&'static str, Vec<&'static str>)>> {
@@ -226,6 +338,30 @@ mod tests {
     use std::fs;
 
     use super::*;
+
+    #[test]
+    fn parses_generated_validation_commands_without_a_shell() {
+        assert_eq!(
+            parse_command_line("cargo test -p widget --test api"),
+            Some(vec![
+                "cargo".to_owned(),
+                "test".to_owned(),
+                "-p".to_owned(),
+                "widget".to_owned(),
+                "--test".to_owned(),
+                "api".to_owned(),
+            ])
+        );
+        assert_eq!(
+            parse_command_line("python -m pytest \"tests/my test.py\""),
+            Some(vec![
+                "python".to_owned(),
+                "-m".to_owned(),
+                "pytest".to_owned(),
+                "tests/my test.py".to_owned(),
+            ])
+        );
+    }
 
     #[test]
     fn static_site_without_test_script_verifies_locally() {
