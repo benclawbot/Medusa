@@ -1,7 +1,10 @@
 use std::{
     env, fs,
     io::{self, IsTerminal, Write},
+    net::{SocketAddr, TcpStream},
     path::PathBuf,
+    process::Command,
+    time::Duration,
 };
 
 use medusa_core::{ErrorCategory, ErrorCode, MedusaError, MedusaResult};
@@ -81,6 +84,11 @@ pub(crate) fn configure_interactive() -> MedusaResult<()> {
                 "omniroute",
                 "OmniRoute managed/existing gateway (recommended)",
             ),
+            (
+                "chatgpt-oauth",
+                "ChatGPT OAuth via local openai-oauth gateway",
+            ),
+            ("openai-api", "OpenAI API key"),
             ("openai-compatible", "Existing OpenAI-compatible endpoint"),
             ("direct", "Direct provider"),
             ("local", "Local model runtime"),
@@ -116,10 +124,11 @@ pub(crate) fn configure_interactive() -> MedusaResult<()> {
 
     if matches!(
         profile.connection.as_str(),
-        "omniroute" | "openai-compatible" | "local"
+        "omniroute" | "chatgpt-oauth" | "openai-compatible" | "local"
     ) {
         let default_url = match profile.connection.as_str() {
             "omniroute" => "http://127.0.0.1:20128/v1",
+            "chatgpt-oauth" => "http://127.0.0.1:10531/v1",
             "local" => "http://127.0.0.1:11434/v1",
             _ => profile
                 .base_url
@@ -131,18 +140,31 @@ pub(crate) fn configure_interactive() -> MedusaResult<()> {
         profile.base_url = None;
     }
 
-    profile.auth = choose(
-        "Authentication",
-        &[
-            ("oauth", "OAuth / browser sign-in"),
-            ("api-key", "API key"),
-            ("existing", "Existing environment or gateway credentials"),
-            ("none", "No authentication"),
-        ],
-        &profile.auth,
-    )?;
+    if profile.connection == "chatgpt-oauth" {
+        profile.provider = "openai-oauth".into();
+        profile.auth = "none".into();
+        profile.base_url = Some("http://127.0.0.1:10531/v1".into());
+    } else if profile.connection == "openai-api" {
+        profile.provider = "openai".into();
+        profile.auth = "api-key".into();
+        profile.base_url = Some("https://api.openai.com/v1".into());
+    } else {
+        profile.auth = choose(
+            "Authentication",
+            &[
+                ("oauth", "OAuth / browser sign-in"),
+                ("api-key", "API key"),
+                ("existing", "Existing environment or gateway credentials"),
+                ("none", "No authentication"),
+            ],
+            &profile.auth,
+        )?;
+    }
     profile.configured = true;
     save_profile(&profile)?;
+    if profile.connection == "chatgpt-oauth" {
+        ensure_chatgpt_oauth_gateway()?;
+    }
 
     println!("\nConfiguration saved to {}", config_path()?.display());
     print_auth_guidance(&profile);
@@ -246,7 +268,38 @@ fn model_default<'a>(connection: &str, current: &'a str) -> &'a str {
     }
 }
 
+fn ensure_chatgpt_oauth_gateway() -> MedusaResult<()> {
+    let address: SocketAddr = "127.0.0.1:10531"
+        .parse()
+        .map_err(|error| config_error(format!("invalid OAuth gateway address: {error}")))?;
+    if TcpStream::connect_timeout(&address, Duration::from_millis(300)).is_ok() {
+        return Ok(());
+    }
+
+    println!("Starting the local ChatGPT OAuth gateway...");
+    let status = Command::new("npx")
+        .args(["--yes", "openai-oauth@latest", "--detach"])
+        .status()
+        .map_err(|error| {
+            config_error(format!(
+                "could not start openai-oauth with npx: {error}. Install Node.js or start the gateway manually"
+            ))
+        })?;
+    if !status.success() {
+        return Err(config_error(format!(
+            "openai-oauth exited with status {status}; run `npx openai-oauth@latest login` and retry"
+        )));
+    }
+    Ok(())
+}
+
 fn print_auth_guidance(profile: &ProviderProfile) {
+    if profile.connection == "chatgpt-oauth" {
+        println!(
+            "ChatGPT OAuth is managed by the loopback gateway at http://127.0.0.1:10531/v1; Medusa never reads the OAuth credential file."
+        );
+        return;
+    }
     match profile.auth.as_str() {
         "oauth" if profile.connection == "omniroute" => println!(
             "Complete provider OAuth in the OmniRoute dashboard; Medusa will use the local gateway credential."
