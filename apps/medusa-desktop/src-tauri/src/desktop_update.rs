@@ -52,10 +52,7 @@ fn schedule_update(app: &tauri::AppHandle) -> MedusaResult<()> {
         return Err(MedusaError::new(
             ErrorCode::DependencyUnavailable,
             ErrorCategory::Environment,
-            format!(
-                "updating from main requires: {}",
-                missing.join(", ")
-            ),
+            format!("updating from main requires: {}", missing.join(", ")),
         ));
     }
 
@@ -193,7 +190,10 @@ mod tests {
     #[cfg(windows)]
     #[test]
     fn windows_helper_builds_main_then_replaces_and_restarts() {
-        let script = windows_update_script(4242, Path::new(r"C:\Program Files\Medusa\medusa-desktop.exe"));
+        let script = windows_update_script(
+            4242,
+            Path::new(r"C:\Program Files\Medusa\medusa-desktop.exe"),
+        );
         assert!(script.contains("git clone --depth 1 --branch main"));
         assert!(script.contains("npm.cmd ci"));
         assert!(script.contains("cargo build --release"));
