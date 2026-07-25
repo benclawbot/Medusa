@@ -8,6 +8,8 @@ use crate::commands::{ModelConfiguration, SlashCommand};
 
 pub use medusa_runtime::{RuntimeActivity, RuntimeActivityKind, RuntimeError, SubmitDisposition};
 
+const MAX_PRESENTED_ACTIVITY_DETAILS: usize = 6;
+
 #[derive(Debug)]
 pub enum RuntimeEvent {
     Started,
@@ -200,6 +202,7 @@ fn map_event(event: medusa_runtime::RuntimeEvent) -> RuntimeEvent {
 }
 
 fn presentation_activity(mut activity: RuntimeActivity) -> RuntimeActivity {
+    compact_activity_details(&mut activity.details);
     let (kind, label) = match activity.kind {
         RuntimeActivityKind::Assistant if !activity.details.is_empty() => {
             (RuntimeActivityKind::Progress, Some("Assistant"))
@@ -215,6 +218,17 @@ fn presentation_activity(mut activity: RuntimeActivity) -> RuntimeActivity {
         activity.title = format!("{label} · {}", activity.title);
     }
     activity
+}
+
+fn compact_activity_details(details: &mut Vec<String>) {
+    details.retain(|detail| !detail.trim().is_empty());
+    if details.len() <= MAX_PRESENTED_ACTIVITY_DETAILS {
+        return;
+    }
+
+    let omitted = details.len() - (MAX_PRESENTED_ACTIVITY_DETAILS - 1);
+    details.truncate(MAX_PRESENTED_ACTIVITY_DETAILS - 1);
+    details.push(format!("… {omitted} more lines"));
 }
 
 fn tool_activity_label(title: &str) -> &'static str {
@@ -308,6 +322,30 @@ mod tests {
         assert_eq!(tool_activity_label("Fetch release metadata"), "Fetch");
         assert_eq!(tool_activity_label("Inspect repository tree"), "Read");
         assert_eq!(tool_activity_label("Invoke custom tool"), "Tool");
+    }
+
+    #[test]
+    fn verbose_activity_details_are_compacted() {
+        let activity = presentation_activity(RuntimeActivity {
+            id: Some("tool-verbose".to_owned()),
+            kind: RuntimeActivityKind::Tool,
+            title: "Run workspace tests".to_owned(),
+            details: (1..=10).map(|line| format!("line {line}")).collect(),
+        });
+        assert_eq!(activity.details.len(), MAX_PRESENTED_ACTIVITY_DETAILS);
+        assert_eq!(activity.details[4], "line 5");
+        assert_eq!(activity.details[5], "… 5 more lines");
+    }
+
+    #[test]
+    fn empty_activity_details_are_removed_before_presentation() {
+        let activity = presentation_activity(RuntimeActivity {
+            id: Some("tool-empty".to_owned()),
+            kind: RuntimeActivityKind::Tool,
+            title: "Read config".to_owned(),
+            details: vec!["".to_owned(), "  ".to_owned(), "config.toml".to_owned()],
+        });
+        assert_eq!(activity.details, vec!["config.toml"]);
     }
 
     #[test]
