@@ -9,6 +9,8 @@ mod patch;
 mod retrieval;
 mod review;
 mod rust_ast;
+#[path = "rust_symbols_v2.rs"]
+mod rust_symbols;
 pub mod snapshot;
 mod support;
 mod symbol_impact;
@@ -27,6 +29,10 @@ pub use review::ReviewImpact;
 pub use rust_ast::{
     RustAstFile, RustAstIndex, RustAstNode, RustAstNodeId, SourcePosition, SourceRange,
     parse_rust_file,
+};
+pub use rust_symbols::{
+    RustScope, RustScopeId, RustScopeKind, RustSymbol, RustSymbolId, RustSymbolKind,
+    RustSymbolTable,
 };
 pub use snapshot::{FileFingerprint, IndexSnapshot, SnapshotDelta};
 pub use symbol_impact::SymbolImpact;
