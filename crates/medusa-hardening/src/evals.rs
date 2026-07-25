@@ -28,7 +28,10 @@ impl CodingTaskOutcome {
             return Err("task identifier cannot be empty");
         }
         if self.oracle_digest.len() != 64
-            || !self.oracle_digest.bytes().all(|byte| byte.is_ascii_hexdigit())
+            || !self
+                .oracle_digest
+                .bytes()
+                .all(|byte| byte.is_ascii_hexdigit())
         {
             return Err("oracle digest must be SHA-256 hex");
         }
@@ -164,17 +167,21 @@ mod tests {
 
     #[test]
     fn accepts_improving_candidate() {
-        assert!(compare_outcomes(&outcome(900), &outcome(920), &EvaluationPolicy::default())
-            .expect("decision")
-            .accepted);
+        assert!(
+            compare_outcomes(&outcome(900), &outcome(920), &EvaluationPolicy::default())
+                .expect("decision")
+                .accepted
+        );
     }
 
     #[test]
     fn hard_correctness_gate_cannot_be_hidden() {
         let mut candidate = outcome(950);
         candidate.correctness_milli = 700;
-        assert!(!compare_outcomes(&outcome(900), &candidate, &EvaluationPolicy::default())
-            .expect("decision")
-            .accepted);
+        assert!(
+            !compare_outcomes(&outcome(900), &candidate, &EvaluationPolicy::default())
+                .expect("decision")
+                .accepted
+        );
     }
 }
