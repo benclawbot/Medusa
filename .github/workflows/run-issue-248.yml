@@ -6,8 +6,7 @@ on:
       - main
     paths:
       - '.github/workflows/run-issue-248.yml'
-      - '.github/workflows/implement-issue-248.yml'
-      - '.github/scripts/run_issue_248.py'
+      - '.github/scripts/implement_issue_248.py'
 
 permissions:
   contents: write
@@ -22,14 +21,7 @@ jobs:
           ref: agent/tui-expandable-activity-details-v2
           fetch-depth: 1
       - name: Apply coordinated source transformation
-        run: python .github/scripts/run_issue_248.py
-      - name: Upload transformation traceback
-        if: failure()
-        uses: actions/upload-artifact@v4
-        with:
-          name: issue248-traceback
-          path: issue248-error.txt
-          if-no-files-found: error
+        run: python .github/scripts/implement_issue_248.py
       - uses: dtolnay/rust-toolchain@1.88.0
         with:
           components: rustfmt
@@ -39,7 +31,7 @@ jobs:
         run: cargo test -p medusa-tui
       - name: Commit implementation
         run: |
-          rm -f .github/workflows/run-issue-248.yml .github/workflows/implement-issue-248.yml .github/scripts/run_issue_248.py
+          rm -f .github/workflows/run-issue-248.yml .github/workflows/implement-issue-248.yml .github/scripts/run_issue_248.py .github/scripts/implement_issue_248.py issue248-error.txt
           git config user.name github-actions[bot]
           git config user.email 41898282+github-actions[bot]@users.noreply.github.com
           git add -A
