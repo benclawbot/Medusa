@@ -152,6 +152,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     println!("cargo:rerun-if-changed=src/engine_base.rs");
     println!("cargo:rerun-if-changed=src/autonomous_execution.rs");
     println!("cargo:rerun-if-changed=src/autonomous_engine.rs");
+    println!("cargo:rerun-if-changed=../medusa-multi-agent-scheduler/src/lib.rs");
     println!("cargo:rerun-if-changed=src/context_budget.rs");
     println!("cargo:rerun-if-changed=src/coding_policy.rs");
     println!("cargo:rerun-if-changed=src/repository_index.rs");
@@ -162,29 +163,11 @@ fn main() -> Result<(), Box<dyn Error>> {
     let manifest_dir = PathBuf::from(env::var("CARGO_MANIFEST_DIR")?);
     let source_path = manifest_dir.join("src/engine_base.rs");
     let source = fs::read_to_string(&source_path)?.replace("\r\n", "\n");
-    let engine = replace_once(
-        source,
-        ORIGINAL_REQUEST_BLOCK,
-        CONTEXT_RECOVERY_REQUEST_BLOCK,
-        "model request block",
-        &source_path,
-    )?;
-    let engine = replace_once(
-        engine,
-        ORIGINAL_USAGE_EVENT,
-        ACCOUNTED_USAGE_EVENT,
-        "model usage event",
-        &source_path,
-    )?;
-    let engine = replace_once(
-        engine,
-        ORIGINAL_TOOL_RESULT_BLOCK,
-        OBSERVED_TOOL_RESULT_BLOCK,
-        "tool result observation block",
-        &source_path,
-    )?;
+    let engine = replace_once(source, ORIGINAL_REQUEST_BLOCK, CONTEXT_RECOVERY_REQUEST_BLOCK, "model request block", &source_path)?;
+    let engine = replace_once(engine, ORIGINAL_USAGE_EVENT, ACCOUNTED_USAGE_EVENT, "model usage event", &source_path)?;
+    let engine = replace_once(engine, ORIGINAL_TOOL_RESULT_BLOCK, OBSERVED_TOOL_RESULT_BLOCK, "tool result observation block", &source_path)?;
     let generated = format!(
-        "mod autonomous_execution {{ include!(concat!(env!(\"CARGO_MANIFEST_DIR\"), \"/src/autonomous_execution.rs\")); }}\nmod context_budget {{ include!(concat!(env!(\"CARGO_MANIFEST_DIR\"), \"/src/context_budget.rs\")); }}\nmod coding_policy {{ include!(concat!(env!(\"CARGO_MANIFEST_DIR\"), \"/src/coding_policy.rs\")); }}\nmod repository_index {{ include!(concat!(env!(\"CARGO_MANIFEST_DIR\"), \"/src/repository_index.rs\")); }}\nmod world_model_observation {{ include!(concat!(env!(\"CARGO_MANIFEST_DIR\"), \"/src/world_model_observation.rs\")); }}\n{engine}\ninclude!(concat!(env!(\"CARGO_MANIFEST_DIR\"), \"/src/autonomous_engine.rs\"));"
+        "mod dynamic_scheduler {{ include!(concat!(env!(\"CARGO_MANIFEST_DIR\"), \"/../medusa-multi-agent-scheduler/src/lib.rs\")); }}\nmod autonomous_execution {{ use super::dynamic_scheduler as medusa_multi_agent_scheduler; include!(concat!(env!(\"CARGO_MANIFEST_DIR\"), \"/src/autonomous_execution.rs\")); }}\nmod context_budget {{ include!(concat!(env!(\"CARGO_MANIFEST_DIR\"), \"/src/context_budget.rs\")); }}\nmod coding_policy {{ include!(concat!(env!(\"CARGO_MANIFEST_DIR\"), \"/src/coding_policy.rs\")); }}\nmod repository_index {{ include!(concat!(env!(\"CARGO_MANIFEST_DIR\"), \"/src/repository_index.rs\")); }}\nmod world_model_observation {{ include!(concat!(env!(\"CARGO_MANIFEST_DIR\"), \"/src/world_model_observation.rs\")); }}\n{engine}\ninclude!(concat!(env!(\"CARGO_MANIFEST_DIR\"), \"/src/autonomous_engine.rs\"));"
     );
     let output_path = PathBuf::from(env::var("OUT_DIR")?).join("engine.rs");
     fs::write(output_path, generated)?;
