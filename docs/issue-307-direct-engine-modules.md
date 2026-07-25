@@ -4,6 +4,6 @@ This migration replaces `medusa-agent`'s build-time source rewriting with normal
 
 The migration preserves the exact generated engine implementation first, then validates it through formatting, Clippy, dependency policy, security audit, full workspace tests, documentation, and daemon/TUI integration on all configured platforms.
 
-The one-time migration workflow has removed itself after materializing `src/engine.rs`, and `build.rs` is deleted from the branch.
+The one-time migration workflows removed themselves after materializing `src/engine.rs` and restoring `autonomous_execution.rs` as a standalone module. `build.rs` is deleted, and production source files remain below the repository's 1,000-line ceiling.
 
 The pull request must use a regular merge commit because the migration and any validation fixes are intentionally separate commits.
