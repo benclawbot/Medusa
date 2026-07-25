@@ -148,8 +148,12 @@ impl PatchTransaction {
             validate_relative(&relative_path)?;
             let path = repo.join(&relative_path);
             let original = fs::read(&path)?;
-            let original_text = std::str::from_utf8(&original)
-                .map_err(|_| invalid(format!("patch target is not UTF-8: {}", relative_path.display())))?;
+            let original_text = std::str::from_utf8(&original).map_err(|_| {
+                invalid(format!(
+                    "patch target is not UTF-8: {}",
+                    relative_path.display()
+                ))
+            })?;
             let original_permissions = fs::metadata(&path)?.permissions();
             let before_hash = hash(&original);
             before_hashes.insert(relative_path.clone(), before_hash.clone());
@@ -165,7 +169,9 @@ impl PatchTransaction {
             for edit in &edits {
                 let actual = original_text
                     .get(edit.start_byte..edit.end_byte)
-                    .ok_or_else(|| invalid(format!("edit range outside {}", relative_path.display())))?;
+                    .ok_or_else(|| {
+                        invalid(format!("edit range outside {}", relative_path.display()))
+                    })?;
                 if actual != edit.expected {
                     return Err(invalid(format!(
                         "stale edit in {}: expected {:?}, found {:?}",
@@ -186,6 +192,7 @@ impl PatchTransaction {
             let backup = format!("{index}.before");
             let staged_name = format!("{index}.after");
             write_synced(&directory.join(&backup), &original)?;
+            fs::set_permissions(directory.join(&backup), original_permissions.clone())?;
             write_synced(&directory.join(&staged_name), &updated)?;
             fs::set_permissions(directory.join(&staged_name), original_permissions)?;
             entries.push(JournalEntry {
@@ -234,7 +241,9 @@ impl PatchTransaction {
 /// Recovers every non-terminal structured patch transaction to its exact pre-apply state.
 pub fn recover_patch_transactions(repo: &Path) -> MedusaResult<Vec<String>> {
     let mut recovered = Vec::new();
-    for directory in journal_directories(repo)? {
+    let mut directories = journal_directories(repo)?;
+    directories.reverse();
+    for directory in directories {
         let mut journal = load_journal(&directory)?;
         if journal.state.terminal() {
             continue;
@@ -247,8 +256,12 @@ pub fn recover_patch_transactions(repo: &Path) -> MedusaResult<Vec<String>> {
 
 /// Promotes applied transactions after verification, or restores them when verification fails.
 pub fn finalize_patch_transactions(repo: &Path, verified: bool) -> MedusaResult<Vec<String>> {
+    let mut directories = journal_directories(repo)?;
+    if !verified {
+        directories.reverse();
+    }
     let mut finalized = Vec::new();
-    for directory in journal_directories(repo)? {
+    for directory in directories {
         let mut journal = load_journal(&directory)?;
         if journal.state.terminal() {
             continue;
@@ -256,7 +269,6 @@ pub fn finalize_patch_transactions(repo: &Path, verified: bool) -> MedusaResult<
         if verified && journal.state == JournalState::Applied {
             journal.state = JournalState::Verified;
             persist_journal(&directory, &journal)?;
-            verify_after_hashes(repo, &journal)?;
             journal.state = JournalState::Committed;
             persist_journal(&directory, &journal)?;
         } else {
@@ -271,6 +283,9 @@ fn rollback(repo: &Path, directory: &Path, journal: &mut PatchJournal) -> Medusa
     journal.state = JournalState::RollingBack;
     persist_journal(directory, journal)?;
     for entry in journal.entries.iter().rev() {
+        if !journal.applied_paths.contains(&entry.path) {
+            continue;
+        }
         let destination = repo.join(&entry.path);
         replace_file(&directory.join(&entry.backup), &destination)?;
         let restored = fs::read(&destination)?;
@@ -285,26 +300,13 @@ fn rollback(repo: &Path, directory: &Path, journal: &mut PatchJournal) -> Medusa
     persist_journal(directory, journal)
 }
 
-fn verify_after_hashes(repo: &Path, journal: &PatchJournal) -> MedusaResult<()> {
-    for entry in &journal.entries {
-        let current = fs::read(repo.join(&entry.path))?;
-        if hash(&current) != entry.after_hash {
-            return Err(invalid(format!(
-                "verified transaction drifted before commit: {}",
-                entry.path.display()
-            )));
-        }
-    }
-    Ok(())
-}
-
 fn transaction_id(grouped: &BTreeMap<PathBuf, Vec<TextEdit>>) -> MedusaResult<String> {
     let timestamp = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map_err(|_| invalid("system clock is before the Unix epoch"))?
         .as_nanos();
     let payload = serde_json::to_vec(&(timestamp, grouped))?;
-    Ok(hash(&payload)[..24].to_owned())
+    Ok(format!("{timestamp:032x}-{}", &hash(&payload)[..16]))
 }
 
 fn journal_directory(repo: &Path, transaction_id: &str) -> PathBuf {
@@ -326,14 +328,19 @@ fn journal_directories(repo: &Path) -> MedusaResult<Vec<PathBuf>> {
 }
 
 fn load_journal(directory: &Path) -> MedusaResult<PatchJournal> {
-    let journal: PatchJournal = serde_json::from_slice(&fs::read(directory.join("journal.json"))?)?;
+    let journal: PatchJournal =
+        serde_json::from_slice(&fs::read(directory.join("journal.json"))?)?;
     if journal.schema != JOURNAL_SCHEMA {
         return Err(invalid(format!(
             "unsupported patch journal schema: {}",
             journal.schema
         )));
     }
-    if journal.transaction_id != directory.file_name().unwrap_or_default().to_string_lossy() {
+    let directory_id = directory
+        .file_name()
+        .and_then(|name| name.to_str())
+        .ok_or_else(|| invalid("patch journal directory is not valid UTF-8"))?;
+    if journal.transaction_id != directory_id {
         return Err(invalid("patch journal identity mismatch"));
     }
     Ok(journal)
@@ -379,21 +386,25 @@ fn sync_directory(path: &Path) -> MedusaResult<()> {
 mod tests {
     use super::*;
 
-    #[test]
-    fn failed_verification_restores_before_state() {
-        let directory = tempfile::tempdir().expect("tempdir");
-        fs::write(directory.path().join("file.rs"), "abcdef").expect("file");
+    fn replace(repo: &Path, expected: &str, replacement: &str) {
         let mut transaction = PatchTransaction::new();
         transaction
             .add_edit(TextEdit {
                 path: "file.rs".into(),
                 start_byte: 0,
-                end_byte: 3,
-                expected: "abc".into(),
-                replacement: "xyz".into(),
+                end_byte: expected.len(),
+                expected: expected.into(),
+                replacement: replacement.into(),
             })
             .expect("edit");
-        transaction.commit(directory.path()).expect("apply");
+        transaction.commit(repo).expect("apply");
+    }
+
+    #[test]
+    fn failed_verification_restores_before_state() {
+        let directory = tempfile::tempdir().expect("tempdir");
+        fs::write(directory.path().join("file.rs"), "abcdef").expect("file");
+        replace(directory.path(), "abc", "xyz");
 
         finalize_patch_transactions(directory.path(), false).expect("rollback");
 
@@ -407,23 +418,52 @@ mod tests {
     fn startup_recovery_is_idempotent() {
         let directory = tempfile::tempdir().expect("tempdir");
         fs::write(directory.path().join("file.rs"), "abcdef").expect("file");
-        let mut transaction = PatchTransaction::new();
-        transaction
-            .add_edit(TextEdit {
-                path: "file.rs".into(),
-                start_byte: 3,
-                end_byte: 6,
-                expected: "def".into(),
-                replacement: "xyz".into(),
-            })
-            .expect("edit");
-        transaction.commit(directory.path()).expect("apply");
+        replace(directory.path(), "abc", "xyz");
 
-        assert_eq!(recover_patch_transactions(directory.path()).expect("recover").len(), 1);
-        assert!(recover_patch_transactions(directory.path()).expect("recover again").is_empty());
+        assert_eq!(
+            recover_patch_transactions(directory.path())
+                .expect("recover")
+                .len(),
+            1
+        );
+        assert!(
+            recover_patch_transactions(directory.path())
+                .expect("recover again")
+                .is_empty()
+        );
         assert_eq!(
             fs::read_to_string(directory.path().join("file.rs")).expect("file"),
             "abcdef"
+        );
+    }
+
+    #[test]
+    fn stacked_transactions_rollback_newest_first() {
+        let directory = tempfile::tempdir().expect("tempdir");
+        fs::write(directory.path().join("file.rs"), "aaa").expect("file");
+        replace(directory.path(), "aaa", "bbb");
+        replace(directory.path(), "bbb", "ccc");
+
+        finalize_patch_transactions(directory.path(), false).expect("rollback");
+
+        assert_eq!(
+            fs::read_to_string(directory.path().join("file.rs")).expect("file"),
+            "aaa"
+        );
+    }
+
+    #[test]
+    fn verification_commit_accepts_formatter_changes() {
+        let directory = tempfile::tempdir().expect("tempdir");
+        fs::write(directory.path().join("file.rs"), "aaa").expect("file");
+        replace(directory.path(), "aaa", "bbb");
+        fs::write(directory.path().join("file.rs"), "bbb\n").expect("formatted");
+
+        finalize_patch_transactions(directory.path(), true).expect("commit");
+
+        assert_eq!(
+            fs::read_to_string(directory.path().join("file.rs")).expect("file"),
+            "bbb\n"
         );
     }
 }
