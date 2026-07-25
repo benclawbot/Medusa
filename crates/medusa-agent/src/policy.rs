@@ -83,11 +83,49 @@ pub(crate) fn validate_shell_command_hard_denials(
         .unwrap_or(program)
         .to_ascii_lowercase();
     const DENIED_PROGRAMS: &[&str] = &[
-        "rm", "sudo", "doas", "shutdown", "reboot", "halt", "poweroff", "mkfs", "dd",
-        "mount", "umount", "chown", "chmod", "kill", "pkill", "killall", "systemctl",
-        "launchctl", "reg", "reg.exe", "sc", "sc.exe", "netsh", "curl", "wget", "nc",
-        "ncat", "socat", "ssh", "scp", "sftp", "rsync", "env", "printenv", "set",
-        "bash", "sh", "zsh", "fish", "cmd", "cmd.exe", "powershell", "pwsh",
+        "rm",
+        "sudo",
+        "doas",
+        "shutdown",
+        "reboot",
+        "halt",
+        "poweroff",
+        "mkfs",
+        "dd",
+        "mount",
+        "umount",
+        "chown",
+        "chmod",
+        "kill",
+        "pkill",
+        "killall",
+        "systemctl",
+        "launchctl",
+        "reg",
+        "reg.exe",
+        "sc",
+        "sc.exe",
+        "netsh",
+        "curl",
+        "wget",
+        "nc",
+        "ncat",
+        "socat",
+        "ssh",
+        "scp",
+        "sftp",
+        "rsync",
+        "env",
+        "printenv",
+        "set",
+        "bash",
+        "sh",
+        "zsh",
+        "fish",
+        "cmd",
+        "cmd.exe",
+        "powershell",
+        "pwsh",
     ];
     if DENIED_PROGRAMS.contains(&basename.as_str()) {
         return Err(policy_denied(format!("hard-denied command: {program}")));
@@ -95,10 +133,27 @@ pub(crate) fn validate_shell_command_hard_denials(
 
     let normalized = args.join(" ").to_ascii_lowercase();
     const DENIED_FRAGMENTS: &[&str] = &[
-        "curl | sh", "curl|sh", "wget | sh", "wget|sh", "/etc/shadow", "/etc/passwd",
-        ".ssh/", "id_rsa", "id_ed25519", "authorization:", "api_key", "api-key",
-        "secret_access_key", "disable-defender", "set-mppreference", "tamper protection",
-        "endpoint protection", "--no-verify", "--force-with-lease", "--force", " -f ",
+        "curl | sh",
+        "curl|sh",
+        "wget | sh",
+        "wget|sh",
+        "/etc/shadow",
+        "/etc/passwd",
+        ".ssh/",
+        "id_rsa",
+        "id_ed25519",
+        "authorization:",
+        "api_key",
+        "api-key",
+        "secret_access_key",
+        "disable-defender",
+        "set-mppreference",
+        "tamper protection",
+        "endpoint protection",
+        "--no-verify",
+        "--force-with-lease",
+        "--force",
+        " -f ",
     ];
     if DENIED_FRAGMENTS
         .iter()
@@ -173,7 +228,12 @@ pub(crate) fn sandboxed_command(
         let mut command = Command::new("bwrap");
         command
             .args([
-                "--die-with-parent", "--new-session", "--unshare-net", "--ro-bind", "/", "/",
+                "--die-with-parent",
+                "--new-session",
+                "--unshare-net",
+                "--ro-bind",
+                "/",
+                "/",
                 "--bind",
             ])
             .arg(&root)
