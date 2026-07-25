@@ -247,7 +247,34 @@ pub(crate) fn sandboxed_command(
             .args(args);
         output_with_timeout(&mut command, "Linux bubblewrap sandbox")
     }
-    #[cfg(not(target_os = "linux"))]
+    #[cfg(target_os = "macos")]
+    {
+        let root = repo.canonicalize()?;
+        let profile = format!(
+            "(version 1)\n(deny default)\n(allow process-exec* process-fork)\n\
+             (allow file-read* (subpath \"/\"))\n\
+             (allow file-write* (subpath \"{}\") (subpath \"/tmp\") (subpath \"/private/tmp\"))\n\
+             (deny network*)\n",
+            sandbox_profile_string(&root)
+        );
+        let profile_path = std::env::temp_dir().join(format!(
+            "medusa-sandbox-{}-{}.sb",
+            std::process::id(),
+            time::OffsetDateTime::now_utc().unix_timestamp_nanos()
+        ));
+        fs::write(&profile_path, profile)?;
+        let mut command = Command::new("sandbox-exec");
+        command
+            .arg("-f")
+            .arg(&profile_path)
+            .arg(program)
+            .args(args)
+            .current_dir(&root);
+        let result = output_with_timeout(&mut command, "macOS sandbox-exec sandbox");
+        let _ = fs::remove_file(&profile_path);
+        result
+    }
+    #[cfg(not(any(target_os = "linux", target_os = "macos")))]
     {
         let root = repo.canonicalize()?;
         #[cfg(windows)]
@@ -260,6 +287,13 @@ pub(crate) fn sandboxed_command(
         command.args(args).current_dir(root);
         output_with_timeout(&mut command, "local shell command")
     }
+}
+
+#[cfg(target_os = "macos")]
+fn sandbox_profile_string(path: &Path) -> String {
+    path.to_string_lossy()
+        .replace('\\', "\\\\")
+        .replace('"', "\\\"")
 }
 
 fn output_with_timeout(command: &mut Command, description: &str) -> MedusaResult<Output> {
