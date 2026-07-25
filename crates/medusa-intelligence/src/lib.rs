@@ -18,6 +18,7 @@ mod resolution;
 mod retrieval;
 mod review;
 pub mod snapshot;
+mod structured_edit;
 mod support;
 mod symbol_impact;
 mod symbol_table;
@@ -29,9 +30,7 @@ pub use graph::{CallEdge, DependencyEdge, SemanticGraph, SymbolId};
 pub use impact::{TestImpact, select_tests, select_tests_with_index};
 pub use index::IndexRefresh;
 pub use language::{CodeIndex, Language, Reference, Symbol, SymbolKind};
-pub use lsp::{
-    LspClient, LspError, LspServerConfig, LspServerManager, LspServerState,
-};
+pub use lsp::{LspClient, LspError, LspServerConfig, LspServerManager, LspServerState};
 pub use lsp_actions::{
     LspAnnotatedTextEdit, LspCapabilityResult, LspChangeAnnotation, LspCodeAction, LspCommand,
     LspCommandPolicy, LspRenameComparison, LspResourceOperation, LspWorkspaceEdit,
@@ -60,6 +59,11 @@ pub use resolution::{ResolutionStatus, RustResolutionIndex, RustResolvedReferenc
 pub use retrieval::{RetrievalBudget, RetrievalExclusion, RetrievalReport, RetrievalResult};
 pub use review::ReviewImpact;
 pub use snapshot::{FileFingerprint, IndexSnapshot, SnapshotDelta};
+pub use structured_edit::{
+    EditIntent, EditPrecondition, EditProvenance, EditRange, EditSnapshot, FileOperation,
+    STRUCTURED_EDIT_SCHEMA, StructuredEditAudit, StructuredEditError, StructuredEditPlan,
+    StructuredTextEdit,
+};
 pub use symbol_impact::{RustImpactFile, RustSymbolImpact, analyze_rust_symbol_impact};
 pub use symbol_table::{
     RustScope, RustScopeKind, RustSymbol, RustSymbolId, RustSymbolKind, RustSymbolTable,
