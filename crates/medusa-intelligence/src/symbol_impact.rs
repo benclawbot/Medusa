@@ -84,7 +84,7 @@ impl SemanticGraph {
 mod tests {
     use std::{fs, path::PathBuf};
 
-    use crate::{CodeIndex, SemanticGraph};
+    use crate::{CodeIndex, SemanticGraph, SymbolId};
 
     #[test]
     fn exposes_reverse_call_graph_and_symbol_test_impact() {
@@ -109,19 +109,19 @@ mod tests {
 
         let index = CodeIndex::build(repository.path()).expect("index");
         let graph = SemanticGraph::build(&index);
-        let leaf = index
+        let leaf: SymbolId = index
             .definitions("leaf")
             .into_iter()
             .next()
             .map(Into::into)
             .expect("leaf");
-        let middle = index
+        let middle: SymbolId = index
             .definitions("middle")
             .into_iter()
             .next()
             .map(Into::into)
             .expect("middle");
-        let facade = index
+        let facade: SymbolId = index
             .definitions("facade")
             .into_iter()
             .next()
