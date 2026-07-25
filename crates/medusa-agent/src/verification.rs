@@ -1,14 +1,20 @@
 use std::{
     collections::BTreeSet,
-    fs,
+    fs::{self, File},
+    io::Read,
     path::{Component, Path, PathBuf},
-    process::Command,
+    process::{Command, ExitStatus, Stdio},
+    thread,
+    time::{Duration, Instant},
 };
 
 use medusa_core::{ErrorCategory, ErrorCode, MedusaError, MedusaResult};
 use medusa_intelligence::{CodeIndex, ReviewImpact};
 
-use crate::tools::format_command_output;
+const VERIFICATION_TIMEOUT: Duration = Duration::from_secs(300);
+const VERIFICATION_POLL_INTERVAL: Duration = Duration::from_millis(25);
+const MAX_STREAM_BYTES: usize = 16 * 1024;
+const MAX_STREAM_LINES: usize = 80;
 
 /// Runs deterministic repository-specific verification.
 pub fn targeted_verification(repo: &Path) -> MedusaResult<VerificationResult> {
@@ -50,17 +56,8 @@ pub(crate) fn targeted_verification_for_paths(
         ));
     };
     let program = platform_program(program);
-    let output = Command::new(program)
-        .args(&args)
-        .current_dir(repo)
-        .output()
-        .map_err(|error| command_error(program, error))?;
-    let mut evidence = format_command_output(program, &args, &output.stdout, &output.stderr);
-    evidence.push(format!("exit_status={}", output.status));
-    Ok(VerificationResult {
-        passed: output.status.success(),
-        evidence,
-    })
+    let output = run_supervised_command(repo, program, &args, VERIFICATION_TIMEOUT)?;
+    Ok(verification_result(program, &args, output))
 }
 
 fn semantic_verification(
@@ -102,19 +99,111 @@ fn semantic_verification(
             )
         })?;
         let program = platform_program(program);
-        let output = Command::new(program)
-            .args(args)
-            .current_dir(repo)
-            .output()
-            .map_err(|error| command_error(program, error))?;
+        let output = run_supervised_command(repo, program, args, VERIFICATION_TIMEOUT)?;
+        let result = verification_result(program, args, output);
         evidence.push(format!("semantic_command={command}"));
-        append_stream_evidence(&mut evidence, "stdout", &output.stdout);
-        append_stream_evidence(&mut evidence, "stderr", &output.stderr);
-        evidence.push(format!("exit_status={}", output.status));
-        passed &= output.status.success();
+        evidence.extend(result.evidence);
+        passed &= result.passed;
     }
 
     Ok(Some(VerificationResult { passed, evidence }))
+}
+
+fn run_supervised_command<S: AsRef<std::ffi::OsStr>>(
+    repo: &Path,
+    program: &str,
+    args: &[S],
+    timeout: Duration,
+) -> MedusaResult<SupervisedOutput> {
+    let id = ulid::Ulid::new();
+    let stdout_path = std::env::temp_dir().join(format!("medusa-verify-{id}.stdout"));
+    let stderr_path = std::env::temp_dir().join(format!("medusa-verify-{id}.stderr"));
+    let stdout_file = File::create(&stdout_path)?;
+    let stderr_file = File::create(&stderr_path)?;
+
+    let started = Instant::now();
+    let mut child = Command::new(program)
+        .args(args)
+        .current_dir(repo)
+        .stdin(Stdio::null())
+        .stdout(Stdio::from(stdout_file))
+        .stderr(Stdio::from(stderr_file))
+        .spawn()
+        .map_err(|error| command_error(program, error))?;
+
+    let (status, timed_out) = loop {
+        if let Some(status) = child.try_wait().map_err(|error| command_error(program, error))? {
+            break (status, false);
+        }
+        if started.elapsed() >= timeout {
+            let _ = child.kill();
+            let status = child.wait().map_err(|error| command_error(program, error))?;
+            break (status, true);
+        }
+        thread::sleep(VERIFICATION_POLL_INTERVAL);
+    };
+
+    let stdout = read_and_remove(&stdout_path)?;
+    let stderr = read_and_remove(&stderr_path)?;
+    Ok(SupervisedOutput {
+        status,
+        stdout,
+        stderr,
+        timed_out,
+        duration: started.elapsed(),
+    })
+}
+
+fn read_and_remove(path: &Path) -> MedusaResult<Vec<u8>> {
+    let mut bytes = Vec::new();
+    File::open(path)?.read_to_end(&mut bytes)?;
+    let _ = fs::remove_file(path);
+    Ok(bytes)
+}
+
+fn verification_result<S: AsRef<std::ffi::OsStr>>(
+    program: &str,
+    args: &[S],
+    output: SupervisedOutput,
+) -> VerificationResult {
+    let mut evidence = vec![format!("program={program}")];
+    evidence.extend(
+        args.iter()
+            .map(|arg| format!("arg={}", arg.as_ref().to_string_lossy())),
+    );
+    evidence.push(format!("duration_ms={}", output.duration.as_millis()));
+    evidence.push(format!("timed_out={}", output.timed_out));
+    append_bounded_stream_evidence(&mut evidence, "stdout", &output.stdout);
+    append_bounded_stream_evidence(&mut evidence, "stderr", &output.stderr);
+    evidence.push(format!("exit_status={}", output.status));
+    VerificationResult {
+        passed: !output.timed_out && output.status.success(),
+        evidence,
+    }
+}
+
+fn append_bounded_stream_evidence(evidence: &mut Vec<String>, stream: &str, bytes: &[u8]) {
+    let byte_truncated = bytes.len() > MAX_STREAM_BYTES;
+    let tail = if byte_truncated {
+        &bytes[bytes.len() - MAX_STREAM_BYTES..]
+    } else {
+        bytes
+    };
+    let text = String::from_utf8_lossy(tail);
+    let lines = text
+        .lines()
+        .filter(|line| !line.trim().is_empty())
+        .collect::<Vec<_>>();
+    let line_truncated = lines.len() > MAX_STREAM_LINES;
+    let start = lines.len().saturating_sub(MAX_STREAM_LINES);
+    for line in &lines[start..] {
+        evidence.push(format!("{stream}={line}"));
+    }
+    evidence.push(format!("{stream}_bytes={}", bytes.len()));
+    evidence.push(format!(
+        "{stream}_truncated={}",
+        byte_truncated || line_truncated
+    ));
 }
 
 fn parse_command_line(command: &str) -> Option<Vec<String>> {
@@ -158,13 +247,6 @@ fn parse_command_line(command: &str) -> Option<Vec<String>> {
         args.push(current);
     }
     Some(args)
-}
-
-fn append_stream_evidence(evidence: &mut Vec<String>, stream: &str, bytes: &[u8]) {
-    let text = String::from_utf8_lossy(bytes);
-    for line in text.lines().filter(|line| !line.trim().is_empty()) {
-        evidence.push(format!("{stream}={line}"));
-    }
 }
 
 fn inferred_command(repo: &Path) -> MedusaResult<Option<(&'static str, Vec<&'static str>)>> {
@@ -317,7 +399,7 @@ fn command_error(program: &str, error: std::io::Error) -> MedusaError {
     let message = if error.kind() == std::io::ErrorKind::NotFound {
         format!("verification program `{program}` was not found on PATH")
     } else {
-        format!("failed to start verification program `{program}`: {error}")
+        format!("failed to run verification program `{program}`: {error}")
     };
     MedusaError::new(
         ErrorCode::DependencyUnavailable,
@@ -326,7 +408,15 @@ fn command_error(program: &str, error: std::io::Error) -> MedusaError {
     )
 }
 
-/// Verification result with exact command evidence.
+struct SupervisedOutput {
+    status: ExitStatus,
+    stdout: Vec<u8>,
+    stderr: Vec<u8>,
+    timed_out: bool,
+    duration: Duration,
+}
+
+/// Verification result with bounded command evidence.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct VerificationResult {
     pub passed: bool,
@@ -364,6 +454,21 @@ mod tests {
     }
 
     #[test]
+    fn bounded_stream_preserves_failure_tail() {
+        let input = (0..120)
+            .map(|line| format!("line-{line}"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        let mut evidence = Vec::new();
+
+        append_bounded_stream_evidence(&mut evidence, "stderr", input.as_bytes());
+
+        assert!(evidence.iter().any(|line| line == "stderr=line-119"));
+        assert!(!evidence.iter().any(|line| line == "stderr=line-0"));
+        assert!(evidence.iter().any(|line| line == "stderr_truncated=true"));
+    }
+
+    #[test]
     fn static_site_without_test_script_verifies_locally() {
         let directory = tempfile::tempdir().expect("tempdir");
         fs::write(directory.path().join("package.json"), "{}").expect("package");
@@ -372,11 +477,8 @@ mod tests {
             "<!doctype html><html><head><link rel=\"stylesheet\" href=\"styles.css\"></head><body><script src=\"script.js\"></script></body></html>",
         )
         .expect("html");
-        fs::write(
-            directory.path().join("styles.css"),
-            "body { color: black; }",
-        )
-        .expect("css");
+        fs::write(directory.path().join("styles.css"), "body { color: black; }")
+            .expect("css");
         fs::write(directory.path().join("script.js"), "console.log('ready');").expect("js");
 
         let result = targeted_verification(directory.path()).expect("verification");
