@@ -1,5 +1,6 @@
 //! Syntax-aware indexing, reference discovery, transactional patches, and test impact.
 
+mod ast;
 mod format;
 mod graph;
 mod impact;
@@ -13,6 +14,7 @@ pub mod snapshot;
 mod support;
 mod symbol_impact;
 
+pub use ast::{ParseDiagnostic, RustAstDocument, RustAstNode, SourcePosition, SourceRange};
 pub use format::format_changed;
 pub use graph::{CallEdge, DependencyEdge, SemanticGraph, SymbolId};
 pub use impact::{TestImpact, select_tests, select_tests_with_index};
