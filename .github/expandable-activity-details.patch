@@ -141,16 +141,6 @@ index 4978fcf..0000000 100644
 +        activity_details_expanded: app.activity_details_expanded,
          spinner_frame: app.spinner_frame,
          selection: app.selection,
-@@ -86,7 +86,9 @@ pub(crate) fn transcript_lines(app: &AppState, width: u16) -> Vec<StyledLine> {
-             TranscriptEntry::Assistant(text) => lines.extend(
-                 super::markdown::markdown_block_lines("Medusa  ", Color::Magenta, text, width),
-             ),
--            TranscriptEntry::Activity(activity) => lines.extend(activity_lines(activity)),
-+            TranscriptEntry::Activity(activity) => {
-+                lines.extend(activity_lines(activity, app.activity_details_expanded));
-+            }
-             TranscriptEntry::System(message) => lines.push(system_line(message)),
-         }
 @@ -458,9 +460,9 @@ pub(super) fn render_frame(
              Color::Magenta,
              if app.is_running() {
@@ -169,14 +159,24 @@ index 0ca17d4..0000000 100644
  use super::*;
 +
 +const MAX_COMPACT_ACTIVITY_DETAILS: usize = 6;
-@@ -611,7 +613,7 @@ pub(super) fn system_line(message: &str) -> StyledLine {
+@@ -86,7 +88,9 @@ pub(crate) fn transcript_lines(app: &AppState, width: u16) -> Vec<StyledLine> {
+             TranscriptEntry::Assistant(text) => lines.extend(
+                 super::markdown::markdown_block_lines("Medusa  ", Color::Magenta, text, width),
+             ),
+-            TranscriptEntry::Activity(activity) => lines.extend(activity_lines(activity)),
++            TranscriptEntry::Activity(activity) => {
++                lines.extend(activity_lines(activity, app.activity_details_expanded));
++            }
+             TranscriptEntry::System(message) => lines.push(system_line(message)),
+         }
+@@ -611,7 +615,7 @@ pub(super) fn system_line(message: &str) -> StyledLine {
      }
  }
  
 -pub(crate) fn activity_lines(activity: &TranscriptActivity) -> Vec<StyledLine> {
 +pub(crate) fn activity_lines(activity: &TranscriptActivity, expanded: bool) -> Vec<StyledLine> {
      let color = match activity.kind {
-@@ -641,14 +643,29 @@ pub(crate) fn activity_lines(activity: &TranscriptActivity) -> Vec<StyledLine> {
+@@ -641,14 +645,29 @@ pub(crate) fn activity_lines(activity: &TranscriptActivity) -> Vec<StyledLine> {
      if !matches!(
          activity.kind,
          TranscriptActivityKind::Assistant | TranscriptActivityKind::Tool
