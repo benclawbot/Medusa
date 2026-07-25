@@ -7,6 +7,7 @@ mod impact;
 mod index;
 mod language;
 mod patch;
+mod resolution;
 mod retrieval;
 mod review;
 pub mod snapshot;
@@ -23,6 +24,7 @@ pub use patch::{
     PatchTransaction, TextEdit, TransactionReceipt, finalize_patch_transactions,
     recover_patch_transactions,
 };
+pub use resolution::{ResolutionStatus, RustResolutionIndex, RustResolvedReference};
 pub use retrieval::{RetrievalBudget, RetrievalExclusion, RetrievalReport, RetrievalResult};
 pub use review::ReviewImpact;
 pub use snapshot::{FileFingerprint, IndexSnapshot, SnapshotDelta};
