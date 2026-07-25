@@ -328,8 +328,7 @@ fn journal_directories(repo: &Path) -> MedusaResult<Vec<PathBuf>> {
 }
 
 fn load_journal(directory: &Path) -> MedusaResult<PatchJournal> {
-    let journal: PatchJournal =
-        serde_json::from_slice(&fs::read(directory.join("journal.json"))?)?;
+    let journal: PatchJournal = serde_json::from_slice(&fs::read(directory.join("journal.json"))?)?;
     if journal.schema != JOURNAL_SCHEMA {
         return Err(invalid(format!(
             "unsupported patch journal schema: {}",

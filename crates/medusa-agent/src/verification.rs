@@ -132,12 +132,17 @@ fn run_supervised_command<S: AsRef<std::ffi::OsStr>>(
         .map_err(|error| command_error(program, error))?;
 
     let (status, timed_out) = loop {
-        if let Some(status) = child.try_wait().map_err(|error| command_error(program, error))? {
+        if let Some(status) = child
+            .try_wait()
+            .map_err(|error| command_error(program, error))?
+        {
             break (status, false);
         }
         if started.elapsed() >= timeout {
             let _ = child.kill();
-            let status = child.wait().map_err(|error| command_error(program, error))?;
+            let status = child
+                .wait()
+                .map_err(|error| command_error(program, error))?;
             break (status, true);
         }
         thread::sleep(VERIFICATION_POLL_INTERVAL);
@@ -477,8 +482,11 @@ mod tests {
             "<!doctype html><html><head><link rel=\"stylesheet\" href=\"styles.css\"></head><body><script src=\"script.js\"></script></body></html>",
         )
         .expect("html");
-        fs::write(directory.path().join("styles.css"), "body { color: black; }")
-            .expect("css");
+        fs::write(
+            directory.path().join("styles.css"),
+            "body { color: black; }",
+        )
+        .expect("css");
         fs::write(directory.path().join("script.js"), "console.log('ready');").expect("js");
 
         let result = targeted_verification(directory.path()).expect("verification");
