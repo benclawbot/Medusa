@@ -285,6 +285,9 @@ mod tests {
         )
         .expect("transaction");
 
-        assert_eq!(fs::metadata(path).unwrap().permissions().mode() & 0o777, 0o750);
+        assert_eq!(
+            fs::metadata(path).unwrap().permissions().mode() & 0o777,
+            0o750
+        );
     }
 }
