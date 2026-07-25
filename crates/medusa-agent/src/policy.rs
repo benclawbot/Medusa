@@ -283,28 +283,6 @@ pub(crate) fn sandboxed_command(
     }
 }
 
-/// Runs a command without containment only after explicit approval.
-pub(crate) fn unsandboxed_command(
-    repo: &Path,
-    program: &str,
-    args: &[String],
-    explicitly_approved: bool,
-) -> MedusaResult<Output> {
-    if !explicitly_approved {
-        return Err(policy_denied(
-            "unsandboxed command execution requires explicit approval",
-        ));
-    }
-    let root = repo.canonicalize()?;
-    let mut command = Command::new(program);
-    command
-        .args(args)
-        .current_dir(root)
-        .env_clear()
-        .env("PATH", std::env::var_os("PATH").unwrap_or_default());
-    output_with_timeout(&mut command, "explicitly approved unsandboxed command")
-}
-
 #[cfg(target_os = "macos")]
 fn sandbox_profile_string(path: &Path) -> String {
     path.to_string_lossy()
@@ -374,13 +352,6 @@ fn policy_denied(message: impl Into<String>) -> MedusaError {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn unsandboxed_execution_requires_explicit_approval() {
-        let error = unsandboxed_command(Path::new("."), "cargo", &["--version".into()], false)
-            .expect_err("unapproved unsandboxed execution must fail");
-        assert_eq!(error.code, ErrorCode::PolicyDenied);
-    }
 
     #[cfg(not(any(target_os = "linux", target_os = "macos")))]
     #[test]

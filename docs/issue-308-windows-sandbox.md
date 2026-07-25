@@ -2,7 +2,7 @@
 
 The command API now fails closed on Windows and every platform without a verified containment backend. `sandboxed_command` never launches a bare child process. The structured `sandbox_unavailable` error includes the active backend and effective restrictions for diagnostics.
 
-A separately named `unsandboxed_command` path requires explicit approval, clears the inherited environment, and is not used by the sandboxed path.
+No unsandboxed fallback is exposed by the sandbox API. Unsupported platforms return before process launch.
 
 Focused tests verify that unapproved unsandboxed execution is denied and that unsupported platforms return `SandboxUnavailable` before process launch. Linux bubblewrap and macOS Seatbelt paths remain unchanged and continue through the repository's cross-platform CI.
 
