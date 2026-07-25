@@ -1,4 +1,7 @@
-use std::{collections::{BTreeMap, BTreeSet, VecDeque}, path::PathBuf};
+use std::{
+    collections::{BTreeMap, BTreeSet, VecDeque},
+    path::PathBuf,
+};
 
 use serde::{Deserialize, Serialize};
 
@@ -61,9 +64,14 @@ pub fn analyze_rust_symbol_impact(
         .iter()
         .filter(|id| {
             symbols.get(*id).is_some_and(|symbol| {
-                matches!(symbol.kind, RustSymbolKind::Function | RustSymbolKind::Method)
-                    && (symbol.name.starts_with("test_")
-                        || symbol.path.components().any(|part| part.as_os_str() == "tests"))
+                matches!(
+                    symbol.kind,
+                    RustSymbolKind::Function | RustSymbolKind::Method
+                ) && (symbol.name.starts_with("test_")
+                    || symbol
+                        .path
+                        .components()
+                        .any(|part| part.as_os_str() == "tests"))
             })
         })
         .cloned()
@@ -72,9 +80,15 @@ pub fn analyze_rust_symbol_impact(
     let mut commands = BTreeSet::new();
     let mut reasons = BTreeSet::new();
     for test in &test_symbols {
-        let Some(symbol) = symbols.get(test) else { continue };
+        let Some(symbol) = symbols.get(test) else {
+            continue;
+        };
         if let Some(package) = crate_name(&symbol.path) {
-            if symbol.path.components().any(|part| part.as_os_str() == "tests") {
+            if symbol
+                .path
+                .components()
+                .any(|part| part.as_os_str() == "tests")
+            {
                 if let Some(name) = symbol.path.file_stem().and_then(|name| name.to_str()) {
                     commands.insert(format!("cargo test -p {package} --test {name}"));
                 }
@@ -95,7 +109,10 @@ pub fn analyze_rust_symbol_impact(
         for path in &affected_paths {
             if let Some(package) = crate_name(path) {
                 commands.insert(format!("cargo test -p {package} --all-features"));
-                reasons.insert(format!("Affected symbol belongs to package {package}: {}", path.display()));
+                reasons.insert(format!(
+                    "Affected symbol belongs to package {package}: {}",
+                    path.display()
+                ));
             }
         }
     }
@@ -138,7 +155,10 @@ mod tests {
         let source = "fn leaf() {} fn middle() { leaf(); } fn test_leaf() { middle(); }";
         let (table, graph) = indexed("crates/widget/src/lib.rs", source);
         let leaf = table.find_simple("leaf")[0].id.clone();
-        let files = [RustImpactFile { symbols: &table, call_graph: &graph }];
+        let files = [RustImpactFile {
+            symbols: &table,
+            call_graph: &graph,
+        }];
         let impact = analyze_rust_symbol_impact(&files, &[leaf]);
 
         assert_eq!(impact.affected_symbols.len(), 3);
@@ -151,7 +171,10 @@ mod tests {
         let source = "fn leaf() {} fn caller() { leaf(); }";
         let (table, graph) = indexed("crates/widget/src/lib.rs", source);
         let leaf = table.find_simple("leaf")[0].id.clone();
-        let files = [RustImpactFile { symbols: &table, call_graph: &graph }];
+        let files = [RustImpactFile {
+            symbols: &table,
+            call_graph: &graph,
+        }];
         let impact = analyze_rust_symbol_impact(&files, &[leaf]);
 
         assert_eq!(impact.commands, vec!["cargo test -p widget --all-features"]);
@@ -162,7 +185,10 @@ mod tests {
         let source = "fn changed() {}";
         let (table, graph) = indexed("src/lib.rs", source);
         let changed = table.find_simple("changed")[0].id.clone();
-        let files = [RustImpactFile { symbols: &table, call_graph: &graph }];
+        let files = [RustImpactFile {
+            symbols: &table,
+            call_graph: &graph,
+        }];
         let impact = analyze_rust_symbol_impact(&files, &[changed]);
         let encoded = serde_json::to_string(&impact).expect("serialize");
         let decoded: RustSymbolImpact = serde_json::from_str(&encoded).expect("deserialize");

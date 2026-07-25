@@ -2,9 +2,7 @@ use std::collections::BTreeMap;
 
 use serde::{Deserialize, Serialize};
 
-use crate::{
-    RustAstDocument, RustSymbol, RustSymbolId, RustSymbolTable, SourceRange,
-};
+use crate::{RustAstDocument, RustSymbol, RustSymbolId, RustSymbolTable, SourceRange};
 
 /// Confidence/status for one reference resolution.
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -172,7 +170,11 @@ fn qualified_candidates(table: &RustSymbolTable, scope: usize, path: &str) -> Ve
 fn qualified_path(document: &RustAstDocument, source: &str, node_id: usize) -> Option<String> {
     let node = document.node(node_id)?;
     let parent = node.parent.and_then(|id| document.node(id))?;
-    if !matches!(parent.kind.as_str(), "scoped_identifier" | "scoped_type_identifier") {
+    if !matches!(
+        parent.kind.as_str(),
+        "scoped_identifier" | "scoped_type_identifier"
+    ) || node.range.end_byte != parent.range.end_byte
+    {
         return None;
     }
     source

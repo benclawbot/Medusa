@@ -1,4 +1,7 @@
-use std::{collections::BTreeMap, path::{Path, PathBuf}};
+use std::{
+    collections::BTreeMap,
+    path::{Path, PathBuf},
+};
 
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -31,9 +34,25 @@ pub struct LspAnnotatedTextEdit {
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum LspResourceOperation {
-    Create { path: PathBuf, overwrite: bool, ignore_if_exists: bool, annotation_id: Option<String> },
-    Rename { old_path: PathBuf, new_path: PathBuf, overwrite: bool, ignore_if_exists: bool, annotation_id: Option<String> },
-    Delete { path: PathBuf, recursive: bool, ignore_if_not_exists: bool, annotation_id: Option<String> },
+    Create {
+        path: PathBuf,
+        overwrite: bool,
+        ignore_if_exists: bool,
+        annotation_id: Option<String>,
+    },
+    Rename {
+        old_path: PathBuf,
+        new_path: PathBuf,
+        overwrite: bool,
+        ignore_if_exists: bool,
+        annotation_id: Option<String>,
+    },
+    Delete {
+        path: PathBuf,
+        recursive: bool,
+        ignore_if_not_exists: bool,
+        annotation_id: Option<String>,
+    },
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -86,11 +105,18 @@ pub fn prepare_rename(
     path: &Path,
     position: LspPosition,
 ) -> Result<LspCapabilityResult<Value>, LspError> {
-    let result = client.request("textDocument/prepareRename", json!({
-        "textDocument": { "uri": path_to_uri(path) },
-        "position": position,
-    }))?;
-    Ok(if result.is_null() { LspCapabilityResult::Unsupported } else { LspCapabilityResult::Supported(result) })
+    let result = client.request(
+        "textDocument/prepareRename",
+        json!({
+            "textDocument": { "uri": path_to_uri(path) },
+            "position": position,
+        }),
+    )?;
+    Ok(if result.is_null() {
+        LspCapabilityResult::Unsupported
+    } else {
+        LspCapabilityResult::Supported(result)
+    })
 }
 
 pub fn rename(
@@ -100,15 +126,20 @@ pub fn rename(
     position: LspPosition,
     new_name: &str,
 ) -> Result<LspCapabilityResult<LspWorkspaceEdit>, LspError> {
-    let result = client.request("textDocument/rename", json!({
-        "textDocument": { "uri": path_to_uri(path) },
-        "position": position,
-        "newName": new_name,
-    }))?;
+    let result = client.request(
+        "textDocument/rename",
+        json!({
+            "textDocument": { "uri": path_to_uri(path) },
+            "position": position,
+            "newName": new_name,
+        }),
+    )?;
     if result.is_null() {
         return Ok(LspCapabilityResult::Unsupported);
     }
-    Ok(LspCapabilityResult::Supported(normalize_workspace_edit(root, &result)?))
+    Ok(LspCapabilityResult::Supported(normalize_workspace_edit(
+        root, &result,
+    )?))
 }
 
 pub fn code_actions(
@@ -119,16 +150,25 @@ pub fn code_actions(
     diagnostics: Vec<Value>,
     only: &[String],
 ) -> Result<LspCapabilityResult<Vec<LspCodeAction>>, LspError> {
-    let result = client.request("textDocument/codeAction", json!({
-        "textDocument": { "uri": path_to_uri(path) },
-        "range": range,
-        "context": { "diagnostics": diagnostics, "only": only },
-    }))?;
+    let result = client.request(
+        "textDocument/codeAction",
+        json!({
+            "textDocument": { "uri": path_to_uri(path) },
+            "range": range,
+            "context": { "diagnostics": diagnostics, "only": only },
+        }),
+    )?;
     if result.is_null() {
         return Ok(LspCapabilityResult::Unsupported);
     }
-    let actions = result.as_array().ok_or_else(|| LspError::Protocol("code action response must be an array".to_owned()))?;
-    actions.iter().map(|value| normalize_code_action(root, value)).collect::<Result<Vec<_>, _>>().map(LspCapabilityResult::Supported)
+    let actions = result
+        .as_array()
+        .ok_or_else(|| LspError::Protocol("code action response must be an array".to_owned()))?;
+    actions
+        .iter()
+        .map(|value| normalize_code_action(root, value))
+        .collect::<Result<Vec<_>, _>>()
+        .map(LspCapabilityResult::Supported)
 }
 
 pub fn resolve_code_action(
@@ -152,32 +192,77 @@ pub fn execute_command_guarded(
     policy.execute(command)
 }
 
-pub fn compare_rename_paths(edit: &LspWorkspaceEdit, static_paths: &[PathBuf]) -> LspRenameComparison {
-    let mut lsp_paths = edit.operations.iter().filter_map(|operation| match operation {
-        LspWorkspaceOperation::Text(edit) => Some(edit.path.clone()),
-        LspWorkspaceOperation::Resource(LspResourceOperation::Create { path, .. }) => Some(path.clone()),
-        LspWorkspaceOperation::Resource(LspResourceOperation::Rename { old_path, new_path, .. }) => Some(old_path.clone()).into_iter().chain(Some(new_path.clone())).next(),
-        LspWorkspaceOperation::Resource(LspResourceOperation::Delete { path, .. }) => Some(path.clone()),
-    }).collect::<Vec<_>>();
+pub fn compare_rename_paths(
+    edit: &LspWorkspaceEdit,
+    static_paths: &[PathBuf],
+) -> LspRenameComparison {
+    let mut lsp_paths = edit
+        .operations
+        .iter()
+        .filter_map(|operation| match operation {
+            LspWorkspaceOperation::Text(edit) => Some(edit.path.clone()),
+            LspWorkspaceOperation::Resource(LspResourceOperation::Create { path, .. }) => {
+                Some(path.clone())
+            }
+            LspWorkspaceOperation::Resource(LspResourceOperation::Rename {
+                old_path,
+                new_path,
+                ..
+            }) => Some(old_path.clone())
+                .into_iter()
+                .chain(Some(new_path.clone()))
+                .next(),
+            LspWorkspaceOperation::Resource(LspResourceOperation::Delete { path, .. }) => {
+                Some(path.clone())
+            }
+        })
+        .collect::<Vec<_>>();
     lsp_paths.sort();
     lsp_paths.dedup();
     let mut static_paths = static_paths.to_vec();
     static_paths.sort();
     static_paths.dedup();
-    let only_lsp = lsp_paths.iter().filter(|path| !static_paths.contains(path)).cloned().collect();
-    let only_static = static_paths.iter().filter(|path| !lsp_paths.contains(path)).cloned().collect();
-    LspRenameComparison { agrees: lsp_paths == static_paths, lsp_paths, static_paths, only_lsp, only_static }
+    let only_lsp = lsp_paths
+        .iter()
+        .filter(|path| !static_paths.contains(path))
+        .cloned()
+        .collect();
+    let only_static = static_paths
+        .iter()
+        .filter(|path| !lsp_paths.contains(path))
+        .cloned()
+        .collect();
+    LspRenameComparison {
+        agrees: lsp_paths == static_paths,
+        lsp_paths,
+        static_paths,
+        only_lsp,
+        only_static,
+    }
 }
 
 pub fn normalize_workspace_edit(root: &Path, value: &Value) -> Result<LspWorkspaceEdit, LspError> {
     let mut edit = LspWorkspaceEdit::default();
     if let Some(annotations) = value.get("changeAnnotations").and_then(Value::as_object) {
         for (id, annotation) in annotations {
-            edit.annotations.insert(id.clone(), LspChangeAnnotation {
-                label: annotation.get("label").and_then(Value::as_str).unwrap_or_default().to_owned(),
-                needs_confirmation: annotation.get("needsConfirmation").and_then(Value::as_bool).unwrap_or(false),
-                description: annotation.get("description").and_then(Value::as_str).map(str::to_owned),
-            });
+            edit.annotations.insert(
+                id.clone(),
+                LspChangeAnnotation {
+                    label: annotation
+                        .get("label")
+                        .and_then(Value::as_str)
+                        .unwrap_or_default()
+                        .to_owned(),
+                    needs_confirmation: annotation
+                        .get("needsConfirmation")
+                        .and_then(Value::as_bool)
+                        .unwrap_or(false),
+                    description: annotation
+                        .get("description")
+                        .and_then(Value::as_str)
+                        .map(str::to_owned),
+                },
+            );
         }
     }
     if let Some(changes) = value.get("changes").and_then(Value::as_object) {
@@ -186,7 +271,10 @@ pub fn normalize_workspace_edit(root: &Path, value: &Value) -> Result<LspWorkspa
         for uri in uris {
             if let Some(items) = changes.get(&uri).and_then(Value::as_array) {
                 for item in items {
-                    edit.operations.push(LspWorkspaceOperation::Text(normalize_text_edit(root, &uri, item)?));
+                    edit.operations
+                        .push(LspWorkspaceOperation::Text(normalize_text_edit(
+                            root, &uri, item,
+                        )?));
                 }
             }
         }
@@ -194,11 +282,25 @@ pub fn normalize_workspace_edit(root: &Path, value: &Value) -> Result<LspWorkspa
     if let Some(changes) = value.get("documentChanges").and_then(Value::as_array) {
         for change in changes {
             if let Some(kind) = change.get("kind").and_then(Value::as_str) {
-                edit.operations.push(LspWorkspaceOperation::Resource(normalize_resource(root, kind, change)?));
+                edit.operations
+                    .push(LspWorkspaceOperation::Resource(normalize_resource(
+                        root, kind, change,
+                    )?));
             } else {
-                let uri = change.pointer("/textDocument/uri").and_then(Value::as_str).ok_or_else(|| LspError::Protocol("document edit missing URI".to_owned()))?;
-                for item in change.get("edits").and_then(Value::as_array).into_iter().flatten() {
-                    edit.operations.push(LspWorkspaceOperation::Text(normalize_text_edit(root, uri, item)?));
+                let uri = change
+                    .pointer("/textDocument/uri")
+                    .and_then(Value::as_str)
+                    .ok_or_else(|| LspError::Protocol("document edit missing URI".to_owned()))?;
+                for item in change
+                    .get("edits")
+                    .and_then(Value::as_array)
+                    .into_iter()
+                    .flatten()
+                {
+                    edit.operations
+                        .push(LspWorkspaceOperation::Text(normalize_text_edit(
+                            root, uri, item,
+                        )?));
                 }
             }
         }
@@ -208,14 +310,39 @@ pub fn normalize_workspace_edit(root: &Path, value: &Value) -> Result<LspWorkspa
 
 fn normalize_code_action(root: &Path, value: &Value) -> Result<LspCodeAction, LspError> {
     if value.get("command").is_some() && value.get("title").is_none() {
-        return Ok(LspCodeAction { title: value.get("title").and_then(Value::as_str).unwrap_or_default().to_owned(), kind: None, preferred: false, disabled_reason: None, edit: None, command: Some(normalize_command(value)), raw: value.clone() });
+        return Ok(LspCodeAction {
+            title: value
+                .get("title")
+                .and_then(Value::as_str)
+                .unwrap_or_default()
+                .to_owned(),
+            kind: None,
+            preferred: false,
+            disabled_reason: None,
+            edit: None,
+            command: Some(normalize_command(value)),
+            raw: value.clone(),
+        });
     }
     Ok(LspCodeAction {
-        title: value.get("title").and_then(Value::as_str).unwrap_or_default().to_owned(),
+        title: value
+            .get("title")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .to_owned(),
         kind: value.get("kind").and_then(Value::as_str).map(str::to_owned),
-        preferred: value.get("isPreferred").and_then(Value::as_bool).unwrap_or(false),
-        disabled_reason: value.pointer("/disabled/reason").and_then(Value::as_str).map(str::to_owned),
-        edit: value.get("edit").map(|edit| normalize_workspace_edit(root, edit)).transpose()?,
+        preferred: value
+            .get("isPreferred")
+            .and_then(Value::as_bool)
+            .unwrap_or(false),
+        disabled_reason: value
+            .pointer("/disabled/reason")
+            .and_then(Value::as_str)
+            .map(str::to_owned),
+        edit: value
+            .get("edit")
+            .map(|edit| normalize_workspace_edit(root, edit))
+            .transpose()?,
         command: value.get("command").map(normalize_command),
         raw: value.clone(),
     })
@@ -224,29 +351,118 @@ fn normalize_code_action(root: &Path, value: &Value) -> Result<LspCodeAction, Ls
 fn normalize_command(value: &Value) -> LspCommand {
     let command = value.get("command").unwrap_or(value);
     LspCommand {
-        command: command.get("command").and_then(Value::as_str).unwrap_or_default().to_owned(),
-        title: command.get("title").and_then(Value::as_str).unwrap_or_default().to_owned(),
-        arguments: command.get("arguments").and_then(Value::as_array).cloned().unwrap_or_default(),
+        command: command
+            .get("command")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .to_owned(),
+        title: command
+            .get("title")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .to_owned(),
+        arguments: command
+            .get("arguments")
+            .and_then(Value::as_array)
+            .cloned()
+            .unwrap_or_default(),
     }
 }
 
-fn normalize_text_edit(root: &Path, uri: &str, value: &Value) -> Result<LspAnnotatedTextEdit, LspError> {
+fn normalize_text_edit(
+    root: &Path,
+    uri: &str,
+    value: &Value,
+) -> Result<LspAnnotatedTextEdit, LspError> {
     Ok(LspAnnotatedTextEdit {
         path: uri_to_relative(root, uri),
-        range: serde_json::from_value(value.get("range").cloned().ok_or_else(|| LspError::Protocol("text edit missing range".to_owned()))?)?,
-        new_text: value.get("newText").and_then(Value::as_str).unwrap_or_default().to_owned(),
-        annotation_id: value.get("annotationId").and_then(Value::as_str).map(str::to_owned),
+        range: serde_json::from_value(
+            value
+                .get("range")
+                .cloned()
+                .ok_or_else(|| LspError::Protocol("text edit missing range".to_owned()))?,
+        )?,
+        new_text: value
+            .get("newText")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .to_owned(),
+        annotation_id: value
+            .get("annotationId")
+            .and_then(Value::as_str)
+            .map(str::to_owned),
     })
 }
 
-fn normalize_resource(root: &Path, kind: &str, value: &Value) -> Result<LspResourceOperation, LspError> {
-    let annotation_id = value.get("annotationId").and_then(Value::as_str).map(str::to_owned);
+fn normalize_resource(
+    root: &Path,
+    kind: &str,
+    value: &Value,
+) -> Result<LspResourceOperation, LspError> {
+    let annotation_id = value
+        .get("annotationId")
+        .and_then(Value::as_str)
+        .map(str::to_owned);
     let options = value.get("options").unwrap_or(&Value::Null);
     match kind {
-        "create" => Ok(LspResourceOperation::Create { path: uri_to_relative(root, value.get("uri").and_then(Value::as_str).unwrap_or_default()), overwrite: options.get("overwrite").and_then(Value::as_bool).unwrap_or(false), ignore_if_exists: options.get("ignoreIfExists").and_then(Value::as_bool).unwrap_or(false), annotation_id }),
-        "rename" => Ok(LspResourceOperation::Rename { old_path: uri_to_relative(root, value.get("oldUri").and_then(Value::as_str).unwrap_or_default()), new_path: uri_to_relative(root, value.get("newUri").and_then(Value::as_str).unwrap_or_default()), overwrite: options.get("overwrite").and_then(Value::as_bool).unwrap_or(false), ignore_if_exists: options.get("ignoreIfExists").and_then(Value::as_bool).unwrap_or(false), annotation_id }),
-        "delete" => Ok(LspResourceOperation::Delete { path: uri_to_relative(root, value.get("uri").and_then(Value::as_str).unwrap_or_default()), recursive: options.get("recursive").and_then(Value::as_bool).unwrap_or(false), ignore_if_not_exists: options.get("ignoreIfNotExists").and_then(Value::as_bool).unwrap_or(false), annotation_id }),
-        _ => Err(LspError::Protocol(format!("unsupported resource operation: {kind}"))),
+        "create" => Ok(LspResourceOperation::Create {
+            path: uri_to_relative(
+                root,
+                value.get("uri").and_then(Value::as_str).unwrap_or_default(),
+            ),
+            overwrite: options
+                .get("overwrite")
+                .and_then(Value::as_bool)
+                .unwrap_or(false),
+            ignore_if_exists: options
+                .get("ignoreIfExists")
+                .and_then(Value::as_bool)
+                .unwrap_or(false),
+            annotation_id,
+        }),
+        "rename" => Ok(LspResourceOperation::Rename {
+            old_path: uri_to_relative(
+                root,
+                value
+                    .get("oldUri")
+                    .and_then(Value::as_str)
+                    .unwrap_or_default(),
+            ),
+            new_path: uri_to_relative(
+                root,
+                value
+                    .get("newUri")
+                    .and_then(Value::as_str)
+                    .unwrap_or_default(),
+            ),
+            overwrite: options
+                .get("overwrite")
+                .and_then(Value::as_bool)
+                .unwrap_or(false),
+            ignore_if_exists: options
+                .get("ignoreIfExists")
+                .and_then(Value::as_bool)
+                .unwrap_or(false),
+            annotation_id,
+        }),
+        "delete" => Ok(LspResourceOperation::Delete {
+            path: uri_to_relative(
+                root,
+                value.get("uri").and_then(Value::as_str).unwrap_or_default(),
+            ),
+            recursive: options
+                .get("recursive")
+                .and_then(Value::as_bool)
+                .unwrap_or(false),
+            ignore_if_not_exists: options
+                .get("ignoreIfNotExists")
+                .and_then(Value::as_bool)
+                .unwrap_or(false),
+            annotation_id,
+        }),
+        _ => Err(LspError::Protocol(format!(
+            "unsupported resource operation: {kind}"
+        ))),
     }
 }
 
@@ -258,7 +474,11 @@ fn uri_to_relative(root: &Path, uri: &str) -> PathBuf {
 
 fn path_to_uri(path: &Path) -> String {
     let normalized = path.to_string_lossy().replace('\\', "/");
-    if normalized.starts_with('/') { format!("file://{normalized}") } else { format!("file:///{normalized}") }
+    if normalized.starts_with('/') {
+        format!("file://{normalized}")
+    } else {
+        format!("file:///{normalized}")
+    }
 }
 
 #[cfg(test)]
@@ -278,12 +498,32 @@ mod tests {
         assert_eq!(edit.operations.len(), 2);
         assert!(edit.annotations["review"].needs_confirmation);
         assert!(matches!(edit.operations[0], LspWorkspaceOperation::Text(_)));
-        assert!(matches!(edit.operations[1], LspWorkspaceOperation::Resource(_)));
+        assert!(matches!(
+            edit.operations[1],
+            LspWorkspaceOperation::Resource(_)
+        ));
     }
 
     #[test]
     fn surfaces_static_lsp_disagreement() {
-        let edit = LspWorkspaceEdit { operations: vec![LspWorkspaceOperation::Text(LspAnnotatedTextEdit { path: "src/lib.rs".into(), range: LspRange { start: LspPosition { line: 0, character: 0 }, end: LspPosition { line: 0, character: 1 } }, new_text: "x".into(), annotation_id: None })], annotations: BTreeMap::new() };
+        let edit = LspWorkspaceEdit {
+            operations: vec![LspWorkspaceOperation::Text(LspAnnotatedTextEdit {
+                path: "src/lib.rs".into(),
+                range: LspRange {
+                    start: LspPosition {
+                        line: 0,
+                        character: 0,
+                    },
+                    end: LspPosition {
+                        line: 0,
+                        character: 1,
+                    },
+                },
+                new_text: "x".into(),
+                annotation_id: None,
+            })],
+            annotations: BTreeMap::new(),
+        };
         let comparison = compare_rename_paths(&edit, &[PathBuf::from("src/main.rs")]);
         assert!(!comparison.agrees);
         assert_eq!(comparison.only_lsp, vec![PathBuf::from("src/lib.rs")]);
@@ -293,10 +533,21 @@ mod tests {
     fn command_policy_must_authorize_before_execution() {
         struct Deny;
         impl LspCommandPolicy for Deny {
-            fn authorize(&self, _: &LspCommand) -> Result<(), String> { Err("approval required".into()) }
-            fn execute(&self, _: &LspCommand) -> Result<Value, String> { panic!("must not execute") }
+            fn authorize(&self, _: &LspCommand) -> Result<(), String> {
+                Err("approval required".into())
+            }
+            fn execute(&self, _: &LspCommand) -> Result<Value, String> {
+                panic!("must not execute")
+            }
         }
-        let command = LspCommand { command: "rust-analyzer.applySourceChange".into(), title: "Apply".into(), arguments: vec![] };
-        assert_eq!(execute_command_guarded(&Deny, &command).unwrap_err(), "approval required");
+        let command = LspCommand {
+            command: "rust-analyzer.applySourceChange".into(),
+            title: "Apply".into(),
+            arguments: vec![],
+        };
+        assert_eq!(
+            execute_command_guarded(&Deny, &command).unwrap_err(),
+            "approval required"
+        );
     }
 }

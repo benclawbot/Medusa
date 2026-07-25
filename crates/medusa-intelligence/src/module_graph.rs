@@ -48,8 +48,16 @@ impl RustModuleGraph {
             for target in dependency_targets(text, &kind) {
                 graph.modules.insert(target.clone());
                 let edge_id = graph.edges.len();
-                graph.outgoing.entry(root.clone()).or_default().push(edge_id);
-                graph.incoming.entry(target.clone()).or_default().push(edge_id);
+                graph
+                    .outgoing
+                    .entry(root.clone())
+                    .or_default()
+                    .push(edge_id);
+                graph
+                    .incoming
+                    .entry(target.clone())
+                    .or_default()
+                    .push(edge_id);
                 graph.edges.push(RustDependencyEdge {
                     from: root.clone(),
                     to: target,
@@ -65,12 +73,22 @@ impl RustModuleGraph {
 
     #[must_use]
     pub fn dependencies_of(&self, module: &str) -> Vec<&RustDependencyEdge> {
-        self.outgoing.get(module).into_iter().flatten().filter_map(|id| self.edges.get(*id)).collect()
+        self.outgoing
+            .get(module)
+            .into_iter()
+            .flatten()
+            .filter_map(|id| self.edges.get(*id))
+            .collect()
     }
 
     #[must_use]
     pub fn dependents_of(&self, module: &str) -> Vec<&RustDependencyEdge> {
-        self.incoming.get(module).into_iter().flatten().filter_map(|id| self.edges.get(*id)).collect()
+        self.incoming
+            .get(module)
+            .into_iter()
+            .flatten()
+            .filter_map(|id| self.edges.get(*id))
+            .collect()
     }
 
     #[must_use]
@@ -87,10 +105,20 @@ impl RustModuleGraph {
         let mut seen = BTreeSet::new();
         let mut queue = VecDeque::from([start.to_owned()]);
         while let Some(current) = queue.pop_front() {
-            let edges = if forward { self.outgoing.get(&current) } else { self.incoming.get(&current) };
-            for edge in edges.into_iter().flatten().filter_map(|id| self.edges.get(*id)) {
+            let edges = if forward {
+                self.outgoing.get(&current)
+            } else {
+                self.incoming.get(&current)
+            };
+            for edge in edges
+                .into_iter()
+                .flatten()
+                .filter_map(|id| self.edges.get(*id))
+            {
                 let next = if forward { &edge.to } else { &edge.from };
-                if seen.insert(next.clone()) { queue.push_back(next.clone()); }
+                if seen.insert(next.clone()) {
+                    queue.push_back(next.clone());
+                }
             }
         }
         seen.remove(start);
@@ -108,17 +136,42 @@ impl RustModuleGraph {
 }
 
 fn module_name(path: &std::path::Path) -> String {
-    path.file_stem().and_then(|value| value.to_str()).unwrap_or("crate").to_owned()
+    path.file_stem()
+        .and_then(|value| value.to_str())
+        .unwrap_or("crate")
+        .to_owned()
 }
 
 fn dependency_targets(text: &str, kind: &RustDependencyKind) -> Vec<String> {
     match kind {
-        RustDependencyKind::Module => text.strip_prefix("mod ").and_then(|v| v.split(|c: char| c == ';' || c == '{' || c.is_whitespace()).find(|p| !p.is_empty())).map(|v| vec![v.to_owned()]).unwrap_or_default(),
-        RustDependencyKind::ExternCrate => text.strip_prefix("extern crate ").and_then(|v| v.split(|c: char| c == ';' || c.is_whitespace()).find(|p| !p.is_empty())).map(|v| vec![v.to_owned()]).unwrap_or_default(),
+        RustDependencyKind::Module => text
+            .strip_prefix("mod ")
+            .and_then(|v| {
+                v.split(|c: char| c == ';' || c == '{' || c.is_whitespace())
+                    .find(|p| !p.is_empty())
+            })
+            .map(|v| vec![v.to_owned()])
+            .unwrap_or_default(),
+        RustDependencyKind::ExternCrate => text
+            .strip_prefix("extern crate ")
+            .and_then(|v| {
+                v.split(|c: char| c == ';' || c.is_whitespace())
+                    .find(|p| !p.is_empty())
+            })
+            .map(|v| vec![v.to_owned()])
+            .unwrap_or_default(),
         RustDependencyKind::Use => {
             let value = text.trim_start_matches("use ").trim_end_matches(';').trim();
-            let root = value.trim_start_matches("::").split("::").next().unwrap_or_default();
-            (!root.is_empty()).then(|| vec![root.to_owned()]).unwrap_or_default()
+            let root = value
+                .trim_start_matches("::")
+                .split("::")
+                .next()
+                .unwrap_or_default();
+            if root.is_empty() {
+                Vec::new()
+            } else {
+                vec![root.to_owned()]
+            }
         }
     }
 }

@@ -32,9 +32,7 @@ pub use graph::{CallEdge, DependencyEdge, SemanticGraph, SymbolId};
 pub use impact::{TestImpact, select_tests, select_tests_with_index};
 pub use index::IndexRefresh;
 pub use language::{CodeIndex, Language, Reference, Symbol, SymbolKind};
-pub use lsp::{
-    LspClient, LspError, LspServerConfig, LspServerManager, LspServerState,
-};
+pub use lsp::{LspClient, LspError, LspServerConfig, LspServerManager, LspServerState};
 pub use lsp_actions::{
     LspAnnotatedTextEdit, LspCapabilityResult, LspChangeAnnotation, LspCodeAction, LspCommand,
     LspCommandPolicy, LspRenameComparison, LspResourceOperation, LspWorkspaceEdit,
@@ -43,13 +41,13 @@ pub use lsp_actions::{
 };
 pub use lsp_navigation::{
     LspLocation, LspNavigationKind, LspNavigationResult, LspPosition, LspRange,
-    compare_with_static, document_symbols, find_references, go_to_declaration,
-    go_to_definition, workspace_symbols,
+    compare_with_static, document_symbols, find_references, go_to_declaration, go_to_definition,
+    workspace_symbols,
 };
 pub use lsp_semantics::{
-    DiagnosticSeverity, DiagnosticSnapshot, LspDiagnostic, LspHover, LspRelatedDiagnostic,
-    LspPosition as LspSemanticPosition, LspRange as LspSemanticRange, SemanticToken,
-    SemanticTokenState,
+    DiagnosticSeverity, DiagnosticSnapshot, LspDiagnostic, LspHover,
+    LspPosition as LspSemanticPosition, LspRange as LspSemanticRange, LspRelatedDiagnostic,
+    SemanticToken, SemanticTokenState,
 };
 pub use module_graph::{RustDependencyEdge, RustDependencyKind, RustModuleGraph};
 pub use patch::{
