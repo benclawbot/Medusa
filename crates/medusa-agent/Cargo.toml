@@ -24,9 +24,6 @@ time.workspace = true
 ulid.workspace = true
 walkdir = "2.5"
 
-[target.'cfg(windows)'.dependencies]
-medusa-process-containment.workspace = true
-
 [dev-dependencies]
 hex.workspace = true
 sha2.workspace = true
