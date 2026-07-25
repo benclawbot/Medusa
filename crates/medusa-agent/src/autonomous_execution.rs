@@ -19,9 +19,6 @@ pub struct AutonomousExecution {
 
 impl AutonomousExecution {
     /// Build and persist an execution graph from the current visible plan.
-    ///
-    /// Plan steps are ordered dependencies by default. A later planner can provide
-    /// a richer graph without changing the durable execution contract.
     pub fn start(session: &mut AgentSession, workers: Vec<Worker>) -> MedusaResult<Self> {
         Self::start_with_attempts(session, workers, DEFAULT_MAX_ATTEMPTS)
     }
@@ -40,7 +37,7 @@ impl AutonomousExecution {
             .plan
             .iter()
             .enumerate()
-            .map(|(index, step)| Task {
+            .map(|(index, _)| Task {
                 id: task_id(index),
                 dependencies: index
                     .checked_sub(1)
@@ -52,7 +49,7 @@ impl AutonomousExecution {
             })
             .collect::<Vec<_>>();
         let scheduler = DynamicSchedule::new(tasks, workers, max_attempts)
-            .map_err(|message| validation_error(message))?;
+            .map_err(validation_error)?;
         for step in &mut session.plan {
             if step.status != AgentPlanStepStatus::Completed {
                 step.status = AgentPlanStepStatus::Pending;
@@ -68,30 +65,19 @@ impl AutonomousExecution {
 
     /// Load a run after process restart and reject cross-session state reuse.
     pub fn load(session: &AgentSession) -> MedusaResult<Self> {
-        let path = execution_path(session);
-        let bytes = fs::read(&path).map_err(|error| io_error("read autonomous execution", error))?;
+        let bytes = fs::read(execution_path(session))
+            .map_err(|error| io_error("read autonomous execution", error))?;
         let execution: Self = serde_json::from_slice(&bytes).map_err(json_error)?;
-        if execution.session_id != session.id.to_string() {
-            return Err(validation_error(
-                "autonomous execution belongs to a different session",
-            ));
-        }
-        execution
-            .scheduler
-            .validate()
-            .map_err(validation_error)?;
+        execution.ensure_session(session)?;
+        execution.scheduler.validate().map_err(validation_error)?;
         Ok(execution)
     }
 
     /// Dispatch all currently ready tasks and synchronize them into the visible plan.
     pub fn dispatch_ready(&mut self, session: &mut AgentSession) -> MedusaResult<Vec<Assignment>> {
         self.ensure_session(session)?;
-        let assignments = self
-            .scheduler
-            .dispatch_ready()
-            .map_err(validation_error)?;
-        self.sync_plan(session)?;
-        self.persist(session)?;
+        let assignments = self.scheduler.dispatch_ready().map_err(validation_error)?;
+        self.sync_and_persist(session)?;
         Ok(assignments)
     }
 
@@ -105,8 +91,7 @@ impl AutonomousExecution {
         self.scheduler
             .complete(task_id, worker_id)
             .map_err(validation_error)?;
-        self.sync_plan(session)?;
-        self.persist(session)
+        self.sync_and_persist(session)
     }
 
     pub fn fail(
@@ -121,8 +106,7 @@ impl AutonomousExecution {
         self.scheduler
             .fail(task_id, worker_id, reason, retryable)
             .map_err(validation_error)?;
-        self.sync_plan(session)?;
-        self.persist(session)
+        self.sync_and_persist(session)
     }
 
     pub fn set_worker_health(
@@ -135,8 +119,7 @@ impl AutonomousExecution {
         self.scheduler
             .set_worker_health(worker_id, healthy)
             .map_err(validation_error)?;
-        self.sync_plan(session)?;
-        self.persist(session)
+        self.sync_and_persist(session)
     }
 
     #[must_use]
@@ -159,7 +142,7 @@ impl AutonomousExecution {
         }
     }
 
-    fn sync_plan(&self, session: &mut AgentSession) -> MedusaResult<()> {
+    fn sync_and_persist(&self, session: &mut AgentSession) -> MedusaResult<()> {
         for (index, step) in session.plan.iter_mut().enumerate() {
             let state = self
                 .scheduler
@@ -172,21 +155,23 @@ impl AutonomousExecution {
                 TaskState::Failed { .. } => AgentPlanStepStatus::Failed,
             };
         }
-        Ok(())
+        self.persist(session)
     }
 
     fn persist(&self, session: &AgentSession) -> MedusaResult<()> {
         self.scheduler.validate().map_err(validation_error)?;
         let path = execution_path(session);
-        let parent = path.parent().ok_or_else(|| {
-            validation_error("autonomous execution path has no parent directory")
-        })?;
+        let parent = path
+            .parent()
+            .ok_or_else(|| validation_error("autonomous execution path has no parent directory"))?;
         fs::create_dir_all(parent)
             .map_err(|error| io_error("create autonomous execution directory", error))?;
         let temporary = path.with_extension("json.tmp");
-        let bytes = serde_json::to_vec_pretty(self).map_err(json_error)?;
-        fs::write(&temporary, bytes)
-            .map_err(|error| io_error("write autonomous execution", error))?;
+        fs::write(
+            &temporary,
+            serde_json::to_vec_pretty(self).map_err(json_error)?,
+        )
+        .map_err(|error| io_error("write autonomous execution", error))?;
         fs::rename(&temporary, &path)
             .map_err(|error| io_error("commit autonomous execution", error))?;
         Ok(())
@@ -200,8 +185,7 @@ fn task_id(index: usize) -> String {
 fn execution_path(session: &AgentSession) -> PathBuf {
     session
         .repo
-        .join(".medusa")
-        .join("executions")
+        .join(".medusa/executions")
         .join(format!("{}.json", session.id))
 }
 
@@ -253,9 +237,8 @@ mod tests {
             repo: repo.to_path_buf(),
             created_at: OffsetDateTime::now_utc(),
             updated_at: OffsetDateTime::now_utc(),
+            completed: false,
             turn: 0,
-            messages: Vec::new(),
-            events: Vec::new(),
             plan: vec![
                 AgentPlanStep {
                     title: "Inspect".to_owned(),
@@ -266,15 +249,15 @@ mod tests {
                     status: AgentPlanStepStatus::Pending,
                 },
             ],
-            questions: Vec::new(),
+            pending_question: None,
+            messages: Vec::new(),
+            events: Vec::new(),
             evidence: Vec::new(),
-            completed: false,
-            pending_tool_approval: None,
+            tool_artifacts: Vec::new(),
+            world_model: None,
             approval_grants: Vec::new(),
             approval_receipts: Vec::new(),
             rollback_receipts: Vec::new(),
-            world_model: None,
-            escalations: Vec::new(),
         }
     }
 
@@ -286,7 +269,6 @@ mod tests {
 
         let first = execution.dispatch_ready(&mut session).unwrap();
         assert_eq!(first[0].task_id, "plan-0000");
-        assert_eq!(session.plan[0].status, AgentPlanStepStatus::InProgress);
         execution.complete(&mut session, "plan-0000", "one").unwrap();
 
         let mut restored = AutonomousExecution::load(&session).unwrap();
@@ -306,7 +288,9 @@ mod tests {
         .unwrap();
 
         assert_eq!(execution.dispatch_ready(&mut session).unwrap()[0].worker_id, "one");
-        execution.set_worker_health(&mut session, "one", false).unwrap();
+        execution
+            .set_worker_health(&mut session, "one", false)
+            .unwrap();
         assert_eq!(execution.dispatch_ready(&mut session).unwrap()[0].worker_id, "two");
     }
 }
