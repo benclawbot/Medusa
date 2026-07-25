@@ -1,5 +1,3 @@
-pub use autonomous_execution::WorkerRole;
-
 impl<P: ModelProvider> AgentEngine<P> {
     pub fn start_autonomous_execution(
         &self,
@@ -16,7 +14,7 @@ impl<P: ModelProvider> AgentEngine<P> {
     pub fn start_role_aware_autonomous_execution(
         &self,
         session: &mut AgentSession,
-        workers: Vec<(String, WorkerRole)>,
+        workers: Vec<(String, String)>,
     ) -> MedusaResult<Vec<(String, String)>> {
         let workers = role_workers(workers)?;
         let mut execution = autonomous_execution::AutonomousExecution::start_with_roles(
@@ -134,7 +132,7 @@ fn autonomous_workers(worker_ids: Vec<String>) -> MedusaResult<Vec<dynamic_sched
 }
 
 fn role_workers(
-    workers: Vec<(String, WorkerRole)>,
+    workers: Vec<(String, String)>,
 ) -> MedusaResult<Vec<autonomous_execution::AutonomousWorker>> {
     if workers.is_empty() {
         return Err(MedusaError::new(
@@ -149,11 +147,28 @@ fn role_workers(
             validate_worker_id(&id)?;
             Ok(autonomous_execution::AutonomousWorker {
                 id,
-                role,
+                role: parse_worker_role(&role)?,
                 capacity: 1,
             })
         })
         .collect()
+}
+
+fn parse_worker_role(role: &str) -> MedusaResult<autonomous_execution::WorkerRole> {
+    match role.trim().to_ascii_lowercase().as_str() {
+        "planner" | "planning" => Ok(autonomous_execution::WorkerRole::Planner),
+        "researcher" | "research" => Ok(autonomous_execution::WorkerRole::Researcher),
+        "coder" | "coding" => Ok(autonomous_execution::WorkerRole::Coder),
+        "reviewer" | "review" => Ok(autonomous_execution::WorkerRole::Reviewer),
+        "tester" | "testing" => Ok(autonomous_execution::WorkerRole::Tester),
+        "documentation" | "docs" => Ok(autonomous_execution::WorkerRole::Documentation),
+        "security" => Ok(autonomous_execution::WorkerRole::Security),
+        _ => Err(MedusaError::new(
+            ErrorCode::InvalidConfiguration,
+            ErrorCategory::Validation,
+            format!("unknown autonomous worker role: {role}"),
+        )),
+    }
 }
 
 fn validate_worker_id(id: &str) -> MedusaResult<()> {
