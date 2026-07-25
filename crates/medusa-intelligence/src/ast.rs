@@ -93,8 +93,9 @@ impl RustAstDocument {
     /// Iterate over nodes matching a Tree-sitter grammar kind.
     pub fn nodes_of_kind<'a>(
         &'a self,
-        kind: &'a str,
+        kind: &str,
     ) -> impl Iterator<Item = &'a RustAstNode> + 'a {
+        let kind = kind.to_owned();
         self.nodes.iter().filter(move |node| node.kind == kind)
     }
 
