@@ -8,6 +8,7 @@ mod language;
 mod patch;
 mod retrieval;
 mod review;
+mod rust_ast;
 pub mod snapshot;
 mod support;
 mod symbol_impact;
@@ -23,6 +24,10 @@ pub use patch::{
 };
 pub use retrieval::{RetrievalBudget, RetrievalExclusion, RetrievalReport, RetrievalResult};
 pub use review::ReviewImpact;
+pub use rust_ast::{
+    RustAstFile, RustAstIndex, RustAstNode, RustAstNodeId, SourcePosition, SourceRange,
+    parse_rust_file,
+};
 pub use snapshot::{FileFingerprint, IndexSnapshot, SnapshotDelta};
 pub use symbol_impact::SymbolImpact;
 
