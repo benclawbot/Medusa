@@ -11,6 +11,7 @@ mod retrieval;
 mod review;
 pub mod snapshot;
 mod support;
+mod symbol_table;
 
 pub use ast::{ParseDiagnostic, RustAstDocument, RustAstNode, SourcePosition, SourceRange};
 pub use format::format_changed;
@@ -25,6 +26,9 @@ pub use patch::{
 pub use retrieval::{RetrievalBudget, RetrievalExclusion, RetrievalReport, RetrievalResult};
 pub use review::ReviewImpact;
 pub use snapshot::{FileFingerprint, IndexSnapshot, SnapshotDelta};
+pub use symbol_table::{
+    RustScope, RustScopeKind, RustSymbol, RustSymbolId, RustSymbolKind, RustSymbolTable,
+};
 
 #[cfg(test)]
 mod tests {
