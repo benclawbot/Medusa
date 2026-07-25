@@ -11,6 +11,22 @@ impl<P: ModelProvider> AgentEngine<P> {
         Ok(assignment_pairs(assignments))
     }
 
+    pub fn start_role_aware_autonomous_execution(
+        &self,
+        session: &mut AgentSession,
+        workers: Vec<(String, String)>,
+    ) -> MedusaResult<Vec<(String, String)>> {
+        let workers = role_workers(workers)?;
+        let mut execution = autonomous_execution::AutonomousExecution::start_with_roles(
+            session,
+            workers,
+            3,
+        )?;
+        let assignments = execution.dispatch_ready(session)?;
+        persist(session)?;
+        Ok(assignment_pairs(assignments))
+    }
+
     pub fn dispatch_autonomous_ready(
         &self,
         session: &mut AgentSession,
@@ -32,6 +48,36 @@ impl<P: ModelProvider> AgentEngine<P> {
         session.updated_at = OffsetDateTime::now_utc();
         session.completed = execution.is_complete();
         persist(session)
+    }
+
+    pub fn submit_autonomous_task_for_review(
+        &self,
+        session: &mut AgentSession,
+        task_id: &str,
+        worker_id: &str,
+        summary: String,
+    ) -> MedusaResult<()> {
+        let mut execution = autonomous_execution::AutonomousExecution::load(session)?;
+        execution.submit_for_review(session, task_id, worker_id, summary)?;
+        session.updated_at = OffsetDateTime::now_utc();
+        persist(session)
+    }
+
+    pub fn review_autonomous_task(
+        &self,
+        session: &mut AgentSession,
+        task_id: &str,
+        reviewer_id: &str,
+        approved: bool,
+        feedback: String,
+    ) -> MedusaResult<Vec<(String, String)>> {
+        let mut execution = autonomous_execution::AutonomousExecution::load(session)?;
+        execution.review(session, task_id, reviewer_id, approved, feedback)?;
+        let assignments = execution.dispatch_ready(session)?;
+        session.updated_at = OffsetDateTime::now_utc();
+        session.completed = execution.is_complete();
+        persist(session)?;
+        Ok(assignment_pairs(assignments))
     }
 
     pub fn fail_autonomous_task(
@@ -74,13 +120,7 @@ fn autonomous_workers(worker_ids: Vec<String>) -> MedusaResult<Vec<dynamic_sched
     worker_ids
         .into_iter()
         .map(|id| {
-            if id.trim().is_empty() {
-                return Err(MedusaError::new(
-                    ErrorCode::InvalidConfiguration,
-                    ErrorCategory::Validation,
-                    "autonomous worker identifiers cannot be empty",
-                ));
-            }
+            validate_worker_id(&id)?;
             Ok(dynamic_scheduler::Worker {
                 id,
                 capabilities: vec!["coding".to_owned()],
@@ -89,6 +129,58 @@ fn autonomous_workers(worker_ids: Vec<String>) -> MedusaResult<Vec<dynamic_sched
             })
         })
         .collect()
+}
+
+fn role_workers(
+    workers: Vec<(String, String)>,
+) -> MedusaResult<Vec<autonomous_execution::AutonomousWorker>> {
+    if workers.is_empty() {
+        return Err(MedusaError::new(
+            ErrorCode::InvalidConfiguration,
+            ErrorCategory::Validation,
+            "role-aware autonomous execution requires workers",
+        ));
+    }
+    workers
+        .into_iter()
+        .map(|(id, role)| {
+            validate_worker_id(&id)?;
+            Ok(autonomous_execution::AutonomousWorker {
+                id,
+                role: parse_worker_role(&role)?,
+                capacity: 1,
+            })
+        })
+        .collect()
+}
+
+fn parse_worker_role(role: &str) -> MedusaResult<autonomous_execution::WorkerRole> {
+    match role.trim().to_ascii_lowercase().as_str() {
+        "planner" | "planning" => Ok(autonomous_execution::WorkerRole::Planner),
+        "researcher" | "research" => Ok(autonomous_execution::WorkerRole::Researcher),
+        "coder" | "coding" => Ok(autonomous_execution::WorkerRole::Coder),
+        "reviewer" | "review" => Ok(autonomous_execution::WorkerRole::Reviewer),
+        "tester" | "testing" => Ok(autonomous_execution::WorkerRole::Tester),
+        "documentation" | "docs" => Ok(autonomous_execution::WorkerRole::Documentation),
+        "security" => Ok(autonomous_execution::WorkerRole::Security),
+        _ => Err(MedusaError::new(
+            ErrorCode::InvalidConfiguration,
+            ErrorCategory::Validation,
+            format!("unknown autonomous worker role: {role}"),
+        )),
+    }
+}
+
+fn validate_worker_id(id: &str) -> MedusaResult<()> {
+    if id.trim().is_empty() {
+        Err(MedusaError::new(
+            ErrorCode::InvalidConfiguration,
+            ErrorCategory::Validation,
+            "autonomous worker identifiers cannot be empty",
+        ))
+    } else {
+        Ok(())
+    }
 }
 
 fn assignment_pairs(assignments: Vec<dynamic_scheduler::Assignment>) -> Vec<(String, String)> {
