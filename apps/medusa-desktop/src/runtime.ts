@@ -71,6 +71,13 @@ export interface PlanStep {
   status: "pending" | "inProgress" | "completed" | "failed";
 }
 
+export interface TimelineSnapshot {
+  runtimeId?: string;
+  plan: PlanStep[];
+  activities: RuntimeActivity[];
+  busy: boolean;
+}
+
 export interface QuestionOption {
   label: string;
   description: string;
@@ -144,14 +151,73 @@ export interface ModelConfiguration {
 }
 
 const pendingResumeKey = "medusa.desktop.resumeSession";
+const emptyTimeline: TimelineSnapshot = { plan: [], activities: [], busy: false };
+let timelineSnapshot: TimelineSnapshot = emptyTimeline;
+const timelineListeners = new Set<() => void>();
+
+function publishTimeline(next: TimelineSnapshot): void {
+  timelineSnapshot = next;
+  timelineListeners.forEach((listener) => listener());
+}
+
+function reduceTimeline(runtimeId: string, events: RuntimeEvent[]): void {
+  let next = timelineSnapshot.runtimeId === runtimeId
+    ? timelineSnapshot
+    : { ...emptyTimeline, runtimeId };
+
+  for (const event of events) {
+    switch (event.type) {
+      case "started":
+        next = { ...next, busy: true };
+        break;
+      case "activity": {
+        const activities = [...next.activities];
+        const index = event.activity.id
+          ? activities.findIndex((item) => item.id === event.activity.id)
+          : -1;
+        if (index >= 0) activities[index] = event.activity;
+        else activities.push(event.activity);
+        next = { ...next, activities };
+        break;
+      }
+      case "plan":
+        next = { ...next, plan: event.steps };
+        break;
+      case "question":
+      case "completed":
+      case "turnFinished":
+      case "cancelled":
+      case "failed":
+        next = { ...next, busy: false };
+        break;
+      case "newSession":
+        next = { ...emptyTimeline, runtimeId };
+        break;
+      default:
+        break;
+    }
+  }
+
+  if (next !== timelineSnapshot) publishTimeline(next);
+}
+
+export function getTimelineSnapshot(): TimelineSnapshot {
+  return timelineSnapshot;
+}
+
+export function subscribeTimeline(listener: () => void): () => void {
+  timelineListeners.add(listener);
+  return () => timelineListeners.delete(listener);
+}
 
 export async function startRuntime(repo?: string): Promise<RuntimeStartResponse> {
   const pendingSession = window.localStorage.getItem(pendingResumeKey);
-  if (repo && pendingSession) {
-    window.localStorage.removeItem(pendingResumeKey);
-    return invoke<RuntimeStartResponse>("runtime_resume", { repo, sessionId: pendingSession });
-  }
-  return invoke<RuntimeStartResponse>("runtime_start", repo ? { repo } : {});
+  const response = repo && pendingSession
+    ? await invoke<RuntimeStartResponse>("runtime_resume", { repo, sessionId: pendingSession })
+    : await invoke<RuntimeStartResponse>("runtime_start", repo ? { repo } : {});
+  if (repo && pendingSession) window.localStorage.removeItem(pendingResumeKey);
+  publishTimeline({ ...emptyTimeline, runtimeId: response.runtimeId });
+  return response;
 }
 
 export function requestRuntimeResume(sessionId: string): void {
@@ -176,6 +242,7 @@ export async function listRuntimeMemories(
 
 export async function closeRuntime(runtimeId: string): Promise<void> {
   await invoke("runtime_close", { runtimeId });
+  if (timelineSnapshot.runtimeId === runtimeId) publishTimeline(emptyTimeline);
 }
 
 export async function submitRuntime(
@@ -201,7 +268,9 @@ export async function cancelRuntime(runtimeId: string): Promise<boolean> {
 }
 
 export async function pollRuntime(runtimeId: string): Promise<RuntimeEvent[]> {
-  return invoke<RuntimeEvent[]>("runtime_poll", { runtimeId, maxEvents: 200 });
+  const events = await invoke<RuntimeEvent[]>("runtime_poll", { runtimeId, maxEvents: 200 });
+  reduceTimeline(runtimeId, events);
+  return events;
 }
 
 export async function configureRuntime(
