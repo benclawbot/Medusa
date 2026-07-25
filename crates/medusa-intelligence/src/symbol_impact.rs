@@ -127,16 +127,22 @@ mod tests {
             .next()
             .map(Into::into)
             .expect("facade");
+        let api_test: SymbolId = index
+            .definitions("api_test")
+            .into_iter()
+            .next()
+            .map(Into::into)
+            .expect("api_test");
 
         assert_eq!(graph.direct_callers(&leaf), vec![middle.clone()]);
         assert_eq!(graph.direct_callees(&middle), vec![leaf.clone()]);
         assert_eq!(
             graph.transitive_callers(std::slice::from_ref(&leaf)),
-            vec![facade.clone(), middle.clone()]
+            vec![api_test.clone(), facade.clone(), middle.clone()]
         );
 
         let impact = graph.impact_for_symbols(&[leaf]);
-        assert_eq!(impact.callers, vec![facade, middle]);
+        assert_eq!(impact.callers, vec![api_test, facade, middle]);
         assert_eq!(impact.test_files, vec![PathBuf::from("tests/api.rs")]);
     }
 }
