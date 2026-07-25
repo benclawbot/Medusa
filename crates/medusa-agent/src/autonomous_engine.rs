@@ -1,5 +1,4 @@
 impl<P: ModelProvider> AgentEngine<P> {
-    /// Start a durable autonomous run from the current visible plan and dispatch ready work.
     pub fn start_autonomous_execution(
         &self,
         session: &mut AgentSession,
@@ -12,7 +11,6 @@ impl<P: ModelProvider> AgentEngine<P> {
         Ok(assignment_pairs(assignments))
     }
 
-    /// Resume a persisted autonomous run and dispatch newly unblocked work.
     pub fn dispatch_autonomous_ready(
         &self,
         session: &mut AgentSession,
@@ -23,7 +21,6 @@ impl<P: ModelProvider> AgentEngine<P> {
         Ok(assignment_pairs(assignments))
     }
 
-    /// Record successful worker completion and release dependent plan steps.
     pub fn complete_autonomous_task(
         &self,
         session: &mut AgentSession,
@@ -37,7 +34,6 @@ impl<P: ModelProvider> AgentEngine<P> {
         persist(session)
     }
 
-    /// Record a worker failure. Retryable work is requeued until the durable limit is reached.
     pub fn fail_autonomous_task(
         &self,
         session: &mut AgentSession,
@@ -54,7 +50,6 @@ impl<P: ModelProvider> AgentEngine<P> {
         Ok(blocked)
     }
 
-    /// Quarantine or restore a worker and requeue any interrupted work.
     pub fn set_autonomous_worker_health(
         &self,
         session: &mut AgentSession,
@@ -68,7 +63,7 @@ impl<P: ModelProvider> AgentEngine<P> {
     }
 }
 
-fn autonomous_workers(worker_ids: Vec<String>) -> MedusaResult<Vec<medusa_multi_agent_scheduler::Worker>> {
+fn autonomous_workers(worker_ids: Vec<String>) -> MedusaResult<Vec<dynamic_scheduler::Worker>> {
     if worker_ids.is_empty() {
         return Err(MedusaError::new(
             ErrorCode::InvalidConfiguration,
@@ -86,7 +81,7 @@ fn autonomous_workers(worker_ids: Vec<String>) -> MedusaResult<Vec<medusa_multi_
                     "autonomous worker identifiers cannot be empty",
                 ));
             }
-            Ok(medusa_multi_agent_scheduler::Worker {
+            Ok(dynamic_scheduler::Worker {
                 id,
                 capabilities: vec!["coding".to_owned()],
                 healthy: true,
@@ -96,9 +91,7 @@ fn autonomous_workers(worker_ids: Vec<String>) -> MedusaResult<Vec<medusa_multi_
         .collect()
 }
 
-fn assignment_pairs(
-    assignments: Vec<medusa_multi_agent_scheduler::Assignment>,
-) -> Vec<(String, String)> {
+fn assignment_pairs(assignments: Vec<dynamic_scheduler::Assignment>) -> Vec<(String, String)> {
     assignments
         .into_iter()
         .map(|assignment| (assignment.task_id, assignment.worker_id))
