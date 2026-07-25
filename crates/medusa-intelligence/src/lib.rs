@@ -9,6 +9,7 @@ mod index;
 mod language;
 mod lsp;
 mod lsp_navigation;
+mod lsp_semantics;
 mod module_graph;
 mod patch;
 mod rename;
@@ -34,6 +35,11 @@ pub use lsp_navigation::{
     LspLocation, LspNavigationKind, LspNavigationResult, LspPosition, LspRange,
     compare_with_static, document_symbols, find_references, go_to_declaration,
     go_to_definition, workspace_symbols,
+};
+pub use lsp_semantics::{
+    DiagnosticSeverity, DiagnosticSnapshot, LspDiagnostic, LspHover, LspRelatedDiagnostic,
+    LspPosition as LspSemanticPosition, LspRange as LspSemanticRange, SemanticToken,
+    SemanticTokenState,
 };
 pub use module_graph::{RustDependencyEdge, RustDependencyKind, RustModuleGraph};
 pub use patch::{
