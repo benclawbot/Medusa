@@ -10,6 +10,7 @@ mod retrieval;
 mod review;
 pub mod snapshot;
 mod support;
+mod symbol_impact;
 
 pub use format::format_changed;
 pub use graph::{CallEdge, DependencyEdge, SemanticGraph, SymbolId};
@@ -23,6 +24,7 @@ pub use patch::{
 pub use retrieval::{RetrievalBudget, RetrievalExclusion, RetrievalReport, RetrievalResult};
 pub use review::ReviewImpact;
 pub use snapshot::{FileFingerprint, IndexSnapshot, SnapshotDelta};
+pub use symbol_impact::SymbolImpact;
 
 #[cfg(test)]
 mod tests {
