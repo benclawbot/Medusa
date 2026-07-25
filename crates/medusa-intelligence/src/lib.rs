@@ -18,6 +18,7 @@ mod resolution;
 mod retrieval;
 mod review;
 pub mod snapshot;
+mod structured_edit;
 mod support;
 mod symbol_impact;
 mod symbol_table;
@@ -60,6 +61,10 @@ pub use resolution::{ResolutionStatus, RustResolutionIndex, RustResolvedReferenc
 pub use retrieval::{RetrievalBudget, RetrievalExclusion, RetrievalReport, RetrievalResult};
 pub use review::ReviewImpact;
 pub use snapshot::{FileFingerprint, IndexSnapshot, SnapshotDelta};
+pub use structured_edit::{
+    EditMetadata, EditPreconditions, EditPreview, EditRange, FileSnapshot, StructuredEditAudit,
+    StructuredEditError, StructuredEditPlan, StructuredFileOperation, StructuredTextEdit,
+};
 pub use symbol_impact::{RustImpactFile, RustSymbolImpact, analyze_rust_symbol_impact};
 pub use symbol_table::{
     RustScope, RustScopeKind, RustSymbol, RustSymbolId, RustSymbolKind, RustSymbolTable,
