@@ -1,8 +1,9 @@
-//! Deterministic dependency-aware scheduling for parallel Medusa workers.
+//! Deterministic and feedback-driven scheduling for parallel Medusa workers.
+
+use std::collections::{BTreeMap, BTreeSet};
 
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
-use std::collections::{BTreeMap, BTreeSet};
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct Task {
@@ -38,6 +39,7 @@ pub fn schedule(tasks: Vec<Task>, workers: Vec<Worker>) -> Result<Schedule, &'st
     let tasks = canonical_tasks(tasks)?;
     let workers = canonical_workers(workers)?;
     validate_graph(&tasks)?;
+
     let mut complete = BTreeSet::new();
     let mut remaining = tasks.keys().cloned().collect::<BTreeSet<_>>();
     let mut waves = Vec::new();
@@ -45,12 +47,18 @@ pub fn schedule(tasks: Vec<Task>, workers: Vec<Worker>) -> Result<Schedule, &'st
     while !remaining.is_empty() {
         let ready = remaining
             .iter()
-            .filter(|id| tasks[*id].dependencies.iter().all(|dependency| complete.contains(dependency)))
+            .filter(|id| {
+                tasks[*id]
+                    .dependencies
+                    .iter()
+                    .all(|dependency| complete.contains(dependency))
+            })
             .cloned()
             .collect::<Vec<_>>();
         if ready.is_empty() {
             return Err("task graph cannot make progress");
         }
+
         let mut capacity = worker_capacity(&workers);
         let mut paths = BTreeSet::new();
         let mut wave = Vec::new();
@@ -79,13 +87,18 @@ pub fn schedule(tasks: Vec<Task>, workers: Vec<Worker>) -> Result<Schedule, &'st
         if wave.is_empty() {
             return Err("no healthy capable worker can execute a ready task");
         }
-        wave.sort_by(|a, b| a.task_id.cmp(&b.task_id).then(a.worker_id.cmp(&b.worker_id)));
+        wave.sort_by(|a, b| {
+            a.task_id
+                .cmp(&b.task_id)
+                .then(a.worker_id.cmp(&b.worker_id))
+        });
         for assignment in &wave {
             remaining.remove(&assignment.task_id);
             complete.insert(assignment.task_id.clone());
         }
         waves.push(wave);
     }
+
     Ok(Schedule {
         fingerprint: hash(&waves),
         waves,
@@ -104,11 +117,20 @@ pub fn overlapping_paths(tasks: &[Task]) -> Result<BTreeMap<String, Vec<String>>
     Ok(paths)
 }
 
-pub fn replacement(task: &Task, unavailable: &str, workers: &[Worker]) -> Result<String, &'static str> {
+pub fn replacement(
+    task: &Task,
+    unavailable: &str,
+    workers: &[Worker],
+) -> Result<String, &'static str> {
     validate_task(task)?;
     canonical_workers(workers.to_vec())?
         .values()
-        .find(|worker| worker.id != unavailable && worker.healthy && worker.capacity > 0 && supports(worker, task))
+        .find(|worker| {
+            worker.id != unavailable
+                && worker.healthy
+                && worker.capacity > 0
+                && supports(worker, task)
+        })
         .map(|worker| worker.id.clone())
         .ok_or("no replacement worker is available")
 }
@@ -134,10 +156,6 @@ pub enum TaskState {
 }
 
 /// Durable execution-time scheduler layered on top of the static planner.
-///
-/// It releases dependencies only after observed success, preserves retry counts,
-/// requeues work from unhealthy workers, enforces worker capacity, and prevents
-/// concurrent writes to the same repository-relative path.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct DynamicSchedule {
     tasks: BTreeMap<String, Task>,
@@ -148,7 +166,11 @@ pub struct DynamicSchedule {
 }
 
 impl DynamicSchedule {
-    pub fn new(tasks: Vec<Task>, workers: Vec<Worker>, max_attempts: u32) -> Result<Self, &'static str> {
+    pub fn new(
+        tasks: Vec<Task>,
+        workers: Vec<Worker>,
+        max_attempts: u32,
+    ) -> Result<Self, &'static str> {
         if max_attempts == 0 {
             return Err("retry limit must be non-zero");
         }
@@ -159,15 +181,15 @@ impl DynamicSchedule {
             .keys()
             .map(|id| (id.clone(), TaskState::Pending { attempts: 0 }))
             .collect();
-        let mut value = Self {
+        let mut schedule = Self {
             tasks,
             workers,
             states,
             max_attempts,
             fingerprint: String::new(),
         };
-        value.refresh();
-        Ok(value)
+        schedule.refresh();
+        Ok(schedule)
     }
 
     pub fn dispatch_ready(&mut self) -> Result<Vec<Assignment>, &'static str> {
@@ -185,6 +207,7 @@ impl DynamicSchedule {
                 }
             }
         }
+
         let mut claimed_paths = self.running_paths();
         let mut assignments = Vec::new();
         for (task_id, task) in &self.tasks {
@@ -192,8 +215,14 @@ impl DynamicSchedule {
                 Some(TaskState::Pending { attempts }) => *attempts,
                 _ => continue,
             };
-            if !task.dependencies.iter().all(|dependency| succeeded.contains(dependency))
-                || task.write_paths.iter().any(|path| claimed_paths.contains(path))
+            if !task
+                .dependencies
+                .iter()
+                .all(|dependency| succeeded.contains(dependency))
+                || task
+                    .write_paths
+                    .iter()
+                    .any(|path| claimed_paths.contains(path))
             {
                 continue;
             }
@@ -257,16 +286,24 @@ impl DynamicSchedule {
         Ok(())
     }
 
-    pub fn set_worker_health(&mut self, worker_id: &str, healthy: bool) -> Result<(), &'static str> {
-        self.workers.get_mut(worker_id).ok_or("worker does not exist")?.healthy = healthy;
+    pub fn set_worker_health(
+        &mut self,
+        worker_id: &str,
+        healthy: bool,
+    ) -> Result<(), &'static str> {
+        self.workers
+            .get_mut(worker_id)
+            .ok_or("worker does not exist")?
+            .healthy = healthy;
         if !healthy {
             let interrupted = self
                 .states
                 .iter()
                 .filter_map(|(task_id, state)| match state {
-                    TaskState::Running { worker_id: assigned, attempt } if assigned == worker_id => {
-                        Some((task_id.clone(), *attempt))
-                    }
+                    TaskState::Running {
+                        worker_id: assigned,
+                        attempt,
+                    } if assigned == worker_id => Some((task_id.clone(), *attempt)),
                     _ => None,
                 })
                 .collect::<Vec<_>>();
@@ -283,11 +320,15 @@ impl DynamicSchedule {
     }
 
     pub fn is_complete(&self) -> bool {
-        self.states.values().all(|state| matches!(state, TaskState::Succeeded))
+        self.states
+            .values()
+            .all(|state| matches!(state, TaskState::Succeeded))
     }
 
     pub fn has_terminal_failure(&self) -> bool {
-        self.states.values().any(|state| matches!(state, TaskState::Failed { .. }))
+        self.states
+            .values()
+            .any(|state| matches!(state, TaskState::Failed { .. }))
     }
 
     pub fn blocked_tasks(&self) -> Vec<String> {
@@ -300,7 +341,10 @@ impl DynamicSchedule {
             .iter()
             .filter_map(|(id, task)| {
                 (matches!(self.states.get(id), Some(TaskState::Pending { .. }))
-                    && task.dependencies.iter().any(|dependency| failed.contains(dependency)))
+                    && task
+                        .dependencies
+                        .iter()
+                        .any(|dependency| failed.contains(dependency)))
                 .then_some(id.clone())
             })
             .collect()
@@ -323,7 +367,10 @@ impl DynamicSchedule {
 
     fn running_attempt(&self, task_id: &str, worker_id: &str) -> Result<u32, &'static str> {
         match self.states.get(task_id) {
-            Some(TaskState::Running { worker_id: assigned, attempt }) if assigned == worker_id => Ok(*attempt),
+            Some(TaskState::Running {
+                worker_id: assigned,
+                attempt,
+            }) if assigned == worker_id => Ok(*attempt),
             Some(TaskState::Running { .. }) => Err("task is owned by a different worker"),
             Some(_) => Err("task is not running"),
             None => Err("task does not exist"),
@@ -333,7 +380,9 @@ impl DynamicSchedule {
     fn running_paths(&self) -> BTreeSet<String> {
         self.states
             .iter()
-            .filter_map(|(task_id, state)| matches!(state, TaskState::Running { .. }).then_some(&self.tasks[task_id]))
+            .filter_map(|(task_id, state)| {
+                matches!(state, TaskState::Running { .. }).then_some(&self.tasks[task_id])
+            })
             .flat_map(|task| task.write_paths.iter().cloned())
             .collect()
     }
@@ -398,7 +447,11 @@ fn validate_task(task: &Task) -> Result<(), &'static str> {
 
 fn validate_graph(tasks: &BTreeMap<String, Task>) -> Result<(), &'static str> {
     for task in tasks.values() {
-        if task.dependencies.iter().any(|dependency| !tasks.contains_key(dependency)) {
+        if task
+            .dependencies
+            .iter()
+            .any(|dependency| !tasks.contains_key(dependency))
+        {
             return Err("task dependency does not exist");
         }
     }
@@ -406,7 +459,11 @@ fn validate_graph(tasks: &BTreeMap<String, Task>) -> Result<(), &'static str> {
     loop {
         let before = done.len();
         for task in tasks.values() {
-            if task.dependencies.iter().all(|dependency| done.contains(dependency)) {
+            if task
+                .dependencies
+                .iter()
+                .all(|dependency| done.contains(dependency))
+            {
                 done.insert(task.id.clone());
             }
         }
@@ -494,15 +551,30 @@ mod tests {
         let workers = vec![worker("one"), worker("two")];
         assert_eq!(
             schedule(tasks.clone(), workers.clone()).unwrap(),
-            schedule(tasks.into_iter().rev().collect(), workers.into_iter().rev().collect()).unwrap()
+            schedule(
+                tasks.into_iter().rev().collect(),
+                workers.into_iter().rev().collect()
+            )
+            .unwrap()
         );
-        assert_eq!(replacement(&task("a", &[], "a.rs"), "one", &[worker("one"), worker("two")]).unwrap(), "two");
+        assert_eq!(
+            replacement(
+                &task("a", &[], "a.rs"),
+                "one",
+                &[worker("one"), worker("two")]
+            )
+            .unwrap(),
+            "two"
+        );
     }
 
     #[test]
     fn dynamic_completion_releases_dependencies() {
         let mut runtime = DynamicSchedule::new(
-            vec![task("plan", &[], "plan.md"), task("code", &["plan"], "src/lib.rs")],
+            vec![
+                task("plan", &[], "plan.md"),
+                task("code", &["plan"], "src/lib.rs"),
+            ],
             vec![worker("one")],
             2,
         )
@@ -523,13 +595,22 @@ mod tests {
         assert_eq!(runtime.dispatch_ready().unwrap()[0].worker_id, "one");
         runtime.set_worker_health("one", false).unwrap();
         assert_eq!(runtime.dispatch_ready().unwrap()[0].worker_id, "two");
-        assert_eq!(runtime.state("code"), Some(&TaskState::Running { worker_id: "two".into(), attempt: 2 }));
+        assert_eq!(
+            runtime.state("code"),
+            Some(&TaskState::Running {
+                worker_id: "two".into(),
+                attempt: 2,
+            })
+        );
     }
 
     #[test]
     fn dynamic_retry_limit_blocks_dependents() {
         let mut runtime = DynamicSchedule::new(
-            vec![task("code", &[], "src/lib.rs"), task("test", &["code"], "tests/a.rs")],
+            vec![
+                task("code", &[], "src/lib.rs"),
+                task("test", &["code"], "tests/a.rs"),
+            ],
             vec![worker("one")],
             2,
         )
