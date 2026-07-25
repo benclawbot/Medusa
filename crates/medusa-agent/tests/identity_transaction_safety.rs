@@ -1,5 +1,7 @@
 #[path = "../src/identity_guard.rs"]
 mod identity_guard;
+#[path = "../src/policy.rs"]
+mod policy;
 #[path = "../src/transaction.rs"]
 mod transaction;
 
