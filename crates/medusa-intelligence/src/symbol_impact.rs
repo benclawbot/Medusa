@@ -69,9 +69,8 @@ impl SemanticGraph {
             .map(|symbol| symbol.path.clone())
             .collect::<BTreeSet<_>>();
         affected_paths.extend(callers.iter().map(|symbol| symbol.path.clone()));
-        let test_files = self.impacted_test_files(
-            &affected_paths.iter().cloned().collect::<Vec<_>>(),
-        );
+        let test_files =
+            self.impacted_test_files(&affected_paths.iter().cloned().collect::<Vec<_>>());
 
         SymbolImpact {
             changed: changed.into_iter().collect(),
