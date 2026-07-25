@@ -1,0 +1,22 @@
+[package]
+name = "medusa-session-feedback"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+medusa-evals = { path = "../medusa-evals" }
+medusa-improvement = { path = "../medusa-improvement" }
+medusa-protocol.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+time.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
+
+[lints]
+workspace = true
