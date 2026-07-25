@@ -7,6 +7,7 @@ on:
     paths:
       - '.github/workflows/run-issue-248.yml'
       - '.github/workflows/implement-issue-248.yml'
+      - '.github/scripts/run_issue_248.py'
 
 permissions:
   contents: write
@@ -20,17 +21,8 @@ jobs:
         with:
           ref: agent/tui-expandable-activity-details-v2
           fetch-depth: 1
-      - name: Extract and run implementation script
-        shell: python
-        run: |
-          from pathlib import Path
-
-          workflow = Path('.github/workflows/implement-issue-248.yml').read_text().splitlines()
-          start = workflow.index('        run: |') + 1
-          end = workflow.index('      - name: Format')
-          script = '\n'.join(line[10:] if line.startswith('          ') else line for line in workflow[start:end]) + '\n'
-          Path('/tmp/implement_issue_248.py').write_text(script)
-          exec(compile(script, '/tmp/implement_issue_248.py', 'exec'))
+      - name: Apply coordinated source transformation
+        run: python .github/scripts/run_issue_248.py
       - uses: dtolnay/rust-toolchain@1.88.0
         with:
           components: rustfmt
@@ -40,7 +32,7 @@ jobs:
         run: cargo test -p medusa-tui
       - name: Commit implementation
         run: |
-          rm -f .github/workflows/run-issue-248.yml .github/workflows/implement-issue-248.yml
+          rm -f .github/workflows/run-issue-248.yml .github/workflows/implement-issue-248.yml .github/scripts/run_issue_248.py
           git config user.name github-actions[bot]
           git config user.email 41898282+github-actions[bot]@users.noreply.github.com
           git add -A
