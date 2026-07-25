@@ -60,7 +60,12 @@ impl ReviewImpact {
 }
 
 fn symbol_label(symbol: &Symbol) -> String {
-    format!("{}:{}:{}", symbol.path.display(), symbol.start_line, symbol.name)
+    format!(
+        "{}:{}:{}",
+        symbol.path.display(),
+        symbol.start_line,
+        symbol.name
+    )
 }
 
 fn is_public_api_candidate(symbol: &Symbol) -> bool {
@@ -99,17 +104,23 @@ mod tests {
         .expect("test");
 
         let index = CodeIndex::build(repository.path()).expect("index");
-        let impact = ReviewImpact::analyze(
-            &index,
-            &[PathBuf::from("crates/widget/src/lib.rs")],
-        );
+        let impact = ReviewImpact::analyze(&index, &[PathBuf::from("crates/widget/src/lib.rs")]);
 
         assert!(impact.public_api_risk);
         assert_eq!(
             impact.impacted_tests,
             vec![PathBuf::from("crates/widget/tests/api.rs")]
         );
-        assert!(impact.changed_symbols.iter().any(|symbol| symbol.ends_with(":answer")));
-        assert!(impact.reviewer_context().contains("cargo test -p widget --test api"));
+        assert!(
+            impact
+                .changed_symbols
+                .iter()
+                .any(|symbol| symbol.ends_with(":answer"))
+        );
+        assert!(
+            impact
+                .reviewer_context()
+                .contains("cargo test -p widget --test api")
+        );
     }
 }
