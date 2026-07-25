@@ -36,7 +36,11 @@ impl RustCallGraph {
 
         for (reference_index, reference) in resolution.references.iter().enumerate() {
             if reference.status != ResolutionStatus::Resolved
-                || !is_call_reference(document, reference.range.start_byte, reference.range.end_byte)
+                || !is_call_reference(
+                    document,
+                    reference.range.start_byte,
+                    reference.range.end_byte,
+                )
             {
                 continue;
             }
@@ -120,15 +124,17 @@ fn is_call_reference(document: &RustAstDocument, start: usize, end: usize) -> bo
         return false;
     };
 
-    std::iter::successors(node.parent, |id| document.node(*id).and_then(|node| node.parent))
-        .filter_map(|id| document.node(id))
-        .take_while(|node| {
-            !matches!(
-                node.kind.as_str(),
-                "function_item" | "closure_expression" | "source_file"
-            )
-        })
-        .any(|node| matches!(node.kind.as_str(), "call_expression" | "macro_invocation"))
+    std::iter::successors(node.parent, |id| {
+        document.node(*id).and_then(|node| node.parent)
+    })
+    .filter_map(|id| document.node(id))
+    .take_while(|node| {
+        !matches!(
+            node.kind.as_str(),
+            "function_item" | "closure_expression" | "source_file"
+        )
+    })
+    .any(|node| matches!(node.kind.as_str(), "call_expression" | "macro_invocation"))
 }
 
 fn containing_callable(table: &RustSymbolTable, byte: usize) -> Option<RustSymbolId> {
@@ -136,8 +142,10 @@ fn containing_callable(table: &RustSymbolTable, byte: usize) -> Option<RustSymbo
         .symbols
         .values()
         .filter(|symbol| {
-            matches!(symbol.kind, RustSymbolKind::Function | RustSymbolKind::Method)
-                && symbol.range.start_byte <= byte
+            matches!(
+                symbol.kind,
+                RustSymbolKind::Function | RustSymbolKind::Method
+            ) && symbol.range.start_byte <= byte
                 && byte <= symbol.range.end_byte
         })
         .min_by_key(|symbol| symbol.range.end_byte - symbol.range.start_byte)

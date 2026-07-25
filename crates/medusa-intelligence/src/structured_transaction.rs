@@ -84,8 +84,16 @@ pub enum StructuredTransactionError {
     Validation(Vec<StructuredEditError>),
     Io(std::io::Error),
     Serialization(serde_json::Error),
-    StaleWorkspace { path: PathBuf, expected: String, actual: Option<String> },
-    VerificationMismatch { path: PathBuf, expected: Option<String>, actual: Option<String> },
+    StaleWorkspace {
+        path: PathBuf,
+        expected: String,
+        actual: Option<String>,
+    },
+    VerificationMismatch {
+        path: PathBuf,
+        expected: Option<String>,
+        actual: Option<String>,
+    },
     InvalidPlan(String),
     Injected(TransactionFailurePoint),
 }
@@ -93,21 +101,37 @@ pub enum StructuredTransactionError {
 impl std::fmt::Display for StructuredTransactionError {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::Validation(errors) => write!(formatter, "structured edit validation failed: {errors:?}"),
+            Self::Validation(errors) => {
+                write!(formatter, "structured edit validation failed: {errors:?}")
+            }
             Self::Io(error) => write!(formatter, "structured transaction I/O error: {error}"),
-            Self::Serialization(error) => write!(formatter, "structured transaction serialization error: {error}"),
-            Self::StaleWorkspace { path, expected, actual } => write!(
+            Self::Serialization(error) => write!(
+                formatter,
+                "structured transaction serialization error: {error}"
+            ),
+            Self::StaleWorkspace {
+                path,
+                expected,
+                actual,
+            } => write!(
                 formatter,
                 "workspace changed before apply for {}: expected {expected}, found {actual:?}",
                 path.display()
             ),
-            Self::VerificationMismatch { path, expected, actual } => write!(
+            Self::VerificationMismatch {
+                path,
+                expected,
+                actual,
+            } => write!(
                 formatter,
                 "post-apply verification mismatch for {}: expected {expected:?}, found {actual:?}",
                 path.display()
             ),
             Self::InvalidPlan(message) => formatter.write_str(message),
-            Self::Injected(point) => write!(formatter, "injected structured transaction failure at {point:?}"),
+            Self::Injected(point) => write!(
+                formatter,
+                "injected structured transaction failure at {point:?}"
+            ),
         }
     }
 }
@@ -139,7 +163,9 @@ pub fn apply_structured_transaction(
             "structured transaction plan id cannot be empty".to_owned(),
         ));
     }
-    let audit = plan.validate(snapshots).map_err(StructuredTransactionError::Validation)?;
+    let audit = plan
+        .validate(snapshots)
+        .map_err(StructuredTransactionError::Validation)?;
     verify_workspace_matches_snapshots(repo, snapshots, &plan.touched_paths())?;
 
     let directory = repo.join(JOURNAL_ROOT).join(&plan.id);
@@ -252,7 +278,10 @@ fn render_final_workspace(
     let mut result = BTreeMap::new();
     for path in plan.touched_paths() {
         let absolute = repo.join(&path);
-        result.insert(path, absolute.is_file().then(|| fs::read(absolute)).transpose()?);
+        result.insert(
+            path,
+            absolute.is_file().then(|| fs::read(absolute)).transpose()?,
+        );
     }
 
     let mut grouped = BTreeMap::<PathBuf, Vec<_>>::new();
@@ -260,13 +289,12 @@ fn render_final_workspace(
         grouped.entry(edit.path.clone()).or_default().push(edit);
     }
     for (path, mut edits) in grouped {
-        let bytes = result
-            .get(&path)
-            .and_then(Option::as_ref)
-            .ok_or_else(|| StructuredTransactionError::InvalidPlan(format!(
+        let bytes = result.get(&path).and_then(Option::as_ref).ok_or_else(|| {
+            StructuredTransactionError::InvalidPlan(format!(
                 "text edit target does not exist: {}",
                 path.display()
-            )))?;
+            ))
+        })?;
         let mut text = String::from_utf8(bytes.clone()).map_err(|_| {
             StructuredTransactionError::InvalidPlan(format!(
                 "text edit target is not UTF-8: {}",
@@ -275,14 +303,22 @@ fn render_final_workspace(
         })?;
         edits.sort_by_key(|edit| edit.range);
         for edit in edits.into_iter().rev() {
-            text.replace_range(edit.range.start_byte..edit.range.end_byte, &edit.replacement);
+            text.replace_range(
+                edit.range.start_byte..edit.range.end_byte,
+                &edit.replacement,
+            );
         }
         result.insert(path, Some(text.into_bytes()));
     }
 
     for operation in &plan.file_operations {
         match operation {
-            StructuredFileOperation::Create { path, content, overwrite, .. } => {
+            StructuredFileOperation::Create {
+                path,
+                content,
+                overwrite,
+                ..
+            } => {
                 if result.get(path).is_some_and(Option::is_some) && !overwrite {
                     return Err(StructuredTransactionError::InvalidPlan(format!(
                         "create target exists: {}",
@@ -294,22 +330,30 @@ fn render_final_workspace(
             StructuredFileOperation::Delete { path, .. } => {
                 result.insert(path.clone(), None);
             }
-            StructuredFileOperation::Move { from, to, overwrite, .. }
-            | StructuredFileOperation::Rename { from, to, overwrite, .. } => {
+            StructuredFileOperation::Move {
+                from,
+                to,
+                overwrite,
+                ..
+            }
+            | StructuredFileOperation::Rename {
+                from,
+                to,
+                overwrite,
+                ..
+            } => {
                 if result.get(to).is_some_and(Option::is_some) && !overwrite {
                     return Err(StructuredTransactionError::InvalidPlan(format!(
                         "move target exists: {}",
                         to.display()
                     )));
                 }
-                let content = result
-                    .get(from)
-                    .cloned()
-                    .flatten()
-                    .ok_or_else(|| StructuredTransactionError::InvalidPlan(format!(
+                let content = result.get(from).cloned().flatten().ok_or_else(|| {
+                    StructuredTransactionError::InvalidPlan(format!(
                         "move source does not exist: {}",
                         from.display()
-                    )))?;
+                    ))
+                })?;
                 result.insert(from.clone(), None);
                 result.insert(to.clone(), Some(content));
             }
@@ -328,7 +372,10 @@ fn prepare_journal(
     let mut paths = Vec::new();
     for (index, (path, final_content)) in final_files.into_iter().enumerate() {
         let absolute = repo.join(&path);
-        let before = absolute.is_file().then(|| fs::read(&absolute)).transpose()?;
+        let before = absolute
+            .is_file()
+            .then(|| fs::read(&absolute))
+            .transpose()?;
         let backup_file = before.as_ref().map(|_| format!("{index}.before"));
         let staged_file = final_content.as_ref().map(|_| format!("{index}.after"));
         if let (Some(name), Some(bytes)) = (&backup_file, &before) {
@@ -367,7 +414,10 @@ fn stage_files(
         if actual != entry.before_hash {
             return Err(StructuredTransactionError::StaleWorkspace {
                 path: entry.path.clone(),
-                expected: entry.before_hash.clone().unwrap_or_else(|| "<missing>".to_owned()),
+                expected: entry
+                    .before_hash
+                    .clone()
+                    .unwrap_or_else(|| "<missing>".to_owned()),
                 actual,
             });
         }
@@ -465,7 +515,11 @@ fn rollback(
 fn receipt(journal: &StructuredTransactionJournal) -> StructuredTransactionReceipt {
     StructuredTransactionReceipt {
         transaction_id: journal.transaction_id.clone(),
-        changed_paths: journal.paths.iter().map(|entry| entry.path.clone()).collect(),
+        changed_paths: journal
+            .paths
+            .iter()
+            .map(|entry| entry.path.clone())
+            .collect(),
         before_hashes: journal
             .paths
             .iter()
@@ -492,7 +546,9 @@ fn inject(
     }
 }
 
-fn load_journal(directory: &Path) -> Result<StructuredTransactionJournal, StructuredTransactionError> {
+fn load_journal(
+    directory: &Path,
+) -> Result<StructuredTransactionJournal, StructuredTransactionError> {
     let journal: StructuredTransactionJournal =
         serde_json::from_slice(&fs::read(directory.join("journal.json"))?)?;
     if journal.schema != JOURNAL_SCHEMA {
@@ -515,7 +571,11 @@ fn persist_journal(
 }
 
 fn file_hash(path: &Path) -> Result<Option<String>, StructuredTransactionError> {
-    Ok(path.is_file().then(|| fs::read(path)).transpose()?.map(|bytes| hash(&bytes)))
+    Ok(path
+        .is_file()
+        .then(|| fs::read(path))
+        .transpose()?
+        .map(|bytes| hash(&bytes)))
 }
 
 fn write_synced(path: &Path, bytes: &[u8]) -> Result<(), StructuredTransactionError> {
@@ -546,9 +606,7 @@ fn sync_directory(path: &Path) -> Result<(), StructuredTransactionError> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{
-        EditMetadata, EditPreconditions, EditRange, StructuredTextEdit,
-    };
+    use crate::{EditMetadata, EditPreconditions, EditRange, StructuredTextEdit};
 
     fn snapshot(content: &str) -> FileSnapshot {
         FileSnapshot {
@@ -567,10 +625,20 @@ mod tests {
                 path: path.into(),
                 file_hash: Some(hash(b"old")),
                 file_version: Some(1),
-                range: EditRange { start_byte: 0, end_byte: 3 },
+                range: EditRange {
+                    start_byte: 0,
+                    end_byte: 3,
+                },
                 replacement: "new".to_owned(),
-                metadata: EditMetadata { intent: "test".to_owned(), provenance: "unit".to_owned(), annotation: None },
-                preconditions: EditPreconditions { expected_content: Some("old".to_owned()), ..EditPreconditions::default() },
+                metadata: EditMetadata {
+                    intent: "test".to_owned(),
+                    provenance: "unit".to_owned(),
+                    annotation: None,
+                },
+                preconditions: EditPreconditions {
+                    expected_content: Some("old".to_owned()),
+                    ..EditPreconditions::default()
+                },
             });
         }
         let snapshots = [
@@ -588,10 +656,20 @@ mod tests {
         fs::write(repo.path().join("a.txt"), "old").expect("a");
         fs::write(repo.path().join("b.txt"), "old").expect("b");
         let (plan, snapshots) = two_file_plan();
-        let receipt = apply_structured_transaction(repo.path(), plan, &snapshots, None).expect("commit");
+        let receipt =
+            apply_structured_transaction(repo.path(), plan, &snapshots, None).expect("commit");
         assert_eq!(receipt.state, StructuredTransactionState::Committed);
-        assert_eq!(fs::read_to_string(repo.path().join("a.txt")).expect("a"), "new");
-        assert!(receipt.audit.previews.iter().all(|preview| preview.after == "new"));
+        assert_eq!(
+            fs::read_to_string(repo.path().join("a.txt")).expect("a"),
+            "new"
+        );
+        assert!(
+            receipt
+                .audit
+                .previews
+                .iter()
+                .all(|preview| preview.after == "new")
+        );
     }
 
     #[test]
@@ -607,8 +685,14 @@ mod tests {
             Some(TransactionFailurePoint::DuringApply),
         );
         assert!(result.is_err());
-        assert_eq!(fs::read_to_string(repo.path().join("a.txt")).expect("a"), "old");
-        assert_eq!(fs::read_to_string(repo.path().join("b.txt")).expect("b"), "old");
+        assert_eq!(
+            fs::read_to_string(repo.path().join("a.txt")).expect("a"),
+            "old"
+        );
+        assert_eq!(
+            fs::read_to_string(repo.path().join("b.txt")).expect("b"),
+            "old"
+        );
     }
 
     #[test]
@@ -618,8 +702,14 @@ mod tests {
         fs::write(repo.path().join("b.txt"), "old").expect("b");
         let (plan, snapshots) = two_file_plan();
         let result = apply_structured_transaction(repo.path(), plan, &snapshots, None);
-        assert!(matches!(result, Err(StructuredTransactionError::StaleWorkspace { .. })));
-        assert_eq!(fs::read_to_string(repo.path().join("b.txt")).expect("b"), "old");
+        assert!(matches!(
+            result,
+            Err(StructuredTransactionError::StaleWorkspace { .. })
+        ));
+        assert_eq!(
+            fs::read_to_string(repo.path().join("b.txt")).expect("b"),
+            "old"
+        );
     }
 
     #[test]
@@ -636,9 +726,17 @@ mod tests {
             fs::write(repo.path().join("b.txt"), "old").expect("b");
             let (mut plan, snapshots) = two_file_plan();
             plan.id = format!("failure-{point:?}");
-            assert!(apply_structured_transaction(repo.path(), plan, &snapshots, Some(point)).is_err());
-            assert_eq!(fs::read_to_string(repo.path().join("a.txt")).expect("a"), "old");
-            assert_eq!(fs::read_to_string(repo.path().join("b.txt")).expect("b"), "old");
+            assert!(
+                apply_structured_transaction(repo.path(), plan, &snapshots, Some(point)).is_err()
+            );
+            assert_eq!(
+                fs::read_to_string(repo.path().join("a.txt")).expect("a"),
+                "old"
+            );
+            assert_eq!(
+                fs::read_to_string(repo.path().join("b.txt")).expect("b"),
+                "old"
+            );
         }
     }
 }

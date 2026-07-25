@@ -112,7 +112,9 @@ impl LspClient {
 
     pub fn start(&mut self) -> Result<Value, LspError> {
         if self.state == LspServerState::Running {
-            return Err(LspError::Protocol("language server is already running".to_owned()));
+            return Err(LspError::Protocol(
+                "language server is already running".to_owned(),
+            ));
         }
         self.state = LspServerState::Starting;
 
@@ -135,10 +137,9 @@ impl LspClient {
             .stdin
             .take()
             .ok_or_else(|| LspError::Protocol("language server stdin is unavailable".to_owned()))?;
-        let stdout = child
-            .stdout
-            .take()
-            .ok_or_else(|| LspError::Protocol("language server stdout is unavailable".to_owned()))?;
+        let stdout = child.stdout.take().ok_or_else(|| {
+            LspError::Protocol("language server stdout is unavailable".to_owned())
+        })?;
 
         self.stdin = Some(stdin);
         self.stdout = Some(BufReader::new(stdout));
@@ -255,11 +256,15 @@ impl LspServerManager {
 
     #[must_use]
     pub fn get_mut(&mut self, language: &str, root: &Path) -> Option<&mut LspClient> {
-        self.servers.get_mut(&(language.to_owned(), root.to_path_buf()))
+        self.servers
+            .get_mut(&(language.to_owned(), root.to_path_buf()))
     }
 
     pub fn stop(&mut self, language: &str, root: &Path) -> Result<(), LspError> {
-        if let Some(mut client) = self.servers.remove(&(language.to_owned(), root.to_path_buf())) {
+        if let Some(mut client) = self
+            .servers
+            .remove(&(language.to_owned(), root.to_path_buf()))
+        {
             client.shutdown()?;
         }
         Ok(())

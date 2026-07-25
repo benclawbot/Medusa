@@ -119,9 +119,7 @@ impl<'a> RustStructuredEditPlanner<'a> {
             .document
             .nodes_of_kind("use_declaration")
             .collect::<Vec<_>>();
-        let insertion = imports
-            .last()
-            .map_or(0, |node| node.range.end_byte);
+        let insertion = imports.last().map_or(0, |node| node.range.end_byte);
         let prefix = if insertion == 0 || self.source[..insertion].ends_with('\n') {
             String::new()
         } else {
@@ -216,11 +214,7 @@ impl<'a> RustStructuredEditPlanner<'a> {
             )));
         }
 
-        let mut plan = StructuredEditPlan::new(plan_id(
-            &self.path,
-            &intent,
-            staged.as_bytes(),
-        ));
+        let mut plan = StructuredEditPlan::new(plan_id(&self.path, &intent, staged.as_bytes()));
         plan.add_text_edit(StructuredTextEdit {
             path: self.path.clone(),
             file_hash: Some(hash(self.source.as_bytes())),
@@ -269,11 +263,19 @@ mod tests {
             .next()
             .expect("block");
         let plan = planner
-            .replace_node(body.id, "{ 42 }", "replace function body", Some("answer".to_owned()))
+            .replace_node(
+                body.id,
+                "{ 42 }",
+                "replace function body",
+                Some("answer".to_owned()),
+            )
             .expect("plan");
         assert_eq!(plan.text_edits.len(), 1);
         assert_eq!(
-            plan.text_edits[0].preconditions.expected_ast_node.as_deref(),
+            plan.text_edits[0]
+                .preconditions
+                .expected_ast_node
+                .as_deref(),
             Some("block")
         );
         assert_eq!(
@@ -286,8 +288,20 @@ mod tests {
     fn import_edits_are_idempotent() {
         let source = "use std::fmt::Debug;\nfn main() {}\n";
         let planner = RustStructuredEditPlanner::parse("src/main.rs", source).expect("planner");
-        assert!(planner.add_import("std::fmt::Debug").expect("add").text_edits.is_empty());
-        assert!(planner.remove_import("std::io::Read").expect("remove").text_edits.is_empty());
+        assert!(
+            planner
+                .add_import("std::fmt::Debug")
+                .expect("add")
+                .text_edits
+                .is_empty()
+        );
+        assert!(
+            planner
+                .remove_import("std::io::Read")
+                .expect("remove")
+                .text_edits
+                .is_empty()
+        );
     }
 
     #[test]

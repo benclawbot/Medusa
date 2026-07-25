@@ -1,4 +1,8 @@
-use std::{collections::{BTreeMap, BTreeSet}, fmt, path::{Path, PathBuf}};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    fmt,
+    path::{Path, PathBuf},
+};
 
 use serde::{Deserialize, Serialize};
 
@@ -100,16 +104,48 @@ pub struct FileSnapshot {
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum StructuredEditError {
-    InvalidRange { path: PathBuf, range: EditRange },
-    OverlappingEdits { path: PathBuf, first: EditRange, second: EditRange },
-    MissingSnapshot { path: PathBuf },
-    StaleHash { path: PathBuf, expected: String, actual: String },
-    StaleVersion { path: PathBuf, expected: u64, actual: Option<u64> },
-    ExpectedContentMismatch { path: PathBuf, range: EditRange, expected: String, actual: String },
-    ExpectedSymbolMissing { path: PathBuf, symbol: String },
-    ExpectedAstNodeMissing { path: PathBuf, node: String },
-    ConflictingFileOperation { path: PathBuf },
-    UnsafePath { path: PathBuf },
+    InvalidRange {
+        path: PathBuf,
+        range: EditRange,
+    },
+    OverlappingEdits {
+        path: PathBuf,
+        first: EditRange,
+        second: EditRange,
+    },
+    MissingSnapshot {
+        path: PathBuf,
+    },
+    StaleHash {
+        path: PathBuf,
+        expected: String,
+        actual: String,
+    },
+    StaleVersion {
+        path: PathBuf,
+        expected: u64,
+        actual: Option<u64>,
+    },
+    ExpectedContentMismatch {
+        path: PathBuf,
+        range: EditRange,
+        expected: String,
+        actual: String,
+    },
+    ExpectedSymbolMissing {
+        path: PathBuf,
+        symbol: String,
+    },
+    ExpectedAstNodeMissing {
+        path: PathBuf,
+        node: String,
+    },
+    ConflictingFileOperation {
+        path: PathBuf,
+    },
+    UnsafePath {
+        path: PathBuf,
+    },
 }
 
 impl fmt::Display for StructuredEditError {
@@ -198,11 +234,16 @@ impl StructuredEditPlan {
 
         for edit in &self.text_edits {
             if !safe_relative(&edit.path) {
-                errors.push(StructuredEditError::UnsafePath { path: edit.path.clone() });
+                errors.push(StructuredEditError::UnsafePath {
+                    path: edit.path.clone(),
+                });
                 continue;
             }
             if edit.range.start_byte > edit.range.end_byte {
-                errors.push(StructuredEditError::InvalidRange { path: edit.path.clone(), range: edit.range });
+                errors.push(StructuredEditError::InvalidRange {
+                    path: edit.path.clone(),
+                    range: edit.range,
+                });
                 continue;
             }
             grouped.entry(&edit.path).or_default().push(edit);
@@ -221,7 +262,9 @@ impl StructuredEditPlan {
                 }
             }
             let Some(snapshot) = snapshots.get(path) else {
-                errors.push(StructuredEditError::MissingSnapshot { path: path.to_path_buf() });
+                errors.push(StructuredEditError::MissingSnapshot {
+                    path: path.to_path_buf(),
+                });
                 continue;
             };
             for edit in &edits {
@@ -230,7 +273,10 @@ impl StructuredEditPlan {
             if errors.is_empty() {
                 let mut after = snapshot.content.clone();
                 for edit in edits.iter().rev() {
-                    after.replace_range(edit.range.start_byte..edit.range.end_byte, &edit.replacement);
+                    after.replace_range(
+                        edit.range.start_byte..edit.range.end_byte,
+                        &edit.replacement,
+                    );
                 }
                 for edit in edits {
                     previews.push(EditPreview {
@@ -282,8 +328,14 @@ fn validate_edit(
             });
         }
     }
-    let Some(actual) = snapshot.content.get(edit.range.start_byte..edit.range.end_byte) else {
-        errors.push(StructuredEditError::InvalidRange { path: edit.path.clone(), range: edit.range });
+    let Some(actual) = snapshot
+        .content
+        .get(edit.range.start_byte..edit.range.end_byte)
+    else {
+        errors.push(StructuredEditError::InvalidRange {
+            path: edit.path.clone(),
+            range: edit.range,
+        });
         return;
     };
     if let Some(expected) = &edit.preconditions.expected_content {
@@ -323,11 +375,23 @@ fn validate_file_operations(
     for operation in operations {
         let (source, destination, expected_hash) = match operation {
             StructuredFileOperation::Create { path, .. } => (None, Some(path), None),
-            StructuredFileOperation::Delete { path, expected_hash, .. } => (Some(path), None, expected_hash.as_ref()),
-            StructuredFileOperation::Move { from, to, expected_hash, .. }
-            | StructuredFileOperation::Rename { from, to, expected_hash, .. } => {
-                (Some(from), Some(to), expected_hash.as_ref())
+            StructuredFileOperation::Delete {
+                path,
+                expected_hash,
+                ..
+            } => (Some(path), None, expected_hash.as_ref()),
+            StructuredFileOperation::Move {
+                from,
+                to,
+                expected_hash,
+                ..
             }
+            | StructuredFileOperation::Rename {
+                from,
+                to,
+                expected_hash,
+                ..
+            } => (Some(from), Some(to), expected_hash.as_ref()),
         };
         for path in source.into_iter().chain(destination) {
             if !safe_relative(path) {
@@ -341,11 +405,13 @@ fn validate_file_operations(
         }
         if let (Some(path), Some(expected)) = (source, expected_hash) {
             match snapshots.get(path) {
-                Some(snapshot) if &snapshot.hash != expected => errors.push(StructuredEditError::StaleHash {
-                    path: path.clone(),
-                    expected: expected.clone(),
-                    actual: snapshot.hash.clone(),
-                }),
+                Some(snapshot) if &snapshot.hash != expected => {
+                    errors.push(StructuredEditError::StaleHash {
+                        path: path.clone(),
+                        expected: expected.clone(),
+                        actual: snapshot.hash.clone(),
+                    })
+                }
                 None => errors.push(StructuredEditError::MissingSnapshot { path: path.clone() }),
                 _ => {}
             }
@@ -356,7 +422,10 @@ fn validate_file_operations(
 fn safe_relative(path: &Path) -> bool {
     !path.is_absolute()
         && path.components().all(|component| {
-            matches!(component, std::path::Component::Normal(_) | std::path::Component::CurDir)
+            matches!(
+                component,
+                std::path::Component::Normal(_) | std::path::Component::CurDir
+            )
         })
 }
 
@@ -366,7 +435,10 @@ impl From<TextEdit> for StructuredTextEdit {
             path: edit.path,
             file_hash: None,
             file_version: None,
-            range: EditRange { start_byte: edit.start_byte, end_byte: edit.end_byte },
+            range: EditRange {
+                start_byte: edit.start_byte,
+                end_byte: edit.end_byte,
+            },
             replacement: edit.replacement,
             metadata: EditMetadata {
                 intent: "text_patch".to_owned(),
@@ -401,10 +473,24 @@ mod tests {
         let mut plan = StructuredEditPlan::new("rename-answer");
         for path in ["src/lib.rs", "tests/use.rs"] {
             plan.add_text_edit(StructuredTextEdit {
-                path: path.into(), file_hash: Some("h1".into()), file_version: Some(1),
-                range: EditRange { start_byte: 0, end_byte: 6 }, replacement: "result".into(),
-                metadata: EditMetadata { intent: "rename".into(), provenance: "test".into(), annotation: None },
-                preconditions: EditPreconditions { expected_content: Some("answer".into()), expected_symbol: Some("answer".into()), expected_ast_node: None },
+                path: path.into(),
+                file_hash: Some("h1".into()),
+                file_version: Some(1),
+                range: EditRange {
+                    start_byte: 0,
+                    end_byte: 6,
+                },
+                replacement: "result".into(),
+                metadata: EditMetadata {
+                    intent: "rename".into(),
+                    provenance: "test".into(),
+                    annotation: None,
+                },
+                preconditions: EditPreconditions {
+                    expected_content: Some("answer".into()),
+                    expected_symbol: Some("answer".into()),
+                    expected_ast_node: None,
+                },
             });
         }
         let snapshots = BTreeMap::from([
@@ -419,23 +505,67 @@ mod tests {
     #[test]
     fn reports_overlap_and_stale_hash_as_typed_failures() {
         let mut plan = StructuredEditPlan::new("bad");
-        for range in [EditRange { start_byte: 0, end_byte: 4 }, EditRange { start_byte: 3, end_byte: 6 }] {
+        for range in [
+            EditRange {
+                start_byte: 0,
+                end_byte: 4,
+            },
+            EditRange {
+                start_byte: 3,
+                end_byte: 6,
+            },
+        ] {
             plan.add_text_edit(StructuredTextEdit {
-                path: "src/lib.rs".into(), file_hash: Some("old".into()), file_version: None,
-                range, replacement: "x".into(), metadata: EditMetadata::default(),
+                path: "src/lib.rs".into(),
+                file_hash: Some("old".into()),
+                file_version: None,
+                range,
+                replacement: "x".into(),
+                metadata: EditMetadata::default(),
                 preconditions: EditPreconditions::default(),
             });
         }
-        let errors = plan.validate(&BTreeMap::from([(PathBuf::from("src/lib.rs"), snapshot("answer()", "new", 1))])).expect_err("invalid");
-        assert!(errors.iter().any(|error| matches!(error, StructuredEditError::OverlappingEdits { .. })));
-        assert!(errors.iter().any(|error| matches!(error, StructuredEditError::StaleHash { .. })));
+        let errors = plan
+            .validate(&BTreeMap::from([(
+                PathBuf::from("src/lib.rs"),
+                snapshot("answer()", "new", 1),
+            )]))
+            .expect_err("invalid");
+        assert!(
+            errors
+                .iter()
+                .any(|error| matches!(error, StructuredEditError::OverlappingEdits { .. }))
+        );
+        assert!(
+            errors
+                .iter()
+                .any(|error| matches!(error, StructuredEditError::StaleHash { .. }))
+        );
     }
 
     #[test]
     fn serialization_is_deterministic_after_normalization() {
         let mut plan = StructuredEditPlan::new("stable");
-        plan.add_text_edit(TextEdit { path: "b.rs".into(), start_byte: 0, end_byte: 1, expected: "b".into(), replacement: "B".into() }.into());
-        plan.add_text_edit(TextEdit { path: "a.rs".into(), start_byte: 0, end_byte: 1, expected: "a".into(), replacement: "A".into() }.into());
+        plan.add_text_edit(
+            TextEdit {
+                path: "b.rs".into(),
+                start_byte: 0,
+                end_byte: 1,
+                expected: "b".into(),
+                replacement: "B".into(),
+            }
+            .into(),
+        );
+        plan.add_text_edit(
+            TextEdit {
+                path: "a.rs".into(),
+                start_byte: 0,
+                end_byte: 1,
+                expected: "a".into(),
+                replacement: "A".into(),
+            }
+            .into(),
+        );
         let first = serde_json::to_string(&plan).expect("serialize");
         let decoded: StructuredEditPlan = serde_json::from_str(&first).expect("deserialize");
         let second = serde_json::to_string(&decoded).expect("serialize");

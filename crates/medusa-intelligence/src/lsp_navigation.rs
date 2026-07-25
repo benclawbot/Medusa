@@ -1,4 +1,8 @@
-use std::{collections::BTreeSet, path::{Path, PathBuf}, time::Instant};
+use std::{
+    collections::BTreeSet,
+    path::{Path, PathBuf},
+    time::Instant,
+};
 
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -67,7 +71,15 @@ pub fn go_to_definition(
     line: u32,
     character: u32,
 ) -> Result<LspNavigationResult, LspError> {
-    position_query(client, workspace_root, path, line, character, "textDocument/definition", LspNavigationKind::Definition)
+    position_query(
+        client,
+        workspace_root,
+        path,
+        line,
+        character,
+        "textDocument/definition",
+        LspNavigationKind::Definition,
+    )
 }
 
 pub fn go_to_declaration(
@@ -77,7 +89,15 @@ pub fn go_to_declaration(
     line: u32,
     character: u32,
 ) -> Result<LspNavigationResult, LspError> {
-    position_query(client, workspace_root, path, line, character, "textDocument/declaration", LspNavigationKind::Declaration)
+    position_query(
+        client,
+        workspace_root,
+        path,
+        line,
+        character,
+        "textDocument/declaration",
+        LspNavigationKind::Declaration,
+    )
 }
 
 pub fn find_references(
@@ -89,12 +109,20 @@ pub fn find_references(
     include_declaration: bool,
 ) -> Result<LspNavigationResult, LspError> {
     let started = Instant::now();
-    let response = client.request("textDocument/references", json!({
-        "textDocument": { "uri": file_uri(path) },
-        "position": { "line": line, "character": character },
-        "context": { "includeDeclaration": include_declaration }
-    }))?;
-    Ok(normalize_response(LspNavigationKind::Reference, workspace_root, response, started.elapsed().as_millis() as u64))
+    let response = client.request(
+        "textDocument/references",
+        json!({
+            "textDocument": { "uri": file_uri(path) },
+            "position": { "line": line, "character": character },
+            "context": { "includeDeclaration": include_declaration }
+        }),
+    )?;
+    Ok(normalize_response(
+        LspNavigationKind::Reference,
+        workspace_root,
+        response,
+        started.elapsed().as_millis() as u64,
+    ))
 }
 
 pub fn document_symbols(
@@ -103,10 +131,18 @@ pub fn document_symbols(
     path: &Path,
 ) -> Result<LspNavigationResult, LspError> {
     let started = Instant::now();
-    let response = client.request("textDocument/documentSymbol", json!({
-        "textDocument": { "uri": file_uri(path) }
-    }))?;
-    Ok(normalize_response(LspNavigationKind::DocumentSymbol, workspace_root, response, started.elapsed().as_millis() as u64))
+    let response = client.request(
+        "textDocument/documentSymbol",
+        json!({
+            "textDocument": { "uri": file_uri(path) }
+        }),
+    )?;
+    Ok(normalize_response(
+        LspNavigationKind::DocumentSymbol,
+        workspace_root,
+        response,
+        started.elapsed().as_millis() as u64,
+    ))
 }
 
 pub fn workspace_symbols(
@@ -116,17 +152,28 @@ pub fn workspace_symbols(
 ) -> Result<LspNavigationResult, LspError> {
     let started = Instant::now();
     let response = client.request("workspace/symbol", json!({ "query": query }))?;
-    Ok(normalize_response(LspNavigationKind::WorkspaceSymbol, workspace_root, response, started.elapsed().as_millis() as u64))
+    Ok(normalize_response(
+        LspNavigationKind::WorkspaceSymbol,
+        workspace_root,
+        response,
+        started.elapsed().as_millis() as u64,
+    ))
 }
 
 pub fn compare_with_static(
     result: &mut LspNavigationResult,
     static_paths: impl IntoIterator<Item = PathBuf>,
 ) {
-    let lsp: BTreeSet<_> = result.locations.iter().map(|location| location.path.clone()).collect();
+    let lsp: BTreeSet<_> = result
+        .locations
+        .iter()
+        .map(|location| location.path.clone())
+        .collect();
     let static_set: BTreeSet<_> = static_paths.into_iter().collect();
     if lsp != static_set {
-        result.disagreement = Some(format!("LSP paths {lsp:?} differ from static paths {static_set:?}"));
+        result.disagreement = Some(format!(
+            "LSP paths {lsp:?} differ from static paths {static_set:?}"
+        ));
         result.confidence_millis = 700;
     }
 }
@@ -141,14 +188,27 @@ fn position_query(
     kind: LspNavigationKind,
 ) -> Result<LspNavigationResult, LspError> {
     let started = Instant::now();
-    let response = client.request(method, json!({
-        "textDocument": { "uri": file_uri(path) },
-        "position": { "line": line, "character": character }
-    }))?;
-    Ok(normalize_response(kind, workspace_root, response, started.elapsed().as_millis() as u64))
+    let response = client.request(
+        method,
+        json!({
+            "textDocument": { "uri": file_uri(path) },
+            "position": { "line": line, "character": character }
+        }),
+    )?;
+    Ok(normalize_response(
+        kind,
+        workspace_root,
+        response,
+        started.elapsed().as_millis() as u64,
+    ))
 }
 
-fn normalize_response(kind: LspNavigationKind, root: &Path, response: Value, latency_ms: u64) -> LspNavigationResult {
+fn normalize_response(
+    kind: LspNavigationKind,
+    root: &Path,
+    response: Value,
+    latency_ms: u64,
+) -> LspNavigationResult {
     if response.is_null() {
         return LspNavigationResult::unsupported(kind, latency_ms);
     }
@@ -167,24 +227,50 @@ fn normalize_response(kind: LspNavigationKind, root: &Path, response: Value, lat
     }
 }
 
-fn collect_locations(root: &Path, value: &Value, inherited_name: Option<String>, inherited_kind: Option<u32>, out: &mut Vec<LspLocation>) {
+fn collect_locations(
+    root: &Path,
+    value: &Value,
+    inherited_name: Option<String>,
+    inherited_kind: Option<u32>,
+    out: &mut Vec<LspLocation>,
+) {
     if let Some(items) = value.as_array() {
         for item in items {
             collect_locations(root, item, inherited_name.clone(), inherited_kind, out);
         }
         return;
     }
-    let Some(object) = value.as_object() else { return; };
-    let name = object.get("name").and_then(Value::as_str).map(str::to_owned).or(inherited_name);
-    let symbol_kind = object.get("kind").and_then(Value::as_u64).map(|kind| kind as u32).or(inherited_kind);
+    let Some(object) = value.as_object() else {
+        return;
+    };
+    let name = object
+        .get("name")
+        .and_then(Value::as_str)
+        .map(str::to_owned)
+        .or(inherited_name);
+    let symbol_kind = object
+        .get("kind")
+        .and_then(Value::as_u64)
+        .map(|kind| kind as u32)
+        .or(inherited_kind);
     if let Some(location) = object.get("location") {
         collect_locations(root, location, name.clone(), symbol_kind, out);
     }
-    let uri = object.get("uri").or_else(|| object.get("targetUri")).and_then(Value::as_str);
-    let range = object.get("range").or_else(|| object.get("targetSelectionRange"));
+    let uri = object
+        .get("uri")
+        .or_else(|| object.get("targetUri"))
+        .and_then(Value::as_str);
+    let range = object
+        .get("range")
+        .or_else(|| object.get("targetSelectionRange"));
     if let (Some(uri), Some(range)) = (uri, range) {
         if let Some(range) = parse_range(range) {
-            out.push(LspLocation { path: repository_path(root, uri), range, name: name.clone(), kind: symbol_kind });
+            out.push(LspLocation {
+                path: repository_path(root, uri),
+                range,
+                name: name.clone(),
+                kind: symbol_kind,
+            });
         }
     }
     if let Some(children) = object.get("children") {
@@ -207,14 +293,27 @@ fn parse_position(value: &Value) -> Option<LspPosition> {
 }
 
 fn repository_path(root: &Path, uri: &str) -> PathBuf {
-    let decoded = uri.strip_prefix("file://").unwrap_or(uri).replace("%20", " ");
+    let decoded = uri
+        .strip_prefix("file://")
+        .unwrap_or(uri)
+        .replace("%20", " ");
     let absolute = PathBuf::from(decoded);
-    absolute.strip_prefix(root).unwrap_or(&absolute).to_path_buf()
+    absolute
+        .strip_prefix(root)
+        .unwrap_or(&absolute)
+        .to_path_buf()
 }
 
 fn file_uri(path: &Path) -> String {
-    let normalized = path.to_string_lossy().replace('\\', "/").replace(' ', "%20");
-    if normalized.starts_with('/') { format!("file://{normalized}") } else { format!("file:///{normalized}") }
+    let normalized = path
+        .to_string_lossy()
+        .replace('\\', "/")
+        .replace(' ', "%20");
+    if normalized.starts_with('/') {
+        format!("file://{normalized}")
+    } else {
+        format!("file:///{normalized}")
+    }
 }
 
 #[cfg(test)]
@@ -227,7 +326,12 @@ mod tests {
             {"targetUri":"file:///repo/src/z.rs","targetSelectionRange":{"start":{"line":2,"character":1},"end":{"line":2,"character":4}}},
             {"uri":"file:///repo/src/a.rs","range":{"start":{"line":1,"character":0},"end":{"line":1,"character":3}}}
         ]);
-        let result = normalize_response(LspNavigationKind::Definition, Path::new("/repo"), response, 3);
+        let result = normalize_response(
+            LspNavigationKind::Definition,
+            Path::new("/repo"),
+            response,
+            3,
+        );
         assert_eq!(result.locations[0].path, PathBuf::from("src/a.rs"));
         assert_eq!(result.locations[1].path, PathBuf::from("src/z.rs"));
     }
@@ -247,7 +351,12 @@ mod tests {
 
     #[test]
     fn null_is_typed_as_unsupported() {
-        let result = normalize_response(LspNavigationKind::WorkspaceSymbol, Path::new("/repo"), Value::Null, 0);
+        let result = normalize_response(
+            LspNavigationKind::WorkspaceSymbol,
+            Path::new("/repo"),
+            Value::Null,
+            0,
+        );
         assert!(result.unsupported);
     }
 }

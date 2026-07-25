@@ -2,9 +2,7 @@ use std::{collections::BTreeSet, path::PathBuf};
 
 use serde::{Deserialize, Serialize};
 
-use crate::{
-    ResolutionStatus, RustResolutionIndex, RustSymbolId, RustSymbolTable, TextEdit,
-};
+use crate::{ResolutionStatus, RustResolutionIndex, RustSymbolId, RustSymbolTable, TextEdit};
 
 /// One indexed source file participating in a workspace rename plan.
 pub struct RustRenameFile<'a> {
@@ -91,9 +89,10 @@ pub fn plan_rust_rename(
         return plan;
     }
 
-    let Some((target_file, target_symbol)) = files.iter().find_map(|file| {
-        file.symbols.symbol(target).map(|symbol| (file, symbol))
-    }) else {
+    let Some((target_file, target_symbol)) = files
+        .iter()
+        .find_map(|file| file.symbols.symbol(target).map(|symbol| (file, symbol)))
+    else {
         plan.conflicts.push(RustRenameConflict {
             kind: RustRenameConflictKind::MissingTarget,
             path: None,
@@ -103,10 +102,10 @@ pub fn plan_rust_rename(
     };
     plan.old_name = target_symbol.name.clone();
 
-    let replacement_qualified = target_symbol
-        .qualified_name
-        .rsplit_once("::")
-        .map_or_else(|| new_name.to_owned(), |(prefix, _)| format!("{prefix}::{new_name}"));
+    let replacement_qualified = target_symbol.qualified_name.rsplit_once("::").map_or_else(
+        || new_name.to_owned(),
+        |(prefix, _)| format!("{prefix}::{new_name}"),
+    );
     let collisions = target_file
         .symbols
         .find_qualified(&replacement_qualified)
@@ -201,11 +200,42 @@ fn valid_rust_identifier(name: &str) -> bool {
         && chars.all(|character| character == '_' || character.is_alphanumeric())
         && !matches!(
             name,
-            "as" | "break" | "const" | "continue" | "crate" | "else" | "enum"
-                | "extern" | "false" | "fn" | "for" | "if" | "impl" | "in" | "let"
-                | "loop" | "match" | "mod" | "move" | "mut" | "pub" | "ref" | "return"
-                | "self" | "Self" | "static" | "struct" | "super" | "trait" | "true"
-                | "type" | "unsafe" | "use" | "where" | "while" | "async" | "await"
+            "as" | "break"
+                | "const"
+                | "continue"
+                | "crate"
+                | "else"
+                | "enum"
+                | "extern"
+                | "false"
+                | "fn"
+                | "for"
+                | "if"
+                | "impl"
+                | "in"
+                | "let"
+                | "loop"
+                | "match"
+                | "mod"
+                | "move"
+                | "mut"
+                | "pub"
+                | "ref"
+                | "return"
+                | "self"
+                | "Self"
+                | "static"
+                | "struct"
+                | "super"
+                | "trait"
+                | "true"
+                | "type"
+                | "unsafe"
+                | "use"
+                | "where"
+                | "while"
+                | "async"
+                | "await"
                 | "dyn"
         )
 }
@@ -227,7 +257,11 @@ mod tests {
         let source = "fn old_name() {} fn caller() { old_name(); }";
         let (table, resolution) = indexed("src/lib.rs", source);
         let target = table.find_simple("old_name")[0].id.clone();
-        let files = [RustRenameFile { source, symbols: &table, resolution: &resolution }];
+        let files = [RustRenameFile {
+            source,
+            symbols: &table,
+            resolution: &resolution,
+        }];
         let plan = plan_rust_rename(&files, &target, "new_name");
         assert!(plan.is_safe());
         assert_eq!(plan.edits.len(), 2);
@@ -239,10 +273,17 @@ mod tests {
         let source = "fn first() {} fn second() {}";
         let (table, resolution) = indexed("src/lib.rs", source);
         let target = table.find_simple("first")[0].id.clone();
-        let files = [RustRenameFile { source, symbols: &table, resolution: &resolution }];
+        let files = [RustRenameFile {
+            source,
+            symbols: &table,
+            resolution: &resolution,
+        }];
         let plan = plan_rust_rename(&files, &target, "second");
         assert!(!plan.is_safe());
-        assert_eq!(plan.conflicts[0].kind, RustRenameConflictKind::NameCollision);
+        assert_eq!(
+            plan.conflicts[0].kind,
+            RustRenameConflictKind::NameCollision
+        );
     }
 
     #[test]
@@ -250,10 +291,17 @@ mod tests {
         let source = "fn answer() {}";
         let (table, resolution) = indexed("src/lib.rs", source);
         let target = table.find_simple("answer")[0].id.clone();
-        let files = [RustRenameFile { source, symbols: &table, resolution: &resolution }];
+        let files = [RustRenameFile {
+            source,
+            symbols: &table,
+            resolution: &resolution,
+        }];
         let plan = plan_rust_rename(&files, &target, "match");
         assert!(plan.edits.is_empty());
-        assert_eq!(plan.conflicts[0].kind, RustRenameConflictKind::InvalidIdentifier);
+        assert_eq!(
+            plan.conflicts[0].kind,
+            RustRenameConflictKind::InvalidIdentifier
+        );
     }
 
     #[test]
@@ -261,7 +309,11 @@ mod tests {
         let source = "fn old() {} fn call() { old(); }";
         let (table, resolution) = indexed("src/lib.rs", source);
         let target = table.find_simple("old")[0].id.clone();
-        let files = [RustRenameFile { source, symbols: &table, resolution: &resolution }];
+        let files = [RustRenameFile {
+            source,
+            symbols: &table,
+            resolution: &resolution,
+        }];
         let plan = plan_rust_rename(&files, &target, "new");
         let encoded = serde_json::to_string(&plan).expect("serialize");
         let decoded: RustRenamePlan = serde_json::from_str(&encoded).expect("deserialize");

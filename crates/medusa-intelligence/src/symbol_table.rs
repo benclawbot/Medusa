@@ -244,9 +244,8 @@ fn declaration(
     };
 
     if kind == RustSymbolKind::Function
-        && ancestors(document, node.id).any(|ancestor| {
-            matches!(ancestor.kind.as_str(), "impl_item" | "trait_item")
-        })
+        && ancestors(document, node.id)
+            .any(|ancestor| matches!(ancestor.kind.as_str(), "impl_item" | "trait_item"))
     {
         kind = RustSymbolKind::Method;
     }
@@ -285,9 +284,10 @@ fn ancestors<'a>(
     document: &'a RustAstDocument,
     node_id: usize,
 ) -> impl Iterator<Item = &'a RustAstNode> {
-    std::iter::successors(document.node(node_id).and_then(|node| node.parent), move |id| {
-        document.node(*id).and_then(|node| node.parent)
-    })
+    std::iter::successors(
+        document.node(node_id).and_then(|node| node.parent),
+        move |id| document.node(*id).and_then(|node| node.parent),
+    )
     .filter_map(|id| document.node(id))
 }
 
@@ -342,9 +342,24 @@ enum State { Ready, Failed }
         assert_eq!(first.find_simple("run").len(), 2);
         assert_eq!(first.find_qualified("lib::alpha::run").len(), 1);
         assert_eq!(first.find_qualified("lib::beta::run").len(), 1);
-        assert!(first.find_simple("Ready").iter().any(|symbol| symbol.kind == RustSymbolKind::Variant));
-        assert!(first.find_simple("count").iter().any(|symbol| symbol.kind == RustSymbolKind::Field));
-        assert!(first.find_simple("save").iter().all(|symbol| symbol.kind == RustSymbolKind::Method));
+        assert!(
+            first
+                .find_simple("Ready")
+                .iter()
+                .any(|symbol| symbol.kind == RustSymbolKind::Variant)
+        );
+        assert!(
+            first
+                .find_simple("count")
+                .iter()
+                .any(|symbol| symbol.kind == RustSymbolKind::Field)
+        );
+        assert!(
+            first
+                .find_simple("save")
+                .iter()
+                .all(|symbol| symbol.kind == RustSymbolKind::Method)
+        );
     }
 
     #[test]
@@ -365,7 +380,11 @@ enum State { Ready, Failed }
             .iter()
             .find(|scope| scope.qualified_name == "lib::outer")
             .expect("function scope");
-        assert!(!after_table.resolve_in_scope(function_scope.id, "value").is_empty());
+        assert!(
+            !after_table
+                .resolve_in_scope(function_scope.id, "value")
+                .is_empty()
+        );
     }
 
     #[test]
