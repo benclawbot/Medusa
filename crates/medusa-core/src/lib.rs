@@ -84,6 +84,8 @@ pub enum ErrorCode {
     ChecksumMismatch,
     #[error("policy denied")]
     PolicyDenied,
+    #[error("sandbox unavailable")]
+    SandboxUnavailable,
     #[error("dependency unavailable")]
     DependencyUnavailable,
     #[error("tool execution failed")]

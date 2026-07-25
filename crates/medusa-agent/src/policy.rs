@@ -276,17 +276,33 @@ pub(crate) fn sandboxed_command(
     }
     #[cfg(not(any(target_os = "linux", target_os = "macos")))]
     {
-        let root = repo.canonicalize()?;
-        #[cfg(windows)]
-        if program.eq_ignore_ascii_case("ls") {
-            let mut command = Command::new("cmd");
-            command.args(["/C", "dir"]).current_dir(root);
-            return output_with_timeout(&mut command, "Windows directory listing");
-        }
-        let mut command = Command::new(program);
-        command.args(args).current_dir(root);
-        output_with_timeout(&mut command, "local shell command")
+        let _ = (repo, program, args);
+        Err(sandbox_unavailable(
+            "no containment backend is available for this platform",
+        ))
     }
+}
+
+/// Runs a command without containment only after explicit approval.
+pub(crate) fn unsandboxed_command(
+    repo: &Path,
+    program: &str,
+    args: &[String],
+    explicitly_approved: bool,
+) -> MedusaResult<Output> {
+    if !explicitly_approved {
+        return Err(policy_denied(
+            "unsandboxed command execution requires explicit approval",
+        ));
+    }
+    let root = repo.canonicalize()?;
+    let mut command = Command::new(program);
+    command
+        .args(args)
+        .current_dir(root)
+        .env_clear()
+        .env("PATH", std::env::var_os("PATH").unwrap_or_default());
+    output_with_timeout(&mut command, "explicitly approved unsandboxed command")
 }
 
 #[cfg(target_os = "macos")]
@@ -335,6 +351,46 @@ fn output_with_timeout(command: &mut Command, description: &str) -> MedusaResult
     }
 }
 
+fn sandbox_unavailable(message: impl Into<String>) -> MedusaError {
+    let mut error = MedusaError::new(
+        ErrorCode::SandboxUnavailable,
+        ErrorCategory::Environment,
+        message,
+    );
+    error.context.insert(
+        "sandbox_backend".into(),
+        serde_json::Value::String("unavailable".into()),
+    );
+    error
+        .context
+        .insert("effective_restrictions".into(), serde_json::json!([]));
+    error
+}
+
 fn policy_denied(message: impl Into<String>) -> MedusaError {
     MedusaError::new(ErrorCode::PolicyDenied, ErrorCategory::Policy, message)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn unsandboxed_execution_requires_explicit_approval() {
+        let error = unsandboxed_command(Path::new("."), "cargo", &["--version".into()], false)
+            .expect_err("unapproved unsandboxed execution must fail");
+        assert_eq!(error.code, ErrorCode::PolicyDenied);
+    }
+
+    #[cfg(not(any(target_os = "linux", target_os = "macos")))]
+    #[test]
+    fn sandboxed_execution_fails_closed_without_backend() {
+        let error = sandboxed_command(Path::new("."), "cargo", &["--version".into()])
+            .expect_err("unsupported platforms must not launch a bare process");
+        assert_eq!(error.code, ErrorCode::SandboxUnavailable);
+        assert_eq!(
+            error.context.get("sandbox_backend"),
+            Some(&serde_json::Value::String("unavailable".into()))
+        );
+    }
 }
