@@ -9,6 +9,7 @@ mod index;
 mod language;
 mod module_graph;
 mod patch;
+mod rename;
 mod resolution;
 mod retrieval;
 mod review;
@@ -27,6 +28,9 @@ pub use module_graph::{RustDependencyEdge, RustDependencyKind, RustModuleGraph};
 pub use patch::{
     PatchTransaction, TextEdit, TransactionReceipt, finalize_patch_transactions,
     recover_patch_transactions,
+};
+pub use rename::{
+    RustRenameConflict, RustRenameConflictKind, RustRenameFile, RustRenamePlan, plan_rust_rename,
 };
 pub use resolution::{ResolutionStatus, RustResolutionIndex, RustResolvedReference};
 pub use retrieval::{RetrievalBudget, RetrievalExclusion, RetrievalReport, RetrievalResult};
