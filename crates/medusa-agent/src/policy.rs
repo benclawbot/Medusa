@@ -329,6 +329,7 @@ fn output_with_timeout(command: &mut Command, description: &str) -> MedusaResult
     }
 }
 
+#[cfg(not(any(target_os = "linux", target_os = "macos")))]
 fn sandbox_unavailable(message: impl Into<String>) -> MedusaError {
     let mut error = MedusaError::new(
         ErrorCode::SandboxUnavailable,
