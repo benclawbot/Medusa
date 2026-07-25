@@ -8,6 +8,7 @@ mod impact;
 mod index;
 mod language;
 mod lsp;
+mod lsp_actions;
 mod lsp_navigation;
 mod lsp_semantics;
 mod module_graph;
@@ -30,6 +31,12 @@ pub use index::IndexRefresh;
 pub use language::{CodeIndex, Language, Reference, Symbol, SymbolKind};
 pub use lsp::{
     LspClient, LspError, LspServerConfig, LspServerManager, LspServerState,
+};
+pub use lsp_actions::{
+    LspAnnotatedTextEdit, LspCapabilityResult, LspChangeAnnotation, LspCodeAction, LspCommand,
+    LspCommandPolicy, LspRenameComparison, LspResourceOperation, LspWorkspaceEdit,
+    LspWorkspaceOperation, code_actions, compare_rename_paths, execute_command_guarded,
+    normalize_workspace_edit, prepare_rename, rename as lsp_rename, resolve_code_action,
 };
 pub use lsp_navigation::{
     LspLocation, LspNavigationKind, LspNavigationResult, LspPosition, LspRange,
