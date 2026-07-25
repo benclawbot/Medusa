@@ -9,6 +9,7 @@ mod patch;
 mod retrieval;
 mod review;
 mod rust_ast;
+#[rustfmt::skip]
 #[path = "rust_symbols_v2.rs"]
 mod rust_symbols;
 pub mod snapshot;
