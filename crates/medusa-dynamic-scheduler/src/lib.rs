@@ -1,8 +1,8 @@
 //! Feedback-driven scheduling for Medusa's parallel worker runtime.
 //!
-//! The static scheduler remains responsible for deterministic initial planning.
-//! This crate owns execution-time state: dispatch, completion, retry, worker
-//! quarantine, dependency release, and durable state validation.
+//! The static scheduler plans deterministic waves. This crate owns execution-time
+//! feedback: dispatch, completion, retry, worker quarantine, dependency release,
+//! and durable state validation.
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -12,7 +12,7 @@ use sha2::{Digest, Sha256};
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub enum TaskState {
-    Pending,
+    Pending { attempts: u32 },
     Running { worker_id: String, attempt: u32 },
     Succeeded,
     Failed { attempts: u32, reason: String },
@@ -28,23 +28,13 @@ pub struct DynamicSchedule {
 }
 
 impl DynamicSchedule {
-    pub fn new(
-        tasks: Vec<Task>,
-        workers: Vec<Worker>,
-        max_attempts: u32,
-    ) -> Result<Self, &'static str> {
+    pub fn new(tasks: Vec<Task>, workers: Vec<Worker>, max_attempts: u32) -> Result<Self, &'static str> {
         if tasks.is_empty() || workers.is_empty() || max_attempts == 0 {
             return Err("tasks, workers, and a non-zero retry limit are required");
         }
-
         let mut task_map = BTreeMap::new();
         for mut task in tasks {
-            task.dependencies.sort();
-            task.dependencies.dedup();
-            task.capabilities.sort();
-            task.capabilities.dedup();
-            task.write_paths.sort();
-            task.write_paths.dedup();
+            canonicalize_task(&mut task);
             validate_task(&task)?;
             if task_map.insert(task.id.clone(), task).is_some() {
                 return Err("task identifiers must be unique");
@@ -66,7 +56,7 @@ impl DynamicSchedule {
 
         let states = task_map
             .keys()
-            .map(|id| (id.clone(), TaskState::Pending))
+            .map(|id| (id.clone(), TaskState::Pending { attempts: 0 }))
             .collect();
         let mut schedule = Self {
             tasks: task_map,
@@ -91,30 +81,25 @@ impl DynamicSchedule {
         let mut assignments = Vec::new();
 
         for (task_id, task) in &self.tasks {
-            if !matches!(self.states.get(task_id), Some(TaskState::Pending)) {
+            let attempts = match self.states.get(task_id) {
+                Some(TaskState::Pending { attempts }) => *attempts,
+                _ => continue,
+            };
+            if !task.dependencies.iter().all(|dependency| succeeded.contains(dependency))
+                || task.write_paths.iter().any(|path| claimed_paths.contains(path))
+            {
                 continue;
             }
-            if !task.dependencies.iter().all(|dependency| succeeded.contains(dependency)) {
-                continue;
-            }
-            if task.write_paths.iter().any(|path| claimed_paths.contains(path)) {
-                continue;
-            }
-
             let worker_id = self.workers.values().find_map(|worker| {
-                let remaining = capacity.get(&worker.id).copied().unwrap_or(0);
                 (worker.healthy
-                    && remaining > 0
+                    && capacity.get(&worker.id).copied().unwrap_or(0) > 0
                     && task.capabilities.iter().all(|capability| {
                         worker.capabilities.binary_search(capability).is_ok()
                     }))
                 .then(|| worker.id.clone())
             });
-
-            let Some(worker_id) = worker_id else {
-                continue;
-            };
-            let attempt = self.attempts_for(task_id).saturating_add(1);
+            let Some(worker_id) = worker_id else { continue };
+            let attempt = attempts.saturating_add(1);
             self.states.insert(
                 task_id.clone(),
                 TaskState::Running {
@@ -132,7 +117,6 @@ impl DynamicSchedule {
                 speculative: task.speculative,
             });
         }
-
         self.refresh()?;
         Ok(assignments)
     }
@@ -155,38 +139,36 @@ impl DynamicSchedule {
         if reason.trim().is_empty() {
             return Err("failure reason cannot be empty");
         }
-        let next = if retryable && attempt < self.max_attempts {
-            TaskState::Pending
+        let state = if retryable && attempt < self.max_attempts {
+            TaskState::Pending { attempts: attempt }
         } else {
             TaskState::Failed {
                 attempts: attempt,
                 reason,
             }
         };
-        self.states.insert(task_id.to_owned(), next);
+        self.states.insert(task_id.to_owned(), state);
         self.refresh()
     }
 
     pub fn set_worker_health(&mut self, worker_id: &str, healthy: bool) -> Result<(), &'static str> {
-        let worker = self
-            .workers
+        self.workers
             .get_mut(worker_id)
-            .ok_or("worker does not exist")?;
-        worker.healthy = healthy;
+            .ok_or("worker does not exist")?
+            .healthy = healthy;
         if !healthy {
             let interrupted = self
                 .states
                 .iter()
                 .filter_map(|(task_id, state)| match state {
-                    TaskState::Running {
-                        worker_id: assigned,
-                        ..
-                    } if assigned == worker_id => Some(task_id.clone()),
+                    TaskState::Running { worker_id: assigned, attempt } if assigned == worker_id => {
+                        Some((task_id.clone(), *attempt))
+                    }
                     _ => None,
                 })
                 .collect::<Vec<_>>();
-            for task_id in interrupted {
-                self.states.insert(task_id, TaskState::Pending);
+            for (task_id, attempts) in interrupted {
+                self.states.insert(task_id, TaskState::Pending { attempts });
             }
         }
         self.refresh()
@@ -197,15 +179,11 @@ impl DynamicSchedule {
     }
 
     pub fn is_complete(&self) -> bool {
-        self.states
-            .values()
-            .all(|state| matches!(state, TaskState::Succeeded))
+        self.states.values().all(|state| matches!(state, TaskState::Succeeded))
     }
 
     pub fn has_terminal_failure(&self) -> bool {
-        self.states
-            .values()
-            .any(|state| matches!(state, TaskState::Failed { .. }))
+        self.states.values().any(|state| matches!(state, TaskState::Failed { .. }))
     }
 
     pub fn blocked_tasks(&self) -> Vec<String> {
@@ -217,7 +195,7 @@ impl DynamicSchedule {
         self.tasks
             .iter()
             .filter_map(|(id, task)| {
-                (matches!(self.states.get(id), Some(TaskState::Pending))
+                (matches!(self.states.get(id), Some(TaskState::Pending { .. }))
                     && task.dependencies.iter().any(|dependency| failed.contains(dependency)))
                 .then_some(id.clone())
             })
@@ -232,37 +210,19 @@ impl DynamicSchedule {
         if self.max_attempts == 0 || self.tasks.len() != self.states.len() {
             return Err("dynamic schedule state is incomplete");
         }
-        for task_id in self.tasks.keys() {
-            if !self.states.contains_key(task_id) {
-                return Err("task state is missing");
-            }
+        if self.tasks.keys().any(|task_id| !self.states.contains_key(task_id)) {
+            return Err("task state is missing");
         }
-        let expected = fingerprint(&(
-            &self.tasks,
-            &self.workers,
-            &self.states,
-            self.max_attempts,
-        ))?;
+        let expected = fingerprint(&(&self.tasks, &self.workers, &self.states, self.max_attempts))?;
         if expected != self.fingerprint {
             return Err("dynamic schedule fingerprint does not match its contents");
         }
         Ok(())
     }
 
-    fn attempts_for(&self, task_id: &str) -> u32 {
-        match self.states.get(task_id) {
-            Some(TaskState::Running { attempt, .. }) => *attempt,
-            Some(TaskState::Failed { attempts, .. }) => *attempts,
-            _ => 0,
-        }
-    }
-
     fn validate_running(&self, task_id: &str, worker_id: &str) -> Result<u32, &'static str> {
         match self.states.get(task_id) {
-            Some(TaskState::Running {
-                worker_id: assigned,
-                attempt,
-            }) if assigned == worker_id => Ok(*attempt),
+            Some(TaskState::Running { worker_id: assigned, attempt }) if assigned == worker_id => Ok(*attempt),
             Some(TaskState::Running { .. }) => Err("task is owned by a different worker"),
             Some(_) => Err("task is not running"),
             None => Err("task does not exist"),
@@ -296,14 +256,18 @@ impl DynamicSchedule {
     }
 
     fn refresh(&mut self) -> Result<(), &'static str> {
-        self.fingerprint = fingerprint(&(
-            &self.tasks,
-            &self.workers,
-            &self.states,
-            self.max_attempts,
-        ))?;
+        self.fingerprint = fingerprint(&(&self.tasks, &self.workers, &self.states, self.max_attempts))?;
         Ok(())
     }
+}
+
+fn canonicalize_task(task: &mut Task) {
+    task.dependencies.sort();
+    task.dependencies.dedup();
+    task.capabilities.sort();
+    task.capabilities.dedup();
+    task.write_paths.sort();
+    task.write_paths.dedup();
 }
 
 fn validate_task(task: &Task) -> Result<(), &'static str> {
@@ -323,11 +287,7 @@ fn validate_task(task: &Task) -> Result<(), &'static str> {
 
 fn validate_graph(tasks: &BTreeMap<String, Task>) -> Result<(), &'static str> {
     for task in tasks.values() {
-        if task
-            .dependencies
-            .iter()
-            .any(|dependency| !tasks.contains_key(dependency))
-        {
+        if task.dependencies.iter().any(|dependency| !tasks.contains_key(dependency)) {
             return Err("task dependency does not exist");
         }
     }
@@ -335,11 +295,7 @@ fn validate_graph(tasks: &BTreeMap<String, Task>) -> Result<(), &'static str> {
     loop {
         let before = complete.len();
         for task in tasks.values() {
-            if task
-                .dependencies
-                .iter()
-                .all(|dependency| complete.contains(dependency))
-            {
+            if task.dependencies.iter().all(|dependency| complete.contains(dependency)) {
                 complete.insert(task.id.clone());
             }
         }
@@ -388,11 +344,9 @@ mod tests {
             2,
         )
         .unwrap();
-        let first = schedule.dispatch_ready().unwrap();
-        assert_eq!(first[0].task_id, "plan");
+        assert_eq!(schedule.dispatch_ready().unwrap()[0].task_id, "plan");
         schedule.complete("plan", "one").unwrap();
-        let second = schedule.dispatch_ready().unwrap();
-        assert_eq!(second[0].task_id, "code");
+        assert_eq!(schedule.dispatch_ready().unwrap()[0].task_id, "code");
     }
 
     #[test]
@@ -403,11 +357,9 @@ mod tests {
             2,
         )
         .unwrap();
-        let first = schedule.dispatch_ready().unwrap();
-        assert_eq!(first[0].worker_id, "one");
+        assert_eq!(schedule.dispatch_ready().unwrap()[0].worker_id, "one");
         schedule.set_worker_health("one", false).unwrap();
-        let second = schedule.dispatch_ready().unwrap();
-        assert_eq!(second[0].worker_id, "two");
+        assert_eq!(schedule.dispatch_ready().unwrap()[0].worker_id, "two");
     }
 
     #[test]
@@ -415,11 +367,13 @@ mod tests {
         let mut schedule = DynamicSchedule::new(
             vec![task("code", &[], "src/lib.rs"), task("test", &["code"], "tests/a.rs")],
             vec![worker("one")],
-            1,
+            2,
         )
         .unwrap();
         schedule.dispatch_ready().unwrap();
-        schedule.fail("code", "one", "compiler error", true).unwrap();
+        schedule.fail("code", "one", "first failure", true).unwrap();
+        schedule.dispatch_ready().unwrap();
+        schedule.fail("code", "one", "second failure", true).unwrap();
         assert!(schedule.has_terminal_failure());
         assert_eq!(schedule.blocked_tasks(), vec!["test"]);
     }
