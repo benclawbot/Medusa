@@ -515,3 +515,29 @@ fn page_and_mouse_scrolling_update_scrollback() {
     );
     assert_eq!(app.scrollback_offset(), 3);
 }
+
+#[test]
+fn ctrl_e_toggles_activity_detail_expansion_and_new_session_resets_it() {
+    let repository = tempdir().expect("temporary repository");
+    let mut app = AppState::new(
+        repository.path().to_path_buf(),
+        "details-toggle",
+        "",
+        Arc::new(FakeClipboard(ClipboardContent::Empty)),
+    )
+    .expect("create app");
+
+    assert!(!app.activity_details_expanded);
+    assert_eq!(
+        app.handle_event(Event::Key(KeyEvent::new(
+            KeyCode::Char('e'),
+            KeyModifiers::CONTROL,
+        )))
+        .expect("toggle details"),
+        AppAction::Redraw
+    );
+    assert!(app.activity_details_expanded);
+
+    app.clear_for_new_session();
+    assert!(!app.activity_details_expanded);
+}

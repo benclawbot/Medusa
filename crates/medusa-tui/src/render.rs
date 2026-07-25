@@ -458,9 +458,9 @@ pub(super) fn render_frame(
             "> ",
             Color::Magenta,
             if app.is_running() {
-                "enter queue follow-up - ctrl+c interrupt - ctrl+t tasks"
+                "enter queue follow-up - ctrl+c interrupt - ctrl+t tasks · ctrl+e details"
             } else {
-                "enter submit - ctrl+v paste - tab commands - ctrl+t tasks"
+                "enter submit - ctrl+v paste - tab commands - ctrl+t tasks · ctrl+e details"
             },
             Color::DarkGrey,
         ),

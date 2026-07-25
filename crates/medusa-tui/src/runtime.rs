@@ -8,8 +8,6 @@ use crate::commands::{ModelConfiguration, SlashCommand};
 
 pub use medusa_runtime::{RuntimeActivity, RuntimeActivityKind, RuntimeError, SubmitDisposition};
 
-const MAX_PRESENTED_ACTIVITY_DETAILS: usize = 6;
-
 #[derive(Debug)]
 pub enum RuntimeEvent {
     Started,
@@ -202,7 +200,7 @@ fn map_event(event: medusa_runtime::RuntimeEvent) -> RuntimeEvent {
 }
 
 fn presentation_activity(mut activity: RuntimeActivity) -> RuntimeActivity {
-    compact_activity_details(&mut activity.details);
+    activity.details.retain(|detail| !detail.trim().is_empty());
     let (kind, label) = match activity.kind {
         RuntimeActivityKind::Assistant if !activity.details.is_empty() => {
             (RuntimeActivityKind::Progress, Some("Assistant"))
@@ -218,17 +216,6 @@ fn presentation_activity(mut activity: RuntimeActivity) -> RuntimeActivity {
         activity.title = format!("{label} · {}", activity.title);
     }
     activity
-}
-
-fn compact_activity_details(details: &mut Vec<String>) {
-    details.retain(|detail| !detail.trim().is_empty());
-    if details.len() <= MAX_PRESENTED_ACTIVITY_DETAILS {
-        return;
-    }
-
-    let omitted = details.len() - (MAX_PRESENTED_ACTIVITY_DETAILS - 1);
-    details.truncate(MAX_PRESENTED_ACTIVITY_DETAILS - 1);
-    details.push(format!("… {omitted} more lines"));
 }
 
 fn tool_activity_label(title: &str) -> &'static str {
@@ -325,16 +312,16 @@ mod tests {
     }
 
     #[test]
-    fn verbose_activity_details_are_compacted() {
+    fn verbose_activity_details_are_retained() {
         let activity = presentation_activity(RuntimeActivity {
             id: Some("tool-verbose".to_owned()),
             kind: RuntimeActivityKind::Tool,
             title: "Run workspace tests".to_owned(),
             details: (1..=10).map(|line| format!("line {line}")).collect(),
         });
-        assert_eq!(activity.details.len(), MAX_PRESENTED_ACTIVITY_DETAILS);
+        assert_eq!(activity.details.len(), 10);
         assert_eq!(activity.details[4], "line 5");
-        assert_eq!(activity.details[5], "… 5 more lines");
+        assert_eq!(activity.details[9], "line 10");
     }
 
     #[test]
