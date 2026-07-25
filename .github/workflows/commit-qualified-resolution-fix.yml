@@ -1,0 +1,48 @@
+name: Commit qualified resolution fix
+
+on:
+  push:
+    branches:
+      - agent/restore-rustfmt-baseline
+
+permissions:
+  contents: write
+
+jobs:
+  fix:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+      - uses: dtolnay/rust-toolchain@1.88.0
+        with:
+          components: rustfmt
+      - name: Apply and commit fix
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          path = Path('crates/medusa-intelligence/src/resolution.rs')
+          text = path.read_text()
+          needle = '''    if !matches!(
+        parent.kind.as_str(),
+        "scoped_identifier" | "scoped_type_identifier"
+    ) {
+'''
+          replacement = '''    if !matches!(
+        parent.kind.as_str(),
+        "scoped_identifier" | "scoped_type_identifier"
+    ) || node.range.end_byte != parent.range.end_byte
+    {
+'''
+          if needle not in text:
+              raise SystemExit('qualified path guard not found')
+          path.write_text(text.replace(needle, replacement, 1))
+          PY
+          cargo fmt --all
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add crates/medusa-intelligence/src/resolution.rs
+          git commit -m "fix: resolve qualified Rust paths once"
+          git push
