@@ -300,12 +300,15 @@ mod tests {
             TranscriptActivityKind::Tool,
             TranscriptActivityKind::Assistant,
         ] {
-            let lines = activity_lines(&TranscriptActivity {
-                id: None,
-                kind,
-                title: "High-level step".to_owned(),
-                details: vec!["argument: private detail".to_owned()],
-            });
+            let lines = activity_lines(
+                &TranscriptActivity {
+                    id: None,
+                    kind,
+                    title: "High-level step".to_owned(),
+                    details: vec!["argument: private detail".to_owned()],
+                },
+                false,
+            );
             assert_eq!(lines.len(), 1);
             assert_eq!(lines[0].text, "High-level step");
         }

@@ -69,6 +69,7 @@ pub struct AppState {
     pub effort_label: Option<String>,
     pub plan_mode: bool,
     pub task_list_visible: bool,
+    pub activity_details_expanded: bool,
     pub spinner_frame: u8,
     pub scrollback: Scrollback,
     pub selection: Option<TextSelection>,
@@ -148,6 +149,7 @@ impl AppState {
             effort_label: None,
             plan_mode: false,
             task_list_visible: true,
+            activity_details_expanded: false,
             spinner_frame: 0,
             scrollback: Scrollback::default(),
             selection: None,
@@ -198,6 +200,10 @@ impl AppState {
             }
             if key.code == KeyCode::Char('t') && key.modifiers.contains(KeyModifiers::CONTROL) {
                 self.task_list_visible = !self.task_list_visible;
+                return Ok(AppAction::Redraw);
+            }
+            if key.code == KeyCode::Char('e') && key.modifiers.contains(KeyModifiers::CONTROL) {
+                self.activity_details_expanded = !self.activity_details_expanded;
                 return Ok(AppAction::Redraw);
             }
             if key.code == KeyCode::Char('v') && key.modifiers.contains(KeyModifiers::CONTROL) {
@@ -334,6 +340,7 @@ impl AppState {
         self.status = "new session".to_owned();
         self.plan_mode = false;
         self.task_list_visible = true;
+        self.activity_details_expanded = false;
         self.question_modal = None;
         self.selection = None;
         self.selection_dragging = false;

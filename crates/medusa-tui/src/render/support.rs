@@ -84,7 +84,9 @@ pub(crate) fn transcript_lines(app: &AppState, width: u16) -> Vec<StyledLine> {
             TranscriptEntry::Assistant(text) => lines.extend(
                 super::markdown::markdown_block_lines("Medusa  ", Color::Magenta, text, width),
             ),
-            TranscriptEntry::Activity(activity) => lines.extend(activity_lines(activity)),
+            TranscriptEntry::Activity(activity) => {
+                lines.extend(activity_lines(activity, app.activity_details_expanded));
+            }
             TranscriptEntry::System(message) => lines.push(system_line(message)),
         }
     }
@@ -608,7 +610,25 @@ pub(super) fn system_line(message: &str) -> StyledLine {
     }
 }
 
-pub(crate) fn activity_lines(activity: &TranscriptActivity) -> Vec<StyledLine> {
+const MAX_PRESENTED_ACTIVITY_DETAILS: usize = 6;
+
+fn presented_activity_details(details: &[String], expanded: bool) -> Vec<String> {
+    let mut rows = details
+        .iter()
+        .filter(|detail| !detail.trim().is_empty())
+        .cloned()
+        .collect::<Vec<_>>();
+    if expanded || rows.len() <= MAX_PRESENTED_ACTIVITY_DETAILS {
+        return rows;
+    }
+
+    let omitted = rows.len() - (MAX_PRESENTED_ACTIVITY_DETAILS - 1);
+    rows.truncate(MAX_PRESENTED_ACTIVITY_DETAILS - 1);
+    rows.push(format!("… {omitted} more lines"));
+    rows
+}
+
+pub(crate) fn activity_lines(activity: &TranscriptActivity, expanded: bool) -> Vec<StyledLine> {
     let color = match activity.kind {
         TranscriptActivityKind::Assistant => Color::Green,
         TranscriptActivityKind::Done => Color::Green,
@@ -643,9 +663,8 @@ pub(crate) fn activity_lines(activity: &TranscriptActivity) -> Vec<StyledLine> {
         TranscriptActivityKind::Assistant | TranscriptActivityKind::Tool
     ) {
         lines.extend(
-            activity
-                .details
-                .iter()
+            presented_activity_details(&activity.details, expanded)
+                .into_iter()
                 .map(|detail| StyledLine::new(format!("  └ {detail}"), Color::DarkGrey)),
         );
     }
@@ -787,3 +806,28 @@ pub(crate) fn terminal_hyperlinks(text: &str) -> String {
 #[cfg(test)]
 #[path = "support_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+mod activity_detail_tests {
+    use super::presented_activity_details;
+
+    #[test]
+    fn compact_activity_details_show_five_rows_and_omitted_count() {
+        let details = (1..=10)
+            .map(|line| format!("line {line}"))
+            .collect::<Vec<_>>();
+        let rows = presented_activity_details(&details, false);
+        assert_eq!(rows.len(), 6);
+        assert_eq!(rows[4], "line 5");
+        assert_eq!(rows[5], "… 5 more lines");
+    }
+
+    #[test]
+    fn expanded_activity_details_show_every_non_blank_row() {
+        let details = vec!["line 1".to_owned(), "  ".to_owned(), "line 2".to_owned()];
+        assert_eq!(
+            presented_activity_details(&details, true),
+            vec!["line 1".to_owned(), "line 2".to_owned()]
+        );
+    }
+}
