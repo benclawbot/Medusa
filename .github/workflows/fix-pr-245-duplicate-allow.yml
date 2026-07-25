@@ -1,0 +1,41 @@
+name: Fix PR 245 duplicate attributes
+
+on:
+  push:
+    branches:
+      - agent/desktop-main-updater
+
+permissions:
+  contents: write
+
+jobs:
+  fix:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: agent/desktop-main-updater
+          fetch-depth: 0
+      - name: Remove duplicate dead-code attributes
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          path = Path('crates/medusa-tui/src/render/support.rs')
+          text = path.read_text()
+          duplicate = '#[allow(dead_code)]\n#[allow(dead_code)]\n'
+          count = text.count(duplicate)
+          if count != 2:
+              raise SystemExit(f'expected 2 duplicated attributes, found {count}')
+          path.write_text(text.replace(duplicate, '#[allow(dead_code)]\n'))
+          PY
+          cargo fmt --all
+      - name: Remove one-shot workflow
+        run: rm -f .github/workflows/fix-pr-245-duplicate-allow.yml
+      - name: Commit repair
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git commit -m "fix(tui): remove duplicate dead-code attributes"
+          git push origin HEAD:agent/desktop-main-updater
