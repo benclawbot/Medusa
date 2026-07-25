@@ -137,19 +137,28 @@ pub(super) fn running_status(app: &AppState) -> String {
     )
 }
 
-pub(super) fn session_metrics_line(app: &AppState) -> String {
+pub(super) fn session_metrics_line(app: &AppState, width: u16) -> String {
+    let elapsed = format_elapsed(app.session_elapsed_seconds());
+    let total = format_token_count(app.total_tokens);
+    let cost = format_cost(app.estimated_cost_microusd);
+    if width < 80 {
+        return format!("session {elapsed} · total {total} · cost {cost}");
+    }
     let rate = app
         .output_tokens_per_second()
         .map_or_else(|| "—".to_owned(), format_token_rate);
+    if width < 120 {
+        return format!(
+            "session {elapsed} · total {total} · output {} · cost {cost} · {rate} tok/s",
+            format_token_count(app.output_tokens),
+        );
+    }
     format!(
-        "session {} · total {} · input {} · output {} · cache-read {} · cache-write {} · cost {} · {} · {rate} tok/s",
-        format_elapsed(app.session_elapsed_seconds()),
-        format_token_count(app.total_tokens),
+        "session {elapsed} · total {total} · input {} · output {} · cache-read {} · cache-write {} · cost {cost} · {} · {rate} tok/s",
         format_token_count(app.input_tokens),
         format_token_count(app.output_tokens),
         format_token_count(app.cache_read_input_tokens),
         format_token_count(app.cache_creation_input_tokens),
-        format_cost(app.estimated_cost_microusd),
         app.usage_provenance.as_deref().unwrap_or("—"),
     )
 }
@@ -286,7 +295,7 @@ pub(super) fn render_frame(
     set_frame_line(
         &mut frame,
         row,
-        StyledLine::new(session_metrics_line(app), Color::DarkGrey),
+        StyledLine::new(session_metrics_line(app, width), Color::DarkGrey),
     );
 
     let header_height = HEADER_TOP_PADDING + 5;
