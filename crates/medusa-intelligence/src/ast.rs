@@ -1,8 +1,10 @@
 use std::path::PathBuf;
 
-use medusa_core::{MedusaResult, internal};
+use medusa_core::MedusaResult;
 use serde::{Deserialize, Serialize};
 use tree_sitter::{Node, Parser, Point};
+
+use crate::support::internal;
 
 /// A stable source position using zero-based rows and columns.
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -89,10 +91,7 @@ impl RustAstDocument {
     }
 
     /// Iterate over nodes matching a Tree-sitter grammar kind.
-    pub fn nodes_of_kind<'a>(
-        &'a self,
-        kind: &'a str,
-    ) -> impl Iterator<Item = &'a RustAstNode> + 'a {
+    pub fn nodes_of_kind<'a>(&'a self, kind: &'a str) -> impl Iterator<Item = &'a RustAstNode> + 'a {
         self.nodes.iter().filter(move |node| node.kind == kind)
     }
 
@@ -124,10 +123,7 @@ impl RustAstDocument {
         }
 
         let mut cursor = node.walk();
-        let child_ids = node
-            .children(&mut cursor)
-            .map(|child| self.collect(child, Some(id)))
-            .collect();
+        let child_ids = node.children(&mut cursor).map(|child| self.collect(child, Some(id))).collect();
         self.nodes[id].children = child_ids;
         id
     }
@@ -164,22 +160,8 @@ pub mod domain {
 "#;
         let document = RustAstDocument::parse("src/lib.rs", source).expect("parse");
 
-        for kind in [
-            "attribute_item",
-            "mod_item",
-            "use_declaration",
-            "trait_item",
-            "struct_item",
-            "enum_item",
-            "impl_item",
-            "function_item",
-            "type_item",
-            "let_declaration",
-        ] {
-            assert!(
-                document.nodes_of_kind(kind).next().is_some(),
-                "missing {kind}"
-            );
+        for kind in ["attribute_item", "mod_item", "use_declaration", "trait_item", "struct_item", "enum_item", "impl_item", "function_item", "type_item", "let_declaration"] {
+            assert!(document.nodes_of_kind(kind).next().is_some(), "missing {kind}");
         }
         assert!(document.nodes.iter().skip(1).all(|node| node.parent.is_some()));
         assert!(!document.has_errors());
@@ -187,11 +169,7 @@ pub mod domain {
 
     #[test]
     fn malformed_source_retains_partial_ast_and_diagnostics() {
-        let document = RustAstDocument::parse(
-            "src/broken.rs",
-            "pub struct Good;\nfn broken( {\npub enum StillVisible { A }\n",
-        )
-        .expect("partial parse");
+        let document = RustAstDocument::parse("src/broken.rs", "pub struct Good;\nfn broken( {\npub enum StillVisible { A }\n").expect("partial parse");
 
         assert!(document.has_errors());
         assert!(document.nodes_of_kind("struct_item").next().is_some());
@@ -201,8 +179,7 @@ pub mod domain {
 
     #[test]
     fn serialization_round_trip_preserves_locations_and_identity() {
-        let document = RustAstDocument::parse("src/lib.rs", "pub fn answer() -> u8 { 42 }\n")
-            .expect("parse");
+        let document = RustAstDocument::parse("src/lib.rs", "pub fn answer() -> u8 { 42 }\n").expect("parse");
         let encoded = serde_json::to_string(&document).expect("serialize");
         let decoded: RustAstDocument = serde_json::from_str(&encoded).expect("deserialize");
         assert_eq!(decoded, document);
