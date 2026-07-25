@@ -130,6 +130,46 @@ const OBSERVED_TOOL_RESULT_BLOCK: &str = r#"                let (raw_content, is
                 );
 "#;
 
+const ORIGINAL_BOOTSTRAP_BLOCK: &str = r#"        bootstrap(repo)?;
+        let now = OffsetDateTime::now_utc();
+"#;
+const RECOVERED_BOOTSTRAP_BLOCK: &str = r#"        bootstrap(repo)?;
+        medusa_intelligence::recover_patch_transactions(repo)?;
+        let now = OffsetDateTime::now_utc();
+"#;
+
+const ORIGINAL_LOAD_BLOCK: &str = r#"    pub fn load_session(&self, repo: &Path, session: &str) -> MedusaResult<AgentSession> {
+        load(repo, session)
+    }
+"#;
+const RECOVERED_LOAD_BLOCK: &str = r#"    pub fn load_session(&self, repo: &Path, session: &str) -> MedusaResult<AgentSession> {
+        medusa_intelligence::recover_patch_transactions(repo)?;
+        load(repo, session)
+    }
+"#;
+
+const ORIGINAL_VERIFICATION_BLOCK: &str = r#"            let verification = targeted_verification_for_paths(
+                &session.repo,
+                &successful_mutation_paths(session),
+            )?;
+"#;
+const TRANSACTIONAL_VERIFICATION_BLOCK: &str = r#"            let mut verification = targeted_verification_for_paths(
+                &session.repo,
+                &successful_mutation_paths(session),
+            )?;
+            let transaction_ids = medusa_intelligence::finalize_patch_transactions(
+                &session.repo,
+                verification.passed,
+            )?;
+            verification.evidence.extend(transaction_ids.into_iter().map(|transaction_id| {
+                if verification.passed {
+                    format!("patch_transaction_committed={transaction_id}")
+                } else {
+                    format!("patch_transaction_rolled_back={transaction_id}")
+                }
+            }));
+"#;
+
 fn replace_once(
     source: String,
     original: &str,
@@ -188,6 +228,27 @@ fn main() -> Result<(), Box<dyn Error>> {
         ORIGINAL_TOOL_RESULT_BLOCK,
         OBSERVED_TOOL_RESULT_BLOCK,
         "tool result observation block",
+        &source_path,
+    )?;
+    let engine = replace_once(
+        engine,
+        ORIGINAL_BOOTSTRAP_BLOCK,
+        RECOVERED_BOOTSTRAP_BLOCK,
+        "session bootstrap block",
+        &source_path,
+    )?;
+    let engine = replace_once(
+        engine,
+        ORIGINAL_LOAD_BLOCK,
+        RECOVERED_LOAD_BLOCK,
+        "session load block",
+        &source_path,
+    )?;
+    let engine = replace_once(
+        engine,
+        ORIGINAL_VERIFICATION_BLOCK,
+        TRANSACTIONAL_VERIFICATION_BLOCK,
+        "verification transaction block",
         &source_path,
     )?;
     let scheduler =
