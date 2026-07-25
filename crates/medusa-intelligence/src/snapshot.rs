@@ -32,6 +32,12 @@ pub struct SnapshotDelta {
 }
 
 impl SnapshotDelta {
+    /// Computes the delta between an older and newer repository snapshot.
+    #[must_use]
+    pub fn between(older: &IndexSnapshot, newer: &IndexSnapshot) -> Self {
+        older.diff(newer)
+    }
+
     #[must_use]
     pub fn is_empty(&self) -> bool {
         self.added.is_empty() && self.modified.is_empty() && self.removed.is_empty()
@@ -123,6 +129,7 @@ mod tests {
                 PathBuf::from("c.rs")
             ]
         );
+        assert_eq!(SnapshotDelta::between(&before, &after), delta);
     }
 
     #[test]
