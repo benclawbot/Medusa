@@ -1,3 +1,5 @@
+pub use autonomous_execution::WorkerRole;
+
 impl<P: ModelProvider> AgentEngine<P> {
     pub fn start_autonomous_execution(
         &self,
@@ -14,7 +16,7 @@ impl<P: ModelProvider> AgentEngine<P> {
     pub fn start_role_aware_autonomous_execution(
         &self,
         session: &mut AgentSession,
-        workers: Vec<(String, autonomous_execution::WorkerRole)>,
+        workers: Vec<(String, WorkerRole)>,
     ) -> MedusaResult<Vec<(String, String)>> {
         let workers = role_workers(workers)?;
         let mut execution = autonomous_execution::AutonomousExecution::start_with_roles(
@@ -132,7 +134,7 @@ fn autonomous_workers(worker_ids: Vec<String>) -> MedusaResult<Vec<dynamic_sched
 }
 
 fn role_workers(
-    workers: Vec<(String, autonomous_execution::WorkerRole)>,
+    workers: Vec<(String, WorkerRole)>,
 ) -> MedusaResult<Vec<autonomous_execution::AutonomousWorker>> {
     if workers.is_empty() {
         return Err(MedusaError::new(
