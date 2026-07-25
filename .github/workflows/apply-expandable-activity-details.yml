@@ -1,0 +1,37 @@
+name: Apply expandable activity details
+
+on:
+  push:
+    branches:
+      - agent/tui-expandable-activity-details
+    paths:
+      - .github/expandable-activity-details.patch
+      - .github/workflows/apply-expandable-activity-details.yml
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: agent/tui-expandable-activity-details
+          fetch-depth: 0
+      - name: Apply source patch
+        run: git apply --check .github/expandable-activity-details.patch && git apply .github/expandable-activity-details.patch
+      - name: Format and test
+        run: |
+          cargo fmt --all
+          cargo test -p medusa-tui
+      - name: Commit implementation
+        run: |
+          rm .github/expandable-activity-details.patch
+          rm .github/workflows/apply-expandable-activity-details.yml
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add -A
+          git commit -m "feat(tui): expand and collapse activity details"
+          git push origin HEAD:agent/tui-expandable-activity-details
