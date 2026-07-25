@@ -173,7 +173,8 @@ fn qualified_path(document: &RustAstDocument, source: &str, node_id: usize) -> O
     if !matches!(
         parent.kind.as_str(),
         "scoped_identifier" | "scoped_type_identifier"
-    ) {
+    ) || node.range.end_byte != parent.range.end_byte
+    {
         return None;
     }
     source
