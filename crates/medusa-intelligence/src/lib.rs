@@ -8,6 +8,7 @@ mod impact;
 mod index;
 mod language;
 mod lsp;
+mod lsp_navigation;
 mod module_graph;
 mod patch;
 mod rename;
@@ -28,6 +29,11 @@ pub use index::IndexRefresh;
 pub use language::{CodeIndex, Language, Reference, Symbol, SymbolKind};
 pub use lsp::{
     LspClient, LspError, LspServerConfig, LspServerManager, LspServerState,
+};
+pub use lsp_navigation::{
+    LspLocation, LspNavigationKind, LspNavigationResult, LspPosition, LspRange,
+    compare_with_static, document_symbols, find_references, go_to_declaration,
+    go_to_definition, workspace_symbols,
 };
 pub use module_graph::{RustDependencyEdge, RustDependencyKind, RustModuleGraph};
 pub use patch::{
