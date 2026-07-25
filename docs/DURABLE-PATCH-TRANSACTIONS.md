@@ -9,3 +9,5 @@ The active agent runtime recovers non-terminal transactions before creating or l
 Formatting may legitimately change a file after the structured edit, so successful verification is the commit authority rather than an exact staged-byte comparison. The bounded verification evidence records the committed or rolled-back transaction identifiers.
 
 Terminal journals remain available as local evidence. They are ignored by later recovery passes, making startup recovery idempotent.
+
+This boundary currently covers structured multi-file edits only. Direct `fs_write`, directory creation, shell-side mutations, and Desktop Commander writes are handled by their existing safeguards and are the next unification slice.
