@@ -61,7 +61,7 @@ impl SemanticGraph {
                 .iter()
                 .filter(|reference| !reference.is_definition)
             {
-                let Some(targets) = definitions.get(&reference.name) else {
+                let Some(targets) = definitions.get(reference.name.as_str()) else {
                     continue;
                 };
                 for target in targets {
