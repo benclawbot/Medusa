@@ -3,7 +3,10 @@ use std::{fs, path::Path};
 use medusa_core::MedusaResult;
 use walkdir::WalkDir;
 
-use crate::policy::safe_path;
+use crate::{
+    policy::safe_path,
+    transaction::{FileMutation, apply_atomic},
+};
 
 const MAX_SEARCH_FILES: usize = 10_000;
 const MAX_SEARCH_BYTES: u64 = 32 * 1024 * 1024;
@@ -66,24 +69,14 @@ fn repository_listing(repo: &Path) -> String {
 }
 
 pub(crate) fn write(repo: &Path, relative: &str, content: &str) -> MedusaResult<String> {
-    let path = safe_path(repo, relative)?;
-    if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent)?;
-    }
-    let original_permissions = fs::metadata(&path)
-        .ok()
-        .map(|metadata| metadata.permissions());
-    let temporary = path.with_extension("medusa-tmp");
-    fs::write(&temporary, content)?;
-    if let Some(permissions) = original_permissions {
-        fs::set_permissions(&temporary, permissions)?;
-    }
-    fs::rename(&temporary, &path)?;
-    Ok(format!(
-        "wrote {} bytes to {}",
-        content.len(),
-        path.display()
-    ))
+    apply_atomic(
+        repo,
+        &[FileMutation {
+            path: relative.to_owned(),
+            content: content.to_owned(),
+        }],
+    )?;
+    Ok(format!("wrote {} bytes to {relative}", content.len()))
 }
 
 pub(crate) fn create_dir(repo: &Path, relative: &str) -> MedusaResult<String> {
@@ -97,7 +90,15 @@ pub(crate) fn write_approved(path: &str, content: &str) -> MedusaResult<String> 
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent)?;
     }
-    fs::write(&path, content)?;
+    let original_permissions = fs::metadata(&path)
+        .ok()
+        .map(|metadata| metadata.permissions());
+    let temporary = path.with_extension("medusa-approved-tmp");
+    fs::write(&temporary, content)?;
+    if let Some(permissions) = original_permissions {
+        fs::set_permissions(&temporary, permissions)?;
+    }
+    fs::rename(&temporary, &path)?;
     Ok(format!(
         "wrote {} bytes to {}",
         content.len(),
@@ -237,5 +238,18 @@ mod tests {
         assert!(read(directory.path(), "../secret.txt").is_err());
         assert!(write(directory.path(), "../secret.txt", "nope").is_err());
         assert!(create_dir(directory.path(), "../outside").is_err());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn single_file_write_uses_the_same_symlink_boundary_as_transactions() {
+        use std::os::unix::fs::symlink;
+
+        let directory = tempfile::tempdir().expect("tempdir");
+        let outside = tempfile::tempdir().expect("outside");
+        symlink(outside.path(), directory.path().join("linked")).expect("symlink");
+
+        assert!(write(directory.path(), "linked/escape.txt", "nope").is_err());
+        assert!(!outside.path().join("escape.txt").exists());
     }
 }
