@@ -1,0 +1,41 @@
+name: Split Engine Source
+
+on:
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: write
+
+jobs:
+  split:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.head_ref }}
+      - name: Split embedded autonomous execution module
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          path = Path('crates/medusa-agent/src/engine.rs')
+          source = path.read_text()
+          start_marker = '#[allow(dead_code)]\nmod autonomous_execution {\n'
+          end_marker = '\n}\nmod context_budget {'
+          start = source.index(start_marker)
+          end = source.index(end_marker, start)
+          replacement = '#[allow(dead_code)]\n#[path = "autonomous_execution.rs"]\nmod autonomous_execution;\nmod context_budget {'
+          path.write_text(source[:start] + replacement + source[end + len(end_marker):])
+
+          workflow = Path('.github/workflows/split-engine-source.yml')
+          workflow.unlink()
+          PY
+      - name: Commit split source
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add crates/medusa-agent/src/engine.rs .github/workflows/split-engine-source.yml
+          git commit -m 'Split autonomous engine module from canonical source'
+          git push
