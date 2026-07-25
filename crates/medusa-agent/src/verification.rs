@@ -19,10 +19,7 @@ pub(crate) fn targeted_verification_for_paths(
     repo: &Path,
     artifact_paths: &[String],
 ) -> MedusaResult<VerificationResult> {
-    let changed_paths = artifact_paths
-        .iter()
-        .map(PathBuf::from)
-        .collect::<Vec<_>>();
+    let changed_paths = artifact_paths.iter().map(PathBuf::from).collect::<Vec<_>>();
     if !changed_paths.is_empty()
         && let Some(result) = semantic_verification(repo, &changed_paths)?
     {
