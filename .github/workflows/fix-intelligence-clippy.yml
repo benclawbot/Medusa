@@ -1,0 +1,59 @@
+name: Fix intelligence Clippy blockers
+
+on:
+  push:
+    branches:
+      - agent/restore-rustfmt-baseline
+
+permissions:
+  contents: write
+
+jobs:
+  fix:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+      - uses: dtolnay/rust-toolchain@1.88.0
+        with:
+          components: rustfmt
+      - name: Apply focused compile fixes
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          ast = Path('crates/medusa-intelligence/src/ast.rs')
+          text = ast.read_text()
+          text = text.replace(
+              '#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]\npub struct SourcePosition',
+              '#[derive(Clone, Copy, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize)]\npub struct SourcePosition',
+          )
+          text = text.replace(
+              '#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]\npub struct SourceRange',
+              '#[derive(Clone, Copy, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize)]\npub struct SourceRange',
+          )
+          ast.write_text(text)
+
+          lsp = Path('crates/medusa-intelligence/src/lsp.rs')
+          text = lsp.read_text().replace(
+              'io::{BufRead, BufReader, Read, Write}',
+              'io::{BufRead, BufReader, Write}',
+          )
+          lsp.write_text(text)
+
+          cargo = Path('crates/medusa-intelligence/Cargo.toml')
+          text = cargo.read_text()
+          if 'hex.workspace = true' not in text:
+              text = text.replace('sha2.workspace = true\n', 'sha2.workspace = true\nhex.workspace = true\n')
+          cargo.write_text(text)
+          PY
+          cargo fmt --all
+      - name: Commit fixes
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add crates/medusa-intelligence
+          git commit -m "fix: resolve intelligence compile blockers"
+          git push
