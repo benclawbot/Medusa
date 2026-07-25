@@ -99,7 +99,9 @@ fn map_event(event: medusa_runtime::RuntimeEvent) -> RuntimeEvent {
     match event {
         medusa_runtime::RuntimeEvent::Started => RuntimeEvent::Started,
         medusa_runtime::RuntimeEvent::AssistantText(text) => RuntimeEvent::AssistantText(text),
-        medusa_runtime::RuntimeEvent::Activity(activity) => RuntimeEvent::Activity(activity),
+        medusa_runtime::RuntimeEvent::Activity(activity) => {
+            RuntimeEvent::Activity(presentation_activity(activity))
+        }
         medusa_runtime::RuntimeEvent::Plan(steps) => RuntimeEvent::Plan(TranscriptPlan {
             steps: steps
                 .into_iter()
@@ -197,6 +199,23 @@ fn map_event(event: medusa_runtime::RuntimeEvent) -> RuntimeEvent {
     }
 }
 
+fn presentation_activity(mut activity: RuntimeActivity) -> RuntimeActivity {
+    let (kind, label) = match activity.kind {
+        RuntimeActivityKind::Assistant if !activity.details.is_empty() => {
+            (RuntimeActivityKind::Progress, Some("Assistant"))
+        }
+        RuntimeActivityKind::Tool if !activity.details.is_empty() => {
+            (RuntimeActivityKind::Verification, Some("Tool"))
+        }
+        _ => (activity.kind, None),
+    };
+    activity.kind = kind;
+    if let Some(label) = label {
+        activity.title = format!("{label} · {}", activity.title);
+    }
+    activity
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -233,5 +252,30 @@ mod tests {
                 TranscriptPlanStepState::Failed,
             ]
         );
+    }
+
+    #[test]
+    fn detailed_tool_activity_uses_a_detail_capable_presentation_kind() {
+        let activity = presentation_activity(RuntimeActivity {
+            id: Some("tool-1".to_owned()),
+            kind: RuntimeActivityKind::Tool,
+            title: "Read render.rs".to_owned(),
+            details: vec!["crates/medusa-tui/src/render.rs".to_owned()],
+        });
+        assert_eq!(activity.kind, RuntimeActivityKind::Verification);
+        assert_eq!(activity.title, "Tool · Read render.rs");
+        assert_eq!(activity.details.len(), 1);
+    }
+
+    #[test]
+    fn compact_tool_activity_keeps_its_original_kind() {
+        let activity = presentation_activity(RuntimeActivity {
+            id: Some("tool-2".to_owned()),
+            kind: RuntimeActivityKind::Tool,
+            title: "Thinking".to_owned(),
+            details: Vec::new(),
+        });
+        assert_eq!(activity.kind, RuntimeActivityKind::Tool);
+        assert_eq!(activity.title, "Thinking");
     }
 }
