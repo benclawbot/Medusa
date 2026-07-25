@@ -75,6 +75,8 @@ jobs:
       - uses: dtolnay/rust-toolchain@1.88.0
         with:
           components: rustfmt,clippy
+      - name: Refresh dependency lock for the merged PR graph
+        run: cargo generate-lockfile --manifest-path apps/medusa-desktop/src-tauri/Cargo.toml
       - name: Check desktop formatting
         run: cargo fmt --manifest-path apps/medusa-desktop/src-tauri/Cargo.toml -- --check
       - name: Lint desktop adapter
