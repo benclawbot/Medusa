@@ -1,0 +1,42 @@
+name: Migrate Engine Source
+
+on:
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: write
+
+jobs:
+  migrate:
+    if: github.head_ref == 'agent/issue-307-direct-engine-modules'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.head_ref }}
+      - uses: dtolnay/rust-toolchain@1.88.0
+      - name: Generate canonical engine source
+        run: |
+          set -euo pipefail
+          cargo build -p medusa-agent
+          generated=$(find target/debug/build -path '*/out/engine.rs' -type f | head -n 1)
+          test -n "$generated"
+          cp "$generated" crates/medusa-agent/src/engine.rs
+          python - <<'PY'
+          from pathlib import Path
+          cargo = Path('crates/medusa-agent/Cargo.toml')
+          text = cargo.read_text()
+          text = text.replace('build = "build.rs"\n', '')
+          cargo.write_text(text)
+          PY
+          rm crates/medusa-agent/build.rs
+          rm .github/workflows/migrate-engine-source.yml
+      - name: Commit migrated source
+        run: |
+          set -euo pipefail
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add crates/medusa-agent/src/engine.rs crates/medusa-agent/Cargo.toml crates/medusa-agent/build.rs .github/workflows/migrate-engine-source.yml
+          git commit -m "Replace generated engine with normal Rust source"
+          git push origin HEAD:${{ github.head_ref }}
