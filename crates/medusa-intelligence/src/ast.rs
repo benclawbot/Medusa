@@ -7,7 +7,7 @@ use tree_sitter::{Node, Parser, Point};
 use crate::support::internal;
 
 /// A stable source position using zero-based rows and columns.
-#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[derive(Clone, Copy, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize)]
 pub struct SourcePosition {
     pub row: usize,
     pub column: usize,
@@ -23,7 +23,7 @@ impl From<Point> for SourcePosition {
 }
 
 /// Byte and line/column location for one syntax node.
-#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[derive(Clone, Copy, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize)]
 pub struct SourceRange {
     pub start_byte: usize,
     pub end_byte: usize,
