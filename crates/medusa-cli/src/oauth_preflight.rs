@@ -14,24 +14,13 @@ use serde_json::{Value, json};
 const DEFAULT_GATEWAY: &str = "http://127.0.0.1:10531/v1";
 const PREFLIGHT_ENV: &str = "MEDUSA_OAUTH_PREFLIGHT";
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Default, Deserialize)]
 #[serde(default)]
 struct ProviderProfile {
     connection: String,
     model: String,
     base_url: Option<String>,
     configured: bool,
-}
-
-impl Default for ProviderProfile {
-    fn default() -> Self {
-        Self {
-            connection: String::new(),
-            model: String::new(),
-            base_url: None,
-            configured: false,
-        }
-    }
 }
 
 #[derive(Debug, PartialEq)]
