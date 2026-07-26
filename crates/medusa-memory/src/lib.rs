@@ -122,8 +122,18 @@ mod tests {
         let final_engine = MemoryEngine::new(root.as_path()).expect("final engine");
         let (_, document) = final_engine.read_by_id(id.as_str()).expect("read document");
         assert_eq!(document.successful_reuse_count, 2);
-        assert!(document.sources.iter().any(|source| source.ends_with("verification-a")));
-        assert!(document.sources.iter().any(|source| source.ends_with("verification-b")));
+        assert!(
+            document
+                .sources
+                .iter()
+                .any(|source| source.ends_with("verification-a"))
+        );
+        assert!(
+            document
+                .sources
+                .iter()
+                .any(|source| source.ends_with("verification-b"))
+        );
     }
 
     #[test]
