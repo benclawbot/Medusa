@@ -10,7 +10,6 @@ permissions:
 
 jobs:
   migrate:
-    if: github.actor != 'github-actions[bot]'
     runs-on: windows-2022
     steps:
       - uses: actions/checkout@v4
@@ -23,10 +22,9 @@ jobs:
           from pathlib import Path
           p = Path('crates/medusa-agent/src/policy.rs')
           text = p.read_text()
-          text = text.replace(
-              'use medusa_core::{ErrorCategory, ErrorCode, MedusaError, MedusaResult};\n',
-              'use medusa_core::{ErrorCategory, ErrorCode, MedusaError, MedusaResult};\n\n#[cfg(windows)]\nmod windows_sandbox;\n'
-          )
+          marker = 'use medusa_core::{ErrorCategory, ErrorCode, MedusaError, MedusaResult};\n'
+          if '#[cfg(windows)]\nmod windows_sandbox;' not in text:
+              text = text.replace(marker, marker + '\n#[cfg(windows)]\nmod windows_sandbox;\n', 1)
           old = '''    #[cfg(not(any(target_os = "linux", target_os = "macos")))]
     {
         let _ = (repo, program, args);
@@ -47,9 +45,10 @@ jobs:
         ))
     }
 '''
-          if old not in text:
+          if old in text:
+              text = text.replace(old, new, 1)
+          elif 'windows_sandbox::run(repo, program, args)' not in text:
               raise SystemExit('sandbox dispatch anchor missing')
-          text = text.replace(old, new, 1)
           text = text.replace(
               '#[cfg(not(any(target_os = "linux", target_os = "macos")))]\nfn sandbox_unavailable',
               '#[cfg(not(any(target_os = "linux", target_os = "macos", windows)))]\nfn sandbox_unavailable'
