@@ -1,0 +1,31 @@
+name: Refresh branch lockfile
+
+on:
+  push:
+    branches:
+      - agent/wire-session-recall
+
+permissions:
+  contents: write
+
+jobs:
+  refresh:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: agent/wire-session-recall
+          fetch-depth: 0
+      - uses: dtolnay/rust-toolchain@1.88.0
+      - name: Regenerate and commit lockfile
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo generate-lockfile
+          rm .github/workflows/lockfile-refresh.yml
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add Cargo.lock .github/workflows/lockfile-refresh.yml
+          git commit -m "Refresh dependency lockfile"
+          git push origin HEAD:agent/wire-session-recall
