@@ -6,7 +6,7 @@
 //! fails closed.
 
 use std::{
-    ffi::{c_void, OsStr, OsString},
+    ffi::{OsStr, OsString, c_void},
     io,
     mem::{size_of, zeroed},
     os::windows::ffi::{OsStrExt, OsStringExt},
@@ -27,19 +27,19 @@ use windows_sys::Win32::{
     Storage::FileSystem::ReadFile,
     System::{
         JobObjects::{
-            AssignProcessToJobObject, CreateJobObjectW, JobObjectExtendedLimitInformation,
-            SetInformationJobObject, JOBOBJECT_EXTENDED_LIMIT_INFORMATION,
-            JOB_OBJECT_LIMIT_ACTIVE_PROCESS, JOB_OBJECT_LIMIT_JOB_MEMORY,
-            JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
+            AssignProcessToJobObject, CreateJobObjectW, JOB_OBJECT_LIMIT_ACTIVE_PROCESS,
+            JOB_OBJECT_LIMIT_JOB_MEMORY, JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
+            JOBOBJECT_EXTENDED_LIMIT_INFORMATION, JobObjectExtendedLimitInformation,
+            SetInformationJobObject,
         },
         Memory::LocalFree,
         Pipes::CreatePipe,
         Threading::{
-            CreateProcessW, DeleteProcThreadAttributeList, InitializeProcThreadAttributeList,
-            ResumeThread, UpdateProcThreadAttribute, WaitForSingleObject, PROCESS_INFORMATION,
-            PROC_THREAD_ATTRIBUTE_SECURITY_CAPABILITIES, STARTF_USESTDHANDLES, STARTUPINFOEXW,
-            CREATE_NO_WINDOW, CREATE_SUSPENDED, CREATE_UNICODE_ENVIRONMENT,
-            EXTENDED_STARTUPINFO_PRESENT, INFINITE,
+            CREATE_NO_WINDOW, CREATE_SUSPENDED, CREATE_UNICODE_ENVIRONMENT, CreateProcessW,
+            DeleteProcThreadAttributeList, EXTENDED_STARTUPINFO_PRESENT, INFINITE,
+            InitializeProcThreadAttributeList, PROC_THREAD_ATTRIBUTE_SECURITY_CAPABILITIES,
+            PROCESS_INFORMATION, ResumeThread, STARTF_USESTDHANDLES, STARTUPINFOEXW,
+            UpdateProcThreadAttribute, WaitForSingleObject,
         },
     },
     UI::Shell::{CreateAppContainerProfile, DeriveAppContainerSidFromAppContainerName},
@@ -63,7 +63,12 @@ pub(crate) fn run(repo: &Path, program: &str, args: &[String]) -> MedusaResult<O
     result
 }
 
-unsafe fn launch(root: &Path, executable: &Path, args: &[String], sid: PSID) -> MedusaResult<Output> {
+unsafe fn launch(
+    root: &Path,
+    executable: &Path,
+    args: &[String],
+    sid: PSID,
+) -> MedusaResult<Output> {
     let job = OwnedHandle::new(CreateJobObjectW(null(), null()))
         .map_err(|error| unavailable("CreateJobObjectW", error))?;
     let mut limits: JOBOBJECT_EXTENDED_LIMIT_INFORMATION = zeroed();
@@ -79,7 +84,10 @@ unsafe fn launch(root: &Path, executable: &Path, args: &[String], sid: PSID) -> 
         size_of::<JOBOBJECT_EXTENDED_LIMIT_INFORMATION>() as u32,
     ) == 0
     {
-        return Err(unavailable("SetInformationJobObject", io::Error::last_os_error()));
+        return Err(unavailable(
+            "SetInformationJobObject",
+            io::Error::last_os_error(),
+        ));
     }
 
     let mut stdout_read = 0;
@@ -166,7 +174,10 @@ unsafe fn launch(root: &Path, executable: &Path, args: &[String], sid: PSID) -> 
         &mut process,
     ) == 0
     {
-        return Err(unavailable("CreateProcessW(AppContainer)", io::Error::last_os_error()));
+        return Err(unavailable(
+            "CreateProcessW(AppContainer)",
+            io::Error::last_os_error(),
+        ));
     }
     let process_handle = OwnedHandle(process.hProcess);
     let thread_handle = OwnedHandle(process.hThread);
@@ -195,7 +206,11 @@ unsafe fn launch(root: &Path, executable: &Path, args: &[String], sid: PSID) -> 
     let stdout = read_all(stdout_read.0)?;
     let stderr = read_all(stderr_read.0)?;
     let status = std::process::ExitStatus::from_raw(process.dwProcessId as i32);
-    Ok(Output { status, stdout, stderr })
+    Ok(Output {
+        status,
+        stdout,
+        stderr,
+    })
 }
 
 fn resolve_program(program: &str) -> MedusaResult<PathBuf> {
@@ -212,7 +227,12 @@ fn resolve_program(program: &str) -> MedusaResult<PathBuf> {
     let first = String::from_utf8_lossy(&output.stdout)
         .lines()
         .next()
-        .ok_or_else(|| unavailable("program resolution", io::Error::from(io::ErrorKind::NotFound)))?;
+        .ok_or_else(|| {
+            unavailable(
+                "program resolution",
+                io::Error::from(io::ErrorKind::NotFound),
+            )
+        })?;
     PathBuf::from(first).canonicalize().map_err(Into::into)
 }
 
@@ -221,7 +241,10 @@ fn environment_block(root: &Path) -> Vec<u16> {
     let _ = std::fs::create_dir_all(&temp);
     let mut values = vec![
         ("PATH", std::env::var_os("PATH").unwrap_or_default()),
-        ("SystemRoot", std::env::var_os("SystemRoot").unwrap_or_default()),
+        (
+            "SystemRoot",
+            std::env::var_os("SystemRoot").unwrap_or_default(),
+        ),
         ("TEMP", temp.clone().into_os_string()),
         ("TMP", temp.into_os_string()),
         ("MEDUSA_SANDBOX", OsString::from("windows-appcontainer")),
@@ -274,7 +297,10 @@ unsafe fn read_all(handle: HANDLE) -> MedusaResult<Vec<u8>> {
             if code == 109 {
                 break;
             }
-            return Err(unavailable("ReadFile", io::Error::from_raw_os_error(code as i32)));
+            return Err(unavailable(
+                "ReadFile",
+                io::Error::from_raw_os_error(code as i32),
+            ));
         }
         if read == 0 {
             break;
@@ -416,7 +442,12 @@ fn unavailable(operation: &str, error: io::Error) -> MedusaError {
     );
     result.context.insert(
         "effective_restrictions".into(),
-        serde_json::json!(["app_container", "network_denied", "job_kill_on_close", "environment_allowlist"]),
+        serde_json::json!([
+            "app_container",
+            "network_denied",
+            "job_kill_on_close",
+            "environment_allowlist"
+        ]),
     );
     result
 }

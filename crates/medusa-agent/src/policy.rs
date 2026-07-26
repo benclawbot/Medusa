@@ -365,10 +365,7 @@ fn policy_denied(message: impl Into<String>) -> MedusaError {
     MedusaError::new(ErrorCode::PolicyDenied, ErrorCategory::Policy, message)
 }
 
-#[cfg(all(
-    test,
-    not(any(target_os = "linux", target_os = "macos", windows))
-))]
+#[cfg(all(test, not(any(target_os = "linux", target_os = "macos", windows))))]
 mod tests {
     use super::*;
 
