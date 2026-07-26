@@ -12,6 +12,7 @@ pub mod session_browser;
 pub mod tools;
 mod transaction;
 mod verification;
+mod worker_execution;
 pub mod world_model_session;
 
 pub use approval::{
@@ -33,6 +34,9 @@ pub use transaction::{
     FileMutation, TransactionOutcome, TransactionPreview, apply_atomic, preview,
 };
 pub use verification::{VerificationResult, targeted_verification};
+pub use worker_execution::{
+    LeasedAssignment, WorkerCompletion, WorkerExecutionController, WorkerProgressSummary,
+};
 
 #[cfg(test)]
 mod tests {
