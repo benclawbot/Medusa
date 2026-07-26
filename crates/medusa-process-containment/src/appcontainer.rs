@@ -217,7 +217,7 @@ unsafe fn launch(root: &Path, executable: &Path, args: &[String], sid: PSID) -> 
 }
 
 fn create_inheritable_pipe() -> io::Result<(OwnedHandle, OwnedHandle)> {
-    let mut attributes = SECURITY_ATTRIBUTES {
+    let attributes = SECURITY_ATTRIBUTES {
         nLength: size_of::<SECURITY_ATTRIBUTES>() as u32,
         lpSecurityDescriptor: null_mut(),
         bInheritHandle: 1,
