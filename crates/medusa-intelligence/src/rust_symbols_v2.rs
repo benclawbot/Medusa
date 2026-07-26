@@ -370,12 +370,7 @@ struct Context<'a> {
 }
 
 impl<'a> Context<'a> {
-    fn new(
-        path: &'a Path,
-        source: &'a str,
-        scope: RustScopeId,
-        scope_kind: RustScopeKind,
-    ) -> Self {
+    fn new(path: &'a Path, source: &'a str, scope: RustScopeId, scope_kind: RustScopeKind) -> Self {
         Self {
             path,
             source,
