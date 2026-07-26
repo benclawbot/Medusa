@@ -581,6 +581,8 @@ mod tests {
         assert_eq!(table.qualified(&answer.qualified_name), vec![answer]);
         assert!(table.in_file(Path::new("src/lib.rs")).contains(&answer));
         assert!(table.in_scope(&answer.scope).contains(&answer));
+        assert!(table.scope(&answer.scope).is_some());
+        assert_eq!(table.resolve_visible(&answer.scope, "answer"), Some(answer));
     }
 
     #[test]
