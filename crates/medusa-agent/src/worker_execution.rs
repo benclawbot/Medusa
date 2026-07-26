@@ -7,10 +7,10 @@
 use std::{
     collections::{BTreeMap, BTreeSet},
     fs,
-    path::{Path, PathBuf},
+    path::PathBuf,
 };
 
-use medusa_multi_agent_scheduler::{Assignment, DynamicSchedule, Task, Worker as ScheduledWorker};
+use medusa_multi_agent_scheduler::{DynamicSchedule, Task, Worker as ScheduledWorker};
 use medusa_progress::{ProgressEvent, ProgressKind};
 use medusa_worker_leases::WorkerLease;
 use medusa_workers::{Worker, WorkerState};
@@ -76,6 +76,7 @@ impl WorkerExecutionController {
         if execution_id.trim().is_empty() {
             return Err("execution identifier cannot be empty".into());
         }
+        let total = u32::try_from(tasks.len()).unwrap_or(u32::MAX);
         let schedule = DynamicSchedule::new(tasks, scheduled_workers.clone(), max_attempts)
             .map_err(str::to_owned)?;
         let workers = workers
@@ -89,7 +90,6 @@ impl WorkerExecutionController {
         {
             return Err("scheduled workers must map one-to-one to medusa worker records".into());
         }
-        let total = u32::try_from(schedule_task_count(&schedule)).unwrap_or(u32::MAX);
         let state = DurableWorkerExecution {
             execution_id,
             schedule,
@@ -127,18 +127,34 @@ impl WorkerExecutionController {
         Ok(Self { path, state })
     }
 
-    pub fn dispatch(&mut self, now_ms: u64, timeout_ms: u64) -> Result<Vec<LeasedAssignment>, String> {
-        let assignments = self.state.schedule.dispatch_ready().map_err(str::to_owned)?;
+    pub fn dispatch(
+        &mut self,
+        now_ms: u64,
+        timeout_ms: u64,
+    ) -> Result<Vec<LeasedAssignment>, String> {
+        let assignments = self
+            .state
+            .schedule
+            .dispatch_ready()
+            .map_err(str::to_owned)?;
         let mut leased = Vec::with_capacity(assignments.len());
         for assignment in assignments {
             if self.state.leases.contains_key(&assignment.task_id) {
-                return Err(format!("task {} already has a live lease", assignment.task_id));
+                return Err(format!(
+                    "task {} already has a live lease",
+                    assignment.task_id
+                ));
             }
             let worker = self
                 .state
                 .workers
                 .get_mut(&assignment.worker_id)
-                .ok_or_else(|| format!("worker {} has no medusa worker record", assignment.worker_id))?;
+                .ok_or_else(|| {
+                    format!(
+                        "worker {} has no medusa worker record",
+                        assignment.worker_id
+                    )
+                })?;
             if !matches!(worker.state, WorkerState::Ready | WorkerState::Failed) {
                 return Err(format!("worker {} is not available", assignment.worker_id));
             }
@@ -157,13 +173,18 @@ impl WorkerExecutionController {
                 timeout_ms,
             )
             .map_err(str::to_owned)?;
-            self.state.last_epochs.insert(assignment.task_id.clone(), epoch);
+            self.state
+                .last_epochs
+                .insert(assignment.task_id.clone(), epoch);
             self.state.leases.insert(assignment.task_id.clone(), lease);
             worker.state = WorkerState::Running;
             self.state.summary.active = self.state.summary.active.saturating_add(1);
             self.push_progress(
                 ProgressKind::ToolStarted,
-                format!("task {} leased to {} at epoch {epoch}", assignment.task_id, assignment.worker_id),
+                format!(
+                    "task {} leased to {} at epoch {epoch}",
+                    assignment.task_id, assignment.worker_id
+                ),
                 Some(assignment.task_id.clone()),
             )?;
             leased.push(LeasedAssignment {
@@ -260,7 +281,9 @@ impl WorkerExecutionController {
             .complete(task_id, worker_id)
             .map_err(str::to_owned)?;
         self.state.leases.remove(task_id);
-        self.state.completed_epochs.insert(task_id.to_owned(), lease_epoch);
+        self.state
+            .completed_epochs
+            .insert(task_id.to_owned(), lease_epoch);
         if let Some(worker) = self.state.workers.get_mut(worker_id) {
             worker.state = WorkerState::Succeeded;
         }
@@ -305,7 +328,11 @@ impl WorkerExecutionController {
             self.state.summary.failed = self.state.summary.failed.saturating_add(1);
         }
         self.push_progress(
-            if retryable { ProgressKind::Retrying } else { ProgressKind::Failed },
+            if retryable {
+                ProgressKind::Retrying
+            } else {
+                ProgressKind::Failed
+            },
             reason,
             Some(task_id.to_owned()),
         )?;
@@ -413,17 +440,6 @@ impl WorkerExecutionController {
         .map_err(|error| error.to_string())?;
         fs::rename(temporary, &self.path).map_err(|error| error.to_string())
     }
-}
-
-fn schedule_task_count(schedule: &DynamicSchedule) -> usize {
-    // DynamicSchedule intentionally exposes task state by identifier only. The durable
-    // progress total is refreshed from dispatched/completed/failed/cancelled accounting.
-    // A minimum of one preserves a useful total for valid non-empty schedules.
-    let mut count = 0;
-    while schedule.state(&format!("task-{count}" )).is_some() {
-        count += 1;
-    }
-    count.max(1)
 }
 
 fn validate_state(state: &DurableWorkerExecution) -> Result<(), String> {
@@ -550,17 +566,41 @@ mod tests {
         )
         .unwrap();
         let assignment = controller.dispatch(0, 10).unwrap().remove(0);
-        assert!(controller
-            .complete("task-0", "a", assignment.lease_epoch, 11, vec![proposal("a", 1)])
-            .is_err());
-        controller.heartbeat("task-0", "a", assignment.lease_epoch, 9).unwrap();
+        assert!(
+            controller
+                .complete(
+                    "task-0",
+                    "a",
+                    assignment.lease_epoch,
+                    11,
+                    vec![proposal("a", 1)]
+                )
+                .is_err()
+        );
+        controller
+            .heartbeat("task-0", "a", assignment.lease_epoch, 9)
+            .unwrap();
         let completion = controller
-            .complete("task-0", "a", assignment.lease_epoch, 10, vec![proposal("a", 1)])
+            .complete(
+                "task-0",
+                "a",
+                assignment.lease_epoch,
+                10,
+                vec![proposal("a", 1)],
+            )
             .unwrap();
         assert_eq!(completion.transaction_proposals.len(), 1);
-        assert!(controller
-            .complete("task-0", "a", assignment.lease_epoch, 10, vec![proposal("a", 1)])
-            .is_err());
+        assert!(
+            controller
+                .complete(
+                    "task-0",
+                    "a",
+                    assignment.lease_epoch,
+                    10,
+                    vec![proposal("a", 1)]
+                )
+                .is_err()
+        );
     }
 
     #[test]
@@ -577,7 +617,9 @@ mod tests {
         )
         .unwrap();
         let assignment = controller.dispatch(0, 10).unwrap().remove(0);
-        controller.cancel("task-0", "a", assignment.lease_epoch).unwrap();
+        controller
+            .cancel("task-0", "a", assignment.lease_epoch)
+            .unwrap();
         drop(controller);
         let restored = WorkerExecutionController::load(path).unwrap();
         assert_eq!(restored.summary().cancelled, 1);
