@@ -1,0 +1,29 @@
+name: PR329 Refresh
+
+on:
+  push:
+    branches:
+      - agent/issue-300-runtime-lifecycle
+
+permissions:
+  contents: read
+
+jobs:
+  refresh:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@1.88.0
+        with:
+          components: rustfmt
+      - name: Refresh lock and formatting
+        run: |
+          cargo generate-lockfile
+          cargo fmt --all
+      - uses: actions/upload-artifact@v4
+        with:
+          name: pr329-refreshed-files
+          path: |
+            Cargo.lock
+            crates/medusa-runtime/src/lifecycle.rs
+          if-no-files-found: error
