@@ -1,4 +1,4 @@
-//! Durable MCP schema cache and deterministic lazy connection planning.
+// Durable MCP schema cache and deterministic lazy connection planning.
 
 use std::collections::{BTreeMap, BTreeSet};
 
