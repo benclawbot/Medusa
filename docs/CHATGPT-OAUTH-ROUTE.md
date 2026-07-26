@@ -28,6 +28,10 @@ npx openai-oauth@latest stop
 
 Choose **OpenAI API key** to use `https://api.openai.com/v1` with `OPENAI_API_KEY`. OAuth is an option, not a mandatory default. MiniMax, Anthropic, OmniRoute, local runtimes, and custom OpenAI-compatible endpoints remain supported.
 
+## Removed manual route
+
+The `medusa escalate` browser/copy-paste command and its documentation are removed from the product surface. Existing internal escalation packet types remain only for workspace compatibility and are not used by the OAuth route.
+
 ## Security boundary
 
 Keep the gateway bound to loopback. Do not expose port `10531` to a LAN or the internet. Existing Medusa tool approvals, sandboxing, and policy checks remain authoritative regardless of the selected model route.
