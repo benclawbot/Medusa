@@ -19,8 +19,21 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@1.88.0
+        with:
+          components: rustfmt
       - name: Refresh dependency lock for merged graph
         run: cargo generate-lockfile
+      - name: Format issue 304 sources
+        run: cargo fmt --all
+      - name: Publish issue 304 generated files
+        uses: actions/upload-artifact@v4
+        with:
+          name: issue-304-generated-files
+          path: |
+            Cargo.lock
+            crates/medusa-mcp-cache/src/result_cache.rs
+            crates/medusa-runtime/src/turn_pipeline.rs
+          if-no-files-found: error
       - name: Exercise policy fixtures
         run: python3 scripts/architecture-policy.py self-test
       - name: Enforce architecture policy
