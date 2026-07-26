@@ -138,6 +138,17 @@ pub struct RuntimeController {
 
 impl RuntimeController {
     pub fn start(repo: PathBuf) -> Self {
+        match RuntimeState::load(repo.clone()) {
+            Ok(state) => Self::start_with_state(state),
+            Err(error) => Self::failed_start(error),
+        }
+    }
+
+    pub fn start_with_config(repo: PathBuf, config: Config) -> Self {
+        Self::start_with_state(RuntimeState::from_config(repo, config))
+    }
+
+    fn start_with_state(state: RuntimeState) -> Self {
         let (command_tx, command_rx) = mpsc::channel();
         let (event_tx, event_rx) = mpsc::channel();
         let cancel = Arc::new(AtomicBool::new(false));
@@ -148,8 +159,8 @@ impl RuntimeController {
         if let Err(error) = thread::Builder::new()
             .name("medusa-runtime".to_owned())
             .spawn(move || {
-                worker_loop(
-                    repo,
+                worker_loop_with_state(
+                    state,
                     command_rx,
                     worker_events,
                     worker_cancel,
@@ -166,6 +177,18 @@ impl RuntimeController {
             events: event_rx,
             cancel,
             submission,
+        }
+    }
+
+    fn failed_start(error: RuntimeError) -> Self {
+        let (command_tx, _command_rx) = mpsc::channel();
+        let (event_tx, event_rx) = mpsc::channel();
+        let _ = event_tx.send(RuntimeEvent::Failed(error.to_string()));
+        Self {
+            commands: command_tx,
+            events: event_rx,
+            cancel: Arc::new(AtomicBool::new(false)),
+            submission: Arc::new(Mutex::new(SubmissionState::default())),
         }
     }
 
@@ -248,21 +271,13 @@ impl Drop for RuntimeController {
     }
 }
 
-fn worker_loop(
-    repo: PathBuf,
+fn worker_loop_with_state(
+    mut state: RuntimeState,
     commands: Receiver<RuntimeCommand>,
     events: Sender<RuntimeEvent>,
     cancel: Arc<AtomicBool>,
     submission: Arc<Mutex<SubmissionState>>,
 ) {
-    let mut state = match RuntimeState::load(repo) {
-        Ok(state) => state,
-        Err(error) => {
-            let _ = events.send(RuntimeEvent::Failed(error.to_string()));
-            mark_idle(&submission, true);
-            return;
-        }
-    };
     let _ = events.send(state.settings_event());
     let capability_event = match CapabilityRegistry::discover(state.repo.clone()) {
         Ok(registry) => RuntimeEvent::Notice {
@@ -396,7 +411,11 @@ impl RuntimeState {
         let config =
             Config::load_layers(None, project.as_deref(), &BTreeMap::new(), &BTreeMap::new())
                 .map_err(RuntimeError::agent)?;
-        Ok(Self {
+        Ok(Self::from_config(repo, config))
+    }
+
+    fn from_config(repo: PathBuf, config: Config) -> Self {
+        Self {
             repo,
             base_config: config.clone(),
             effort: effort_for_turns(config.agent.max_turns),
@@ -406,7 +425,7 @@ impl RuntimeState {
             pending_goal: None,
             pending_skill: None,
             session_api_key: None,
-        })
+        }
     }
 
     fn settings_event(&self) -> RuntimeEvent {

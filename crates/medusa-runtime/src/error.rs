@@ -78,7 +78,24 @@ impl From<io::Error> for RuntimeError {
 impl RuntimeController {
     /// Starts a runtime with a verified durable session already attached.
     pub fn start_resumed(repo: PathBuf, session_id: &str) -> Result<Self, RuntimeError> {
-        let mut state = RuntimeState::load(repo.clone())?;
+        let state = RuntimeState::load(repo.clone())?;
+        Self::start_resumed_with_state(repo, session_id, state)
+    }
+
+    pub fn start_resumed_with_config(
+        repo: PathBuf,
+        session_id: &str,
+        config: medusa_config::Config,
+    ) -> Result<Self, RuntimeError> {
+        let state = RuntimeState::from_config(repo.clone(), config);
+        Self::start_resumed_with_state(repo, session_id, state)
+    }
+
+    fn start_resumed_with_state(
+        repo: PathBuf,
+        session_id: &str,
+        mut state: RuntimeState,
+    ) -> Result<Self, RuntimeError> {
         let provider =
             ConfiguredProvider::manager_from_config(&state.config, state.session_api_key.clone())
                 .map_err(RuntimeError::agent)?;
