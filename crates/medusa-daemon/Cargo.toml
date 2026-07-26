@@ -7,15 +7,21 @@ license.workspace = true
 repository.workspace = true
 
 [dependencies]
+hex.workspace = true
 medusa-core.workspace = true
+medusa-process-registry = { path = "../medusa-process-registry" }
+medusa-protocol.workspace = true
+medusa-recovery-coordinator = { path = "../medusa-recovery-coordinator" }
+medusa-runtime-supervisor = { path = "../medusa-runtime-supervisor" }
+medusa-wakeup = { path = "../medusa-wakeup" }
 serde.workspace = true
 serde_json.workspace = true
+sha2.workspace = true
 time.workspace = true
 ulid.workspace = true
 
 [target.'cfg(windows)'.dependencies]
 getrandom.workspace = true
-hex.workspace = true
 medusa-process-containment.workspace = true
 
 [dev-dependencies]
