@@ -97,27 +97,36 @@ mod tests {
     fn concurrent_reuse_updates_preserve_both_increments() {
         let directory = tempfile::tempdir().expect("tempdir");
         let root = Arc::new(directory.path().to_path_buf());
-        let engine = MemoryEngine::new(root.as_path()).expect("engine");
-        let committed = engine
+        let initial = MemoryEngine::new(root.as_path()).expect("engine");
+        let committed = initial
             .commit_proposal(&proposal("Concurrent command", "Use the verified command."))
             .expect("commit");
+        let first_engine = MemoryEngine::new(root.as_path()).expect("first worker engine");
+        let second_engine = MemoryEngine::new(root.as_path()).expect("second worker engine");
         let id = Arc::new(committed.id);
 
-        let workers = ["verification-a", "verification-b"].map(|evidence| {
-            let root = Arc::clone(&root);
-            let id = Arc::clone(&id);
-            thread::spawn(move || {
-                MemoryEngine::new(root.as_path())
-                    .expect("worker engine")
-                    .record_reuse(
-                        id.as_str(),
-                        &format!("artifact://sessions/concurrent/{evidence}"),
-                    )
-            })
+        let first_id = Arc::clone(&id);
+        let first_worker = thread::spawn(move || {
+            first_engine.record_reuse(
+                first_id.as_str(),
+                "artifact://sessions/concurrent/verification-a",
+            )
         });
-        for worker in workers {
-            worker.join().expect("worker thread").expect("reuse update");
-        }
+        let second_id = Arc::clone(&id);
+        let second_worker = thread::spawn(move || {
+            second_engine.record_reuse(
+                second_id.as_str(),
+                "artifact://sessions/concurrent/verification-b",
+            )
+        });
+        first_worker
+            .join()
+            .expect("first worker thread")
+            .expect("first reuse update");
+        second_worker
+            .join()
+            .expect("second worker thread")
+            .expect("second reuse update");
 
         let final_engine = MemoryEngine::new(root.as_path()).expect("final engine");
         let (_, document) = final_engine.read_by_id(id.as_str()).expect("read document");
