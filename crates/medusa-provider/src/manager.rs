@@ -27,7 +27,7 @@ enum RetryDisposition {
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
-pub struct RouteRouteRetryPolicy {
+pub struct RouteRetryPolicy {
     pub max_retries: u8,
     pub base_delay_ms: u64,
     pub max_delay_ms: u64,
@@ -47,7 +47,7 @@ pub struct ProviderRouteProfile {
     pub retry: RouteRetryPolicy,
 }
 
-impl Default for RouteRouteRetryPolicy {
+impl Default for RouteRetryPolicy {
     fn default() -> Self {
         Self {
             max_retries: 1,
@@ -58,7 +58,7 @@ impl Default for RouteRouteRetryPolicy {
     }
 }
 
-impl RouteRouteRetryPolicy {
+impl RouteRetryPolicy {
     fn delay_ms(&self, error: &MedusaError, provider_index: usize, attempt: u8) -> u64 {
         if let Some(delay) = retry_after_ms(error) {
             return delay.min(self.max_delay_ms);
