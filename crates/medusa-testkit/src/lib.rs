@@ -6,7 +6,7 @@ use medusa_core::{
 use medusa_protocol::{Actor, EventEnvelope, EventPayload};
 use time::OffsetDateTime;
 
-/// Creates a deterministic session-created event fixture.
+/// Creates a deterministic, checksummed session-created event fixture.
 pub fn session_created_event(objective: impl Into<String>) -> MedusaResult<EventEnvelope> {
     let session_id = SessionId::parse("ses-01ARZ3NDEKTSV4RRFFQ69G5FAV")
         .map_err(|error| invalid_fixture("session", error))?;
