@@ -16,7 +16,8 @@ pub(crate) struct LifecycleLock {
 impl LifecycleLock {
     pub(crate) fn acquire(root: &Path) -> MedusaResult<Self> {
         fs::create_dir_all(root)?;
-        let connection = Connection::open(root.join("lifecycle-lock.sqlite3")).map_err(sql_error)?;
+        let connection =
+            Connection::open(root.join("lifecycle-lock.sqlite3")).map_err(sql_error)?;
         connection
             .busy_timeout(std::time::Duration::from_secs(30))
             .map_err(sql_error)?;
@@ -38,7 +39,9 @@ impl Drop for LifecycleLock {
 }
 
 pub(crate) fn atomic_write(path: &Path, bytes: &[u8]) -> MedusaResult<()> {
-    let parent = path.parent().ok_or_else(|| invalid("memory path must have a parent directory"))?;
+    let parent = path
+        .parent()
+        .ok_or_else(|| invalid("memory path must have a parent directory"))?;
     fs::create_dir_all(parent)?;
 
     let temporary = temporary_path(path);
@@ -184,7 +187,10 @@ mod tests {
         let path = directory.path().join("memory.md");
         fs::write(&path, b"old").expect("seed file");
         atomic_write(&path, b"new complete state").expect("atomic write");
-        assert_eq!(fs::read(&path).expect("read final file"), b"new complete state");
+        assert_eq!(
+            fs::read(&path).expect("read final file"),
+            b"new complete state"
+        );
         assert_no_temporary_files(directory.path());
     }
 
@@ -201,8 +207,14 @@ mod tests {
             let second = second.clone();
             thread::spawn(move || atomic_write(&second, b"json"))
         };
-        first_worker.join().expect("first worker").expect("first write");
-        second_worker.join().expect("second worker").expect("second write");
+        first_worker
+            .join()
+            .expect("first worker")
+            .expect("first write");
+        second_worker
+            .join()
+            .expect("second worker")
+            .expect("second write");
         assert_eq!(fs::read(first).expect("read markdown"), b"markdown");
         assert_eq!(fs::read(second).expect("read json"), b"json");
         assert_no_temporary_files(directory.path());
@@ -230,7 +242,13 @@ mod tests {
         assert_eq!(first.parent(), Some(directory.path()));
         assert_eq!(second.parent(), Some(directory.path()));
         assert_ne!(first, second);
-        assert!(first.file_name().unwrap().to_string_lossy().starts_with(".memory.md."));
+        assert!(
+            first
+                .file_name()
+                .unwrap()
+                .to_string_lossy()
+                .starts_with(".memory.md.")
+        );
     }
 
     fn assert_no_temporary_files(directory: &Path) {
@@ -240,6 +258,9 @@ mod tests {
             .map(|entry| entry.file_name().to_string_lossy().into_owned())
             .filter(|name| name.ends_with(".tmp"))
             .collect::<Vec<_>>();
-        assert!(leftovers.is_empty(), "temporary files remain: {leftovers:?}");
+        assert!(
+            leftovers.is_empty(),
+            "temporary files remain: {leftovers:?}"
+        );
     }
 }
