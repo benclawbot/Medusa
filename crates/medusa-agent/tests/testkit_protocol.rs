@@ -10,5 +10,8 @@ fn deterministic_session_event_is_stable_for_agent_replay() {
 
     let first_json = serde_json::to_string(&first).expect("serialize first event");
     let second_json = serde_json::to_string(&second).expect("serialize second event");
-    assert_eq!(first_json, second_json, "fixture output must be deterministic");
+    assert_eq!(
+        first_json, second_json,
+        "fixture output must be deterministic"
+    );
 }
