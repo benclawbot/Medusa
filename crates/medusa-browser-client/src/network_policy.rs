@@ -11,6 +11,20 @@ pub struct ResolvedTarget {
 
 impl ResolvedTarget {
     #[must_use]
+    pub fn new_for_loopback(
+        scheme: &str,
+        host: &str,
+        port: u16,
+        addresses: Vec<std::net::SocketAddr>,
+    ) -> Self {
+        Self {
+            scheme: scheme.to_owned(),
+            host: host.to_owned(),
+            port,
+            addresses,
+        }
+    }
+    #[must_use]
     pub fn host(&self) -> &str {
         &self.host
     }

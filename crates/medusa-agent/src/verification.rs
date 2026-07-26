@@ -1,5 +1,5 @@
 use std::{
-    collections::BTreeSet,
+    collections::{BTreeMap, BTreeSet},
     fs::{self, File},
     io::Read,
     path::{Component, Path, PathBuf},
@@ -8,6 +8,8 @@ use std::{
     time::{Duration, Instant},
 };
 
+use medusa_browser_client::{BrowserClient, BrowserRequest, BrowserResponse};
+use medusa_config::Config;
 use medusa_core::{ErrorCategory, ErrorCode, MedusaError, MedusaResult};
 use medusa_intelligence::{CodeIndex, ReviewImpact};
 
@@ -26,9 +28,12 @@ pub(crate) fn targeted_verification_for_paths(
     artifact_paths: &[String],
 ) -> MedusaResult<VerificationResult> {
     let changed_paths = artifact_paths.iter().map(PathBuf::from).collect::<Vec<_>>();
+    let browser_decision =
+        browser_verification_decision(&changed_paths, browser_policy_enabled(repo));
     if !changed_paths.is_empty()
-        && let Some(result) = semantic_verification(repo, &changed_paths)?
+        && let Some(mut result) = semantic_verification(repo, &changed_paths)?
     {
+        append_browser_verification(repo, browser_decision, &mut result)?;
         return Ok(result);
     }
 
@@ -57,7 +62,264 @@ pub(crate) fn targeted_verification_for_paths(
     };
     let program = platform_program(program);
     let output = run_supervised_command(repo, program, &args, VERIFICATION_TIMEOUT)?;
-    Ok(verification_result(program, &args, output))
+    let mut result = verification_result(program, &args, output);
+    append_browser_verification(repo, browser_decision, &mut result)?;
+    Ok(result)
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum BrowserVerificationDecision {
+    Run,
+    Skip,
+}
+
+fn browser_policy_enabled(repo: &Path) -> bool {
+    let project = repo.join(".medusa/config.toml");
+    let project = project.is_file().then_some(project);
+    Config::load_layers(None, project.as_deref(), &BTreeMap::new(), &BTreeMap::new())
+        .map(|config| config.verification.browser_on_ui_change)
+        .unwrap_or(true)
+}
+
+fn browser_verification_decision(
+    changed_paths: &[PathBuf],
+    policy_enabled: bool,
+) -> BrowserVerificationDecision {
+    match std::env::var("MEDUSA_BROWSER_VERIFY")
+        .unwrap_or_else(|_| "auto".to_owned())
+        .trim()
+        .to_ascii_lowercase()
+        .as_str()
+    {
+        "force" | "always" | "1" | "true" => BrowserVerificationDecision::Run,
+        "skip" | "never" | "0" | "false" => BrowserVerificationDecision::Skip,
+        _ if policy_enabled
+            && changed_paths
+                .iter()
+                .any(|path| is_effective_ui_change(path)) =>
+        {
+            BrowserVerificationDecision::Run
+        }
+        _ => BrowserVerificationDecision::Skip,
+    }
+}
+
+fn is_effective_ui_change(path: &Path) -> bool {
+    let normalized = path
+        .to_string_lossy()
+        .replace('\\', "/")
+        .to_ascii_lowercase();
+    if normalized.starts_with("docs/")
+        || normalized.contains("/docs/")
+        || normalized.contains("__snapshots__")
+        || normalized.ends_with(".snap")
+        || normalized.ends_with(".md")
+        || normalized.ends_with(".lock")
+        || normalized.contains("/generated/")
+        || normalized.starts_with("dist/")
+        || normalized.starts_with("target/")
+    {
+        return false;
+    }
+    normalized.starts_with("apps/")
+        || normalized.starts_with("web/")
+        || normalized.starts_with("frontend/")
+        || normalized.starts_with("src-tauri/")
+        || normalized.ends_with(".html")
+        || normalized.ends_with(".css")
+        || normalized.ends_with(".scss")
+        || normalized.ends_with(".tsx")
+        || normalized.ends_with(".jsx")
+        || normalized.ends_with(".vue")
+        || normalized.ends_with(".svelte")
+}
+
+fn append_browser_verification(
+    repo: &Path,
+    decision: BrowserVerificationDecision,
+    result: &mut VerificationResult,
+) -> MedusaResult<()> {
+    let override_value = std::env::var("MEDUSA_BROWSER_VERIFY").unwrap_or_else(|_| "auto".into());
+    result
+        .evidence
+        .push(format!("browser_override={override_value}"));
+    if decision == BrowserVerificationDecision::Skip {
+        result
+            .evidence
+            .push("browser_verification=skipped".to_owned());
+        return Ok(());
+    }
+
+    let route = std::env::var("MEDUSA_BROWSER_VERIFY_URL").map_err(|_| {
+        MedusaError::new(
+            ErrorCode::DependencyUnavailable,
+            ErrorCategory::Environment,
+            "UI changes require browser verification, but MEDUSA_BROWSER_VERIFY_URL is not set; start the dev server and provide a runnable route",
+        )
+    })?;
+    let command = std::env::var("MEDUSA_BROWSERD").unwrap_or_else(|_| "medusa-browserd".into());
+    let mut client = BrowserClient::spawn_with_env(
+        &command,
+        &[("MEDUSA_BROWSER_ALLOW_LOOPBACK", "1")],
+    )
+    .map_err(|error| {
+        MedusaError::new(
+            ErrorCode::DependencyUnavailable,
+            ErrorCategory::Environment,
+            format!(
+                "UI changes require browser verification, but {command} could not start: {error}"
+            ),
+        )
+    })?;
+
+    let navigation = client.request(BrowserRequest::Navigate { url: route.clone() })?;
+    let (final_url, status) = match navigation {
+        BrowserResponse::Navigate { final_url, status } => (final_url, status),
+        BrowserResponse::Error { code, message } => {
+            result.passed = false;
+            result
+                .evidence
+                .push(format!("browser_error={code}:{message}"));
+            return Ok(());
+        }
+        other => {
+            result.passed = false;
+            result
+                .evidence
+                .push(format!("browser_unexpected_navigation={other:?}"));
+            return Ok(());
+        }
+    };
+    result.evidence.push(format!("browser_route={final_url}"));
+    result.evidence.push(format!("browser_status={status}"));
+    result.passed &= status < 400;
+
+    let snapshot = client.request(BrowserRequest::Snapshot)?;
+    match snapshot {
+        BrowserResponse::Snapshot { text, refs } => {
+            let nonempty = !text.trim().is_empty();
+            result
+                .evidence
+                .push(format!("browser_snapshot_nonempty={nonempty}"));
+            result
+                .evidence
+                .push(format!("browser_snapshot_refs={}", refs.len()));
+            result.passed &= nonempty;
+        }
+        BrowserResponse::Error { code, message } => {
+            result.passed = false;
+            result
+                .evidence
+                .push(format!("browser_snapshot_error={code}:{message}"));
+        }
+        other => {
+            result.passed = false;
+            result
+                .evidence
+                .push(format!("browser_unexpected_snapshot={other:?}"));
+        }
+    }
+
+    let console = client.request(BrowserRequest::Evaluate {
+        expression: "JSON.stringify(globalThis.__MEDUSA_CONSOLE_ERRORS__ || [])".to_owned(),
+    })?;
+    match console {
+        BrowserResponse::Evaluate { value } => {
+            let serialized = value
+                .as_str()
+                .map(str::to_owned)
+                .unwrap_or_else(|| value.to_string());
+            let clean = serialized == "[]" || serialized == "\"[]\"" || serialized == "null";
+            result
+                .evidence
+                .push(format!("browser_console_errors={serialized}"));
+            result.passed &= clean;
+        }
+        BrowserResponse::Error { code, message } => {
+            result.passed = false;
+            result
+                .evidence
+                .push(format!("browser_console_probe_error={code}:{message}"));
+        }
+        other => {
+            result.passed = false;
+            result
+                .evidence
+                .push(format!("browser_unexpected_console_probe={other:?}"));
+        }
+    }
+
+    match client.request(BrowserRequest::Screenshot { full_page: true })? {
+        BrowserResponse::Screenshot {
+            format,
+            bytes_base64,
+        } => {
+            let directory = repo.join(".medusa/verification/screenshots");
+            fs::create_dir_all(&directory)?;
+            let path = directory.join(format!("{}.{}", ulid::Ulid::new(), format));
+            let bytes = decode_base64(&bytes_base64)?;
+            fs::write(&path, bytes)?;
+            result
+                .evidence
+                .push(format!("browser_screenshot={}", path.display()));
+        }
+        BrowserResponse::Error { code, message } => {
+            result.passed = false;
+            result
+                .evidence
+                .push(format!("browser_screenshot_error={code}:{message}"));
+        }
+        other => {
+            result.passed = false;
+            result
+                .evidence
+                .push(format!("browser_unexpected_screenshot={other:?}"));
+        }
+    }
+    result.evidence.push(format!(
+        "browser_result={}",
+        if result.passed { "passed" } else { "failed" }
+    ));
+    Ok(())
+}
+
+fn decode_base64(input: &str) -> MedusaResult<Vec<u8>> {
+    const TABLE: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    let mut output = Vec::new();
+    let mut chunk = [0u8; 4];
+    let mut length = 0;
+    for byte in input.bytes().filter(|byte| !byte.is_ascii_whitespace()) {
+        if byte == b'=' {
+            chunk[length] = 64;
+        } else if let Some(index) = TABLE.iter().position(|candidate| *candidate == byte) {
+            chunk[length] = index as u8;
+        } else {
+            return Err(MedusaError::new(
+                ErrorCode::InvalidConfiguration,
+                ErrorCategory::Validation,
+                "browser screenshot returned invalid base64",
+            ));
+        }
+        length += 1;
+        if length == 4 {
+            output.push((chunk[0] << 2) | (chunk[1] >> 4));
+            if chunk[2] != 64 {
+                output.push((chunk[1] << 4) | (chunk[2] >> 2));
+            }
+            if chunk[3] != 64 {
+                output.push((chunk[2] << 6) | chunk[3]);
+            }
+            length = 0;
+        }
+    }
+    if length != 0 {
+        return Err(MedusaError::new(
+            ErrorCode::InvalidConfiguration,
+            ErrorCategory::Validation,
+            "browser screenshot base64 was truncated",
+        ));
+    }
+    Ok(output)
 }
 
 fn semantic_verification(
@@ -426,6 +688,55 @@ struct SupervisedOutput {
 pub struct VerificationResult {
     pub passed: bool,
     pub evidence: Vec<String>,
+}
+
+#[cfg(test)]
+mod browser_policy_tests {
+    use super::*;
+
+    #[test]
+    fn classifies_representative_ui_changes() {
+        assert!(is_effective_ui_change(Path::new(
+            "apps/desktop/src/App.tsx"
+        )));
+        assert!(is_effective_ui_change(Path::new("web/styles.css")));
+        assert!(is_effective_ui_change(Path::new("index.html")));
+    }
+
+    #[test]
+    fn skips_documentation_generated_and_snapshot_changes() {
+        assert!(!is_effective_ui_change(Path::new("docs/browser.md")));
+        assert!(!is_effective_ui_change(Path::new(
+            "apps/web/__snapshots__/App.snap"
+        )));
+        assert!(!is_effective_ui_change(Path::new("dist/index.js")));
+        assert!(!is_effective_ui_change(Path::new(
+            "src/generated/client.ts"
+        )));
+    }
+
+    #[test]
+    fn disabled_policy_skips_automatic_ui_verification() {
+        assert_eq!(
+            browser_verification_decision(&[PathBuf::from("apps/web/App.tsx")], false),
+            BrowserVerificationDecision::Skip
+        );
+    }
+
+    #[test]
+    fn manual_override_is_auditable() {
+        unsafe { std::env::set_var("MEDUSA_BROWSER_VERIFY", "force") };
+        assert_eq!(
+            browser_verification_decision(&[PathBuf::from("README.md")], false),
+            BrowserVerificationDecision::Run
+        );
+        unsafe { std::env::set_var("MEDUSA_BROWSER_VERIFY", "skip") };
+        assert_eq!(
+            browser_verification_decision(&[PathBuf::from("apps/web/App.tsx")], true),
+            BrowserVerificationDecision::Skip
+        );
+        unsafe { std::env::remove_var("MEDUSA_BROWSER_VERIFY") };
+    }
 }
 
 #[cfg(test)]

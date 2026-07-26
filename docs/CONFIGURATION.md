@@ -30,6 +30,7 @@ format = "markdown"
 
 [verification]
 required = true
+browser_on_ui_change = true
 ```
 
 Configuration precedence is CLI overrides, environment overrides, project TOML, user TOML, then built-in defaults.
@@ -47,8 +48,11 @@ The following version-1 keys were removed because they were validated and expose
 - the entire `[git]` table (`auto_commit`, `protect_dirty_tree`, and `allow_force_push`)
 - `memory.auto_promote_low_risk`
 - `verification.independent_review`
-- `verification.browser_on_ui_change`
 
 Delete these keys from user and project configuration files. Medusa now reports them as unknown fields with their TOML location, preventing a configuration file from promising behavior the runtime does not implement.
 
 Provider-profile `speed` and `reasoning` values remain readable for compatibility with the provider-settings file, but they are not part of the public runtime TOML schema and are not projected into runtime configuration.
+
+## Browser verification policy
+
+When `verification.browser_on_ui_change` is enabled, effective UI changes automatically require browser verification. Documentation-only, generated, snapshot-only, lockfile, and build-output changes are skipped. Set `MEDUSA_BROWSER_VERIFY=force` or `MEDUSA_BROWSER_VERIFY=skip` for an explicit audited override. A runnable route must be supplied through `MEDUSA_BROWSER_VERIFY_URL`; `MEDUSA_BROWSERD` may override the browser daemon executable. Evidence records the override, tested route, HTTP status, snapshot assertions, screenshot path, console errors, and final browser result.
