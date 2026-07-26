@@ -1,9 +1,9 @@
 name: Issue 308 Wire Windows Backend
 
 on:
-  pull_request:
+  push:
     branches:
-      - main
+      - agent/issue-308-native-windows-appcontainer
 
 permissions:
   contents: write
@@ -59,18 +59,31 @@ jobs:
               '#[cfg(all(test, not(any(target_os = "linux", target_os = "macos", windows))))]'
           )
           p.write_text(text)
-      - name: Format and validate Windows backend
+      - name: Format
+        shell: pwsh
+        run: cargo fmt --all
+      - name: Validate and capture diagnostics
+        id: validate
+        continue-on-error: true
         shell: pwsh
         run: |
-          cargo fmt --all
-          cargo check -p medusa-agent --all-targets
-          cargo test -p medusa-agent windows_sandbox::tests
-      - name: Commit integration
+          cargo check -p medusa-agent --all-targets *>&1 | Tee-Object windows-backend-diagnostics.txt
+          if ($LASTEXITCODE -eq 0) {
+            cargo test -p medusa-agent windows_sandbox::tests *>&1 | Tee-Object -Append windows-backend-diagnostics.txt
+          }
+          exit $LASTEXITCODE
+      - name: Commit result
+        if: always()
         shell: bash
         run: |
-          rm .github/workflows/issue-308-wire-windows-backend.yml
           git config user.name github-actions[bot]
           git config user.email 41898282+github-actions[bot]@users.noreply.github.com
-          git add crates/medusa-agent/src/policy.rs crates/medusa-agent/src/windows_sandbox.rs crates/medusa-agent/Cargo.toml Cargo.lock .github/workflows/issue-308-wire-windows-backend.yml
-          git commit -m "Implement native Windows AppContainer sandbox"
+          if [ "${{ steps.validate.outcome }}" = "success" ]; then
+            rm .github/workflows/issue-308-wire-windows-backend.yml windows-backend-diagnostics.txt
+            git add crates/medusa-agent/src/policy.rs crates/medusa-agent/src/windows_sandbox.rs crates/medusa-agent/Cargo.toml Cargo.lock .github/workflows/issue-308-wire-windows-backend.yml
+            git commit -m "Implement native Windows AppContainer sandbox"
+          else
+            git add windows-backend-diagnostics.txt
+            git commit -m "Capture Windows sandbox compiler diagnostics"
+          fi
           git push origin HEAD:agent/issue-308-native-windows-appcontainer
