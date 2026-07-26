@@ -28,6 +28,7 @@ mod error;
 pub mod prompt;
 pub mod skill_dependencies;
 pub mod skill_dependency_locks;
+pub mod supervision;
 mod support;
 #[cfg(test)]
 mod tests;
@@ -37,6 +38,7 @@ pub use medusa_agent::{
     AgentPlanStep as RuntimePlanStep, AgentPlanStepStatus, AgentQuestionItem, AgentQuestionOption,
     UsageProvenance,
 };
+pub use supervision::{RuntimeShutdownState, RuntimeSupervisionReport};
 
 use support::{
     SelectedSkill, UpdateState, configure_model, credential_environment, discover_skills,

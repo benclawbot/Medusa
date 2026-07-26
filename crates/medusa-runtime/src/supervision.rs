@@ -45,7 +45,11 @@ impl RuntimeSupervisionReport {
         Ok(report)
     }
 
-    pub fn shutdown(mut self, clean: bool, observed_at: OffsetDateTime) -> Result<Self, &'static str> {
+    pub fn shutdown(
+        mut self,
+        clean: bool,
+        observed_at: OffsetDateTime,
+    ) -> Result<Self, &'static str> {
         if observed_at < self.observed_at {
             return Err("runtime supervision timestamp regressed");
         }
@@ -68,8 +72,7 @@ impl RuntimeSupervisionReport {
             return Err("runtime supervision identity is invalid");
         }
         if let Some(fingerprint) = self.checkpoint_fingerprint.as_deref() {
-            if fingerprint.len() != 64
-                || !fingerprint.bytes().all(|byte| byte.is_ascii_hexdigit())
+            if fingerprint.len() != 64 || !fingerprint.bytes().all(|byte| byte.is_ascii_hexdigit())
             {
                 return Err("checkpoint fingerprint must be a SHA-256 digest");
             }

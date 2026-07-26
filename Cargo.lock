@@ -1199,6 +1199,10 @@ dependencies = [
  "hex",
  "medusa-core",
  "medusa-process-containment",
+ "medusa-process-registry",
+ "medusa-recovery-coordinator",
+ "medusa-runtime-supervisor",
+ "medusa-wakeup",
  "serde",
  "serde_json",
  "tempfile",
@@ -1509,6 +1513,7 @@ dependencies = [
  "serde_json",
  "sha2",
  "tempfile",
+ "time",
 ]
 
 [[package]]
