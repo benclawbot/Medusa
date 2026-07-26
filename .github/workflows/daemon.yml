@@ -25,6 +25,8 @@ jobs:
       - uses: dtolnay/rust-toolchain@1.88.0
         with:
           components: rustfmt,clippy
+      - name: Refresh dependency lock for the merged PR graph
+        run: cargo generate-lockfile
       - name: Check workspace formatting
         id: formatting
         run: cargo fmt --all -- --check
