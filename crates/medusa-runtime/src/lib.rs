@@ -25,6 +25,7 @@ use crate::{
 
 pub mod commands;
 mod error;
+pub mod lifecycle;
 pub mod prompt;
 pub mod skill_dependencies;
 pub mod skill_dependency_locks;
