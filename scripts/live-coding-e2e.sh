@@ -13,7 +13,9 @@ ROOT="$(mktemp -d)"
 ARTIFACTS="$(pwd)/live-e2e-artifacts"
 REPO="$ROOT/multi-language-repair"
 rm -rf "$ARTIFACTS"
-mkdir -p "$ARTIFACTS" "$REPO/src"
+mkdir -p "$ARTIFACTS" "$REPO/src" "$REPO/.medusa/sessions"
+test -d "$REPO/.medusa/sessions"
+test -w "$REPO/.medusa/sessions"
 trap 'rm -rf "$ROOT"' EXIT
 
 git -C "$REPO" init -q -b main
