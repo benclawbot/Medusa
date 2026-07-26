@@ -1,11 +1,15 @@
 use medusa_context::{ContextItem, ContextKind};
-use medusa_markdown_memory::{MemoryDocument as IndexedMemoryDocument, MemoryIndex, RetrievalQuery};
+use medusa_markdown_memory::{
+    MemoryDocument as IndexedMemoryDocument, MemoryIndex, RetrievalQuery,
+};
 use medusa_mcp_cache::result_cache::{ResultCache, ResultCacheKey};
 use medusa_memory_consolidation::{ConsolidatedMemory, MemoryConflict};
 use medusa_memory_writeback::{
     MemoryDocument as WritebackDocument, WritebackPlan, WritebackPolicy, plan_writeback,
 };
-use medusa_turn_assembly::{StableSection, ToolSchema, TurnAssembly, TurnAssemblyInput, TurnBudget};
+use medusa_turn_assembly::{
+    StableSection, ToolSchema, TurnAssembly, TurnAssemblyInput, TurnBudget,
+};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use time::{Duration, OffsetDateTime};
@@ -149,11 +153,7 @@ impl TurnPipeline {
         let provenance = TurnProvenance {
             context_ids,
             memory: MemoryProvenance {
-                chunk_ids: memory
-                    .hits
-                    .iter()
-                    .map(|hit| hit.chunk.id.clone())
-                    .collect(),
+                chunk_ids: memory.hits.iter().map(|hit| hit.chunk.id.clone()).collect(),
                 index_fingerprint: memory.index_fingerprint,
                 query_fingerprint: memory.query_fingerprint,
                 result_fingerprint: memory.result_fingerprint,
@@ -205,14 +205,10 @@ mod tests {
         TurnPipelineInput {
             stable_sections: vec![StableSection::new("system", "Follow policy").expect("section")],
             tool_schemas: vec![],
-            retrieved_context: vec![ContextItem::new(
-                "goal",
-                ContextKind::Goal,
-                "Ship the feature",
-                1,
-                now,
-            )
-            .expect("context")],
+            retrieved_context: vec![
+                ContextItem::new("goal", ContextKind::Goal, "Ship the feature", 1, now)
+                    .expect("context"),
+            ],
             memory_documents: vec![IndexedMemoryDocument {
                 path: "memory/project.md".into(),
                 content: "# Preference\nUse Rust".into(),
