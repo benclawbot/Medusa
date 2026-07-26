@@ -1,0 +1,46 @@
+name: Issue 302 refresh
+
+on:
+  push:
+    branches:
+      - agent/issue-302-runtime-resilience
+
+permissions:
+  contents: write
+
+jobs:
+  refresh:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: agent/issue-302-runtime-resilience
+      - uses: dtolnay/rust-toolchain@1.88.0
+        with:
+          components: rustfmt
+      - name: Wire runtime supervision module
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          path = Path('crates/medusa-runtime/src/lib.rs')
+          text = path.read_text()
+          marker = 'pub mod skill_dependency_locks;\n'
+          if 'pub mod supervision;\n' not in text:
+              text = text.replace(marker, marker + 'pub mod supervision;\n')
+          export_marker = 'pub use error::RuntimeError;\n'
+          export = 'pub use supervision::{RuntimeShutdownState, RuntimeSupervisionReport};\n'
+          if export not in text:
+              text = text.replace(export_marker, export_marker + export)
+          path.write_text(text)
+          PY
+      - run: cargo fmt --all
+      - run: cargo generate-lockfile
+      - name: Commit generated files
+        run: |
+          if git diff --quiet; then exit 0; fi
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add Cargo.lock crates/medusa-runtime/src/lib.rs crates/medusa-runtime/src/supervision.rs crates/medusa-daemon/src/resilience.rs crates/medusa-daemon/src/lib.rs
+          git commit -m "Refresh runtime resilience wiring and lockfile"
+          git push origin HEAD:agent/issue-302-runtime-resilience
