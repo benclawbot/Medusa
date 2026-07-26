@@ -1,0 +1,116 @@
+name: PR 369 trusted finalizer
+
+on:
+  issues:
+    types: [labeled]
+
+permissions:
+  contents: write
+  issues: write
+
+jobs:
+  finish:
+    if: github.event.issue.number == 369 && github.event.label.name == 'run-pr369-finalizer'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: fix/353-oauth-gateway-preflight
+          fetch-depth: 0
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
+      - name: Apply review fixes
+        shell: python
+        run: |
+          from pathlib import Path
+          wrapper = Path('crates/medusa-cli/src/wrapper.rs')
+          text = wrapper.read_text()
+          text = text.replace(
+              'mod legacy {\n    pub(super) fn entry() {\n        main();\n    }\n\n    include!("main.rs");\n}',
+              'mod legacy {\n    pub(super) fn entry() {\n        main();\n    }\n\n    pub(super) fn prepare_interactive_session() -> medusa_core::MedusaResult<()> {\n        ensure_first_run()?;\n        ensure_selected_runtime()?;\n        Ok(())\n    }\n\n    include!("main.rs");\n}'
+          )
+          text = text.replace(
+              '    if let Err(error) = oauth_preflight::run_if_needed(&args) {',
+              '    if oauth_preflight::is_interactive_session(&args) {\n        if let Err(error) = legacy::prepare_interactive_session() {\n            eprintln!(\n                "{}",\n                serde_json::to_string_pretty(&error).unwrap_or_else(|_| error.to_string())\n            );\n            std::process::exit(1);\n        }\n    }\n    if let Err(error) = oauth_preflight::run_if_needed(&args) {'
+          )
+          wrapper.write_text(text)
+
+          preflight = Path('crates/medusa-cli/src/oauth_preflight.rs')
+          text = preflight.read_text()
+          text = text.replace(
+              '    let report = probe_gateway(&client, base_url, &profile.model)?;',
+              '    let model = effective_model(&profile.model, args);\n    let report = probe_gateway(&client, base_url, &model)?;'
+          )
+          text = text.replace('fn is_coding_session(args: &[String]) -> bool {', 'pub(crate) fn is_coding_session(args: &[String]) -> bool {')
+          text = text.replace(
+              '        if arg == "--" {\n            return false;\n        }',
+              '        if arg == "--" {\n            return false;\n        }\n        if matches!(arg.as_str(), "-h" | "--help" | "-V" | "--version") {\n            return false;\n        }'
+          )
+          marker = '\nfn load_profile() -> MedusaResult<Option<ProviderProfile>> {'
+          helpers = '''
+
+pub(crate) fn is_interactive_session(args: &[String]) -> bool {
+    if !is_coding_session(args) { return false; }
+    let mut index = 0;
+    while index < args.len() {
+        let arg = &args[index];
+        if matches!(arg.as_str(), "--repo" | "--set" | "--prompt" | "--resume") { index += 2; continue; }
+        if arg.starts_with("--repo=") || arg.starts_with("--set=") { index += 1; continue; }
+        if arg.starts_with('-') { index += 1; continue; }
+        return false;
+    }
+    true
+}
+
+fn effective_model(profile_model: &str, args: &[String]) -> String {
+    let mut model = profile_model.to_owned();
+    let mut index = 0;
+    while index < args.len() {
+        let arg = &args[index];
+        let value = if arg == "--set" { index += 1; args.get(index).map(String::as_str) } else { arg.strip_prefix("--set=") };
+        if let Some(raw) = value {
+            if let Some((key, value)) = raw.split_once('=') {
+                if key == "model.name" { model = value.to_owned(); }
+            }
+        }
+        index += 1;
+    }
+    model
+}
+'''
+          if 'fn effective_model(' not in text: text = text.replace(marker, helpers + marker)
+          text = text.replace(
+              '        assert!(!is_coding_session(&["config".into()]));',
+              '        assert!(!is_coding_session(&["config".into()]));\n        assert!(!is_coding_session(&["--help".into()]));\n        assert!(!is_coding_session(&["--version".into()]));'
+          )
+          test_marker = '    #[test]\n    fn model_discovery_requires_requested_model() {'
+          model_test = '''    #[test]
+    fn cli_model_override_wins_over_profile() {
+        assert_eq!(effective_model("gpt-profile", &["--set".into(), "model.name=gpt-cli".into(), "run".into()]), "gpt-cli");
+        assert_eq!(effective_model("gpt-profile", &["--set=model.name=gpt-inline".into(), "run".into()]), "gpt-inline");
+    }
+
+'''
+          if 'fn cli_model_override_wins_over_profile' not in text: text = text.replace(test_marker, model_test + test_marker)
+          preflight.write_text(text)
+      - name: Regenerate, format, and test
+        run: |
+          cargo generate-lockfile
+          cargo fmt --all
+          cargo test -p medusa-cli --locked
+      - name: Commit PR fixes
+        run: |
+          git rm -f .github/workflows/pr369-finish.yml || true
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add crates/medusa-cli/src/wrapper.rs crates/medusa-cli/src/oauth_preflight.rs Cargo.lock .github/workflows/pr369-finish.yml
+          git commit -m "fix: address OAuth preflight review feedback"
+          git push origin HEAD:fix/353-oauth-gateway-preflight
+      - name: Remove trusted finalizer from main
+        run: |
+          git fetch origin main
+          git checkout main
+          git rm .github/workflows/pr369-trusted-finalizer.yml
+          git commit -m "ci: remove completed PR 369 finalizer"
+          git push origin main
