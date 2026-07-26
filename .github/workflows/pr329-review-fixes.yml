@@ -1,0 +1,179 @@
+name: PR329 review fixes
+
+on:
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    if: github.head_ref == 'agent/issue-300-runtime-lifecycle'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: agent/issue-300-runtime-lifecycle
+          fetch-depth: 0
+      - uses: dtolnay/rust-toolchain@1.88.0
+        with:
+          components: rustfmt
+      - name: Apply review fixes and tests
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          p = Path('crates/medusa-runtime/src/lifecycle.rs')
+          s = p.read_text()
+          old = '''        let latest = durable
+              .state
+              .checkpoints
+              .last()
+              .cloned()
+              .ok_or(LifecycleError::NoCheckpoint)?;
+          durable.state =
+              ExecutionState::resume(latest).map_err(LifecycleError::InvalidState)?;
+          durable.resumed = true;'''
+          new = '''        if let Some(latest) = durable.state.checkpoints.last() {
+              durable.state.current_stage = latest
+                  .completed_stage
+                  .next()
+                  .ok_or(LifecycleError::InvalidState("cannot resume after completion"))?;
+          }
+          durable.state.attempt = durable.state.attempt.saturating_add(1);
+          refresh_execution_state(&mut durable.state)?;
+          durable.resumed = true;'''
+          if old not in s:
+              raise SystemExit('resume block not found')
+          s = s.replace(old, new, 1)
+          old = '''        let confirmation_token = digest(format!(
+              "restore:{}:{}",
+              self.current.state.execution_id, checkpoint.fingerprint
+          ));'''
+          new = '''        let confirmation_token = digest(format!(
+              "restore:{}:{}:{}",
+              self.current.state.execution_id, checkpoint.fingerprint, snapshot.fingerprint
+          ));'''
+          if old not in s:
+              raise SystemExit('token block not found')
+          s = s.replace(old, new, 1)
+          old = '''        if preview.confirmation_token != confirmation_token {
+              return Err(LifecycleError::RestoreNotConfirmed);
+          }
+          let checkpoint = self
+              .current
+              .state
+              .checkpoints
+              .iter()
+              .find(|checkpoint| checkpoint.fingerprint == preview.checkpoint_fingerprint)
+              .cloned()
+              .ok_or_else(|| {
+                  LifecycleError::UnknownCheckpoint(preview.checkpoint_fingerprint.clone())
+              })?;'''
+          new = '''        let expected = self.preview_time_travel(&preview.checkpoint_fingerprint)?;
+          if preview != &expected || expected.confirmation_token != confirmation_token {
+              return Err(LifecycleError::RestoreNotConfirmed);
+          }
+          let checkpoint = self
+              .current
+              .state
+              .checkpoints
+              .iter()
+              .find(|checkpoint| checkpoint.fingerprint == expected.checkpoint_fingerprint)
+              .cloned()
+              .ok_or_else(|| {
+                  LifecycleError::UnknownCheckpoint(expected.checkpoint_fingerprint.clone())
+              })?;'''
+          if old not in s:
+              raise SystemExit('restore block not found')
+          s = s.replace(old, new, 1)
+          s = s.replace('''        Ok(self.protocol_event(Some(preview.snapshot.fingerprint.clone())))''', '''        Ok(self.protocol_event(Some(expected.snapshot.fingerprint.clone())))''', 1)
+          marker = '''fn replay_trace(trace: &StageTrace) -> Result<ExecutionTrace, LifecycleError> {'''
+          helper = '''fn refresh_execution_state(state: &mut ExecutionState) -> Result<(), LifecycleError> {
+              state.fingerprint = hash_json(&(
+                  state.execution_id.as_str(),
+                  state.current_stage,
+                  state.snapshot_fingerprint.as_str(),
+                  &state.checkpoints,
+                  &state.failures,
+                  state.attempt,
+              ))?;
+              Ok(())
+          }
+
+          '''
+          if marker not in s:
+              raise SystemExit('helper insertion point not found')
+          s = s.replace(marker, helper + marker, 1)
+          s = s.replace('''        assert_eq!(resumed.state().checkpoints.len(), 1);''', '''        assert_eq!(resumed.state().checkpoints.len(), 3);''', 1)
+          insert = '''
+              #[test]
+              fn resume_before_first_checkpoint_restarts_snapshot() {
+                  let storage = MemoryStorage::default();
+                  let service = ExecutionLifecycleService::start(
+                      storage.clone(),
+                      "run-zero",
+                      artifact("snapshot"),
+                  )
+                  .unwrap();
+                  drop(service);
+                  let resumed = ExecutionLifecycleService::resume(storage, "run-zero").unwrap();
+                  assert_eq!(resumed.state().current_stage, ExecutionStage::Snapshot);
+                  assert!(resumed.state().checkpoints.is_empty());
+                  assert!(resumed.protocol_event(None).resumed);
+              }
+
+              #[test]
+              fn resume_preserves_full_checkpoint_history() {
+                  let storage = MemoryStorage::default();
+                  let mut service = ExecutionLifecycleService::start(
+                      storage.clone(),
+                      "run-history",
+                      artifact("snapshot"),
+                  )
+                  .unwrap();
+                  service.complete_stage(ExecutionStage::Snapshot, vec![artifact("a")]).unwrap();
+                  service.complete_stage(ExecutionStage::Context, vec![artifact("b")]).unwrap();
+                  let original = service.stage_trace().unwrap();
+                  drop(service);
+                  let resumed = ExecutionLifecycleService::resume(storage, "run-history").unwrap();
+                  assert_eq!(resumed.state().checkpoints.len(), 2);
+                  assert_eq!(resumed.stage_trace().unwrap(), original);
+              }
+
+              #[test]
+              fn tampered_time_travel_preview_is_rejected() {
+                  let storage = MemoryStorage::default();
+                  let mut service = ExecutionLifecycleService::start(
+                      storage,
+                      "run-tamper",
+                      artifact("snapshot"),
+                  )
+                  .unwrap();
+                  service.complete_stage(ExecutionStage::Snapshot, vec![artifact("a")]).unwrap();
+                  let fingerprint = service.state().checkpoints[0].fingerprint.clone();
+                  let mut preview = service.preview_time_travel(&fingerprint).unwrap();
+                  preview.snapshot.fingerprint = artifact("forged");
+                  let token = preview.confirmation_token.clone();
+                  assert_eq!(
+                      service.confirm_restore(&preview, &token).unwrap_err(),
+                      LifecycleError::RestoreNotConfirmed
+                  );
+              }
+          '''
+          test_marker = '''    #[test]
+              fn deterministic_replay_matches_stage_order_and_artifacts() {'''
+          if test_marker not in s:
+              raise SystemExit('test insertion point not found')
+          s = s.replace(test_marker, insert + '\n' + test_marker, 1)
+          p.write_text(s)
+          PY
+          cargo fmt --all
+          cargo test -p medusa-runtime --all-features
+          git rm .github/workflows/pr329-review-fixes.yml
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add crates/medusa-runtime/src/lifecycle.rs
+          git commit -m 'Address lifecycle resume and restore review findings'
+          git push origin HEAD:agent/issue-300-runtime-lifecycle
