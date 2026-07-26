@@ -7,13 +7,21 @@ rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
 
+[lib]
+path = "src/runtime_lib.rs"
+
 [dependencies]
 base64 = "0.22"
 medusa-agent = { path = "../medusa-agent" }
 medusa-capabilities = { path = "../medusa-capabilities" }
 medusa-config = { path = "../medusa-config" }
+medusa-continuation = { path = "../medusa-continuation" }
+medusa-execution-checkpoint = { path = "../medusa-execution-checkpoint" }
+medusa-execution-orchestrator = { path = "../medusa-execution-orchestrator" }
+medusa-execution-replay = { path = "../medusa-execution-replay" }
 medusa-protocol = { path = "../medusa-protocol" }
 medusa-provider = { path = "../medusa-provider" }
+medusa-time-travel = { path = "../medusa-time-travel" }
 png = "0.17"
 serde.workspace = true
 serde_json.workspace = true
