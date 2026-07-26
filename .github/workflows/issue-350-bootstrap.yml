@@ -10,7 +10,7 @@ permissions:
 
 jobs:
   apply:
-    if: github.actor != 'github-actions[bot]' && hashFiles('.github/issue-350-trigger') != ''
+    if: github.actor != 'github-actions[bot]'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
