@@ -50,7 +50,10 @@ impl SnapshotFile {
         })
     }
 
-    pub fn directory(path: impl Into<String>, unix_mode: Option<u32>) -> Result<Self, &'static str> {
+    pub fn directory(
+        path: impl Into<String>,
+        unix_mode: Option<u32>,
+    ) -> Result<Self, &'static str> {
         let path = path.into();
         validate_path(&path)?;
         validate_mode(unix_mode)?;
@@ -504,16 +507,12 @@ mod tests {
 
     #[test]
     fn symlink_identity_includes_target() {
-        let first = RepositorySnapshot::capture(
-            [SnapshotFile::symlink("link", "one").unwrap()],
-            None,
-        )
-        .unwrap();
-        let second = RepositorySnapshot::capture(
-            [SnapshotFile::symlink("link", "two").unwrap()],
-            None,
-        )
-        .unwrap();
+        let first =
+            RepositorySnapshot::capture([SnapshotFile::symlink("link", "one").unwrap()], None)
+                .unwrap();
+        let second =
+            RepositorySnapshot::capture([SnapshotFile::symlink("link", "two").unwrap()], None)
+                .unwrap();
         assert_ne!(first.fingerprint, second.fingerprint);
     }
 
