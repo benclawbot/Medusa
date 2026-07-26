@@ -14,8 +14,11 @@ fn main() {
 }
 
 fn run() -> Result<(), Box<dyn std::error::Error>> {
-    let repository_path = env::args().nth(1).map_or_else(|| PathBuf::from("."), PathBuf::from);
-    let repository_name = env::var("MEDUSA_GITHUB_REPOSITORY").unwrap_or_else(|_| "local/repository".into());
+    let repository_path = env::args()
+        .nth(1)
+        .map_or_else(|| PathBuf::from("."), PathBuf::from);
+    let repository_name =
+        env::var("MEDUSA_GITHUB_REPOSITORY").unwrap_or_else(|_| "local/repository".into());
     let registry = CapabilityRegistry::discover(&repository_path)?;
     let grants = vec![
         CapabilityGrant {
@@ -27,11 +30,8 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
             permissions: BTreeSet::from([CapabilityPermission::Read]),
         },
     ];
-    let runtime = ExplicitCapabilityRuntime::new(
-        registry,
-        grants,
-        GitHubService::new(repository_name),
-    );
+    let runtime =
+        ExplicitCapabilityRuntime::new(registry, grants, GitHubService::new(repository_name));
     let diagnostics = runtime.diagnostics();
     println!("{}", serde_json::to_string_pretty(&diagnostics)?);
     Ok(())
