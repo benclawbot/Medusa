@@ -18,6 +18,7 @@ medusa-core.workspace = true
 medusa-escalation = { path = "../medusa-escalation" }
 medusa-extensions = { path = "../medusa-extensions" }
 medusa-intelligence = { path = "../medusa-intelligence" }
+medusa-memory = { path = "../medusa-memory" }
 medusa-multi-agent-scheduler = { path = "../medusa-multi-agent-scheduler" }
 medusa-process-containment.workspace = true
 medusa-progress = { path = "../medusa-progress" }
