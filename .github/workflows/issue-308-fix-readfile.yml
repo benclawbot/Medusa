@@ -1,0 +1,48 @@
+name: Issue 308 Fix ReadFile Binding
+
+on:
+  push:
+    branches:
+      - agent/issue-308-native-windows-appcontainer
+
+permissions:
+  contents: write
+
+jobs:
+  fix:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: agent/issue-308-native-windows-appcontainer
+      - uses: dtolnay/rust-toolchain@1.88.0
+      - name: Correct generated binding path
+        shell: python
+        run: |
+          from pathlib import Path
+          source = Path('crates/medusa-process-containment/src/appcontainer.rs')
+          text = source.read_text()
+          text = text.replace('    System:\n        IO::ReadFile,\n', '    Storage::FileSystem::ReadFile,\n    System:\n')
+          if 'Storage::FileSystem::ReadFile' not in text:
+              text = text.replace('    System::{\n        IO::ReadFile,\n', '    Storage::FileSystem::ReadFile,\n    System::{\n')
+          source.write_text(text)
+
+          cargo = Path('crates/medusa-process-containment/Cargo.toml')
+          text = cargo.read_text()
+          anchor = '    "Win32_Security_Isolation",\n'
+          if '"Win32_Storage_FileSystem"' not in text:
+              text = text.replace(anchor, anchor + '    "Win32_Storage_FileSystem",\n')
+          cargo.write_text(text)
+      - name: Normalize Linux-visible graph
+        run: |
+          cargo check -p medusa-agent --all-targets
+          cargo fmt --all
+      - name: Commit correction
+        run: |
+          rm .github/workflows/issue-308-fix-readfile.yml
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add Cargo.lock crates/medusa-process-containment .github/workflows/issue-308-fix-readfile.yml
+          git commit -m "Fix Windows ReadFile binding"
+          git push origin HEAD:agent/issue-308-native-windows-appcontainer
