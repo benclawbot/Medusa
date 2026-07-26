@@ -1072,10 +1072,15 @@ dependencies = [
 name = "medusa-capabilities"
 version = "1.0.0"
 dependencies = [
+ "hex",
  "medusa-config",
  "medusa-core",
  "medusa-extensions",
+ "medusa-github",
+ "medusa-improvement",
+ "medusa-transaction-coordinator",
  "serde",
+ "sha2",
  "tempfile",
 ]
 

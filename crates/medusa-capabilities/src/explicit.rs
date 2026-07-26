@@ -38,8 +38,7 @@ pub fn github_descriptor() -> CapabilityDescriptor {
         id: "github_operations".into(),
         capability: Capability::GitHub,
         description:
-            "Authenticated GitHub reads and explicitly approved writes through medusa-github"
-                .into(),
+            "Authenticated GitHub reads and explicitly approved writes through medusa-github".into(),
         permissions: BTreeSet::from([
             CapabilityPermission::Read,
             CapabilityPermission::Write,
@@ -58,8 +57,7 @@ pub fn self_improvement_descriptor() -> CapabilityDescriptor {
         id: "self_improvement".into(),
         capability: Capability::SelfImprovement,
         description:
-            "Reviewable improvement proposals committed through the transaction coordinator"
-                .into(),
+            "Reviewable improvement proposals committed through the transaction coordinator".into(),
         permissions: BTreeSet::from([
             CapabilityPermission::Read,
             CapabilityPermission::RepositoryMutation,
@@ -352,12 +350,7 @@ impl<E: CommandExecutor> ExplicitCapabilityRuntime<E> {
         let verification = fingerprint(patch.verification_commands.join("\n").as_bytes());
         let rollback = fingerprint(patch.rollback_metadata.as_bytes());
         self.coordinator
-            .attach_evidence(
-                transaction_id,
-                Some(verification),
-                Some(rollback),
-                None,
-            )
+            .attach_evidence(transaction_id, Some(verification), Some(rollback), None)
             .map_err(coordinator_error)?;
         self.coordinator
             .vote(
@@ -451,7 +444,10 @@ mod tests {
     use super::*;
     use medusa_github::CommandOutput;
     use medusa_improvement::{ImprovementRisk, ImprovementTarget};
-    use std::{path::PathBuf, sync::{Arc, Mutex}};
+    use std::{
+        path::PathBuf,
+        sync::{Arc, Mutex},
+    };
 
     #[derive(Clone, Default)]
     struct FakeExecutor(Arc<Mutex<Vec<(String, Vec<String>)>>>);
@@ -555,14 +551,18 @@ mod tests {
             "ok"
         );
         let diagnostics = runtime.diagnostics();
-        assert!(diagnostics
-            .audit_events
-            .iter()
-            .any(|event| !event.allowed && event.permission == CapabilityPermission::Write));
-        assert!(diagnostics
-            .audit_events
-            .iter()
-            .any(|event| event.allowed && event.permission == CapabilityPermission::Write));
+        assert!(
+            diagnostics
+                .audit_events
+                .iter()
+                .any(|event| !event.allowed && event.permission == CapabilityPermission::Write)
+        );
+        assert!(
+            diagnostics
+                .audit_events
+                .iter()
+                .any(|event| event.allowed && event.permission == CapabilityPermission::Write)
+        );
     }
 
     #[test]
@@ -582,12 +582,14 @@ mod tests {
             .stage_improvement(patch("skills/x.md"), false)
             .expect("stage");
         let mut committed = false;
-        assert!(runtime
-            .approve_improvement(&transaction, false, |_| {
-                committed = true;
-                Ok(())
-            })
-            .is_err());
+        assert!(
+            runtime
+                .approve_improvement(&transaction, false, |_| {
+                    committed = true;
+                    Ok(())
+                })
+                .is_err()
+        );
         assert!(!committed);
         runtime
             .approve_improvement(&transaction, true, |_| {
@@ -605,8 +607,10 @@ mod tests {
     #[test]
     fn protected_paths_require_sensitive_change_approval() {
         let (mut runtime, _) = runtime();
-        assert!(runtime
-            .stage_improvement(patch("crates/medusa-hardening/src/lib.rs"), false)
-            .is_err());
+        assert!(
+            runtime
+                .stage_improvement(patch("crates/medusa-hardening/src/lib.rs"), false)
+                .is_err()
+        );
     }
 }
