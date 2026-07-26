@@ -1,5 +1,6 @@
 include!("lib.rs");
 
+#[rustfmt::skip]
 #[path = "result_cache.rs"]
 pub mod result_cache;
 
