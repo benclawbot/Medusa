@@ -8,6 +8,10 @@ repository.workspace = true
 
 [dependencies]
 medusa-core.workspace = true
+medusa-process-registry = { path = "../medusa-process-registry" }
+medusa-recovery-coordinator = { path = "../medusa-recovery-coordinator" }
+medusa-runtime-supervisor = { path = "../medusa-runtime-supervisor" }
+medusa-wakeup = { path = "../medusa-wakeup" }
 serde.workspace = true
 serde_json.workspace = true
 time.workspace = true
