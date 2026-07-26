@@ -4,6 +4,7 @@ import { App } from "./App";
 import { DesktopTimelineBridge } from "./DesktopTimelineBridge";
 import { DesktopUpdateControl } from "./DesktopUpdateControl";
 import { DiffDock } from "./DiffDock";
+import { EngineeringDashboardLauncher } from "./EngineeringDashboard";
 import { MemoryDock } from "./MemoryDock";
 import { SessionDock } from "./SessionDock";
 import "./styles.css";
@@ -23,5 +24,6 @@ ReactDOM.createRoot(document.getElementById("root") as HTMLElement).render(
     <DiffDock />
     <MemoryDock />
     <DesktopUpdateControl />
+    <EngineeringDashboardLauncher />
   </React.StrictMode>,
 );
