@@ -233,16 +233,14 @@ fn probe_gateway(client: &Client, base_url: &str, model: &str) -> MedusaResult<P
     })
 }
 
-fn require_success(
-    response: reqwest::blocking::Response,
-    operation: &str,
-) -> MedusaResult<String> {
+fn require_success(response: reqwest::blocking::Response, operation: &str) -> MedusaResult<String> {
     let status = response.status();
     let body = response.text().unwrap_or_default();
     if status.is_success() {
         return Ok(body);
     }
-    let (category, class) = if status == StatusCode::UNAUTHORIZED || status == StatusCode::FORBIDDEN {
+    let (category, class) = if status == StatusCode::UNAUTHORIZED || status == StatusCode::FORBIDDEN
+    {
         (ErrorCategory::Policy, "authentication")
     } else if status == StatusCode::NOT_FOUND {
         (ErrorCategory::Validation, "gateway endpoint")
@@ -288,7 +286,10 @@ fn verify_tool_call(body: &str) -> MedusaResult<()> {
         .ok_or_else(|| protocol_error("gateway did not return OpenAI-compatible tool_calls"))?;
     if calls.iter().any(|call| {
         call.pointer("/function/name").and_then(Value::as_str) == Some("medusa_preflight")
-            && call.pointer("/function/arguments").and_then(Value::as_str).is_some()
+            && call
+                .pointer("/function/arguments")
+                .and_then(Value::as_str)
+                .is_some()
     }) {
         Ok(())
     } else {
@@ -313,7 +314,9 @@ fn verify_stream(body: &str) -> MedusaResult<()> {
             continue;
         }
         let value: Value = serde_json::from_str(data).map_err(|error| {
-            protocol_error(format!("streaming response contains malformed JSON: {error}"))
+            protocol_error(format!(
+                "streaming response contains malformed JSON: {error}"
+            ))
         })?;
         if value.get("choices").and_then(Value::as_array).is_none() {
             return Err(protocol_error(
