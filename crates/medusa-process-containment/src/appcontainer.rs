@@ -224,7 +224,7 @@ fn create_inheritable_pipe() -> io::Result<(OwnedHandle, OwnedHandle)> {
     };
     let mut read: HANDLE = null_mut();
     let mut write: HANDLE = null_mut();
-    if unsafe { CreatePipe(&mut read, &mut write, &mut attributes, 0) } == 0 {
+    if unsafe { CreatePipe(&mut read, &mut write, &attributes, 0) } == 0 {
         return Err(io::Error::last_os_error());
     }
     let read = OwnedHandle::new(read)?;
