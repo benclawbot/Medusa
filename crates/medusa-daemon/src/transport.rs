@@ -27,8 +27,8 @@ mod platform {
                 )
             })?;
             fs::create_dir_all(parent)?;
-            let parent_metadata = fs::symlink_metadata(parent)?;
-            if parent_metadata.file_type().is_symlink() || !parent_metadata.is_dir() {
+            let metadata = fs::symlink_metadata(parent)?;
+            if metadata.file_type().is_symlink() || !metadata.is_dir() {
                 return Err(io::Error::new(
                     io::ErrorKind::PermissionDenied,
                     "daemon directory must be a real directory",
@@ -213,8 +213,7 @@ mod platform {
                 file.sync_all()?;
                 secure_owner_only(&temporary, &owner_sid, false)?;
                 fs::rename(&temporary, endpoint)?;
-                secure_owner_only(endpoint, &owner_sid, false)?;
-                Ok(())
+                secure_owner_only(endpoint, &owner_sid, false)
             })();
             if let Err(error) = write_result {
                 let _ = fs::remove_file(&temporary);
@@ -344,7 +343,9 @@ mod platform {
             .rsplit_once("\",\"")
             .map(|(_, sid)| sid.trim_matches('"'))
             .filter(|sid| sid.starts_with("S-1-"))
-            .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "invalid current-user SID"))?;
+            .ok_or_else(|| {
+                io::Error::new(io::ErrorKind::InvalidData, "invalid current-user SID")
+            })?;
         Ok(sid.to_owned())
     }
 
@@ -370,7 +371,12 @@ mod platform {
                 "daemon endpoint ACL does not grant the current user",
             ));
         }
-        for forbidden in ["Everyone", "Authenticated Users", "BUILTIN\\Users", "Users:"] {
+        for forbidden in [
+            "Everyone",
+            "Authenticated Users",
+            "BUILTIN\\Users",
+            "Users:",
+        ] {
             if text.contains(forbidden) {
                 return Err(io::Error::new(
                     io::ErrorKind::PermissionDenied,
