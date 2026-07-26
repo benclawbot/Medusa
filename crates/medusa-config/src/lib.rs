@@ -17,16 +17,6 @@ pub enum Mode {
     ReadOnly,
 }
 
-/// Runtime backend.
-#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
-#[serde(rename_all = "kebab-case")]
-pub enum RuntimeBackend {
-    Auto,
-    Host,
-    Container,
-    Remote,
-}
-
 /// Root configuration.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(default, deny_unknown_fields)]
@@ -34,23 +24,20 @@ pub struct Config {
     pub version: u16,
     pub agent: AgentConfig,
     pub model: ModelConfig,
-    pub runtime: RuntimeConfig,
-    pub git: GitConfig,
     pub memory: MemoryConfig,
     pub verification: VerificationConfig,
 }
 
-/// Agent settings.
+/// Agent settings with production runtime effects.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct AgentConfig {
     pub mode: Mode,
     pub max_turns: u32,
     pub parallel_workers: u16,
-    pub ask_policy: String,
 }
 
-/// Model settings.
+/// Model settings with production provider effects.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct ModelConfig {
@@ -64,44 +51,21 @@ pub struct ModelConfig {
     pub auto_compact_percent: u8,
     pub base_url: Option<String>,
     pub auth: String,
-    pub speed: String,
-    pub reasoning: String,
 }
 
-/// Runtime settings.
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-#[serde(default, deny_unknown_fields)]
-pub struct RuntimeConfig {
-    pub backend: RuntimeBackend,
-    pub network: String,
-    pub process_limit: u32,
-}
-
-/// Git settings.
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-#[serde(default, deny_unknown_fields)]
-pub struct GitConfig {
-    pub auto_commit: bool,
-    pub allow_force_push: bool,
-    pub protect_dirty_tree: bool,
-}
-
-/// Memory settings.
+/// Memory settings with production persistence effects.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct MemoryConfig {
     pub enabled: bool,
     pub format: String,
-    pub auto_promote_low_risk: bool,
 }
 
-/// Verification settings.
+/// Verification settings with production execution effects.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct VerificationConfig {
     pub required: bool,
-    pub independent_review: bool,
-    pub browser_on_ui_change: bool,
 }
 
 impl Default for Config {
@@ -110,8 +74,6 @@ impl Default for Config {
             version: CONFIG_VERSION,
             agent: AgentConfig::default(),
             model: ModelConfig::default(),
-            runtime: RuntimeConfig::default(),
-            git: GitConfig::default(),
             memory: MemoryConfig::default(),
             verification: VerificationConfig::default(),
         }
@@ -124,7 +86,6 @@ impl Default for AgentConfig {
             mode: Mode::Yolo,
             max_turns: 500,
             parallel_workers: 4,
-            ask_policy: "only_irreducible".into(),
         }
     }
 }
@@ -142,28 +103,6 @@ impl Default for ModelConfig {
             auto_compact_percent: 40,
             base_url: None,
             auth: "api-key".into(),
-            speed: "balanced".into(),
-            reasoning: "medium".into(),
-        }
-    }
-}
-
-impl Default for RuntimeConfig {
-    fn default() -> Self {
-        Self {
-            backend: RuntimeBackend::Auto,
-            network: "allowlist".into(),
-            process_limit: 512,
-        }
-    }
-}
-
-impl Default for GitConfig {
-    fn default() -> Self {
-        Self {
-            auto_commit: true,
-            allow_force_push: false,
-            protect_dirty_tree: true,
         }
     }
 }
@@ -173,18 +112,13 @@ impl Default for MemoryConfig {
         Self {
             enabled: true,
             format: "markdown".into(),
-            auto_promote_low_risk: true,
         }
     }
 }
 
 impl Default for VerificationConfig {
     fn default() -> Self {
-        Self {
-            required: true,
-            independent_review: true,
-            browser_on_ui_change: true,
-        }
+        Self { required: true }
     }
 }
 
@@ -241,11 +175,6 @@ impl Config {
         if !(1..=100).contains(&self.model.auto_compact_percent) {
             return Err(invalid("auto_compact_percent must be between 1 and 100"));
         }
-        if self.git.allow_force_push {
-            return Err(invalid(
-                "force push cannot be enabled by the built-in schema",
-            ));
-        }
         if self.memory.format != "markdown" {
             return Err(invalid("memory format must remain markdown"));
         }
@@ -267,8 +196,10 @@ struct ProviderProfile {
     connection: String,
     provider: String,
     model: String,
-    speed: String,
-    reasoning: String,
+    #[serde(rename = "speed")]
+    _speed: String,
+    #[serde(rename = "reasoning")]
+    _reasoning: String,
     auth: String,
     base_url: Option<String>,
     configured: bool,
@@ -318,11 +249,6 @@ fn merge_provider_profile(base: &mut toml::Value) -> MedusaResult<()> {
         toml::Value::String(protocol.to_owned()),
     );
     model.insert("auth".to_owned(), toml::Value::String(profile.auth));
-    model.insert("speed".to_owned(), toml::Value::String(profile.speed));
-    model.insert(
-        "reasoning".to_owned(),
-        toml::Value::String(profile.reasoning),
-    );
     let mut root = toml::map::Map::new();
     root.insert("model".to_owned(), toml::Value::Table(model));
     let overlay = toml::Value::Table(root);
@@ -401,16 +327,46 @@ mod tests {
     use super::*;
 
     #[test]
-    fn defaults_validate() {
+    fn defaults_validate_and_are_documented_contract() {
         let config = Config::default();
         config.validate().expect("defaults");
+        assert_eq!(config.agent.mode, Mode::Yolo);
+        assert_eq!(config.agent.max_turns, 500);
+        assert_eq!(config.agent.parallel_workers, 4);
+        assert_eq!(config.model.provider, "minimax");
+        assert_eq!(config.model.name, "MiniMax-M3");
+        assert_eq!(config.model.temperature_milli, 200);
+        assert_eq!(config.model.max_output_tokens, 32_768);
         assert_eq!(config.model.context_window_tokens, 1_000_000);
         assert_eq!(config.model.auto_compact_percent, 40);
+        assert!(config.memory.enabled);
+        assert_eq!(config.memory.format, "markdown");
+        assert!(config.verification.required);
     }
 
     #[test]
     fn unknown_fields_fail_closed() {
         assert!(Config::from_toml("version = 1\nunknown = true").is_err());
+    }
+
+    #[test]
+    fn removed_no_effect_fields_fail_closed() {
+        for document in [
+            "version = 1\n[agent]\nask_policy = 'only_irreducible'\n",
+            "version = 1\n[model]\nspeed = 'balanced'\n",
+            "version = 1\n[model]\nreasoning = 'medium'\n",
+            "version = 1\n[runtime]\nbackend = 'auto'\n",
+            "version = 1\n[runtime]\nnetwork = 'allowlist'\n",
+            "version = 1\n[runtime]\nprocess_limit = 512\n",
+            "version = 1\n[git]\nauto_commit = true\n",
+            "version = 1\n[git]\nprotect_dirty_tree = true\n",
+            "version = 1\n[git]\nallow_force_push = false\n",
+            "version = 1\n[memory]\nauto_promote_low_risk = true\n",
+            "version = 1\n[verification]\nindependent_review = true\n",
+            "version = 1\n[verification]\nbrowser_on_ui_change = true\n",
+        ] {
+            assert!(Config::from_toml(document).is_err(), "accepted {document}");
+        }
     }
 
     #[test]
@@ -437,11 +393,6 @@ mod tests {
             parse_override_value("only_irreducible").expect("string override"),
             toml::Value::String("only_irreducible".into())
         );
-    }
-
-    #[test]
-    fn force_push_fails_closed() {
-        assert!(Config::from_toml("version = 1\n[git]\nallow_force_push = true\n").is_err());
     }
 }
 
