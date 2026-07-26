@@ -42,7 +42,7 @@ pub struct AgentConfig {
 #[serde(default, deny_unknown_fields)]
 pub struct ModelConfig {
     pub provider: String,
-    pub fallback_providers: Vec<String>,
+    pub fallback_providers: Vec<FallbackProviderConfig>,
     pub name: String,
     pub protocol: String,
     pub temperature_milli: u16,
@@ -51,6 +51,55 @@ pub struct ModelConfig {
     pub auto_compact_percent: u8,
     pub base_url: Option<String>,
     pub auth: String,
+    pub tool_calling: bool,
+    pub streaming: bool,
+    pub max_retries: u8,
+    pub retry_base_delay_ms: u64,
+    pub retry_max_delay_ms: u64,
+    pub retry_jitter_ms: u64,
+}
+
+/// A complete, independently resolved fallback route.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct FallbackProviderConfig {
+    pub provider: String,
+    pub name: String,
+    pub protocol: String,
+    pub base_url: Option<String>,
+    pub auth: String,
+    #[serde(default = "default_true")]
+    pub tool_calling: bool,
+    #[serde(default)]
+    pub streaming: bool,
+    #[serde(default = "default_max_retries")]
+    pub max_retries: u8,
+    #[serde(default = "default_retry_base_delay_ms")]
+    pub retry_base_delay_ms: u64,
+    #[serde(default = "default_retry_max_delay_ms")]
+    pub retry_max_delay_ms: u64,
+    #[serde(default = "default_retry_jitter_ms")]
+    pub retry_jitter_ms: u64,
+}
+
+fn default_true() -> bool {
+    true
+}
+
+fn default_max_retries() -> u8 {
+    1
+}
+
+fn default_retry_base_delay_ms() -> u64 {
+    250
+}
+
+fn default_retry_max_delay_ms() -> u64 {
+    8_000
+}
+
+fn default_retry_jitter_ms() -> u64 {
+    100
 }
 
 /// Memory settings with production persistence effects.
@@ -105,6 +154,12 @@ impl Default for ModelConfig {
             auto_compact_percent: 40,
             base_url: None,
             auth: "api-key".into(),
+            tool_calling: true,
+            streaming: false,
+            max_retries: default_max_retries(),
+            retry_base_delay_ms: default_retry_base_delay_ms(),
+            retry_max_delay_ms: default_retry_max_delay_ms(),
+            retry_jitter_ms: default_retry_jitter_ms(),
         }
     }
 }
@@ -177,6 +232,30 @@ impl Config {
         if self.model.context_window_tokens == 0 {
             return Err(invalid("context_window_tokens must be greater than zero"));
         }
+        validate_route(
+            "primary",
+            &self.model.provider,
+            &self.model.name,
+            &self.model.protocol,
+            &self.model.auth,
+            self.model.max_retries,
+            self.model.retry_base_delay_ms,
+            self.model.retry_max_delay_ms,
+            self.model.retry_jitter_ms,
+        )?;
+        for (index, fallback) in self.model.fallback_providers.iter().enumerate() {
+            validate_route(
+                &format!("fallback[{index}]"),
+                &fallback.provider,
+                &fallback.name,
+                &fallback.protocol,
+                &fallback.auth,
+                fallback.max_retries,
+                fallback.retry_base_delay_ms,
+                fallback.retry_max_delay_ms,
+                fallback.retry_jitter_ms,
+            )?;
+        }
         if !(1..=100).contains(&self.model.auto_compact_percent) {
             return Err(invalid("auto_compact_percent must be between 1 and 100"));
         }
@@ -185,6 +264,48 @@ impl Config {
         }
         Ok(())
     }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn validate_route(
+    label: &str,
+    provider: &str,
+    model: &str,
+    protocol: &str,
+    auth: &str,
+    max_retries: u8,
+    base_delay_ms: u64,
+    max_delay_ms: u64,
+    jitter_ms: u64,
+) -> MedusaResult<()> {
+    if provider.trim().is_empty() || model.trim().is_empty() {
+        return Err(invalid(format!(
+            "{label} provider and model must be explicit"
+        )));
+    }
+    if !matches!(
+        protocol.trim().to_ascii_lowercase().as_str(),
+        "anthropic" | "openai"
+    ) {
+        return Err(invalid(format!(
+            "{label} protocol must be anthropic or openai"
+        )));
+    }
+    if !matches!(
+        auth.trim().to_ascii_lowercase().as_str(),
+        "api-key" | "none"
+    ) {
+        return Err(invalid(format!("{label} auth must be api-key or none")));
+    }
+    if max_retries > 8 {
+        return Err(invalid(format!("{label} max_retries must be at most 8")));
+    }
+    if base_delay_ms == 0 || max_delay_ms < base_delay_ms || jitter_ms > max_delay_ms {
+        return Err(invalid(format!(
+            "{label} retry policy is invalid or unbounded"
+        )));
+    }
+    Ok(())
 }
 
 fn invalid(message: impl Into<String>) -> MedusaError {

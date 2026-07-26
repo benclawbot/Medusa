@@ -1,0 +1,73 @@
+name: Finalize issue 352 workspace fixtures
+
+on:
+  push:
+    branches: [main]
+    paths: [.github/workflows/fix-issue-352-workspace.yml]
+
+concurrency:
+  group: issue-352-workspace-main
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+
+jobs:
+  patch-verify-and-commit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+      - uses: dtolnay/rust-toolchain@1.88.0
+        with:
+          components: rustfmt, clippy
+      - name: Update capability fixtures
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+
+          path = Path('crates/medusa-agent/src/engine_support.rs')
+          text = path.read_text()
+          replacements = [
+              (
+                  '''            max_image_bytes: Some(1024),
+            max_images_per_request: Some(2),
+        };''',
+                  '''            max_image_bytes: Some(1024),
+            max_images_per_request: Some(2),
+            tool_calling: true,
+            streaming: false,
+        };''',
+              ),
+              (
+                  '''            max_image_bytes: None,
+            max_images_per_request: None,
+        };''',
+                  '''            max_image_bytes: None,
+            max_images_per_request: None,
+            tool_calling: true,
+            streaming: false,
+        };''',
+              ),
+          ]
+          for old, new in replacements:
+              if old in text:
+                  text = text.replace(old, new, 1)
+          path.write_text(text)
+          PY
+          cargo fmt --all
+      - name: Workspace Clippy
+        run: cargo clippy --workspace --all-targets --all-features -- -D warnings
+      - name: Workspace tests
+        run: cargo test --workspace --all-targets --all-features
+      - name: Commit verified fixture updates
+        run: |
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add crates/medusa-agent/src/engine_support.rs
+          if ! git diff --cached --quiet; then
+            git commit -m "test(agent): declare complete provider capabilities (#352)"
+            git push origin HEAD:main
+          fi
