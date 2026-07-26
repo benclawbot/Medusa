@@ -7,10 +7,16 @@ license.workspace = true
 repository.workspace = true
 
 [dependencies]
+hex.workspace = true
 medusa-config = { path = "../medusa-config" }
 medusa-core.workspace = true
 medusa-extensions = { path = "../medusa-extensions" }
+medusa-github = { path = "../medusa-github" }
+medusa-improvement = { path = "../medusa-improvement" }
+medusa-transaction-coordinator = { path = "../medusa-transaction-coordinator" }
 serde.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
 
 [dev-dependencies]
 tempfile.workspace = true

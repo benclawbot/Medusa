@@ -19,6 +19,7 @@ pub enum Capability {
     Shell,
     Git,
     GitHub,
+    SelfImprovement,
     Browser,
     DesktopMcp,
     Playwright,
@@ -27,11 +28,12 @@ pub enum Capability {
 }
 
 impl Capability {
-    const ALL: [Self; 9] = [
+    const ALL: [Self; 10] = [
         Self::Filesystem,
         Self::Shell,
         Self::Git,
         Self::GitHub,
+        Self::SelfImprovement,
         Self::Browser,
         Self::DesktopMcp,
         Self::Playwright,
@@ -46,6 +48,7 @@ impl Capability {
             Self::Shell => "Shell",
             Self::Git => "Git",
             Self::GitHub => "GitHub",
+            Self::SelfImprovement => "Self-improvement",
             Self::Browser => "Browser",
             Self::DesktopMcp => "Desktop MCP",
             Self::Playwright => "Playwright",
@@ -173,6 +176,16 @@ impl CapabilityRegistry {
                 "repository state directory is unavailable or read-only"
             },
         );
+        insert(
+            &mut capabilities,
+            Capability::SelfImprovement,
+            memory,
+            if memory {
+                "self-improvement proposals can be staged for review"
+            } else {
+                "self-improvement requires writable repository state"
+            },
+        );
         let network = !matches!(
             std::env::var("MEDUSA_NETWORK_DISABLED").as_deref(),
             Ok("1") | Ok("true")
@@ -263,6 +276,9 @@ fn io_error(error: std::io::Error) -> MedusaError {
     )
 }
 
+pub mod explicit;
+pub use explicit::*;
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -292,11 +308,13 @@ mod tests {
             CapabilityRegistry::discover_with(directory.path().into(), &probe).expect("discover");
         assert!(registry.available(Capability::Filesystem));
         assert!(registry.available(Capability::GitHub));
+        assert!(registry.available(Capability::SelfImprovement));
         assert!(registry.available(Capability::Memory));
         let prompt = registry.prompt_summary();
         assert!(prompt.contains("Filesystem ✓"));
         assert!(prompt.contains("GitHub ✓"));
-        assert_eq!(prompt.lines().count(), 9);
+        assert!(prompt.contains("Self-improvement ✓"));
+        assert_eq!(prompt.lines().count(), 10);
     }
 
     #[test]
