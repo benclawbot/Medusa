@@ -1,16 +1,27 @@
 //! Shared public-host URL validation for the browser sidecar.
 
-use medusa_network_policy::resolve_public_url;
+use medusa_browser_client::network_policy::resolve_public_target;
 
 pub fn validate_public_url(url: &url::Url) -> Result<(), String> {
-    resolve_public_url(url).map(|_| ())
+    let host = url
+        .host_str()
+        .ok_or_else(|| "web URL must include a host".to_owned())?;
+    resolve_public_target(
+        url.scheme(),
+        url.username(),
+        url.password().is_some(),
+        url.port(),
+        host,
+        url.port_or_known_default().unwrap_or(443),
+    )
+    .map(|_| ())
 }
 
 #[cfg(test)]
 mod tests {
     use std::net::IpAddr;
 
-    use medusa_network_policy::is_public_ip;
+    use medusa_browser_client::network_policy::is_public_ip;
 
     use super::validate_public_url;
 
@@ -50,7 +61,10 @@ mod tests {
             "fc00::1",
             "fe80::1",
         ] {
-            assert!(!is_public_ip(address.parse::<IpAddr>().expect("address")), "{address}");
+            assert!(
+                !is_public_ip(address.parse::<IpAddr>().expect("address")),
+                "{address}"
+            );
             assert!(validate_public_url(&parse(&format!("http://[{address}]/"))).is_err());
         }
     }
