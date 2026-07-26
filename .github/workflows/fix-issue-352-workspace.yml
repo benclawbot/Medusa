@@ -72,4 +72,4 @@ jobs:
             git push origin HEAD:main
           fi
 
-# Triggered after PR #363 merged.
+# Triggered by a trusted merge event after PR #363.
