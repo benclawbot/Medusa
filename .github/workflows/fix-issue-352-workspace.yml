@@ -71,3 +71,5 @@ jobs:
             git commit -m "test(agent): declare complete provider capabilities (#352)"
             git push origin HEAD:main
           fi
+
+# Triggered after PR #363 merged.
