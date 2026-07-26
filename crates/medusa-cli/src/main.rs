@@ -19,7 +19,7 @@ use medusa_core::{ErrorCategory, ErrorCode, MedusaError, MedusaResult};
 use medusa_daemon::{DaemonClient, DaemonPaths, Request, serve};
 use medusa_extensions::{DesktopCommanderClient, DesktopCommanderSettings};
 use medusa_hardening::{CURRENT_SCHEMA_VERSION, Migrator};
-use medusa_runtime::{PromptDraft, RuntimeController, RuntimeEvent};
+use medusa_runtime::{prompt::PromptDraft, RuntimeController, RuntimeEvent};
 use medusa_tui::{TuiOptions, run as run_tui};
 use medusa_update::{InstallKind, InstallLocation, MainBranchUpdater, UpdatePolicy};
 use serde::Serialize;
