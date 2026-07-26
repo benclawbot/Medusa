@@ -7,3 +7,5 @@ The child receives an explicit environment allowlist containing `PATH`, `SystemR
 Every profile, ACL, process-attribute, pipe, process-launch, Job Object, and resume failure returns `SandboxUnavailable`; there is no bare-process downgrade. The active backend and effective restrictions are included in structured error context.
 
 The Job Object prevents breakaway by omission of breakaway flags, limits active processes and aggregate committed memory, and terminates the process tree when its final handle closes. AppContainer execution has no network capabilities, so outbound and private-network access are denied by Windows.
+
+Validation covers the complete repository suite: dependency graph and lockfile policy, formatting, Clippy, panic audit, workspace tests, documentation, refactor guardrails, and the Windows, macOS, and Ubuntu daemon/TUI matrix. All failures are inspected before further changes are committed.
