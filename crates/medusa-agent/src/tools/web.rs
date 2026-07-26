@@ -1,8 +1,6 @@
 use std::{io::Read, time::Duration};
 
-use medusa_browser_client::network_policy::{
-    ResolvedTarget, is_public_ip, resolve_public_target,
-};
+use medusa_browser_client::network_policy::{ResolvedTarget, is_public_ip, resolve_public_target};
 use medusa_core::{ErrorCategory, ErrorCode, MedusaError, MedusaResult};
 use reqwest::{
     Url,
