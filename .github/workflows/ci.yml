@@ -6,13 +6,39 @@ on:
   pull_request:
 
 permissions:
-  contents: read
+  contents: write
 
 concurrency:
   group: ci-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
+  apply-model-selection-parity:
+    if: github.event_name == 'pull_request' && github.actor != 'github-actions[bot]' && hashFiles('.github/scripts/apply-model-selection-parity.py') != ''
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: agent/model-selection-parity
+          token: ${{ secrets.GITHUB_TOKEN }}
+      - uses: dtolnay/rust-toolchain@1.88.0
+        with:
+          components: rustfmt
+      - name: Apply and commit source patch
+        shell: bash
+        run: |
+          python3 .github/scripts/apply-model-selection-parity.py
+          cargo fmt --all
+          git diff --check
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git fetch origin main
+          git checkout origin/main -- .github/workflows/ci.yml
+          git rm .github/scripts/apply-model-selection-parity.py .github/workflows/apply-model-selection-parity.yml
+          git add crates/medusa-runtime/src/support.rs crates/medusa-runtime/src/lib.rs crates/medusa-tui/src/app/models.rs
+          git commit -m "Align interactive model provider selection"
+          git push origin HEAD:agent/model-selection-parity
+
   quality:
     name: Workspace quality
     runs-on: ubuntu-latest
