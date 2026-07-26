@@ -786,6 +786,8 @@ mod tests {
             supported_image_media_types: vec!["image/png".to_owned()],
             max_image_bytes: Some(1024),
             max_images_per_request: Some(2),
+            tool_calling: true,
+            streaming: false,
         };
         validate_user_content(&[image_block("image/png", "AAEC")], &capabilities)
             .expect("accept supported image");
@@ -798,6 +800,8 @@ mod tests {
             supported_image_media_types: vec!["image/png".to_owned()],
             max_image_bytes: None,
             max_images_per_request: None,
+            tool_calling: true,
+            streaming: false,
         };
         let error = validate_user_content(&[image_block("image/tiff", "AAEC")], &capabilities)
             .expect_err("reject unsupported type");

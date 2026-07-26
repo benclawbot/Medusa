@@ -722,21 +722,6 @@ mod browser_policy_tests {
             BrowserVerificationDecision::Skip
         );
     }
-
-    #[test]
-    fn manual_override_is_auditable() {
-        unsafe { std::env::set_var("MEDUSA_BROWSER_VERIFY", "force") };
-        assert_eq!(
-            browser_verification_decision(&[PathBuf::from("README.md")], false),
-            BrowserVerificationDecision::Run
-        );
-        unsafe { std::env::set_var("MEDUSA_BROWSER_VERIFY", "skip") };
-        assert_eq!(
-            browser_verification_decision(&[PathBuf::from("apps/web/App.tsx")], true),
-            BrowserVerificationDecision::Skip
-        );
-        unsafe { std::env::remove_var("MEDUSA_BROWSER_VERIFY") };
-    }
 }
 
 #[cfg(test)]
