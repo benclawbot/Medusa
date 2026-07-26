@@ -36,6 +36,7 @@ thiserror.workspace = true
 time.workspace = true
 
 [dev-dependencies]
+medusa-testkit = { path = "../medusa-testkit" }
 tempfile.workspace = true
 
 [lints]
