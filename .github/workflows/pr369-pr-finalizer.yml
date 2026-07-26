@@ -1,0 +1,48 @@
+name: PR 369 finalizer
+
+on:
+  pull_request_target:
+    types: [labeled]
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  finish:
+    if: github.event.pull_request.number == 369 && github.event.label.name == 'run-pr369-finalizer'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: fix/353-oauth-gateway-preflight
+          fetch-depth: 0
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
+      - name: Run embedded finalizer
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          lines = Path('.github/workflows/pr369-finish.yml').read_text().splitlines()
+          start = lines.index('        run: |', lines.index('      - name: Apply review fixes')) + 1
+          end = lines.index('      - name: Regenerate lockfile and format')
+          script = '\n'.join(line[10:] if line.startswith('          ') else line for line in lines[start:end])
+          exec(compile(script, 'pr369-finalizer', 'exec'))
+          PY
+          cargo generate-lockfile
+          cargo fmt --all
+          cargo test -p medusa-cli --locked
+          git rm .github/workflows/pr369-finish.yml
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add crates/medusa-cli/src/wrapper.rs crates/medusa-cli/src/oauth_preflight.rs Cargo.lock
+          git commit -m "fix: address OAuth preflight review feedback"
+          git push origin HEAD:fix/353-oauth-gateway-preflight
+      - name: Remove finalizer from main
+        run: |
+          git fetch origin main
+          git checkout main
+          git rm .github/workflows/pr369-pr-finalizer.yml
+          git commit -m "ci: remove completed PR 369 finalizer"
+          git push origin main
