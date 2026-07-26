@@ -1,0 +1,60 @@
+name: Issue 303 refresh
+
+on:
+  push:
+    branches:
+      - agent/issue-303-worker-leases-progress
+
+permissions:
+  contents: write
+
+jobs:
+  refresh:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: agent/issue-303-worker-leases-progress
+      - uses: dtolnay/rust-toolchain@1.88.0
+        with:
+          components: rustfmt
+      - name: Wire worker execution module and normalize source
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          lib = Path('crates/medusa-agent/src/lib.rs')
+          text = lib.read_text()
+          marker = 'mod verification;\n'
+          if 'mod worker_execution;\n' not in text:
+              text = text.replace(marker, marker + 'mod worker_execution;\n')
+          export_marker = 'pub use verification::{VerificationResult, targeted_verification};\n'
+          export = 'pub use worker_execution::{LeasedAssignment, WorkerCompletion, WorkerExecutionController, WorkerProgressSummary};\n'
+          if export not in text:
+              text = text.replace(export_marker, export_marker + export)
+          lib.write_text(text)
+
+          source = Path('crates/medusa-agent/src/worker_execution.rs')
+          text = source.read_text()
+          text = text.replace('path::{Path, PathBuf},', 'path::PathBuf,')
+          text = text.replace('use medusa_multi_agent_scheduler::{Assignment, DynamicSchedule, Task, Worker as ScheduledWorker};', 'use medusa_multi_agent_scheduler::{DynamicSchedule, Task, Worker as ScheduledWorker};')
+          old = '''        let schedule = DynamicSchedule::new(tasks, scheduled_workers.clone(), max_attempts)\n            .map_err(str::to_owned)?;'''
+          new = '''        let total = u32::try_from(tasks.len()).unwrap_or(u32::MAX);\n        let schedule = DynamicSchedule::new(tasks, scheduled_workers.clone(), max_attempts)\n            .map_err(str::to_owned)?;'''
+          text = text.replace(old, new)
+          text = text.replace('        let total = u32::try_from(schedule_task_count(&schedule)).unwrap_or(u32::MAX);\n', '')
+          start = text.find('\nfn schedule_task_count(')
+          end = text.find('\nfn validate_state(', start)
+          if start != -1 and end != -1:
+              text = text[:start] + text[end:]
+          source.write_text(text)
+          PY
+      - run: cargo fmt --all
+      - run: cargo generate-lockfile
+      - name: Commit generated files
+        run: |
+          if git diff --quiet; then exit 0; fi
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add Cargo.lock crates/medusa-agent/src/lib.rs crates/medusa-agent/src/worker_execution.rs
+          git commit -m "Refresh leased worker execution wiring and lockfile"
+          git push origin HEAD:agent/issue-303-worker-leases-progress
