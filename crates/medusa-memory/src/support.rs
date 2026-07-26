@@ -23,7 +23,7 @@ impl LifecycleLock {
             .map_err(sql_error)?;
         connection
             .execute_batch(
-                "PRAGMA journal_mode=WAL;
+                "PRAGMA journal_mode=DELETE;
                  CREATE TABLE IF NOT EXISTS lifecycle_lock (singleton INTEGER PRIMARY KEY CHECK (singleton = 1));
                  BEGIN IMMEDIATE;",
             )
