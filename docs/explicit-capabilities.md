@@ -26,4 +26,4 @@ Changes to policy, sandbox, approval, credential, capability, hardening, workflo
 
 ## Diagnostics
 
-The shared capability matrix exposes both `GitHub` and `Self-improvement`, including availability details. Runtime diagnostics also expose capability descriptors and the ordered authorization audit trail. A shipped CLI entry point constructs the explicit runtime and emits these diagnostics as JSON.
+The shared capability matrix exposes both `GitHub` and `Self-improvement`, including availability details. Runtime diagnostics also expose capability descriptors and the ordered authorization audit trail. The shipped `medusa-capabilities [repository]` command constructs the explicit runtime and emits these diagnostics as JSON; `MEDUSA_GITHUB_REPOSITORY` selects the GitHub repository identity.
