@@ -249,11 +249,9 @@ mod tests {
     #[test]
     fn rejects_symlink_traversal_before_staging() {
         use std::os::unix::fs::symlink;
-
         let directory = tempfile::tempdir().expect("tempdir");
         let outside = tempfile::tempdir().expect("outside");
         symlink(outside.path(), directory.path().join("linked")).expect("symlink");
-
         let result = apply_atomic(
             directory.path(),
             &[FileMutation {
@@ -261,7 +259,6 @@ mod tests {
                 content: "bad".into(),
             }],
         );
-
         assert!(result.is_err());
         assert!(!outside.path().join("escape.txt").exists());
     }
@@ -270,12 +267,10 @@ mod tests {
     #[test]
     fn preserves_existing_file_permissions() {
         use std::os::unix::fs::PermissionsExt;
-
         let directory = tempfile::tempdir().expect("tempdir");
         let path = directory.path().join("script.sh");
         fs::write(&path, "old").expect("fixture");
         fs::set_permissions(&path, fs::Permissions::from_mode(0o750)).expect("permissions");
-
         apply_atomic(
             directory.path(),
             &[FileMutation {
@@ -284,10 +279,17 @@ mod tests {
             }],
         )
         .expect("transaction");
-
         assert_eq!(
             fs::metadata(path).unwrap().permissions().mode() & 0o777,
             0o750
         );
     }
 }
+
+#[allow(dead_code)]
+#[path = "transaction_pipeline.rs"]
+mod safety_pipeline;
+#[allow(unused_imports)]
+pub use safety_pipeline::{
+    SafeTransactionOutcome, TransactionEvidence, WorkerMutationProposal, execute_safe_transaction,
+};

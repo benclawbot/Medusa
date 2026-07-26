@@ -10,12 +10,17 @@ repository.workspace = true
 hex.workspace = true
 medusa-browser-client = { path = "../medusa-browser-client" }
 medusa-capabilities = { path = "../medusa-capabilities" }
+medusa-commit-barrier = { path = "../medusa-commit-barrier" }
 medusa-config = { path = "../medusa-config" }
+medusa-conflict-resolution = { path = "../medusa-conflict-resolution" }
+medusa-consensus = { path = "../medusa-consensus" }
 medusa-core.workspace = true
 medusa-escalation = { path = "../medusa-escalation" }
 medusa-extensions = { path = "../medusa-extensions" }
 medusa-intelligence = { path = "../medusa-intelligence" }
 medusa-multi-agent-scheduler = { path = "../medusa-multi-agent-scheduler" }
+medusa-repository-rollback = { path = "../medusa-repository-rollback" }
+medusa-transaction-coordinator = { path = "../medusa-transaction-coordinator" }
 medusa-process-containment.workspace = true
 medusa-protocol.workspace = true
 medusa-provider = { path = "../medusa-provider" }
