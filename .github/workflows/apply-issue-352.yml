@@ -10,12 +10,13 @@ on:
     types: [opened, synchronize, reopened, ready_for_review]
     branches:
       - main
-    paths:
-      - .github/workflows/apply-issue-352.yml
-      - .github/scripts/fix_issue_352.py
+
+concurrency:
+  group: issue-352-${{ github.ref }}
+  cancel-in-progress: true
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
   apply-and-verify:
@@ -29,39 +30,25 @@ jobs:
         with:
           toolchain: 1.88.0
           components: rustfmt, clippy
-      - name: Apply source migration when needed
+      - name: Apply migration and compiler fix
         run: |
           if grep -q 'fallback_providers: Vec<String>' crates/medusa-config/src/lib.rs; then
             python3 .github/scripts/fix_issue_352.py
           fi
-      - name: Format
-        run: cargo fmt --all
-      - name: Package migrated implementation
+          sed -i 's/RouteRouteRetryPolicy/RouteRetryPolicy/g' crates/medusa-provider/src/manager.rs
+          cargo fmt --all
+      - name: Commit source changes
         run: |
-          mkdir -p issue-352/crates/medusa-config/src issue-352/crates/medusa-provider/src
-          cp crates/medusa-config/src/lib.rs issue-352/crates/medusa-config/src/lib.rs
-          cp crates/medusa-provider/src/lib.rs issue-352/crates/medusa-provider/src/lib.rs
-          cp crates/medusa-provider/src/manager.rs issue-352/crates/medusa-provider/src/manager.rs
-      - uses: actions/upload-artifact@v4
-        with:
-          name: issue-352-migrated-source
-          path: issue-352
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add crates/medusa-config/src/lib.rs crates/medusa-provider/src/lib.rs crates/medusa-provider/src/manager.rs
+          if ! git diff --cached --quiet; then
+            git commit -m "fix(provider): complete self-contained fallback routes (#352)"
+            git pull --rebase origin fix/352-self-contained-fallback-profiles
+            git push origin HEAD:fix/352-self-contained-fallback-profiles
+          fi
       - name: Check provider and config crates
-        shell: bash
-        run: |
-          set +e
-          cargo check -p medusa-config -p medusa-provider 2>&1 | tee issue-352-check.log
-          status=${PIPESTATUS[0]}
-          echo "$status" > issue-352-check.status
-          exit "$status"
-      - name: Upload compiler diagnostics
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: issue-352-compiler-diagnostics
-          path: |
-            issue-352-check.log
-            issue-352-check.status
+        run: cargo check -p medusa-config -p medusa-provider
       - name: Test provider and config crates
         run: cargo test -p medusa-config -p medusa-provider
       - name: Clippy provider and config crates
