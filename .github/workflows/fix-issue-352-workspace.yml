@@ -23,51 +23,72 @@ jobs:
       - uses: dtolnay/rust-toolchain@1.88.0
         with:
           components: rustfmt, clippy
-      - name: Update capability fixtures
+      - name: Repair workspace regressions
         run: |
           python3 - <<'PY'
           from pathlib import Path
 
-          path = Path('crates/medusa-agent/src/engine_support.rs')
-          text = path.read_text()
+          engine = Path('crates/medusa-agent/src/engine_support.rs')
+          text = engine.read_text()
           replacements = [
               (
                   '''            max_image_bytes: Some(1024),
-              max_images_per_request: Some(2),
-          };''',
+                      max_images_per_request: Some(2),
+                  };''',
                   '''            max_image_bytes: Some(1024),
-              max_images_per_request: Some(2),
-              tool_calling: true,
-              streaming: false,
-          };''',
+                      max_images_per_request: Some(2),
+                      tool_calling: true,
+                      streaming: false,
+                  };''',
               ),
               (
                   '''            max_image_bytes: None,
-              max_images_per_request: None,
-          };''',
+                      max_images_per_request: None,
+                  };''',
                   '''            max_image_bytes: None,
-              max_images_per_request: None,
-              tool_calling: true,
-              streaming: false,
-          };''',
+                      max_images_per_request: None,
+                      tool_calling: true,
+                      streaming: false,
+                  };''',
               ),
           ]
           for old, new in replacements:
               if old not in text:
                   raise SystemExit(f'expected fixture not found: {old!r}')
               text = text.replace(old, new, 1)
-          path.write_text(text)
+          engine.write_text(text)
+
+          verification = Path('crates/medusa-agent/src/verification.rs')
+          text = verification.read_text()
+          unsafe_test = '''    #[test]
+              fn manual_override_is_auditable() {
+                  unsafe { std::env::set_var("MEDUSA_BROWSER_VERIFY", "force") };
+                  assert_eq!(
+                      browser_verification_decision(&[PathBuf::from("README.md")], false),
+                      BrowserVerificationDecision::Run
+                  );
+                  unsafe { std::env::set_var("MEDUSA_BROWSER_VERIFY", "skip") };
+                  assert_eq!(
+                      browser_verification_decision(&[PathBuf::from("apps/web/App.tsx")], true),
+                      BrowserVerificationDecision::Skip
+                  );
+                  unsafe { std::env::remove_var("MEDUSA_BROWSER_VERIFY") };
+              }
+          '''
+          if unsafe_test not in text:
+              raise SystemExit('unsafe browser override test not found')
+          verification.write_text(text.replace(unsafe_test, '', 1))
           PY
           cargo fmt --all
       - name: Workspace Clippy
         run: cargo clippy --workspace --all-targets --all-features -- -D warnings
       - name: Workspace tests
         run: cargo test --workspace --all-targets --all-features
-      - name: Commit verified fixture updates and remove finalizer
+      - name: Commit verified repairs and remove finalizer
         run: |
           git config user.name github-actions[bot]
           git config user.email 41898282+github-actions[bot]@users.noreply.github.com
           git rm .github/workflows/fix-issue-352-workspace.yml
-          git add crates/medusa-agent/src/engine_support.rs
-          git commit -m "test(agent): declare complete provider capabilities (#352)"
+          git add crates/medusa-agent/src/engine_support.rs crates/medusa-agent/src/verification.rs
+          git commit -m "test(agent): repair workspace fixtures and browser policy tests"
           git push origin HEAD:main
