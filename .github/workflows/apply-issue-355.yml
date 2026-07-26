@@ -6,6 +6,7 @@ on:
       - fix/355-automatic-browser-verification
     paths:
       - .github/scripts/fix_issue_355.py
+      - .github/scripts/fix_issue_355_policy.py
       - .github/workflows/apply-issue-355.yml
   pull_request:
     types: [opened, synchronize, reopened, ready_for_review]
@@ -35,6 +36,9 @@ jobs:
         run: |
           if ! grep -q 'browser_on_ui_change: bool' crates/medusa-config/src/lib.rs; then
             python3 .github/scripts/fix_issue_355.py
+          fi
+          if ! grep -q 'fn browser_policy_enabled' crates/medusa-agent/src/verification.rs; then
+            python3 .github/scripts/fix_issue_355_policy.py
           fi
           cargo fmt --all
       - name: Commit source changes
