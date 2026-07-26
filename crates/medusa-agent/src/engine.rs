@@ -61,7 +61,7 @@ pub enum StepOutcome {
 
 const MAX_PARALLEL_TOOL_CALLS: usize = 8;
 
-fn parallel_tool_limit(configured_workers: u16) -> usize {
+pub(crate) fn parallel_tool_limit(configured_workers: u16) -> usize {
     usize::from(configured_workers).clamp(1, MAX_PARALLEL_TOOL_CALLS)
 }
 
