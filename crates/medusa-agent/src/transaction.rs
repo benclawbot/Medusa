@@ -291,3 +291,5 @@ mod tests {
         );
     }
 }
+
+include!("transaction_pipeline.rs");
