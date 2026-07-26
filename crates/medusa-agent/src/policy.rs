@@ -13,6 +13,10 @@ use std::{
 
 use medusa_core::{ErrorCategory, ErrorCode, MedusaError, MedusaResult};
 
+#[cfg(windows)]
+#[path = "windows_sandbox.rs"]
+mod windows_sandbox;
+
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 const SHELL_COMMAND_TIMEOUT: Duration = Duration::from_secs(120);
 
@@ -280,7 +284,11 @@ pub(crate) fn sandboxed_command(
         let _ = fs::remove_file(&profile_path);
         result
     }
-    #[cfg(not(any(target_os = "linux", target_os = "macos")))]
+    #[cfg(windows)]
+    {
+        windows_sandbox::run(repo, program, args)
+    }
+    #[cfg(not(any(target_os = "linux", target_os = "macos", windows)))]
     {
         let _ = (repo, program, args);
         Err(sandbox_unavailable(
@@ -336,7 +344,7 @@ fn output_with_timeout(command: &mut Command, description: &str) -> MedusaResult
     }
 }
 
-#[cfg(not(any(target_os = "linux", target_os = "macos")))]
+#[cfg(not(any(target_os = "linux", target_os = "macos", windows)))]
 fn sandbox_unavailable(message: impl Into<String>) -> MedusaError {
     let mut error = MedusaError::new(
         ErrorCode::SandboxUnavailable,
@@ -357,7 +365,10 @@ fn policy_denied(message: impl Into<String>) -> MedusaError {
     MedusaError::new(ErrorCode::PolicyDenied, ErrorCategory::Policy, message)
 }
 
-#[cfg(all(test, not(any(target_os = "linux", target_os = "macos"))))]
+#[cfg(all(
+    test,
+    not(any(target_os = "linux", target_os = "macos", windows))
+))]
 mod tests {
     use super::*;
 
