@@ -1,0 +1,26 @@
+name: Export generated lockfile
+
+on:
+  push:
+    branches:
+      - issue-306-adopt-testkit
+    paths:
+      - .github/workflows/export-lock.yml
+
+permissions:
+  contents: read
+
+jobs:
+  export-lock:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@1.88.0
+      - name: Generate workspace lockfile
+        run: cargo generate-lockfile
+      - name: Upload generated lockfile
+        uses: actions/upload-artifact@v4
+        with:
+          name: generated-cargo-lock
+          path: Cargo.lock
+          if-no-files-found: error
