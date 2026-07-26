@@ -286,8 +286,10 @@ mod tests {
     }
 }
 
+#[allow(dead_code)]
 #[path = "transaction_pipeline.rs"]
 mod safety_pipeline;
+#[allow(unused_imports)]
 pub use safety_pipeline::{
     SafeTransactionOutcome, TransactionEvidence, WorkerMutationProposal, execute_safe_transaction,
 };
