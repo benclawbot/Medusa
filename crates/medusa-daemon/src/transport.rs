@@ -5,7 +5,7 @@ mod platform {
     use std::{
         fs,
         io::{self, Read, Write},
-        os::unix::net::{UnixListener, UnixStream},
+        os::unix::{fs::PermissionsExt, net::{UnixListener, UnixStream}},
         path::{Path, PathBuf},
         time::Duration,
     };
@@ -17,10 +17,38 @@ mod platform {
 
     impl LocalListener {
         pub fn bind(endpoint: &Path) -> io::Result<Self> {
-            if endpoint.exists() {
-                fs::remove_file(endpoint)?;
+            let parent = endpoint.parent().ok_or_else(|| {
+                io::Error::new(io::ErrorKind::InvalidInput, "daemon endpoint must have a parent directory")
+            })?;
+            fs::create_dir_all(parent)?;
+            let parent_metadata = fs::symlink_metadata(parent)?;
+            if parent_metadata.file_type().is_symlink() || !parent_metadata.is_dir() {
+                return Err(io::Error::new(
+                    io::ErrorKind::PermissionDenied,
+                    "daemon directory must be a real directory",
+                ));
             }
+            fs::set_permissions(parent, fs::Permissions::from_mode(0o700))?;
+
+            match fs::symlink_metadata(endpoint) {
+                Ok(metadata) => {
+                    if metadata.is_dir() {
+                        return Err(io::Error::new(
+                            io::ErrorKind::PermissionDenied,
+                            "daemon endpoint cannot be a directory",
+                        ));
+                    }
+                    fs::remove_file(endpoint)?;
+                }
+                Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+                Err(error) => return Err(error),
+            }
+
             let inner = UnixListener::bind(endpoint)?;
+            if let Err(error) = fs::set_permissions(endpoint, fs::Permissions::from_mode(0o600)) {
+                let _ = fs::remove_file(endpoint);
+                return Err(error);
+            }
             inner.set_nonblocking(true)?;
             Ok(Self {
                 inner,
@@ -296,6 +324,51 @@ mod platform {
 }
 
 pub use platform::{LocalListener, LocalStream, connect, wake};
+
+#[cfg(all(test, unix))]
+mod unix_tests {
+    use std::{fs, os::unix::fs::{PermissionsExt, symlink}};
+
+    use tempfile::tempdir;
+
+    use super::LocalListener;
+
+    #[test]
+    fn daemon_directory_and_socket_are_owner_only() {
+        let root = tempdir().expect("temporary directory");
+        let directory = root.path().join("daemon");
+        fs::create_dir(&directory).expect("create daemon directory");
+        fs::set_permissions(&directory, fs::Permissions::from_mode(0o777))
+            .expect("make fixture permissive");
+        let endpoint = directory.join("medusa.sock");
+
+        let _listener = LocalListener::bind(&endpoint).expect("bind listener");
+
+        assert_eq!(
+            fs::metadata(&directory).expect("directory metadata").permissions().mode() & 0o777,
+            0o700
+        );
+        assert_eq!(
+            fs::metadata(&endpoint).expect("socket metadata").permissions().mode() & 0o777,
+            0o600
+        );
+    }
+
+    #[test]
+    fn symlinked_daemon_directory_is_rejected() {
+        let root = tempdir().expect("temporary directory");
+        let real = root.path().join("real");
+        fs::create_dir(&real).expect("create real directory");
+        let linked = root.path().join("linked");
+        symlink(&real, &linked).expect("create directory symlink");
+
+        let error = LocalListener::bind(&linked.join("medusa.sock"))
+            .err()
+            .expect("symlinked directory must fail");
+
+        assert_eq!(error.kind(), std::io::ErrorKind::PermissionDenied);
+    }
+}
 
 #[cfg(all(test, windows))]
 mod tests {
