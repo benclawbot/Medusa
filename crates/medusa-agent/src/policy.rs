@@ -1,13 +1,19 @@
 use std::{
     fs,
     path::{Component, Path, PathBuf},
-    process::{Command, Output, Stdio},
+    process::Output,
+};
+
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+use std::{
+    process::{Command, Stdio},
     thread,
     time::{Duration, Instant},
 };
 
 use medusa_core::{ErrorCategory, ErrorCode, MedusaError, MedusaResult};
 
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 const SHELL_COMMAND_TIMEOUT: Duration = Duration::from_secs(120);
 
 pub(crate) fn safe_path(repo: &Path, relative: &str) -> MedusaResult<PathBuf> {
@@ -290,6 +296,7 @@ fn sandbox_profile_string(path: &Path) -> String {
         .replace('"', "\\\"")
 }
 
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 fn output_with_timeout(command: &mut Command, description: &str) -> MedusaResult<Output> {
     let mut child = command
         .stdout(Stdio::piped())
