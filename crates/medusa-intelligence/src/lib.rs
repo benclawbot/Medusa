@@ -18,6 +18,10 @@ mod resolution;
 mod retrieval;
 mod review;
 mod rust_structured_edit;
+#[cfg(test)]
+mod rust_ast;
+#[cfg(test)]
+mod rust_symbols_v2;
 pub mod snapshot;
 mod structured_edit;
 mod structured_transaction;
