@@ -8,4 +8,6 @@ Every profile, ACL, process-attribute, pipe, process-launch, Job Object, and res
 
 The Job Object prevents breakaway by omission of breakaway flags, limits active processes and aggregate committed memory, and terminates the process tree when its final handle closes. AppContainer execution has no network capabilities, so outbound and private-network access are denied by Windows.
 
+All Windows FFI is isolated in `medusa-process-containment`. The `medusa-agent` policy boundary calls a safe API and retains the workspace-wide `unsafe_code = "forbid"` guarantee.
+
 Validation covers the complete repository suite: dependency graph and lockfile policy, formatting, Clippy, panic audit, workspace tests, documentation, refactor guardrails, and the Windows, macOS, and Ubuntu daemon/TUI matrix. All failed jobs and their diagnostics are collected before corrective changes are made, and the authoritative validation runs from a normal branch commit.
