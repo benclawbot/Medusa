@@ -1,0 +1,33 @@
+name: Apply PR 339 consolidated fixes
+
+on:
+  push:
+    branches: [issue-305-explicit-capabilities]
+
+permissions:
+  contents: write
+
+jobs:
+  fix:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: issue-305-explicit-capabilities
+          fetch-depth: 0
+      - uses: dtolnay/rust-toolchain@1.88.0
+        with:
+          components: rustfmt,clippy
+      - name: Format, refresh lock, and validate
+        run: |
+          cargo fmt --all
+          cargo generate-lockfile
+          cargo check -p medusa-capabilities -p medusa-cli
+          cargo test -p medusa-capabilities
+          rm .github/workflows/fix-pr339.yml
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add crates/medusa-capabilities/src/explicit.rs Cargo.lock .github/workflows/fix-pr339.yml
+          git commit -m "Format and refresh explicit capability integration"
+          git push origin HEAD:issue-305-explicit-capabilities
