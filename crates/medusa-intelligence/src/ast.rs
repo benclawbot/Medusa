@@ -47,6 +47,10 @@ pub struct RustAstNode {
     pub parent: Option<usize>,
     pub kind: String,
     pub named: bool,
+    /// Tree-sitter field role assigned by the parent node.
+    pub field_name: Option<String>,
+    /// Semantic identifier extracted from the grammar's `name` field.
+    pub name: Option<String>,
     pub range: SourceRange,
     pub children: Vec<usize>,
 }
@@ -80,7 +84,7 @@ impl RustAstDocument {
             nodes: Vec::new(),
             diagnostics: Vec::new(),
         };
-        document.root = document.collect(tree.root_node(), None);
+        document.root = document.collect(tree.root_node(), None, None, source);
         Ok(document)
     }
 
@@ -102,7 +106,13 @@ impl RustAstDocument {
         !self.diagnostics.is_empty()
     }
 
-    fn collect(&mut self, node: Node<'_>, parent: Option<usize>) -> usize {
+    fn collect(
+        &mut self,
+        node: Node<'_>,
+        parent: Option<usize>,
+        field_name: Option<String>,
+        source: &str,
+    ) -> usize {
         let id = self.nodes.len();
         let range = source_range(node);
         self.nodes.push(RustAstNode {
@@ -110,6 +120,8 @@ impl RustAstDocument {
             parent,
             kind: node.kind().to_owned(),
             named: node.is_named(),
+            field_name,
+            name: semantic_name(node, source),
             range,
             children: Vec::new(),
         });
@@ -126,11 +138,20 @@ impl RustAstDocument {
         let mut cursor = node.walk();
         let child_ids = node
             .children(&mut cursor)
-            .map(|child| self.collect(child, Some(id)))
+            .enumerate()
+            .map(|(index, child)| {
+                let child_field = node.field_name_for_child(index as u32).map(str::to_owned);
+                self.collect(child, Some(id), child_field, source)
+            })
             .collect();
         self.nodes[id].children = child_ids;
         id
     }
+}
+
+fn semantic_name(node: Node<'_>, source: &str) -> Option<String> {
+    let name = node.child_by_field_name("name")?;
+    source.get(name.byte_range()).map(str::to_owned)
 }
 
 fn source_range(node: Node<'_>) -> SourceRange {
@@ -189,6 +210,29 @@ pub mod domain {
                 .all(|node| node.parent.is_some())
         );
         assert!(!document.has_errors());
+    }
+
+    #[test]
+    fn captures_semantic_names_and_field_roles() {
+        let document = RustAstDocument::parse(
+            "src/lib.rs",
+            "pub struct User { pub name: String }\nimpl User { pub fn new() -> Self { todo!() } }\n",
+        )
+        .expect("parse");
+
+        let structure = document
+            .nodes_of_kind("struct_item")
+            .next()
+            .expect("struct item");
+        assert_eq!(structure.name.as_deref(), Some("User"));
+
+        let name_node = structure
+            .children
+            .iter()
+            .filter_map(|id| document.node(*id))
+            .find(|node| node.field_name.as_deref() == Some("name"))
+            .expect("name field");
+        assert_eq!(name_node.kind, "type_identifier");
     }
 
     #[test]

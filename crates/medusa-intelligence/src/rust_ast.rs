@@ -261,6 +261,7 @@ mod nested {
         let file = parse_rust_file("src/lib.rs".into(), source).expect("ast");
         assert!(!file.has_errors);
         assert_eq!(file.node(file.root).expect("root").kind, "source_file");
+        assert!(!file.children(file.root).is_empty());
         assert_eq!(
             file.nodes_of_kind("struct_item")[0].name.as_deref(),
             Some("User")
@@ -304,6 +305,8 @@ mod nested {
         fs::write(repository.path().join("src/lib.rs"), "pub fn first() {}\n").expect("lib");
         let before = IndexSnapshot::capture(repository.path()).expect("before");
         let mut incremental = RustAstIndex::build(repository.path()).expect("index");
+        assert!(incremental.file(Path::new("src/lib.rs")).is_some());
+        assert!(incremental.parse_errors().is_empty());
 
         fs::write(
             repository.path().join("src/lib.rs"),

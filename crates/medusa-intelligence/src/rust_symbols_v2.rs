@@ -370,12 +370,7 @@ struct Context<'a> {
 }
 
 impl<'a> Context<'a> {
-    fn new(
-        path: &'a Path,
-        source: &'a str,
-        scope: RustScopeId,
-        scope_kind: RustScopeKind,
-    ) -> Self {
+    fn new(path: &'a Path, source: &'a str, scope: RustScopeId, scope_kind: RustScopeKind) -> Self {
         Self {
             path,
             source,
@@ -406,8 +401,11 @@ impl<'a> Context<'a> {
 
 fn symbol_kind(kind: &str, scope: RustScopeKind) -> Option<RustSymbolKind> {
     Some(match kind {
-        "function_item" if scope == RustScopeKind::Impl => RustSymbolKind::Method,
-        "function_item" => RustSymbolKind::Function,
+        "function_item" if matches!(scope, RustScopeKind::Impl | RustScopeKind::Trait) => {
+            RustSymbolKind::Method
+        }
+        "function_signature_item" if scope == RustScopeKind::Trait => RustSymbolKind::Method,
+        "function_item" | "function_signature_item" => RustSymbolKind::Function,
         "struct_item" => RustSymbolKind::Struct,
         "enum_item" => RustSymbolKind::Enum,
         "enum_variant" => RustSymbolKind::Variant,
@@ -424,7 +422,7 @@ fn symbol_kind(kind: &str, scope: RustScopeKind) -> Option<RustSymbolKind> {
 
 fn owned_scope_kind(kind: &str) -> Option<RustScopeKind> {
     Some(match kind {
-        "function_item" => RustScopeKind::Function,
+        "function_item" | "function_signature_item" => RustScopeKind::Function,
         "struct_item" | "enum_item" => RustScopeKind::Type,
         "trait_item" => RustScopeKind::Trait,
         "mod_item" => RustScopeKind::Module,
@@ -586,6 +584,8 @@ mod tests {
         assert_eq!(table.qualified(&answer.qualified_name), vec![answer]);
         assert!(table.in_file(Path::new("src/lib.rs")).contains(&answer));
         assert!(table.in_scope(&answer.scope).contains(&answer));
+        assert!(table.scope(&answer.scope).is_some());
+        assert_eq!(table.resolve_visible(&answer.scope, "answer"), Some(answer));
     }
 
     #[test]
