@@ -23,7 +23,6 @@ members = [
   "crates/medusa-agent",
   "crates/medusa-browser-client",
   "crates/medusa-browserd",
-  "crates/medusa-network-policy",
   "crates/medusa-process-containment",
   "crates/medusa-daemon",
   "crates/medusa-runtime",
@@ -68,7 +67,6 @@ repository = "https://github.com/benclawbot/Medusa"
 
 [workspace.dependencies]
 medusa-core = { path = "crates/medusa-core" }
-medusa-network-policy = { path = "crates/medusa-network-policy" }
 medusa-protocol = { path = "crates/medusa-protocol" }
 medusa-process-containment = { path = "crates/medusa-process-containment" }
 medusa-world-model = { path = "crates/medusa-world-model" }
