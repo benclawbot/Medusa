@@ -1,15 +1,16 @@
 name: Issue 308 Wire Windows Backend
 
 on:
-  push:
+  pull_request:
     branches:
-      - agent/issue-308-native-windows-appcontainer
+      - main
 
 permissions:
   contents: write
 
 jobs:
   migrate:
+    if: github.actor != 'github-actions[bot]'
     runs-on: windows-2022
     steps:
       - uses: actions/checkout@v4
