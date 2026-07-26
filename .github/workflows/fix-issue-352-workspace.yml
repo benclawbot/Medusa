@@ -2,26 +2,23 @@ name: Finalize issue 352 workspace fixtures
 
 on:
   push:
-    branches: [fix/352-self-contained-fallback-profiles]
-    paths: [.github/workflows/fix-issue-352-workspace.yml]
-  pull_request:
-    types: [opened, reopened, synchronize]
     branches: [main]
+    paths: [.github/workflows/fix-issue-352-workspace.yml]
 
 concurrency:
-  group: issue-352-workspace-${{ github.ref }}
-  cancel-in-progress: true
+  group: issue-352-workspace-main
+  cancel-in-progress: false
 
 permissions:
   contents: write
 
 jobs:
-  patch-and-verify:
+  patch-verify-and-commit:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: fix/352-self-contained-fallback-profiles
+          ref: main
           fetch-depth: 0
       - uses: dtolnay/rust-toolchain@1.88.0
         with:
@@ -30,42 +27,47 @@ jobs:
         run: |
           python3 - <<'PY'
           from pathlib import Path
+
           path = Path('crates/medusa-agent/src/engine_support.rs')
           text = path.read_text()
-          old_a = '''            max_image_bytes: Some(1024),
+          replacements = [
+              (
+                  '''            max_image_bytes: Some(1024),
             max_images_per_request: Some(2),
-        };'''
-          new_a = '''            max_image_bytes: Some(1024),
+        };''',
+                  '''            max_image_bytes: Some(1024),
             max_images_per_request: Some(2),
             tool_calling: true,
             streaming: false,
-        };'''
-          old_b = '''            max_image_bytes: None,
+        };''',
+              ),
+              (
+                  '''            max_image_bytes: None,
             max_images_per_request: None,
-        };'''
-          new_b = '''            max_image_bytes: None,
+        };''',
+                  '''            max_image_bytes: None,
             max_images_per_request: None,
             tool_calling: true,
             streaming: false,
-        };'''
-          if old_a in text:
-              text = text.replace(old_a, new_a, 1)
-          if old_b in text:
-              text = text.replace(old_b, new_b, 1)
+        };''',
+              ),
+          ]
+          for old, new in replacements:
+              if old in text:
+                  text = text.replace(old, new, 1)
           path.write_text(text)
           PY
           cargo fmt --all
-      - name: Commit fixture updates
+      - name: Workspace Clippy
+        run: cargo clippy --workspace --all-targets --all-features -- -D warnings
+      - name: Workspace tests
+        run: cargo test --workspace --all-targets --all-features
+      - name: Commit verified fixture updates
         run: |
           git config user.name github-actions[bot]
           git config user.email 41898282+github-actions[bot]@users.noreply.github.com
           git add crates/medusa-agent/src/engine_support.rs
           if ! git diff --cached --quiet; then
             git commit -m "test(agent): declare complete provider capabilities (#352)"
-            git pull --rebase origin fix/352-self-contained-fallback-profiles
-            git push origin HEAD:fix/352-self-contained-fallback-profiles
+            git push origin HEAD:main
           fi
-      - name: Workspace Clippy
-        run: cargo clippy --workspace --all-targets --all-features -- -D warnings
-      - name: Workspace tests
-        run: cargo test --workspace --all-targets --all-features
