@@ -2,6 +2,7 @@ mod credentials;
 mod desktop_update;
 mod diffs;
 mod dto;
+#[rustfmt::skip]
 mod engineering;
 mod github_actions;
 mod github_audit;
