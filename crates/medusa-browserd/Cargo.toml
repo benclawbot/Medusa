@@ -12,5 +12,6 @@ path = "src/main.rs"
 
 [dependencies]
 medusa-browser-client = { path = "../medusa-browser-client" }
+medusa-network-policy.workspace = true
 serde_json = { workspace = true }
 url = "2.5"
