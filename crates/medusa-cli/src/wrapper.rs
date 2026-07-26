@@ -1,5 +1,6 @@
 use std::{env, path::PathBuf, process::Command};
 
+mod oauth_preflight;
 mod skill_dependencies;
 mod skill_graduation;
 mod skill_lifecycle;
@@ -69,6 +70,13 @@ fn main() {
             std::process::exit(1);
         }
         return;
+    }
+    if let Err(error) = oauth_preflight::run_if_needed(&args) {
+        eprintln!(
+            "{}",
+            serde_json::to_string_pretty(&error).unwrap_or_else(|_| error.to_string())
+        );
+        std::process::exit(1);
     }
     legacy::entry();
 }
