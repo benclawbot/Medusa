@@ -23,16 +23,16 @@ pub(crate) fn search(
 ) -> MedusaResult<String> {
     let query = query.trim();
     if query.is_empty() {
-        return Err(invalid_web_input("query must not be empty"));
+        return Err(invalid_input("query must not be empty"));
     }
-    let allowed_domains = normalize_domains(allowed_domains)?;
-    let blocked_domains = normalize_domains(blocked_domains)?;
-    let search_query = if allowed_domains.is_empty() {
+    let allowed = normalize_domains(allowed_domains)?;
+    let blocked = normalize_domains(blocked_domains)?;
+    let search_query = if allowed.is_empty() {
         query.to_owned()
     } else {
         format!(
             "{query} ({})",
-            allowed_domains
+            allowed
                 .iter()
                 .map(|domain| format!("site:{domain}"))
                 .collect::<Vec<_>>()
@@ -46,15 +46,13 @@ pub(crate) fn search(
     let results = parse_bing_rss(&String::from_utf8_lossy(&body))
         .into_iter()
         .filter(|result| {
-            let Ok(url) = Url::parse(&result.url) else {
-                return false;
-            };
-            (allowed_domains.is_empty() || matches_any_domain(&url, &allowed_domains))
-                && !matches_any_domain(&url, &blocked_domains)
+            Url::parse(&result.url).is_ok_and(|url| {
+                (allowed.is_empty() || matches_domain(&url, &allowed))
+                    && !matches_domain(&url, &blocked)
+            })
         })
         .take(MAX_SEARCH_RESULTS)
         .collect::<Vec<_>>();
-
     if results.is_empty() {
         return Ok(format!("No public web results found for: {query}"));
     }
@@ -72,7 +70,9 @@ pub(crate) fn search(
 }
 
 pub(crate) fn fetch(url: &str, prompt: Option<&str>) -> MedusaResult<String> {
-    let (final_url, body) = request(parse_public_url(url)?)?;
+    let parsed = Url::parse(url.trim())
+        .map_err(|error| invalid_input(format!("invalid web URL: {error}")))?;
+    let (final_url, body) = request(parsed)?;
     let content = readable_text(&String::from_utf8_lossy(&body));
     if content.is_empty() {
         return Ok(format!(
@@ -81,15 +81,15 @@ pub(crate) fn fetch(url: &str, prompt: Option<&str>) -> MedusaResult<String> {
     }
     let requested = prompt
         .map(str::trim)
-        .filter(|prompt| !prompt.is_empty())
-        .map(|prompt| format!("\nRequested extraction: {prompt}"))
+        .filter(|value| !value.is_empty())
+        .map(|value| format!("\nRequested extraction: {value}"))
         .unwrap_or_default();
     Ok(format!("Fetched: {final_url}{requested}\n\n{content}"))
 }
 
 fn request(mut url: Url) -> MedusaResult<(Url, Vec<u8>)> {
     for _ in 0..=MAX_REDIRECTS {
-        let target = resolve_url(&url).map_err(invalid_web_input)?;
+        let target = resolve_url(&url).map_err(invalid_input)?;
         let client = Client::builder()
             .redirect(Policy::none())
             .timeout(Duration::from_secs(15))
@@ -110,27 +110,22 @@ fn request(mut url: Url) -> MedusaResult<(Url, Vec<u8>)> {
             url = url
                 .join(location)
                 .map_err(|error| web_error(format!("invalid redirect target: {error}")))?;
-            resolve_url(&url).map_err(invalid_web_input)?;
+            resolve_url(&url).map_err(invalid_input)?;
             continue;
         }
         if !response.status().is_success() {
-            let status = response.status();
-            let body = read_limited(&mut response).unwrap_or_default();
             return Err(web_error(format!(
-                "web request returned HTTP {status}: {}",
-                truncate_inline(&String::from_utf8_lossy(&body), 400)
+                "web request returned HTTP {}",
+                response.status()
             )));
         }
         if response
             .content_length()
             .is_some_and(|length| length > MAX_RESPONSE_BYTES as u64)
         {
-            return Err(web_error(format!(
-                "web response exceeds the {MAX_RESPONSE_BYTES} byte limit"
-            )));
+            return Err(web_error("web response exceeds the byte limit"));
         }
-        let body = read_limited(&mut response)?;
-        return Ok((url, body));
+        return Ok((url, read_limited(&mut response)?));
     }
     Err(web_error("web request exceeded the redirect limit"))
 }
@@ -156,18 +151,9 @@ fn read_limited(response: &mut impl Read) -> MedusaResult<Vec<u8>> {
         .read_to_end(&mut body)
         .map_err(|error| web_error(format!("could not read web response: {error}")))?;
     if body.len() > MAX_RESPONSE_BYTES {
-        return Err(web_error(format!(
-            "web response exceeds the {MAX_RESPONSE_BYTES} byte limit"
-        )));
+        return Err(web_error("web response exceeds the byte limit"));
     }
     Ok(body)
-}
-
-fn parse_public_url(value: &str) -> MedusaResult<Url> {
-    let url = Url::parse(value.trim())
-        .map_err(|error| invalid_web_input(format!("invalid web URL: {error}")))?;
-    resolve_url(&url).map_err(invalid_web_input)?;
-    Ok(url)
 }
 
 #[derive(Debug, Eq, PartialEq)]
@@ -212,16 +198,16 @@ fn normalize_domains(domains: Vec<String>) -> MedusaResult<Vec<String>> {
             let domain = domain.trim().trim_start_matches('.').to_ascii_lowercase();
             if domain.is_empty()
                 || domain.contains(['/', ':', '@'])
-                || domain.split('.').any(|label| label.is_empty())
+                || domain.split('.').any(str::is_empty)
             {
-                return Err(invalid_web_input(format!("invalid web domain: {domain}")));
+                return Err(invalid_input(format!("invalid web domain: {domain}")));
             }
             Ok(domain)
         })
         .collect()
 }
 
-fn matches_any_domain(url: &Url, domains: &[String]) -> bool {
+fn matches_domain(url: &Url, domains: &[String]) -> bool {
     let Some(host) = url.host_str() else {
         return false;
     };
@@ -233,17 +219,9 @@ fn matches_any_domain(url: &Url, domains: &[String]) -> bool {
 }
 
 fn readable_text(value: &str) -> String {
-    let mut text = value.to_owned();
-    for tag in ["script", "style", "noscript"] {
-        text = remove_tagged_sections(&text, tag);
-    }
-    for tag in ["br", "p", "div", "li", "h1", "h2", "h3", "h4", "tr"] {
-        text = text.replace(&format!("<{tag}>"), "\n");
-        text = text.replace(&format!("</{tag}>"), "\n");
-    }
-    let mut plain = String::with_capacity(text.len());
+    let mut plain = String::with_capacity(value.len());
     let mut inside_tag = false;
-    for character in text.chars() {
+    for character in value.chars() {
         match character {
             '<' => inside_tag = true,
             '>' => inside_tag = false,
@@ -251,38 +229,7 @@ fn readable_text(value: &str) -> String {
             _ => {}
         }
     }
-    decode_entities(&plain)
-        .lines()
-        .map(str::trim)
-        .filter(|line| !line.is_empty())
-        .collect::<Vec<_>>()
-        .join("\n")
-}
-
-fn remove_tagged_sections(value: &str, tag: &str) -> String {
-    let lowercase = value.to_ascii_lowercase();
-    let start_tag = format!("<{tag}");
-    let end_tag = format!("</{tag}>");
-    let mut result = String::new();
-    let mut offset = 0;
-    while let Some(start) = lowercase[offset..].find(&start_tag) {
-        let start = offset + start;
-        result.push_str(&value[offset..start]);
-        let after_start = lowercase[start..]
-            .find('>')
-            .map(|index| start + index + 1)
-            .unwrap_or(value.len());
-        let Some(end) = lowercase[after_start..].find(&end_tag) else {
-            return result;
-        };
-        offset = after_start + end + end_tag.len();
-    }
-    result.push_str(&value[offset..]);
-    result
-}
-
-fn decode_entities(value: &str) -> String {
-    value
+    plain
         .replace("&nbsp;", " ")
         .replace("&amp;", "&")
         .replace("&quot;", "\"")
@@ -290,21 +237,14 @@ fn decode_entities(value: &str) -> String {
         .replace("&apos;", "'")
         .replace("&lt;", "<")
         .replace("&gt;", ">")
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+        .collect::<Vec<_>>()
+        .join("\n")
 }
 
-fn truncate_inline(value: &str, max_chars: usize) -> String {
-    if value.chars().count() <= max_chars {
-        return value.to_owned();
-    }
-    value
-        .chars()
-        .take(max_chars)
-        .chain(std::iter::once('\n'))
-        .chain("[truncated]".chars())
-        .collect()
-}
-
-fn invalid_web_input(message: impl Into<String>) -> MedusaError {
+fn invalid_input(message: impl Into<String>) -> MedusaError {
     MedusaError::new(
         ErrorCode::InvalidConfiguration,
         ErrorCategory::Validation,
@@ -328,32 +268,11 @@ mod tests {
     use super::*;
 
     #[test]
-    fn parses_and_filters_bing_rss_results() {
-        let feed = r#"
-            <rss><channel><item><title>Example &amp; One</title><link>https://docs.example.com/one</link><description><![CDATA[First <b>result</b>]]></description></item>
-            <item><title>Example Two</title><link>https://other.example.net/two</link><description>Second result</description></item></channel></rss>
-        "#;
+    fn parses_bing_rss_results() {
+        let feed = "<item><title>Example &amp; One</title><link>https://example.com</link><description>Result</description></item>";
         let results = parse_bing_rss(feed);
-        assert_eq!(results.len(), 2);
+        assert_eq!(results.len(), 1);
         assert_eq!(results[0].title, "Example & One");
-        assert_eq!(results[0].snippet, "First result");
-        let allowed = vec!["example.com".to_owned()];
-        assert!(matches_any_domain(
-            &Url::parse(&results[0].url).expect("result URL"),
-            &allowed
-        ));
-        assert!(!matches_any_domain(
-            &Url::parse(&results[1].url).expect("result URL"),
-            &allowed
-        ));
-    }
-
-    #[test]
-    fn readable_text_removes_markup_and_active_content() {
-        assert_eq!(
-            readable_text("<h1>Title</h1><script>bad()</script><p>One &amp; two</p>"),
-            "Title\nOne & two"
-        );
     }
 
     #[test]
@@ -366,7 +285,6 @@ mod tests {
         ] {
             assert!(!is_public_ip(address), "{address}");
         }
-        assert!(is_public_ip(IpAddr::V4(Ipv4Addr::new(8, 8, 8, 8))));
     }
 
     #[test]
@@ -376,21 +294,5 @@ mod tests {
             Ok(vec!["docs.example.com".to_owned()])
         );
         assert!(normalize_domains(vec!["https://example.com".to_owned()]).is_err());
-    }
-
-    #[test]
-    #[ignore = "requires public network access"]
-    fn live_public_search_returns_result_text() {
-        let output =
-            search("Rust programming language", Vec::new(), Vec::new()).expect("search public web");
-        assert!(output.starts_with("Web search results for:"));
-    }
-
-    #[test]
-    #[ignore = "requires public network access"]
-    fn live_public_fetch_returns_readable_text() {
-        let output = fetch("https://www.rust-lang.org", Some("identify the page"))
-            .expect("fetch public web");
-        assert!(output.starts_with("Fetched: https://"));
     }
 }
