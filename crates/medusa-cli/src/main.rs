@@ -13,13 +13,13 @@ use config_command::{
     configure_interactive, ensure_first_run, ensure_selected_runtime, reset as reset_config,
     show as show_config,
 };
-use medusa_agent::{AgentEngine, bootstrap};
+use medusa_agent::bootstrap;
 use medusa_config::Config;
 use medusa_core::{ErrorCategory, ErrorCode, MedusaError, MedusaResult};
 use medusa_daemon::{DaemonClient, DaemonPaths, Request, serve};
 use medusa_extensions::{DesktopCommanderClient, DesktopCommanderSettings};
 use medusa_hardening::{CURRENT_SCHEMA_VERSION, Migrator};
-use medusa_provider::ConfiguredProvider;
+use medusa_runtime::{PromptDraft, RuntimeController, RuntimeEvent};
 use medusa_tui::{TuiOptions, run as run_tui};
 use medusa_update::{InstallKind, InstallLocation, MainBranchUpdater, UpdatePolicy};
 use serde::Serialize;
@@ -169,26 +169,85 @@ fn run() -> MedusaResult<()> {
         CommandKind::Checkpoint { message } => checkpoint(&repo, &message),
         CommandKind::Run { objective } => {
             ensure_selected_runtime()?;
-            let provider = ConfiguredProvider::manager_from_config(&config, None)?;
-            let engine = AgentEngine::new(provider, config);
-            let mut session = engine.create_session(&repo, objective)?;
-            println!("session {} created", session.id);
-            engine.run_to_completion(&mut session)?;
-            print_completion(&session);
-            Ok(())
+            let runtime = RuntimeController::start_with_config(repo, config);
+            runtime
+                .submit(PromptDraft {
+                    text: objective,
+                    ..PromptDraft::default()
+                })
+                .map_err(runtime_error)?;
+            drain_headless_runtime(&runtime)
         }
         CommandKind::Resume { session } => {
             ensure_selected_runtime()?;
-            let provider = ConfiguredProvider::manager_from_config(&config, None)?;
-            let engine = AgentEngine::new(provider, config);
-            let mut session = engine.load_session(&repo, &session)?;
-            println!("session {} resumed", session.id);
-            engine.run_to_completion(&mut session)?;
-            print_completion(&session);
-            Ok(())
+            let runtime = RuntimeController::start_resumed_with_config(repo, &session, config)
+                .map_err(runtime_error)?;
+            runtime
+                .submit(PromptDraft {
+                    text: "Continue the current task from its durable session state.".to_owned(),
+                    ..PromptDraft::default()
+                })
+                .map_err(runtime_error)?;
+            drain_headless_runtime(&runtime)
         }
         CommandKind::Config { .. } => unreachable!("handled before runtime config loading"),
         CommandKind::DaemonServe => serve(DaemonPaths::for_repo(&repo)),
+    }
+}
+
+fn runtime_error(error: medusa_runtime::RuntimeError) -> MedusaError {
+    MedusaError::new(
+        ErrorCode::DependencyUnavailable,
+        ErrorCategory::Execution,
+        error.to_string(),
+    )
+}
+
+fn drain_headless_runtime(runtime: &RuntimeController) -> MedusaResult<()> {
+    loop {
+        match runtime.try_event().map_err(runtime_error)? {
+            Some(RuntimeEvent::AssistantText(text)) => println!("{text}"),
+            Some(RuntimeEvent::Activity(activity)) => {
+                println!("{}: {}", activity.title, activity.details.join("; "));
+            }
+            Some(RuntimeEvent::Notice { title, details }) => {
+                println!("{title}: {}", details.join("; "));
+            }
+            Some(RuntimeEvent::Question(question)) => {
+                return Err(MedusaError::new(
+                    ErrorCode::DependencyUnavailable,
+                    ErrorCategory::Execution,
+                    format!(
+                        "agent is waiting for user input: {}",
+                        question
+                            .prompts()
+                            .first()
+                            .map(|item| item.question.as_str())
+                            .unwrap_or("question details unavailable")
+                    ),
+                ));
+            }
+            Some(RuntimeEvent::Completed { session_id }) => {
+                println!("session {session_id} completed");
+                return Ok(());
+            }
+            Some(RuntimeEvent::TurnFinished) => return Ok(()),
+            Some(RuntimeEvent::Cancelled) => {
+                return Err(MedusaError::new(
+                    ErrorCode::DependencyUnavailable,
+                    ErrorCategory::Execution,
+                    "agent execution was cancelled",
+                ));
+            }
+            Some(RuntimeEvent::Failed(error)) => {
+                return Err(MedusaError::new(
+                    ErrorCode::DependencyUnavailable,
+                    ErrorCategory::Execution,
+                    error,
+                ));
+            }
+            Some(_) | None => std::thread::yield_now(),
+        }
     }
 }
 
@@ -402,13 +461,6 @@ fn writable_directory(path: &Path) -> bool {
     let written = fs::write(&probe, b"probe").is_ok();
     let _ = fs::remove_file(probe);
     written
-}
-
-fn print_completion(session: &medusa_agent::AgentSession) {
-    println!("session {} completed", session.id);
-    for item in &session.evidence {
-        println!("evidence: {item}");
-    }
 }
 
 fn search(repo: &Path, pattern: &str) -> MedusaResult<()> {
