@@ -63,7 +63,16 @@ fn admit_to_canonical_memory(
 
     proposal["lifecycle"] = json!({
         "status": status,
-        "auto_promotion": "disabled_until_probation_passes",
+        "auto_promotion": "disabled",
+        "promotion": {
+            "mode": "explicit_graduation",
+            "command": "medusa skills graduate NAME --confirm",
+            "requires_probation_state": "passed"
+        },
+        "rollback": {
+            "mode": "graduation_receipt_transaction",
+            "on_receipt_failure": "restore_previous_lifecycle_state"
+        },
         "minimum_confidence_milli": MIN_PROBATION_CONFIDENCE_MILLI,
         "rejection_reason": if status == "rejected" {
             "insufficient confidence, evidence, or safety"
@@ -170,11 +179,20 @@ mod tests {
             .path()
             .join(".medusa/memory/lessons")
             .join(format!("{}.json", session.id));
-        let value: Value =
-            serde_json::from_slice(&fs::read(memory).expect("memory")).expect("memory json");
+        let value: Value = serde_json::from_slice(&fs::read(memory).expect("memory"))
+            .expect("memory json");
         assert_eq!(value["provenance"]["session_id"], session.id.to_string());
         assert_eq!(value["provenance"]["verification_result"], "verified");
         assert_eq!(value["lifecycle"]["status"], "probation");
+        assert_eq!(value["lifecycle"]["auto_promotion"], "disabled");
+        assert_eq!(
+            value["lifecycle"]["promotion"]["mode"],
+            "explicit_graduation"
+        );
+        assert_eq!(
+            value["lifecycle"]["rollback"]["mode"],
+            "graduation_receipt_transaction"
+        );
         assert!(processed_marker(&session).is_file());
     }
 
