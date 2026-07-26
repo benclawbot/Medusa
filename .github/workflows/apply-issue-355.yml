@@ -7,6 +7,7 @@ on:
     paths:
       - .github/scripts/fix_issue_355.py
       - .github/scripts/fix_issue_355_policy.py
+      - .github/scripts/fix_issue_355_review.py
       - .github/workflows/apply-issue-355.yml
   pull_request:
     types: [opened, synchronize, reopened, ready_for_review]
@@ -40,20 +41,31 @@ jobs:
           if ! grep -q 'fn browser_policy_enabled' crates/medusa-agent/src/verification.rs; then
             python3 .github/scripts/fix_issue_355_policy.py
           fi
+          python3 .github/scripts/fix_issue_355_review.py
           cargo fmt --all
       - name: Commit source changes
         run: |
           git config user.name github-actions[bot]
           git config user.email 41898282+github-actions[bot]@users.noreply.github.com
-          git add crates/medusa-config/src/lib.rs crates/medusa-agent/src/verification.rs docs/CONFIGURATION.md
+          git add \
+            crates/medusa-config/src/lib.rs \
+            crates/medusa-agent/src/verification.rs \
+            crates/medusa-agent/src/engine.rs \
+            crates/medusa-agent/src/engine_support.rs \
+            crates/medusa-browser-client/src/lib.rs \
+            crates/medusa-browser-client/src/network_policy.rs \
+            crates/medusa-browserd/src/validation.rs \
+            crates/medusa-browserd/src/proxy.rs \
+            browser/playwright_bridge.mjs \
+            docs/CONFIGURATION.md
           if ! git diff --cached --quiet; then
-            git commit -m "fix(verification): trigger browser checks for UI changes (#355)"
+            git commit -m "fix(verification): address browser review findings (#355)"
             git pull --rebase origin fix/355-automatic-browser-verification
             git push origin HEAD:fix/355-automatic-browser-verification
           fi
       - name: Check affected crates
-        run: cargo check -p medusa-config -p medusa-agent
+        run: cargo check -p medusa-config -p medusa-agent -p medusa-browser-client -p medusa-browserd
       - name: Test affected crates
-        run: cargo test -p medusa-config -p medusa-agent
+        run: cargo test -p medusa-config -p medusa-agent -p medusa-browser-client -p medusa-browserd
       - name: Clippy affected crates
-        run: cargo clippy -p medusa-config -p medusa-agent --all-targets -- -D warnings
+        run: cargo clippy -p medusa-config -p medusa-agent -p medusa-browser-client -p medusa-browserd --all-targets -- -D warnings
