@@ -1,0 +1,40 @@
+name: Issue 304 clippy fix
+
+on:
+  push:
+    branches:
+      - agent/issue-304-turn-memory-pipeline
+
+permissions:
+  contents: write
+
+jobs:
+  fix:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: agent/issue-304-turn-memory-pipeline
+      - uses: dtolnay/rust-toolchain@1.88.0
+        with:
+          components: rustfmt
+      - name: Remove unused imports
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          path = Path('crates/medusa-runtime/src/turn_pipeline.rs')
+          text = path.read_text()
+          text = text.replace('use std::collections::{BTreeMap, BTreeSet};', 'use std::collections::BTreeMap;')
+          text = text.replace('use medusa_markdown_memory::{MemoryIndex, RetrievalQuery, RetrievalResult};', 'use medusa_markdown_memory::{MemoryIndex, RetrievalQuery};')
+          path.write_text(text)
+          PY
+      - run: cargo fmt --all
+      - name: Commit fix
+        run: |
+          if git diff --quiet; then exit 0; fi
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add crates/medusa-runtime/src/turn_pipeline.rs
+          git commit -m "Fix turn pipeline Clippy diagnostics"
+          git push origin HEAD:agent/issue-304-turn-memory-pipeline
