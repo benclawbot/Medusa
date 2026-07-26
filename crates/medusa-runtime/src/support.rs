@@ -52,9 +52,10 @@ pub(super) fn configure_model(
 ) -> Result<(), RuntimeError> {
     if !is_supported_provider(&configuration.provider) {
         return Err(RuntimeError::InvalidCommand(
-            "supported providers are minimax, anthropic, and anthropic-compatible".to_owned(),
+            format!("supported providers are {}", SUPPORTED_PROVIDERS.join(", ")),
         ));
     }
+    state.config.model.protocol = protocol_for_provider(&configuration.provider).to_owned();
     state.config.model.provider = configuration.provider;
     state.config.model.name = configuration.model;
     state.config.model.context_window_tokens = model_context_window_tokens(
@@ -94,8 +95,26 @@ pub(super) fn turns_for_effort(effort: Effort) -> u32 {
     }
 }
 
+pub(super) const SUPPORTED_PROVIDERS: [&str; 8] = [
+    "minimax",
+    "anthropic",
+    "anthropic-compatible",
+    "openai",
+    "openai-oauth",
+    "openai-compatible",
+    "omniroute",
+    "local",
+];
+
 pub(super) fn is_supported_provider(provider: &str) -> bool {
-    matches!(provider, "minimax" | "anthropic" | "anthropic-compatible")
+    SUPPORTED_PROVIDERS.contains(&provider)
+}
+
+pub(super) fn protocol_for_provider(provider: &str) -> &'static str {
+    match provider {
+        "minimax" | "anthropic" | "anthropic-compatible" => "anthropic",
+        _ => "openai",
+    }
 }
 
 pub(super) fn model_context_window_tokens(model: &str, configured_default: u64) -> u64 {
@@ -129,7 +148,7 @@ pub(super) fn model_configuration_details(state: &RuntimeState) -> Vec<String> {
         format!("provider: {}", state.config.model.provider),
         format!("model: {}", state.config.model.name),
         credential.to_owned(),
-        "set provider: /model provider <minimax|anthropic|anthropic-compatible>".to_owned(),
+        format!("set provider: /model provider <{}>", SUPPORTED_PROVIDERS.join("|")),
         "set model: /model <model-name>".to_owned(),
         "set session key: /model key <api-key>".to_owned(),
     ]
@@ -139,7 +158,9 @@ pub(super) fn credential_environment(provider: &str) -> Option<&'static str> {
     match provider {
         "minimax" => Some("MINIMAX_API_KEY"),
         "anthropic" => Some("ANTHROPIC_API_KEY"),
-        "anthropic-compatible" => Some("MEDUSA_API_KEY"),
+        "anthropic-compatible" | "openai-compatible" => Some("MEDUSA_API_KEY"),
+        "openai" => Some("OPENAI_API_KEY"),
+        "openai-oauth" | "omniroute" | "local" => None,
         _ => None,
     }
 }
@@ -639,7 +660,14 @@ mod tests {
         assert!(is_supported_provider("minimax"));
         assert!(is_supported_provider("anthropic"));
         assert!(is_supported_provider("anthropic-compatible"));
+        assert!(is_supported_provider("openai"));
+        assert!(is_supported_provider("openai-oauth"));
+        assert!(is_supported_provider("openai-compatible"));
+        assert!(is_supported_provider("omniroute"));
+        assert!(is_supported_provider("local"));
         assert!(!is_supported_provider("other"));
+        assert_eq!(protocol_for_provider("anthropic"), "anthropic");
+        assert_eq!(protocol_for_provider("openai"), "openai");
         assert_eq!(credential_environment("minimax"), Some("MINIMAX_API_KEY"));
         assert_eq!(
             credential_environment("anthropic"),
@@ -649,6 +677,11 @@ mod tests {
             credential_environment("anthropic-compatible"),
             Some("MEDUSA_API_KEY")
         );
+        assert_eq!(credential_environment("openai"), Some("OPENAI_API_KEY"));
+        assert_eq!(credential_environment("openai-compatible"), Some("MEDUSA_API_KEY"));
+        assert_eq!(credential_environment("openai-oauth"), None);
+        assert_eq!(credential_environment("omniroute"), None);
+        assert_eq!(credential_environment("local"), None);
         assert_eq!(credential_environment("other"), None);
         assert!(!should_auto_compact(399_999, 1_000_000, 40));
         assert!(should_auto_compact(400_000, 1_000_000, 40));

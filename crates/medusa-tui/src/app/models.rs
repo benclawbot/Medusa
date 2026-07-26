@@ -306,7 +306,16 @@ pub struct ModelModal {
 }
 
 impl ModelModal {
-    const PROVIDERS: [&str; 3] = ["minimax", "anthropic", "anthropic-compatible"];
+    const PROVIDERS: [&str; 8] = [
+        "minimax",
+        "anthropic",
+        "anthropic-compatible",
+        "openai",
+        "openai-oauth",
+        "openai-compatible",
+        "omniroute",
+        "local",
+    ];
 
     pub(super) fn new(
         model_label: Option<&str>,
@@ -458,6 +467,13 @@ fn model_options_for(provider: &str, current_model: &str) -> Vec<String> {
             "claude-sonnet-4-6".to_owned(),
             "claude-haiku-4-5".to_owned(),
         ],
+        "openai" | "openai-oauth" => vec![
+            "gpt-5.1-codex".to_owned(),
+            "gpt-5.1".to_owned(),
+            "gpt-5-mini".to_owned(),
+        ],
+        "omniroute" => vec!["auto/coding".to_owned()],
+        "local" => vec!["local-model".to_owned()],
         _ => vec!["custom-model".to_owned()],
     };
     if !current_model.is_empty() && !models.iter().any(|model| model == current_model) {
