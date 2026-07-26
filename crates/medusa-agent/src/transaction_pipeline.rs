@@ -54,7 +54,9 @@ pub fn execute_safe_transaction(
     proposals: Vec<WorkerMutationProposal>,
 ) -> MedusaResult<SafeTransactionOutcome> {
     if proposals.is_empty() {
-        return Err(validation("transaction requires at least one worker proposal"));
+        return Err(validation(
+            "transaction requires at least one worker proposal",
+        ));
     }
 
     let required_epochs = proposals
@@ -84,7 +86,9 @@ pub fn execute_safe_transaction(
         .iter()
         .any(|resolution| matches!(resolution, Resolution::Conflict(_)))
     {
-        return Err(validation("competing worker proposals require explicit conflict resolution"));
+        return Err(validation(
+            "competing worker proposals require explicit conflict resolution",
+        ));
     }
 
     let consensus_fingerprint = if has_competing_proposals {
@@ -102,7 +106,11 @@ pub fn execute_safe_transaction(
             worker_id: proposal.worker_id.clone(),
             lease_epoch: proposal.lease_epoch,
             intent_fingerprint: fingerprint(
-                format!("{}:{}:{}", proposal.task_id, proposal.path, proposal.content).as_bytes(),
+                format!(
+                    "{}:{}:{}",
+                    proposal.task_id, proposal.path, proposal.content
+                )
+                .as_bytes(),
             ),
         })
         .collect::<Vec<_>>();
@@ -128,13 +136,20 @@ pub fn execute_safe_transaction(
 
     let mut barrier = CommitBarrier::create(
         format!("barrier-{transaction_id}"),
-        proposals.iter().map(|proposal| proposal.task_id.clone()).collect(),
+        proposals
+            .iter()
+            .map(|proposal| proposal.task_id.clone())
+            .collect(),
         deadline_ms,
     )
     .map_err(validation)?;
     for proposal in &proposals {
         let transaction_fingerprint = fingerprint(
-            format!("{}:{}:{}", proposal.worker_id, proposal.path, proposal.content).as_bytes(),
+            format!(
+                "{}:{}:{}",
+                proposal.worker_id, proposal.path, proposal.content
+            )
+            .as_bytes(),
         );
         barrier
             .record_vote(ParticipantVote {
@@ -167,7 +182,10 @@ pub fn execute_safe_transaction(
         .transition(transaction_id, TransactionPhase::Prepared)
         .map_err(|error| validation(error.to_string()))?;
 
-    let base_snapshot = snapshot_fingerprint(repo, mutations.iter().map(|mutation| mutation.path.as_str()))?;
+    let base_snapshot = snapshot_fingerprint(
+        repo,
+        mutations.iter().map(|mutation| mutation.path.as_str()),
+    )?;
     let target_snapshot = fingerprint(
         &serde_json::to_vec(&mutations).map_err(|error| validation(error.to_string()))?,
     );
@@ -238,7 +256,10 @@ pub fn execute_safe_transaction(
             rollback_journal_fingerprint: journal.fingerprint,
             coordinator_fingerprint: record.decision_fingerprint.clone(),
             consensus_fingerprint,
-            affected_files: mutations.into_iter().map(|mutation| mutation.path).collect(),
+            affected_files: mutations
+                .into_iter()
+                .map(|mutation| mutation.path)
+                .collect(),
         },
     })
 }
@@ -399,7 +420,13 @@ fn validation(message: impl Into<String>) -> MedusaError {
 mod tests {
     use super::*;
 
-    fn proposal(worker: &str, task: &str, path: &str, old: &[u8], new: &str) -> WorkerMutationProposal {
+    fn proposal(
+        worker: &str,
+        task: &str,
+        path: &str,
+        old: &[u8],
+        new: &str,
+    ) -> WorkerMutationProposal {
         WorkerMutationProposal {
             worker_id: worker.into(),
             task_id: task.into(),
@@ -428,8 +455,14 @@ mod tests {
             ],
         )
         .unwrap();
-        assert_eq!(fs::read_to_string(repo.path().join("a.txt")).unwrap(), "new-a");
-        assert_eq!(fs::read_to_string(repo.path().join("b.txt")).unwrap(), "new-b");
+        assert_eq!(
+            fs::read_to_string(repo.path().join("a.txt")).unwrap(),
+            "new-a"
+        );
+        assert_eq!(
+            fs::read_to_string(repo.path().join("b.txt")).unwrap(),
+            "new-b"
+        );
         assert!(result.evidence.consensus_fingerprint.is_none());
     }
 
@@ -446,7 +479,10 @@ mod tests {
             vec![proposal("w1", "t1", "a.txt", b"stale", "new")],
         );
         assert!(result.is_err());
-        assert_eq!(fs::read_to_string(repo.path().join("a.txt")).unwrap(), "current");
+        assert_eq!(
+            fs::read_to_string(repo.path().join("a.txt")).unwrap(),
+            "current"
+        );
     }
 
     #[test]
@@ -466,7 +502,10 @@ mod tests {
         )
         .unwrap();
         assert!(result.evidence.consensus_fingerprint.is_some());
-        assert_eq!(fs::read_to_string(repo.path().join("a.txt")).unwrap(), "same");
+        assert_eq!(
+            fs::read_to_string(repo.path().join("a.txt")).unwrap(),
+            "same"
+        );
     }
 
     #[test]
@@ -485,6 +524,9 @@ mod tests {
             ],
         );
         assert!(result.is_err());
-        assert_eq!(fs::read_to_string(repo.path().join("a.txt")).unwrap(), "old");
+        assert_eq!(
+            fs::read_to_string(repo.path().join("a.txt")).unwrap(),
+            "old"
+        );
     }
 }

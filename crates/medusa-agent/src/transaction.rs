@@ -195,8 +195,14 @@ mod tests {
         )
         .expect("transaction");
         assert!(!outcome.rolled_back);
-        assert_eq!(fs::read_to_string(directory.path().join("a.txt")).unwrap(), "a");
-        assert_eq!(fs::read_to_string(directory.path().join("nested/b.txt")).unwrap(), "b");
+        assert_eq!(
+            fs::read_to_string(directory.path().join("a.txt")).unwrap(),
+            "a"
+        );
+        assert_eq!(
+            fs::read_to_string(directory.path().join("nested/b.txt")).unwrap(),
+            "b"
+        );
     }
 
     #[test]
@@ -205,8 +211,14 @@ mod tests {
         let result = apply_atomic(
             directory.path(),
             &[
-                FileMutation { path: "safe.txt".into(), content: "safe".into() },
-                FileMutation { path: "../escape.txt".into(), content: "bad".into() },
+                FileMutation {
+                    path: "safe.txt".into(),
+                    content: "safe".into(),
+                },
+                FileMutation {
+                    path: "../escape.txt".into(),
+                    content: "bad".into(),
+                },
             ],
         );
         assert!(result.is_err());
@@ -219,8 +231,14 @@ mod tests {
         let result = apply_atomic(
             directory.path(),
             &[
-                FileMutation { path: "same.txt".into(), content: "first".into() },
-                FileMutation { path: "same.txt".into(), content: "second".into() },
+                FileMutation {
+                    path: "same.txt".into(),
+                    content: "first".into(),
+                },
+                FileMutation {
+                    path: "same.txt".into(),
+                    content: "second".into(),
+                },
             ],
         );
         assert!(result.is_err());
@@ -236,7 +254,10 @@ mod tests {
         symlink(outside.path(), directory.path().join("linked")).expect("symlink");
         let result = apply_atomic(
             directory.path(),
-            &[FileMutation { path: "linked/escape.txt".into(), content: "bad".into() }],
+            &[FileMutation {
+                path: "linked/escape.txt".into(),
+                content: "bad".into(),
+            }],
         );
         assert!(result.is_err());
         assert!(!outside.path().join("escape.txt").exists());
@@ -252,10 +273,16 @@ mod tests {
         fs::set_permissions(&path, fs::Permissions::from_mode(0o750)).expect("permissions");
         apply_atomic(
             directory.path(),
-            &[FileMutation { path: "script.sh".into(), content: "new".into() }],
+            &[FileMutation {
+                path: "script.sh".into(),
+                content: "new".into(),
+            }],
         )
         .expect("transaction");
-        assert_eq!(fs::metadata(path).unwrap().permissions().mode() & 0o777, 0o750);
+        assert_eq!(
+            fs::metadata(path).unwrap().permissions().mode() & 0o777,
+            0o750
+        );
     }
 }
 
