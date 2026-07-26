@@ -300,6 +300,8 @@ impl From<&'static str> for TurnPipelineError {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::BTreeSet;
+
     use super::*;
     use medusa_markdown_memory::MemoryDocument;
     use medusa_memory_consolidation::MemoryKind;
