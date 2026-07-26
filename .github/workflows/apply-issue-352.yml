@@ -6,6 +6,12 @@ on:
       - fix/352-self-contained-fallback-profiles
     paths:
       - .github/workflows/apply-issue-352.yml
+  pull_request:
+    branches:
+      - main
+    paths:
+      - .github/workflows/apply-issue-352.yml
+      - .github/scripts/fix_issue_352.py
 
 permissions:
   contents: write
