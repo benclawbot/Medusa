@@ -4,9 +4,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use medusa_context::ContextItem;
 use medusa_markdown_memory::{MemoryIndex, RetrievalQuery, RetrievalResult};
-use medusa_memory_consolidation::{
-    ConsolidationPolicy, MemoryObservation, consolidate,
-};
+use medusa_memory_consolidation::{ConsolidationPolicy, MemoryObservation, consolidate};
 use medusa_memory_writeback::{
     MemoryDocument as WritebackDocument, WritebackPlan, WritebackPolicy, plan_writeback,
 };
@@ -397,7 +395,9 @@ mod tests {
     fn retrieval_assembly_execution_and_verified_writeback_are_one_pipeline() {
         let now = datetime!(2026-07-26 08:00 UTC);
         let mut pipeline = TurnPipeline::new(memory_index());
-        let prepared = pipeline.prepare(request("issue body", "schema-a", "1"), now).unwrap();
+        let prepared = pipeline
+            .prepare(request("issue body", "schema-a", "1"), now)
+            .unwrap();
         assert_eq!(prepared.provenance.memory_chunk_ids.len(), 1);
         assert_eq!(prepared.provenance.mcp_cache_hits, vec![false]);
         let mut executor = Executor {
@@ -416,7 +416,9 @@ mod tests {
     fn failed_verification_never_stages_memory_writeback() {
         let now = datetime!(2026-07-26 08:00 UTC);
         let mut pipeline = TurnPipeline::new(memory_index());
-        let prepared = pipeline.prepare(request("issue body", "schema-a", "1"), now).unwrap();
+        let prepared = pipeline
+            .prepare(request("issue body", "schema-a", "1"), now)
+            .unwrap();
         let mut executor = Executor {
             observations: vec![observation()],
             calls: 0,
@@ -431,15 +433,26 @@ mod tests {
     fn identical_mcp_requests_hit_cache_but_schema_or_version_changes_miss() {
         let now = datetime!(2026-07-26 08:00 UTC);
         let mut pipeline = TurnPipeline::new(memory_index());
-        let first = pipeline.prepare(request("first", "schema-a", "1"), now).unwrap();
+        let first = pipeline
+            .prepare(request("first", "schema-a", "1"), now)
+            .unwrap();
         let second = pipeline
-            .prepare(request("ignored replacement", "schema-a", "1"), now + Duration::minutes(1))
+            .prepare(
+                request("ignored replacement", "schema-a", "1"),
+                now + Duration::minutes(1),
+            )
             .unwrap();
         let schema_change = pipeline
-            .prepare(request("schema changed", "schema-b", "1"), now + Duration::minutes(2))
+            .prepare(
+                request("schema changed", "schema-b", "1"),
+                now + Duration::minutes(2),
+            )
             .unwrap();
         let version_change = pipeline
-            .prepare(request("version changed", "schema-b", "2"), now + Duration::minutes(3))
+            .prepare(
+                request("version changed", "schema-b", "2"),
+                now + Duration::minutes(3),
+            )
             .unwrap();
         assert_eq!(first.provenance.mcp_cache_hits, vec![false]);
         assert_eq!(second.provenance.mcp_cache_hits, vec![true]);
