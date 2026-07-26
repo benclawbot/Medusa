@@ -6,10 +6,15 @@ rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
 
+[lib]
+path = "src/generated_lib.rs"
+
 [dependencies]
 medusa-config = { path = "../medusa-config" }
 medusa-core.workspace = true
 medusa-extensions = { path = "../medusa-extensions" }
+medusa-github = { path = "../medusa-github" }
+medusa-improvement = { path = "../medusa-improvement" }
 serde.workspace = true
 
 [dev-dependencies]
