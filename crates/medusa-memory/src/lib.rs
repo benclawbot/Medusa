@@ -21,6 +21,8 @@ pub use session_recall_inbox::open_session_recall;
 
 #[cfg(test)]
 mod tests {
+    use std::{sync::Arc, thread};
+
     use super::*;
 
     fn proposal(title: &str, claim: &str) -> MemoryProposal {
@@ -89,6 +91,39 @@ mod tests {
             .search("cargo test workspace", Scope::Project, 1)
             .expect("search after reuse");
         assert_eq!(reused[0].document.successful_reuse_count, 1);
+    }
+
+    #[test]
+    fn concurrent_reuse_updates_preserve_both_increments() {
+        let directory = tempfile::tempdir().expect("tempdir");
+        let root = Arc::new(directory.path().to_path_buf());
+        let engine = MemoryEngine::new(root.as_path()).expect("engine");
+        let committed = engine
+            .commit_proposal(&proposal("Concurrent command", "Use the verified command."))
+            .expect("commit");
+        let id = Arc::new(committed.id);
+
+        let workers = ["verification-a", "verification-b"].map(|evidence| {
+            let root = Arc::clone(&root);
+            let id = Arc::clone(&id);
+            thread::spawn(move || {
+                MemoryEngine::new(root.as_path())
+                    .expect("worker engine")
+                    .record_reuse(
+                        id.as_str(),
+                        &format!("artifact://sessions/concurrent/{evidence}"),
+                    )
+            })
+        });
+        for worker in workers {
+            worker.join().expect("worker thread").expect("reuse update");
+        }
+
+        let final_engine = MemoryEngine::new(root.as_path()).expect("final engine");
+        let (_, document) = final_engine.read_by_id(id.as_str()).expect("read document");
+        assert_eq!(document.successful_reuse_count, 2);
+        assert!(document.sources.iter().any(|source| source.ends_with("verification-a")));
+        assert!(document.sources.iter().any(|source| source.ends_with("verification-b")));
     }
 
     #[test]
