@@ -1,12 +1,11 @@
 [package]
 name = "medusa-runtime"
-description = "Frontend-neutral interactive session runtime for Medusa"
+description = "Frontend-neutral interactive runtime with durable execution lifecycle ownership"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
-
 
 [dependencies]
 base64 = "0.22"
