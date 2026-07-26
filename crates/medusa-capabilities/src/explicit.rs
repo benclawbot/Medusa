@@ -1,6 +1,6 @@
 use std::{
     collections::{BTreeMap, BTreeSet},
-    path::{Path, PathBuf},
+    path::Path,
 };
 
 use medusa_core::{ErrorCategory, ErrorCode, MedusaError, MedusaResult};
@@ -512,7 +512,10 @@ mod tests {
     use super::*;
     use medusa_github::CommandOutput;
     use medusa_improvement::{ImprovementRisk, ImprovementTarget};
-    use std::sync::{Arc, Mutex};
+    use std::{
+        path::PathBuf,
+        sync::{Arc, Mutex},
+    };
     type RecordedCommands = Arc<Mutex<Vec<(String, Vec<String>)>>>;
     #[derive(Clone, Default)]
     struct FakeExecutor(RecordedCommands);
