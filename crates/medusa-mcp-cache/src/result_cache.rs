@@ -149,8 +149,15 @@ mod tests {
     use time::macros::datetime;
 
     fn key(input: Value, schema: &str, version: &str) -> ResultCacheKey {
-        ResultCacheKey::build("github", "search", &input, schema, version, Some("1".into()))
-            .expect("key")
+        ResultCacheKey::build(
+            "github",
+            "search",
+            &input,
+            schema,
+            version,
+            Some("1".into()),
+        )
+        .expect("key")
     }
 
     #[test]
@@ -169,9 +176,18 @@ mod tests {
             )
             .expect("insert");
         assert_eq!(cache.get(&original, now), Some(json!({"items":[1]})));
-        assert_eq!(cache.get(&key(json!({"q":"go"}), "schema-a", "2026-01"), now), None);
-        assert_eq!(cache.get(&key(json!({"q":"rust"}), "schema-b", "2026-01"), now), None);
-        assert_eq!(cache.get(&key(json!({"q":"rust"}), "schema-a", "2026-02"), now), None);
+        assert_eq!(
+            cache.get(&key(json!({"q":"go"}), "schema-a", "2026-01"), now),
+            None
+        );
+        assert_eq!(
+            cache.get(&key(json!({"q":"rust"}), "schema-b", "2026-01"), now),
+            None
+        );
+        assert_eq!(
+            cache.get(&key(json!({"q":"rust"}), "schema-a", "2026-02"), now),
+            None
+        );
     }
 
     #[test]
@@ -179,28 +195,32 @@ mod tests {
         let now = datetime!(2026-07-26 08:00 UTC);
         let mut cache = ResultCache::default();
         let sensitive = key(json!({"q":"secret"}), "schema", "1");
-        assert!(!cache
-            .insert(
-                sensitive.clone(),
-                json!({"token":"secret"}),
-                now,
-                Duration::minutes(5),
-                true,
-                true,
-            )
-            .expect("sensitive"));
+        assert!(
+            !cache
+                .insert(
+                    sensitive.clone(),
+                    json!({"token":"secret"}),
+                    now,
+                    Duration::minutes(5),
+                    true,
+                    true,
+                )
+                .expect("sensitive")
+        );
         assert_eq!(cache.get(&sensitive, now), None);
         let non_cacheable = key(json!({"q":"live"}), "schema", "1");
-        assert!(!cache
-            .insert(
-                non_cacheable.clone(),
-                json!({"value":1}),
-                now,
-                Duration::minutes(5),
-                false,
-                false,
-            )
-            .expect("non-cacheable"));
+        assert!(
+            !cache
+                .insert(
+                    non_cacheable.clone(),
+                    json!({"value":1}),
+                    now,
+                    Duration::minutes(5),
+                    false,
+                    false,
+                )
+                .expect("non-cacheable")
+        );
         assert_eq!(cache.get(&non_cacheable, now), None);
     }
 }
