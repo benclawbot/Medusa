@@ -7,4 +7,4 @@ Medusa supports two distinct OpenAI routes:
 
 Both routes use Medusa's existing OpenAI-compatible provider implementation. MiniMax, Anthropic, OmniRoute, local runtimes, and other compatible endpoints remain available.
 
-The former user-facing browser/copy-paste escalation command has been removed. ChatGPT access is now a normal selectable provider route with the same tool approvals, sandboxing, and policy enforcement as every other model provider.
+The former user-facing browser/copy-paste escalation command has been removed. The old internal escalation packet library remains in the workspace for compatibility, but it is no longer exposed as a CLI route. ChatGPT access is now a normal selectable provider route with the same tool approvals, sandboxing, and policy enforcement as every other model provider.
