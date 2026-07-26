@@ -162,9 +162,7 @@ pub(crate) fn configure_interactive() -> MedusaResult<()> {
     }
     profile.configured = true;
     save_profile(&profile)?;
-    if profile.connection == "chatgpt-oauth" {
-        ensure_chatgpt_oauth_gateway()?;
-    }
+    ensure_runtime_for_profile(&profile)?;
 
     println!("\nConfiguration saved to {}", config_path()?.display());
     print_auth_guidance(&profile);
@@ -268,6 +266,21 @@ fn model_default<'a>(connection: &str, current: &'a str) -> &'a str {
     }
 }
 
+pub(crate) fn ensure_selected_runtime() -> MedusaResult<()> {
+    let profile = load_profile()?;
+    if profile.configured {
+        ensure_runtime_for_profile(&profile)?;
+    }
+    Ok(())
+}
+
+fn ensure_runtime_for_profile(profile: &ProviderProfile) -> MedusaResult<()> {
+    if profile.connection == "chatgpt-oauth" {
+        ensure_chatgpt_oauth_gateway()?;
+    }
+    Ok(())
+}
+
 fn ensure_chatgpt_oauth_gateway() -> MedusaResult<()> {
     let address: SocketAddr = "127.0.0.1:10531"
         .parse()
@@ -289,6 +302,11 @@ fn ensure_chatgpt_oauth_gateway() -> MedusaResult<()> {
         return Err(config_error(format!(
             "openai-oauth exited with status {status}; run `npx openai-oauth@latest login` and retry"
         )));
+    }
+    if TcpStream::connect_timeout(&address, Duration::from_secs(2)).is_err() {
+        return Err(config_error(
+            "openai-oauth started but its loopback endpoint is not reachable at 127.0.0.1:10531",
+        ));
     }
     Ok(())
 }
