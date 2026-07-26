@@ -15,7 +15,7 @@ on:
       - .github/scripts/fix_issue_352.py
 
 permissions:
-  contents: write
+  contents: read
 
 jobs:
   apply-and-verify:
@@ -36,15 +36,16 @@ jobs:
           fi
       - name: Format
         run: cargo fmt --all
-      - name: Commit migrated implementation
+      - name: Package migrated implementation
         run: |
-          git config user.name github-actions[bot]
-          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
-          git add crates/medusa-config/src/lib.rs crates/medusa-provider/src/lib.rs crates/medusa-provider/src/manager.rs
-          if ! git diff --cached --quiet; then
-            git commit -m "fix(provider): make fallback profiles self-contained (#352)"
-            git push origin HEAD:fix/352-self-contained-fallback-profiles
-          fi
+          mkdir -p issue-352/crates/medusa-config/src issue-352/crates/medusa-provider/src
+          cp crates/medusa-config/src/lib.rs issue-352/crates/medusa-config/src/lib.rs
+          cp crates/medusa-provider/src/lib.rs issue-352/crates/medusa-provider/src/lib.rs
+          cp crates/medusa-provider/src/manager.rs issue-352/crates/medusa-provider/src/manager.rs
+      - uses: actions/upload-artifact@v4
+        with:
+          name: issue-352-migrated-source
+          path: issue-352
       - name: Check provider and config crates
         run: cargo check -p medusa-config -p medusa-provider
       - name: Test provider and config crates
