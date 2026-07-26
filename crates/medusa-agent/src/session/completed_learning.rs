@@ -4,9 +4,9 @@ use std::{
 };
 
 use medusa_core::MedusaResult;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
-use super::{lessons, skill_drafts, skill_outcomes, skill_probation, AgentSession};
+use super::{AgentSession, lessons, skill_drafts, skill_outcomes, skill_probation};
 
 const MIN_PROBATION_CONFIDENCE_MILLI: u64 = 750;
 
@@ -170,8 +170,8 @@ mod tests {
             .path()
             .join(".medusa/memory/lessons")
             .join(format!("{}.json", session.id));
-        let value: Value = serde_json::from_slice(&fs::read(memory).expect("memory"))
-            .expect("memory json");
+        let value: Value =
+            serde_json::from_slice(&fs::read(memory).expect("memory")).expect("memory json");
         assert_eq!(value["provenance"]["session_id"], session.id.to_string());
         assert_eq!(value["provenance"]["verification_result"], "verified");
         assert_eq!(value["lifecycle"]["status"], "probation");
