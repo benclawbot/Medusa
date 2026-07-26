@@ -1,7 +1,9 @@
 use std::{io::Read, time::Duration};
 
+use medusa_browser_client::network_policy::{
+    ResolvedTarget, is_public_ip, resolve_public_target,
+};
 use medusa_core::{ErrorCategory, ErrorCode, MedusaError, MedusaResult};
-use medusa_network_policy::{is_public_ip, resolve_public_url};
 use reqwest::{
     Url,
     blocking::Client,
@@ -87,7 +89,7 @@ pub(crate) fn fetch(url: &str, prompt: Option<&str>) -> MedusaResult<String> {
 
 fn request(mut url: Url) -> MedusaResult<(Url, Vec<u8>)> {
     for _ in 0..=MAX_REDIRECTS {
-        let target = resolve_public_url(&url).map_err(invalid_web_input)?;
+        let target = resolve_url(&url).map_err(invalid_web_input)?;
         let client = Client::builder()
             .redirect(Policy::none())
             .timeout(Duration::from_secs(15))
@@ -108,7 +110,7 @@ fn request(mut url: Url) -> MedusaResult<(Url, Vec<u8>)> {
             url = url
                 .join(location)
                 .map_err(|error| web_error(format!("invalid redirect target: {error}")))?;
-            resolve_public_url(&url).map_err(invalid_web_input)?;
+            resolve_url(&url).map_err(invalid_web_input)?;
             continue;
         }
         if !response.status().is_success() {
@@ -133,6 +135,20 @@ fn request(mut url: Url) -> MedusaResult<(Url, Vec<u8>)> {
     Err(web_error("web request exceeded the redirect limit"))
 }
 
+fn resolve_url(url: &Url) -> Result<ResolvedTarget, String> {
+    let host = url
+        .host_str()
+        .ok_or_else(|| "web URL must include a host".to_owned())?;
+    resolve_public_target(
+        url.scheme(),
+        url.username(),
+        url.password().is_some(),
+        url.port(),
+        host,
+        url.port_or_known_default().unwrap_or(443),
+    )
+}
+
 fn read_limited(response: &mut impl Read) -> MedusaResult<Vec<u8>> {
     let mut body = Vec::new();
     response
@@ -150,7 +166,7 @@ fn read_limited(response: &mut impl Read) -> MedusaResult<Vec<u8>> {
 fn parse_public_url(value: &str) -> MedusaResult<Url> {
     let url = Url::parse(value.trim())
         .map_err(|error| invalid_web_input(format!("invalid web URL: {error}")))?;
-    resolve_public_url(&url).map_err(invalid_web_input)?;
+    resolve_url(&url).map_err(invalid_web_input)?;
     Ok(url)
 }
 
