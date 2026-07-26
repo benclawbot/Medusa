@@ -42,3 +42,6 @@ tempfile.workspace = true
 
 [lints]
 workspace = true
+
+[lints.clippy]
+derivable_impls = "allow"
