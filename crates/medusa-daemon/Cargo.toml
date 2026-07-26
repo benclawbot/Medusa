@@ -27,6 +27,7 @@ getrandom.workspace = true
 medusa-process-containment.workspace = true
 
 [dev-dependencies]
+medusa-testkit = { path = "../medusa-testkit" }
 tempfile.workspace = true
 
 [lints]
