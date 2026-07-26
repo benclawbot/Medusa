@@ -1,5 +1,6 @@
 use std::io;
 
+mod proxy;
 mod server;
 mod validation;
 
