@@ -20,8 +20,9 @@ use windows_sys::Win32::{
     },
     Security::{
         Authorization::ConvertSidToStringSidW,
-        FreeSid, PSID, SECURITY_ATTRIBUTES, SECURITY_CAPABILITIES,
+        FreeSid,
         Isolation::{CreateAppContainerProfile, DeriveAppContainerSidFromAppContainerName},
+        PSID, SECURITY_ATTRIBUTES, SECURITY_CAPABILITIES,
     },
     System::{
         IO::ReadFile,
@@ -85,12 +86,7 @@ pub fn run_appcontainer(repo: &Path, program: &str, args: &[String]) -> io::Resu
     result
 }
 
-unsafe fn launch(
-    root: &Path,
-    executable: &Path,
-    args: &[String],
-    sid: PSID,
-) -> io::Result<Output> {
+unsafe fn launch(root: &Path, executable: &Path, args: &[String], sid: PSID) -> io::Result<Output> {
     let job = OwnedHandle::new(unsafe { CreateJobObjectW(null(), null()) })?;
     let mut limits: JOBOBJECT_EXTENDED_LIMIT_INFORMATION = unsafe { zeroed() };
     limits.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE
@@ -246,8 +242,8 @@ fn resolve_program(program: &str) -> io::Result<PathBuf> {
     }
 
     let path = std::env::var_os("PATH").unwrap_or_default();
-    let extensions = std::env::var_os("PATHEXT")
-        .unwrap_or_else(|| OsString::from(".COM;.EXE;.BAT;.CMD"));
+    let extensions =
+        std::env::var_os("PATHEXT").unwrap_or_else(|| OsString::from(".COM;.EXE;.BAT;.CMD"));
     let has_extension = requested.extension().is_some();
     for directory in std::env::split_paths(&path) {
         if has_extension {
@@ -371,7 +367,8 @@ impl AppContainerProfile {
     fn open_or_create() -> io::Result<Self> {
         let name = wide_null(OsStr::new(PROFILE_NAME));
         let mut sid: PSID = null_mut();
-        let mut result = unsafe { DeriveAppContainerSidFromAppContainerName(name.as_ptr(), &mut sid) };
+        let mut result =
+            unsafe { DeriveAppContainerSidFromAppContainerName(name.as_ptr(), &mut sid) };
         if result < 0 {
             let display = wide_null(OsStr::new("Medusa command sandbox"));
             let description = wide_null(OsStr::new("Network-isolated Medusa command runner"));
@@ -397,7 +394,9 @@ impl AppContainerProfile {
         if unsafe { ConvertSidToStringSidW(self.sid, &mut text) } == 0 {
             return Err(io::Error::last_os_error());
         }
-        let len = (0..).take_while(|&index| unsafe { *text.add(index) } != 0).count();
+        let len = (0..)
+            .take_while(|&index| unsafe { *text.add(index) } != 0)
+            .count();
         let value = unsafe { OsString::from_wide(slice::from_raw_parts(text, len)) }
             .to_string_lossy()
             .into_owned();
