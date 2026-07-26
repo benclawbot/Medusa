@@ -289,8 +289,7 @@ pub mod turn_pipeline {
                 input.retrieved_context.push(ContextItem::new(
                     format!("mcp:{key_fingerprint}"),
                     ContextKind::Observation,
-                    serde_json::to_string(&value)
-                        .map_err(|_| "MCP result serialization failed")?,
+                    serde_json::to_string(&value).map_err(|_| "MCP result serialization failed")?,
                     sequence,
                     input.now,
                 )?);
