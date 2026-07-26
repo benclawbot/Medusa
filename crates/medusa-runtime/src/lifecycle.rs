@@ -7,7 +7,7 @@ use std::{collections::BTreeMap, error::Error, fmt};
 
 use medusa_continuation::ContinuationDecision;
 use medusa_execution_checkpoint::{ExecutionCheckpoint as DurableCheckpoint, ExecutionLog};
-use medusa_execution_orchestrator::{Checkpoint, ExecutionStage, ExecutionState};
+use medusa_execution_orchestrator::{ExecutionStage, ExecutionState};
 use medusa_execution_replay::{ExecutionTrace, ReplayReport, verify as verify_replay};
 use medusa_time_travel::{ExecutionState as HistoricalState, FullSnapshot};
 use serde::{Deserialize, Serialize};
