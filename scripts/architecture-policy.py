@@ -19,6 +19,11 @@ SPLICE_PATTERNS = (
     re.compile(r"(?:concat|extend_from_slice|push_str)\s*\([^)]*(?:\.\./)+crates/[^)]*/src/", re.S),
 )
 MOD_RE = re.compile(r"^\s*(?:pub(?:\([^)]*\))?\s+)?mod\s+([A-Za-z_][A-Za-z0-9_]*)\s*;", re.M)
+PATH_MOD_RE = re.compile(
+    r"#\s*\[\s*path\s*=\s*\"([^\"]+)\"\s*\]\s*(?:pub(?:\([^)]*\))?\s+)?mod\s+[A-Za-z_][A-Za-z0-9_]*\s*;",
+    re.M,
+)
+INCLUDE_RE = re.compile(r"include!\s*\(\s*\"([^\"]+\.rs)\"\s*\)")
 
 
 def run(command: list[str], cwd: pathlib.Path) -> str:
@@ -61,36 +66,60 @@ def reachable(graph: dict[str, dict[str, set[str]]], roots: set[str], allowed: s
     return seen
 
 
-def active_modules(crate_root: pathlib.Path) -> set[pathlib.Path]:
+def module_base(path: pathlib.Path) -> pathlib.Path:
+    if path.name in {"lib.rs", "main.rs", "mod.rs"}:
+        return path.parent
+    return path.parent / path.stem
+
+
+def active_modules(crate_root: pathlib.Path, package: dict[str, Any]) -> set[pathlib.Path]:
     active: set[pathlib.Path] = set()
-    queue = deque(path for path in (crate_root / "src/lib.rs", crate_root / "src/main.rs") if path.exists())
+    roots = {
+        pathlib.Path(target["src_path"]).resolve()
+        for target in package.get("targets", [])
+        if target.get("src_path")
+    }
+    queue = deque(path for path in roots if path.exists())
     while queue:
         path = queue.popleft().resolve()
-        if path in active:
+        if path in active or not path.is_file():
             continue
         active.add(path)
         text = path.read_text(encoding="utf-8")
+        for relative in PATH_MOD_RE.findall(text):
+            child = (path.parent / relative).resolve()
+            if child.exists():
+                queue.append(child)
+        base = module_base(path)
         for name in MOD_RE.findall(text):
-            direct = path.parent / f"{name}.rs"
-            nested = path.parent / name / "mod.rs"
-            child = direct if direct.exists() else nested
+            candidates = (base / f"{name}.rs", base / name / "mod.rs")
+            child = next((candidate for candidate in candidates if candidate.exists()), None)
+            if child is not None:
+                queue.append(child)
+        for relative in INCLUDE_RE.findall(text):
+            child = (path.parent / relative).resolve()
+            try:
+                child.relative_to(crate_root.resolve())
+            except ValueError:
+                continue
             if child.exists():
                 queue.append(child)
     return active
 
 
-def scan_hidden_dependencies(root: pathlib.Path, ignored_rs: set[str]) -> list[str]:
+def scan_hidden_dependencies(root: pathlib.Path, workspace: dict[str, dict[str, Any]], ignored_rs: set[str]) -> list[str]:
     errors: list[str] = []
     for path in root.glob("crates/*/**/*.rs"):
         rel = path.relative_to(root).as_posix()
         text = path.read_text(encoding="utf-8")
         if any(pattern.search(text) for pattern in SPLICE_PATTERNS):
             errors.append(f"hidden cross-crate source dependency: {rel}")
-    for crate in root.glob("crates/*"):
+    for package in workspace.values():
+        crate = pathlib.Path(package["manifest_path"]).resolve().parent
         src = crate / "src"
         if not src.is_dir():
             continue
-        active = active_modules(crate)
+        active = active_modules(crate, package)
         for path in src.rglob("*.rs"):
             rel = path.relative_to(root).as_posix()
             if path.resolve() not in active and rel not in ignored_rs:
@@ -135,11 +164,16 @@ def check(root: pathlib.Path, policy_path: pathlib.Path, report_path: pathlib.Pa
         rows.append((name, status))
 
     expected_bins = set(policy.get("expected_binary_targets", []))
-    actual_bins = {p["name"] for p in workspace.values() if any(t["kind"] == ["bin"] for t in p["targets"])}
+    actual_bins = {
+        target["name"]
+        for package in workspace.values()
+        for target in package.get("targets", [])
+        if "bin" in target.get("kind", [])
+    }
     for name in sorted(expected_bins - actual_bins):
         errors.append(f"expected binary target missing: {name}")
 
-    errors.extend(scan_hidden_dependencies(root, set(policy.get("ignored_unreferenced_rs", []))))
+    errors.extend(scan_hidden_dependencies(root, workspace, set(policy.get("ignored_unreferenced_rs", []))))
     lines = ["# Medusa architecture policy report", "", "| Crate | Reachability |", "|---|---|"]
     lines.extend(f"| `{name}` | {status} |" for name, status in rows)
     lines.extend(["", "## Violations", ""])
@@ -160,6 +194,8 @@ def self_test() -> int:
     assert reachable(graph, {"root"}, {"normal", "build"}) == {"root", "normal", "build"}
     assert "dev" in reachable(graph, {"root"}, set(KINDS))
     assert "orphan" not in reachable(graph, {"root"}, set(KINDS))
+    assert module_base(pathlib.Path("src/server.rs")) == pathlib.Path("src/server")
+    assert module_base(pathlib.Path("src/lib.rs")) == pathlib.Path("src")
     print("architecture policy self-test passed")
     return 0
 
