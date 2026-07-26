@@ -34,7 +34,8 @@ function TrendChart({ data }: { data: EngineeringDashboardData["trend"] }) {
       })
       .join(" ");
   }, [data]);
-  const delta = (data.at(-1)?.successRate ?? 0) - (data[0]?.successRate ?? 0);
+  const lastPoint = data[data.length - 1];
+  const delta = (lastPoint?.successRate ?? 0) - (data[0]?.successRate ?? 0);
   return (
     <section className="engineering-card trend-card">
       <div className="card-head">
@@ -43,7 +44,7 @@ function TrendChart({ data }: { data: EngineeringDashboardData["trend"] }) {
           {delta >= 0 ? <ArrowUpRight size={15} /> : <ArrowDownRight size={15} />} {Math.abs(delta).toFixed(1)} pts
         </span>
       </div>
-      {data.length ? <><svg viewBox="0 0 760 220" role="img" aria-label="Task success rate trend"><g className="grid"><line x1="22" y1="22" x2="738" y2="22"/><line x1="22" y1="110" x2="738" y2="110"/><line x1="22" y1="198" x2="738" y2="198"/></g><polyline points={points}/>{data.map((point,index)=><circle key={point.date} cx={22+(index*716)/Math.max(1,data.length-1)} cy={198-(point.successRate*176)/100} r="4"><title>{point.date}: {pct(point.successRate)}</title></circle>)}</svg><div className="axis-labels"><span>{data[0].date}</span><span>{data.at(-1)?.date}</span></div></> : <p className="empty-state">Completed sessions will appear here as Medusa works.</p>}
+      {data.length ? <><svg viewBox="0 0 760 220" role="img" aria-label="Task success rate trend"><g className="grid"><line x1="22" y1="22" x2="738" y2="22"/><line x1="22" y1="110" x2="738" y2="110"/><line x1="22" y1="198" x2="738" y2="198"/></g><polyline points={points}/>{data.map((point,index)=><circle key={point.date} cx={22+(index*716)/Math.max(1,data.length-1)} cy={198-(point.successRate*176)/100} r="4"><title>{point.date}: {pct(point.successRate)}</title></circle>)}</svg><div className="axis-labels"><span>{data[0]?.date}</span><span>{lastPoint?.date}</span></div></> : <p className="empty-state">Completed sessions will appear here as Medusa works.</p>}
     </section>
   );
 }
