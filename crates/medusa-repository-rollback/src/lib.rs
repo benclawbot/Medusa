@@ -354,7 +354,7 @@ fn is_sorted_unique(values: &[String]) -> bool {
 
 fn hash<T: Serialize>(value: &T) -> String {
     hex::encode(Sha256::digest(
-        serde_json::to_vec(value).expect("rollback journal types are serializable"),
+        serde_json::to_vec(value).unwrap_or_default(),
     ))
 }
 
