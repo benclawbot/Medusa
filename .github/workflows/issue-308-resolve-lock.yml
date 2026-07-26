@@ -1,0 +1,29 @@
+name: Issue 308 Resolve Lockfile
+
+on:
+  push:
+    branches:
+      - agent/issue-308-native-windows-appcontainer
+
+permissions:
+  contents: write
+
+jobs:
+  resolve:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: agent/issue-308-native-windows-appcontainer
+      - uses: dtolnay/rust-toolchain@1.88.0
+      - name: Resolve actual package graph
+        run: cargo check -p medusa-agent --all-targets
+      - name: Commit resolved lockfile
+        run: |
+          rm .github/workflows/issue-308-resolve-lock.yml
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add Cargo.lock .github/workflows/issue-308-resolve-lock.yml
+          git commit -m "Resolve lockfile for Windows sandbox graph"
+          git push origin HEAD:agent/issue-308-native-windows-appcontainer
