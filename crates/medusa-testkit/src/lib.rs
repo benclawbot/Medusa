@@ -1,6 +1,8 @@
 //! Deterministic fixtures for Medusa tests.
 
-use medusa_core::{CorrelationId, ErrorCategory, ErrorCode, MedusaError, MedusaResult, SessionId};
+use medusa_core::{
+    CorrelationId, ErrorCategory, ErrorCode, EventId, MedusaError, MedusaResult, SessionId,
+};
 use medusa_protocol::{Actor, EventEnvelope, EventPayload};
 use time::OffsetDateTime;
 
@@ -10,8 +12,10 @@ pub fn session_created_event(objective: impl Into<String>) -> MedusaResult<Event
         .map_err(|error| invalid_fixture("session", error))?;
     let correlation_id = CorrelationId::parse("cor-01ARZ3NDEKTSV4RRFFQ69G5FAW")
         .map_err(|error| invalid_fixture("correlation", error))?;
+    let event_id = EventId::parse("evt-01ARZ3NDEKTSV4RRFFQ69G5FAX")
+        .map_err(|error| invalid_fixture("event", error))?;
 
-    EventEnvelope::new(
+    let mut event = EventEnvelope::new(
         1,
         session_id,
         Actor::Coordinator,
@@ -21,7 +25,10 @@ pub fn session_created_event(objective: impl Into<String>) -> MedusaResult<Event
         },
         None,
         OffsetDateTime::UNIX_EPOCH,
-    )
+    )?;
+    event.event_id = event_id;
+    event.checksum = event.compute_checksum()?;
+    Ok(event)
 }
 
 fn invalid_fixture(kind: &str, error: &str) -> MedusaError {
