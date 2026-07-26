@@ -61,6 +61,7 @@ struct DurableExecution {
     resumed: bool,
 }
 
+#[derive(Debug)]
 pub struct ExecutionLifecycleService<S> {
     storage: S,
     current: DurableExecution,
@@ -416,7 +417,7 @@ mod tests {
     use super::*;
     use std::sync::{Arc, Mutex};
 
-    #[derive(Clone, Default)]
+    #[derive(Clone, Debug, Default)]
     struct MemoryStorage(Arc<Mutex<BTreeMap<String, Vec<u8>>>>);
 
     impl LifecycleStorage for MemoryStorage {
