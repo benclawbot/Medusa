@@ -1,10 +1,7 @@
-use std::{
-    io::Read,
-    net::{IpAddr, Ipv4Addr, Ipv6Addr, ToSocketAddrs},
-    time::Duration,
-};
+use std::{io::Read, time::Duration};
 
 use medusa_core::{ErrorCategory, ErrorCode, MedusaError, MedusaResult};
+use medusa_network_policy::{is_public_ip, resolve_public_url};
 use reqwest::{
     Url,
     blocking::Client,
@@ -89,14 +86,14 @@ pub(crate) fn fetch(url: &str, prompt: Option<&str>) -> MedusaResult<String> {
 }
 
 fn request(mut url: Url) -> MedusaResult<(Url, Vec<u8>)> {
-    validate_public_url(&url)?;
-    let client = Client::builder()
-        .redirect(Policy::none())
-        .timeout(Duration::from_secs(15))
-        .build()
-        .map_err(|error| web_error(format!("could not initialize web client: {error}")))?;
-
     for _ in 0..=MAX_REDIRECTS {
+        let target = resolve_public_url(&url).map_err(invalid_web_input)?;
+        let client = Client::builder()
+            .redirect(Policy::none())
+            .timeout(Duration::from_secs(15))
+            .resolve_to_addrs(target.host(), target.addresses())
+            .build()
+            .map_err(|error| web_error(format!("could not initialize web client: {error}")))?;
         let mut response = client
             .get(url.clone())
             .header(USER_AGENT, USER_AGENT_VALUE)
@@ -111,7 +108,7 @@ fn request(mut url: Url) -> MedusaResult<(Url, Vec<u8>)> {
             url = url
                 .join(location)
                 .map_err(|error| web_error(format!("invalid redirect target: {error}")))?;
-            validate_public_url(&url)?;
+            resolve_public_url(&url).map_err(invalid_web_input)?;
             continue;
         }
         if !response.status().is_success() {
@@ -153,74 +150,8 @@ fn read_limited(response: &mut impl Read) -> MedusaResult<Vec<u8>> {
 fn parse_public_url(value: &str) -> MedusaResult<Url> {
     let url = Url::parse(value.trim())
         .map_err(|error| invalid_web_input(format!("invalid web URL: {error}")))?;
-    validate_public_url(&url)?;
+    resolve_public_url(&url).map_err(invalid_web_input)?;
     Ok(url)
-}
-
-fn validate_public_url(url: &Url) -> MedusaResult<()> {
-    if !matches!(url.scheme(), "http" | "https") {
-        return Err(invalid_web_input("web URLs must use http or https"));
-    }
-    if !url.username().is_empty() || url.password().is_some() {
-        return Err(invalid_web_input("web URLs must not include credentials"));
-    }
-    if url.port().is_some_and(|port| port != 80 && port != 443) {
-        return Err(invalid_web_input("web URLs may only use ports 80 or 443"));
-    }
-    let host = url
-        .host_str()
-        .ok_or_else(|| invalid_web_input("web URL must include a host"))?;
-    if host.eq_ignore_ascii_case("localhost") || host.ends_with(".localhost") {
-        return Err(invalid_web_input("web URL must resolve to a public host"));
-    }
-    if let Ok(address) = host.parse::<IpAddr>() {
-        return is_public_ip(address)
-            .then_some(())
-            .ok_or_else(|| invalid_web_input("web URL must use a public IP address"));
-    }
-    let port = url.port_or_known_default().unwrap_or(443);
-    let addresses = (host, port)
-        .to_socket_addrs()
-        .map_err(|error| web_error(format!("could not resolve web host {host}: {error}")))?
-        .map(|address| address.ip())
-        .collect::<Vec<_>>();
-    if addresses.is_empty() || addresses.iter().any(|address| !is_public_ip(*address)) {
-        return Err(invalid_web_input(
-            "web URL must resolve only to public IP addresses",
-        ));
-    }
-    Ok(())
-}
-
-fn is_public_ip(address: IpAddr) -> bool {
-    match address {
-        IpAddr::V4(address) => {
-            !address.is_private()
-                && !address.is_loopback()
-                && !address.is_link_local()
-                && !address.is_broadcast()
-                && !address.is_unspecified()
-                && !address.is_multicast()
-                && address != Ipv4Addr::new(100, 64, 0, 0)
-                && !(address.octets()[0] == 100 && (64..=127).contains(&address.octets()[1]))
-                && !(address.octets()[0] == 192 && address.octets()[1] == 0)
-                && !(address.octets()[0] == 198 && matches!(address.octets()[1], 18 | 19))
-                && !(address.octets()[0] == 198
-                    && address.octets()[1] == 51
-                    && address.octets()[2] == 100)
-                && !(address.octets()[0] == 203
-                    && address.octets()[1] == 0
-                    && address.octets()[2] == 113)
-        }
-        IpAddr::V6(address) => {
-            !address.is_loopback()
-                && !address.is_unspecified()
-                && !address.is_multicast()
-                && !address.is_unicast_link_local()
-                && !address.is_unique_local()
-                && address != Ipv6Addr::new(0x2001, 0x0db8, 0, 0, 0, 0, 0, 0)
-        }
-    }
 }
 
 #[derive(Debug, Eq, PartialEq)]
@@ -252,7 +183,7 @@ fn tag_value(value: &str, tag: &str) -> Option<String> {
     Some(
         value
             .strip_prefix("<![CDATA[")
-            .and_then(|value| value.strip_suffix("]]>"))
+            .and_then(|value| value.strip_suffix("]]>") )
             .unwrap_or(value)
             .to_owned(),
     )
@@ -345,10 +276,6 @@ fn decode_entities(value: &str) -> String {
         .replace("&gt;", ">")
 }
 
-/// Truncates an error-context string to `max_chars` bytes. Unlike the
-/// tool-result helper this stays local because HTTP error context is
-/// always short and only used for diagnostics — the full body lives in
-/// the envelope sidecar.
 fn truncate_inline(value: &str, max_chars: usize) -> String {
     if value.chars().count() <= max_chars {
         return value.to_owned();
@@ -380,6 +307,8 @@ fn web_error(message: impl Into<String>) -> MedusaError {
 
 #[cfg(test)]
 mod tests {
+    use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
+
     use super::*;
 
     #[test]
@@ -412,10 +341,15 @@ mod tests {
     }
 
     #[test]
-    fn private_addresses_are_never_public_web_targets() {
-        assert!(!is_public_ip(IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1))));
-        assert!(!is_public_ip(IpAddr::V4(Ipv4Addr::new(10, 0, 0, 1))));
-        assert!(!is_public_ip(IpAddr::V6(Ipv6Addr::LOCALHOST)));
+    fn shared_policy_rejects_private_and_mapped_addresses() {
+        for address in [
+            IpAddr::V4(Ipv4Addr::LOCALHOST),
+            IpAddr::V4(Ipv4Addr::new(10, 0, 0, 1)),
+            IpAddr::V6(Ipv6Addr::LOCALHOST),
+            "::ffff:127.0.0.1".parse().expect("mapped loopback"),
+        ] {
+            assert!(!is_public_ip(address), "{address}");
+        }
         assert!(is_public_ip(IpAddr::V4(Ipv4Addr::new(8, 8, 8, 8))));
     }
 
