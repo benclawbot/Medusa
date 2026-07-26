@@ -1,27 +1,18 @@
 use std::{
-    env, fs,
+    env,
     net::{SocketAddr, TcpStream},
-    path::PathBuf,
     process::Command,
     time::Duration,
 };
 
+use medusa_config::Config;
 use medusa_core::{ErrorCategory, ErrorCode, MedusaError, MedusaResult};
 use reqwest::{StatusCode, blocking::Client};
-use serde::Deserialize;
 use serde_json::{Value, json};
 
 const DEFAULT_GATEWAY: &str = "http://127.0.0.1:10531/v1";
 const PREFLIGHT_ENV: &str = "MEDUSA_OAUTH_PREFLIGHT";
-
-#[derive(Debug, Default, Deserialize)]
-#[serde(default)]
-struct ProviderProfile {
-    connection: String,
-    model: String,
-    base_url: Option<String>,
-    configured: bool,
-}
+const OAUTH_PROVIDER: &str = "openai-oauth";
 
 #[derive(Debug, PartialEq)]
 struct PreflightReport {
@@ -31,14 +22,8 @@ struct PreflightReport {
     cancellation: &'static str,
 }
 
-pub(crate) fn run_if_needed(args: &[String]) -> MedusaResult<()> {
-    if !is_coding_session(args) {
-        return Ok(());
-    }
-    let Some(profile) = load_profile()? else {
-        return Ok(());
-    };
-    if !profile.configured || profile.connection != "chatgpt-oauth" {
+pub(crate) fn run_if_needed(config: &Config) -> MedusaResult<()> {
+    if !requires_preflight(config) {
         return Ok(());
     }
     if preflight_disabled() {
@@ -49,13 +34,13 @@ pub(crate) fn run_if_needed(args: &[String]) -> MedusaResult<()> {
     }
 
     ensure_gateway_running()?;
-    let base_url = profile.base_url.as_deref().unwrap_or(DEFAULT_GATEWAY);
+    let base_url = config.model.base_url.as_deref().unwrap_or(DEFAULT_GATEWAY);
     let client = Client::builder()
         .connect_timeout(Duration::from_secs(2))
         .timeout(Duration::from_secs(15))
         .build()
         .map_err(gateway_transport_error)?;
-    let report = probe_gateway(&client, base_url, &profile.model)?;
+    let report = probe_gateway(&client, base_url, &config.model.name)?;
     eprintln!(
         "ChatGPT OAuth gateway verified: model={}, tool_calling={}, streaming={}, cancellation={}.",
         report.model, report.tool_calling, report.streaming, report.cancellation
@@ -63,65 +48,8 @@ pub(crate) fn run_if_needed(args: &[String]) -> MedusaResult<()> {
     Ok(())
 }
 
-fn is_coding_session(args: &[String]) -> bool {
-    let mut index = 0;
-    while index < args.len() {
-        let arg = &args[index];
-        if arg == "--" {
-            return false;
-        }
-        if matches!(arg.as_str(), "--repo" | "--set" | "--prompt" | "--resume") {
-            index += 2;
-            continue;
-        }
-        if arg.starts_with("--repo=") || arg.starts_with("--set=") {
-            index += 1;
-            continue;
-        }
-        if arg.starts_with('-') {
-            index += 1;
-            continue;
-        }
-        return matches!(arg.as_str(), "run" | "resume");
-    }
-    true
-}
-
-fn load_profile() -> MedusaResult<Option<ProviderProfile>> {
-    let path = profile_path()?;
-    if !path.exists() {
-        return Ok(None);
-    }
-    let text = fs::read_to_string(&path).map_err(|error| {
-        preflight_error(
-            ErrorCategory::Environment,
-            format!("read OAuth provider profile {}: {error}", path.display()),
-        )
-    })?;
-    let profile = toml::from_str(&text).map_err(|error| {
-        preflight_error(
-            ErrorCategory::Validation,
-            format!("parse OAuth provider profile {}: {error}", path.display()),
-        )
-    })?;
-    Ok(Some(profile))
-}
-
-fn profile_path() -> MedusaResult<PathBuf> {
-    let base = if cfg!(windows) {
-        env::var_os("APPDATA").map(PathBuf::from)
-    } else if let Some(path) = env::var_os("XDG_CONFIG_HOME") {
-        Some(PathBuf::from(path))
-    } else {
-        env::var_os("HOME").map(|home| PathBuf::from(home).join(".config"))
-    }
-    .ok_or_else(|| {
-        preflight_error(
-            ErrorCategory::Environment,
-            "could not resolve the user configuration directory for OAuth preflight",
-        )
-    })?;
-    Ok(base.join("medusa").join("provider.toml"))
+fn requires_preflight(config: &Config) -> bool {
+    config.model.provider == OAUTH_PROVIDER
 }
 
 fn preflight_disabled() -> bool {
@@ -346,12 +274,15 @@ mod tests {
     use super::*;
 
     #[test]
-    fn only_coding_sessions_trigger_preflight() {
-        assert!(is_coding_session(&[]));
-        assert!(is_coding_session(&["run".into(), "fix tests".into()]));
-        assert!(is_coding_session(&["--prompt".into(), "fix tests".into()]));
-        assert!(!is_coding_session(&["doctor".into()]));
-        assert!(!is_coding_session(&["config".into()]));
+    fn only_oauth_provider_requires_preflight() {
+        let mut config = Config::default();
+        assert!(!requires_preflight(&config));
+
+        config.model.provider = OAUTH_PROVIDER.into();
+        assert!(requires_preflight(&config));
+
+        config.model.provider = "openai".into();
+        assert!(!requires_preflight(&config));
     }
 
     #[test]

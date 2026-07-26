@@ -71,13 +71,6 @@ fn main() {
         }
         return;
     }
-    if let Err(error) = oauth_preflight::run_if_needed(&args) {
-        eprintln!(
-            "{}",
-            serde_json::to_string_pretty(&error).unwrap_or_else(|_| error.to_string())
-        );
-        std::process::exit(1);
-    }
     legacy::entry();
 }
 
