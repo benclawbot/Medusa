@@ -42,6 +42,7 @@ pub use medusa_agent::{
 use support::{
     SelectedSkill, UpdateState, configure_model, credential_environment, discover_skills,
     effort_for_turns, forward_update, is_supported_provider, load_selected_skill, message_blocks,
+    protocol_for_provider, SUPPORTED_PROVIDERS,
     model_configuration_details, objective_for, should_auto_compact, turns_for_effort,
 };
 
@@ -664,10 +665,10 @@ fn execute_slash_command_with_submission(
             ModelCommand::SetProvider(provider) => {
                 if !is_supported_provider(&provider) {
                     return Err(RuntimeError::InvalidCommand(
-                        "supported providers are minimax, anthropic, and anthropic-compatible"
-                            .to_owned(),
+                        format!("supported providers are {}", SUPPORTED_PROVIDERS.join(", ")),
                     ));
                 }
+                state.config.model.protocol = protocol_for_provider(&provider).to_owned();
                 state.config.model.provider = provider;
                 let _ = events.send(state.settings_event());
                 let _ = events.send(RuntimeEvent::Notice {

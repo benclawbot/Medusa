@@ -4,44 +4,15 @@ on:
   workflow_run:
     workflows: ["Publish Draft Release"]
     types: [completed]
-  pull_request:
 
 permissions:
   contents: read
 
 concurrency:
-  group: refresh-cli-assets-${{ github.event.workflow_run.head_sha || github.sha }}
+  group: refresh-cli-assets-${{ github.event.workflow_run.head_sha }}
   cancel-in-progress: false
 
 jobs:
-  apply-model-selection-parity:
-    if: github.event_name == 'pull_request' && github.head_ref == 'agent/model-selection-parity' && github.actor != 'github-actions[bot]'
-    runs-on: ubuntu-latest
-    permissions:
-      contents: write
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          ref: agent/model-selection-parity
-          token: ${{ secrets.GITHUB_TOKEN }}
-      - uses: dtolnay/rust-toolchain@1.88.0
-        with:
-          components: rustfmt
-      - name: Apply source patch and restore workflow baseline
-        shell: bash
-        run: |
-          set -euo pipefail
-          python3 .github/scripts/apply-model-selection-parity.py
-          cargo fmt --all
-          git diff --check
-          git fetch origin main
-          git checkout origin/main -- .github/workflows/ci.yml .github/workflows/refresh-cli-release-assets.yml
-          git rm .github/scripts/apply-model-selection-parity.py .github/workflows/apply-model-selection-parity.yml
-      - uses: stefanzweifel/git-auto-commit-action@v5
-        with:
-          commit_message: Align interactive model provider selection
-          branch: agent/model-selection-parity
-
   build:
     if: ${{ github.event.workflow_run.conclusion == 'success' }}
     strategy:
