@@ -1,5 +1,7 @@
 include!("lib.rs");
 
+pub mod turn_pipeline;
+
 pub mod supervision {
     use std::{fs, path::PathBuf};
 
