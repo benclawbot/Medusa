@@ -1,0 +1,34 @@
+name: Issue 350 Finalize
+
+on:
+  push:
+    branches:
+      - agent/issue-350-completed-session-learning
+
+permissions:
+  contents: write
+
+jobs:
+  finalize:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+      - uses: dtolnay/rust-toolchain@1.88.0
+        with:
+          components: rustfmt
+      - name: Apply final scope patch
+        run: git apply .github/issue-350-finalize.patch
+      - name: Format workspace
+        run: cargo fmt --all
+      - name: Remove one-shot files
+        run: rm .github/issue-350-finalize.patch .github/issue-350-finalize-trigger .github/workflows/issue-350-finalize.yml
+      - name: Commit final scope corrections
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git commit -m "Complete learning lifecycle policy"
+          git push origin HEAD:agent/issue-350-completed-session-learning
