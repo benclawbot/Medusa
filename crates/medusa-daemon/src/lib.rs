@@ -1,6 +1,7 @@
 //! Persistent local daemon, cross-platform IPC, process ownership, crash recovery, and lifecycle supervision.
 
 mod cancellation;
+mod control_plane;
 mod lifecycle;
 mod paths;
 mod process;
@@ -9,6 +10,9 @@ mod scheduler;
 mod server;
 mod transport;
 
+pub use control_plane::{
+    ControlPlaneError, RuntimeBinding, SupervisionControlPlane, SupervisionEvent,
+};
 pub use lifecycle::{DaemonLaunch, DaemonLifecycle, DaemonLifecycleState, DaemonSupervisor};
 pub use paths::DaemonPaths;
 pub use protocol::{
