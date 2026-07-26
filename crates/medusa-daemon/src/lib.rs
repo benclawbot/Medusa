@@ -5,6 +5,7 @@ mod lifecycle;
 mod paths;
 mod process;
 mod protocol;
+mod resilience;
 mod scheduler;
 mod server;
 mod transport;
@@ -15,5 +16,6 @@ pub use protocol::{
     DAEMON_PROTOCOL_VERSION, JobRecord, JobState, Request, RequestEnvelope, Response,
     ResponseEnvelope,
 };
+pub use resilience::{ResilienceControlPlane, SupervisionEvent};
 pub use scheduler::DaemonLimits;
 pub use server::{DaemonClient, ServerHandle, serve, serve_with_limits, spawn, spawn_with_limits};
