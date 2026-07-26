@@ -104,6 +104,8 @@ jobs:
       - uses: taiki-e/install-action@v2
         with:
           tool: cargo-deny,cargo-audit
+      - name: Refresh dependency lock for the merged PR graph
+        run: cargo generate-lockfile
       - name: Validate deterministic release evidence
         run: |
           python3 scripts/release-evidence.py self-test
