@@ -13,4 +13,4 @@ Turn provenance records included context identifiers, memory chunk and retrieval
 
 MCP result-cache identity includes server, tool, canonical input, schema fingerprint, protocol version, and optional server version. Sensitive or explicitly non-cacheable responses are not stored, and expired entries are rejected.
 
-The runtime composes turns and coordinates lifecycle state; indexing, cache policy, deterministic assembly, consolidation, and writeback planning remain owned by their dedicated crates.
+The runtime composes turns and coordinates lifecycle state; indexing, cache policy, deterministic assembly, consolidation, and writeback planning remain owned by their dedicated crates. The shipped Cargo-selected roots compile these integrations directly and preserve the dedicated crates as the only policy authorities.
