@@ -61,6 +61,10 @@ pub enum StepOutcome {
 
 const MAX_PARALLEL_TOOL_CALLS: usize = 8;
 
+pub(crate) fn parallel_tool_limit(configured_workers: u16) -> usize {
+    usize::from(configured_workers).clamp(1, MAX_PARALLEL_TOOL_CALLS)
+}
+
 fn parallel_safe_tool(name: &str) -> bool {
     matches!(
         name,
@@ -610,7 +614,7 @@ impl<P: ModelProvider> AgentEngine<P> {
         while !calls.is_empty() {
             let parallel_count = calls
                 .iter()
-                .take(MAX_PARALLEL_TOOL_CALLS)
+                .take(parallel_tool_limit(self.config.agent.parallel_workers))
                 .take_while(|(_, name, _)| {
                     parallel_safe_tool(name) && tool_allowed(self.config.agent.mode, name)
                 })

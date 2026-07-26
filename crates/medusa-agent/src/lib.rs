@@ -702,6 +702,13 @@ mod tests {
     }
 
     #[test]
+    fn configured_parallel_worker_limit_is_bounded() {
+        assert_eq!(crate::engine::parallel_tool_limit(1), 1);
+        assert_eq!(crate::engine::parallel_tool_limit(4), 4);
+        assert_eq!(crate::engine::parallel_tool_limit(64), 8);
+    }
+
+    #[test]
     fn independent_tool_work_runs_concurrently_and_keeps_response_order() {
         let active = Arc::new(AtomicUsize::new(0));
         let maximum = Arc::new(AtomicUsize::new(0));
