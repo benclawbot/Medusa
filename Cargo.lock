@@ -1027,6 +1027,7 @@ dependencies = [
  "medusa-extensions",
  "medusa-intelligence",
  "medusa-multi-agent-scheduler",
+ "medusa-process-containment",
  "medusa-protocol",
  "medusa-provider",
  "medusa-world-model",
@@ -1396,7 +1397,9 @@ dependencies = [
 name = "medusa-process-containment"
 version = "1.0.0"
 dependencies = [
+ "tempfile",
  "windows",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]

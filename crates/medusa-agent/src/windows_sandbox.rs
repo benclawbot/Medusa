@@ -1,0 +1,49 @@
+//! Safe adapter from the agent policy boundary to Windows process containment.
+
+use std::{path::Path, process::Output};
+
+use medusa_core::{ErrorCategory, ErrorCode, MedusaError, MedusaResult};
+use medusa_process_containment::{WindowsSandboxRestrictions, run_appcontainer};
+
+pub(crate) fn run(repo: &Path, program: &str, args: &[String]) -> MedusaResult<Output> {
+    run_appcontainer(repo, program, args).map_err(unavailable)
+}
+
+fn unavailable(error: std::io::Error) -> MedusaError {
+    let restrictions = WindowsSandboxRestrictions::default();
+    let mut result = MedusaError::new(
+        ErrorCode::SandboxUnavailable,
+        ErrorCategory::Environment,
+        format!("Windows AppContainer sandbox unavailable: {error}"),
+    );
+    result.context.insert(
+        "sandbox_backend".into(),
+        serde_json::Value::String(restrictions.backend.into()),
+    );
+    result.context.insert(
+        "effective_restrictions".into(),
+        serde_json::json!(restrictions.restrictions),
+    );
+    result
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn unavailable_errors_report_the_effective_boundary() {
+        let error = unavailable(std::io::Error::other("fixture"));
+        assert_eq!(error.code, ErrorCode::SandboxUnavailable);
+        assert_eq!(
+            error.context.get("sandbox_backend"),
+            Some(&serde_json::Value::String("windows_appcontainer".into()))
+        );
+        assert!(
+            error
+                .context
+                .get("effective_restrictions")
+                .is_some_and(|value| value.to_string().contains("network_denied"))
+        );
+    }
+}
