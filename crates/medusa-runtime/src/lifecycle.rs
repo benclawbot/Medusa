@@ -108,13 +108,17 @@ impl<S: LifecycleStorage> ExecutionLifecycleService<S> {
             .validate()
             .map_err(LifecycleError::InvalidState)?;
         durable.log.verify().map_err(LifecycleError::checkpoint)?;
-        let latest = durable
-            .state
-            .checkpoints
-            .last()
-            .cloned()
-            .ok_or(LifecycleError::NoCheckpoint)?;
-        durable.state = ExecutionState::resume(latest).map_err(LifecycleError::InvalidState)?;
+        if let Some(latest) = durable.state.checkpoints.last() {
+            durable.state.current_stage =
+                latest
+                    .completed_stage
+                    .next()
+                    .ok_or(LifecycleError::InvalidState(
+                        "cannot resume after completion",
+                    ))?;
+        }
+        durable.state.attempt = durable.state.attempt.saturating_add(1);
+        refresh_execution_state(&mut durable.state)?;
         durable.resumed = true;
         let service = Self {
             storage,
@@ -255,8 +259,8 @@ impl<S: LifecycleStorage> ExecutionLifecycleService<S> {
         };
         let snapshot = FullSnapshot::new(historical);
         let confirmation_token = digest(format!(
-            "restore:{}:{}",
-            self.current.state.execution_id, checkpoint.fingerprint
+            "restore:{}:{}:{}",
+            self.current.state.execution_id, checkpoint.fingerprint, snapshot.fingerprint
         ));
         Ok(TimeTravelPreview {
             execution_id: self.current.state.execution_id.clone(),
@@ -271,7 +275,8 @@ impl<S: LifecycleStorage> ExecutionLifecycleService<S> {
         preview: &TimeTravelPreview,
         confirmation_token: &str,
     ) -> Result<LifecycleProtocolEvent, LifecycleError> {
-        if preview.confirmation_token != confirmation_token {
+        let expected = self.preview_time_travel(&preview.checkpoint_fingerprint)?;
+        if preview != &expected || expected.confirmation_token != confirmation_token {
             return Err(LifecycleError::RestoreNotConfirmed);
         }
         let checkpoint = self
@@ -279,17 +284,17 @@ impl<S: LifecycleStorage> ExecutionLifecycleService<S> {
             .state
             .checkpoints
             .iter()
-            .find(|checkpoint| checkpoint.fingerprint == preview.checkpoint_fingerprint)
+            .find(|checkpoint| checkpoint.fingerprint == expected.checkpoint_fingerprint)
             .cloned()
             .ok_or_else(|| {
-                LifecycleError::UnknownCheckpoint(preview.checkpoint_fingerprint.clone())
+                LifecycleError::UnknownCheckpoint(expected.checkpoint_fingerprint.clone())
             })?;
         let mut candidate = self.current.clone();
         candidate.state =
             ExecutionState::resume(checkpoint).map_err(LifecycleError::InvalidState)?;
         candidate.resumed = true;
         self.save_candidate(candidate)?;
-        Ok(self.protocol_event(Some(preview.snapshot.fingerprint.clone())))
+        Ok(self.protocol_event(Some(expected.snapshot.fingerprint.clone())))
     }
 
     pub fn state(&self) -> &ExecutionState {
@@ -309,6 +314,18 @@ impl<S: LifecycleStorage> ExecutionLifecycleService<S> {
             .map_err(|error| LifecycleError::Serialization(error.to_string()))?;
         self.storage.save(&self.current.state.execution_id, &bytes)
     }
+}
+
+fn refresh_execution_state(state: &mut ExecutionState) -> Result<(), LifecycleError> {
+    state.fingerprint = hash_json(&(
+        state.execution_id.as_str(),
+        state.current_stage,
+        state.snapshot_fingerprint.as_str(),
+        &state.checkpoints,
+        &state.failures,
+        state.attempt,
+    ))?;
+    Ok(())
 }
 
 fn replay_trace(trace: &StageTrace) -> Result<ExecutionTrace, LifecycleError> {
@@ -457,8 +474,58 @@ mod tests {
 
         let resumed = ExecutionLifecycleService::resume(storage, "run-1").unwrap();
         assert_eq!(resumed.state().current_stage, ExecutionStage::Plan);
-        assert_eq!(resumed.state().checkpoints.len(), 1);
+        assert_eq!(resumed.state().checkpoints.len(), 3);
         assert!(resumed.protocol_event(None).resumed);
+    }
+
+    #[test]
+    fn resume_before_first_checkpoint_restarts_snapshot() {
+        let storage = MemoryStorage::default();
+        let service =
+            ExecutionLifecycleService::start(storage.clone(), "run-zero", artifact("snapshot"))
+                .unwrap();
+        drop(service);
+        let resumed = ExecutionLifecycleService::resume(storage, "run-zero").unwrap();
+        assert_eq!(resumed.state().current_stage, ExecutionStage::Snapshot);
+        assert!(resumed.state().checkpoints.is_empty());
+        assert!(resumed.protocol_event(None).resumed);
+    }
+
+    #[test]
+    fn resume_preserves_full_checkpoint_history() {
+        let storage = MemoryStorage::default();
+        let mut service =
+            ExecutionLifecycleService::start(storage.clone(), "run-history", artifact("snapshot"))
+                .unwrap();
+        service
+            .complete_stage(ExecutionStage::Snapshot, vec![artifact("a")])
+            .unwrap();
+        service
+            .complete_stage(ExecutionStage::Context, vec![artifact("b")])
+            .unwrap();
+        let original = service.stage_trace().unwrap();
+        drop(service);
+        let resumed = ExecutionLifecycleService::resume(storage, "run-history").unwrap();
+        assert_eq!(resumed.state().checkpoints.len(), 2);
+        assert_eq!(resumed.stage_trace().unwrap(), original);
+    }
+
+    #[test]
+    fn tampered_time_travel_preview_is_rejected() {
+        let storage = MemoryStorage::default();
+        let mut service =
+            ExecutionLifecycleService::start(storage, "run-tamper", artifact("snapshot")).unwrap();
+        service
+            .complete_stage(ExecutionStage::Snapshot, vec![artifact("a")])
+            .unwrap();
+        let fingerprint = service.state().checkpoints[0].fingerprint.clone();
+        let mut preview = service.preview_time_travel(&fingerprint).unwrap();
+        preview.snapshot.fingerprint = artifact("forged");
+        let token = preview.confirmation_token.clone();
+        assert_eq!(
+            service.confirm_restore(&preview, &token).unwrap_err(),
+            LifecycleError::RestoreNotConfirmed
+        );
     }
 
     #[test]
