@@ -1,9 +1,8 @@
 name: Finalize issue 352 workspace fixtures
 
 on:
-  push:
-    branches: [main]
-    paths: [.github/workflows/fix-issue-352-workspace.yml]
+  issues:
+    types: [labeled]
 
 concurrency:
   group: issue-352-workspace-main
@@ -14,6 +13,7 @@ permissions:
 
 jobs:
   patch-verify-and-commit:
+    if: github.event.issue.number == 352 && github.event.label.name == 'run-issue-352-finalizer'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -33,28 +33,29 @@ jobs:
           replacements = [
               (
                   '''            max_image_bytes: Some(1024),
-            max_images_per_request: Some(2),
-        };''',
+              max_images_per_request: Some(2),
+          };''',
                   '''            max_image_bytes: Some(1024),
-            max_images_per_request: Some(2),
-            tool_calling: true,
-            streaming: false,
-        };''',
+              max_images_per_request: Some(2),
+              tool_calling: true,
+              streaming: false,
+          };''',
               ),
               (
                   '''            max_image_bytes: None,
-            max_images_per_request: None,
-        };''',
+              max_images_per_request: None,
+          };''',
                   '''            max_image_bytes: None,
-            max_images_per_request: None,
-            tool_calling: true,
-            streaming: false,
-        };''',
+              max_images_per_request: None,
+              tool_calling: true,
+              streaming: false,
+          };''',
               ),
           ]
           for old, new in replacements:
-              if old in text:
-                  text = text.replace(old, new, 1)
+              if old not in text:
+                  raise SystemExit(f'expected fixture not found: {old!r}')
+              text = text.replace(old, new, 1)
           path.write_text(text)
           PY
           cargo fmt --all
@@ -62,14 +63,11 @@ jobs:
         run: cargo clippy --workspace --all-targets --all-features -- -D warnings
       - name: Workspace tests
         run: cargo test --workspace --all-targets --all-features
-      - name: Commit verified fixture updates
+      - name: Commit verified fixture updates and remove finalizer
         run: |
           git config user.name github-actions[bot]
           git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git rm .github/workflows/fix-issue-352-workspace.yml
           git add crates/medusa-agent/src/engine_support.rs
-          if ! git diff --cached --quiet; then
-            git commit -m "test(agent): declare complete provider capabilities (#352)"
-            git push origin HEAD:main
-          fi
-
-# Triggered by a trusted merge event after PR #363.
+          git commit -m "test(agent): declare complete provider capabilities (#352)"
+          git push origin HEAD:main
