@@ -1,0 +1,34 @@
+name: Refresh issue 304 generated files
+
+on:
+  push:
+    branches:
+      - agent/issue-304-turn-pipeline
+
+permissions:
+  contents: write
+
+jobs:
+  refresh:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: agent/issue-304-turn-pipeline
+          fetch-depth: 0
+      - uses: dtolnay/rust-toolchain@1.88.0
+        with:
+          components: rustfmt
+      - name: Format and refresh lockfile
+        run: |
+          cargo fmt --all
+          cargo generate-lockfile
+          git rm .github/workflows/issue-304-refresh.yml
+      - name: Commit generated files
+        run: |
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add Cargo.lock crates/medusa-mcp-cache/src/result_cache.rs crates/medusa-runtime/src/turn_pipeline.rs .github/workflows/issue-304-refresh.yml
+          git commit -m "chore: refresh formatting and lockfile [skip ci]"
+          git push origin HEAD:agent/issue-304-turn-pipeline
