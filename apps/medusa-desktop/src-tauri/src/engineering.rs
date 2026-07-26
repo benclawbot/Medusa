@@ -177,10 +177,18 @@ pub fn runtime_engineering_dashboard(
         successful_tasks: successful,
         success_rate: rate(successful, total),
         verification_pass_rate: rate(verification_passed, verification_total),
-        average_retries: if total == 0 { 0.0 } else { retries as f64 / total as f64 },
+        average_retries: if total == 0 {
+            0.0
+        } else {
+            retries as f64 / total as f64
+        },
         human_intervention_rate: rate(interventions, total),
         rollback_rate: rate(rolled_back, improvements.len() as u32),
-        average_duration_minutes: if total == 0 { 0.0 } else { durations / total as f64 },
+        average_duration_minutes: if total == 0 {
+            0.0
+        } else {
+            durations / total as f64
+        },
         trend,
         friction,
         improvements,
@@ -211,7 +219,10 @@ pub fn runtime_generate_improvement(repo: String) -> Result<ImprovementRecord, S
             "Add a focused prevention and recovery path for {} and validate it against affected sessions.",
             top.category
         ),
-        evidence: vec![format!("Observed {} occurrence(s) in the selected window", top.count)],
+        evidence: vec![format!(
+            "Observed {} occurrence(s) in the selected window",
+            top.count
+        )],
         source_sessions: top.sessions,
         risk: "low".into(),
         status: "pending".into(),
@@ -279,7 +290,11 @@ fn add_friction(
 }
 
 fn rate(part: u32, total: u32) -> f64 {
-    if total == 0 { 0.0 } else { part as f64 / total as f64 * 100.0 }
+    if total == 0 {
+        0.0
+    } else {
+        part as f64 / total as f64 * 100.0
+    }
 }
 
 fn parse_time(value: Option<&str>) -> Option<OffsetDateTime> {
@@ -323,7 +338,9 @@ fn write_improvements(repo: &Path, records: &[ImprovementRecord]) -> Result<(), 
 fn session_values(repo: &Path) -> Result<Vec<Value>, String> {
     let mut values = BTreeMap::new();
     for root in [repo.join(".medusa/sessions"), fallback_session_root(repo)] {
-        let Ok(entries) = fs::read_dir(root) else { continue };
+        let Ok(entries) = fs::read_dir(root) else {
+            continue;
+        };
         for entry in entries.flatten() {
             let path = entry.path();
             if path.extension().and_then(|value| value.to_str()) != Some("json") {
