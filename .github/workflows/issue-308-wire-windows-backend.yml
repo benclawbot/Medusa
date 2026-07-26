@@ -1,0 +1,76 @@
+name: Issue 308 Wire Windows Backend
+
+on:
+  push:
+    branches:
+      - agent/issue-308-native-windows-appcontainer
+
+permissions:
+  contents: write
+
+jobs:
+  migrate:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: windows-2022
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: agent/issue-308-native-windows-appcontainer
+      - uses: dtolnay/rust-toolchain@1.88.0
+      - name: Wire Windows backend
+        shell: python
+        run: |
+          from pathlib import Path
+          p = Path('crates/medusa-agent/src/policy.rs')
+          text = p.read_text()
+          text = text.replace(
+              'use medusa_core::{ErrorCategory, ErrorCode, MedusaError, MedusaResult};\n',
+              'use medusa_core::{ErrorCategory, ErrorCode, MedusaError, MedusaResult};\n\n#[cfg(windows)]\nmod windows_sandbox;\n'
+          )
+          old = '''    #[cfg(not(any(target_os = "linux", target_os = "macos")))]
+    {
+        let _ = (repo, program, args);
+        Err(sandbox_unavailable(
+            "no containment backend is available for this platform",
+        ))
+    }
+'''
+          new = '''    #[cfg(windows)]
+    {
+        windows_sandbox::run(repo, program, args)
+    }
+    #[cfg(not(any(target_os = "linux", target_os = "macos", windows)))]
+    {
+        let _ = (repo, program, args);
+        Err(sandbox_unavailable(
+            "no containment backend is available for this platform",
+        ))
+    }
+'''
+          if old not in text:
+              raise SystemExit('sandbox dispatch anchor missing')
+          text = text.replace(old, new, 1)
+          text = text.replace(
+              '#[cfg(not(any(target_os = "linux", target_os = "macos")))]\nfn sandbox_unavailable',
+              '#[cfg(not(any(target_os = "linux", target_os = "macos", windows)))]\nfn sandbox_unavailable'
+          )
+          text = text.replace(
+              '#[cfg(all(test, not(any(target_os = "linux", target_os = "macos"))))]',
+              '#[cfg(all(test, not(any(target_os = "linux", target_os = "macos", windows))))]'
+          )
+          p.write_text(text)
+      - name: Format and validate Windows backend
+        shell: pwsh
+        run: |
+          cargo fmt --all
+          cargo check -p medusa-agent --all-targets
+          cargo test -p medusa-agent windows_sandbox::tests
+      - name: Commit integration
+        shell: bash
+        run: |
+          rm .github/workflows/issue-308-wire-windows-backend.yml
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add crates/medusa-agent/src/policy.rs crates/medusa-agent/src/windows_sandbox.rs crates/medusa-agent/Cargo.toml Cargo.lock .github/workflows/issue-308-wire-windows-backend.yml
+          git commit -m "Implement native Windows AppContainer sandbox"
+          git push origin HEAD:agent/issue-308-native-windows-appcontainer
