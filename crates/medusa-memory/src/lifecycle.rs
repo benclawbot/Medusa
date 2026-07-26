@@ -1,11 +1,24 @@
+use std::{fs, path::PathBuf};
+
 use medusa_core::MedusaResult;
+use serde::{Deserialize, Serialize};
 use time::{OffsetDateTime, format_description::well_known::Rfc3339};
 
 use crate::{
     engine::MemoryEngine,
     schema::{MemoryDocument, MemoryProposal, Scope, Status, Validation},
-    support::{atomic_write, deduplicate, first_claim, internal, invalid},
+    support::{
+        LifecycleLock, atomic_write, deduplicate, durable_remove, first_claim, internal, invalid,
+    },
 };
+
+#[derive(Debug, Deserialize, Serialize)]
+struct SupersedeJournal {
+    old_path: PathBuf,
+    old_markdown: String,
+    new_path: PathBuf,
+    new_markdown: String,
+}
 
 impl MemoryEngine {
     /// Records a successful reuse as durable Markdown evidence.
@@ -13,6 +26,8 @@ impl MemoryEngine {
         if evidence.trim().is_empty() {
             return Err(invalid("reuse evidence cannot be empty"));
         }
+        let _lock = LifecycleLock::acquire(&self.root)?;
+        self.recover_lifecycle_journal()?;
         let (path, mut document) = self.read_by_id(id)?;
         document.successful_reuse_count = document.successful_reuse_count.saturating_add(1);
         document.updated_at = OffsetDateTime::now_utc()
@@ -29,6 +44,8 @@ impl MemoryEngine {
         if old_id == new_id {
             return Err(invalid("memory cannot supersede itself"));
         }
+        let _lock = LifecycleLock::acquire(&self.root)?;
+        self.recover_lifecycle_journal()?;
         let (old_path, mut old_document) = self.read_by_id(old_id)?;
         let (new_path, mut new_document) = self.read_by_id(new_id)?;
         if old_document.status != Status::Active || new_document.status != Status::Active {
@@ -44,9 +61,46 @@ impl MemoryEngine {
             .map_err(|error| internal(error.to_string()))?;
         old_document.updated_at.clone_from(&now);
         new_document.updated_at = now;
-        atomic_write(&old_path, old_document.to_markdown().as_bytes())?;
-        atomic_write(&new_path, new_document.to_markdown().as_bytes())?;
+
+        let journal = SupersedeJournal {
+            old_path,
+            old_markdown: old_document.to_markdown(),
+            new_path,
+            new_markdown: new_document.to_markdown(),
+        };
+        let encoded = serde_json::to_vec(&journal).map_err(|error| internal(error.to_string()))?;
+        atomic_write(&self.lifecycle_journal_path(), &encoded)?;
+        self.apply_supersede_journal(&journal)?;
+        durable_remove(&self.lifecycle_journal_path())?;
         self.rebuild_index()
+    }
+
+    fn lifecycle_journal_path(&self) -> PathBuf {
+        self.root.join("lifecycle-journal.json")
+    }
+
+    fn recover_lifecycle_journal(&self) -> MedusaResult<()> {
+        let path = self.lifecycle_journal_path();
+        let raw = match fs::read(&path) {
+            Ok(raw) => raw,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+            Err(error) => return Err(error.into()),
+        };
+        let journal = serde_json::from_slice::<SupersedeJournal>(&raw)
+            .map_err(|error| internal(format!("invalid lifecycle recovery journal: {error}")))?;
+        self.apply_supersede_journal(&journal)?;
+        durable_remove(&path)
+    }
+
+    fn apply_supersede_journal(&self, journal: &SupersedeJournal) -> MedusaResult<()> {
+        ensure_memory_path(&self.root, &journal.old_path)?;
+        ensure_memory_path(&self.root, &journal.new_path)?;
+        MemoryDocument::from_markdown(&journal.old_markdown)
+            .map_err(|error| internal(format!("invalid old journal document: {error}")))?;
+        MemoryDocument::from_markdown(&journal.new_markdown)
+            .map_err(|error| internal(format!("invalid new journal document: {error}")))?;
+        atomic_write(&journal.old_path, journal.old_markdown.as_bytes())?;
+        atomic_write(&journal.new_path, journal.new_markdown.as_bytes())
     }
 
     /// Compacts selected active documents into a summary without deleting source memory.
@@ -88,4 +142,11 @@ impl MemoryEngine {
         };
         self.commit_proposal(&proposal)
     }
+}
+
+fn ensure_memory_path(root: &std::path::Path, path: &std::path::Path) -> MedusaResult<()> {
+    if !path.starts_with(root) || path == root {
+        return Err(invalid("lifecycle journal path escapes the memory root"));
+    }
+    Ok(())
 }
