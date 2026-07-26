@@ -1,0 +1,41 @@
+name: Issue 304 test import fix
+
+on:
+  push:
+    branches:
+      - agent/issue-304-turn-memory-pipeline
+
+permissions:
+  contents: write
+
+jobs:
+  fix:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: agent/issue-304-turn-memory-pipeline
+      - uses: dtolnay/rust-toolchain@1.88.0
+        with:
+          components: rustfmt
+      - name: Add test-only collection import
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          path = Path('crates/medusa-runtime/src/turn_pipeline.rs')
+          text = path.read_text()
+          marker = 'mod tests {\n    use super::*;\n'
+          replacement = 'mod tests {\n    use std::collections::BTreeSet;\n\n    use super::*;\n'
+          if marker not in text:
+              raise SystemExit('test module marker not found')
+          path.write_text(text.replace(marker, replacement, 1))
+          PY
+      - run: cargo fmt --all
+      - name: Commit fix
+        run: |
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add crates/medusa-runtime/src/turn_pipeline.rs
+          git commit -m "Import BTreeSet for turn pipeline tests"
+          git push origin HEAD:agent/issue-304-turn-memory-pipeline
