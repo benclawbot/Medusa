@@ -1,9 +1,9 @@
 //! Canonical context, memory, MCP, assembly, execution, and verified writeback pipeline.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 
 use medusa_context::ContextItem;
-use medusa_markdown_memory::{MemoryIndex, RetrievalQuery, RetrievalResult};
+use medusa_markdown_memory::{MemoryIndex, RetrievalQuery};
 use medusa_memory_consolidation::{ConsolidationPolicy, MemoryObservation, consolidate};
 use medusa_memory_writeback::{
     MemoryDocument as WritebackDocument, WritebackPlan, WritebackPolicy, plan_writeback,
