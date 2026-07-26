@@ -455,7 +455,10 @@ mod tests {
 
     #[test]
     fn directory_and_symlink_before_states_are_actionable() {
-        for before in [FileState::directory(Some(0o755)), FileState::symlink("target")] {
+        for before in [
+            FileState::directory(Some(0o755)),
+            FileState::symlink("target"),
+        ] {
             let journal = RecoveryJournal::prepare(
                 "metadata",
                 digest(b"base"),
@@ -506,14 +509,16 @@ mod tests {
         ] {
             let mut invalid = entry(path);
             invalid.after = FileState::Absent;
-            assert!(RecoveryJournal::prepare(
-                "paths",
-                digest(b"base"),
-                digest(b"target"),
-                digest(b"barrier"),
-                vec![invalid],
-            )
-            .is_err());
+            assert!(
+                RecoveryJournal::prepare(
+                    "paths",
+                    digest(b"base"),
+                    digest(b"target"),
+                    digest(b"barrier"),
+                    vec![invalid],
+                )
+                .is_err()
+            );
         }
     }
 
