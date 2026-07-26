@@ -147,6 +147,12 @@ mod platform {
         capability: String,
     }
 
+    #[derive(Clone, Debug)]
+    struct UserIdentity {
+        account: String,
+        sid: String,
+    }
+
     pub struct LocalListener {
         inner: TcpListener,
         endpoint: PathBuf,
@@ -163,8 +169,8 @@ mod platform {
             })?;
             fs::create_dir_all(parent)?;
             ensure_real_directory(parent)?;
-            let owner_sid = current_user_sid()?;
-            secure_owner_only(parent, &owner_sid, true)?;
+            let identity = current_user_identity()?;
+            secure_owner_only(parent, &identity, true)?;
 
             match fs::symlink_metadata(endpoint) {
                 Ok(metadata) => {
@@ -211,9 +217,9 @@ mod platform {
                     .open(&temporary)?;
                 file.write_all(&encoded)?;
                 file.sync_all()?;
-                secure_owner_only(&temporary, &owner_sid, false)?;
+                secure_owner_only(&temporary, &identity, false)?;
                 fs::rename(&temporary, endpoint)?;
-                secure_owner_only(endpoint, &owner_sid, false)
+                secure_owner_only(endpoint, &identity, false)
             })();
             if let Err(error) = write_result {
                 let _ = fs::remove_file(&temporary);
@@ -321,12 +327,12 @@ mod platform {
                 "daemon endpoint descriptor must be a regular file",
             ));
         }
-        let owner_sid = current_user_sid()?;
-        verify_owner_only(parent, &owner_sid)?;
-        verify_owner_only(endpoint, &owner_sid)
+        let identity = current_user_identity()?;
+        verify_owner_only(parent, &identity)?;
+        verify_owner_only(endpoint, &identity)
     }
 
-    fn current_user_sid() -> io::Result<String> {
+    fn current_user_identity() -> io::Result<UserIdentity> {
         let output = Command::new("whoami.exe")
             .args(["/user", "/fo", "csv", "/nh"])
             .output()?;
@@ -337,26 +343,36 @@ mod platform {
             )));
         }
         let text = String::from_utf8_lossy(&output.stdout);
-        let sid = text
+        let mut fields = text
             .trim()
-            .trim_matches('"')
-            .rsplit_once("\",\"")
-            .map(|(_, sid)| sid.trim_matches('"'))
-            .filter(|sid| sid.starts_with("S-1-"))
+            .split("\",\"")
+            .map(|field| field.trim_matches('"'));
+        let account = fields
+            .next()
+            .filter(|value| !value.trim().is_empty())
+            .ok_or_else(|| {
+                io::Error::new(io::ErrorKind::InvalidData, "invalid current-user account")
+            })?;
+        let sid = fields
+            .next()
+            .filter(|value| value.starts_with("S-1-"))
             .ok_or_else(|| {
                 io::Error::new(io::ErrorKind::InvalidData, "invalid current-user SID")
             })?;
-        Ok(sid.to_owned())
+        Ok(UserIdentity {
+            account: account.to_owned(),
+            sid: sid.to_owned(),
+        })
     }
 
-    fn secure_owner_only(path: &Path, sid: &str, directory: bool) -> io::Result<()> {
+    fn secure_owner_only(path: &Path, identity: &UserIdentity, directory: bool) -> io::Result<()> {
         let rights = if directory { "(OI)(CI)F" } else { "F" };
         run_icacls(path, &["/inheritance:r"])?;
-        run_icacls(path, &["/grant:r", &format!("*{sid}:{rights}")])?;
-        verify_owner_only(path, sid)
+        run_icacls(path, &["/grant:r", &format!("*{}:{rights}", identity.sid)])?;
+        verify_owner_only(path, identity)
     }
 
-    fn verify_owner_only(path: &Path, sid: &str) -> io::Result<()> {
+    fn verify_owner_only(path: &Path, identity: &UserIdentity) -> io::Result<()> {
         let output = Command::new("icacls.exe").arg(path).output()?;
         if !output.status.success() {
             return Err(io::Error::other(format!(
@@ -365,7 +381,7 @@ mod platform {
             )));
         }
         let text = String::from_utf8_lossy(&output.stdout);
-        if !text.contains(sid) {
+        if !text.contains(&identity.sid) && !text.contains(&identity.account) {
             return Err(io::Error::new(
                 io::ErrorKind::PermissionDenied,
                 "daemon endpoint ACL does not grant the current user",
