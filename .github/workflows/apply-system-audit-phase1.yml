@@ -1,0 +1,55 @@
+name: Apply system audit phase 1
+
+on:
+  push:
+    branches: [agent/full-system-audit-readme]
+    paths:
+      - .github/workflows/apply-system-audit-phase1.yml
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: agent/full-system-audit-readme
+      - name: Wire configured parallel worker limit
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+
+          engine = Path('crates/medusa-agent/src/engine.rs')
+          text = engine.read_text()
+          marker = 'const MAX_PARALLEL_TOOL_CALLS: usize = 8;\n'
+          addition = '''const MAX_PARALLEL_TOOL_CALLS: usize = 8;\n\nfn parallel_tool_limit(configured_workers: u16) -> usize {\n    usize::from(configured_workers).clamp(1, MAX_PARALLEL_TOOL_CALLS)\n}\n'''
+          if 'fn parallel_tool_limit(' not in text:
+              text = text.replace(marker, addition, 1)
+          text = text.replace(
+              '.take(MAX_PARALLEL_TOOL_CALLS)\n',
+              '.take(parallel_tool_limit(self.config.agent.parallel_workers))\n',
+              1,
+          )
+          engine.write_text(text)
+
+          lib = Path('crates/medusa-agent/src/lib.rs')
+          text = lib.read_text()
+          test_marker = '''    #[test]\n    fn independent_tool_work_runs_concurrently_and_keeps_response_order() {'''
+          test = '''    #[test]\n    fn configured_parallel_worker_limit_is_bounded() {\n        assert_eq!(crate::engine::parallel_tool_limit(1), 1);\n        assert_eq!(crate::engine::parallel_tool_limit(4), 4);\n        assert_eq!(crate::engine::parallel_tool_limit(64), 8);\n    }\n\n'''
+          if 'configured_parallel_worker_limit_is_bounded' not in text:
+              text = text.replace(test_marker, test + test_marker, 1)
+          lib.write_text(text)
+          PY
+      - name: Remove helper workflow
+        run: rm .github/workflows/apply-system-audit-phase1.yml
+      - name: Commit repair
+        shell: bash
+        run: |
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add -A
+          git commit -m "Wire configured parallel tool concurrency"
+          git push origin HEAD:agent/full-system-audit-readme
