@@ -8,7 +8,7 @@ use std::{
 use medusa_core::{ErrorCategory, ErrorCode, MedusaError, MedusaResult};
 use medusa_intelligence::{IndexRefresh, IndexSnapshot, RetrievalBudget, RetrievalReport};
 
-use crate::session_browser::RepositoryIndexCache;
+use crate::{recall_context, session_browser::RepositoryIndexCache};
 
 const MAX_RETRIEVAL_TOKENS: u64 = 8_000;
 const RETRIEVAL_WRAPPER_RESERVE_TOKENS: u64 = 256;
@@ -133,12 +133,25 @@ pub(crate) fn retrieve_context(
             max_tokens_per_result: 1_200,
         },
     );
-    if report.results.is_empty() && report.exclusions.is_empty() {
+    let recall = recall_context::retrieve(repo, query)?;
+    if report.results.is_empty() && report.exclusions.is_empty() && recall.is_none() {
         return Ok(None);
     }
+
+    let mut fragments = Vec::new();
+    let mut statuses = Vec::new();
+    if !report.results.is_empty() || !report.exclusions.is_empty() {
+        fragments.push(format_retrieval_context(&report));
+        statuses.push(retrieval_summary(&report, available_tokens));
+    }
+    if let Some(recall) = recall {
+        fragments.push(recall.system_fragment);
+        statuses.push(format!("Session recall: {}.", recall.status));
+    }
+
     Ok(Some(RetrievalContext {
-        system_fragment: format_retrieval_context(&report),
-        status: retrieval_summary(&report, available_tokens),
+        system_fragment: fragments.join("\n\n"),
+        status: statuses.join(" "),
     }))
 }
 
