@@ -17,9 +17,9 @@ mod rename;
 mod resolution;
 mod retrieval;
 mod review;
-mod rust_structured_edit;
 #[cfg(test)]
 mod rust_ast;
+mod rust_structured_edit;
 #[cfg(test)]
 mod rust_symbols_v2;
 pub mod snapshot;
