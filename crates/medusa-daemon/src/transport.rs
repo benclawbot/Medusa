@@ -5,7 +5,10 @@ mod platform {
     use std::{
         fs,
         io::{self, Read, Write},
-        os::unix::net::{UnixListener, UnixStream},
+        os::unix::{
+            fs::PermissionsExt,
+            net::{UnixListener, UnixStream},
+        },
         path::{Path, PathBuf},
         time::Duration,
     };
@@ -17,10 +20,41 @@ mod platform {
 
     impl LocalListener {
         pub fn bind(endpoint: &Path) -> io::Result<Self> {
-            if endpoint.exists() {
-                fs::remove_file(endpoint)?;
+            let parent = endpoint.parent().ok_or_else(|| {
+                io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    "daemon endpoint must have a parent directory",
+                )
+            })?;
+            fs::create_dir_all(parent)?;
+            let metadata = fs::symlink_metadata(parent)?;
+            if metadata.file_type().is_symlink() || !metadata.is_dir() {
+                return Err(io::Error::new(
+                    io::ErrorKind::PermissionDenied,
+                    "daemon directory must be a real directory",
+                ));
             }
+            fs::set_permissions(parent, fs::Permissions::from_mode(0o700))?;
+
+            match fs::symlink_metadata(endpoint) {
+                Ok(metadata) => {
+                    if metadata.is_dir() || metadata.file_type().is_symlink() {
+                        return Err(io::Error::new(
+                            io::ErrorKind::PermissionDenied,
+                            "daemon endpoint must be a replaceable socket path",
+                        ));
+                    }
+                    fs::remove_file(endpoint)?;
+                }
+                Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+                Err(error) => return Err(error),
+            }
+
             let inner = UnixListener::bind(endpoint)?;
+            if let Err(error) = fs::set_permissions(endpoint, fs::Permissions::from_mode(0o600)) {
+                let _ = fs::remove_file(endpoint);
+                return Err(error);
+            }
             inner.set_nonblocking(true)?;
             Ok(Self {
                 inner,
@@ -91,10 +125,12 @@ mod platform {
 #[cfg(windows)]
 mod platform {
     use std::{
-        fs,
+        fs::{self, OpenOptions},
         io::{self, Read, Write},
         net::{Ipv4Addr, SocketAddr, TcpListener, TcpStream},
+        os::windows::fs::MetadataExt,
         path::{Path, PathBuf},
+        process::Command,
         time::Duration,
     };
 
@@ -103,11 +139,18 @@ mod platform {
     const CAPABILITY_BYTES: usize = 32;
     const CAPABILITY_HEX_LENGTH: usize = CAPABILITY_BYTES * 2;
     const AUTHENTICATION_TIMEOUT: Duration = Duration::from_secs(5);
+    const FILE_ATTRIBUTE_REPARSE_POINT: u32 = 0x400;
 
     #[derive(Deserialize, Serialize)]
     struct EndpointDescriptor {
         address: String,
         capability: String,
+    }
+
+    #[derive(Clone, Debug)]
+    struct UserIdentity {
+        account: String,
+        sid: String,
     }
 
     pub struct LocalListener {
@@ -118,12 +161,33 @@ mod platform {
 
     impl LocalListener {
         pub fn bind(endpoint: &Path) -> io::Result<Self> {
-            if let Some(parent) = endpoint.parent() {
-                fs::create_dir_all(parent)?;
+            let parent = endpoint.parent().ok_or_else(|| {
+                io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    "daemon endpoint must have a parent directory",
+                )
+            })?;
+            fs::create_dir_all(parent)?;
+            ensure_real_directory(parent)?;
+            let identity = current_user_identity()?;
+            secure_owner_only(parent, &identity, true)?;
+
+            match fs::symlink_metadata(endpoint) {
+                Ok(metadata) => {
+                    if metadata.is_dir()
+                        || metadata.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0
+                    {
+                        return Err(io::Error::new(
+                            io::ErrorKind::PermissionDenied,
+                            "daemon endpoint must be a regular replaceable file",
+                        ));
+                    }
+                    fs::remove_file(endpoint)?;
+                }
+                Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+                Err(error) => return Err(error),
             }
-            if endpoint.exists() {
-                fs::remove_file(endpoint)?;
-            }
+
             let inner = TcpListener::bind((Ipv4Addr::LOCALHOST, 0))?;
             inner.set_nonblocking(true)?;
             let address = inner.local_addr()?;
@@ -133,20 +197,36 @@ mod platform {
                     "daemon transport must bind to loopback",
                 ));
             }
+
             let capability = generate_capability()?;
             let descriptor = EndpointDescriptor {
                 address: address.to_string(),
                 capability: capability.clone(),
             };
-            let temporary = endpoint.with_extension("endpoint.tmp");
             let encoded = serde_json::to_vec(&descriptor).map_err(|error| {
                 io::Error::new(
                     io::ErrorKind::InvalidData,
                     format!("failed to encode daemon endpoint descriptor: {error}"),
                 )
             })?;
-            fs::write(&temporary, encoded)?;
-            fs::rename(&temporary, endpoint)?;
+            let temporary = endpoint.with_extension(format!("{}.tmp", &capability[..16]));
+            let write_result = (|| -> io::Result<()> {
+                let mut file = OpenOptions::new()
+                    .write(true)
+                    .create_new(true)
+                    .open(&temporary)?;
+                file.write_all(&encoded)?;
+                file.sync_all()?;
+                secure_owner_only(&temporary, &identity, false)?;
+                fs::rename(&temporary, endpoint)?;
+                secure_owner_only(endpoint, &identity, false)
+            })();
+            if let Err(error) = write_result {
+                let _ = fs::remove_file(&temporary);
+                let _ = fs::remove_file(endpoint);
+                return Err(error);
+            }
+
             Ok(Self {
                 inner,
                 endpoint: endpoint.to_path_buf(),
@@ -203,6 +283,7 @@ mod platform {
     }
 
     pub fn connect(endpoint: &Path) -> io::Result<LocalStream> {
+        ensure_secure_descriptor(endpoint)?;
         let descriptor = read_descriptor(endpoint).map_err(socket_error)?;
         let address = validated_address(&descriptor).map_err(socket_error)?;
         let mut stream = TcpStream::connect(address).map_err(socket_error)?;
@@ -218,6 +299,117 @@ mod platform {
 
     pub fn wake(endpoint: &Path) -> io::Result<()> {
         connect(endpoint).map(|_| ())
+    }
+
+    fn ensure_real_directory(path: &Path) -> io::Result<()> {
+        let metadata = fs::symlink_metadata(path)?;
+        if !metadata.is_dir() || metadata.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0 {
+            return Err(io::Error::new(
+                io::ErrorKind::PermissionDenied,
+                "daemon directory must be a real directory",
+            ));
+        }
+        Ok(())
+    }
+
+    fn ensure_secure_descriptor(endpoint: &Path) -> io::Result<()> {
+        let parent = endpoint.parent().ok_or_else(|| {
+            io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "daemon endpoint must have a parent directory",
+            )
+        })?;
+        ensure_real_directory(parent)?;
+        let metadata = fs::symlink_metadata(endpoint)?;
+        if !metadata.is_file() || metadata.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0 {
+            return Err(io::Error::new(
+                io::ErrorKind::PermissionDenied,
+                "daemon endpoint descriptor must be a regular file",
+            ));
+        }
+        let identity = current_user_identity()?;
+        verify_owner_only(parent, &identity)?;
+        verify_owner_only(endpoint, &identity)
+    }
+
+    fn current_user_identity() -> io::Result<UserIdentity> {
+        let output = Command::new("whoami.exe")
+            .args(["/user", "/fo", "csv", "/nh"])
+            .output()?;
+        if !output.status.success() {
+            return Err(io::Error::other(format!(
+                "whoami.exe failed with {}",
+                output.status
+            )));
+        }
+        let text = String::from_utf8_lossy(&output.stdout);
+        let mut fields = text
+            .trim()
+            .split("\",\"")
+            .map(|field| field.trim_matches('"'));
+        let account = fields
+            .next()
+            .filter(|value| !value.trim().is_empty())
+            .ok_or_else(|| {
+                io::Error::new(io::ErrorKind::InvalidData, "invalid current-user account")
+            })?;
+        let sid = fields
+            .next()
+            .filter(|value| value.starts_with("S-1-"))
+            .ok_or_else(|| {
+                io::Error::new(io::ErrorKind::InvalidData, "invalid current-user SID")
+            })?;
+        Ok(UserIdentity {
+            account: account.to_owned(),
+            sid: sid.to_owned(),
+        })
+    }
+
+    fn secure_owner_only(path: &Path, identity: &UserIdentity, directory: bool) -> io::Result<()> {
+        let rights = if directory { "(OI)(CI)F" } else { "F" };
+        run_icacls(path, &["/inheritance:r"])?;
+        run_icacls(path, &["/grant:r", &format!("*{}:{rights}", identity.sid)])?;
+        verify_owner_only(path, identity)
+    }
+
+    fn verify_owner_only(path: &Path, identity: &UserIdentity) -> io::Result<()> {
+        let output = Command::new("icacls.exe").arg(path).output()?;
+        if !output.status.success() {
+            return Err(io::Error::other(format!(
+                "icacls.exe verification failed with {}",
+                output.status
+            )));
+        }
+        let text = String::from_utf8_lossy(&output.stdout);
+        if !text.contains(&identity.sid) && !text.contains(&identity.account) {
+            return Err(io::Error::new(
+                io::ErrorKind::PermissionDenied,
+                "daemon endpoint ACL does not grant the current user",
+            ));
+        }
+        for forbidden in [
+            "Everyone",
+            "Authenticated Users",
+            "BUILTIN\\Users",
+            "Users:",
+        ] {
+            if text.contains(forbidden) {
+                return Err(io::Error::new(
+                    io::ErrorKind::PermissionDenied,
+                    format!("daemon endpoint ACL contains broad principal {forbidden}"),
+                ));
+            }
+        }
+        Ok(())
+    }
+
+    fn run_icacls(path: &Path, args: &[&str]) -> io::Result<()> {
+        let status = Command::new("icacls.exe").arg(path).args(args).status()?;
+        if status.success() {
+            Ok(())
+        } else {
+            Err(io::Error::other(format!("icacls.exe failed with {status}")))
+        }
     }
 
     fn read_descriptor(endpoint: &Path) -> io::Result<EndpointDescriptor> {
@@ -297,12 +489,87 @@ mod platform {
 
 pub use platform::{LocalListener, LocalStream, connect, wake};
 
+#[cfg(all(test, unix))]
+mod unix_tests {
+    use std::{
+        fs,
+        os::unix::fs::{PermissionsExt, symlink},
+    };
+
+    use tempfile::tempdir;
+
+    use super::LocalListener;
+
+    #[test]
+    fn daemon_directory_and_socket_are_owner_only() {
+        let root = tempdir().expect("temporary directory");
+        let directory = root.path().join("daemon");
+        fs::create_dir(&directory).expect("create daemon directory");
+        fs::set_permissions(&directory, fs::Permissions::from_mode(0o777))
+            .expect("make fixture permissive");
+        let endpoint = directory.join("medusa.sock");
+
+        let _listener = LocalListener::bind(&endpoint).expect("bind listener");
+
+        assert_eq!(
+            fs::metadata(&directory)
+                .expect("directory metadata")
+                .permissions()
+                .mode()
+                & 0o777,
+            0o700
+        );
+        assert_eq!(
+            fs::metadata(&endpoint)
+                .expect("socket metadata")
+                .permissions()
+                .mode()
+                & 0o777,
+            0o600
+        );
+    }
+
+    #[test]
+    fn symlinked_daemon_directory_is_rejected() {
+        let root = tempdir().expect("temporary directory");
+        let real = root.path().join("real");
+        fs::create_dir(&real).expect("create real directory");
+        let linked = root.path().join("linked");
+        symlink(&real, &linked).expect("create directory symlink");
+
+        let error = LocalListener::bind(&linked.join("medusa.sock"))
+            .err()
+            .expect("symlinked directory must fail");
+
+        assert_eq!(error.kind(), std::io::ErrorKind::PermissionDenied);
+    }
+
+    #[test]
+    fn symlinked_endpoint_is_rejected() {
+        let root = tempdir().expect("temporary directory");
+        let directory = root.path().join("daemon");
+        fs::create_dir(&directory).expect("create daemon directory");
+        let target = root.path().join("target");
+        fs::write(&target, b"do not replace").expect("write target");
+        let endpoint = directory.join("medusa.sock");
+        symlink(&target, &endpoint).expect("create endpoint symlink");
+
+        let error = LocalListener::bind(&endpoint)
+            .err()
+            .expect("symlinked endpoint must fail");
+
+        assert_eq!(error.kind(), std::io::ErrorKind::PermissionDenied);
+        assert_eq!(fs::read(&target).expect("read target"), b"do not replace");
+    }
+}
+
 #[cfg(all(test, windows))]
 mod tests {
     use std::{
         fs,
         io::{BufRead, BufReader, Write},
         net::{SocketAddr, TcpStream},
+        process::Command,
     };
 
     use serde_json::Value;
@@ -360,6 +627,23 @@ mod tests {
             .expect("read request payload");
 
         assert_eq!(request, "request-payload\n");
+    }
+
+    #[test]
+    fn endpoint_acl_is_current_user_only() {
+        let directory = tempdir().expect("temporary directory");
+        let endpoint = directory.path().join("medusa.sock");
+        let _listener = LocalListener::bind(&endpoint).expect("bind listener");
+
+        let output = Command::new("icacls.exe")
+            .arg(&endpoint)
+            .output()
+            .expect("inspect endpoint ACL");
+        assert!(output.status.success());
+        let text = String::from_utf8_lossy(&output.stdout);
+        assert!(!text.contains("Everyone"));
+        assert!(!text.contains("Authenticated Users"));
+        assert!(!text.contains("BUILTIN\\Users"));
     }
 
     fn descriptor_address(raw: &str) -> SocketAddr {
