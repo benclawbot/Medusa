@@ -6,9 +6,7 @@
 use std::{collections::BTreeMap, error::Error, fmt};
 
 use medusa_continuation::ContinuationDecision;
-use medusa_execution_checkpoint::{
-    ExecutionCheckpoint as DurableCheckpoint, ExecutionLog,
-};
+use medusa_execution_checkpoint::{ExecutionCheckpoint as DurableCheckpoint, ExecutionLog};
 use medusa_execution_orchestrator::{Checkpoint, ExecutionStage, ExecutionState};
 use medusa_execution_replay::{ExecutionTrace, ReplayReport, verify as verify_replay};
 use medusa_time_travel::{ExecutionState as HistoricalState, FullSnapshot};
@@ -104,7 +102,10 @@ impl<S: LifecycleStorage> ExecutionLifecycleService<S> {
                 actual: durable.schema_version,
             });
         }
-        durable.state.validate().map_err(LifecycleError::InvalidState)?;
+        durable
+            .state
+            .validate()
+            .map_err(LifecycleError::InvalidState)?;
         durable.log.verify().map_err(LifecycleError::checkpoint)?;
         let latest = durable
             .state
@@ -114,7 +115,10 @@ impl<S: LifecycleStorage> ExecutionLifecycleService<S> {
             .ok_or(LifecycleError::NoCheckpoint)?;
         durable.state = ExecutionState::resume(latest).map_err(LifecycleError::InvalidState)?;
         durable.resumed = true;
-        let service = Self { storage, current: durable };
+        let service = Self {
+            storage,
+            current: durable,
+        };
         service.persist()?;
         Ok(service)
     }
@@ -149,7 +153,10 @@ impl<S: LifecycleStorage> ExecutionLifecycleService<S> {
             candidate.state.snapshot_fingerprint.clone(),
             Some(event.fingerprint),
             BTreeMap::from([
-                ("orchestrator".to_owned(), candidate.state.fingerprint.clone()),
+                (
+                    "orchestrator".to_owned(),
+                    candidate.state.fingerprint.clone(),
+                ),
                 ("stage".to_owned(), checkpoint.fingerprint.clone()),
             ]),
         )
@@ -199,10 +206,7 @@ impl<S: LifecycleStorage> ExecutionLifecycleService<S> {
                 checkpoint_fingerprint: checkpoint.fingerprint.clone(),
             })
             .collect::<Vec<_>>();
-        let fingerprint = hash_json(&(
-            self.current.state.execution_id.as_str(),
-            &entries,
-        ))?;
+        let fingerprint = hash_json(&(self.current.state.execution_id.as_str(), &entries))?;
         Ok(StageTrace {
             execution_id: self.current.state.execution_id.clone(),
             entries,
@@ -214,7 +218,9 @@ impl<S: LifecycleStorage> ExecutionLifecycleService<S> {
     pub fn replay_against(&self, actual: &StageTrace) -> Result<ReplayReport, LifecycleError> {
         let expected = self.stage_trace()?;
         if expected.execution_id != actual.execution_id {
-            return Err(LifecycleError::Replay("execution identifiers differ".to_owned()));
+            return Err(LifecycleError::Replay(
+                "execution identifiers differ".to_owned(),
+            ));
         }
         let expected_trace = replay_trace(&expected)?;
         let actual_trace = replay_trace(actual)?;
@@ -239,7 +245,10 @@ impl<S: LifecycleStorage> ExecutionLifecycleService<S> {
             execution_id: self.current.state.execution_id.clone(),
             sequence: index as u64 + 1,
             values: BTreeMap::from([
-                ("stage".to_owned(), format!("{:?}", checkpoint.completed_stage)),
+                (
+                    "stage".to_owned(),
+                    format!("{:?}", checkpoint.completed_stage),
+                ),
                 ("checkpoint".to_owned(), checkpoint.fingerprint.clone()),
             ]),
         };
@@ -271,9 +280,12 @@ impl<S: LifecycleStorage> ExecutionLifecycleService<S> {
             .iter()
             .find(|checkpoint| checkpoint.fingerprint == preview.checkpoint_fingerprint)
             .cloned()
-            .ok_or_else(|| LifecycleError::UnknownCheckpoint(preview.checkpoint_fingerprint.clone()))?;
+            .ok_or_else(|| {
+                LifecycleError::UnknownCheckpoint(preview.checkpoint_fingerprint.clone())
+            })?;
         let mut candidate = self.current.clone();
-        candidate.state = ExecutionState::resume(checkpoint).map_err(LifecycleError::InvalidState)?;
+        candidate.state =
+            ExecutionState::resume(checkpoint).map_err(LifecycleError::InvalidState)?;
         candidate.resumed = true;
         self.save_candidate(candidate)?;
         Ok(self.protocol_event(Some(preview.snapshot.fingerprint.clone())))
@@ -380,7 +392,9 @@ impl fmt::Display for LifecycleError {
             Self::NotFound(id) => write!(formatter, "execution was not found: {id}"),
             Self::NoCheckpoint => formatter.write_str("execution has no durable checkpoint"),
             Self::UnknownCheckpoint(value) => write!(formatter, "unknown checkpoint: {value}"),
-            Self::RestoreNotConfirmed => formatter.write_str("time-travel restore was not confirmed"),
+            Self::RestoreNotConfirmed => {
+                formatter.write_str("time-travel restore was not confirmed")
+            }
             Self::InvalidState(value) => write!(formatter, "invalid execution state: {value}"),
             Self::CorruptCheckpoint(value) => write!(formatter, "corrupt checkpoint: {value}"),
             Self::IncompatibleCheckpoint { expected, actual } => write!(
@@ -426,18 +440,17 @@ mod tests {
     #[test]
     fn restart_after_three_stages_skips_completed_work() {
         let storage = MemoryStorage::default();
-        let mut first = ExecutionLifecycleService::start(
-            storage.clone(),
-            "run-1",
-            artifact("snapshot"),
-        )
-        .unwrap();
+        let mut first =
+            ExecutionLifecycleService::start(storage.clone(), "run-1", artifact("snapshot"))
+                .unwrap();
         for stage in [
             ExecutionStage::Snapshot,
             ExecutionStage::Context,
             ExecutionStage::Memory,
         ] {
-            first.complete_stage(stage, vec![artifact(&format!("{stage:?}"))]).unwrap();
+            first
+                .complete_stage(stage, vec![artifact(&format!("{stage:?}"))])
+                .unwrap();
         }
         drop(first);
 
@@ -450,12 +463,8 @@ mod tests {
     #[test]
     fn deterministic_replay_matches_stage_order_and_artifacts() {
         let storage = MemoryStorage::default();
-        let mut service = ExecutionLifecycleService::start(
-            storage,
-            "run-2",
-            artifact("snapshot"),
-        )
-        .unwrap();
+        let mut service =
+            ExecutionLifecycleService::start(storage, "run-2", artifact("snapshot")).unwrap();
         service
             .complete_stage(ExecutionStage::Snapshot, vec![artifact("a")])
             .unwrap();
@@ -478,12 +487,8 @@ mod tests {
     #[test]
     fn time_travel_requires_explicit_confirmation() {
         let storage = MemoryStorage::default();
-        let mut service = ExecutionLifecycleService::start(
-            storage,
-            "run-3",
-            artifact("snapshot"),
-        )
-        .unwrap();
+        let mut service =
+            ExecutionLifecycleService::start(storage, "run-3", artifact("snapshot")).unwrap();
         service
             .complete_stage(ExecutionStage::Snapshot, vec![artifact("a")])
             .unwrap();

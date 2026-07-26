@@ -6,43 +6,13 @@ on:
   pull_request:
 
 permissions:
-  contents: write
+  contents: read
 
 concurrency:
   group: ci-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
-  refresh-pr329:
-    if: github.event_name == 'pull_request' && github.head_ref == 'agent/issue-300-runtime-lifecycle'
-    name: Refresh PR329 generated files
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          ref: ${{ github.head_ref }}
-          fetch-depth: 0
-      - uses: dtolnay/rust-toolchain@1.88.0
-        with:
-          components: rustfmt
-      - name: Generate canonical files and restore workflows
-        shell: bash
-        run: |
-          set -euo pipefail
-          cargo generate-lockfile
-          cargo fmt --all
-          git fetch --no-tags origin main
-          git checkout origin/main -- .github/workflows/ci.yml
-          rm -f .github/workflows/pr329-refresh.yml
-          git config user.name github-actions[bot]
-          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
-          git add Cargo.lock crates/medusa-runtime/src/lifecycle.rs .github/workflows/ci.yml .github/workflows/pr329-refresh.yml
-          if git diff --cached --quiet; then
-            exit 0
-          fi
-          git commit -m "Refresh lifecycle lock and formatting"
-          git push origin HEAD:${{ github.head_ref }}
-
   quality:
     name: Workspace quality
     runs-on: ubuntu-latest
