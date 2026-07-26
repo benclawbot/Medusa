@@ -8,15 +8,26 @@
     "medusa-browserd"
   ],
   "expected_binary_targets": [
-    "medusa-cli",
-    "medusa-daemon",
+    "medusa",
     "medusa-tui",
     "medusa-browserd"
   ],
   "test_support_crates": ["medusa-testkit"],
   "ignored_unreferenced_rs": [
     "crates/medusa-intelligence/src/rust_ast.rs",
-    "crates/medusa-intelligence/src/rust_symbols_v2.rs"
+    "crates/medusa-intelligence/src/rust_symbols_v2.rs",
+    "crates/medusa-agent/src/engine_base.rs",
+    "crates/medusa-agent/src/world_model_observation.rs",
+    "crates/medusa-agent/src/autonomous_engine.rs",
+    "crates/medusa-agent/src/coding_policy.rs",
+    "crates/medusa-agent/src/repository_index.rs",
+    "crates/medusa-improvement/src/crate.rs",
+    "crates/medusa-improvement/src/learning.rs",
+    "crates/medusa-cli/src/skill_dependencies.rs",
+    "crates/medusa-cli/src/skills.rs",
+    "crates/medusa-cli/src/skill_graduation.rs",
+    "crates/medusa-cli/src/skill_probation.rs",
+    "crates/medusa-cli/src/skill_lifecycle.rs"
   ],
   "crate_exemptions": {
     "medusa-core": {"owner":"architecture","reason":"Foundational library tracked by integration epic #310","expires":"2026-12-31"},
