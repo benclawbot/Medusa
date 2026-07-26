@@ -173,7 +173,7 @@ impl Default for MemoryConfig {
         Self {
             enabled: true,
             format: "markdown".into(),
-            auto_promote_low_risk: true,
+            auto_promote_low_risk: false,
         }
     }
 }
@@ -248,6 +248,11 @@ impl Config {
         }
         if self.memory.format != "markdown" {
             return Err(invalid("memory format must remain markdown"));
+        }
+        if self.memory.auto_promote_low_risk {
+            return Err(invalid(
+                "memory.auto_promote_low_risk is unsupported; lessons must pass probation and be promoted through explicit, rollback-capable graduation",
+            ));
         }
         Ok(())
     }
@@ -406,6 +411,7 @@ mod tests {
         config.validate().expect("defaults");
         assert_eq!(config.model.context_window_tokens, 1_000_000);
         assert_eq!(config.model.auto_compact_percent, 40);
+        assert!(!config.memory.auto_promote_low_risk);
     }
 
     #[test]
@@ -442,6 +448,15 @@ mod tests {
     #[test]
     fn force_push_fails_closed() {
         assert!(Config::from_toml("version = 1\n[git]\nallow_force_push = true\n").is_err());
+    }
+
+    #[test]
+    fn automatic_memory_promotion_fails_closed() {
+        let error = Config::from_toml(
+            "version = 1\n[memory]\nauto_promote_low_risk = true\n",
+        )
+        .expect_err("automatic promotion must be rejected");
+        assert!(error.to_string().contains("explicit, rollback-capable graduation"));
     }
 }
 
