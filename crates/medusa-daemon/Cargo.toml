@@ -6,6 +6,7 @@ rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
 
+# The shipped daemon owns durable process supervision and recovery coordination.
 [dependencies]
 hex.workspace = true
 medusa-core.workspace = true
