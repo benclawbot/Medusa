@@ -26,18 +26,31 @@ enum RetryDisposition {
     Permanent,
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-struct RetryPolicy {
-    max_retries_per_provider: u8,
-    base_delay_ms: u64,
-    max_delay_ms: u64,
-    jitter_ms: u64,
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct RouteRouteRetryPolicy {
+    pub max_retries: u8,
+    pub base_delay_ms: u64,
+    pub max_delay_ms: u64,
+    pub jitter_ms: u64,
 }
 
-impl Default for RetryPolicy {
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct ProviderRouteProfile {
+    pub id: String,
+    pub provider: String,
+    pub model: String,
+    pub protocol: String,
+    pub endpoint: Option<String>,
+    pub auth_source: String,
+    pub tool_calling: bool,
+    pub streaming: bool,
+    pub retry: RouteRetryPolicy,
+}
+
+impl Default for RouteRouteRetryPolicy {
     fn default() -> Self {
         Self {
-            max_retries_per_provider: 1,
+            max_retries: 1,
             base_delay_ms: 250,
             max_delay_ms: 8_000,
             jitter_ms: 100,
@@ -45,7 +58,7 @@ impl Default for RetryPolicy {
     }
 }
 
-impl RetryPolicy {
+impl RouteRouteRetryPolicy {
     fn delay_ms(&self, error: &MedusaError, provider_index: usize, attempt: u8) -> u64 {
         if let Some(delay) = retry_after_ms(error) {
             return delay.min(self.max_delay_ms);
@@ -64,7 +77,7 @@ impl RetryPolicy {
 /// Routes requests through a primary provider followed by optional fallbacks.
 pub struct ProviderManager<P> {
     providers: Vec<P>,
-    policy: RetryPolicy,
+    profiles: Vec<ProviderRouteProfile>,
     cache: Mutex<BTreeMap<String, ModelResponse>>,
     health: Mutex<Vec<ProviderHealth>>,
     last_completed_provider: Mutex<Option<usize>>,
@@ -78,9 +91,52 @@ impl<P> ProviderManager<P> {
     #[must_use]
     pub fn new(providers: Vec<P>) -> Self {
         let health = vec![ProviderHealth::default(); providers.len()];
+        let profiles = (0..providers.len())
+            .map(|index| ProviderRouteProfile {
+                id: format!("provider[{index}]"),
+                provider: format!("provider-{index}"),
+                model: "unspecified".to_owned(),
+                protocol: "unspecified".to_owned(),
+                endpoint: None,
+                auth_source: "unspecified".to_owned(),
+                tool_calling: true,
+                streaming: false,
+                retry: RouteRetryPolicy::default(),
+            })
+            .collect();
         Self {
             providers,
-            policy: RetryPolicy::default(),
+            profiles,
+            cache: Mutex::new(BTreeMap::new()),
+            health: Mutex::new(health),
+            last_completed_provider: Mutex::new(None),
+            cache_hits: Mutex::new(0),
+            last_execution: Mutex::new(None),
+            sleeper: thread::sleep,
+        }
+    }
+
+    #[must_use]
+    pub fn new_with_profiles(providers: Vec<P>, mut profiles: Vec<ProviderRouteProfile>) -> Self {
+        profiles.truncate(providers.len());
+        while profiles.len() < providers.len() {
+            let index = profiles.len();
+            profiles.push(ProviderRouteProfile {
+                id: format!("provider[{index}]"),
+                provider: format!("provider-{index}"),
+                model: "unspecified".to_owned(),
+                protocol: "unspecified".to_owned(),
+                endpoint: None,
+                auth_source: "unspecified".to_owned(),
+                tool_calling: true,
+                streaming: false,
+                retry: RouteRetryPolicy::default(),
+            });
+        }
+        let health = vec![ProviderHealth::default(); providers.len()];
+        Self {
+            providers,
+            profiles,
             cache: Mutex::new(BTreeMap::new()),
             health: Mutex::new(health),
             last_completed_provider: Mutex::new(None),
@@ -92,13 +148,17 @@ impl<P> ProviderManager<P> {
 
     #[must_use]
     pub fn with_retries(mut self, retries_per_provider: u8) -> Self {
-        self.policy.max_retries_per_provider = retries_per_provider;
+        for profile in &mut self.profiles {
+            profile.retry.max_retries = retries_per_provider;
+        }
         self
     }
 
     #[cfg(test)]
-    fn with_policy(mut self, policy: RetryPolicy) -> Self {
-        self.policy = policy;
+    fn with_policy(mut self, policy: RouteRetryPolicy) -> Self {
+        for profile in &mut self.profiles {
+            profile.retry = policy;
+        }
         self
     }
 
@@ -146,8 +206,17 @@ impl<P> ProviderManager<P> {
             .ok()
             .and_then(|health| health.get(index).cloned())
             .unwrap_or_default();
+        let route = self.profiles.get(index);
         let snapshot = json!({
             "provider_index": index,
+            "route_id": route.map(|route| route.id.as_str()),
+            "provider": route.map(|route| route.provider.as_str()),
+            "model": route.map(|route| route.model.as_str()),
+            "protocol": route.map(|route| route.protocol.as_str()),
+            "endpoint": route.and_then(|route| route.endpoint.as_deref()),
+            "auth_source": route.map(|route| route.auth_source.as_str()),
+            "tool_calling": route.map(|route| route.tool_calling),
+            "streaming": route.map(|route| route.streaming),
             "cache_hit": cache_hit,
             "cache_hits": self.cache_hits(),
             "attempts": health.attempts,
@@ -236,7 +305,11 @@ impl<P: ModelProvider> ModelProvider for ProviderManager<P> {
         let mut final_error = None;
         for (index, provider) in self.providers.iter().enumerate() {
             let has_fallback = index + 1 < self.providers.len();
-            for attempt in 0..=self.policy.max_retries_per_provider {
+            let policy = self
+                .profiles
+                .get(index)
+                .map_or_else(RouteRetryPolicy::default, |profile| profile.retry);
+            for attempt in 0..=policy.max_retries {
                 self.record_attempt(index);
                 match provider.complete(request) {
                     Ok(response) => {
@@ -250,10 +323,8 @@ impl<P: ModelProvider> ModelProvider for ProviderManager<P> {
                         self.record_error(index, &error);
                         final_error = Some(error.clone());
                         match classify_error(&error, has_fallback) {
-                            RetryDisposition::Retry
-                                if attempt < self.policy.max_retries_per_provider =>
-                            {
-                                let delay_ms = self.policy.delay_ms(&error, index, attempt);
+                            RetryDisposition::Retry if attempt < policy.max_retries => {
+                                let delay_ms = policy.delay_ms(&error, index, attempt);
                                 self.record_retry(index, delay_ms);
                                 (self.sleeper)(Duration::from_millis(delay_ms));
                             }
@@ -468,8 +539,8 @@ mod tests {
         error.context.insert("retry_after_seconds".into(), json!(3));
         let (provider, _) = provider(Err(error));
         let manager = ProviderManager::new(vec![provider])
-            .with_policy(RetryPolicy {
-                max_retries_per_provider: 1,
+            .with_policy(RouteRetryPolicy {
+                max_retries: 1,
                 base_delay_ms: 1,
                 max_delay_ms: 5_000,
                 jitter_ms: 0,

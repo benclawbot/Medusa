@@ -3,13 +3,13 @@
 mod manager;
 use std::{env, sync::OnceLock, time::Duration};
 
-use medusa_config::Config;
+use medusa_config::{Config, FallbackProviderConfig};
 use medusa_core::{ErrorCategory, ErrorCode, MedusaError, MedusaResult};
 use reqwest::{StatusCode, blocking::Client};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
-pub use manager::{ProviderHealth, ProviderManager};
+pub use manager::{ProviderHealth, ProviderManager, ProviderRouteProfile, RouteRetryPolicy};
 const PROVIDER_REQUEST_TIMEOUT: Duration = Duration::from_secs(120);
 
 /// Strict tool definition sent to the model.
@@ -107,6 +107,8 @@ pub struct ProviderCapabilities {
     pub supported_image_media_types: Vec<String>,
     pub max_image_bytes: Option<u64>,
     pub max_images_per_request: Option<u32>,
+    pub tool_calling: bool,
+    pub streaming: bool,
 }
 
 /// Provider response stripped of private hidden reasoning.
@@ -162,15 +164,22 @@ impl MiniMaxProvider {
                     format!("missing provider credential in {}", settings.api_key_env),
                 )
             })?;
-        let base_url = env::var(settings.base_url_env)
-            .unwrap_or_else(|_| settings.default_base_url.to_owned());
+        let base_url = config
+            .model
+            .base_url
+            .clone()
+            .or_else(|| env::var(settings.base_url_env).ok())
+            .unwrap_or_else(|| settings.default_base_url.to_owned());
         let client = shared_http_client()?;
+        let mut capabilities = (settings.capabilities)();
+        capabilities.tool_calling = config.model.tool_calling;
+        capabilities.streaming = config.model.streaming;
         Ok(Self {
             client,
             base_url: base_url.trim_end_matches('/').to_owned(),
             api_key,
             model: config.model.name.clone(),
-            capabilities: (settings.capabilities)(),
+            capabilities,
         })
     }
 
@@ -187,6 +196,13 @@ impl MiniMaxProvider {
     }
 
     fn validate_request(&self, request: &ModelRequest) -> MedusaResult<()> {
+        if !request.tools.is_empty() && !self.capabilities.tool_calling {
+            return Err(MedusaError::new(
+                ErrorCode::DependencyUnavailable,
+                ErrorCategory::Validation,
+                "selected route does not support tool calling",
+            ));
+        }
         let images = request
             .messages
             .iter()
@@ -310,9 +326,15 @@ fn minimax_capabilities_from_environment() -> ProviderCapabilities {
             ],
             max_image_bytes: Some(20 * 1024 * 1024),
             max_images_per_request: Some(10),
+            tool_calling: true,
+            streaming: false,
         }
     } else {
-        ProviderCapabilities::default()
+        ProviderCapabilities {
+            tool_calling: true,
+            streaming: false,
+            ..ProviderCapabilities::default()
+        }
     }
 }
 
@@ -327,6 +349,8 @@ fn anthropic_capabilities() -> ProviderCapabilities {
         ],
         max_image_bytes: Some(20 * 1024 * 1024),
         max_images_per_request: Some(20),
+        tool_calling: true,
+        streaming: false,
     }
 }
 
@@ -494,27 +518,109 @@ impl ConfiguredProvider {
         }
     }
 
-    /// Builds the configured primary provider plus ordered fallback providers.
+    /// Builds the configured primary provider plus ordered, self-contained fallback routes.
     pub fn manager_from_config(
         config: &Config,
         session_api_key: Option<String>,
     ) -> MedusaResult<ProviderManager<Self>> {
-        let mut providers = vec![Self::from_config_with_api_key(
-            config,
-            session_api_key.clone(),
-        )?];
-        for fallback in &config.model.fallback_providers {
-            if fallback.eq_ignore_ascii_case(&config.model.provider) {
-                continue;
-            }
-            let mut fallback_config = config.clone();
-            fallback_config.model.provider = fallback.clone();
-            providers.push(Self::from_config_with_api_key(
-                &fallback_config,
-                session_api_key.clone(),
-            )?);
+        let mut providers = vec![Self::from_config_with_api_key(config, session_api_key)?];
+        let mut profiles = vec![route_profile(
+            "primary",
+            &config.model.provider,
+            &config.model.name,
+            &config.model.protocol,
+            config.model.base_url.as_deref(),
+            &config.model.auth,
+            config.model.tool_calling,
+            config.model.streaming,
+            config.model.max_retries,
+            config.model.retry_base_delay_ms,
+            config.model.retry_max_delay_ms,
+            config.model.retry_jitter_ms,
+        )];
+        for (index, fallback) in config.model.fallback_providers.iter().enumerate() {
+            let fallback_config = config_for_fallback(config, fallback);
+            providers.push(
+                Self::from_config_with_api_key(&fallback_config, None).map_err(|mut error| {
+                    error
+                        .context
+                        .insert("fallback_index".to_owned(), Value::from(index as u64));
+                    error.context.insert(
+                        "provider".to_owned(),
+                        Value::from(fallback.provider.clone()),
+                    );
+                    error
+                        .context
+                        .insert("model".to_owned(), Value::from(fallback.name.clone()));
+                    error
+                })?,
+            );
+            profiles.push(route_profile(
+                &format!("fallback[{index}]"),
+                &fallback.provider,
+                &fallback.name,
+                &fallback.protocol,
+                fallback.base_url.as_deref(),
+                &fallback.auth,
+                fallback.tool_calling,
+                fallback.streaming,
+                fallback.max_retries,
+                fallback.retry_base_delay_ms,
+                fallback.retry_max_delay_ms,
+                fallback.retry_jitter_ms,
+            ));
         }
-        Ok(ProviderManager::new(providers))
+        Ok(ProviderManager::new_with_profiles(providers, profiles))
+    }
+}
+
+fn config_for_fallback(config: &Config, fallback: &FallbackProviderConfig) -> Config {
+    let mut route = config.clone();
+    route.model.provider = fallback.provider.clone();
+    route.model.name = fallback.name.clone();
+    route.model.protocol = fallback.protocol.clone();
+    route.model.base_url = fallback.base_url.clone();
+    route.model.auth = fallback.auth.clone();
+    route.model.tool_calling = fallback.tool_calling;
+    route.model.streaming = fallback.streaming;
+    route.model.max_retries = fallback.max_retries;
+    route.model.retry_base_delay_ms = fallback.retry_base_delay_ms;
+    route.model.retry_max_delay_ms = fallback.retry_max_delay_ms;
+    route.model.retry_jitter_ms = fallback.retry_jitter_ms;
+    route.model.fallback_providers.clear();
+    route
+}
+
+#[allow(clippy::too_many_arguments)]
+fn route_profile(
+    id: &str,
+    provider: &str,
+    model: &str,
+    protocol: &str,
+    endpoint: Option<&str>,
+    auth: &str,
+    tool_calling: bool,
+    streaming: bool,
+    max_retries: u8,
+    base_delay_ms: u64,
+    max_delay_ms: u64,
+    jitter_ms: u64,
+) -> ProviderRouteProfile {
+    ProviderRouteProfile {
+        id: id.to_owned(),
+        provider: provider.to_owned(),
+        model: model.to_owned(),
+        protocol: protocol.to_owned(),
+        endpoint: endpoint.map(str::to_owned),
+        auth_source: auth.to_owned(),
+        tool_calling,
+        streaming,
+        retry: RouteRetryPolicy {
+            max_retries,
+            base_delay_ms,
+            max_delay_ms,
+            jitter_ms,
+        },
     }
 }
 
@@ -539,6 +645,7 @@ pub struct OpenAiProvider {
     base_url: String,
     api_key: Option<String>,
     model: String,
+    capabilities: ProviderCapabilities,
 }
 
 impl OpenAiProvider {
@@ -578,6 +685,11 @@ impl OpenAiProvider {
             base_url: base_url.trim_end_matches('/').to_owned(),
             api_key,
             model: config.model.name.clone(),
+            capabilities: ProviderCapabilities {
+                tool_calling: config.model.tool_calling,
+                streaming: config.model.streaming,
+                ..ProviderCapabilities::default()
+            },
         })
     }
 
@@ -631,6 +743,13 @@ impl OpenAiProvider {
 
 impl ModelProvider for OpenAiProvider {
     fn complete(&self, request: &ModelRequest) -> MedusaResult<ModelResponse> {
+        if !request.tools.is_empty() && !self.capabilities.tool_calling {
+            return Err(MedusaError::new(
+                ErrorCode::DependencyUnavailable,
+                ErrorCategory::Validation,
+                "selected route does not support tool calling",
+            ));
+        }
         let endpoint = format!("{}/chat/completions", self.base_url);
         let mut builder = self
             .client
@@ -645,6 +764,10 @@ impl ModelProvider for OpenAiProvider {
             return wire.into_model_response();
         }
         Err(response_error(response))
+    }
+
+    fn capabilities(&self) -> ProviderCapabilities {
+        self.capabilities.clone()
     }
 }
 
