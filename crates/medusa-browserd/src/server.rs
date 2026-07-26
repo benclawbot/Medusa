@@ -3,10 +3,11 @@ use std::process::{Child, ChildStdin, ChildStdout, Command, Stdio};
 
 use medusa_browser_client::protocol::{BrowserRequest, BrowserResponse};
 
-use crate::validation::validate_public_url;
+use crate::{proxy, validation::validate_public_url};
 
 pub fn run() -> io::Result<()> {
-    let mut bridge = spawn_bridge().map_err(io::Error::other)?;
+    let proxy = proxy::spawn()?;
+    let mut bridge = spawn_bridge(&proxy).map_err(io::Error::other)?;
     let stdin = io::stdin();
     let stdout = io::stdout();
     let mut stdout = stdout.lock();
@@ -79,9 +80,10 @@ struct Bridge {
     stdout: BufReader<ChildStdout>,
 }
 
-fn spawn_bridge() -> io::Result<Bridge> {
+fn spawn_bridge(proxy: &proxy::Proxy) -> io::Result<Bridge> {
     let mut child = Command::new("node")
         .arg("browser/playwright_bridge.mjs")
+        .env("MEDUSA_BROWSER_PROXY", proxy.server())
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::inherit())
