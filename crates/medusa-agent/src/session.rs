@@ -17,6 +17,7 @@ use crate::{
 };
 
 mod browser_assisted_escalation;
+mod completed_learning;
 mod escalation_state;
 mod lessons;
 mod manual_escalation;
@@ -240,42 +241,12 @@ pub(crate) fn persist(session: &AgentSession) -> MedusaResult<()> {
             &error.to_string(),
         );
     }
-    match lessons::extract_completed_session(session) {
-        Ok(Some(lesson_path)) => {
-            if let Err(error) = skill_drafts::create_from_lesson(&lesson_path) {
-                record_nonfatal(
-                    &session.repo,
-                    Some(&session.id),
-                    "learning",
-                    "create_skill_draft",
-                    &error.to_string(),
-                );
-            }
-        }
-        Ok(None) => {}
-        Err(error) => record_nonfatal(
-            &session.repo,
-            Some(&session.id),
-            "learning",
-            "extract_lesson",
-            &error.to_string(),
-        ),
-    }
-    if let Err(error) = skill_outcomes::record_completed_session(session) {
+    if let Err(error) = completed_learning::process(session) {
         record_nonfatal(
             &session.repo,
             Some(&session.id),
             "learning",
-            "record_skill_outcome",
-            &error.to_string(),
-        );
-    }
-    if let Err(error) = skill_probation::refresh(&session.repo) {
-        record_nonfatal(
-            &session.repo,
-            Some(&session.id),
-            "learning",
-            "refresh_skill_probation",
+            "process_completed_session",
             &error.to_string(),
         );
     }
