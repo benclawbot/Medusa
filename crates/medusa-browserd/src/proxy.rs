@@ -5,7 +5,7 @@ use std::{
     time::Duration,
 };
 
-use medusa_network_policy::{ResolvedTarget, resolve_public_url};
+use medusa_browser_client::network_policy::{ResolvedTarget, resolve_public_target};
 
 const MAX_HEADER_BYTES: usize = 32 * 1024;
 
@@ -64,21 +64,21 @@ fn handle_connection(mut client: TcpStream) -> io::Result<()> {
 fn handle_connect(mut client: TcpStream, authority: &str) -> io::Result<()> {
     let url = url::Url::parse(&format!("https://{authority}/"))
         .map_err(|error| io::Error::new(io::ErrorKind::InvalidInput, error))?;
-    let target = resolve_public_url(&url).map_err(policy_error)?;
+    let target = resolve_url(&url).map_err(policy_error)?;
     let upstream = connect_pinned(&target)?;
     client.write_all(b"HTTP/1.1 200 Connection Established\r\n\r\n")?;
     tunnel(client, upstream)
 }
 
 fn handle_http(
-    mut client: TcpStream,
+    client: TcpStream,
     method: &str,
     absolute_target: &str,
     header_text: &str,
 ) -> io::Result<()> {
     let url = url::Url::parse(absolute_target)
         .map_err(|error| io::Error::new(io::ErrorKind::InvalidInput, error))?;
-    let target = resolve_public_url(&url).map_err(policy_error)?;
+    let target = resolve_url(&url).map_err(policy_error)?;
     let mut upstream = connect_pinned(&target)?;
     let mut path = url.path().to_owned();
     if path.is_empty() {
@@ -103,6 +103,20 @@ fn handle_http(
     upstream.write_all(b"\r\n")?;
     upstream.flush()?;
     tunnel(client, upstream)
+}
+
+fn resolve_url(url: &url::Url) -> Result<ResolvedTarget, String> {
+    let host = url
+        .host_str()
+        .ok_or_else(|| "web URL must include a host".to_owned())?;
+    resolve_public_target(
+        url.scheme(),
+        url.username(),
+        url.password().is_some(),
+        url.port(),
+        host,
+        url.port_or_known_default().unwrap_or(443),
+    )
 }
 
 fn read_header(stream: &mut TcpStream) -> io::Result<Vec<u8>> {
@@ -175,6 +189,6 @@ mod tests {
     #[test]
     fn private_connect_targets_are_rejected() {
         let url = url::Url::parse("https://[::ffff:127.0.0.1]/").expect("URL");
-        assert!(resolve_public_url(&url).is_err());
+        assert!(resolve_url(&url).is_err());
     }
 }
