@@ -128,7 +128,7 @@ fn is_public_ipv4(address: Ipv4Addr) -> bool {
         && !address.is_unspecified()
         && !address.is_multicast()
         && octets[0] != 0
-        && octets[0] != 240
+        && octets[0] < 240
         && !(octets[0] == 100 && (64..=127).contains(&octets[1]))
         && !(octets[0] == 192 && octets[1] == 0)
         && !(octets[0] == 198 && matches!(octets[1], 18 | 19))
@@ -161,6 +161,7 @@ mod tests {
             "198.18.0.1",
             "198.51.100.1",
             "203.0.113.1",
+            "240.0.0.1",
             "::1",
             "fe80::1",
             "fc00::1",
