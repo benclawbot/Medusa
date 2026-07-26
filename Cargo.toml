@@ -65,6 +65,27 @@ rust-version = "1.88"
 license = "MIT"
 repository = "https://github.com/benclawbot/Medusa"
 
+[workspace.metadata.medusa]
+production_execution_model = "single-agent"
+experimental_multi_agent_crates = [
+  "medusa-worker-read-set",
+  "medusa-worker-transaction",
+  "medusa-repository-snapshot",
+  "medusa-execution-orchestrator",
+  "medusa-multi-agent-scheduler",
+  "medusa-worker-leases",
+  "medusa-commit-barrier",
+  "medusa-repository-rollback",
+  "medusa-execution-replay",
+  "medusa-runtime-supervisor",
+  "medusa-execution-checkpoint",
+  "medusa-time-travel",
+  "medusa-conflict-resolution",
+  "medusa-transaction-coordinator",
+  "medusa-recovery-coordinator",
+  "medusa-consensus",
+]
+
 [workspace.dependencies]
 medusa-core = { path = "crates/medusa-core" }
 medusa-protocol = { path = "crates/medusa-protocol" }
