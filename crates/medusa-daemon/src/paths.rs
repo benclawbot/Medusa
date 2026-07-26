@@ -8,6 +8,7 @@ pub struct DaemonPaths {
     /// Unix-domain socket path on Unix and a loopback endpoint descriptor on Windows.
     pub socket: PathBuf,
     pub state: PathBuf,
+    pub supervision: PathBuf,
     pub owner: PathBuf,
     /// Serializes external frontend startup attempts for this repository.
     pub startup: PathBuf,
@@ -21,6 +22,7 @@ impl DaemonPaths {
             repo: repo.to_path_buf(),
             socket: directory.join("medusa.sock"),
             state: directory.join("jobs.json"),
+            supervision: directory.join("supervision.json"),
             owner: directory.join("owner.pid"),
             startup: directory.join("startup.lock"),
             directory,
