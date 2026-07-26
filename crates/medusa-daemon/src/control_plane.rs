@@ -1,7 +1,7 @@
 use std::{
     collections::{BTreeMap, BTreeSet},
     fs,
-    path::{Path, PathBuf},
+    path::PathBuf,
 };
 
 use medusa_process_registry::{
@@ -146,11 +146,9 @@ impl SupervisionControlPlane {
                 shutdown_requested: false,
             },
         );
-        let subscription_id = SubscriptionId::parse(format!(
-            "recover-{}-{generation}",
-            process_id.as_str()
-        ))
-        .map_err(ControlPlaneError::Wakeup)?;
+        let subscription_id =
+            SubscriptionId::parse(format!("recover-{}-{generation}", process_id.as_str()))
+                .map_err(ControlPlaneError::Wakeup)?;
         self.state
             .wakeups
             .subscribe(WakeupSubscription {
@@ -372,7 +370,10 @@ fn validate_state(state: &DurableControlState) -> Result<(), ControlPlaneError> 
         return Err(ControlPlaneError::UnsupportedSchema(state.schema_version));
     }
     state.registry.validate()?;
-    state.wakeups.validate().map_err(ControlPlaneError::Wakeup)?;
+    state
+        .wakeups
+        .validate()
+        .map_err(ControlPlaneError::Wakeup)?;
     for (process_id, binding) in &state.bindings {
         if process_id != &binding.process_id || binding.execution_id.trim().is_empty() {
             return Err(ControlPlaneError::InvalidBinding);
