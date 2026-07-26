@@ -9,6 +9,8 @@ fn deterministic_session_event_survives_runtime_transport_roundtrip() {
     let decoded: medusa_protocol::EventEnvelope =
         serde_json::from_slice(&encoded).expect("deserialize event");
 
-    decoded.validate().expect("round-tripped event remains valid");
+    decoded
+        .validate()
+        .expect("round-tripped event remains valid");
     assert_eq!(decoded.sequence, 1);
 }
