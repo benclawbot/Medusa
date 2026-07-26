@@ -27,7 +27,8 @@
     "crates/medusa-cli/src/skills.rs",
     "crates/medusa-cli/src/skill_graduation.rs",
     "crates/medusa-cli/src/skill_probation.rs",
-    "crates/medusa-cli/src/skill_lifecycle.rs"
+    "crates/medusa-cli/src/skill_lifecycle.rs",
+    "crates/medusa-cli/src/oauth_preflight.rs"
   ],
   "crate_exemptions": {}
 }
