@@ -2,7 +2,7 @@
 
 Medusa's ChatGPT OAuth route depends on the external `openai-oauth` loopback gateway. Medusa does not read, copy, or store the user's private OAuth credential files.
 
-Before an interactive, `run`, or `resume` coding session starts, Medusa verifies the configured gateway at the profile `base_url` (default `http://127.0.0.1:10531/v1`). The preflight:
+Before an interactive, `run`, or `resume` coding session starts, Medusa verifies the configured gateway at the profile `base_url` (default `http://127.0.0.1:10531/v1`). The preflight runs once at process startup, before the coding runtime accepts work, and:
 
 1. calls `GET /models` and requires the configured model to be present;
 2. submits a forced function call and requires OpenAI-compatible `tool_calls`;
