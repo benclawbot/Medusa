@@ -5,27 +5,117 @@ use std::collections::BTreeMap;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
+#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SnapshotFileKind {
+    #[default]
+    Regular,
+    Directory,
+    Symlink,
+}
+
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct SnapshotFile {
     pub path: String,
     pub content_fingerprint: String,
     pub byte_len: u64,
+    #[serde(default)]
+    pub kind: SnapshotFileKind,
+    #[serde(default)]
+    pub unix_mode: Option<u32>,
+    #[serde(default)]
+    pub symlink_target: Option<String>,
 }
 
 impl SnapshotFile {
     pub fn from_bytes(path: impl Into<String>, bytes: &[u8]) -> Result<Self, &'static str> {
+        Self::regular(path, bytes, None)
+    }
+
+    pub fn regular(
+        path: impl Into<String>,
+        bytes: &[u8],
+        unix_mode: Option<u32>,
+    ) -> Result<Self, &'static str> {
         let path = path.into();
         validate_path(&path)?;
+        validate_mode(unix_mode)?;
         Ok(Self {
             path,
             content_fingerprint: fingerprint_bytes(bytes),
             byte_len: bytes.len() as u64,
+            kind: SnapshotFileKind::Regular,
+            unix_mode,
+            symlink_target: None,
+        })
+    }
+
+    pub fn directory(
+        path: impl Into<String>,
+        unix_mode: Option<u32>,
+    ) -> Result<Self, &'static str> {
+        let path = path.into();
+        validate_path(&path)?;
+        validate_mode(unix_mode)?;
+        Ok(Self {
+            path,
+            content_fingerprint: fingerprint_bytes(b"directory"),
+            byte_len: 0,
+            kind: SnapshotFileKind::Directory,
+            unix_mode,
+            symlink_target: None,
+        })
+    }
+
+    pub fn symlink(
+        path: impl Into<String>,
+        target: impl Into<String>,
+    ) -> Result<Self, &'static str> {
+        let path = path.into();
+        let target = target.into();
+        validate_path(&path)?;
+        if target.is_empty() || target.contains('\0') {
+            return Err("symlink target cannot be empty or contain NUL");
+        }
+        Ok(Self {
+            path,
+            content_fingerprint: fingerprint_bytes(target.as_bytes()),
+            byte_len: target.len() as u64,
+            kind: SnapshotFileKind::Symlink,
+            unix_mode: None,
+            symlink_target: Some(target),
         })
     }
 
     fn validate(&self) -> Result<(), &'static str> {
         validate_path(&self.path)?;
-        validate_digest(&self.content_fingerprint)
+        validate_digest(&self.content_fingerprint)?;
+        validate_mode(self.unix_mode)?;
+        match self.kind {
+            SnapshotFileKind::Regular => {
+                if self.symlink_target.is_some() {
+                    return Err("regular snapshot entries cannot have a symlink target");
+                }
+            }
+            SnapshotFileKind::Directory => {
+                if self.byte_len != 0 || self.symlink_target.is_some() {
+                    return Err("directory snapshot entries cannot contain bytes or a target");
+                }
+            }
+            SnapshotFileKind::Symlink => {
+                let target = self
+                    .symlink_target
+                    .as_deref()
+                    .ok_or("symlink snapshot entries require a target")?;
+                if self.unix_mode.is_some()
+                    || self.byte_len != target.len() as u64
+                    || self.content_fingerprint != fingerprint_bytes(target.as_bytes())
+                {
+                    return Err("symlink snapshot metadata does not match its target");
+                }
+            }
+        }
+        Ok(())
     }
 }
 
@@ -67,12 +157,12 @@ impl RepositorySnapshot {
         let current = self
             .files
             .iter()
-            .map(|f| (f.path.as_str(), f))
+            .map(|file| (file.path.as_str(), file))
             .collect::<BTreeMap<_, _>>();
         let old = previous
             .files
             .iter()
-            .map(|f| (f.path.as_str(), f))
+            .map(|file| (file.path.as_str(), file))
             .collect::<BTreeMap<_, _>>();
         let mut paths = current
             .keys()
@@ -83,10 +173,7 @@ impl RepositorySnapshot {
         paths.dedup();
         Ok(paths
             .into_iter()
-            .filter(|path| {
-                current.get(path).map(|f| f.content_fingerprint.as_str())
-                    != old.get(path).map(|f| f.content_fingerprint.as_str())
-            })
+            .filter(|path| current.get(path) != old.get(path))
             .map(str::to_owned)
             .collect())
     }
@@ -304,8 +391,25 @@ fn canonical_files(
 }
 
 fn validate_path(path: &str) -> Result<(), &'static str> {
-    if path.trim().is_empty() || path.starts_with('/') || path.split('/').any(|part| part == "..") {
-        return Err("snapshot paths must be non-empty workspace-relative paths");
+    let bytes = path.as_bytes();
+    let drive_prefixed = bytes.len() >= 2 && bytes[1] == b':';
+    let invalid_component = path
+        .split(['/', '\\'])
+        .any(|part| part.is_empty() || matches!(part, "." | ".."));
+    if path.trim().is_empty()
+        || path.contains('\0')
+        || path.starts_with(['/', '\\'])
+        || drive_prefixed
+        || invalid_component
+    {
+        return Err("snapshot paths must be canonical workspace-relative paths");
+    }
+    Ok(())
+}
+
+fn validate_mode(mode: Option<u32>) -> Result<(), &'static str> {
+    if mode.is_some_and(|mode| mode & !0o7777 != 0) {
+        return Err("unix mode must contain permission and special bits only");
     }
     Ok(())
 }
@@ -358,27 +462,58 @@ mod tests {
     }
 
     #[test]
-    fn changed_paths_include_created_modified_and_deleted_files() {
+    fn changed_paths_include_content_type_and_mode_changes() {
         let old = RepositorySnapshot::capture(
             [
-                SnapshotFile::from_bytes("modified", b"old").unwrap(),
+                SnapshotFile::regular("modified", b"same", Some(0o644)).unwrap(),
                 SnapshotFile::from_bytes("deleted", b"gone").unwrap(),
+                SnapshotFile::directory("kind", Some(0o755)).unwrap(),
             ],
             None,
         )
         .unwrap();
         let new = RepositorySnapshot::capture(
             [
-                SnapshotFile::from_bytes("modified", b"new").unwrap(),
+                SnapshotFile::regular("modified", b"same", Some(0o755)).unwrap(),
                 SnapshotFile::from_bytes("created", b"here").unwrap(),
+                SnapshotFile::symlink("kind", "target").unwrap(),
             ],
             Some(old.fingerprint.clone()),
         )
         .unwrap();
         assert_eq!(
             new.changed_paths(&old).unwrap(),
-            vec!["created", "deleted", "modified"]
+            vec!["created", "deleted", "kind", "modified"]
         );
+    }
+
+    #[test]
+    fn rejects_windows_and_mixed_separator_traversal() {
+        for path in [
+            "../outside",
+            "..\\outside",
+            "safe/..\\outside",
+            "/absolute",
+            "\\\\server\\share",
+            "C:\\device",
+            "\\\\?\\C:\\device",
+            "safe//file",
+            "safe\\\\file",
+        ] {
+            assert!(SnapshotFile::from_bytes(path, b"x").is_err(), "{path}");
+        }
+        assert!(SnapshotFile::from_bytes("safe\\nested/file", b"x").is_ok());
+    }
+
+    #[test]
+    fn symlink_identity_includes_target() {
+        let first =
+            RepositorySnapshot::capture([SnapshotFile::symlink("link", "one").unwrap()], None)
+                .unwrap();
+        let second =
+            RepositorySnapshot::capture([SnapshotFile::symlink("link", "two").unwrap()], None)
+                .unwrap();
+        assert_ne!(first.fingerprint, second.fingerprint);
     }
 
     #[test]
