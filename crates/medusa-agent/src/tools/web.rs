@@ -182,13 +182,8 @@ fn tag_value(value: &str, tag: &str) -> Option<String> {
     let start = format!("<{tag}>");
     let end = format!("</{tag}>");
     let value = value.split_once(&start)?.1.split_once(&end)?.0.trim();
-    Some(
-        value
-            .strip_prefix("<![CDATA[")
-            .and_then(|value| value.strip_suffix("]]>") )
-            .unwrap_or(value)
-            .to_owned(),
-    )
+    let value = value.strip_prefix("<![CDATA[").unwrap_or(value);
+    Some(value.strip_suffix("]]>").unwrap_or(value).to_owned())
 }
 
 fn normalize_domains(domains: Vec<String>) -> MedusaResult<Vec<String>> {
