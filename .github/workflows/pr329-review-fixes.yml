@@ -24,18 +24,14 @@ jobs:
         run: |
           python3 - <<'PY'
           from pathlib import Path
+          import re
+
           p = Path('crates/medusa-runtime/src/lifecycle.rs')
           s = p.read_text()
-          old = '''        let latest = durable
-              .state
-              .checkpoints
-              .last()
-              .cloned()
-              .ok_or(LifecycleError::NoCheckpoint)?;
-          durable.state =
-              ExecutionState::resume(latest).map_err(LifecycleError::InvalidState)?;
-          durable.resumed = true;'''
-          new = '''        if let Some(latest) = durable.state.checkpoints.last() {
+
+          s, n = re.subn(
+              r'''        let latest = durable\n.*?        durable\.resumed = true;''',
+              '''        if let Some(latest) = durable.state.checkpoints.last() {
               durable.state.current_stage = latest
                   .completed_stage
                   .next()
@@ -43,35 +39,29 @@ jobs:
           }
           durable.state.attempt = durable.state.attempt.saturating_add(1);
           refresh_execution_state(&mut durable.state)?;
-          durable.resumed = true;'''
-          if old not in s:
-              raise SystemExit('resume block not found')
-          s = s.replace(old, new, 1)
-          old = '''        let confirmation_token = digest(format!(
-              "restore:{}:{}",
-              self.current.state.execution_id, checkpoint.fingerprint
-          ));'''
-          new = '''        let confirmation_token = digest(format!(
+          durable.resumed = true;''',
+              s,
+              count=1,
+              flags=re.S,
+          )
+          if n != 1:
+              raise SystemExit(f'resume replacement count: {n}')
+
+          s, n = re.subn(
+              r'''        let confirmation_token = digest\(format!\(\n\s*"restore:\{\}:\{\}",\n\s*self\.current\.state\.execution_id, checkpoint\.fingerprint\n\s*\)\);''',
+              '''        let confirmation_token = digest(format!(
               "restore:{}:{}:{}",
               self.current.state.execution_id, checkpoint.fingerprint, snapshot.fingerprint
-          ));'''
-          if old not in s:
-              raise SystemExit('token block not found')
-          s = s.replace(old, new, 1)
-          old = '''        if preview.confirmation_token != confirmation_token {
-              return Err(LifecycleError::RestoreNotConfirmed);
-          }
-          let checkpoint = self
-              .current
-              .state
-              .checkpoints
-              .iter()
-              .find(|checkpoint| checkpoint.fingerprint == preview.checkpoint_fingerprint)
-              .cloned()
-              .ok_or_else(|| {
-                  LifecycleError::UnknownCheckpoint(preview.checkpoint_fingerprint.clone())
-              })?;'''
-          new = '''        let expected = self.preview_time_travel(&preview.checkpoint_fingerprint)?;
+          ));''',
+              s,
+              count=1,
+          )
+          if n != 1:
+              raise SystemExit(f'token replacement count: {n}')
+
+          s, n = re.subn(
+              r'''        if preview\.confirmation_token != confirmation_token \{.*?        let mut candidate = self\.current\.clone\(\);''',
+              '''        let expected = self.preview_time_travel(&preview.checkpoint_fingerprint)?;
           if preview != &expected || expected.confirmation_token != confirmation_token {
               return Err(LifecycleError::RestoreNotConfirmed);
           }
@@ -84,12 +74,22 @@ jobs:
               .cloned()
               .ok_or_else(|| {
                   LifecycleError::UnknownCheckpoint(expected.checkpoint_fingerprint.clone())
-              })?;'''
-          if old not in s:
-              raise SystemExit('restore block not found')
-          s = s.replace(old, new, 1)
-          s = s.replace('''        Ok(self.protocol_event(Some(preview.snapshot.fingerprint.clone())))''', '''        Ok(self.protocol_event(Some(expected.snapshot.fingerprint.clone())))''', 1)
-          marker = '''fn replay_trace(trace: &StageTrace) -> Result<ExecutionTrace, LifecycleError> {'''
+              })?;
+          let mut candidate = self.current.clone();''',
+              s,
+              count=1,
+              flags=re.S,
+          )
+          if n != 1:
+              raise SystemExit(f'restore replacement count: {n}')
+
+          s = s.replace(
+              'Ok(self.protocol_event(Some(preview.snapshot.fingerprint.clone())))',
+              'Ok(self.protocol_event(Some(expected.snapshot.fingerprint.clone())))',
+              1,
+          )
+
+          marker = 'fn replay_trace(trace: &StageTrace) -> Result<ExecutionTrace, LifecycleError> {'
           helper = '''fn refresh_execution_state(state: &mut ExecutionState) -> Result<(), LifecycleError> {
               state.fingerprint = hash_json(&(
                   state.execution_id.as_str(),
@@ -106,8 +106,9 @@ jobs:
           if marker not in s:
               raise SystemExit('helper insertion point not found')
           s = s.replace(marker, helper + marker, 1)
-          s = s.replace('''        assert_eq!(resumed.state().checkpoints.len(), 1);''', '''        assert_eq!(resumed.state().checkpoints.len(), 3);''', 1)
-          insert = '''
+          s = s.replace('assert_eq!(resumed.state().checkpoints.len(), 1);', 'assert_eq!(resumed.state().checkpoints.len(), 3);', 1)
+
+          tests = '''
               #[test]
               fn resume_before_first_checkpoint_restarts_snapshot() {
                   let storage = MemoryStorage::default();
@@ -162,11 +163,10 @@ jobs:
                   );
               }
           '''
-          test_marker = '''    #[test]
-              fn deterministic_replay_matches_stage_order_and_artifacts() {'''
+          test_marker = '    #[test]\n    fn deterministic_replay_matches_stage_order_and_artifacts() {'
           if test_marker not in s:
               raise SystemExit('test insertion point not found')
-          s = s.replace(test_marker, insert + '\n' + test_marker, 1)
+          s = s.replace(test_marker, tests + '\n' + test_marker, 1)
           p.write_text(s)
           PY
           cargo fmt --all
