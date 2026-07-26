@@ -1,5 +1,5 @@
 use std::{
-    collections::BTreeSet,
+    collections::{BTreeMap, BTreeSet},
     fs::{self, File},
     io::Read,
     path::{Component, Path, PathBuf},
@@ -9,6 +9,7 @@ use std::{
 };
 
 use medusa_browser_client::{BrowserClient, BrowserRequest, BrowserResponse};
+use medusa_config::Config;
 use medusa_core::{ErrorCategory, ErrorCode, MedusaError, MedusaResult};
 use medusa_intelligence::{CodeIndex, ReviewImpact};
 
@@ -27,7 +28,8 @@ pub(crate) fn targeted_verification_for_paths(
     artifact_paths: &[String],
 ) -> MedusaResult<VerificationResult> {
     let changed_paths = artifact_paths.iter().map(PathBuf::from).collect::<Vec<_>>();
-    let browser_decision = browser_verification_decision(&changed_paths);
+    let browser_decision =
+        browser_verification_decision(&changed_paths, browser_policy_enabled(repo));
     if !changed_paths.is_empty()
         && let Some(mut result) = semantic_verification(repo, &changed_paths)?
     {
@@ -71,7 +73,18 @@ enum BrowserVerificationDecision {
     Skip,
 }
 
-fn browser_verification_decision(changed_paths: &[PathBuf]) -> BrowserVerificationDecision {
+fn browser_policy_enabled(repo: &Path) -> bool {
+    let project = repo.join(".medusa/config.toml");
+    let project = project.is_file().then_some(project);
+    Config::load_layers(None, project.as_deref(), &BTreeMap::new(), &BTreeMap::new())
+        .map(|config| config.verification.browser_on_ui_change)
+        .unwrap_or(true)
+}
+
+fn browser_verification_decision(
+    changed_paths: &[PathBuf],
+    policy_enabled: bool,
+) -> BrowserVerificationDecision {
     match std::env::var("MEDUSA_BROWSER_VERIFY")
         .unwrap_or_else(|_| "auto".to_owned())
         .trim()
@@ -80,9 +93,10 @@ fn browser_verification_decision(changed_paths: &[PathBuf]) -> BrowserVerificati
     {
         "force" | "always" | "1" | "true" => BrowserVerificationDecision::Run,
         "skip" | "never" | "0" | "false" => BrowserVerificationDecision::Skip,
-        _ if changed_paths
-            .iter()
-            .any(|path| is_effective_ui_change(path)) =>
+        _ if policy_enabled
+            && changed_paths
+                .iter()
+                .any(|path| is_effective_ui_change(path)) =>
         {
             BrowserVerificationDecision::Run
         }
@@ -698,15 +712,23 @@ mod browser_policy_tests {
     }
 
     #[test]
+    fn disabled_policy_skips_automatic_ui_verification() {
+        assert_eq!(
+            browser_verification_decision(&[PathBuf::from("apps/web/App.tsx")], false),
+            BrowserVerificationDecision::Skip
+        );
+    }
+
+    #[test]
     fn manual_override_is_auditable() {
         unsafe { std::env::set_var("MEDUSA_BROWSER_VERIFY", "force") };
         assert_eq!(
-            browser_verification_decision(&[PathBuf::from("README.md")]),
+            browser_verification_decision(&[PathBuf::from("README.md")], false),
             BrowserVerificationDecision::Run
         );
         unsafe { std::env::set_var("MEDUSA_BROWSER_VERIFY", "skip") };
         assert_eq!(
-            browser_verification_decision(&[PathBuf::from("apps/web/App.tsx")]),
+            browser_verification_decision(&[PathBuf::from("apps/web/App.tsx")], true),
             BrowserVerificationDecision::Skip
         );
         unsafe { std::env::remove_var("MEDUSA_BROWSER_VERIFY") };
