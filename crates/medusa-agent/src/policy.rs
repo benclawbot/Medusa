@@ -1,13 +1,19 @@
 use std::{
     fs,
     path::{Component, Path, PathBuf},
-    process::{Command, Output, Stdio},
+    process::Output,
+};
+
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+use std::{
+    process::{Command, Stdio},
     thread,
     time::{Duration, Instant},
 };
 
 use medusa_core::{ErrorCategory, ErrorCode, MedusaError, MedusaResult};
 
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 const SHELL_COMMAND_TIMEOUT: Duration = Duration::from_secs(120);
 
 pub(crate) fn safe_path(repo: &Path, relative: &str) -> MedusaResult<PathBuf> {
@@ -276,16 +282,10 @@ pub(crate) fn sandboxed_command(
     }
     #[cfg(not(any(target_os = "linux", target_os = "macos")))]
     {
-        let root = repo.canonicalize()?;
-        #[cfg(windows)]
-        if program.eq_ignore_ascii_case("ls") {
-            let mut command = Command::new("cmd");
-            command.args(["/C", "dir"]).current_dir(root);
-            return output_with_timeout(&mut command, "Windows directory listing");
-        }
-        let mut command = Command::new(program);
-        command.args(args).current_dir(root);
-        output_with_timeout(&mut command, "local shell command")
+        let _ = (repo, program, args);
+        Err(sandbox_unavailable(
+            "no containment backend is available for this platform",
+        ))
     }
 }
 
@@ -296,6 +296,7 @@ fn sandbox_profile_string(path: &Path) -> String {
         .replace('"', "\\\"")
 }
 
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 fn output_with_timeout(command: &mut Command, description: &str) -> MedusaResult<Output> {
     let mut child = command
         .stdout(Stdio::piped())
@@ -335,6 +336,39 @@ fn output_with_timeout(command: &mut Command, description: &str) -> MedusaResult
     }
 }
 
+#[cfg(not(any(target_os = "linux", target_os = "macos")))]
+fn sandbox_unavailable(message: impl Into<String>) -> MedusaError {
+    let mut error = MedusaError::new(
+        ErrorCode::SandboxUnavailable,
+        ErrorCategory::Environment,
+        message,
+    );
+    error.context.insert(
+        "sandbox_backend".into(),
+        serde_json::Value::String("unavailable".into()),
+    );
+    error
+        .context
+        .insert("effective_restrictions".into(), serde_json::json!([]));
+    error
+}
+
 fn policy_denied(message: impl Into<String>) -> MedusaError {
     MedusaError::new(ErrorCode::PolicyDenied, ErrorCategory::Policy, message)
+}
+
+#[cfg(all(test, not(any(target_os = "linux", target_os = "macos"))))]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn sandboxed_execution_fails_closed_without_backend() {
+        let error = sandboxed_command(Path::new("."), "cargo", &["--version".into()])
+            .expect_err("unsupported platforms must not launch a bare process");
+        assert_eq!(error.code, ErrorCode::SandboxUnavailable);
+        assert_eq!(
+            error.context.get("sandbox_backend"),
+            Some(&serde_json::Value::String("unavailable".into()))
+        );
+    }
 }
