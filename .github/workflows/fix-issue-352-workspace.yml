@@ -1,6 +1,9 @@
 name: Finalize issue 352 workspace fixtures
 
 on:
+  push:
+    branches: [fix/352-self-contained-fallback-profiles]
+    paths: [.github/workflows/fix-issue-352-workspace.yml]
   pull_request:
     types: [opened, reopened, synchronize]
     branches: [main]
