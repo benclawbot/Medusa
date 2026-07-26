@@ -3,6 +3,11 @@
 use medusa_browser_client::network_policy::resolve_public_target;
 
 pub fn validate_public_url(url: &url::Url) -> Result<(), String> {
+    if std::env::var_os("MEDUSA_BROWSER_ALLOW_LOOPBACK").is_some()
+        && validate_loopback_url(url).is_ok()
+    {
+        return Ok(());
+    }
     let host = url
         .host_str()
         .ok_or_else(|| "web URL must include a host".to_owned())?;
@@ -15,6 +20,25 @@ pub fn validate_public_url(url: &url::Url) -> Result<(), String> {
         url.port_or_known_default().unwrap_or(443),
     )
     .map(|_| ())
+}
+
+pub(crate) fn validate_loopback_url(url: &url::Url) -> Result<(), String> {
+    if !matches!(url.scheme(), "http" | "https") {
+        return Err("local browser URLs must use http or https".to_owned());
+    }
+    if !url.username().is_empty() || url.password().is_some() {
+        return Err("local browser URLs must not include credentials".to_owned());
+    }
+    let host = url
+        .host_str()
+        .ok_or_else(|| "local browser URL must include a host".to_owned())?;
+    let loopback = host.eq_ignore_ascii_case("localhost")
+        || host
+            .parse::<std::net::IpAddr>()
+            .is_ok_and(|address| address.is_loopback());
+    loopback
+        .then_some(())
+        .ok_or_else(|| "local browser URL must target loopback".to_owned())
 }
 
 #[cfg(test)]

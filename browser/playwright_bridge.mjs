@@ -15,6 +15,20 @@ async function ensurePage() {
     if (!proxyServer) throw new Error('MEDUSA_BROWSER_PROXY is required');
     browser = await chromium.launch({ proxy: { server: proxyServer } });
     context = await browser.newContext({ serviceWorkers: 'block' });
+    await context.addInitScript(() => {
+      globalThis.__MEDUSA_CONSOLE_ERRORS__ = [];
+      const originalError = console.error.bind(console);
+      console.error = (...args) => {
+        globalThis.__MEDUSA_CONSOLE_ERRORS__.push(args.map(String).join(' '));
+        originalError(...args);
+      };
+      addEventListener('error', (event) => {
+        globalThis.__MEDUSA_CONSOLE_ERRORS__.push(String(event.error?.stack ?? event.message));
+      });
+      addEventListener('unhandledrejection', (event) => {
+        globalThis.__MEDUSA_CONSOLE_ERRORS__.push(String(event.reason?.stack ?? event.reason));
+      });
+    });
     page = await context.newPage();
   }
   return page;

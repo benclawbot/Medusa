@@ -1,11 +1,13 @@
 use std::{
     io::{self, Read, Write},
-    net::{Shutdown, SocketAddr, TcpListener, TcpStream},
+    net::{Shutdown, SocketAddr, TcpListener, TcpStream, ToSocketAddrs},
     thread,
     time::Duration,
 };
 
 use medusa_browser_client::network_policy::{ResolvedTarget, resolve_public_target};
+
+use crate::validation::validate_loopback_url;
 
 const MAX_HEADER_BYTES: usize = 32 * 1024;
 
@@ -106,6 +108,28 @@ fn handle_http(
 }
 
 fn resolve_url(url: &url::Url) -> Result<ResolvedTarget, String> {
+    if std::env::var_os("MEDUSA_BROWSER_ALLOW_LOOPBACK").is_some()
+        && validate_loopback_url(url).is_ok()
+    {
+        let host = url
+            .host_str()
+            .ok_or_else(|| "local browser URL must include a host".to_owned())?;
+        let port = url.port_or_known_default().unwrap_or(80);
+        let addresses = (host, port)
+            .to_socket_addrs()
+            .map_err(|error| error.to_string())?
+            .filter(|address| address.ip().is_loopback())
+            .collect::<Vec<_>>();
+        if addresses.is_empty() {
+            return Err("local browser URL did not resolve to loopback".to_owned());
+        }
+        return Ok(ResolvedTarget::new_for_loopback(
+            url.scheme(),
+            host,
+            port,
+            addresses,
+        ));
+    }
     let host = url
         .host_str()
         .ok_or_else(|| "web URL must include a host".to_owned())?;

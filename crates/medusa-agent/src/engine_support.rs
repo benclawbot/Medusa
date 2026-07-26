@@ -408,6 +408,18 @@ pub(crate) fn successful_mutation_paths(session: &AgentSession) -> Vec<String> {
                                     .map(str::to_owned),
                             );
                         }
+                        "symbol_rename" => collect_mutation_paths(input, &mut paths),
+                        "desktop_commander" => {
+                            if input
+                                .get("tool")
+                                .and_then(serde_json::Value::as_str)
+                                .is_some_and(desktop_commander_tool_is_mutating)
+                            {
+                                if let Some(arguments) = input.get("arguments") {
+                                    collect_mutation_paths(arguments, &mut paths);
+                                }
+                            }
+                        }
                         _ => {}
                     }
                 }
@@ -418,6 +430,37 @@ pub(crate) fn successful_mutation_paths(session: &AgentSession) -> Vec<String> {
     paths.sort();
     paths.dedup();
     paths
+}
+
+fn collect_mutation_paths(value: &serde_json::Value, paths: &mut Vec<String>) {
+    match value {
+        serde_json::Value::Object(map) => {
+            for (key, value) in map {
+                if matches!(
+                    key.as_str(),
+                    "path"
+                        | "file"
+                        | "file_path"
+                        | "source"
+                        | "destination"
+                        | "old_path"
+                        | "new_path"
+                ) {
+                    if let Some(path) = value.as_str() {
+                        paths.push(path.to_owned());
+                        continue;
+                    }
+                }
+                collect_mutation_paths(value, paths);
+            }
+        }
+        serde_json::Value::Array(values) => {
+            for value in values {
+                collect_mutation_paths(value, paths);
+            }
+        }
+        _ => {}
+    }
 }
 
 pub(crate) fn plan_is_complete(session: &AgentSession) -> bool {

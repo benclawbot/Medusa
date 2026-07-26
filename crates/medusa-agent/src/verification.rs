@@ -158,7 +158,11 @@ fn append_browser_verification(
         )
     })?;
     let command = std::env::var("MEDUSA_BROWSERD").unwrap_or_else(|_| "medusa-browserd".into());
-    let mut client = BrowserClient::spawn(&command).map_err(|error| {
+    let mut client = BrowserClient::spawn_with_env(
+        &command,
+        &[("MEDUSA_BROWSER_ALLOW_LOOPBACK", "1")],
+    )
+    .map_err(|error| {
         MedusaError::new(
             ErrorCode::DependencyUnavailable,
             ErrorCategory::Environment,
