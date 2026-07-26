@@ -66,6 +66,8 @@ pub struct MemoryConfig {
 #[serde(default, deny_unknown_fields)]
 pub struct VerificationConfig {
     pub required: bool,
+    /// Automatically run browser verification for effective UI changes.
+    pub browser_on_ui_change: bool,
 }
 
 impl Default for Config {
@@ -118,7 +120,10 @@ impl Default for MemoryConfig {
 
 impl Default for VerificationConfig {
     fn default() -> Self {
-        Self { required: true }
+        Self {
+            required: true,
+            browser_on_ui_change: true,
+        }
     }
 }
 
@@ -363,7 +368,6 @@ mod tests {
             "version = 1\n[git]\nallow_force_push = false\n",
             "version = 1\n[memory]\nauto_promote_low_risk = true\n",
             "version = 1\n[verification]\nindependent_review = true\n",
-            "version = 1\n[verification]\nbrowser_on_ui_change = true\n",
         ] {
             assert!(Config::from_toml(document).is_err(), "accepted {document}");
         }
