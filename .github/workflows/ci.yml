@@ -131,6 +131,7 @@ jobs:
           set -o pipefail
           git fetch --no-tags --depth=1 origin "${{ github.base_ref }}"
           git worktree add ../dependency-base FETCH_HEAD
+          cargo generate-lockfile --manifest-path ../dependency-base/Cargo.toml
           python3 scripts/dependency-metrics.py measure \
             --root ../dependency-base \
             --output dependency-base.json \
