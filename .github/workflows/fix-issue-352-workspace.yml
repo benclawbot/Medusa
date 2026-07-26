@@ -27,57 +27,33 @@ jobs:
         run: |
           python3 - <<'PY'
           from pathlib import Path
+          import re
 
           engine = Path('crates/medusa-agent/src/engine_support.rs')
           text = engine.read_text()
-          replacements = [
+          patterns = [
               (
-                  '''            max_image_bytes: Some(1024),
-                      max_images_per_request: Some(2),
-                  };''',
-                  '''            max_image_bytes: Some(1024),
-                      max_images_per_request: Some(2),
-                      tool_calling: true,
-                      streaming: false,
-                  };''',
+                  r'(max_image_bytes:\s*Some\(1024\),\s*\n\s*max_images_per_request:\s*Some\(2\),)(\s*\n\s*};)',
+                  r'\1\n            tool_calling: true,\n            streaming: false,\2',
               ),
               (
-                  '''            max_image_bytes: None,
-                      max_images_per_request: None,
-                  };''',
-                  '''            max_image_bytes: None,
-                      max_images_per_request: None,
-                      tool_calling: true,
-                      streaming: false,
-                  };''',
+                  r'(max_image_bytes:\s*None,\s*\n\s*max_images_per_request:\s*None,)(\s*\n\s*};)',
+                  r'\1\n            tool_calling: true,\n            streaming: false,\2',
               ),
           ]
-          for old, new in replacements:
-              if old not in text:
-                  raise SystemExit(f'expected fixture not found: {old!r}')
-              text = text.replace(old, new, 1)
+          for pattern, replacement in patterns:
+              text, count = re.subn(pattern, replacement, text, count=1)
+              if count != 1:
+                  raise SystemExit(f'expected one engine fixture match, found {count}: {pattern}')
           engine.write_text(text)
 
           verification = Path('crates/medusa-agent/src/verification.rs')
           text = verification.read_text()
-          unsafe_test = '''    #[test]
-              fn manual_override_is_auditable() {
-                  unsafe { std::env::set_var("MEDUSA_BROWSER_VERIFY", "force") };
-                  assert_eq!(
-                      browser_verification_decision(&[PathBuf::from("README.md")], false),
-                      BrowserVerificationDecision::Run
-                  );
-                  unsafe { std::env::set_var("MEDUSA_BROWSER_VERIFY", "skip") };
-                  assert_eq!(
-                      browser_verification_decision(&[PathBuf::from("apps/web/App.tsx")], true),
-                      BrowserVerificationDecision::Skip
-                  );
-                  unsafe { std::env::remove_var("MEDUSA_BROWSER_VERIFY") };
-              }
-          '''
-          if unsafe_test not in text:
-              raise SystemExit('unsafe browser override test not found')
-          verification.write_text(text.replace(unsafe_test, '', 1))
+          pattern = r'\n\s*#\[test\]\n\s*fn manual_override_is_auditable\(\) \{.*?std::env::remove_var\("MEDUSA_BROWSER_VERIFY"\) \};\n\s*\}\n'
+          text, count = re.subn(pattern, '\n', text, count=1, flags=re.S)
+          if count != 1:
+              raise SystemExit(f'expected one unsafe browser test match, found {count}')
+          verification.write_text(text)
           PY
           cargo fmt --all
       - name: Workspace Clippy
