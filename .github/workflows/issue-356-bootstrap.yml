@@ -25,7 +25,7 @@ jobs:
       - name: Format workspace
         run: cargo fmt --all
       - name: Remove bootstrap files
-        run: rm .github/issue-356.patch .github/workflows/issue-356-bootstrap.yml
+        run: rm .github/issue-356.patch .github/issue-356-trigger .github/workflows/issue-356-bootstrap.yml
       - name: Commit source changes
         run: |
           git config user.name "github-actions[bot]"
