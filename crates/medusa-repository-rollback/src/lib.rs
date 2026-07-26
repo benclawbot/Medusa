@@ -8,10 +8,49 @@ use sha2::{Digest, Sha256};
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub enum FileState {
     Absent,
+    /// Legacy fingerprint-only state. This remains readable for journal compatibility but is not
+    /// accepted as rollback evidence because it cannot reconstruct file bytes.
     Present {
         content_fingerprint: String,
         byte_len: u64,
     },
+    CapturedFile {
+        content_fingerprint: String,
+        content: Vec<u8>,
+        #[serde(default)]
+        unix_mode: Option<u32>,
+    },
+    Directory {
+        #[serde(default)]
+        unix_mode: Option<u32>,
+    },
+    Symlink {
+        target: String,
+    },
+}
+
+impl FileState {
+    #[must_use]
+    pub fn captured_file(content: impl Into<Vec<u8>>, unix_mode: Option<u32>) -> Self {
+        let content = content.into();
+        Self::CapturedFile {
+            content_fingerprint: fingerprint_bytes(&content),
+            content,
+            unix_mode,
+        }
+    }
+
+    #[must_use]
+    pub fn directory(unix_mode: Option<u32>) -> Self {
+        Self::Directory { unix_mode }
+    }
+
+    #[must_use]
+    pub fn symlink(target: impl Into<String>) -> Self {
+        Self::Symlink {
+            target: target.into(),
+        }
+    }
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -229,7 +268,7 @@ fn canonical_entries(entries: Vec<RollbackEntry>) -> Result<Vec<RollbackEntry>, 
     let mut by_path = BTreeMap::new();
     for entry in entries {
         validate_path(&entry.path)?;
-        validate_state(&entry.before)?;
+        validate_recovery_state(&entry.before)?;
         validate_state(&entry.after)?;
         if entry.before == entry.after {
             return Err("rollback entry must change repository state");
@@ -241,20 +280,63 @@ fn canonical_entries(entries: Vec<RollbackEntry>) -> Result<Vec<RollbackEntry>, 
     Ok(by_path.into_values().collect())
 }
 
-fn validate_state(state: &FileState) -> Result<(), &'static str> {
-    if let FileState::Present {
-        content_fingerprint,
-        ..
-    } = state
-    {
-        validate_digest(content_fingerprint)?;
+fn validate_recovery_state(state: &FileState) -> Result<(), &'static str> {
+    validate_state(state)?;
+    if matches!(state, FileState::Present { .. }) {
+        return Err("rollback before-state must contain restorable bytes and metadata");
     }
     Ok(())
 }
 
+fn validate_state(state: &FileState) -> Result<(), &'static str> {
+    match state {
+        FileState::Absent => Ok(()),
+        FileState::Present {
+            content_fingerprint,
+            ..
+        } => validate_digest(content_fingerprint),
+        FileState::CapturedFile {
+            content_fingerprint,
+            content,
+            unix_mode,
+        } => {
+            validate_digest(content_fingerprint)?;
+            validate_mode(*unix_mode)?;
+            if content_fingerprint != &fingerprint_bytes(content) {
+                return Err("captured file fingerprint does not match its bytes");
+            }
+            Ok(())
+        }
+        FileState::Directory { unix_mode } => validate_mode(*unix_mode),
+        FileState::Symlink { target } => {
+            if target.is_empty() || target.contains('\0') {
+                return Err("symlink target cannot be empty or contain NUL");
+            }
+            Ok(())
+        }
+    }
+}
+
 fn validate_path(path: &str) -> Result<(), &'static str> {
-    if path.trim().is_empty() || path.starts_with('/') || path.split('/').any(|part| part == "..") {
-        return Err("paths must be workspace relative");
+    let bytes = path.as_bytes();
+    let drive_prefixed = bytes.len() >= 2 && bytes[1] == b':';
+    let invalid_component = path
+        .split(['/', '\\'])
+        .any(|part| part.is_empty() || matches!(part, "." | ".."));
+    if path.trim().is_empty()
+        || path.contains('\0')
+        || path.starts_with(['/', '\\'])
+        || drive_prefixed
+        || invalid_component
+    {
+        return Err("paths must be canonical workspace-relative paths");
+    }
+    Ok(())
+}
+
+fn validate_mode(mode: Option<u32>) -> Result<(), &'static str> {
+    if mode.is_some_and(|mode| mode & !0o7777 != 0) {
+        return Err("unix mode must contain permission and special bits only");
     }
     Ok(())
 }
@@ -272,8 +354,12 @@ fn is_sorted_unique(values: &[String]) -> bool {
 
 fn hash<T: Serialize>(value: &T) -> String {
     hex::encode(Sha256::digest(
-        serde_json::to_vec(value).unwrap_or_default(),
+        serde_json::to_vec(value).expect("rollback journal types are serializable"),
     ))
+}
+
+fn fingerprint_bytes(bytes: &[u8]) -> String {
+    hex::encode(Sha256::digest(bytes))
 }
 
 #[cfg(test)]
@@ -281,21 +367,20 @@ mod tests {
     use super::*;
 
     fn digest(value: &[u8]) -> String {
-        hex::encode(Sha256::digest(value))
+        fingerprint_bytes(value)
     }
+
     fn entry(path: &str) -> RollbackEntry {
         RollbackEntry {
             path: path.into(),
-            before: FileState::Present {
-                content_fingerprint: digest(b"old"),
-                byte_len: 3,
-            },
+            before: FileState::captured_file(b"old".to_vec(), Some(0o644)),
             after: FileState::Present {
                 content_fingerprint: digest(b"new"),
                 byte_len: 3,
             },
         }
     }
+
     fn journal() -> RecoveryJournal {
         RecoveryJournal::prepare(
             "run-1",
@@ -318,6 +403,118 @@ mod tests {
         assert!(matches!(&actions[0], RecoveryAction::Restore { path, .. } if path == "b.rs"));
         assert!(matches!(&actions[1], RecoveryAction::Restore { path, .. } if path == "a.rs"));
         assert!(matches!(&actions[2], RecoveryAction::VerifySnapshot { .. }));
+    }
+
+    #[test]
+    fn created_files_are_removed_on_rollback() {
+        let mut journal = RecoveryJournal::prepare(
+            "create",
+            digest(b"base"),
+            digest(b"target"),
+            digest(b"barrier"),
+            vec![RollbackEntry {
+                path: "created.txt".into(),
+                before: FileState::Absent,
+                after: FileState::Present {
+                    content_fingerprint: digest(b"created"),
+                    byte_len: 7,
+                },
+            }],
+        )
+        .unwrap();
+        journal.begin_apply().unwrap();
+        journal.record_applied("created.txt").unwrap();
+        let actions = journal.begin_rollback().unwrap();
+        assert!(matches!(
+            &actions[0],
+            RecoveryAction::Restore {
+                path,
+                state: FileState::Absent
+            } if path == "created.txt"
+        ));
+    }
+
+    #[test]
+    fn rollback_evidence_contains_bytes_and_mode() {
+        let mut journal = journal();
+        journal.begin_apply().unwrap();
+        journal.record_applied("a.rs").unwrap();
+        let actions = journal.begin_rollback().unwrap();
+        assert!(matches!(
+            &actions[0],
+            RecoveryAction::Restore {
+                state: FileState::CapturedFile {
+                    content,
+                    unix_mode: Some(0o644),
+                    ..
+                },
+                ..
+            } if content == b"old"
+        ));
+    }
+
+    #[test]
+    fn directory_and_symlink_before_states_are_actionable() {
+        for before in [FileState::directory(Some(0o755)), FileState::symlink("target")] {
+            let journal = RecoveryJournal::prepare(
+                "metadata",
+                digest(b"base"),
+                digest(b"target"),
+                digest(b"barrier"),
+                vec![RollbackEntry {
+                    path: "entry".into(),
+                    before,
+                    after: FileState::Absent,
+                }],
+            );
+            assert!(journal.is_ok());
+        }
+    }
+
+    #[test]
+    fn fingerprint_only_before_state_is_rejected() {
+        let result = RecoveryJournal::prepare(
+            "legacy",
+            digest(b"base"),
+            digest(b"target"),
+            digest(b"barrier"),
+            vec![RollbackEntry {
+                path: "entry".into(),
+                before: FileState::Present {
+                    content_fingerprint: digest(b"old"),
+                    byte_len: 3,
+                },
+                after: FileState::Absent,
+            }],
+        );
+        assert_eq!(
+            result.unwrap_err(),
+            "rollback before-state must contain restorable bytes and metadata"
+        );
+    }
+
+    #[test]
+    fn rejects_windows_and_mixed_separator_traversal() {
+        for path in [
+            "../outside",
+            "..\\outside",
+            "safe/..\\outside",
+            "/absolute",
+            "\\\\server\\share",
+            "C:\\device",
+            "\\\\?\\C:\\device",
+        ] {
+            let mut invalid = entry(path);
+            invalid.after = FileState::Absent;
+            assert!(RecoveryJournal::prepare(
+                "paths",
+                digest(b"base"),
+                digest(b"target"),
+                digest(b"barrier"),
+                vec![invalid],
+            )
+            .is_err());
+        }
     }
 
     #[test]
