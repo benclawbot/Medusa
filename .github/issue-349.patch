@@ -1,0 +1,259 @@
+--- a/crates/medusa-runtime/src/lib.rs
++++ b/crates/medusa-runtime/src/lib.rs
+@@ -138,6 +138,17 @@
+ 
+ impl RuntimeController {
+     pub fn start(repo: PathBuf) -> Self {
++        match RuntimeState::load(repo.clone()) {
++            Ok(state) => Self::start_with_state(state),
++            Err(error) => Self::failed_start(error),
++        }
++    }
++
++    pub fn start_with_config(repo: PathBuf, config: Config) -> Self {
++        Self::start_with_state(RuntimeState::from_config(repo, config))
++    }
++
++    fn start_with_state(state: RuntimeState) -> Self {
+         let (command_tx, command_rx) = mpsc::channel();
+         let (event_tx, event_rx) = mpsc::channel();
+         let cancel = Arc::new(AtomicBool::new(false));
+@@ -148,8 +159,8 @@
+         if let Err(error) = thread::Builder::new()
+             .name("medusa-runtime".to_owned())
+             .spawn(move || {
+-                worker_loop(
+-                    repo,
++                worker_loop_with_state(
++                    state,
+                     command_rx,
+                     worker_events,
+                     worker_cancel,
+@@ -169,6 +180,18 @@
+         }
+     }
+ 
++    fn failed_start(error: RuntimeError) -> Self {
++        let (command_tx, _command_rx) = mpsc::channel();
++        let (event_tx, event_rx) = mpsc::channel();
++        let _ = event_tx.send(RuntimeEvent::Failed(error.to_string()));
++        Self {
++            commands: command_tx,
++            events: event_rx,
++            cancel: Arc::new(AtomicBool::new(false)),
++            submission: Arc::new(Mutex::new(SubmissionState::default())),
++        }
++    }
++
+     pub fn submit(&self, draft: PromptDraft) -> Result<SubmitDisposition, RuntimeError> {
+         let mut submission = lock_submission(&self.submission);
+         if submission.busy {
+@@ -248,21 +271,13 @@
+     }
+ }
+ 
+-fn worker_loop(
+-    repo: PathBuf,
++fn worker_loop_with_state(
++    mut state: RuntimeState,
+     commands: Receiver<RuntimeCommand>,
+     events: Sender<RuntimeEvent>,
+     cancel: Arc<AtomicBool>,
+     submission: Arc<Mutex<SubmissionState>>,
+ ) {
+-    let mut state = match RuntimeState::load(repo) {
+-        Ok(state) => state,
+-        Err(error) => {
+-            let _ = events.send(RuntimeEvent::Failed(error.to_string()));
+-            mark_idle(&submission, true);
+-            return;
+-        }
+-    };
+     let _ = events.send(state.settings_event());
+     let capability_event = match CapabilityRegistry::discover(state.repo.clone()) {
+         Ok(registry) => RuntimeEvent::Notice {
+@@ -396,7 +411,11 @@
+         let config =
+             Config::load_layers(None, project.as_deref(), &BTreeMap::new(), &BTreeMap::new())
+                 .map_err(RuntimeError::agent)?;
+-        Ok(Self {
++        Ok(Self::from_config(repo, config))
++    }
++
++    fn from_config(repo: PathBuf, config: Config) -> Self {
++        Self {
+             repo,
+             base_config: config.clone(),
+             effort: effort_for_turns(config.agent.max_turns),
+@@ -406,7 +425,7 @@
+             pending_goal: None,
+             pending_skill: None,
+             session_api_key: None,
+-        })
++        }
+     }
+ 
+     fn settings_event(&self) -> RuntimeEvent {
+--- a/crates/medusa-runtime/src/error.rs
++++ b/crates/medusa-runtime/src/error.rs
+@@ -78,7 +78,24 @@
+ impl RuntimeController {
+     /// Starts a runtime with a verified durable session already attached.
+     pub fn start_resumed(repo: PathBuf, session_id: &str) -> Result<Self, RuntimeError> {
+-        let mut state = RuntimeState::load(repo.clone())?;
++        let state = RuntimeState::load(repo.clone())?;
++        Self::start_resumed_with_state(repo, session_id, state)
++    }
++
++    pub fn start_resumed_with_config(
++        repo: PathBuf,
++        session_id: &str,
++        config: medusa_config::Config,
++    ) -> Result<Self, RuntimeError> {
++        let state = RuntimeState::from_config(repo.clone(), config);
++        Self::start_resumed_with_state(repo, session_id, state)
++    }
++
++    fn start_resumed_with_state(
++        repo: PathBuf,
++        session_id: &str,
++        mut state: RuntimeState,
++    ) -> Result<Self, RuntimeError> {
+         let provider =
+             ConfiguredProvider::manager_from_config(&state.config, state.session_api_key.clone())
+                 .map_err(RuntimeError::agent)?;
+--- a/crates/medusa-cli/src/main.rs
++++ b/crates/medusa-cli/src/main.rs
+@@ -13,13 +13,13 @@
+     configure_interactive, ensure_first_run, ensure_selected_runtime, reset as reset_config,
+     show as show_config,
+ };
+-use medusa_agent::{AgentEngine, bootstrap};
++use medusa_agent::bootstrap;
+ use medusa_config::Config;
+ use medusa_core::{ErrorCategory, ErrorCode, MedusaError, MedusaResult};
+ use medusa_daemon::{DaemonClient, DaemonPaths, Request, serve};
+ use medusa_extensions::{DesktopCommanderClient, DesktopCommanderSettings};
+ use medusa_hardening::{CURRENT_SCHEMA_VERSION, Migrator};
+-use medusa_provider::ConfiguredProvider;
++use medusa_runtime::{PromptDraft, RuntimeController, RuntimeEvent};
+ use medusa_tui::{TuiOptions, run as run_tui};
+ use medusa_update::{InstallKind, InstallLocation, MainBranchUpdater, UpdatePolicy};
+ use serde::Serialize;
+@@ -169,29 +169,88 @@
+         CommandKind::Checkpoint { message } => checkpoint(&repo, &message),
+         CommandKind::Run { objective } => {
+             ensure_selected_runtime()?;
+-            let provider = ConfiguredProvider::manager_from_config(&config, None)?;
+-            let engine = AgentEngine::new(provider, config);
+-            let mut session = engine.create_session(&repo, objective)?;
+-            println!("session {} created", session.id);
+-            engine.run_to_completion(&mut session)?;
+-            print_completion(&session);
+-            Ok(())
++            let runtime = RuntimeController::start_with_config(repo, config);
++            runtime
++                .submit(PromptDraft {
++                    text: objective,
++                    ..PromptDraft::default()
++                })
++                .map_err(runtime_error)?;
++            drain_headless_runtime(&runtime)
+         }
+         CommandKind::Resume { session } => {
+             ensure_selected_runtime()?;
+-            let provider = ConfiguredProvider::manager_from_config(&config, None)?;
+-            let engine = AgentEngine::new(provider, config);
+-            let mut session = engine.load_session(&repo, &session)?;
+-            println!("session {} resumed", session.id);
+-            engine.run_to_completion(&mut session)?;
+-            print_completion(&session);
+-            Ok(())
++            let runtime = RuntimeController::start_resumed_with_config(repo, &session, config)
++                .map_err(runtime_error)?;
++            runtime
++                .submit(PromptDraft {
++                    text: "Continue the current task from its durable session state.".to_owned(),
++                    ..PromptDraft::default()
++                })
++                .map_err(runtime_error)?;
++            drain_headless_runtime(&runtime)
+         }
+         CommandKind::Config { .. } => unreachable!("handled before runtime config loading"),
+         CommandKind::DaemonServe => serve(DaemonPaths::for_repo(&repo)),
+     }
+ }
+ 
++fn runtime_error(error: medusa_runtime::RuntimeError) -> MedusaError {
++    MedusaError::new(
++        ErrorCode::DependencyUnavailable,
++        ErrorCategory::Execution,
++        error.to_string(),
++    )
++}
++
++fn drain_headless_runtime(runtime: &RuntimeController) -> MedusaResult<()> {
++    loop {
++        match runtime.try_event().map_err(runtime_error)? {
++            Some(RuntimeEvent::AssistantText(text)) => println!("{text}"),
++            Some(RuntimeEvent::Activity(activity)) => {
++                println!("{}: {}", activity.title, activity.details.join("; "));
++            }
++            Some(RuntimeEvent::Notice { title, details }) => {
++                println!("{title}: {}", details.join("; "));
++            }
++            Some(RuntimeEvent::Question(question)) => {
++                return Err(MedusaError::new(
++                    ErrorCode::DependencyUnavailable,
++                    ErrorCategory::Execution,
++                    format!(
++                        "agent is waiting for user input: {}",
++                        question
++                            .prompts()
++                            .first()
++                            .map(|item| item.question.as_str())
++                            .unwrap_or("question details unavailable")
++                    ),
++                ));
++            }
++            Some(RuntimeEvent::Completed { session_id }) => {
++                println!("session {session_id} completed");
++                return Ok(());
++            }
++            Some(RuntimeEvent::TurnFinished) => return Ok(()),
++            Some(RuntimeEvent::Cancelled) => {
++                return Err(MedusaError::new(
++                    ErrorCode::DependencyUnavailable,
++                    ErrorCategory::Execution,
++                    "agent execution was cancelled",
++                ));
++            }
++            Some(RuntimeEvent::Failed(error)) => {
++                return Err(MedusaError::new(
++                    ErrorCode::DependencyUnavailable,
++                    ErrorCategory::Execution,
++                    error,
++                ));
++            }
++            Some(_) | None => std::thread::yield_now(),
++        }
++    }
++}
++
+ fn update(repo: &Path, check_only: bool, automatic: bool) -> MedusaResult<()> {
+     let policy = UpdatePolicy::from_environment();
+     let check_only = check_only || policy == UpdatePolicy::Check;
+@@ -404,13 +463,6 @@
+     written
+ }
+ 
+-fn print_completion(session: &medusa_agent::AgentSession) {
+-    println!("session {} completed", session.id);
+-    for item in &session.evidence {
+-        println!("evidence: {item}");
+-    }
+-}
+-
+ fn search(repo: &Path, pattern: &str) -> MedusaResult<()> {
+     for entry in WalkDir::new(repo).into_iter().filter_map(Result::ok) {
+         if !entry.file_type().is_file()
