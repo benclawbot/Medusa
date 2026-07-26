@@ -401,8 +401,11 @@ impl<'a> Context<'a> {
 
 fn symbol_kind(kind: &str, scope: RustScopeKind) -> Option<RustSymbolKind> {
     Some(match kind {
-        "function_item" if scope == RustScopeKind::Impl => RustSymbolKind::Method,
-        "function_item" => RustSymbolKind::Function,
+        "function_item" if matches!(scope, RustScopeKind::Impl | RustScopeKind::Trait) => {
+            RustSymbolKind::Method
+        }
+        "function_signature_item" if scope == RustScopeKind::Trait => RustSymbolKind::Method,
+        "function_item" | "function_signature_item" => RustSymbolKind::Function,
         "struct_item" => RustSymbolKind::Struct,
         "enum_item" => RustSymbolKind::Enum,
         "enum_variant" => RustSymbolKind::Variant,
@@ -419,7 +422,7 @@ fn symbol_kind(kind: &str, scope: RustScopeKind) -> Option<RustSymbolKind> {
 
 fn owned_scope_kind(kind: &str) -> Option<RustScopeKind> {
     Some(match kind {
-        "function_item" => RustScopeKind::Function,
+        "function_item" | "function_signature_item" => RustScopeKind::Function,
         "struct_item" | "enum_item" => RustScopeKind::Type,
         "trait_item" => RustScopeKind::Trait,
         "mod_item" => RustScopeKind::Module,
