@@ -142,14 +142,16 @@ pub mod supervision {
                     datetime!(2026-07-26 07:00 UTC),
                 )
                 .expect("publish");
-            assert_eq!(RuntimeHeartbeatPublisher::load(&path).expect("load"), written);
+            assert_eq!(
+                RuntimeHeartbeatPublisher::load(&path).expect("load"),
+                written
+            );
         }
 
         #[test]
         fn zero_pid_is_rejected() {
             assert!(
-                RuntimeHeartbeatPublisher::new("heartbeat.json", "exec-1", "runtime-1", 0)
-                    .is_err()
+                RuntimeHeartbeatPublisher::new("heartbeat.json", "exec-1", "runtime-1", 0).is_err()
             );
         }
     }
