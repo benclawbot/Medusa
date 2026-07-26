@@ -6,6 +6,10 @@ Medusa treats a production capability as integrated only when its crate is reach
 
 The reviewed root set lives in `.github/architecture-policy.json`. It currently contains `medusa-cli`, `medusa-daemon`, `medusa-tui`, `medusa-runtime`, `medusa-agent`, and `medusa-browserd`.
 
+## Integration baseline
+
+The workspace integration epic is complete only when every production crate is reachable from a shipped root through normal or build dependency edges and `medusa-testkit` is reachable through dev edges only. The policy therefore carries no crate-reachability exemptions: a newly orphaned crate is a blocking CI failure.
+
 ## Adding a crate
 
 1. Add the crate to the Cargo workspace.
@@ -27,6 +31,8 @@ A newly orphaned crate fails CI.
 ## Temporary exemptions
 
 Exemptions are migration tools, not proof of integration. Every entry requires an owner, a concrete reason, and an ISO expiry date. Expired exemptions fail CI. Remove an exemption in the same PR that establishes the real dependency path.
+
+The clean baseline intentionally contains no crate exemptions. Any future exemption must be narrowly scoped, reviewed, and paired with a tracked removal plan.
 
 ## Hidden dependencies
 

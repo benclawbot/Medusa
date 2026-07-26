@@ -22,6 +22,7 @@ medusa-execution-orchestrator = { path = "../medusa-execution-orchestrator" }
 medusa-execution-replay = { path = "../medusa-execution-replay" }
 medusa-markdown-memory = { path = "../medusa-markdown-memory" }
 medusa-mcp-cache = { path = "../medusa-mcp-cache" }
+medusa-memory = { path = "../medusa-memory" }
 medusa-memory-consolidation = { path = "../medusa-memory-consolidation" }
 medusa-memory-writeback = { path = "../medusa-memory-writeback" }
 medusa-protocol = { path = "../medusa-protocol" }
