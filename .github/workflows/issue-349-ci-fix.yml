@@ -1,0 +1,38 @@
+name: Fix issue 349 CI diagnostics
+
+on:
+  push:
+    branches:
+      - agent/issue-349-authoritative-lifecycle
+    paths:
+      - .github/workflows/issue-349-ci-fix.yml
+
+permissions:
+  contents: write
+
+jobs:
+  fix:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Apply all collected CI fixes
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          path = Path('crates/medusa-cli/src/main.rs')
+          source = path.read_text()
+          old = 'use medusa_runtime::{PromptDraft, RuntimeController, RuntimeEvent};'
+          new = 'use medusa_runtime::{prompt::PromptDraft, RuntimeController, RuntimeEvent};'
+          if source.count(old) != 1:
+              raise SystemExit('expected exactly one PromptDraft import to update')
+          path.write_text(source.replace(old, new))
+          PY
+          rm .github/workflows/issue-349-ci-fix.yml
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add -A
+          git commit -m "Fix runtime prompt import"
+          git push
