@@ -18,10 +18,12 @@ Each authorization decision records the capability, requested permission, approv
 - rollback metadata;
 - touched paths and safety analysis.
 
-Approved improvements pass through `medusa-transaction-coordinator`. The transaction records intent, verification-barrier evidence, rollback evidence, the prepared vote, and the final commit or recovery phase. Repository mutation is supplied only as the final approved transaction callback.
+The runtime derives changed paths from the submitted unified diff and requires them to exactly match the declared touched paths. Duplicate pending proposal IDs are rejected so reviewed work cannot be replaced under an existing transaction identifier.
 
-Changes to policy, sandbox, approval, credential, capability, hardening, workflow, or update-trust paths require separate sensitive-change approval before a transaction can be staged.
+Approved improvements pass through `medusa-transaction-coordinator`. A successful verification callback must provide evidence for every declared verification command before the prepared vote is cast. Repository mutation is supplied only as the final approved transaction callback, and a commit failure invokes an executable rollback callback before the transaction is marked failed.
+
+Changes to policy, sandbox, approval, credential, capability, hardening, workflow, or update-trust paths require separate sensitive-change approval before a transaction can be staged. This includes the concrete approval, policy, Windows sandbox, and desktop credential implementations.
 
 ## Diagnostics
 
-The shared capability matrix exposes both `GitHub` and `Self-improvement`, including availability details. Runtime diagnostics also expose capability descriptors and the ordered authorization audit trail.
+The shared capability matrix exposes both `GitHub` and `Self-improvement`, including availability details. Runtime diagnostics also expose capability descriptors and the ordered authorization audit trail. A shipped CLI entry point constructs the explicit runtime and emits these diagnostics as JSON.
