@@ -7,11 +7,14 @@ use std::{
 
 use medusa_core::{ErrorCategory, ErrorCode, MedusaError, MedusaResult};
 use medusa_intelligence::{IndexRefresh, IndexSnapshot, RetrievalBudget, RetrievalReport};
+use medusa_memory::{SessionSearchQuery, open_session_recall};
 
-use crate::{recall_context, session_browser::RepositoryIndexCache};
+use crate::session_browser::RepositoryIndexCache;
 
 const MAX_RETRIEVAL_TOKENS: u64 = 8_000;
 const RETRIEVAL_WRAPPER_RESERVE_TOKENS: u64 = 256;
+const MAX_RECALL_HITS: usize = 3;
+const MAX_RECALL_EXCERPT_CHARS: usize = 1_200;
 
 #[derive(Debug)]
 struct CachedRepository {
@@ -133,7 +136,7 @@ pub(crate) fn retrieve_context(
             max_tokens_per_result: 1_200,
         },
     );
-    let recall = recall_context::retrieve(repo, query)?;
+    let recall = retrieve_recall_context(repo, query)?;
     if report.results.is_empty() && report.exclusions.is_empty() && recall.is_none() {
         return Ok(None);
     }
@@ -153,6 +156,46 @@ pub(crate) fn retrieve_context(
         system_fragment: fragments.join("\n\n"),
         status: statuses.join(" "),
     }))
+}
+
+fn retrieve_recall_context(repo: &Path, query: &str) -> MedusaResult<Option<RetrievalContext>> {
+    let store = open_session_recall(repo)?;
+    let hits = store.session_search(&SessionSearchQuery {
+        query: query.to_owned(),
+        repository_fingerprint: Some(format!("path:{}", repo.to_string_lossy())),
+        outcome: Some("success".to_owned()),
+        limit: MAX_RECALL_HITS,
+        ..SessionSearchQuery::default()
+    })?;
+    if hits.is_empty() {
+        return Ok(None);
+    }
+
+    let mut fragment = String::from(
+        "PRIOR SUCCESSFUL SESSION EVIDENCE\nReuse only details that remain applicable. Inspect the current repository before acting.\n",
+    );
+    for hit in &hits {
+        fragment.push_str(&format!(
+            "\n- Session {} ({}, relevance {}): {}",
+            hit.session_id,
+            hit.created_at,
+            hit.relevance_milli,
+            truncate_chars(hit.excerpt.trim(), MAX_RECALL_EXCERPT_CHARS)
+        ));
+    }
+    Ok(Some(RetrievalContext {
+        system_fragment: fragment,
+        status: format!("loaded {} relevant prior session(s)", hits.len()),
+    }))
+}
+
+fn truncate_chars(value: &str, limit: usize) -> String {
+    if value.chars().count() <= limit {
+        return value.to_owned();
+    }
+    let mut truncated = value.chars().take(limit).collect::<String>();
+    truncated.push('…');
+    truncated
 }
 
 fn retrieval_token_budget(available_tokens: u64) -> u64 {
@@ -340,6 +383,65 @@ mod tests {
         assert!(context.status.contains("included 1 fragment(s)"));
         assert!(context.status.contains("excluded 1 fragment(s)"));
         assert!(context.status.contains("protected capacity 256 tokens"));
+    }
+
+    #[test]
+    fn retrieval_context_includes_successful_same_repository_recall() {
+        use medusa_memory::{SessionEvent, SessionRecord};
+
+        let repository = tempfile::tempdir().expect("repository");
+        fs::write(repository.path().join("lib.rs"), "fn unrelated_source() {}\n")
+            .expect("source");
+        let store = open_session_recall(repository.path()).expect("recall store");
+        store
+            .upsert(&SessionRecord {
+                session_id: "matching".to_owned(),
+                parent_session_id: None,
+                created_at: "2026-07-26T10:00:00Z".to_owned(),
+                repository_fingerprint: format!(
+                    "path:{}",
+                    repository.path().to_string_lossy()
+                ),
+                outcome: "success".to_owned(),
+                events: vec![SessionEvent {
+                    ordinal: 0,
+                    kind: "objective".to_owned(),
+                    tool: None,
+                    success: Some(true),
+                    text: "repair Windows containment policy".to_owned(),
+                }],
+            })
+            .expect("matching session");
+        store
+            .upsert(&SessionRecord {
+                session_id: "failed".to_owned(),
+                parent_session_id: None,
+                created_at: "2026-07-26T11:00:00Z".to_owned(),
+                repository_fingerprint: format!(
+                    "path:{}",
+                    repository.path().to_string_lossy()
+                ),
+                outcome: "failed".to_owned(),
+                events: vec![SessionEvent {
+                    ordinal: 0,
+                    kind: "objective".to_owned(),
+                    tool: None,
+                    success: Some(false),
+                    text: "repair Windows containment policy".to_owned(),
+                }],
+            })
+            .expect("failed session");
+
+        let context = retrieve_context(
+            repository.path(),
+            "repair Windows containment policy",
+            2_000,
+        )
+        .expect("retrieval")
+        .expect("context");
+        assert!(context.system_fragment.contains("matching"));
+        assert!(!context.system_fragment.contains("failed"));
+        assert!(context.status.contains("loaded 1 relevant prior session(s)"));
     }
 
     #[test]
