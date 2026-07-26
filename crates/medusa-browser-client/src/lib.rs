@@ -1,3 +1,4 @@
+pub mod network_policy;
 pub mod protocol;
 pub mod transport;
 

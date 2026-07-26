@@ -1,9 +1,5 @@
 #!/usr/bin/env node
 // Minimal Playwright bridge for medusa-browserd.
-//
-// Reads JSON requests from stdin (one per line) and writes JSON responses
-// to stdout (one per line). The Rust sidecar owns control plane concerns
-// (URL validation, ping, close); this script owns the Playwright API.
 
 import { chromium } from 'playwright';
 
@@ -15,8 +11,10 @@ const refs = new Map();
 
 async function ensurePage() {
   if (!browser) {
-    browser = await chromium.launch();
-    context = await browser.newContext();
+    const proxyServer = process.env.MEDUSA_BROWSER_PROXY;
+    if (!proxyServer) throw new Error('MEDUSA_BROWSER_PROXY is required');
+    browser = await chromium.launch({ proxy: { server: proxyServer } });
+    context = await browser.newContext({ serviceWorkers: 'block' });
     page = await context.newPage();
   }
   return page;
@@ -25,10 +23,7 @@ async function ensurePage() {
 function snapshotFromElement(el, depth = 0) {
   const tag = el.tagName().toLowerCase();
   const role = el.getAttribute('role') ?? tag;
-  const name =
-    el.getAttribute('aria-label') ??
-    el.textContent()?.trim().slice(0, 80) ??
-    '';
+  const name = el.getAttribute('aria-label') ?? el.textContent()?.trim().slice(0, 80) ?? '';
   const id = el.getAttribute('data-medusa-ref');
   let refId = null;
   if (id) {
@@ -94,11 +89,7 @@ async function press(request) {
 async function screenshot(request) {
   const p = await ensurePage();
   const buf = await p.screenshot({ fullPage: !!request.full_page });
-  return {
-    kind: 'screenshot',
-    format: 'png',
-    bytes_base64: buf.toString('base64'),
-  };
+  return { kind: 'screenshot', format: 'png', bytes_base64: buf.toString('base64') };
 }
 
 async function evaluate(request) {
@@ -165,38 +156,24 @@ async function handleLine(line) {
     req = JSON.parse(line);
   } catch (e) {
     process.stdout.write(
-      JSON.stringify({
-        kind: 'error',
-        code: 'invalid_request',
-        message: e.message,
-      }) + '\n',
+      JSON.stringify({ kind: 'error', code: 'invalid_request', message: e.message }) + '\n',
     );
     return;
   }
   const handler = handlers[req.method];
   if (!handler) {
     process.stdout.write(
-      JSON.stringify({
-        kind: 'error',
-        code: 'unknown_method',
-        message: `unknown method: ${req.method}`,
-      }) + '\n',
+      JSON.stringify({ kind: 'error', code: 'unknown_method', message: `unknown method: ${req.method}` }) + '\n',
     );
     return;
   }
   try {
     const response = await handler(req);
     process.stdout.write(JSON.stringify(response) + '\n');
-    if (req.method === 'close') {
-      process.exit(0);
-    }
+    if (req.method === 'close') process.exit(0);
   } catch (e) {
     process.stdout.write(
-      JSON.stringify({
-        kind: 'error',
-        code: 'bridge_failure',
-        message: e.message ?? String(e),
-      }) + '\n',
+      JSON.stringify({ kind: 'error', code: 'bridge_failure', message: e.message ?? String(e) }) + '\n',
     );
   }
 }
