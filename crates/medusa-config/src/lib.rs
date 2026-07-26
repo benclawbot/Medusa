@@ -261,6 +261,7 @@ impl Config {
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn validate_route(
     label: &str,
     provider: &str,
