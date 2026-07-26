@@ -4,6 +4,7 @@ use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr, ToSocketAddrs};
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ResolvedTarget {
+    scheme: String,
     host: String,
     port: u16,
     addresses: Vec<SocketAddr>,
@@ -24,6 +25,12 @@ impl ResolvedTarget {
             addresses,
         }
     }
+
+    #[must_use]
+    pub fn scheme(&self) -> &str {
+        &self.scheme
+    }
+
     #[must_use]
     pub fn host(&self) -> &str {
         &self.host
@@ -108,6 +115,7 @@ where
         return Err("web URL must resolve only to public IP addresses".to_owned());
     }
     Ok(ResolvedTarget {
+        scheme: scheme.to_owned(),
         host: host.to_owned(),
         port,
         addresses,
@@ -215,6 +223,7 @@ mod tests {
             },
         )
         .expect("public target");
+        assert_eq!(target.scheme(), "https");
         assert_eq!(
             target.addresses(),
             &["8.8.8.8:443".parse().expect("socket")]
