@@ -9,7 +9,7 @@ Before an interactive, `run`, or `resume` coding session starts, Medusa verifies
 3. submits a streaming request and requires valid SSE `data:` events plus a `[DONE]` terminator;
 4. classifies authentication, gateway reachability, missing model, and protocol failures separately.
 
-The gateway does not expose a portable cancellation-capability endpoint, so cancellation compatibility is reported explicitly as **unverified** rather than implied. Preflight results are startup evidence only and do not replace per-request runtime error handling.
+The gateway does not expose a portable cancellation-capability endpoint, so cancellation compatibility is reported explicitly as **unverified** rather than implied. Preflight results are startup evidence only; per-request runtime error handling remains authoritative.
 
 ## Offline startup
 
