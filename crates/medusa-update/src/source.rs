@@ -1,9 +1,4 @@
-use std::{
-    fs,
-    path::Path,
-    process::Command,
-    sync::Mutex,
-};
+use std::{fs, path::Path, process::Command, sync::Mutex};
 
 use medusa_core::{ErrorCategory, ErrorCode, MedusaError, MedusaResult};
 use reqwest::blocking::Client;
@@ -160,12 +155,7 @@ fn windows_source_script(
 }
 
 #[cfg(any(not(windows), test))]
-fn unix_source_script(
-    parent_pid: u32,
-    executable: &Path,
-    script: &Path,
-    revision: &str,
-) -> String {
+fn unix_source_script(parent_pid: u32, executable: &Path, script: &Path, revision: &str) -> String {
     format!(
         "#!/bin/sh\nwhile kill -0 {parent_pid} 2>/dev/null; do sleep 1; done\ncargo install --git '{REPOSITORY_URL}' --rev {revision} --locked --force --bin medusa medusa-cli && exec '{}'\nrm -f '{}'\n",
         shell_quote(executable),
