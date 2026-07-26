@@ -34,6 +34,8 @@ required = true
 
 Configuration precedence is CLI overrides, environment overrides, project TOML, user TOML, then built-in defaults.
 
+`agent.parallel_workers` is retained only for version-1 compatibility. It does not activate the experimental multi-agent transaction stack, and production coding sessions remain single-agent. Do not use this field to infer concurrent coding behavior. See [Multi-agent execution](MULTI-AGENT.md).
+
 ## Migration from ignored fields
 
 The following version-1 keys were removed because they were validated and exposed publicly but had no authoritative production behavior:
