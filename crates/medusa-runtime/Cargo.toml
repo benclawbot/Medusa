@@ -6,9 +6,10 @@ edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
+build = "build.rs"
 
 [lib]
-path = "src/generated_lib.rs"
+path = "src/runtime_root_generated.rs"
 
 [dependencies]
 base64 = "0.22"
@@ -25,6 +26,7 @@ medusa-mcp-cache = { path = "../medusa-mcp-cache" }
 medusa-memory = { path = "../medusa-memory" }
 medusa-memory-consolidation = { path = "../medusa-memory-consolidation" }
 medusa-memory-writeback = { path = "../medusa-memory-writeback" }
+medusa-multi-agent-scheduler = { path = "../medusa-multi-agent-scheduler" }
 medusa-protocol = { path = "../medusa-protocol" }
 medusa-provider = { path = "../medusa-provider" }
 medusa-time-travel = { path = "../medusa-time-travel" }
