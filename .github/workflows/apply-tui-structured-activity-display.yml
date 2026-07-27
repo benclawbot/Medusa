@@ -1,9 +1,8 @@
 name: Apply TUI structured activity display
 
 on:
-  push:
-    branches:
-      - feat/tui-structured-activity-display
+  pull_request:
+    types: [opened, synchronize, reopened]
     paths:
       - scripts/apply-tui-structured-activity-display.py
       - .github/workflows/apply-tui-structured-activity-display.yml
@@ -13,6 +12,7 @@ permissions:
 
 jobs:
   apply-and-test:
+    if: github.actor != 'github-actions[bot]'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -26,8 +26,8 @@ jobs:
         run: python3 scripts/apply-tui-structured-activity-display.py
       - name: Format changed Rust sources
         run: cargo fmt -- crates/medusa-tui/src/render/support.rs crates/medusa-tui/src/lib.rs
-      - name: Run focused TUI tests
-        run: cargo test -p medusa-tui tool_and_assistant_activities_render_without_detail_rows structured_activity_groups_and_lifecycle_labels_render
+      - name: Run TUI tests
+        run: cargo test -p medusa-tui
       - name: Commit patched renderer
         run: |
           set -euo pipefail
