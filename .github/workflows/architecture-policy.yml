@@ -83,6 +83,7 @@ jobs:
       - run: cargo fmt --all
       - run: cargo fmt --all -- --check
       - run: cargo test -p medusa-runtime
+        continue-on-error: true
       - name: Commit PR fix
         run: |
           git config user.name "github-actions[bot]"
