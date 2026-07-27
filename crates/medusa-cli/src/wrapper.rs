@@ -25,6 +25,13 @@ fn main() {
     let args = env::args().skip(1).collect::<Vec<_>>();
     let repo = repository_argument(&args).unwrap_or_else(|| PathBuf::from("."));
 
+    if let Some(quickstart_args) = subcommand_arguments(&args, "quickstart") {
+        finish(
+            run_sibling("medusa-quickstart", &quickstart_args),
+            None::<&str>,
+        );
+        return;
+    }
     if let Some(report_args) = subcommand_arguments(&args, "report") {
         let command_args = strip_repository_argument(&report_args);
         finish(
@@ -148,7 +155,11 @@ fn takes_value(value: &str) -> bool {
 }
 
 fn run_recall(args: &[String]) -> Result<(), String> {
-    let executable = sibling_executable("medusa-recall").map_err(|error| error.to_string())?;
+    run_sibling("medusa-recall", args)
+}
+
+fn run_sibling(name: &str, args: &[String]) -> Result<(), String> {
+    let executable = sibling_executable(name).map_err(|error| error.to_string())?;
     let status = Command::new(&executable)
         .args(args)
         .status()
@@ -181,6 +192,17 @@ mod tests {
 
     fn strings(values: &[&str]) -> Vec<String> {
         values.iter().map(|value| (*value).to_owned()).collect()
+    }
+
+    #[test]
+    fn quickstart_is_delegated_with_global_repository() {
+        assert_eq!(
+            subcommand_arguments(
+                &strings(&["--repo", "/workspace/project", "quickstart", "--json"]),
+                "quickstart"
+            ),
+            Some(strings(&["--repo", "/workspace/project", "--json"]))
+        );
     }
 
     #[test]
@@ -229,6 +251,10 @@ mod tests {
         );
         assert_eq!(
             subcommand_arguments(&strings(&["run", "skills"]), "skills"),
+            None
+        );
+        assert_eq!(
+            subcommand_arguments(&strings(&["run", "quickstart"]), "quickstart"),
             None
         );
     }
