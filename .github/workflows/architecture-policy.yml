@@ -6,60 +6,13 @@ on:
   pull_request:
 
 permissions:
-  contents: write
+  contents: read
 
 concurrency:
   group: architecture-policy-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
-  capture-real-screenshots:
-    if: github.event_name == 'pull_request' && github.head_ref == 'fix/real-product-screenshots'
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          ref: fix/real-product-screenshots
-          fetch-depth: 0
-      - uses: dtolnay/rust-toolchain@1.88.0
-      - uses: actions/setup-node@v4
-        with:
-          node-version: '22'
-      - name: Capture actual TUI and desktop app
-        run: |
-          python3 - <<'PY'
-          from pathlib import Path
-          p = Path('.github/capture-real-screenshots.sh')
-          s = p.read_text()
-          s = s.replace(
-              'let delivered = false;',
-              'export interface DesktopPromptDraft { text: string; attachments: DesktopAttachment[]; revision: number; }\n'
-              'export interface ModelConfiguration { provider: string; model: string; effort: Effort; apiKey?: string; }\n'
-              'let delivered = false;'
-          )
-          s = s.replace('export async function startRuntime() {', 'export async function startRuntime(_repo?: string) {')
-          s = s.replace('export async function closeRuntime() {}', 'export async function closeRuntime(_runtimeId: string) {}')
-          s = s.replace('export async function submitRuntime(): Promise<SubmitDisposition>', 'export async function submitRuntime(_runtimeId: string, _draft: DesktopPromptDraft): Promise<SubmitDisposition>')
-          s = s.replace('export async function runRuntimeCommand() {}', 'export async function runRuntimeCommand(_runtimeId: string, _input: string) {}')
-          s = s.replace('export async function commandSuggestions(): Promise<CommandSuggestion[]>', 'export async function commandSuggestions(_runtimeId: string, _input: string): Promise<CommandSuggestion[]>')
-          s = s.replace('export async function cancelRuntime() {}', 'export async function cancelRuntime(_runtimeId: string): Promise<boolean> { return true; }')
-          s = s.replace('export async function configureRuntime() {}', 'export async function configureRuntime(_runtimeId: string, _configuration: ModelConfiguration) {}')
-          s = s.replace('export async function pollRuntime(): Promise<RuntimeEvent[]>', 'export async function pollRuntime(_runtimeId: string): Promise<RuntimeEvent[]>')
-          p.write_text(s)
-          PY
-          set +e
-          bash .github/capture-real-screenshots.sh > /tmp/capture-real-screenshots.log 2>&1
-          status=$?
-          if [ "$status" -ne 0 ]; then
-            tail -n 240 /tmp/capture-real-screenshots.log > capture-real-screenshots-error.log
-            git config user.name github-actions[bot]
-            git config user.email 41898282+github-actions[bot]@users.noreply.github.com
-            git add capture-real-screenshots-error.log
-            git commit -m "ci: record screenshot capture failure"
-            git push origin HEAD:fix/real-product-screenshots
-            exit "$status"
-          fi
-
   architecture-policy:
     name: Shipped crate reachability
     runs-on: ubuntu-latest
