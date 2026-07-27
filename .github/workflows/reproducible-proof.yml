@@ -22,7 +22,13 @@ jobs:
       - name: Refresh dependency lock for the merged PR graph
         run: cargo generate-lockfile
       - name: Install production sandbox backend
-        run: sudo apt-get update && sudo apt-get install -y bubblewrap
+        shell: bash
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y bubblewrap
+          if [[ -e /proc/sys/kernel/apparmor_restrict_unprivileged_userns ]]; then
+            echo 0 | sudo tee /proc/sys/kernel/apparmor_restrict_unprivileged_userns
+          fi
       - name: Run reproducible safety and recovery proof
         run: cargo medusa-proof --output medusa-proof-artifacts
       - uses: actions/upload-artifact@v4
