@@ -51,7 +51,9 @@ The manifest also records production paths, behavioral test paths, canonical gat
 - `release-trust`: release evidence scripts and publish workflow; validated by CI, Desktop, Release Gates, and Refactor Guardrails.
 - `self-update`: `crates/medusa-cli`; validated by CI, Desktop, and Release Gates.
 
-## Design-only boundary
+## Planned and scaffolding behavior
+
+### Design-only boundary
 
 `multi-agent-research` covers retained scheduler, worker-lease, isolated-worker transaction, consensus, and commit-barrier concepts. The production runtime uses one `AgentEngine` and does not dispatch workers or subagents. This capability has no production entrypoint, no runtime opt-in, is disabled by definition, and cannot be a dependency of a `production` record.
 
