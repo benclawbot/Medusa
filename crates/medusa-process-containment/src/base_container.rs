@@ -13,7 +13,8 @@ use std::{
 use flatbuffers::FlatBufferBuilder;
 use windows_sys::Win32::{
     Foundation::{
-        CloseHandle, FARPROC, HANDLE, HMODULE, INVALID_HANDLE_VALUE, WAIT_OBJECT_0, WAIT_TIMEOUT,
+        CloseHandle, FARPROC, FreeLibrary, HANDLE, HMODULE, INVALID_HANDLE_VALUE, WAIT_OBJECT_0,
+        WAIT_TIMEOUT,
     },
     System::{
         JobObjects::{
@@ -22,9 +23,7 @@ use windows_sys::Win32::{
             JOBOBJECT_EXTENDED_LIMIT_INFORMATION, JobObjectExtendedLimitInformation,
             SetInformationJobObject,
         },
-        LibraryLoader::{
-            FreeLibrary, GetProcAddress, LOAD_LIBRARY_SEARCH_SYSTEM32, LoadLibraryExW,
-        },
+        LibraryLoader::{GetProcAddress, LOAD_LIBRARY_SEARCH_SYSTEM32, LoadLibraryExW},
         Threading::{
             CREATE_NO_WINDOW, CREATE_SUSPENDED, CREATE_UNICODE_ENVIRONMENT, GetExitCodeProcess,
             PROCESS_INFORMATION, ResumeThread, STARTUPINFOW, WaitForSingleObject,
