@@ -14,7 +14,11 @@ fn bind_module(source: &mut String, manifest: &str, declaration: &str, file: &st
         .display()
         .to_string()
         .replace('\\', "/");
-    replace_once(source, declaration, &format!("#[path = \"{path}\"]\n{declaration}"));
+    replace_once(
+        source,
+        declaration,
+        &format!("#[path = \"{path}\"]\n{declaration}"),
+    );
 }
 
 fn main() {
@@ -31,7 +35,10 @@ fn main() {
         ("pub mod lifecycle;", "lifecycle.rs"),
         ("pub mod prompt;", "prompt.rs"),
         ("pub mod skill_dependencies;", "skill_dependencies.rs"),
-        ("pub mod skill_dependency_locks;", "skill_dependency_locks.rs"),
+        (
+            "pub mod skill_dependency_locks;",
+            "skill_dependency_locks.rs",
+        ),
         ("mod support;", "support.rs"),
         ("mod tests;", "tests.rs"),
     ] {
