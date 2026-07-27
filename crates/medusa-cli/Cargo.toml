@@ -16,10 +16,15 @@ path = "src/wrapper.rs"
 name = "medusa-capabilities"
 path = "src/capabilities.rs"
 
+[[bin]]
+name = "medusa-clarity"
+path = "src/clarity.rs"
+
 [dependencies]
 clap = { version = "4.5", features = ["derive"] }
 medusa-agent = { path = "../medusa-agent" }
 medusa-capabilities = { path = "../medusa-capabilities" }
+medusa-clearops = { path = "../medusa-clearops" }
 medusa-config = { path = "../medusa-config" }
 medusa-core.workspace = true
 medusa-escalation = { path = "../medusa-escalation" }
