@@ -27,7 +27,12 @@ jobs:
       - name: Format changed Rust sources
         run: cargo fmt -- crates/medusa-tui/src/app.rs crates/medusa-tui/src/render.rs crates/medusa-tui/src/render/support.rs crates/medusa-tui/src/lib.rs
       - name: Run TUI tests
-        run: cargo test -p medusa-tui
+        run: |
+          if ! cargo test -p medusa-tui > /tmp/medusa-tui-test.log 2>&1; then
+            tail -n 220 /tmp/medusa-tui-test.log
+            exit 1
+          fi
+          tail -n 40 /tmp/medusa-tui-test.log
       - name: Commit tested implementation
         run: |
           set -euo pipefail
