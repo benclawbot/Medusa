@@ -14,6 +14,7 @@ import "./memory-browser.css";
 import "./accessibility.css";
 import "./desktop-ux-overhaul.css";
 import "./desktop-timeline.css";
+import "./structured-timeline.css";
 import "./desktop-update.css";
 
 ReactDOM.createRoot(document.getElementById("root") as HTMLElement).render(
