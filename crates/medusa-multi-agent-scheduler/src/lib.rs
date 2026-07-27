@@ -286,6 +286,19 @@ impl DynamicSchedule {
         Ok(())
     }
 
+    pub fn reopen_succeeded(&mut self, task_id: &str) -> Result<(), &'static str> {
+        match self.states.get(task_id) {
+            Some(TaskState::Succeeded) => {
+                self.states
+                    .insert(task_id.to_owned(), TaskState::Pending { attempts: 0 });
+                self.refresh();
+                Ok(())
+            }
+            Some(_) => Err("only a succeeded task can be reopened"),
+            None => Err("task does not exist"),
+        }
+    }
+
     pub fn set_worker_health(
         &mut self,
         worker_id: &str,

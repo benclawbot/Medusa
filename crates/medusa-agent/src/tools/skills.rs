@@ -29,6 +29,18 @@ pub(crate) fn summaries(repo: &Path) -> Vec<SkillSummary> {
     skills
 }
 
+pub(crate) fn automatically_loaded_names(repo: &Path) -> Vec<String> {
+    summaries(repo)
+        .into_iter()
+        .filter(|skill| {
+            skill.description.as_deref().is_some_and(|description| {
+                description.contains("Approved instructions automatically loaded:")
+            })
+        })
+        .map(|skill| skill.name)
+        .collect()
+}
+
 pub(crate) fn read(repo: &Path, name: &str, scope: Option<&str>) -> MedusaResult<String> {
     let name = validate_name(name)?;
     let scope = scope.map(str::trim).filter(|scope| !scope.is_empty());

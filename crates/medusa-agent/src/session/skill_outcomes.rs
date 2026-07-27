@@ -9,12 +9,13 @@ use serde::{Deserialize, Serialize};
 use time::{OffsetDateTime, format_description::well_known::Rfc3339};
 
 use super::AgentSession;
+use crate::tools::skills::automatically_loaded_names;
 
 const ACTIVE_SKILLS_ROOT: &str = ".medusa/skills";
+const SESSION_SKILLS_ROOT: &str = ".medusa/learning/session-skills";
 const OUTCOME_ROOT: &str = ".medusa/learning/skill-outcomes";
 const METRICS_PATH: &str = ".medusa/learning/skill-metrics/summary.json";
 const REVIEW_PATH: &str = ".medusa/learning/skill-reviews/recommendations.json";
-const MAX_AUTOMATIC_SKILLS: usize = 8;
 const MIN_REVIEW_SAMPLES: usize = 5;
 const HEALTHY_RATE_MILLI: u16 = 750;
 const REVIEW_RATE_MILLI: u16 = 500;
@@ -92,7 +93,7 @@ pub(super) fn record_completed_session(session: &AgentSession) -> MedusaResult<O
         return Ok(None);
     }
 
-    let skills = approved_skill_names(session);
+    let skills = loaded_skill_names(session);
     if skills.is_empty() {
         return Ok(None);
     }
@@ -116,7 +117,7 @@ pub(super) fn record_completed_session(session: &AgentSession) -> MedusaResult<O
             objective: session.objective.clone(),
             recorded_at,
             completed: true,
-            verified: !session.evidence.is_empty(),
+            verified: verification_passed(session),
             turns: session.turn,
             evidence_count: session.evidence.len(),
             automatically_loaded_skills: skills,
@@ -127,21 +128,46 @@ pub(super) fn record_completed_session(session: &AgentSession) -> MedusaResult<O
     Ok(Some(destination))
 }
 
-fn approved_skill_names(session: &AgentSession) -> Vec<String> {
-    let root = session.repo.join(ACTIVE_SKILLS_ROOT);
-    let mut skills = fs::read_dir(root)
-        .into_iter()
-        .flatten()
-        .flatten()
-        .filter_map(|entry| {
-            let name = entry.file_name().to_string_lossy().into_owned();
-            entry.path().join("SKILL.md").is_file().then_some(name)
+pub(crate) fn record_loaded_skills(session: &AgentSession) -> MedusaResult<()> {
+    let mut loaded = loaded_skill_names(session);
+    loaded.extend(automatically_loaded_names(&session.repo));
+    loaded.sort();
+    loaded.dedup();
+    if loaded.is_empty() {
+        return Ok(());
+    }
+    let path = session
+        .repo
+        .join(SESSION_SKILLS_ROOT)
+        .join(format!("{}.json", session.id));
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent)?;
+    }
+    atomic_json(&path, &loaded)
+}
+
+fn loaded_skill_names(session: &AgentSession) -> Vec<String> {
+    fs::read(
+        session
+            .repo
+            .join(SESSION_SKILLS_ROOT)
+            .join(format!("{}.json", session.id)),
+    )
+    .ok()
+    .and_then(|content| serde_json::from_slice(&content).ok())
+    .unwrap_or_default()
+}
+
+pub(super) fn verification_passed(session: &AgentSession) -> bool {
+    session
+        .events
+        .iter()
+        .rev()
+        .find_map(|event| match &event.payload {
+            medusa_protocol::EventPayload::VerificationCompleted { passed, .. } => Some(*passed),
+            _ => None,
         })
-        .collect::<Vec<_>>();
-    skills.sort();
-    skills.dedup();
-    skills.truncate(MAX_AUTOMATIC_SKILLS);
-    skills
+        == Some(true)
 }
 
 fn rebuild_effectiveness_summary(repo: &Path) -> MedusaResult<PathBuf> {
@@ -314,12 +340,15 @@ fn atomic_json(path: &Path, value: &impl Serialize) -> MedusaResult<()> {
 #[cfg(test)]
 mod tests {
     use medusa_core::SessionId;
+    use medusa_protocol::{Actor, EventPayload};
     use time::OffsetDateTime;
+
+    use crate::evidence::append_event;
 
     use super::*;
 
     fn session(repo: PathBuf, completed: bool) -> AgentSession {
-        AgentSession {
+        let mut session = AgentSession {
             id: SessionId::new(),
             objective: "verify the release".to_owned(),
             repo,
@@ -337,7 +366,19 @@ mod tests {
             approval_receipts: Vec::new(),
             rollback_receipts: Vec::new(),
             world_model: None,
+        };
+        if completed {
+            append_event(
+                &mut session,
+                Actor::System("test".to_owned()),
+                EventPayload::VerificationCompleted {
+                    passed: true,
+                    evidence: vec!["cargo test passed".to_owned()],
+                },
+            )
+            .expect("verification event");
         }
+        session
     }
 
     fn install_skills(repo: &Path) {
@@ -353,6 +394,7 @@ mod tests {
         let directory = tempfile::tempdir().expect("temporary directory");
         install_skills(directory.path());
         let session = session(directory.path().to_path_buf(), true);
+        record_loaded_skills(&session).expect("record loaded skills");
 
         let first = record_completed_session(&session)
             .expect("record outcome")
@@ -373,10 +415,39 @@ mod tests {
     }
 
     #[test]
+    fn outcome_uses_skills_recorded_when_request_was_built() {
+        let directory = tempfile::tempdir().expect("temporary directory");
+        install_skills(directory.path());
+        let session = session(directory.path().to_path_buf(), true);
+        record_loaded_skills(&session).expect("record loaded skills");
+        fs::remove_dir_all(directory.path().join(ACTIVE_SKILLS_ROOT).join("release"))
+            .expect("remove loaded skill");
+        let late = directory
+            .path()
+            .join(ACTIVE_SKILLS_ROOT)
+            .join("late")
+            .join("SKILL.md");
+        fs::create_dir_all(late.parent().expect("late parent")).expect("create late skill");
+        fs::write(late, "# Added after request\n").expect("write late skill");
+
+        let outcome = record_completed_session(&session)
+            .expect("record outcome")
+            .expect("outcome path");
+        let value: serde_json::Value =
+            serde_json::from_slice(&fs::read(outcome).expect("read outcome"))
+                .expect("outcome json");
+        assert_eq!(
+            value["automatically_loaded_skills"],
+            serde_json::json!(["release", "verify"])
+        );
+    }
+
+    #[test]
     fn early_metrics_collect_evidence_without_recommending_review() {
         let directory = tempfile::tempdir().expect("temporary directory");
         install_skills(directory.path());
         let session = session(directory.path().to_path_buf(), true);
+        record_loaded_skills(&session).expect("record loaded skills");
         record_completed_session(&session).expect("outcome");
 
         let summary: serde_json::Value = serde_json::from_slice(
@@ -396,7 +467,16 @@ mod tests {
         install_skills(directory.path());
         for _ in 0..5 {
             let mut failed = session(directory.path().to_path_buf(), true);
-            failed.evidence.clear();
+            append_event(
+                &mut failed,
+                Actor::System("test".to_owned()),
+                EventPayload::VerificationCompleted {
+                    passed: false,
+                    evidence: vec!["cargo test failed".to_owned()],
+                },
+            )
+            .expect("failed verification event");
+            record_loaded_skills(&failed).expect("record loaded skills");
             record_completed_session(&failed).expect("outcome");
         }
 

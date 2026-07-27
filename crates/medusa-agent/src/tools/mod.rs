@@ -4,7 +4,7 @@ mod filesystem;
 mod git;
 mod intelligence;
 mod shell;
-mod skills;
+pub(crate) mod skills;
 mod web;
 
 use std::path::Path;

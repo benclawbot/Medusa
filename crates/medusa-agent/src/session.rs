@@ -23,6 +23,7 @@ mod lessons;
 mod manual_escalation;
 mod recall;
 mod skill_drafts;
+#[allow(dead_code)]
 mod skill_outcomes;
 mod skill_probation;
 #[path = "usage.rs"]
@@ -36,6 +37,7 @@ pub use escalation_state::{
     persist_escalation_journal,
 };
 pub use manual_escalation::{export_manual_escalation, import_manual_advice};
+pub(crate) use skill_outcomes::record_loaded_skills;
 pub(crate) use usage::record_turn_usage;
 #[allow(unused_imports)]
 pub use usage::{SessionUsage, TurnUsage, UsageProvenance, session_usage};
@@ -232,6 +234,22 @@ pub(crate) fn persist(session: &AgentSession) -> MedusaResult<()> {
         Err(_) => persist_at(&fallback_session_path(&session.repo, &session.id), session),
     };
     persisted?;
+    if session.events.last().is_some_and(|event| {
+        matches!(
+            &event.payload,
+            medusa_protocol::EventPayload::ModelRequestStarted { .. }
+        )
+    }) {
+        if let Err(error) = record_loaded_skills(session) {
+            record_nonfatal(
+                &session.repo,
+                Some(&session.id),
+                "learning",
+                "record_loaded_skills",
+                &error.to_string(),
+            );
+        }
+    }
     if let Err(error) = recall::persist_completed_session(session) {
         record_nonfatal(
             &session.repo,

@@ -297,6 +297,21 @@ impl AutonomousExecution {
         self.sync_and_persist(session)
     }
 
+    pub fn reopen_last_completed(&mut self, session: &mut AgentSession) -> MedusaResult<()> {
+        self.ensure_session(session)?;
+        let task_id = (0..session.plan.len())
+            .rev()
+            .map(task_id)
+            .find(|id| matches!(self.scheduler.state(id), Some(TaskState::Succeeded)))
+            .ok_or_else(|| {
+                validation_error("autonomous verification has no completed task to reopen")
+            })?;
+        self.scheduler
+            .reopen_succeeded(&task_id)
+            .map_err(validation_error)?;
+        self.sync_and_persist(session)
+    }
+
     pub fn set_worker_health(
         &mut self,
         session: &mut AgentSession,
