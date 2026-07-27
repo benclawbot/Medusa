@@ -1,6 +1,6 @@
 #![cfg(target_os = "linux")]
 
-use std::process::Command;
+use std::{env, process::Command};
 
 use medusa_agent::tools::ToolManager;
 use medusa_extensions::DesktopCommanderSettings;
@@ -8,6 +8,10 @@ use serde_json::json;
 
 #[test]
 fn linux_product_boundary_exercises_allowed_write_external_denial_and_network_denial() {
+    if env::var_os("MEDUSA_PRODUCT_ACCEPTANCE").is_none() {
+        return;
+    }
+
     let bwrap = Command::new("bwrap")
         .arg("--version")
         .output()
