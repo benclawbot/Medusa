@@ -18,8 +18,18 @@ fn linux_product_boundary_exercises_allowed_write_external_denial_and_network_de
         .expect("product acceptance requires the Bubblewrap backend");
     assert!(bwrap.status.success(), "Bubblewrap must be runnable");
 
-    let repository = tempfile::tempdir().expect("temporary repository");
-    let external = tempfile::tempdir().expect("external directory");
+    // Bubblewrap intentionally replaces /tmp with an isolated tmpfs. Create the
+    // acceptance fixture beneath the checked-out workspace so the repository
+    // bind remains visible after that mount is applied.
+    let workspace = env::current_dir().expect("current workspace");
+    let repository = tempfile::Builder::new()
+        .prefix("product-acceptance-repository-")
+        .tempdir_in(&workspace)
+        .expect("temporary repository");
+    let external = tempfile::Builder::new()
+        .prefix("product-acceptance-external-")
+        .tempdir_in(&workspace)
+        .expect("external directory");
     let tools = ToolManager::new(DesktopCommanderSettings::default());
 
     tools
