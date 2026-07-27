@@ -1,0 +1,38 @@
+name: Apply recovery preview integrity
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+    paths:
+      - scripts/apply-recovery-preview-integrity.py
+      - .github/workflows/apply-recovery-preview-integrity.yml
+
+permissions:
+  contents: write
+
+jobs:
+  apply-and-test:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: fix/recovery-preview-checkpoint-integrity
+          fetch-depth: 0
+      - uses: dtolnay/rust-toolchain@1.88.0
+        with:
+          components: rustfmt
+      - name: Apply exact recovery patch
+        run: python3 scripts/apply-recovery-preview-integrity.py
+      - name: Format recovery source
+        run: cargo fmt -- crates/medusa-recovery-coordinator/src/view.rs
+      - name: Run recovery coordinator tests
+        run: cargo test -p medusa-recovery-coordinator
+      - name: Commit tested implementation
+        run: |
+          set -euo pipefail
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add crates/medusa-recovery-coordinator/src/view.rs
+          git commit -m "fix(recovery): bind previews to verified checkpoints"
+          git push origin HEAD:fix/recovery-preview-checkpoint-integrity
