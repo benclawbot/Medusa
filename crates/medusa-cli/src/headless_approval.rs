@@ -146,3 +146,5 @@ mod tests {
         assert_eq!(normalize_command(" cargo   test  "), "cargo test");
     }
 }
+
+// Workflow synchronization marker for issue #380.
