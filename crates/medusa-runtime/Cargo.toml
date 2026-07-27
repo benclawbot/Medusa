@@ -6,9 +6,10 @@ edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
+build = "build.rs"
 
 [lib]
-path = "src/runtime_root.rs"
+path = "src/runtime_root_generated.rs"
 
 [dependencies]
 base64 = "0.22"
