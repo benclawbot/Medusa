@@ -20,6 +20,10 @@ path = "src/capabilities.rs"
 name = "medusa-clarity"
 path = "src/clarity.rs"
 
+[[bin]]
+name = "medusa-product-acceptance"
+path = "src/product_acceptance.rs"
+
 [dependencies]
 clap = { version = "4.5", features = ["derive"] }
 medusa-agent = { path = "../medusa-agent" }
