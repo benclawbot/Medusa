@@ -7,10 +7,7 @@ use std::process::Command;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 const REQUIRED_LINUX_EVIDENCE: &[(&str, &str)] = &[
-    (
-        "bounded-coding-task",
-        "production-orchestration",
-    ),
+    ("bounded-coding-task", "production-orchestration"),
     (
         "repository-write-boundary",
         "filesystem-network-process-boundary",
@@ -19,34 +16,16 @@ const REQUIRED_LINUX_EVIDENCE: &[(&str, &str)] = &[
         "external-filesystem-denial",
         "filesystem-network-process-boundary",
     ),
-    (
-        "network-denial",
-        "filesystem-network-process-boundary",
-    ),
+    ("network-denial", "filesystem-network-process-boundary"),
     (
         "process-tree-cleanup",
         "filesystem-network-process-boundary",
     ),
-    (
-        "interrupt-and-resume",
-        "interruption-resume",
-    ),
-    (
-        "durable-checkpoint-restore",
-        "checkpoint-restore",
-    ),
-    (
-        "failed-change-rollback",
-        "verification-rollback",
-    ),
-    (
-        "final-repository-verification",
-        "headless-entrypoint",
-    ),
-    (
-        "corrupted-state-recovery",
-        "corrupted-state-recovery",
-    ),
+    ("interrupt-and-resume", "interruption-resume"),
+    ("durable-checkpoint-restore", "checkpoint-restore"),
+    ("failed-change-rollback", "verification-rollback"),
+    ("final-repository-verification", "headless-entrypoint"),
+    ("corrupted-state-recovery", "corrupted-state-recovery"),
 ];
 
 #[derive(Debug, Deserialize)]
@@ -161,9 +140,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
     let mut proof_passed = status.success() && summary.failed == 0;
     for (guarantee, scenario_id) in REQUIRED_LINUX_EVIDENCE {
         let scenario = scenarios.get(scenario_id).ok_or_else(|| {
-            format!(
-                "acceptance contract drifted: required scenario `{scenario_id}` is missing"
-            )
+            format!("acceptance contract drifted: required scenario `{scenario_id}` is missing")
         })?;
         let passed = scenario.status == "passed";
         proof_passed &= passed;
@@ -249,14 +226,18 @@ fn cargo_program() -> &'static str {
 fn relative_or_original(output_dir: &Path, value: &str) -> String {
     let path = Path::new(value);
     if path.is_absolute() {
-        path.strip_prefix(output_dir)
-            .map_or_else(|_| value.to_string(), |relative| relative.display().to_string())
+        path.strip_prefix(output_dir).map_or_else(
+            |_| value.to_string(),
+            |relative| relative.display().to_string(),
+        )
     } else {
         value.to_string()
     }
 }
 
 fn path_relative_to(output_dir: &Path, path: &Path) -> String {
-    path.strip_prefix(output_dir)
-        .map_or_else(|_| path.display().to_string(), |relative| relative.display().to_string())
+    path.strip_prefix(output_dir).map_or_else(
+        |_| path.display().to_string(),
+        |relative| relative.display().to_string(),
+    )
 }
