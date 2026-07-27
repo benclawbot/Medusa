@@ -249,7 +249,10 @@ fn execute_scenario(
                 .map_or_else(|| "terminated".to_string(), |code| code.to_string())
         ))
     } else if !marker_present {
-        Some("required test marker was not present; the filter may have matched zero tests".to_string())
+        Some(
+            "required test marker was not present; the filter may have matched zero tests"
+                .to_string(),
+        )
     } else {
         None
     };
@@ -267,11 +270,7 @@ fn execute_scenario(
 }
 
 fn cargo_program() -> &'static str {
-    if cfg!(windows) {
-        "cargo.exe"
-    } else {
-        "cargo"
-    }
+    if cfg!(windows) { "cargo.exe" } else { "cargo" }
 }
 
 fn combine_output(output: &Output) -> String {
