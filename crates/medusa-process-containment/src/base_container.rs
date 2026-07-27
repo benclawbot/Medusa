@@ -1,21 +1,24 @@
 use std::{
     collections::BTreeSet,
     ffi::{OsStr, OsString, c_void},
-    fs, io,
+    io,
     mem::{size_of, transmute, zeroed},
     os::windows::{ffi::OsStrExt, process::ExitStatusExt},
     path::{Path, PathBuf},
     process::{ExitStatus, Output},
     ptr::{null, null_mut},
-    time::{Duration, SystemTime, UNIX_EPOCH},
+    thread,
+    time::Duration,
 };
 
 use flatbuffers::FlatBufferBuilder;
 use windows_sys::Win32::{
     Foundation::{
-        CloseHandle, FARPROC, FreeLibrary, HANDLE, HMODULE, INVALID_HANDLE_VALUE, WAIT_OBJECT_0,
-        WAIT_TIMEOUT,
+        CloseHandle, FARPROC, FreeLibrary, HANDLE, HANDLE_FLAG_INHERIT, HMODULE,
+        INVALID_HANDLE_VALUE, SetHandleInformation, WAIT_OBJECT_0, WAIT_TIMEOUT,
     },
+    Security::SECURITY_ATTRIBUTES,
+    Storage::FileSystem::ReadFile,
     System::{
         JobObjects::{
             AssignProcessToJobObject, CreateJobObjectW, JOB_OBJECT_LIMIT_ACTIVE_PROCESS,
@@ -24,9 +27,11 @@ use windows_sys::Win32::{
             SetInformationJobObject,
         },
         LibraryLoader::{GetProcAddress, LOAD_LIBRARY_SEARCH_SYSTEM32, LoadLibraryExW},
+        Pipes::CreatePipe,
         Threading::{
             CREATE_NO_WINDOW, CREATE_SUSPENDED, CREATE_UNICODE_ENVIRONMENT, GetExitCodeProcess,
-            PROCESS_INFORMATION, ResumeThread, STARTUPINFOW, WaitForSingleObject,
+            PROCESS_INFORMATION, ResumeThread, STARTF_USESTDHANDLES, STARTUPINFOW,
+            WaitForSingleObject,
         },
     },
 };
@@ -35,6 +40,7 @@ const SANDBOX_IDENTITY: &str = "Medusa.CommandSandbox.v2";
 const COMMAND_TIMEOUT: Duration = Duration::from_secs(120);
 const PROCESSMODEL_DLL: &str = "processmodel.dll";
 const SANDBOX_EXPORT: &[u8] = b"Experimental_CreateProcessInSandbox\0";
+const BROKEN_PIPE: u32 = 109;
 
 type CreateProcessInSandbox = unsafe extern "system" fn(
     *const u16,
@@ -77,31 +83,26 @@ impl Default for WindowsSandboxRestrictions {
     }
 }
 
-/// Runs a command in the Windows composable sandbox.
+/// Runs a command directly in the Windows composable sandbox.
 ///
-/// The operating system supplies AppContainer network isolation and Bound File
-/// System grants. The repository is the only read/write host path; toolchain and
-/// system locations are read-only. The function fails closed when the Windows
-/// 11 experimental sandbox API is unavailable.
+/// No shell or batch file is involved, so arguments cannot be reinterpreted as
+/// shell syntax after they cross the command-policy boundary.
 pub fn run_appcontainer(repo: &Path, program: &str, args: &[String]) -> io::Result<Output> {
     let root = strip_verbatim(&repo.canonicalize()?);
     let executable = strip_verbatim(&resolve_program(program)?);
-    let temp = SandboxTemp::new(&root)?;
-    temp.write_script(&executable, args)?;
-
     let read_only = read_only_paths(&executable);
     let specification = sandbox_specification(&root, &read_only);
     let api = SandboxApi::load()?;
-    let result = unsafe { launch(&api, &root, &temp, &specification) };
-    result.and_then(|status| temp.output(status))
+    unsafe { launch(&api, &root, &executable, args, &specification) }
 }
 
 unsafe fn launch(
     api: &SandboxApi,
     root: &Path,
-    temp: &SandboxTemp,
+    executable: &Path,
+    args: &[String],
     specification: &[u8],
-) -> io::Result<ExitStatus> {
+) -> io::Result<Output> {
     let job = OwnedHandle::new(unsafe { CreateJobObjectW(null(), null()) })?;
     let mut limits: JOBOBJECT_EXTENDED_LIMIT_INFORMATION = unsafe { zeroed() };
     limits.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE
@@ -121,31 +122,28 @@ unsafe fn launch(
         return Err(io::Error::last_os_error());
     }
 
-    let cmd = system_command("cmd.exe")?;
-    let mut command_line = wide_command_line(
-        &cmd,
-        &[
-            "/D".into(),
-            "/S".into(),
-            "/C".into(),
-            temp.script.display().to_string(),
-        ],
-    );
+    let (stdout_read, stdout_write) = create_inheritable_pipe()?;
+    let (stderr_read, stderr_write) = create_inheritable_pipe()?;
+    let mut command_line = wide_command_line(executable, args);
     let mut environment = environment_block(root)?;
-    let cmd_wide = wide_null(cmd.as_os_str());
+    let executable_wide = wide_null(executable.as_os_str());
     let root_wide = wide_null(root.as_os_str());
     let identity = wide_null(OsStr::new(SANDBOX_IDENTITY));
     let mut startup: STARTUPINFOW = unsafe { zeroed() };
     startup.cb = size_of::<STARTUPINFOW>() as u32;
+    startup.dwFlags = STARTF_USESTDHANDLES;
+    startup.hStdInput = INVALID_HANDLE_VALUE;
+    startup.hStdOutput = stdout_write.0;
+    startup.hStdError = stderr_write.0;
     let mut process: PROCESS_INFORMATION = unsafe { zeroed() };
 
     let created = unsafe {
         (api.create)(
-            cmd_wide.as_ptr(),
+            executable_wide.as_ptr(),
             command_line.as_mut_ptr(),
             null(),
             null(),
-            0,
+            1,
             CREATE_SUSPENDED | CREATE_NO_WINDOW | CREATE_UNICODE_ENVIRONMENT,
             environment.as_mut_ptr().cast(),
             root_wide.as_ptr(),
@@ -172,7 +170,11 @@ unsafe fn launch(
     if unsafe { ResumeThread(thread_handle.0) } == u32::MAX {
         return Err(io::Error::last_os_error());
     }
+    drop(stdout_write);
+    drop(stderr_write);
 
+    let stdout_reader = thread::spawn(move || read_all(stdout_read));
+    let stderr_reader = thread::spawn(move || read_all(stderr_read));
     let wait = unsafe { WaitForSingleObject(process_handle.0, COMMAND_TIMEOUT.as_millis() as u32) };
     if wait == WAIT_TIMEOUT {
         return Err(io::Error::new(
@@ -190,7 +192,67 @@ unsafe fn launch(
     if unsafe { GetExitCodeProcess(process_handle.0, &mut exit_code) } == 0 {
         return Err(io::Error::last_os_error());
     }
-    Ok(ExitStatus::from_raw(exit_code))
+    let stdout = join_reader(stdout_reader)?;
+    let stderr = join_reader(stderr_reader)?;
+    Ok(Output {
+        status: ExitStatus::from_raw(exit_code),
+        stdout,
+        stderr,
+    })
+}
+
+fn create_inheritable_pipe() -> io::Result<(OwnedHandle, OwnedHandle)> {
+    let attributes = SECURITY_ATTRIBUTES {
+        nLength: size_of::<SECURITY_ATTRIBUTES>() as u32,
+        lpSecurityDescriptor: null_mut(),
+        bInheritHandle: 1,
+    };
+    let mut read: HANDLE = null_mut();
+    let mut write: HANDLE = null_mut();
+    if unsafe { CreatePipe(&mut read, &mut write, &attributes, 0) } == 0 {
+        return Err(io::Error::last_os_error());
+    }
+    let read = OwnedHandle::new(read)?;
+    let write = OwnedHandle::new(write)?;
+    if unsafe { SetHandleInformation(read.0, HANDLE_FLAG_INHERIT, 0) } == 0 {
+        return Err(io::Error::last_os_error());
+    }
+    Ok((read, write))
+}
+
+fn read_all(handle: OwnedHandle) -> io::Result<Vec<u8>> {
+    let mut output = Vec::new();
+    let mut buffer = [0u8; 8192];
+    loop {
+        let mut read = 0u32;
+        if unsafe {
+            ReadFile(
+                handle.0,
+                buffer.as_mut_ptr().cast(),
+                buffer.len() as u32,
+                &mut read,
+                null_mut(),
+            )
+        } == 0
+        {
+            let error = io::Error::last_os_error();
+            if error.raw_os_error() == Some(BROKEN_PIPE as i32) {
+                break;
+            }
+            return Err(error);
+        }
+        if read == 0 {
+            break;
+        }
+        output.extend_from_slice(&buffer[..read as usize]);
+    }
+    Ok(output)
+}
+
+fn join_reader(reader: thread::JoinHandle<io::Result<Vec<u8>>>) -> io::Result<Vec<u8>> {
+    reader
+        .join()
+        .map_err(|_| io::Error::other("Windows sandbox output reader panicked"))?
 }
 
 fn sandbox_specification(root: &Path, read_only: &[PathBuf]) -> Vec<u8> {
@@ -252,60 +314,6 @@ fn read_only_paths(executable: &Path) -> Vec<PathBuf> {
         .collect()
 }
 
-struct SandboxTemp {
-    directory: PathBuf,
-    script: PathBuf,
-    stdout: PathBuf,
-    stderr: PathBuf,
-}
-
-impl SandboxTemp {
-    fn new(root: &Path) -> io::Result<Self> {
-        let nonce = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_nanos();
-        let directory = root
-            .join(".medusa-sandbox-tmp")
-            .join(format!("{}-{nonce}", std::process::id()));
-        fs::create_dir_all(&directory)?;
-        Ok(Self {
-            script: directory.join("command.cmd"),
-            stdout: directory.join("stdout.bin"),
-            stderr: directory.join("stderr.bin"),
-            directory,
-        })
-    }
-
-    fn write_script(&self, executable: &Path, args: &[String]) -> io::Result<()> {
-        let mut command = quote(executable.as_os_str());
-        for argument in args {
-            command.push(' ');
-            command.push_str(&quote(OsStr::new(argument)));
-        }
-        let script = format!(
-            "@echo off\r\n{command} 1>\"{}\" 2>\"{}\"\r\nexit /b %errorlevel%\r\n",
-            self.stdout.display(),
-            self.stderr.display()
-        );
-        fs::write(&self.script, script)
-    }
-
-    fn output(&self, status: ExitStatus) -> io::Result<Output> {
-        Ok(Output {
-            status,
-            stdout: fs::read(&self.stdout).unwrap_or_default(),
-            stderr: fs::read(&self.stderr).unwrap_or_default(),
-        })
-    }
-}
-
-impl Drop for SandboxTemp {
-    fn drop(&mut self) {
-        let _ = fs::remove_dir_all(&self.directory);
-    }
-}
-
 struct SandboxApi {
     module: HMODULE,
     create: CreateProcessInSandbox,
@@ -314,8 +322,7 @@ struct SandboxApi {
 impl SandboxApi {
     fn load() -> io::Result<Self> {
         let dll = wide_null(OsStr::new(PROCESSMODEL_DLL));
-        let module =
-            unsafe { LoadLibraryExW(dll.as_ptr(), null_mut(), LOAD_LIBRARY_SEARCH_SYSTEM32) };
+        let module = unsafe { LoadLibraryExW(dll.as_ptr(), null_mut(), LOAD_LIBRARY_SEARCH_SYSTEM32) };
         if module.is_null() {
             return Err(io::Error::new(
                 io::ErrorKind::Unsupported,
@@ -373,18 +380,9 @@ fn resolve_program(program: &str) -> io::Result<PathBuf> {
     ))
 }
 
-fn system_command(name: &str) -> io::Result<PathBuf> {
-    let root = std::env::var_os("SystemRoot")
-        .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "SystemRoot is not set"))?;
-    PathBuf::from(root)
-        .join("System32")
-        .join(name)
-        .canonicalize()
-}
-
 fn environment_block(root: &Path) -> io::Result<Vec<u16>> {
     let temp = root.join(".medusa-sandbox-tmp");
-    fs::create_dir_all(&temp)?;
+    std::fs::create_dir_all(&temp)?;
     let mut values = vec![
         ("PATH", std::env::var_os("PATH").unwrap_or_default()),
         (
@@ -464,6 +462,8 @@ fn strip_verbatim(path: &Path) -> PathBuf {
 
 struct OwnedHandle(HANDLE);
 
+unsafe impl Send for OwnedHandle {}
+
 impl OwnedHandle {
     fn new(handle: HANDLE) -> io::Result<Self> {
         if handle.is_null() || handle == INVALID_HANDLE_VALUE {
@@ -501,10 +501,14 @@ mod tests {
     }
 
     #[test]
-    fn command_line_quotes_arguments() {
-        let line = wide_command_line(Path::new("C:\\Program Files\\tool.exe"), &["a b".into()]);
+    fn command_line_preserves_shell_metacharacters_as_arguments() {
+        let line = wide_command_line(
+            Path::new("C:\\Program Files\\tool.exe"),
+            &["foo|bar".into(), "a b".into()],
+        );
         let decoded = String::from_utf16_lossy(&line);
         assert!(decoded.starts_with("\"C:\\Program Files\\tool.exe\""));
+        assert!(decoded.contains("foo|bar"));
         assert!(decoded.contains("\"a b\""));
     }
 }
