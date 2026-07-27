@@ -7,12 +7,37 @@ fn replace_once(source: &mut String, needle: &str, replacement: &str) {
     source.replace_range(position..position + needle.len(), replacement);
 }
 
+fn bind_module(source: &mut String, manifest: &str, declaration: &str, file: &str) {
+    let path = PathBuf::from(manifest)
+        .join("src")
+        .join(file)
+        .display()
+        .to_string()
+        .replace('\\', "/");
+    replace_once(source, declaration, &format!("#[path = \"{path}\"]\n{declaration}"));
+}
+
 fn main() {
     println!("cargo:rerun-if-changed=src/runtime_impl.rs");
     println!("cargo:rerun-if-changed=src/production_orchestrator.rs");
 
+    let manifest = env::var("CARGO_MANIFEST_DIR").expect("CARGO_MANIFEST_DIR");
     let mut source =
         fs::read_to_string("src/runtime_impl.rs").expect("read canonical runtime implementation");
+
+    for (declaration, file) in [
+        ("pub mod commands;", "commands.rs"),
+        ("mod error;", "error.rs"),
+        ("pub mod lifecycle;", "lifecycle.rs"),
+        ("pub mod prompt;", "prompt.rs"),
+        ("pub mod skill_dependencies;", "skill_dependencies.rs"),
+        ("pub mod skill_dependency_locks;", "skill_dependency_locks.rs"),
+        ("mod support;", "support.rs"),
+        ("mod tests;", "tests.rs"),
+    ] {
+        bind_module(&mut source, &manifest, declaration, file);
+    }
+    source = source.replace(", StepOutcome, TurnUsage,", ", StepOutcome,");
 
     replace_once(
         &mut source,
