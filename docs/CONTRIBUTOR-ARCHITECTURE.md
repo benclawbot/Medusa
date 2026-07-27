@@ -6,13 +6,13 @@ This map connects the product architecture in [`ARCHITECTURE.md`](ARCHITECTURE.m
 
 | Surface | Authoritative path | Responsibility |
 |---|---|---|
-| Production orchestration | `medusa-runtime::production_orchestrator` | Owns the production execution model and shared runtime event flow. |
+| Production orchestration | `medusa-runtime::production_orchestrator` | Plans orchestrated work and feeds the schedule into the single production `AgentEngine`. |
 | Terminal UI | `crates/medusa-tui` | Renders and drives the shared runtime interactively. |
 | Desktop application | `apps/medusa-desktop` | React/Tauri frontend over the shared runtime and daemon boundary. |
 | Headless CLI | `crates/medusa-cli` | Starts scripted objectives, resume flows, maintenance commands, and explicit approval allowlists. |
 | Agent session engine | `crates/medusa-agent` | Session state, plans, approvals, transactions, tool use, verification wiring, and durable records. |
 
-The workspace metadata in the root `Cargo.toml` is the machine-readable authority for the production execution model, orchestrator, delegation contract, and verification gate.
+The workspace metadata in the root `Cargo.toml` is the machine-readable authority for the production execution model, orchestrator, delegation status, and verification gate.
 
 ## Plan
 
@@ -26,20 +26,20 @@ The workspace metadata in the root `Cargo.toml` is the machine-readable authorit
 
 ## Execute Safely
 
-| Responsibility | Primary ownership | Supporting ownership |
-|---|---|---|
-| Production orchestration | `crates/medusa-runtime` | `crates/medusa-execution-orchestrator` |
-| Multi-agent scheduling | `crates/medusa-multi-agent-scheduler` | `crates/medusa-workers`, `crates/medusa-worker-leases` |
-| Parent/subagent integration | `crates/medusa-runtime`, `crates/medusa-agent` | `crates/medusa-consensus`, `crates/medusa-conflict-resolution` |
-| Read-set and isolated mutation | `crates/medusa-worker-read-set`, `crates/medusa-worker-transaction` | `crates/medusa-transaction-coordinator` |
-| Commit barrier | `crates/medusa-commit-barrier` | `crates/medusa-repository-snapshot` |
-| Filesystem transaction safety | `crates/medusa-agent/src/transaction.rs` | `crates/medusa-repository-rollback` |
-| Process containment | `crates/medusa-process-containment` | `crates/medusa-process-registry` |
-| Browser verification | `crates/medusa-browser-client`, `crates/medusa-browserd` | `crates/medusa-runtime` |
-| Repository verification gate | `crates/medusa-agent`, `crates/medusa-runtime` | `crates/medusa-hardening` |
-| Shared runtime events | `crates/medusa-protocol`, `crates/medusa-runtime` | `crates/medusa-tui`, `apps/medusa-desktop` |
+| Responsibility | Production status | Primary ownership | Supporting ownership |
+|---|---|---|---|
+| Production orchestration | Shipped | `crates/medusa-runtime` | `crates/medusa-execution-orchestrator` |
+| Multi-agent scheduling model | Scaffolding; not dispatched by production `run_prompt` | `crates/medusa-multi-agent-scheduler` | `crates/medusa-workers`, `crates/medusa-worker-leases` |
+| Parent/subagent integration | Planned production wiring | `crates/medusa-runtime`, `crates/medusa-agent` | `crates/medusa-consensus`, `crates/medusa-conflict-resolution` |
+| Read-set and isolated worker mutation | Supporting implementation paths | `crates/medusa-worker-read-set`, `crates/medusa-worker-transaction` | `crates/medusa-transaction-coordinator` |
+| Commit barrier | Supporting implementation path | `crates/medusa-commit-barrier` | `crates/medusa-repository-snapshot` |
+| Filesystem transaction safety | Shipped | `crates/medusa-agent/src/transaction.rs` | `crates/medusa-repository-rollback` |
+| Process containment | Shipped, platform-limited | `crates/medusa-process-containment` | `crates/medusa-process-registry` |
+| Browser verification | Shipped, prerequisite-limited | `crates/medusa-browser-client`, `crates/medusa-browserd` | `crates/medusa-runtime` |
+| Repository verification gate | Shipped | `crates/medusa-agent`, `crates/medusa-runtime` | `crates/medusa-hardening` |
+| Shared runtime events | Shipped | `crates/medusa-protocol`, `crates/medusa-runtime` | `crates/medusa-tui`, `apps/medusa-desktop` |
 
-A subagent result is input to the primary agent, not a completed change. The primary agent validates evidence, integrates accepted work, resolves conflicts, and submits the combined repository state to the commit and verification gates.
+Current production execution uses one `AgentEngine`; scheduler and worker APIs are not evidence that subagents are actively dispatched. The planned contract is that the primary agent validates evidence, integrates accepted work, resolves conflicts, and submits the combined repository state to commit and verification gates.
 
 ## Recover
 
