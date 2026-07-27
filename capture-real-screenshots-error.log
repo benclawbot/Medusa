@@ -1,44 +1,44 @@
 
-added 3 packages in 2s
+added 3 packages in 3s
 Installing dependencies...
 Switching to root user to install dependencies...
 Get:1 file:/etc/apt/apt-mirrors.txt Mirrorlist [144 B]
 Hit:3 https://packages.microsoft.com/repos/azure-cli noble InRelease
-Get:4 https://packages.microsoft.com/ubuntu/24.04/prod noble InRelease [3600 B]
 Hit:2 http://azure.archive.ubuntu.com/ubuntu noble InRelease
-Get:5 http://azure.archive.ubuntu.com/ubuntu noble-updates InRelease [126 kB]
-Get:6 http://azure.archive.ubuntu.com/ubuntu noble-backports InRelease [126 kB]
-Get:7 http://azure.archive.ubuntu.com/ubuntu noble-security InRelease [126 kB]
+Get:7 https://packages.microsoft.com/ubuntu/24.04/prod noble InRelease [3600 B]
 Get:8 https://dl.google.com/linux/chrome-stable/deb stable InRelease [2548 B]
+Get:4 http://azure.archive.ubuntu.com/ubuntu noble-updates InRelease [126 kB]
+Get:5 http://azure.archive.ubuntu.com/ubuntu noble-backports InRelease [126 kB]
+Get:6 http://azure.archive.ubuntu.com/ubuntu noble-security InRelease [126 kB]
 Get:9 https://packages.microsoft.com/ubuntu/24.04/prod noble/main amd64 Packages [237 kB]
 Get:10 https://packages.microsoft.com/ubuntu/24.04/prod noble/main armhf Packages [11.7 kB]
 Get:11 https://packages.microsoft.com/ubuntu/24.04/prod noble/main arm64 Packages [203 kB]
-Get:12 http://azure.archive.ubuntu.com/ubuntu noble-updates/main amd64 Packages [1151 kB]
-Get:13 http://azure.archive.ubuntu.com/ubuntu noble-updates/main Translation-en [277 kB]
-Get:14 http://azure.archive.ubuntu.com/ubuntu noble-updates/main amd64 Components [180 kB]
-Get:15 http://azure.archive.ubuntu.com/ubuntu noble-updates/universe amd64 Packages [1678 kB]
-Get:16 http://azure.archive.ubuntu.com/ubuntu noble-updates/universe Translation-en [333 kB]
-Get:17 http://azure.archive.ubuntu.com/ubuntu noble-updates/universe amd64 Components [388 kB]
-Get:18 http://azure.archive.ubuntu.com/ubuntu noble-updates/restricted amd64 Packages [1367 kB]
-Get:19 http://azure.archive.ubuntu.com/ubuntu noble-updates/restricted Translation-en [308 kB]
-Get:20 http://azure.archive.ubuntu.com/ubuntu noble-updates/multiverse amd64 Packages [45.4 kB]
-Get:21 http://azure.archive.ubuntu.com/ubuntu noble-updates/multiverse Translation-en [12.3 kB]
-Get:22 http://azure.archive.ubuntu.com/ubuntu noble-updates/multiverse amd64 Components [940 B]
-Get:23 http://azure.archive.ubuntu.com/ubuntu noble-backports/main amd64 Components [5760 B]
-Get:24 http://azure.archive.ubuntu.com/ubuntu noble-backports/universe amd64 Packages [32.5 kB]
-Get:25 http://azure.archive.ubuntu.com/ubuntu noble-backports/universe amd64 Components [12.6 kB]
-Get:26 http://azure.archive.ubuntu.com/ubuntu noble-security/main amd64 Packages [885 kB]
-Get:27 http://azure.archive.ubuntu.com/ubuntu noble-security/main Translation-en [196 kB]
-Get:28 http://azure.archive.ubuntu.com/ubuntu noble-security/main amd64 Components [46.3 kB]
-Get:29 http://azure.archive.ubuntu.com/ubuntu noble-security/universe amd64 Packages [1197 kB]
-Get:30 http://azure.archive.ubuntu.com/ubuntu noble-security/universe Translation-en [238 kB]
-Get:31 http://azure.archive.ubuntu.com/ubuntu noble-security/universe amd64 Components [76.3 kB]
-Get:32 http://azure.archive.ubuntu.com/ubuntu noble-security/restricted amd64 Packages [1248 kB]
-Get:33 http://azure.archive.ubuntu.com/ubuntu noble-security/restricted Translation-en [284 kB]
-Get:34 http://azure.archive.ubuntu.com/ubuntu noble-security/multiverse amd64 Packages [40.3 kB]
-Get:35 http://azure.archive.ubuntu.com/ubuntu noble-security/multiverse Translation-en [10.4 kB]
-Get:36 https://dl.google.com/linux/chrome-stable/deb stable/main amd64 Packages [1425 B]
-Fetched 10.9 MB in 1s (8309 kB/s)
+Get:12 https://dl.google.com/linux/chrome-stable/deb stable/main amd64 Packages [1425 B]
+Get:13 http://azure.archive.ubuntu.com/ubuntu noble-updates/main amd64 Packages [1151 kB]
+Get:14 http://azure.archive.ubuntu.com/ubuntu noble-updates/main Translation-en [277 kB]
+Get:15 http://azure.archive.ubuntu.com/ubuntu noble-updates/main amd64 Components [180 kB]
+Get:16 http://azure.archive.ubuntu.com/ubuntu noble-updates/universe amd64 Packages [1678 kB]
+Get:17 http://azure.archive.ubuntu.com/ubuntu noble-updates/universe Translation-en [333 kB]
+Get:18 http://azure.archive.ubuntu.com/ubuntu noble-updates/universe amd64 Components [388 kB]
+Get:19 http://azure.archive.ubuntu.com/ubuntu noble-updates/restricted amd64 Packages [1367 kB]
+Get:20 http://azure.archive.ubuntu.com/ubuntu noble-updates/restricted Translation-en [308 kB]
+Get:21 http://azure.archive.ubuntu.com/ubuntu noble-updates/multiverse amd64 Packages [45.4 kB]
+Get:22 http://azure.archive.ubuntu.com/ubuntu noble-updates/multiverse Translation-en [12.3 kB]
+Get:23 http://azure.archive.ubuntu.com/ubuntu noble-updates/multiverse amd64 Components [940 B]
+Get:24 http://azure.archive.ubuntu.com/ubuntu noble-backports/main amd64 Components [5760 B]
+Get:25 http://azure.archive.ubuntu.com/ubuntu noble-backports/universe amd64 Packages [32.5 kB]
+Get:26 http://azure.archive.ubuntu.com/ubuntu noble-backports/universe amd64 Components [12.6 kB]
+Get:27 http://azure.archive.ubuntu.com/ubuntu noble-security/main amd64 Packages [885 kB]
+Get:28 http://azure.archive.ubuntu.com/ubuntu noble-security/main Translation-en [196 kB]
+Get:29 http://azure.archive.ubuntu.com/ubuntu noble-security/main amd64 Components [46.3 kB]
+Get:30 http://azure.archive.ubuntu.com/ubuntu noble-security/universe amd64 Packages [1197 kB]
+Get:31 http://azure.archive.ubuntu.com/ubuntu noble-security/universe Translation-en [238 kB]
+Get:32 http://azure.archive.ubuntu.com/ubuntu noble-security/universe amd64 Components [76.3 kB]
+Get:33 http://azure.archive.ubuntu.com/ubuntu noble-security/restricted amd64 Packages [1248 kB]
+Get:34 http://azure.archive.ubuntu.com/ubuntu noble-security/restricted Translation-en [284 kB]
+Get:35 http://azure.archive.ubuntu.com/ubuntu noble-security/multiverse amd64 Packages [40.3 kB]
+Get:36 http://azure.archive.ubuntu.com/ubuntu noble-security/multiverse Translation-en [10.4 kB]
+Fetched 10.9 MB in 2s (7196 kB/s)
 Reading package lists...
 Reading package lists...
 Building dependency tree...
@@ -101,7 +101,7 @@ The following NEW packages will be installed:
   fonts-freefont-ttf fonts-ipafont-gothic fonts-tlwg-loma-otf fonts-unifont
   fonts-wqy-zenhei xfonts-cyrillic xfonts-encodings xfonts-scalable
   xfonts-utils
-0 upgraded, 9 newly installed, 0 to remove and 72 not upgraded.
+0 upgraded, 9 newly installed, 0 to remove and 66 not upgraded.
 Need to get 21.1 MB of archives.
 After this operation, 79.5 MB of additional disk space will be used.
 Get:1 file:/etc/apt/apt-mirrors.txt Mirrorlist [144 B]
@@ -114,7 +114,7 @@ Get:7 http://azure.archive.ubuntu.com/ubuntu noble/main amd64 xfonts-encodings a
 Get:8 http://azure.archive.ubuntu.com/ubuntu noble/main amd64 xfonts-utils amd64 1:7.7+6build3 [94.4 kB]
 Get:9 http://azure.archive.ubuntu.com/ubuntu noble/universe amd64 xfonts-cyrillic all 1:1.0.5+nmu1 [384 kB]
 Get:10 http://azure.archive.ubuntu.com/ubuntu noble/main amd64 xfonts-scalable all 1:1.0.3-1.3 [304 kB]
-Fetched 21.1 MB in 14s (1498 kB/s)
+Fetched 21.1 MB in 0s (43.4 MB/s)
 Selecting previously unselected package fonts-ipafont-gothic.
 (Reading database ... (Reading database ... 5%(Reading database ... 10%(Reading database ... 15%(Reading database ... 20%(Reading database ... 25%(Reading database ... 30%(Reading database ... 35%(Reading database ... 40%(Reading database ... 45%(Reading database ... 50%(Reading database ... 55%(Reading database ... 60%(Reading database ... 65%(Reading database ... 70%(Reading database ... 75%(Reading database ... 80%(Reading database ... 85%(Reading database ... 90%(Reading database ... 95%(Reading database ... 100%(Reading database ... 202954 files and directories currently installed.)
 Preparing to unpack .../0-fonts-ipafont-gothic_00303-21ubuntu1_all.deb ...
@@ -208,30 +208,31 @@ Chrome Headless Shell 151.0.7922.34 (playwright chromium-headless-shell v1234) d
 info: syncing channel updates for 1.88.0-x86_64-unknown-linux-gnu
 info: latest update on 2025-06-26 for version 1.88.0 (6b00bc388 2025-06-23)
 info: downloading component clippy
-[0m[1m[38;5;9merror[E0425][0m[0m[1m: cannot find function `draw_frame` in this scope[0m
-[0m   [0m[0m[1m[38;5;12m--> [0m[0mcrates/medusa-tui/src/lib.rs:541:5[0m
-[0m    [0m[0m[1m[38;5;12m|[0m
-[0m[1m[38;5;12m541[0m[0m [0m[0m[1m[38;5;12m|[0m[0m [0m[0m    draw_frame(&mut stdout, 140, &frame, None)?;[0m
-[0m    [0m[0m[1m[38;5;12m|[0m[0m     [0m[0m[1m[38;5;9m^^^^^^^^^^[0m[0m [0m[0m[1m[38;5;9mnot found in this scope[0m
-[0m    [0m[0m[1m[38;5;12m|[0m
-[0m[1m[38;5;10mnote[0m[0m: function `crate::render::draw_frame` exists but is inaccessible[0m
-[0m   [0m[0m[1m[38;5;12m--> [0m[0mcrates/medusa-tui/src/render/support.rs:156:1[0m
-[0m    [0m[0m[1m[38;5;12m|[0m
-[0m[1m[38;5;12m156[0m[0m [0m[0m[1m[38;5;12m|[0m[0m [0m[0m[1m[38;5;10m/[0m[0m [0m[0mpub(super) fn draw_frame([0m
-[0m[1m[38;5;12m157[0m[0m [0m[0m[1m[38;5;12m|[0m[0m [0m[0m[1m[38;5;10m|[0m[0m [0m[0m    stdout: &mut io::Stdout,[0m
-[0m[1m[38;5;12m158[0m[0m [0m[0m[1m[38;5;12m|[0m[0m [0m[0m[1m[38;5;10m|[0m[0m [0m[0m    width: u16,[0m
-[0m[1m[38;5;12m159[0m[0m [0m[0m[1m[38;5;12m|[0m[0m [0m[0m[1m[38;5;10m|[0m[0m [0m[0m    frame: &[StyledLine],[0m
-[0m[1m[38;5;12m...[0m[0m   [0m[0m[1m[38;5;10m|[0m
-[0m[1m[38;5;12m168[0m[0m [0m[0m[1m[38;5;12m|[0m[0m [0m[0m[1m[38;5;10m|[0m[0m [0m[0m    Ok(())[0m
-[0m[1m[38;5;12m169[0m[0m [0m[0m[1m[38;5;12m|[0m[0m [0m[0m[1m[38;5;10m|[0m[0m [0m[0m}[0m
-[0m    [0m[0m[1m[38;5;12m|[0m[0m [0m[0m[1m[38;5;10m|_^[0m[0m [0m[0m[1m[38;5;10mnot accessible[0m
+npm warn deprecated whatwg-encoding@3.1.1: Use @exodus/bytes instead for a more spec-conformant and faster implementation
 
-[0m[1m[38;5;9merror[E0063][0m[0m[1m: missing field `revision` in initializer of `medusa_runtime::prompt::PromptDraft`[0m
-[0m   [0m[0m[1m[38;5;12m--> [0m[0mcrates/medusa-tui/src/lib.rs:531:31[0m
-[0m    [0m[0m[1m[38;5;12m|[0m
-[0m[1m[38;5;12m531[0m[0m [0m[0m[1m[38;5;12m|[0m[0m [0m[0m[1m[38;5;12m...[0m[0m   TranscriptEntry::User(PromptDraft { text: "Fix the flaky runtime test and verify the result.".to_owned(), attachments: Vec::new() }),[0m
-[0m    [0m[0m[1m[38;5;12m|[0m[0m                             [0m[0m[1m[38;5;9m^^^^^^^^^^^[0m[0m [0m[0m[1m[38;5;9mmissing `revision`[0m
+added 184 packages, and audited 185 packages in 4s
 
-[0m[1mSome errors have detailed explanations: E0063, E0425.[0m
-[0m[1mFor more information about an error, try `rustc --explain E0063`.[0m
-[1m[31merror[0m[1m:[0m could not compile `medusa-tui` (lib) due to 2 previous errors
+33 packages are looking for funding
+  run `npm fund` for details
+
+found 0 vulnerabilities
+
+> medusa-desktop@1.0.0 build
+> tsc && vite build
+
+src/App.tsx(303,42): error TS2554: Expected 0 arguments, but got 1.
+src/App.tsx(323,29): error TS2554: Expected 0 arguments, but got 2.
+src/App.tsx(342,35): error TS2554: Expected 0 arguments, but got 1.
+src/App.tsx(352,29): error TS2554: Expected 0 arguments, but got 1.
+src/App.tsx(357,31): error TS2554: Expected 0 arguments, but got 2.
+src/App.tsx(370,38): error TS2554: Expected 0 arguments, but got 1.
+src/App.tsx(377,42): error TS2554: Expected 0 arguments, but got 1.
+src/App.tsx(378,30): error TS2554: Expected 0 arguments, but got 2.
+src/App.tsx(379,41): error TS2554: Expected 0 arguments, but got 1.
+src/App.tsx(396,30): error TS2554: Expected 0 arguments, but got 2.
+src/App.tsx(397,41): error TS2554: Expected 0 arguments, but got 1.
+src/App.tsx(440,33): error TS2554: Expected 0 arguments, but got 2.
+src/App.tsx(446,49): error TS2554: Expected 0 arguments, but got 2.
+src/App.tsx(481,30): error TS2554: Expected 0 arguments, but got 2.
+src/App.tsx(501,27): error TS2554: Expected 0 arguments, but got 1.
+src/App.tsx(510,31): error TS2554: Expected 0 arguments, but got 2.
