@@ -1,3 +1,10 @@
+pub mod view;
+pub use view::{
+    CheckpointPresentation, FileChangeKind, RecoveryActionAvailability, RecoveryFileChange,
+    RecoveryHealth, RecoveryOperation, RecoveryPreview, RecoveryView, RecoveryViewInput,
+    VerificationState,
+};
+
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, BTreeSet};
