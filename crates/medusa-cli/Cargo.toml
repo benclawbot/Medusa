@@ -33,6 +33,7 @@ medusa-daemon = { path = "../medusa-daemon" }
 medusa-extensions = { path = "../medusa-extensions" }
 medusa-github = { path = "../medusa-github" }
 medusa-hardening = { path = "../medusa-hardening" }
+medusa-protocol.workspace = true
 medusa-provider = { path = "../medusa-provider" }
 medusa-runtime = { path = "../medusa-runtime" }
 medusa-tui = { path = "../medusa-tui" }
