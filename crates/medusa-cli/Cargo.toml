@@ -22,6 +22,7 @@ path = "src/clarity.rs"
 
 [dependencies]
 clap = { version = "4.5", features = ["derive"] }
+hex.workspace = true
 medusa-agent = { path = "../medusa-agent" }
 medusa-capabilities = { path = "../medusa-capabilities" }
 medusa-clearops = { path = "../medusa-clearops" }
@@ -39,6 +40,7 @@ medusa-update = { path = "../medusa-update" }
 reqwest.workspace = true
 serde.workspace = true
 serde_json.workspace = true
+sha2.workspace = true
 toml.workspace = true
 walkdir = "2.5"
 
