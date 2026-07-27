@@ -28,6 +28,10 @@ path = "src/clarity.rs"
 name = "medusa-product-acceptance"
 path = "src/product_acceptance.rs"
 
+[[bin]]
+name = "medusa-proof"
+path = "src/proof.rs"
+
 [dependencies]
 clap = { version = "4.5", features = ["derive"] }
 hex.workspace = true
