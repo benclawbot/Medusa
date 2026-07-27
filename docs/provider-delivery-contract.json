@@ -1,0 +1,22 @@
+{
+  "schema_version": 1,
+  "first_run_choices": [
+    "chatgpt",
+    "anthropic",
+    "local",
+    "custom"
+  ],
+  "diagnostic_checks": [
+    "authentication",
+    "model_availability",
+    "minimal_completion",
+    "tool_use",
+    "image_input",
+    "context_window",
+    "streaming",
+    "external_dependencies"
+  ],
+  "credential_persistence": false,
+  "streaming_claim_policy": "fail_closed_until_native_streaming_is_verified",
+  "custom_endpoint_requires_base_url": true
+}
