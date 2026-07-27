@@ -1,4 +1,7 @@
 //! Safe adapter from the agent policy boundary to Windows process containment.
+//!
+//! The adapter preserves fail-closed containment errors and reports the
+//! effective Windows boundary in structured diagnostics.
 
 use std::{path::Path, process::Output};
 
