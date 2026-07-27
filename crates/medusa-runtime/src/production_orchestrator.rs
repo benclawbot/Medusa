@@ -106,22 +106,18 @@ pub fn runtime_context(plan: &ProductionExecutionPlan) -> String {
         .iter()
         .map(|contract| {
             format!(
-                "- {} ({:?}): dependencies={:?}; writes={:?}; subagents allowed={} depth={} parallel={}; primary agent must review={} and integrate={}",
+                "- {} ({:?}): dependencies={:?}; writes={:?}; required evidence={:?}",
                 contract.task_id,
                 contract.role,
                 contract.dependencies,
                 contract.allowed_write_paths,
-                contract.delegation.allowed,
-                contract.delegation.max_depth,
-                contract.delegation.max_parallel_subagents,
-                contract.delegation.parent_must_review,
-                contract.delegation.parent_must_integrate,
+                contract.required_evidence,
             )
         })
         .collect::<Vec<_>>()
         .join("\n");
     format!(
-        "Production multi-agent execution is active. Each primary segment agent receives task-scoped context only. Dependency outputs must be carried forward by task ID. Subagents may be used when useful, but inherit the parent scope and policies. The primary agent remains accountable for validating every subagent result, rejecting or revising weak output, resolving conflicts, and integrating only the required evidence-backed work. Repository verification is the completion gate.\n{contracts}"
+        "Production execution mode: single-agent orchestrated. The production orchestrator decomposed the objective into task contracts and dependencies for planning context, but the same AgentEngine performs the work. No workers or subagents are dispatched. Do not claim that delegation or parallel execution occurred. Repository verification is the completion gate.\n{contracts}"
     )
 }
 
@@ -202,36 +198,26 @@ pub fn events(plan: &ProductionExecutionPlan) -> Vec<RuntimeEvent> {
             kind: RuntimeActivityKind::Progress,
             title: "Direct execution selected".to_owned(),
             details: vec![
-                "The objective is conversational or single-step; multi-agent overhead was skipped."
+                "The objective is conversational or single-step; orchestration planning was skipped."
                     .to_owned(),
             ],
         })],
         (ExecutionMode::Orchestrated, Some(schedule)) => {
-            let mut result = vec![RuntimeEvent::Activity(RuntimeActivity {
+            vec![RuntimeEvent::Activity(RuntimeActivity {
                 id: Some(plan.fingerprint.clone()),
                 kind: RuntimeActivityKind::Progress,
-                title: "Production orchestrator planned execution".to_owned(),
+                title: "Execution contracts prepared".to_owned(),
                 details: vec![
-                    format!("{} dependency-aware tasks", plan.tasks.len()),
-                    format!("{} bounded-concurrency waves", schedule.waves.len()),
-                    "Each primary agent receives scoped context and remains responsible for subagent review and integration.".to_owned(),
+                    format!("{} dependency-aware task contracts", plan.tasks.len()),
+                    format!(
+                        "{} schedule waves retained as planning metadata; no workers were dispatched",
+                        schedule.waves.len()
+                    ),
+                    "The same AgentEngine receives the contracts and performs the repository work."
+                        .to_owned(),
                     "Repository verification remains the completion gate.".to_owned(),
                 ],
-            })];
-            for (index, wave) in schedule.waves.iter().enumerate() {
-                result.push(RuntimeEvent::Activity(RuntimeActivity {
-                    id: Some(format!("{}-wave-{}", plan.fingerprint, index + 1)),
-                    kind: RuntimeActivityKind::Tool,
-                    title: format!("Dispatch wave {}", index + 1),
-                    details: wave
-                        .iter()
-                        .map(|assignment| {
-                            format!("{} -> {}", assignment.task_id, assignment.worker_id)
-                        })
-                        .collect(),
-                }));
-            }
-            result
+            })]
         }
         _ => Vec::new(),
     }
@@ -288,9 +274,9 @@ fn contract_for(objective: &str, task: &Task) -> AgentContract {
         allowed_write_paths: task.write_paths.clone(),
         required_evidence,
         delegation: DelegationPolicy {
-            allowed: true,
-            max_depth: 2,
-            max_parallel_subagents: if role == AgentRole::Implementer { 3 } else { 2 },
+            allowed: false,
+            max_depth: 0,
+            max_parallel_subagents: 0,
             parent_must_review: true,
             parent_must_integrate: true,
         },
@@ -368,7 +354,7 @@ mod tests {
         assert_eq!(planned.mode, ExecutionMode::Orchestrated);
         assert_eq!(planned.tasks.len(), 4);
         assert_eq!(planned.schedule.as_ref().unwrap().waves.len(), 4);
-        assert!(planned.contracts.iter().all(|contract| contract.delegation.parent_must_review && contract.delegation.parent_must_integrate));
+        assert!(planned.contracts.iter().all(|contract| !contract.delegation.allowed));
     }
 
     #[test]
@@ -383,15 +369,27 @@ mod tests {
             vec!["tests pass".to_owned()],
         ).unwrap();
         assert_eq!(packet.dependency_outputs.len(), 1);
-        assert!(packet.contract.delegation.allowed);
+        assert!(!packet.contract.delegation.allowed);
     }
 
     #[test]
-    fn parent_rejects_stale_subagent_context() {
+    fn inactive_delegation_rejects_subagent_results() {
         let draft = PromptDraft { text: "Fix repository tests".to_owned(), ..PromptDraft::default() };
         let planned = plan(&draft).unwrap();
         let packet = context_for_task(&planned, "analyze", BTreeMap::new(), vec![], vec![]).unwrap();
-        assert!(validate_subagent_result(&packet, "research-1", "stale", &["evidence".to_owned()]).is_err());
+        assert!(validate_subagent_result(&packet, "research-1", &packet.fingerprint, &["evidence".to_owned()]).is_err());
+    }
+
+    #[test]
+    fn runtime_context_and_events_do_not_claim_dispatch() {
+        let draft = PromptDraft { text: "Implement a repository-wide refactor".to_owned(), ..PromptDraft::default() };
+        let planned = plan(&draft).unwrap();
+        let context = runtime_context(&planned);
+        assert!(context.contains("No workers or subagents are dispatched"));
+        assert!(!context.contains("multi-agent execution is active"));
+        let rendered = format!("{:?}", events(&planned));
+        assert!(!rendered.contains("Dispatch wave"));
+        assert!(rendered.contains("no workers were dispatched"));
     }
 
     #[test]
