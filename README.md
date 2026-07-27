@@ -29,8 +29,6 @@ Medusa has one production runtime with three user-facing entry points:
 | Desktop app | The same runtime in a React/Tauri interface with a central execution timeline, session navigation, diffs, memory views, settings, and approvals. |
 | Headless CLI | Scripted objectives, resumable sessions, and unattended runs with an explicit command-approval allowlist. |
 
-The production coding path is a single authoritative agent loop. Transaction-oriented multi-agent crates remain experimental workspace components and are not presented as the default product execution model.
-
 ## Installation
 
 ### Prerequisites
@@ -38,7 +36,7 @@ The production coding path is a single authoritative agent loop. Transaction-ori
 - Git
 - Rust 1.88 or newer; this repository pins Rust 1.88.0
 - A supported model connection
-- Node.js 22 when using ChatGPT OAuth, browser verification, desktop development, or desktop packaging
+- Node.js 22 for optional ChatGPT OAuth, browser verification, desktop development, or desktop packaging
 
 ### Install the CLI from `main`
 
@@ -64,15 +62,15 @@ medusa doctor
 
 ### Desktop application
 
-The release workflow builds unsigned desktop packages for:
+The release workflow builds unsigned desktop packages for Linux, macOS, and Windows. Release assets remain draft-only until a maintainer reviews the packages, checksums, SBOM, and provenance.
 
 - Linux: Debian package and AppImage
 - macOS: application archive and DMG
 - Windows: NSIS installer
 
-Release assets remain draft-only until a maintainer reviews the packages, checksums, SBOM, and provenance. Windows packages are not Authenticode-signed, macOS packages are not Developer ID signed or notarized, and Linux packages are not distributed through a signed package repository.
+Windows packages are not Authenticode-signed, macOS packages are not Developer ID signed or notarized, and Linux packages are not distributed through a signed package repository.
 
-For desktop development from source, install Node.js 22, then use the scripts in `apps/medusa-desktop`.
+For desktop development from source, install Node.js 22 and use the scripts in `apps/medusa-desktop`.
 
 ## First run
 
@@ -101,18 +99,6 @@ The Rust provider layer directly implements Anthropic Messages-compatible routes
 | Anthropic-compatible endpoint | `MEDUSA_API_KEY` and optionally `MEDUSA_BASE_URL` |
 
 MiniMax is the default route. A custom base URL can be supplied through configuration or the provider-specific environment variable.
-
-### Gateway and OpenAI-compatible connections
-
-First-run setup also supports local or externally supplied gateways, including OmniRoute, OpenAI-compatible endpoints, local model runtimes, the OpenAI API, and ChatGPT OAuth.
-
-ChatGPT OAuth is provided through the external `openai-oauth` loopback gateway, not by an embedded OAuth implementation. Medusa expects it at `127.0.0.1:10531` and can start it with:
-
-```bash
-npx --yes openai-oauth@latest --detach
-```
-
-Node.js is required. The gateway owns the OAuth credential; Medusa communicates with its local OpenAI-compatible endpoint and does not read the gateway's credential file.
 
 Review or reset the saved connection with:
 
@@ -182,42 +168,7 @@ medusa update
 
 ## Configuration
 
-Medusa loads typed configuration with unknown fields denied. The supported runtime sections are:
-
-```toml
-version = 1
-
-[agent]
-mode = "yolo"              # yolo, review, or read-only
-max_turns = 500
-parallel_workers = 4        # bounded parallel read-only tool work
-
-[model]
-provider = "minimax"
-name = "MiniMax-M3"
-protocol = "anthropic"     # anthropic or openai
-base_url = "https://api.minimax.io/anthropic"
-auth = "api-key"           # api-key or none
-tool_calling = true
-streaming = false
-max_output_tokens = 32768
-context_window_tokens = 1000000
-auto_compact_percent = 40
-max_retries = 1
-retry_base_delay_ms = 250
-retry_max_delay_ms = 8000
-retry_jitter_ms = 100
-
-[memory]
-enabled = true
-format = "markdown"
-
-[verification]
-required = true
-browser_on_ui_change = true
-```
-
-Fallback providers are complete routes with their own provider, model, protocol, endpoint, authentication mode, capabilities, and retry policy. A fallback does not inherit the primary provider's credentials or request-specific fields.
+Medusa loads typed configuration with unknown fields denied. The principal runtime settings cover agent mode and turn limits, provider route and model details, retry policy, Markdown memory, and required verification.
 
 Command-line overrides use `--set key=value`:
 
@@ -226,13 +177,13 @@ medusa --set agent.mode=read-only
 medusa --set verification.browser_on_ui_change=false
 ```
 
+Fallback providers are complete routes with their own provider, model, protocol, endpoint, authentication mode, capabilities, and retry policy. A fallback does not inherit the primary provider's credentials or request-specific fields.
+
 ## Verification and safety
 
 Medusa treats successful model output and successful repository work as different things. Coding completion requires repository verification.
 
 After mutations, the runtime can build a code index, inspect changed symbols and affected files, select impacted tests, detect public API risk, and run targeted commands. It falls back to broader repository checks when semantic selection is unavailable or unsafe.
-
-Browser verification is automatically considered for effective UI changes when `verification.browser_on_ui_change` is enabled. Documentation-only, generated, snapshot-only, lockfile, and build-output changes are excluded. A browser run records the route, assertions, screenshots, console errors, override state, and result. Missing browser or dev-server prerequisites produce an actionable failure rather than a false pass.
 
 Shell execution fails closed when the platform containment backend is unavailable:
 
@@ -240,7 +191,9 @@ Shell execution fails closed when the platform containment backend is unavailabl
 - macOS uses Seatbelt.
 - Windows uses the Windows 11 composable sandbox API with repository read/write binding, toolchain read-only binding, network denial, an environment allowlist, and Job Object limits.
 
-Windows command containment therefore requires Windows 11 with `Experimental_CreateProcessInSandbox` available. There is no unsandboxed fallback through the sandbox API.
+Windows command containment requires Windows 11 with `Experimental_CreateProcessInSandbox` available. There is no unsandboxed fallback through the sandbox API.
+
+Repository writes are symlink-aware and transactional. `.git`, credential locations, operating-system configuration and executable paths, and login-persistence locations remain denied even when an external write receives approval.
 
 ## Persistent state
 
@@ -248,20 +201,68 @@ Repository-local state is stored under `.medusa`, including sessions, prompts, d
 
 Medusa's durable memory is Markdown-first. Recall is repository-scoped and bounded; it does not treat every previous session as trustworthy. Completed-session learning requires verified evidence, starts accepted lessons in probation, and preserves provenance.
 
+## Optional integrations
+
+These features are functional but are not required for the standard CLI and TUI coding path.
+
+### ChatGPT OAuth and OpenAI-compatible gateways
+
+First-run setup can use local or externally supplied gateways, including OmniRoute, OpenAI-compatible endpoints, local model runtimes, the OpenAI API, and ChatGPT OAuth.
+
+ChatGPT OAuth is provided through the separately distributed `openai-oauth` loopback gateway, not an embedded OAuth implementation. Medusa expects it at `127.0.0.1:10531` and can start it with:
+
+```bash
+npx --yes openai-oauth@latest --detach
+```
+
+The gateway owns the OAuth credential. Medusa communicates with its local OpenAI-compatible endpoint and does not read the gateway credential file.
+
+### Browser verification
+
+When `verification.browser_on_ui_change` is enabled, Medusa can automatically verify effective UI changes through the Playwright sidecar. Documentation-only, generated, snapshot-only, lockfile, and build-output changes are excluded.
+
+A browser run records the route, assertions, screenshots, console errors, override state, and result. Node.js, the browser sidecar, and a reachable development route are required. Missing prerequisites produce an actionable failure rather than a false pass.
+
+### Image prompts
+
+The runtime supports image message blocks, but screenshots are sent only when the selected provider explicitly declares compatible image-input support, media types, byte limits, and image-count limits.
+
+### Desktop Commander
+
+Desktop Commander integration is optional and isolated behind its extension boundary. The normal repository tools, runtime, TUI, and desktop application do not require it.
+
+## Experimental components
+
+The repository contains experimental components that are useful for research and future product work but are not the standard execution path.
+
+### Multi-agent execution
+
+Transaction-oriented multi-agent scheduling, worker roles, leases, conflict resolution, consensus, and parallel worktree components exist in the workspace. The supported production coding path remains one authoritative agent loop. Configuration such as `agent.parallel_workers` controls bounded parallel read-only tool work; it does not activate a general concurrent coding swarm.
+
+### Self-improvement and engineering proposals
+
+Medusa can collect verified session outcomes, failure evidence, skill metrics, and reviewable improvement proposals. Automatic mutation of core policy or protected runtime boundaries is not implied. Sensitive changes remain approval- and transaction-gated.
+
+### Advanced lifecycle and recovery primitives
+
+The workspace includes deterministic checkpoint, replay, rollback, recovery, and transaction-coordination primitives. Production entry points use the portions wired through the shared runtime; standalone crate APIs should not be interpreted as additional user-facing modes.
+
+Experimental components are deliberately kept out of installation and quick-start instructions until they become part of a tested, supported product workflow.
+
 ## Platform support
 
 The canonical workflows test the Rust workspace and daemon behavior across Linux, macOS, and Windows. Desktop CI builds and validates unsigned packages on all three platforms. Release gates also cover coverage, security checks, adversarial regressions, fuzz smoke tests, chaos and migration recovery, documentation/schema consistency, package smoke tests, and live provider scenarios.
 
-Platform support does not imply identical containment internals or operating-system signing. See the safety and desktop installation sections above for those boundaries.
+Platform support does not imply identical containment internals or operating-system signing.
 
 ## Current limitations
 
-- The production execution model is single-agent. Experimental multi-agent and transaction-coordination crates are not the default runtime path.
 - ChatGPT OAuth depends on the separately distributed `openai-oauth` gateway and Node.js.
 - Browser verification depends on Node.js, Playwright-sidecar availability, and a reachable development route.
 - Provider streaming is represented in configuration and capability checks, but the native Anthropic-compatible adapter currently performs non-streaming requests.
 - Screenshot input is accepted only when the selected provider declares compatible image support.
 - Desktop release packages are unsigned at the operating-system level.
+- Windows command containment requires the Windows 11 composable sandbox API.
 - The repository is evolving quickly; run `medusa update --check` and `medusa doctor` before diagnosing an older source installation.
 
 ## Project documentation
