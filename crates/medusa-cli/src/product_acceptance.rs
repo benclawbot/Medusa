@@ -151,46 +151,60 @@ fn scenarios_for_platform() -> Vec<Scenario> {
         },
     ];
 
-    if env::consts::OS == "windows" {
-        scenarios.push(Scenario {
-            id: "containment-fail-closed",
-            guarantee: "Windows containment fails closed when a requested program cannot be resolved or the platform backend is unavailable.",
-            package: "medusa-process-containment",
-            filter: Some("unresolvable_programs_fail_closed"),
-            required_marker: Some("unresolvable_programs_fail_closed"),
-        });
-        scenarios.push(Scenario {
-            id: "interruption-replay",
-            guarantee: "Interrupted execution can be replayed from durable evidence on Windows.",
-            package: "medusa-execution-replay",
-            filter: None,
-            required_marker: None,
-        });
-    } else {
-        scenarios.push(Scenario {
-            id: "process-tree-containment",
-            guarantee: "The platform containment backend enforces bounded process execution and process-tree cleanup.",
-            package: "medusa-process-containment",
-            filter: None,
-            required_marker: None,
-        });
-        scenarios.push(Scenario {
-            id: "interruption-resume",
-            guarantee: "An interrupted repository repair resumes through durable runtime state with exact evidence.",
-            package: "medusa-agent",
-            filter: Some("fixture_bug_fix_survives_restart_with_exact_evidence"),
-            required_marker: Some("fixture_bug_fix_survives_restart_with_exact_evidence"),
-        });
-    }
-
-    if env::consts::OS == "linux" {
-        scenarios.push(Scenario {
-            id: "filesystem-network-boundary",
-            guarantee: "The production Linux sandbox denies external writes and network access while allowing repository-bounded work.",
-            package: "medusa-agent",
-            filter: Some("sandbox_blocks_network_and_external_writes"),
-            required_marker: Some("sandbox_blocks_network_and_external_writes"),
-        });
+    match env::consts::OS {
+        "windows" => {
+            scenarios.push(Scenario {
+                id: "containment-fail-closed",
+                guarantee: "Windows containment fails closed when a requested program cannot be resolved or the platform backend is unavailable.",
+                package: "medusa-process-containment",
+                filter: Some("unresolvable_programs_fail_closed"),
+                required_marker: Some("unresolvable_programs_fail_closed"),
+            });
+            scenarios.push(Scenario {
+                id: "interruption-replay",
+                guarantee: "Interrupted execution can be replayed from durable evidence on Windows.",
+                package: "medusa-execution-replay",
+                filter: None,
+                required_marker: None,
+            });
+        }
+        "linux" => {
+            scenarios.push(Scenario {
+                id: "filesystem-network-process-boundary",
+                guarantee: "The production Linux sandbox starts successfully, allows repository-bounded writes, denies external writes and network access, and uses the real Bubblewrap backend.",
+                package: "medusa-agent",
+                filter: Some(
+                    "linux_product_boundary_exercises_allowed_write_external_denial_and_network_denial",
+                ),
+                required_marker: Some(
+                    "linux_product_boundary_exercises_allowed_write_external_denial_and_network_denial",
+                ),
+            });
+            scenarios.push(Scenario {
+                id: "interruption-resume",
+                guarantee: "An interrupted repository repair resumes through durable runtime state with exact evidence.",
+                package: "medusa-agent",
+                filter: Some("fixture_bug_fix_survives_restart_with_exact_evidence"),
+                required_marker: Some("fixture_bug_fix_survives_restart_with_exact_evidence"),
+            });
+        }
+        "macos" => {
+            scenarios.push(Scenario {
+                id: "policy-boundary",
+                guarantee: "The shipped macOS runtime enforces hard shell-command denials while no native process-containment backend is advertised.",
+                package: "medusa-agent",
+                filter: Some("dangerous_shell_commands_are_denied"),
+                required_marker: Some("dangerous_shell_commands_are_denied"),
+            });
+            scenarios.push(Scenario {
+                id: "interruption-resume",
+                guarantee: "An interrupted repository repair resumes through durable runtime state with exact evidence.",
+                package: "medusa-agent",
+                filter: Some("fixture_bug_fix_survives_restart_with_exact_evidence"),
+                required_marker: Some("fixture_bug_fix_survives_restart_with_exact_evidence"),
+            });
+        }
+        _ => {}
     }
     scenarios
 }
@@ -235,10 +249,7 @@ fn execute_scenario(
                 .map_or_else(|| "terminated".to_string(), |code| code.to_string())
         ))
     } else if !marker_present {
-        Some(
-            "required test marker was not present; the filter may have matched zero tests"
-                .to_string(),
-        )
+        Some("required test marker was not present; the filter may have matched zero tests".to_string())
     } else {
         None
     };
@@ -256,7 +267,11 @@ fn execute_scenario(
 }
 
 fn cargo_program() -> &'static str {
-    if cfg!(windows) { "cargo.exe" } else { "cargo" }
+    if cfg!(windows) {
+        "cargo.exe"
+    } else {
+        "cargo"
+    }
 }
 
 fn combine_output(output: &Output) -> String {
