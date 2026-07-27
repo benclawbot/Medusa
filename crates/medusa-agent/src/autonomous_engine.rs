@@ -46,7 +46,7 @@ impl<P: ModelProvider> AgentEngine<P> {
         let mut execution = autonomous_execution::AutonomousExecution::load(session)?;
         execution.complete(session, task_id, worker_id)?;
         session.updated_at = OffsetDateTime::now_utc();
-        session.completed = execution.is_complete();
+        finalize_autonomous_completion(session, execution.is_complete())?;
         persist(session)
     }
 
@@ -75,7 +75,7 @@ impl<P: ModelProvider> AgentEngine<P> {
         execution.review(session, task_id, reviewer_id, approved, feedback)?;
         let assignments = execution.dispatch_ready(session)?;
         session.updated_at = OffsetDateTime::now_utc();
-        session.completed = execution.is_complete();
+        finalize_autonomous_completion(session, execution.is_complete())?;
         persist(session)?;
         Ok(assignment_pairs(assignments))
     }
@@ -192,4 +192,34 @@ fn assignment_pairs(
         .into_iter()
         .map(|assignment| (assignment.task_id, assignment.worker_id))
         .collect()
+}
+
+fn finalize_autonomous_completion(
+    session: &mut AgentSession,
+    execution_complete: bool,
+) -> MedusaResult<()> {
+    if !execution_complete {
+        session.completed = false;
+        return Ok(());
+    }
+
+    append_event(
+        session,
+        Actor::System("autonomous_verification".to_owned()),
+        EventPayload::VerificationStarted {
+            commands: Vec::new(),
+        },
+    )?;
+    let verification = targeted_verification_for_paths(&session.repo, &[])?;
+    append_event(
+        session,
+        Actor::System("autonomous_verification".to_owned()),
+        EventPayload::VerificationCompleted {
+            passed: verification.passed,
+            evidence: verification.evidence.clone(),
+        },
+    )?;
+    session.evidence.extend(verification.evidence);
+    session.completed = verification.passed;
+    Ok(())
 }
