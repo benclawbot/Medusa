@@ -1,0 +1,47 @@
+name: Reliability Benchmarks
+
+on:
+  pull_request:
+    paths:
+      - 'benchmarks/**'
+      - 'scripts/reliability-benchmark.py'
+      - 'scripts/test-reliability-benchmark.py'
+      - 'docs/BENCHMARKS.md'
+      - '.github/workflows/reliability-benchmarks.yml'
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  scoring-contract:
+    name: Benchmark scoring contract
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Validate deterministic scoring fixtures
+        run: python3 scripts/test-reliability-benchmark.py
+
+  deterministic-runtime:
+    name: Deterministic runtime benchmark
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@1.88.0
+      - name: Refresh merged dependency lock
+        run: cargo generate-lockfile
+      - name: Run release-blocking reliability benchmark
+        env:
+          MEDUSA_BENCHMARK_COMMIT: ${{ github.sha }}
+        run: python3 scripts/reliability-benchmark.py
+      - name: Upload benchmark evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: reliability-benchmark-${{ github.sha }}
+          path: target/reliability-benchmark
