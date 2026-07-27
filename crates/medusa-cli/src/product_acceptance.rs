@@ -1,10 +1,9 @@
 use serde::Serialize;
 use std::env;
 use std::fs;
-use std::io;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
-use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
 #[derive(Debug, Clone)]
 struct Scenario {
@@ -31,7 +30,6 @@ struct AcceptanceSummary {
     schema_version: u32,
     generated_unix_seconds: u64,
     platform: String,
-    rust_target_os: String,
     passed: usize,
     failed: usize,
     total: usize,
@@ -68,7 +66,6 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
             .unwrap_or_default()
             .as_secs(),
         platform: env::consts::OS.to_string(),
-        rust_target_os: env::consts::OS.to_string(),
         passed,
         failed,
         total: results.len(),
@@ -212,20 +209,23 @@ fn execute_scenario(
     let log_path = output_dir.join(format!("{}.log", scenario.id));
     fs::write(&log_path, combined.as_bytes())?;
 
-    let mut detail = None;
     let marker_present = scenario
         .required_marker
         .is_none_or(|marker| combined.contains(marker));
     let passed = output.status.success() && marker_present;
-
-    if !output.status.success() {
-        detail = Some(format!(
+    let detail = if !output.status.success() {
+        Some(format!(
             "cargo exited with status {}",
-            output.status.code().map_or_else(|| "terminated".to_string(), |code| code.to_string())
-        ));
+            output
+                .status
+                .code()
+                .map_or_else(|| "terminated".to_string(), |code| code.to_string())
+        ))
     } else if !marker_present {
-        detail = Some("required test marker was not present; the filter may have matched zero tests".to_string());
-    }
+        Some("required test marker was not present; the filter may have matched zero tests".to_string())
+    } else {
+        None
+    };
 
     Ok(ScenarioResult {
         id: scenario.id.to_string(),
@@ -251,13 +251,4 @@ fn combine_output(output: &Output) -> String {
     combined.push_str("\n--- stderr ---\n");
     combined.push_str(&String::from_utf8_lossy(&output.stderr));
     combined
-}
-
-#[allow(dead_code)]
-fn _duration_ms(duration: Duration) -> u128 {
-    duration.as_millis()
-}
-
-fn _io_error(message: &str) -> io::Error {
-    io::Error::other(message)
 }
