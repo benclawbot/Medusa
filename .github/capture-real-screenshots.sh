@@ -4,6 +4,16 @@ set -euo pipefail
 npm install --no-save playwright @xterm/xterm
 npx playwright install --with-deps chromium
 
+python3 - <<'PY'
+from pathlib import Path
+p = Path('crates/medusa-tui/src/render.rs')
+s = p.read_text().replace('pub(super) mod support;', 'pub(crate) mod support;')
+p.write_text(s)
+p = Path('crates/medusa-tui/src/render/support.rs')
+s = p.read_text().replace('pub(super) fn draw_frame(', 'pub(crate) fn draw_frame(')
+p.write_text(s)
+PY
+
 cat >> crates/medusa-tui/src/lib.rs <<'RUST'
 
 #[doc(hidden)]
@@ -37,7 +47,7 @@ pub fn write_readme_screenshot_frame() -> std::io::Result<()> {
         ],
     });
     app.transcript = vec![
-        TranscriptEntry::User(PromptDraft { text: "Fix the flaky runtime test and verify the result.".to_owned(), attachments: Vec::new() }),
+        TranscriptEntry::User(PromptDraft { text: "Fix the flaky runtime test and verify the result.".to_owned(), attachments: Vec::new(), revision: 0 }),
         TranscriptEntry::Assistant("I found a stale assertion in the runtime activity test. The production path already forwards tool output details, so I’m aligning the test and running the focused suite.".to_owned()),
         TranscriptEntry::Activity(TranscriptActivity { id: Some("read".to_owned()), kind: TranscriptActivityKind::Tool, title: "Read crates/medusa-runtime/src/tests.rs".to_owned(), details: vec!["Located the stale completed activity expectation".to_owned()] }),
         TranscriptEntry::Activity(TranscriptActivity { id: Some("patch".to_owned()), kind: TranscriptActivityKind::Tool, title: "Patch completed activity expectation".to_owned(), details: vec!["Updated the assertion to preserve tool output details".to_owned()] }),
@@ -47,7 +57,7 @@ pub fn write_readme_screenshot_frame() -> std::io::Result<()> {
     let identity = UiIdentity::for_repo(&directory);
     let frame = render_frame(&identity, &app, 140, 42);
     let mut stdout = std::io::stdout();
-    draw_frame(&mut stdout, 140, &frame, None)?;
+    crate::render::support::draw_frame(&mut stdout, 140, &frame, None)?;
     stdout.flush()
 }
 RUST
@@ -160,12 +170,12 @@ s = p.read_text().replace('docs/assets/medusa-tui.svg', 'docs/assets/medusa-tui.
 p.write_text(s)
 PY
 
-git checkout -- crates/medusa-tui/src/lib.rs apps/medusa-desktop/src/App.tsx
-rm -f crates/medusa-tui/examples/readme_screenshot.rs apps/medusa-desktop/src/runtime.screenshot.ts capture-real-screenshots.mjs
+git checkout -- crates/medusa-tui/src/lib.rs crates/medusa-tui/src/render.rs crates/medusa-tui/src/render/support.rs apps/medusa-desktop/src/App.tsx
+rm -f crates/medusa-tui/examples/readme_screenshot.rs apps/medusa-desktop/src/runtime.screenshot.ts capture-real-screenshots.mjs capture-real-screenshots-error.log
 rm -f .github/workflows/capture-real-screenshots.yml .github/capture-real-screenshots.sh .github/capture-real-screenshots.trigger
 
 git config user.name github-actions[bot]
 git config user.email 41898282+github-actions[bot]@users.noreply.github.com
-git add README.md docs/assets .github crates/medusa-tui apps/medusa-desktop
+git add README.md docs/assets .github crates/medusa-tui apps/medusa-desktop capture-real-screenshots-error.log
 git commit -m "docs: replace illustrations with actual product screenshots"
 git push origin HEAD:fix/real-product-screenshots
