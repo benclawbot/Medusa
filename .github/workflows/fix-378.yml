@@ -1,0 +1,108 @@
+name: Apply issue 378 fix
+
+on:
+  push:
+    branches:
+      - fix/378-tool-output-details
+    paths:
+      - .github/workflows/fix-378.yml
+
+permissions:
+  contents: write
+
+jobs:
+  apply-fix:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: fix/378-tool-output-details
+          fetch-depth: 0
+      - name: Patch runtime output forwarding
+        shell: python
+        run: |
+          from pathlib import Path
+
+          path = Path("crates/medusa-runtime/src/support.rs")
+          text = path.read_text()
+
+          old = '''        AgentUpdate::ToolOutput {
+            tool,
+            output: _,
+            is_error,
+        } => {'''
+          new = '''        AgentUpdate::ToolOutput {
+            tool,
+            output,
+            is_error,
+        } => {'''
+          if old not in text:
+              raise SystemExit("ToolOutput match shape not found")
+          text = text.replace(old, new, 1)
+
+          old = '''                    details: Vec::new(),
+                },
+                |pending| RuntimeActivity {'''
+          new = '''                    details: tool_output_details(output),
+                },
+                |pending| RuntimeActivity {'''
+          if old not in text:
+              raise SystemExit("fallback activity details not found")
+          text = text.replace(old, new, 1)
+
+          old = '''                    details: Vec::new(),
+                },
+            );
+            let _ = events.send(RuntimeEvent::Activity(activity));'''
+          new = '''                    details: tool_output_details(output),
+                },
+            );
+            let _ = events.send(RuntimeEvent::Activity(activity));'''
+          if old not in text:
+              raise SystemExit("pending activity details not found")
+          text = text.replace(old, new, 1)
+
+          marker = '''fn summarize(value: &str) -> String {
+'''
+          helper = '''fn tool_output_details(output: &str) -> Vec<String> {
+    let output = output.trim();
+    if output.is_empty() {
+        Vec::new()
+    } else {
+        output.lines().map(str::to_owned).collect()
+    }
+}
+
+'''
+          if helper not in text:
+              if marker not in text:
+                  raise SystemExit("summarize marker not found")
+              text = text.replace(marker, helper + marker, 1)
+
+          old = '''        assert_eq!(summarize("short line"), "short line");
+        assert!(summarize(&"x".repeat(150)).ends_with("..."));'''
+          new = '''        assert_eq!(summarize("short line"), "short line");
+        assert!(summarize(&"x".repeat(150)).ends_with("..."));
+        assert!(tool_output_details("  \\n").is_empty());
+        assert_eq!(
+            tool_output_details("stdout line\\nstderr: command failed\\n"),
+            vec!["stdout line", "stderr: command failed"]
+        );'''
+          if old not in text:
+              raise SystemExit("formatting helper test marker not found")
+          text = text.replace(old, new, 1)
+
+          path.write_text(text)
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Format
+        run: cargo fmt --all -- --check
+      - name: Test runtime
+        run: cargo test -p medusa-runtime
+      - name: Remove temporary workflow and commit
+        run: |
+          rm .github/workflows/fix-378.yml
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add crates/medusa-runtime/src/support.rs .github/workflows/fix-378.yml
+          git commit -m "fix(runtime): surface tool output details"
+          git push origin HEAD:fix/378-tool-output-details
