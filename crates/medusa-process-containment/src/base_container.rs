@@ -1,8 +1,7 @@
 use std::{
     collections::BTreeSet,
     ffi::{OsStr, OsString, c_void},
-    fs,
-    io,
+    fs, io,
     mem::{size_of, transmute, zeroed},
     os::windows::{ffi::OsStrExt, process::ExitStatusExt},
     path::{Path, PathBuf},
@@ -378,7 +377,10 @@ fn resolve_program(program: &str) -> io::Result<PathBuf> {
 fn system_command(name: &str) -> io::Result<PathBuf> {
     let root = std::env::var_os("SystemRoot")
         .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "SystemRoot is not set"))?;
-    PathBuf::from(root).join("System32").join(name).canonicalize()
+    PathBuf::from(root)
+        .join("System32")
+        .join(name)
+        .canonicalize()
 }
 
 fn environment_block(root: &Path) -> io::Result<Vec<u16>> {
@@ -392,10 +394,7 @@ fn environment_block(root: &Path) -> io::Result<Vec<u16>> {
         ),
         ("TEMP", temp.clone().into_os_string()),
         ("TMP", temp.into_os_string()),
-        (
-            "MEDUSA_SANDBOX",
-            OsString::from("windows-base-container"),
-        ),
+        ("MEDUSA_SANDBOX", OsString::from("windows-base-container")),
         ("MEDUSA_NETWORK", OsString::from("disabled")),
     ];
     for key in ["CARGO_HOME", "RUSTUP_HOME"] {
