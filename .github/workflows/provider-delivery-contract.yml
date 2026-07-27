@@ -1,0 +1,41 @@
+name: Provider Delivery Contract
+
+on:
+  pull_request:
+    paths:
+      - 'crates/medusa-cli/src/config_command.rs'
+      - 'crates/medusa-cli/src/provider_diagnostic.rs'
+      - 'docs/PROVIDER-DELIVERY.md'
+      - 'docs/provider-delivery-contract.json'
+      - 'examples/**/*.toml'
+      - 'scripts/check-provider-delivery.py'
+      - '.github/workflows/provider-delivery-contract.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'crates/medusa-cli/src/config_command.rs'
+      - 'crates/medusa-cli/src/provider_diagnostic.rs'
+      - 'docs/PROVIDER-DELIVERY.md'
+      - 'docs/provider-delivery-contract.json'
+      - 'examples/**/*.toml'
+      - 'scripts/check-provider-delivery.py'
+      - '.github/workflows/provider-delivery-contract.yml'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: provider-delivery-contract-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  contract:
+    name: Provider choices and claims remain fail-closed
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Validate provider delivery contract
+        run: python3 scripts/check-provider-delivery.py
