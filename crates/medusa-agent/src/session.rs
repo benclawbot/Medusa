@@ -233,6 +233,22 @@ pub(crate) fn persist(session: &AgentSession) -> MedusaResult<()> {
         Err(_) => persist_at(&fallback_session_path(&session.repo, &session.id), session),
     };
     persisted?;
+    if session.events.last().is_some_and(|event| {
+        matches!(
+            event.payload,
+            medusa_protocol::EventPayload::ModelRequestStarted { .. }
+        )
+    }) {
+        if let Err(error) = record_loaded_skills(session) {
+            record_nonfatal(
+                &session.repo,
+                Some(&session.id),
+                "learning",
+                "record_loaded_skills",
+                &error.to_string(),
+            );
+        }
+    }
     if let Err(error) = recall::persist_completed_session(session) {
         record_nonfatal(
             &session.repo,
