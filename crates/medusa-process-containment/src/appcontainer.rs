@@ -73,13 +73,19 @@ impl Default for WindowsSandboxRestrictions {
 ///
 /// No user-supplied process is created when any setup operation fails.
 pub fn run_appcontainer(repo: &Path, program: &str, args: &[String]) -> io::Result<Output> {
-    let root = repo.canonicalize()?;
-    let executable = resolve_program(program)?;
+    let root = strip_verbatim(&repo.canonicalize()?);
+    let executable = strip_verbatim(&resolve_program(program)?);
     let profile = AppContainerProfile::open_or_create()?;
     let sid = profile.sid_string()?;
 
     let root_acl = AclGrant::grant(&root, &sid, "(OI)(CI)M")?;
-    let executable_acl = AclGrant::grant(&executable, &sid, "RX")?;
+    // Granting the container read/execute on the target binary requires
+    // ownership of it, which an unelevated user does not hold for System32 or
+    // Program Files executables. Windows already grants RX to
+    // ALL APPLICATION PACKAGES on those, so this grant is best-effort:
+    // omitting it is strictly more restrictive, and a genuinely unreadable
+    // binary still fails closed when the contained process is created.
+    let executable_acl = AclGrant::grant(&executable, &sid, "RX").ok();
     let result = unsafe { launch(&root, &executable, args, profile.sid) };
     drop(executable_acl);
     drop(root_acl);
@@ -175,7 +181,14 @@ unsafe fn launch(root: &Path, executable: &Path, args: &[String], sid: PSID) -> 
         )
     } == 0
     {
-        return Err(io::Error::last_os_error());
+        return Err(io::Error::new(
+            io::Error::last_os_error().kind(),
+            format!(
+                "contained process creation failed for {}: {}",
+                executable.display(),
+                io::Error::last_os_error()
+            ),
+        ));
     }
     let process_handle = OwnedHandle::new(process.hProcess)?;
     let thread_handle = OwnedHandle::new(process.hThread)?;
@@ -233,6 +246,37 @@ fn create_inheritable_pipe() -> io::Result<(OwnedHandle, OwnedHandle)> {
         return Err(io::Error::last_os_error());
     }
     Ok((read, write))
+}
+
+/// Converts a COM `HRESULT` into a diagnosable [`io::Error`].
+///
+/// The AppContainer profile APIs return `HRESULT`s, so feeding the raw value to
+/// [`io::Error::from_raw_os_error`] (which expects a Win32 code) reports an
+/// unrelated errno. `FACILITY_WIN32` results wrap the Win32 code in their low
+/// 16 bits, so unwrap that before formatting.
+fn hresult_error(context: &str, hresult: i32) -> io::Error {
+    let raw = hresult as u32;
+    let detail = if raw >> 16 == 0x8007 {
+        io::Error::from_raw_os_error((raw & 0xFFFF) as i32).to_string()
+    } else {
+        format!("HRESULT {raw:#010x}")
+    };
+    io::Error::other(format!("{context} failed: {detail}"))
+}
+
+/// Removes the `\\?\` prefix that [`Path::canonicalize`] adds on Windows.
+///
+/// `CreateProcessW` rejects verbatim paths for its working-directory argument,
+/// and the prefix otherwise leaks into user-visible diagnostics.
+fn strip_verbatim(path: &Path) -> PathBuf {
+    let text = path.to_string_lossy();
+    if let Some(rest) = text.strip_prefix(r"\\?\UNC\") {
+        return PathBuf::from(format!(r"\\{rest}"));
+    }
+    match text.strip_prefix(r"\\?\") {
+        Some(rest) => PathBuf::from(rest),
+        None => path.to_path_buf(),
+    }
 }
 
 fn resolve_program(program: &str) -> io::Result<PathBuf> {
@@ -384,7 +428,7 @@ impl AppContainerProfile {
             };
         }
         if result < 0 || sid.is_null() {
-            return Err(io::Error::from_raw_os_error(result));
+            return Err(hresult_error("AppContainer profile creation", result));
         }
         Ok(Self { sid })
     }
@@ -418,13 +462,16 @@ struct AclGrant {
 
 impl AclGrant {
     fn grant(path: &Path, sid: &str, rights: &str) -> io::Result<Self> {
-        let status = std::process::Command::new("icacls.exe")
+        // `.output()` keeps icacls progress text out of the inherited streams,
+        // which would otherwise interleave with agent and TUI output.
+        let output = std::process::Command::new("icacls.exe")
             .arg(path)
             .args(["/grant", &format!("*{sid}:{rights}"), "/Q"])
-            .status()?;
-        if !status.success() {
+            .output()?;
+        if !output.status.success() {
             return Err(io::Error::other(format!(
-                "icacls grant failed with {status}"
+                "icacls grant failed with {}",
+                output.status
             )));
         }
         Ok(Self {
@@ -439,7 +486,7 @@ impl Drop for AclGrant {
         let _ = std::process::Command::new("icacls.exe")
             .arg(&self.path)
             .args(["/remove", &format!("*{}", self.sid), "/Q"])
-            .status();
+            .output();
     }
 }
 

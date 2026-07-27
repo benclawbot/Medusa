@@ -381,34 +381,95 @@ mod platform {
             )));
         }
         let text = String::from_utf8_lossy(&output.stdout);
-        if !text.contains(&identity.sid) && !text.contains(&identity.account) {
+        let principals = acl_principals(path, &text);
+        if principals.is_empty() {
             return Err(io::Error::new(
                 io::ErrorKind::PermissionDenied,
-                "daemon endpoint ACL does not grant the current user",
+                "daemon endpoint ACL could not be read",
             ));
         }
-        for forbidden in [
-            "Everyone",
-            "Authenticated Users",
-            "BUILTIN\\Users",
-            "Users:",
-        ] {
-            if text.contains(forbidden) {
-                return Err(io::Error::new(
-                    io::ErrorKind::PermissionDenied,
-                    format!("daemon endpoint ACL contains broad principal {forbidden}"),
-                ));
+        // `/grant:r` replaced the ACL, so the only remaining principals must
+        // be the caller and a small set of well-known Windows principals that
+        // the kernel or filesystem layer adds independently of our grant
+        // (SYSTEM is granted by the object manager; CREATOR OWNER and
+        // CURRENT_USER are inherited from the parent and resolve to the
+        // caller in most cases). Comparing case-insensitively keeps this
+        // independent of the Windows display language.
+        for principal in &principals {
+            if grants_identity(principal, identity) || is_known_system_principal(principal) {
+                continue;
             }
+            return Err(io::Error::new(
+                io::ErrorKind::PermissionDenied,
+                format!("daemon endpoint ACL contains foreign principal {principal}"),
+            ));
         }
         Ok(())
     }
 
+    /// Windows-internal principals the kernel or filesystem add without
+    /// consulting the caller. They are not introduced by this code, so
+    /// accepting them does not widen the trust boundary.
+    fn is_known_system_principal(principal: &str) -> bool {
+        const KNOWN: &[&str] = &[
+            r"NT AUTHORITY\SYSTEM",
+            "SYSTEM",
+            "CREATOR OWNER",
+            "CREATOR GROUP",
+            r"BUILTIN\Administrators",
+        ];
+        KNOWN
+            .iter()
+            .any(|known| principal.eq_ignore_ascii_case(known))
+    }
+
+    /// Extracts the granted principals from `icacls` output.
+    ///
+    /// Entries are rendered as `PRINCIPAL:(RIGHTS)`, with the inspected path
+    /// prefixed onto the first line only.
+    fn acl_principals(path: &Path, text: &str) -> Vec<String> {
+        let displayed = path.to_string_lossy().to_string();
+        let mut principals = Vec::new();
+        for line in text.lines() {
+            let entry = line
+                .strip_prefix(displayed.as_str())
+                .unwrap_or(line)
+                .trim_start();
+            let Some(index) = entry.find(":(") else {
+                continue;
+            };
+            let principal = entry[..index].trim();
+            if !principal.is_empty() {
+                principals.push(principal.to_owned());
+            }
+        }
+        principals
+    }
+
+    /// Compares an `icacls` principal against the caller identity.
+    ///
+    /// `icacls` resolves SIDs to account names, and `whoami` may report the
+    /// machine component in a different case, so both forms are compared
+    /// case-insensitively.
+    fn grants_identity(principal: &str, identity: &UserIdentity) -> bool {
+        principal.eq_ignore_ascii_case(&identity.account)
+            || principal.eq_ignore_ascii_case(&identity.sid)
+            || principal
+                .trim_start_matches('*')
+                .eq_ignore_ascii_case(&identity.sid)
+    }
+
     fn run_icacls(path: &Path, args: &[&str]) -> io::Result<()> {
-        let status = Command::new("icacls.exe").arg(path).args(args).status()?;
-        if status.success() {
+        // `.output()` keeps icacls progress text out of the inherited streams,
+        // which would otherwise interleave with agent and TUI output.
+        let output = Command::new("icacls.exe").arg(path).args(args).output()?;
+        if output.status.success() {
             Ok(())
         } else {
-            Err(io::Error::other(format!("icacls.exe failed with {status}")))
+            Err(io::Error::other(format!(
+                "icacls.exe failed with {}",
+                output.status
+            )))
         }
     }
 
@@ -630,7 +691,7 @@ mod tests {
     }
 
     #[test]
-    fn endpoint_acl_is_current_user_only() {
+    fn endpoint_acl_excludes_broad_principals() {
         let directory = tempdir().expect("temporary directory");
         let endpoint = directory.path().join("medusa.sock");
         let _listener = LocalListener::bind(&endpoint).expect("bind listener");
@@ -641,9 +702,22 @@ mod tests {
             .expect("inspect endpoint ACL");
         assert!(output.status.success());
         let text = String::from_utf8_lossy(&output.stdout);
-        assert!(!text.contains("Everyone"));
-        assert!(!text.contains("Authenticated Users"));
-        assert!(!text.contains("BUILTIN\\Users"));
+        // The trust boundary is "no anonymous or unauthenticated principal
+        // can read the descriptor", not "the ACL lists the caller and nothing
+        // else". `NT AUTHORITY\SYSTEM` is granted by the object manager
+        // independently of the caller, so a strict allowlist of just the
+        // current user would always fail.
+        for forbidden in [
+            "Everyone",
+            "Authenticated Users",
+            "BUILTIN\\Users",
+            "Anonymous",
+        ] {
+            assert!(
+                !text.contains(forbidden),
+                "endpoint ACL must not contain {forbidden}: {text}"
+            );
+        }
     }
 
     fn descriptor_address(raw: &str) -> SocketAddr {

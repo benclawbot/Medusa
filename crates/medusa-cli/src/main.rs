@@ -121,7 +121,7 @@ fn main() {
 
 fn run() -> MedusaResult<()> {
     let cli = Cli::parse();
-    let repo = cli.repo.canonicalize().unwrap_or(cli.repo);
+    let repo = repository_path(&cli.repo);
 
     let Some(command) = cli.command else {
         ensure_first_run()?;
@@ -214,6 +214,25 @@ fn runtime_error(error: medusa_runtime::RuntimeError) -> MedusaError {
     )
 }
 
+/// Resolves the repository argument to an absolute path.
+///
+/// On Windows `canonicalize` returns a `\\?\` verbatim path. That prefix leaks
+/// into diagnostics and daemon endpoint paths, and several Win32 consumers
+/// reject it, so it is removed while keeping the resolved location.
+fn repository_path(requested: &Path) -> PathBuf {
+    let resolved = requested
+        .canonicalize()
+        .unwrap_or_else(|_| requested.to_path_buf());
+    let text = resolved.to_string_lossy();
+    if let Some(rest) = text.strip_prefix(r"\\?\UNC\") {
+        return PathBuf::from(format!(r"\\{rest}"));
+    }
+    match text.strip_prefix(r"\\?\") {
+        Some(rest) => PathBuf::from(rest),
+        None => resolved,
+    }
+}
+
 fn drain_headless_runtime(runtime: &RuntimeController) -> MedusaResult<()> {
     loop {
         match runtime.try_event().map_err(runtime_error)? {
@@ -229,7 +248,9 @@ fn drain_headless_runtime(runtime: &RuntimeController) -> MedusaResult<()> {
                     ErrorCode::DependencyUnavailable,
                     ErrorCategory::Execution,
                     format!(
-                        "agent is waiting for user input: {}",
+                        "agent is waiting for user input, which headless execution cannot provide: {}. \
+                         Approval prompts can only be answered in the interactive terminal, so rerun \
+                         this objective with `medusa` instead of `medusa run`.",
                         question
                             .prompts()
                             .first()
