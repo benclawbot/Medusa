@@ -25,6 +25,8 @@ use medusa_update::{InstallKind, InstallLocation, MainBranchUpdater, UpdatePolic
 use serde::Serialize;
 use walkdir::WalkDir;
 
+use super::oauth_preflight;
+
 #[derive(Parser, Debug)]
 #[command(
     name = "medusa",
@@ -124,6 +126,13 @@ fn run() -> MedusaResult<()> {
     let Some(command) = cli.command else {
         ensure_first_run()?;
         ensure_selected_runtime()?;
+        let overrides = cli
+            .overrides
+            .iter()
+            .cloned()
+            .collect::<BTreeMap<_, _>>();
+        let config = Config::load_layers(None, None, &BTreeMap::new(), &overrides)?;
+        oauth_preflight::run_if_needed(&config)?;
         let mut options = TuiOptions::for_repo(repo);
         options.initial_prompt = cli.prompt;
         options.resume_session = cli.resume_session;
@@ -169,6 +178,7 @@ fn run() -> MedusaResult<()> {
         CommandKind::Checkpoint { message } => checkpoint(&repo, &message),
         CommandKind::Run { objective } => {
             ensure_selected_runtime()?;
+            oauth_preflight::run_if_needed(&config)?;
             let runtime = RuntimeController::start_with_config(repo, config);
             runtime
                 .submit(PromptDraft {
@@ -180,6 +190,7 @@ fn run() -> MedusaResult<()> {
         }
         CommandKind::Resume { session } => {
             ensure_selected_runtime()?;
+            oauth_preflight::run_if_needed(&config)?;
             let runtime = RuntimeController::start_resumed_with_config(repo, &session, config)
                 .map_err(runtime_error)?;
             runtime

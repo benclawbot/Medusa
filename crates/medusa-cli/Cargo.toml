@@ -31,6 +31,7 @@ medusa-provider = { path = "../medusa-provider" }
 medusa-runtime = { path = "../medusa-runtime" }
 medusa-tui = { path = "../medusa-tui" }
 medusa-update = { path = "../medusa-update" }
+reqwest.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 toml.workspace = true

@@ -1,5 +1,6 @@
 use std::{env, path::PathBuf, process::Command};
 
+mod oauth_preflight;
 mod skill_dependencies;
 mod skill_graduation;
 mod skill_lifecycle;
