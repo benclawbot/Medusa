@@ -457,7 +457,7 @@ pub(super) fn forward_update(
         AgentUpdate::Question(_) => {}
         AgentUpdate::ToolOutput {
             tool,
-            output: _,
+            output,
             is_error,
         } => {
             if is_internal_tool(tool) {
@@ -481,7 +481,7 @@ pub(super) fn forward_update(
                     } else {
                         tool.clone()
                     },
-                    details: Vec::new(),
+                    details: tool_output_details(output),
                 },
                 |pending| RuntimeActivity {
                     id: Some(pending.id),
@@ -495,7 +495,7 @@ pub(super) fn forward_update(
                     } else {
                         pending.title
                     },
-                    details: Vec::new(),
+                    details: tool_output_details(output),
                 },
             );
             let _ = events.send(RuntimeEvent::Activity(activity));
@@ -561,6 +561,15 @@ fn shell_command(arguments: &Value) -> String {
         program
     } else {
         format!("{program} {args}")
+    }
+}
+
+fn tool_output_details(output: &str) -> Vec<String> {
+    let output = output.trim();
+    if output.is_empty() {
+        Vec::new()
+    } else {
+        output.lines().map(str::to_owned).collect()
     }
 }
 
@@ -701,6 +710,11 @@ mod tests {
         );
         assert_eq!(summarize("short line"), "short line");
         assert!(summarize(&"x".repeat(150)).ends_with("..."));
+        assert!(tool_output_details("  \n").is_empty());
+        assert_eq!(
+            tool_output_details("stdout line\nstderr: command failed\n"),
+            vec!["stdout line", "stderr: command failed"]
+        );
     }
 
     #[test]
