@@ -54,11 +54,17 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
         println!("    {} ({} ms)", result.status, result.duration_ms);
         results.push(result);
     }
-    let passed = results.iter().filter(|result| result.status == "passed").count();
+    let passed = results
+        .iter()
+        .filter(|result| result.status == "passed")
+        .count();
     let failed = results.len().saturating_sub(passed);
     let summary = AcceptanceSummary {
         schema_version: 1,
-        generated_unix_seconds: SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_secs(),
+        generated_unix_seconds: SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs(),
         platform: env::consts::OS.to_string(),
         passed,
         failed,
@@ -81,7 +87,9 @@ fn parse_output_dir() -> Result<PathBuf, Box<dyn std::error::Error>> {
         match arg.as_str() {
             "--output" => output = PathBuf::from(args.next().ok_or("--output requires a path")?),
             "--help" | "-h" => {
-                println!("Usage: cargo product-acceptance [--output PATH]\n\nRuns the authoritative product-level safety and recovery acceptance suite.");
+                println!(
+                    "Usage: cargo product-acceptance [--output PATH]\n\nRuns the authoritative product-level safety and recovery acceptance suite."
+                );
                 std::process::exit(0);
             }
             other => return Err(format!("unknown argument: {other}").into()),
@@ -187,8 +195,16 @@ fn scenarios_for_platform() -> Vec<Scenario> {
     scenarios
 }
 
-fn execute_scenario(scenario: &Scenario, output_dir: &Path) -> Result<ScenarioResult, Box<dyn std::error::Error>> {
-    let mut args = vec!["test".to_string(), "-p".to_string(), scenario.package.to_string(), "--locked".to_string()];
+fn execute_scenario(
+    scenario: &Scenario,
+    output_dir: &Path,
+) -> Result<ScenarioResult, Box<dyn std::error::Error>> {
+    let mut args = vec![
+        "test".to_string(),
+        "-p".to_string(),
+        scenario.package.to_string(),
+        "--locked".to_string(),
+    ];
     if let Some(filter) = scenario.filter {
         args.push(filter.to_string());
     }
@@ -206,19 +222,32 @@ fn execute_scenario(scenario: &Scenario, output_dir: &Path) -> Result<ScenarioRe
     let combined = combine_output(&output);
     let log_path = output_dir.join(format!("{}.log", scenario.id));
     fs::write(&log_path, combined.as_bytes())?;
-    let marker_present = scenario.required_marker.is_none_or(|marker| combined.contains(marker));
+    let marker_present = scenario
+        .required_marker
+        .is_none_or(|marker| combined.contains(marker));
     let passed = output.status.success() && marker_present;
     let detail = if !output.status.success() {
-        Some(format!("cargo exited with status {}", output.status.code().map_or_else(|| "terminated".to_string(), |code| code.to_string())))
+        Some(format!(
+            "cargo exited with status {}",
+            output
+                .status
+                .code()
+                .map_or_else(|| "terminated".to_string(), |code| code.to_string())
+        ))
     } else if !marker_present {
-        Some("required test marker was not present; the filter may have matched zero tests".to_string())
+        Some(
+            "required test marker was not present; the filter may have matched zero tests"
+                .to_string(),
+        )
     } else {
         None
     };
     Ok(ScenarioResult {
         id: scenario.id.to_string(),
         guarantee: scenario.guarantee.to_string(),
-        command: std::iter::once(cargo_program().to_string()).chain(args).collect(),
+        command: std::iter::once(cargo_program().to_string())
+            .chain(args)
+            .collect(),
         status: if passed { "passed" } else { "failed" }.to_string(),
         duration_ms: duration.as_millis(),
         log: log_path.display().to_string(),
