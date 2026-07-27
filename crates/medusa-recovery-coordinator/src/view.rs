@@ -102,30 +102,48 @@ pub struct RecoveryViewInput {
 
 impl RecoveryView {
     pub fn build(mut input: RecoveryViewInput) -> Self {
-        input.checkpoints.sort_by_key(|checkpoint| checkpoint.sequence);
-        input.checkpoints.dedup_by(|left, right| left.id == right.id);
+        input
+            .checkpoints
+            .sort_by_key(|checkpoint| checkpoint.sequence);
+        input
+            .checkpoints
+            .dedup_by(|left, right| left.id == right.id);
 
         let mut warnings = Vec::new();
         if input.source_corrupt {
-            warnings.push("Recovery records are corrupt or incomplete; destructive actions are disabled.".to_owned());
+            warnings.push(
+                "Recovery records are corrupt or incomplete; destructive actions are disabled."
+                    .to_owned(),
+            );
         }
         if input.approvals_must_be_reestablished {
             warnings.push("Previous approvals are not reused after recovery.".to_owned());
         }
         if input.containment_must_be_reestablished {
-            warnings.push("Containment must pass preflight again before execution resumes.".to_owned());
+            warnings
+                .push("Containment must pass preflight again before execution resumes.".to_owned());
         }
-        if input.checkpoints.iter().any(|checkpoint| !checkpoint.integrity_verified) {
+        if input
+            .checkpoints
+            .iter()
+            .any(|checkpoint| !checkpoint.integrity_verified)
+        {
             warnings.push("One or more checkpoints failed integrity verification.".to_owned());
         }
 
         let preview = input.selected_preview.as_ref();
         let destructive_conflict = preview.is_some_and(|value| {
             !value.repository_matches_checkpoint_base
-                || value.files.iter().any(|file| file.would_overwrite_uncommitted_work)
+                || value
+                    .files
+                    .iter()
+                    .any(|file| file.would_overwrite_uncommitted_work)
                 || !value.unresolved_risks.is_empty()
         });
-        let valid_checkpoint = input.checkpoints.iter().any(|checkpoint| checkpoint.integrity_verified);
+        let valid_checkpoint = input
+            .checkpoints
+            .iter()
+            .any(|checkpoint| checkpoint.integrity_verified);
         let blocked = input.source_corrupt || !valid_checkpoint;
         let health = if input.source_corrupt {
             RecoveryHealth::Corrupt
@@ -138,7 +156,12 @@ impl RecoveryView {
         };
 
         let actions = vec![
-            availability(RecoveryOperation::Inspect, true, false, "Inspection never modifies repository state."),
+            availability(
+                RecoveryOperation::Inspect,
+                true,
+                false,
+                "Inspection never modifies repository state.",
+            ),
             availability(
                 RecoveryOperation::Resume,
                 !blocked && !input.containment_must_be_reestablished,
@@ -167,7 +190,11 @@ impl RecoveryView {
             ),
             availability(
                 RecoveryOperation::RetryVerification,
-                !blocked && matches!(input.verification, VerificationState::Failed | VerificationState::Incomplete),
+                !blocked
+                    && matches!(
+                        input.verification,
+                        VerificationState::Failed | VerificationState::Incomplete
+                    ),
                 false,
                 "Retry verification without claiming completion until required checks pass.",
             ),
@@ -196,7 +223,9 @@ impl RecoveryView {
     }
 
     pub fn action(&self, operation: RecoveryOperation) -> Option<&RecoveryActionAvailability> {
-        self.actions.iter().find(|action| action.operation == operation)
+        self.actions
+            .iter()
+            .find(|action| action.operation == operation)
     }
 }
 
@@ -259,7 +288,12 @@ mod tests {
     fn sorts_checkpoints_and_requires_preview_before_restore() {
         let view = RecoveryView::build(input());
         assert_eq!(view.checkpoints[0].id, "cp-1");
-        assert!(!view.action(RecoveryOperation::RestoreCheckpoint).unwrap().enabled);
+        assert!(
+            !view
+                .action(RecoveryOperation::RestoreCheckpoint)
+                .unwrap()
+                .enabled
+        );
         assert_eq!(view.health, RecoveryHealth::Ready);
     }
 
@@ -291,7 +325,12 @@ mod tests {
         assert_eq!(view.health, RecoveryHealth::Corrupt);
         assert!(view.action(RecoveryOperation::Inspect).unwrap().enabled);
         assert!(!view.action(RecoveryOperation::Resume).unwrap().enabled);
-        assert!(!view.action(RecoveryOperation::RestoreCheckpoint).unwrap().enabled);
+        assert!(
+            !view
+                .action(RecoveryOperation::RestoreCheckpoint)
+                .unwrap()
+                .enabled
+        );
         assert!(view.action(RecoveryOperation::Abandon).unwrap().enabled);
     }
 
@@ -301,6 +340,10 @@ mod tests {
         value.containment_must_be_reestablished = true;
         let view = RecoveryView::build(value);
         assert!(!view.action(RecoveryOperation::Resume).unwrap().enabled);
-        assert!(view.warnings.iter().any(|warning| warning.contains("Containment")));
+        assert!(
+            view.warnings
+                .iter()
+                .any(|warning| warning.contains("Containment"))
+        );
     }
 }
