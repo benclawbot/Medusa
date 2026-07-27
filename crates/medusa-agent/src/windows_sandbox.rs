@@ -14,7 +14,7 @@ fn unavailable(error: std::io::Error) -> MedusaError {
     let mut result = MedusaError::new(
         ErrorCode::SandboxUnavailable,
         ErrorCategory::Environment,
-        format!("Windows AppContainer sandbox unavailable: {error}"),
+        format!("Windows composable sandbox unavailable: {error}"),
     );
     result.context.insert(
         "sandbox_backend".into(),
@@ -37,7 +37,9 @@ mod tests {
         assert_eq!(error.code, ErrorCode::SandboxUnavailable);
         assert_eq!(
             error.context.get("sandbox_backend"),
-            Some(&serde_json::Value::String("windows_appcontainer".into()))
+            Some(&serde_json::Value::String(
+                "windows_base_container".into()
+            ))
         );
         assert!(
             error
