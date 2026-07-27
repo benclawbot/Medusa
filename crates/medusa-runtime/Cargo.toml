@@ -25,6 +25,7 @@ medusa-mcp-cache = { path = "../medusa-mcp-cache" }
 medusa-memory = { path = "../medusa-memory" }
 medusa-memory-consolidation = { path = "../medusa-memory-consolidation" }
 medusa-memory-writeback = { path = "../medusa-memory-writeback" }
+medusa-multi-agent-scheduler = { path = "../medusa-multi-agent-scheduler" }
 medusa-protocol = { path = "../medusa-protocol" }
 medusa-provider = { path = "../medusa-provider" }
 medusa-time-travel = { path = "../medusa-time-travel" }
