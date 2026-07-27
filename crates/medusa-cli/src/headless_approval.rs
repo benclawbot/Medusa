@@ -98,18 +98,12 @@ fn normalize_command(command: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use medusa_agent::{ApprovalGrant, AgentPlanStep, AgentPlanStepStatus};
     use serde_json::json;
-    use time::OffsetDateTime;
 
     use super::*;
 
     fn approval_question(program: &str, args: &[&str]) -> AgentQuestion {
         let input = json!({"program": program, "args": args});
-        let plan = vec![AgentPlanStep {
-            title: "Verify the fix".to_owned(),
-            status: AgentPlanStepStatus::InProgress,
-        }];
         let value = json!({
             "tool_use_id": "tool-1",
             "questions": [{
@@ -122,12 +116,15 @@ mod tests {
                 "tool_use_id": "tool-1",
                 "tool": "shell_run",
                 "input": input,
-                "grant": ApprovalGrant::exact_action(
-                    "shell_run",
-                    &json!({"program": program, "args": args}),
-                    &plan,
-                    OffsetDateTime::now_utc()
-                )
+                "grant": {
+                    "scope": {
+                        "tool": "shell_run",
+                        "action_fingerprint": "fixture-action",
+                        "plan_fingerprint": "fixture-plan"
+                    },
+                    "approved_at": "2026-07-27T12:00:00Z",
+                    "expires_at": "2026-07-27T12:05:00Z"
+                }
             }
         });
         serde_json::from_value(value).expect("approval question")

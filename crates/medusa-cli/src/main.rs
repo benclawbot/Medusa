@@ -1,4 +1,5 @@
 mod config_command;
+mod headless_approval;
 
 use std::{
     collections::BTreeMap,
@@ -19,6 +20,7 @@ use medusa_core::{ErrorCategory, ErrorCode, MedusaError, MedusaResult};
 use medusa_daemon::{DaemonClient, DaemonPaths, Request, serve};
 use medusa_extensions::{DesktopCommanderClient, DesktopCommanderSettings};
 use medusa_hardening::{CURRENT_SCHEMA_VERSION, Migrator};
+use headless_approval::{ApprovalMatch, HeadlessApprovalPolicy};
 use medusa_runtime::{prompt::PromptDraft, RuntimeController, RuntimeEvent};
 use medusa_tui::{TuiOptions, run as run_tui};
 use medusa_update::{InstallKind, InstallLocation, MainBranchUpdater, UpdatePolicy};
@@ -80,6 +82,12 @@ enum CommandKind {
     },
     Run {
         objective: String,
+        /// Answer only allowlisted approval prompts without opening the interactive terminal.
+        #[arg(long, requires = "approve_allowlist")]
+        non_interactive: bool,
+        /// File containing one exact shell command per line.
+        #[arg(long, value_name = "PATH", requires = "non_interactive")]
+        approve_allowlist: Option<PathBuf>,
     },
     Resume {
         session: String,
@@ -176,9 +184,17 @@ fn run() -> MedusaResult<()> {
         CommandKind::Search { pattern } => search(&repo, &pattern),
         CommandKind::Shell { program, args } => shell(&repo, &program, &args),
         CommandKind::Checkpoint { message } => checkpoint(&repo, &message),
-        CommandKind::Run { objective } => {
+        CommandKind::Run {
+            objective,
+            non_interactive,
+            approve_allowlist,
+        } => {
             ensure_selected_runtime()?;
             oauth_preflight::run_if_needed(&config)?;
+            let approval_policy = HeadlessApprovalPolicy::load(
+                non_interactive,
+                approve_allowlist.as_deref(),
+            )?;
             let runtime = RuntimeController::start_with_config(repo, config);
             runtime
                 .submit(PromptDraft {
@@ -186,7 +202,7 @@ fn run() -> MedusaResult<()> {
                     ..PromptDraft::default()
                 })
                 .map_err(runtime_error)?;
-            drain_headless_runtime(&runtime)
+            drain_headless_runtime(&runtime, approval_policy.as_ref())
         }
         CommandKind::Resume { session } => {
             ensure_selected_runtime()?;
@@ -199,7 +215,7 @@ fn run() -> MedusaResult<()> {
                     ..PromptDraft::default()
                 })
                 .map_err(runtime_error)?;
-            drain_headless_runtime(&runtime)
+            drain_headless_runtime(&runtime, None)
         }
         CommandKind::Config { .. } => unreachable!("handled before runtime config loading"),
         CommandKind::DaemonServe => serve(DaemonPaths::for_repo(&repo)),
@@ -233,7 +249,10 @@ fn repository_path(requested: &Path) -> PathBuf {
     }
 }
 
-fn drain_headless_runtime(runtime: &RuntimeController) -> MedusaResult<()> {
+fn drain_headless_runtime(
+    runtime: &RuntimeController,
+    approval_policy: Option<&HeadlessApprovalPolicy>,
+) -> MedusaResult<()> {
     loop {
         match runtime.try_event().map_err(runtime_error)? {
             Some(RuntimeEvent::AssistantText(text)) => println!("{text}"),
@@ -244,13 +263,37 @@ fn drain_headless_runtime(runtime: &RuntimeController) -> MedusaResult<()> {
                 println!("{title}: {}", details.join("; "));
             }
             Some(RuntimeEvent::Question(question)) => {
+                if let Some(policy) = approval_policy {
+                    match policy.matches(&question) {
+                        ApprovalMatch::Approved(command) => {
+                            println!("approved allowlisted command: {command}");
+                            runtime
+                                .submit(PromptDraft {
+                                    text: "approve".to_owned(),
+                                    ..PromptDraft::default()
+                                })
+                                .map_err(runtime_error)?;
+                            continue;
+                        }
+                        ApprovalMatch::Missing(command) => {
+                            return Err(MedusaError::new(
+                                ErrorCode::PolicyDenied,
+                                ErrorCategory::Policy,
+                                format!(
+                                    "headless approval denied for `{command}` because it is not listed in {}. Add the exact command and rerun with `medusa run --non-interactive --approve-allowlist {} <objective>`.",
+                                    policy.source().display(),
+                                    policy.source().display()
+                                ),
+                            ));
+                        }
+                        ApprovalMatch::NotApproval => {}
+                    }
+                }
                 return Err(MedusaError::new(
                     ErrorCode::DependencyUnavailable,
                     ErrorCategory::Execution,
                     format!(
-                        "agent is waiting for user input, which headless execution cannot provide: {}. \
-                         Approval prompts can only be answered in the interactive terminal, so rerun \
-                         this objective with `medusa` instead of `medusa run`.",
+                        "agent is waiting for user input, which headless execution cannot provide: {}. For an approval prompt, create an allowlist and rerun with `medusa run --non-interactive --approve-allowlist .medusa/approve.txt <objective>`; otherwise use the interactive terminal.",
                         question
                             .prompts()
                             .first()
@@ -625,8 +668,29 @@ mod tests {
     fn headless_run_remains_available() {
         let cli = Cli::try_parse_from(["medusa", "run", "fix tests"]).expect("parse headless run");
         assert!(
-            matches!(cli.command, Some(CommandKind::Run { objective }) if objective == "fix tests")
+            matches!(cli.command, Some(CommandKind::Run { objective, .. }) if objective == "fix tests")
         );
+    }
+
+    #[test]
+    fn headless_run_accepts_explicit_approval_allowlist() {
+        let cli = Cli::try_parse_from([
+            "medusa",
+            "run",
+            "--non-interactive",
+            "--approve-allowlist",
+            ".medusa/approve.txt",
+            "fix tests",
+        ])
+        .expect("parse allowlisted headless run");
+        assert!(matches!(
+            cli.command,
+            Some(CommandKind::Run {
+                objective,
+                non_interactive: true,
+                approve_allowlist: Some(path),
+            }) if objective == "fix tests" && path == PathBuf::from(".medusa/approve.txt")
+        ));
     }
 
     #[test]
