@@ -38,16 +38,21 @@ fn active_level() -> CodingPolicyLevel {
 }
 
 pub(crate) fn apply(mut prompt: String, mode: Mode) -> String {
+    append_fragment(&mut prompt, medusa_clearops::runtime_prompt_fragment());
     if mode == Mode::ReadOnly {
         return prompt;
     }
     let level = active_level();
-    let fragment = prompt_fragment_for(level);
-    if !fragment.is_empty() {
-        prompt.push_str("\n\n");
-        prompt.push_str(&fragment);
-    }
+    append_fragment(&mut prompt, &prompt_fragment_for(level));
     prompt
+}
+
+fn append_fragment(prompt: &mut String, fragment: &str) {
+    if fragment.is_empty() {
+        return;
+    }
+    prompt.push_str("\n\n");
+    prompt.push_str(fragment);
 }
 
 fn prompt_fragment_for(level: CodingPolicyLevel) -> String {
@@ -92,6 +97,17 @@ mod tests {
         assert!(prompt.contains("MINIMAL CODING POLICY — ACTIVE (full)"));
         assert!(prompt.contains("Reuse an existing repository helper"));
         assert!(prompt.contains("Never weaken, delete, or rewrite tests"));
+    }
+
+    #[test]
+    fn runtime_prompt_always_contains_clearops() {
+        let read_only = apply("base".to_owned(), Mode::ReadOnly);
+        assert!(read_only.contains("CLEAROPS COMMUNICATION POLICY — ACTIVE"));
+        assert!(read_only.contains("production execution path"));
+
+        let full = apply("base".to_owned(), Mode::Autonomous);
+        assert!(full.contains("CLEAROPS COMMUNICATION POLICY — ACTIVE"));
+        assert!(full.contains("MINIMAL CODING POLICY — ACTIVE"));
     }
 
     #[test]
