@@ -328,8 +328,7 @@ mod tests {
     use std::{fs, path::Path};
 
     use super::{
-        approved_absolute_path, create_dir, normalized_policy_path, read,
-        reject_sensitive_approved_path, search, write,
+        approved_absolute_path, create_dir, read, reject_sensitive_approved_path, search, write,
     };
 
     #[test]
@@ -389,7 +388,7 @@ mod tests {
     #[test]
     fn approved_external_paths_reject_windows_system_targets_after_canonicalization() {
         assert_eq!(
-            normalized_policy_path(Path::new(r"\\?\C:\Windows\System32\drivers\etc\hosts")),
+            super::normalized_policy_path(Path::new(r"\\?\C:\Windows\System32\drivers\etc\hosts")),
             "c:/windows/system32/drivers/etc/hosts"
         );
 
