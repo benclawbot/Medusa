@@ -11,8 +11,8 @@ fn main() {
     println!("cargo:rerun-if-changed=src/runtime_impl.rs");
     println!("cargo:rerun-if-changed=src/production_orchestrator.rs");
 
-    let mut source = fs::read_to_string("src/runtime_impl.rs")
-        .expect("read canonical runtime implementation");
+    let mut source =
+        fs::read_to_string("src/runtime_impl.rs").expect("read canonical runtime implementation");
 
     replace_once(
         &mut source,
@@ -32,7 +32,7 @@ fn main() {
         "    let verified = matches!(&result, Ok(RuntimeEvent::Completed { .. }));\n    let failed = result.is_err();\n    if let Err(error) = crate::production_orchestrator::persist_outcome(\n        &state.repo,\n        &draft,\n        &execution_plan,\n        verified,\n        failed,\n    ) {\n        let _ = events.send(RuntimeEvent::Notice {\n            title: \"Runtime learning record unavailable\".to_owned(),\n            details: vec![error.to_string()],\n        });\n    }\n    state.session = Some(session);\n    result\n}\n\nfn append_followups",
     );
 
-    let output = PathBuf::from(env::var_os("OUT_DIR").expect("OUT_DIR"))
-        .join("runtime_generated.rs");
+    let output =
+        PathBuf::from(env::var_os("OUT_DIR").expect("OUT_DIR")).join("runtime_generated.rs");
     fs::write(output, source).expect("write generated production runtime");
 }
