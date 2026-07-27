@@ -132,6 +132,18 @@ impl RecoveryView {
         }
 
         let preview = input.selected_preview.as_ref();
+        let selected_checkpoint_valid = preview.is_some_and(|value| {
+            input.checkpoints.iter().any(|checkpoint| {
+                checkpoint.id == value.checkpoint_id && checkpoint.integrity_verified
+            })
+        });
+        let stale_or_untrusted_preview = preview.is_some() && !selected_checkpoint_valid;
+        if stale_or_untrusted_preview {
+            warnings.push(
+                "The selected recovery preview does not reference an integrity-verified checkpoint; regenerate the preview."
+                    .to_owned(),
+            );
+        }
         let destructive_conflict = preview.is_some_and(|value| {
             !value.repository_matches_checkpoint_base
                 || value
@@ -144,10 +156,11 @@ impl RecoveryView {
             .checkpoints
             .iter()
             .any(|checkpoint| checkpoint.integrity_verified);
-        let blocked = input.source_corrupt || !valid_checkpoint;
+        let records_blocked = input.source_corrupt || !valid_checkpoint;
+        let restore_blocked = records_blocked || stale_or_untrusted_preview;
         let health = if input.source_corrupt {
             RecoveryHealth::Corrupt
-        } else if blocked {
+        } else if records_blocked || stale_or_untrusted_preview {
             RecoveryHealth::Blocked
         } else if destructive_conflict {
             RecoveryHealth::NeedsConfirmation
@@ -164,11 +177,11 @@ impl RecoveryView {
             ),
             availability(
                 RecoveryOperation::Resume,
-                !blocked && !input.containment_must_be_reestablished,
+                !records_blocked && !input.containment_must_be_reestablished,
                 false,
                 if input.containment_must_be_reestablished {
                     "Containment preflight must succeed before resume."
-                } else if blocked {
+                } else if records_blocked {
                     "Recovery records are not trustworthy enough to resume."
                 } else {
                     "Resume from the last durable continuation point."
@@ -176,12 +189,14 @@ impl RecoveryView {
             ),
             availability(
                 RecoveryOperation::RestoreCheckpoint,
-                !blocked && preview.is_some(),
+                !restore_blocked && preview.is_some(),
                 destructive_conflict,
                 if preview.is_none() {
                     "Select a checkpoint and generate a preview first."
-                } else if blocked {
+                } else if records_blocked {
                     "Checkpoint integrity is not sufficient for restore."
+                } else if stale_or_untrusted_preview {
+                    "The selected preview is stale or references an untrusted checkpoint."
                 } else if destructive_conflict {
                     "Restore may overwrite local work or has unresolved risks."
                 } else {
@@ -190,7 +205,7 @@ impl RecoveryView {
             ),
             availability(
                 RecoveryOperation::RetryVerification,
-                !blocked
+                !records_blocked
                     && matches!(
                         input.verification,
                         VerificationState::Failed | VerificationState::Incomplete
@@ -332,6 +347,52 @@ mod tests {
                 .enabled
         );
         assert!(view.action(RecoveryOperation::Abandon).unwrap().enabled);
+    }
+
+    #[test]
+    fn missing_checkpoint_preview_fails_closed_without_blocking_resume() {
+        let mut value = input();
+        value.selected_preview = Some(RecoveryPreview {
+            checkpoint_id: "missing".to_owned(),
+            files: Vec::new(),
+            unresolved_risks: Vec::new(),
+            repository_matches_checkpoint_base: true,
+        });
+        let view = RecoveryView::build(value);
+        assert_eq!(view.health, RecoveryHealth::Blocked);
+        assert!(view.action(RecoveryOperation::Resume).unwrap().enabled);
+        let restore = view.action(RecoveryOperation::RestoreCheckpoint).unwrap();
+        assert!(!restore.enabled);
+        assert!(restore.reason.contains("stale") || restore.reason.contains("untrusted"));
+        assert!(
+            view.warnings
+                .iter()
+                .any(|warning| warning.contains("regenerate"))
+        );
+    }
+
+    #[test]
+    fn integrity_failed_checkpoint_preview_fails_closed() {
+        let mut value = input();
+        value.checkpoints = vec![
+            checkpoint("cp-bad", 1, false),
+            checkpoint("cp-good", 2, true),
+        ];
+        value.selected_preview = Some(RecoveryPreview {
+            checkpoint_id: "cp-bad".to_owned(),
+            files: Vec::new(),
+            unresolved_risks: Vec::new(),
+            repository_matches_checkpoint_base: true,
+        });
+        let view = RecoveryView::build(value);
+        assert_eq!(view.health, RecoveryHealth::Blocked);
+        assert!(view.action(RecoveryOperation::Resume).unwrap().enabled);
+        assert!(
+            !view
+                .action(RecoveryOperation::RestoreCheckpoint)
+                .unwrap()
+                .enabled
+        );
     }
 
     #[test]
