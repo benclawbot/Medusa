@@ -60,9 +60,16 @@ def require(text: str, needle: str, context: str) -> None:
         raise ArchitectureError(f"{context} is missing {needle!r}")
 
 
+def forbid(text: str, needle: str, context: str) -> None:
+    if needle in text:
+        raise ArchitectureError(f"{context} contains stale capability wording {needle!r}")
+
+
 def validate(root: Path) -> None:
     architecture = read(root, "docs/ARCHITECTURE.md")
     contributor = read(root, "docs/CONTRIBUTOR-ARCHITECTURE.md")
+    evidence = read(root, "docs/CAPABILITY-EVIDENCE.md")
+    runtime = read(root, "crates/medusa-runtime/src/production_orchestrator.rs")
     readme = read(root, "README.md")
     cargo_text = read(root, "Cargo.toml")
 
@@ -103,14 +110,36 @@ def validate(root: Path) -> None:
 
     require(architecture, metadata["production_orchestrator"], "docs/ARCHITECTURE.md")
     require(architecture, "one `AgentEngine`", "docs/ARCHITECTURE.md")
+    require(architecture, "task contracts and dependencies", "docs/ARCHITECTURE.md")
     require(architecture, "does not yet dispatch subagents", "docs/ARCHITECTURE.md")
     require(architecture, "primary agent remains accountable", "docs/ARCHITECTURE.md")
     require(architecture, "repository verification gate", "docs/ARCHITECTURE.md")
     require(architecture, "platform- or prerequisite-limited", "docs/ARCHITECTURE.md")
     require(architecture, "scripts/check-product-architecture.py", "docs/ARCHITECTURE.md")
+    forbid(architecture, "Schedule is added to the same agent prompt", "docs/ARCHITECTURE.md")
+
     require(contributor, metadata["production_orchestrator"], "docs/CONTRIBUTOR-ARCHITECTURE.md")
     require(contributor, "primary agent validates evidence", "docs/CONTRIBUTOR-ARCHITECTURE.md")
     require(contributor, "not dispatched by production `run_prompt`", "docs/CONTRIBUTOR-ARCHITECTURE.md")
+    require(contributor, "task contracts and dependencies", "docs/CONTRIBUTOR-ARCHITECTURE.md")
+
+    require(runtime, "Production execution mode: single-agent orchestrated", "production orchestrator")
+    require(runtime, "No workers or subagents are dispatched", "production orchestrator")
+    require(runtime, "no workers were dispatched", "production orchestrator events")
+    require(runtime, "allowed: false", "production delegation policy")
+    forbid(runtime, "Production multi-agent execution is active", "production orchestrator")
+    forbid(runtime, "title: format!(\"Dispatch wave", "production orchestrator events")
+
+    require(evidence, "## Planned and scaffolding behavior", "docs/CAPABILITY-EVIDENCE.md")
+    require(evidence, "not shipped production capabilities", "docs/CAPABILITY-EVIDENCE.md")
+    shipped_section = evidence.split("## Shipped on `main`", 1)[1].split(
+        "## Planned and scaffolding behavior", 1
+    )[0]
+    forbid(
+        shipped_section,
+        "parallel workers with isolated worktrees",
+        "docs/CAPABILITY-EVIDENCE.md shipped section",
+    )
 
 
 if __name__ == "__main__":
