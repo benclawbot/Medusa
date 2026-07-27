@@ -137,6 +137,103 @@ pub(crate) fn create_dir_approved(path: &str) -> MedusaResult<String> {
     Ok(format!("created directory {}", path.display()))
 }
 
+fn normalized_policy_path(path: &Path) -> String {
+    let normalized = path.to_string_lossy().replace('\\', "/");
+    let normalized = if let Some(suffix) = normalized.strip_prefix("//?/UNC/") {
+        format!("//{suffix}")
+    } else if let Some(suffix) = normalized.strip_prefix("//?/") {
+        suffix.to_owned()
+    } else {
+        normalized
+    };
+    let normalized = normalized.trim_end_matches('/');
+    if cfg!(any(windows, target_os = "macos")) {
+        normalized.to_ascii_lowercase()
+    } else {
+        normalized.to_owned()
+    }
+}
+
+fn path_is_at_or_below(path: &str, prefix: &str) -> bool {
+    path == prefix
+        || path
+            .strip_prefix(prefix)
+            .is_some_and(|suffix| suffix.starts_with('/'))
+}
+
+fn reject_sensitive_approved_path(path: &Path) -> MedusaResult<()> {
+    use medusa_core::{ErrorCategory, ErrorCode, MedusaError};
+
+    let normalized = normalized_policy_path(path);
+    let components = normalized
+        .split('/')
+        .filter(|component| !component.is_empty());
+    if components
+        .clone()
+        .any(|component| component.eq_ignore_ascii_case(".git"))
+    {
+        return Err(MedusaError::new(
+            ErrorCode::PolicyDenied,
+            ErrorCategory::Policy,
+            format!(
+                "approved external path is sensitive and cannot be modified: {}",
+                path.display()
+            ),
+        ));
+    }
+
+    let mut sensitive_prefixes = vec![
+        "/etc".to_owned(),
+        "/bin".to_owned(),
+        "/sbin".to_owned(),
+        "/usr/bin".to_owned(),
+        "/usr/sbin".to_owned(),
+        "/usr/local/bin".to_owned(),
+        "/usr/local/sbin".to_owned(),
+        "/library/launchagents".to_owned(),
+        "/library/launchdaemons".to_owned(),
+        "c:/windows/system32/drivers/etc".to_owned(),
+        "c:/windows/system32/config".to_owned(),
+        "c:/windows/system32/wbem".to_owned(),
+        "c:/windows/system32".to_owned(),
+        "c:/windows/syswow64".to_owned(),
+    ];
+
+    for home in [std::env::var_os("HOME"), std::env::var_os("USERPROFILE")]
+        .into_iter()
+        .flatten()
+    {
+        let home = normalized_policy_path(Path::new(&home));
+        for suffix in [
+            ".ssh",
+            ".aws/credentials",
+            ".gnupg",
+            ".config/gh/hosts.yml",
+            ".config/autostart",
+            "library/launchagents",
+            "appdata/roaming/microsoft/windows/start menu/programs/startup",
+        ] {
+            sensitive_prefixes.push(format!("{home}/{suffix}"));
+        }
+    }
+
+    if sensitive_prefixes
+        .iter()
+        .any(|prefix| path_is_at_or_below(&normalized, prefix))
+    {
+        return Err(MedusaError::new(
+            ErrorCode::PolicyDenied,
+            ErrorCategory::Policy,
+            format!(
+                "approved external path is sensitive and cannot be modified: {}",
+                path.display()
+            ),
+        ));
+    }
+
+    Ok(())
+}
+
 fn approved_absolute_path(value: &str) -> MedusaResult<std::path::PathBuf> {
     use medusa_core::{ErrorCategory, ErrorCode, MedusaError};
 
@@ -167,6 +264,7 @@ fn approved_absolute_path(value: &str) -> MedusaResult<std::path::PathBuf> {
         )
     })?;
     let resolved = canonical_existing.join(suffix);
+    reject_sensitive_approved_path(&resolved)?;
     if resolved.exists() && fs::symlink_metadata(&resolved)?.file_type().is_symlink() {
         return Err(MedusaError::new(
             ErrorCode::PolicyDenied,
@@ -227,9 +325,11 @@ pub(crate) fn search(repo: &Path, query: &str) -> MedusaResult<String> {
 
 #[cfg(test)]
 mod tests {
-    use std::fs;
+    use std::{fs, path::Path};
 
-    use super::{create_dir, read, search, write};
+    use super::{
+        approved_absolute_path, create_dir, read, reject_sensitive_approved_path, search, write,
+    };
 
     #[test]
     fn extracted_filesystem_tools_preserve_read_write_and_search_behavior() {
@@ -263,6 +363,112 @@ mod tests {
         assert!(read(directory.path(), "../secret.txt").is_err());
         assert!(write(directory.path(), "../secret.txt", "nope").is_err());
         assert!(create_dir(directory.path(), "../outside").is_err());
+    }
+
+    #[test]
+    fn approved_external_paths_reject_git_metadata() {
+        assert!(
+            reject_sensitive_approved_path(Path::new("/tmp/project/.git/hooks/pre-commit"))
+                .is_err()
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn approved_external_paths_reject_unix_system_targets() {
+        for path in ["/etc/hosts", "/bin/tool", "/sbin/tool", "/usr/bin/tool"] {
+            assert!(
+                reject_sensitive_approved_path(Path::new(path)).is_err(),
+                "{path}"
+            );
+        }
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn approved_external_paths_reject_windows_system_targets_after_canonicalization() {
+        assert_eq!(
+            super::normalized_policy_path(Path::new(r"\\?\C:\Windows\System32\drivers\etc\hosts")),
+            "c:/windows/system32/drivers/etc/hosts"
+        );
+
+        let windows = std::env::var_os("WINDIR").expect("WINDIR");
+        let target = Path::new(&windows).join("System32/drivers/etc/hosts");
+        assert!(
+            approved_absolute_path(target.to_str().expect("utf8 system path")).is_err(),
+            "{}",
+            target.display()
+        );
+    }
+
+    #[test]
+    fn approved_external_paths_reject_user_credentials() {
+        let home = std::env::var_os("HOME").or_else(|| std::env::var_os("USERPROFILE"));
+        let Some(home) = home else {
+            return;
+        };
+        let home = Path::new(&home);
+        for suffix in [
+            ".ssh/authorized_keys",
+            ".aws/credentials",
+            ".gnupg/private-keys-v1.d/key",
+            ".config/gh/hosts.yml",
+        ] {
+            let path = home.join(suffix);
+            assert!(
+                reject_sensitive_approved_path(&path).is_err(),
+                "{}",
+                path.display()
+            );
+        }
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn approved_external_paths_reject_linux_autostart() {
+        let Some(home) = std::env::var_os("HOME") else {
+            return;
+        };
+        let path = Path::new(&home).join(".config/autostart/medusa.desktop");
+        assert!(reject_sensitive_approved_path(&path).is_err());
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn approved_external_paths_reject_macos_launch_agents_after_canonicalization() {
+        let target = Path::new("/Library/LaunchAgents/com.medusa.agent.plist");
+        assert!(approved_absolute_path(target.to_str().expect("utf8 path")).is_err());
+
+        let Some(home) = std::env::var_os("HOME") else {
+            return;
+        };
+        let user_target = Path::new(&home).join("Library/LaunchAgents/com.medusa.agent.plist");
+        assert!(
+            reject_sensitive_approved_path(&user_target).is_err(),
+            "{}",
+            user_target.display()
+        );
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn approved_external_paths_reject_windows_startup() {
+        let Some(home) = std::env::var_os("USERPROFILE") else {
+            return;
+        };
+        let target = Path::new(&home)
+            .join("AppData/Roaming/Microsoft/Windows/Start Menu/Programs/Startup/medusa.cmd");
+        assert!(reject_sensitive_approved_path(&target).is_err());
+    }
+
+    #[test]
+    fn approved_external_path_outside_denylist_remains_allowed_by_path_policy() {
+        let directory = tempfile::tempdir().expect("tempdir");
+        let target = directory.path().join("exports/report.txt");
+        assert_eq!(
+            approved_absolute_path(target.to_str().expect("utf8 path")).expect("allowed"),
+            target
+        );
     }
 
     #[cfg(unix)]
