@@ -6,13 +6,28 @@ on:
   pull_request:
 
 permissions:
-  contents: read
+  contents: write
 
 concurrency:
   group: architecture-policy-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
+  capture-real-tui:
+    if: github.event_name == 'pull_request' && github.head_ref == 'fix/real-product-screenshots'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: fix/real-product-screenshots
+          fetch-depth: 0
+      - uses: dtolnay/rust-toolchain@1.88.0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Capture full-height actual TUI
+        run: bash .github/fix-tui-screenshot.sh
+
   architecture-policy:
     name: Shipped crate reachability
     runs-on: ubuntu-latest
