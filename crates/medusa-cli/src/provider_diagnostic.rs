@@ -90,7 +90,10 @@ fn diagnose(config: &Config) -> DiagnosticReport {
 
     let auth_supported = matches!(route.auth.as_str(), "api-key" | "none");
     if !auth_supported {
-        failures.push(format!("authentication mode `{}` is unsupported", route.auth));
+        failures.push(format!(
+            "authentication mode `{}` is unsupported",
+            route.auth
+        ));
     }
 
     if route.auth == "api-key" && !credential_present(&provider) {
@@ -134,7 +137,11 @@ fn diagnose(config: &Config) -> DiagnosticReport {
 
     DiagnosticReport {
         schema_version: 1,
-        status: if failures.is_empty() { "ready" } else { "blocked" },
+        status: if failures.is_empty() {
+            "ready"
+        } else {
+            "blocked"
+        },
         provider: route.provider.clone(),
         model: route.name.clone(),
         protocol: route.protocol.clone(),
@@ -148,11 +155,13 @@ fn diagnose(config: &Config) -> DiagnosticReport {
         },
         model_availability: Capability {
             supported: model_present && supported_provider,
-            detail: "configuration-level validation only; live availability requires an optional credentialed canary".into(),
+            detail: "configuration-level validation only; live availability requires an optional credentialed canary"
+                .into(),
         },
         minimal_completion: Capability {
             supported: model_present && supported_provider && protocol_supported,
-            detail: "deterministic route compatibility passed; live completion is intentionally separate".into(),
+            detail: "deterministic route compatibility passed; live completion is intentionally separate"
+                .into(),
         },
         tool_use: Capability {
             supported: route.tool_calling && protocol_supported,
@@ -168,7 +177,10 @@ fn diagnose(config: &Config) -> DiagnosticReport {
         },
         context_window: Capability {
             supported: route.context_window_tokens > 0,
-            detail: format!("configured context window: {} tokens", route.context_window_tokens),
+            detail: format!(
+                "configured context window: {} tokens",
+                route.context_window_tokens
+            ),
         },
         streaming: Capability {
             supported: !route.streaming,
@@ -184,7 +196,10 @@ fn diagnose(config: &Config) -> DiagnosticReport {
 }
 
 fn credential_present(provider: &str) -> bool {
-    let provider_key = format!("{}_API_KEY", provider.to_ascii_uppercase().replace('-', "_"));
+    let provider_key = format!(
+        "{}_API_KEY",
+        provider.to_ascii_uppercase().replace('-', "_")
+    );
     std::env::var_os(provider_key).is_some()
         || std::env::var_os("OPENAI_API_KEY").is_some()
         || std::env::var_os("ANTHROPIC_API_KEY").is_some()
@@ -203,7 +218,12 @@ mod tests {
         config.model.streaming = true;
         let report = diagnose(&config);
         assert_eq!(report.status, "blocked");
-        assert!(report.failures.iter().any(|failure| failure.contains("streaming")));
+        assert!(
+            report
+                .failures
+                .iter()
+                .any(|failure| failure.contains("streaming"))
+        );
     }
 
     #[test]
