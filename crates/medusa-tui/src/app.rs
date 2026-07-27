@@ -1,4 +1,5 @@
 use std::{
+    collections::BTreeSet,
     io,
     path::{Path, PathBuf},
     sync::Arc,
@@ -26,6 +27,12 @@ mod models;
 mod tests;
 
 pub use models::*;
+
+#[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd)]
+enum ActivityDetailKey {
+    Id(String),
+    TranscriptIndex(usize),
+}
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub struct Scrollback {
@@ -69,7 +76,7 @@ pub struct AppState {
     pub effort_label: Option<String>,
     pub plan_mode: bool,
     pub task_list_visible: bool,
-    pub activity_details_expanded: bool,
+    expanded_activity_details: BTreeSet<ActivityDetailKey>,
     pub spinner_frame: u8,
     pub scrollback: Scrollback,
     pub selection: Option<TextSelection>,
@@ -107,6 +114,59 @@ impl AppState {
 
     pub fn scrollback_scroll_down(&mut self, step: usize) {
         self.scrollback.scroll_down(step);
+    }
+
+    fn activity_detail_key(index: usize, activity: &TranscriptActivity) -> ActivityDetailKey {
+        activity
+            .id
+            .as_ref()
+            .map_or(ActivityDetailKey::TranscriptIndex(index), |id| {
+                ActivityDetailKey::Id(id.clone())
+            })
+    }
+
+    #[must_use]
+    pub(crate) fn activity_details_expanded(
+        &self,
+        index: usize,
+        activity: &TranscriptActivity,
+    ) -> bool {
+        self.expanded_activity_details
+            .contains(&Self::activity_detail_key(index, activity))
+    }
+
+    pub(crate) fn activity_detail_expansion_snapshot(&self) -> Vec<bool> {
+        self.transcript
+            .iter()
+            .enumerate()
+            .map(|(index, entry)| match entry {
+                TranscriptEntry::Activity(activity) => {
+                    self.activity_details_expanded(index, activity)
+                }
+                _ => false,
+            })
+            .collect()
+    }
+
+    fn toggle_latest_activity_details(&mut self) {
+        let key = self
+            .transcript
+            .iter()
+            .enumerate()
+            .rev()
+            .find_map(|(index, entry)| match entry {
+                TranscriptEntry::Activity(activity) if !activity.details.is_empty() => {
+                    Some(Self::activity_detail_key(index, activity))
+                }
+                _ => None,
+            });
+        let Some(key) = key else {
+            self.status = "no activity details available".to_owned();
+            return;
+        };
+        if !self.expanded_activity_details.remove(&key) {
+            self.expanded_activity_details.insert(key);
+        }
     }
 
     pub fn new(
@@ -149,7 +209,7 @@ impl AppState {
             effort_label: None,
             plan_mode: false,
             task_list_visible: true,
-            activity_details_expanded: false,
+            expanded_activity_details: BTreeSet::new(),
             spinner_frame: 0,
             scrollback: Scrollback::default(),
             selection: None,
@@ -203,7 +263,7 @@ impl AppState {
                 return Ok(AppAction::Redraw);
             }
             if key.code == KeyCode::Char('e') && key.modifiers.contains(KeyModifiers::CONTROL) {
-                self.activity_details_expanded = !self.activity_details_expanded;
+                self.toggle_latest_activity_details();
                 return Ok(AppAction::Redraw);
             }
             if key.code == KeyCode::Char('v') && key.modifiers.contains(KeyModifiers::CONTROL) {
@@ -340,7 +400,7 @@ impl AppState {
         self.status = "new session".to_owned();
         self.plan_mode = false;
         self.task_list_visible = true;
-        self.activity_details_expanded = false;
+        self.expanded_activity_details.clear();
         self.question_modal = None;
         self.selection = None;
         self.selection_dragging = false;
