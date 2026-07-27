@@ -1,4 +1,7 @@
-use std::{fs, path::{Path, PathBuf}};
+use std::{
+    fs,
+    path::{Path, PathBuf},
+};
 
 use serde::Serialize;
 use serde_json::{Map, Value};
@@ -75,8 +78,14 @@ fn run(repo: &Path, session_id: &str, args: &[String]) -> Result<(), String> {
 }
 
 fn build_report(session: &Value, requested_id: &str) -> Result<AuditReport, String> {
-    let object = session.as_object().ok_or_else(|| "session root must be an object".to_owned())?;
-    let events = object.get("events").and_then(Value::as_array).cloned().unwrap_or_default();
+    let object = session
+        .as_object()
+        .ok_or_else(|| "session root must be an object".to_owned())?;
+    let events = object
+        .get("events")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default();
     let mut routes = Vec::new();
     let mut orchestration = Vec::new();
     let mut files_changed = Vec::new();
@@ -95,7 +104,10 @@ fn build_report(session: &Value, requested_id: &str) -> Result<AuditReport, Stri
 
     for event in &events {
         let payload = event.get("payload").cloned().unwrap_or(Value::Null);
-        let event_type = payload.get("type").and_then(Value::as_str).unwrap_or("unknown");
+        let event_type = payload
+            .get("type")
+            .and_then(Value::as_str)
+            .unwrap_or("unknown");
         let data = payload.get("data").cloned().unwrap_or(Value::Null);
         match event_type {
             "model_request_started" => routes.push(sanitize(&data)),
@@ -113,23 +125,44 @@ fn build_report(session: &Value, requested_id: &str) -> Result<AuditReport, Stri
                 }
             }
             "checkpoint_created" => checkpoints.push(sanitize(&data)),
-            "verification_started" | "verification_completed" => verification.push(sanitize(&payload)),
-            "session_failed" | "session_paused" | "session_resumed" | "session_state_changed" => failures.push(sanitize(&payload)),
+            "verification_started" | "verification_completed" => {
+                verification.push(sanitize(&payload))
+            }
+            "session_failed" | "session_paused" | "session_resumed" | "session_state_changed" => {
+                failures.push(sanitize(&payload))
+            }
             "session_completed" => completion_reason = "verified_completion".to_owned(),
             _ => {}
         }
         timeline.push(sanitize(event));
     }
-    let first = events.first().and_then(|event| event.get("checksum")).and_then(Value::as_str).map(str::to_owned);
-    let final_checksum = events.last().and_then(|event| event.get("checksum")).and_then(Value::as_str).map(str::to_owned);
+    let first = events
+        .first()
+        .and_then(|event| event.get("checksum"))
+        .and_then(Value::as_str)
+        .map(str::to_owned);
+    let final_checksum = events
+        .last()
+        .and_then(|event| event.get("checksum"))
+        .and_then(Value::as_str)
+        .map(str::to_owned);
     let mut report = AuditReport {
         schema_version: SCHEMA,
-        session_id: object.get("id").and_then(Value::as_str).unwrap_or(requested_id).to_owned(),
+        session_id: object
+            .get("id")
+            .and_then(Value::as_str)
+            .unwrap_or(requested_id)
+            .to_owned(),
         objective: sanitize(object.get("objective").unwrap_or(&Value::Null)),
         repository: sanitize(object.get("repo").unwrap_or(&Value::Null)),
         created_at: sanitize(object.get("created_at").unwrap_or(&Value::Null)),
         updated_at: sanitize(object.get("updated_at").unwrap_or(&Value::Null)),
-        status: if object.get("completed").and_then(Value::as_bool) == Some(true) { "completed" } else { "incomplete" }.to_owned(),
+        status: if object.get("completed").and_then(Value::as_bool) == Some(true) {
+            "completed"
+        } else {
+            "incomplete"
+        }
+        .to_owned(),
         turn_count: object.get("turn").cloned().unwrap_or(Value::Null),
         plan: sanitize(object.get("plan").unwrap_or(&Value::Null)),
         provider_routes: routes,
@@ -146,7 +179,11 @@ fn build_report(session: &Value, requested_id: &str) -> Result<AuditReport, Stri
         artifact_references: sanitize(object.get("tool_artifacts").unwrap_or(&Value::Null)),
         completion_reason,
         event_timeline: timeline,
-        provenance: Provenance { first_event_checksum: first, final_event_checksum: final_checksum, report_fingerprint: String::new() },
+        provenance: Provenance {
+            first_event_checksum: first,
+            final_event_checksum: final_checksum,
+            report_fingerprint: String::new(),
+        },
     };
     let bytes = serde_json::to_vec(&report).map_err(|error| error.to_string())?;
     report.provenance.report_fingerprint = hex::encode(Sha256::digest(bytes));
@@ -157,23 +194,48 @@ fn sanitize(value: &Value) -> Value {
     match value {
         Value::String(text) => Value::String(redact(text)),
         Value::Array(items) => Value::Array(items.iter().take(MAX_ITEMS).map(sanitize).collect()),
-        Value::Object(object) => Value::Object(object.iter().map(|(key, value)| {
-            (key.clone(), if secret_like(key) { Value::String("[REDACTED]".to_owned()) } else { sanitize(value) })
-        }).collect::<Map<_, _>>()),
+        Value::Object(object) => Value::Object(
+            object
+                .iter()
+                .map(|(key, value)| {
+                    (
+                        key.clone(),
+                        if secret_like(key) {
+                            Value::String("[REDACTED]".to_owned())
+                        } else {
+                            sanitize(value)
+                        },
+                    )
+                })
+                .collect::<Map<_, _>>(),
+        ),
         other => other.clone(),
     }
 }
 
 fn redact(text: &str) -> String {
     let bounded = text.chars().take(MAX_STRING).collect::<String>();
-    bounded.split_whitespace().map(|token| {
-        if secret_like(token) || token.starts_with("sk-") || token.starts_with("ghp_") { "[REDACTED]" } else { token }
-    }).collect::<Vec<_>>().join(" ")
+    bounded
+        .split_whitespace()
+        .map(|token| {
+            if secret_like(token) || token.starts_with("sk-") || token.starts_with("ghp_") {
+                "[REDACTED]"
+            } else {
+                token
+            }
+        })
+        .collect::<Vec<_>>()
+        .join(" ")
 }
 
 fn secret_like(value: &str) -> bool {
     let lower = value.to_ascii_lowercase();
-    lower.contains("api_key") || lower.contains("apikey") || lower.contains("authorization") || lower.contains("password") || lower.contains("secret") || lower.contains("token=")
+    lower.contains("api_key")
+        || lower.contains("apikey")
+        || lower.contains("authorization")
+        || lower.contains("password")
+        || lower.contains("secret")
+        || lower.contains("token=")
 }
 
 fn markdown(report: &AuditReport) -> String {
@@ -191,7 +253,10 @@ fn markdown(report: &AuditReport) -> String {
 }
 
 fn option_value(args: &[String], name: &str) -> Option<String> {
-    args.iter().position(|arg| arg == name).and_then(|index| args.get(index + 1)).cloned()
+    args.iter()
+        .position(|arg| arg == name)
+        .and_then(|index| args.get(index + 1))
+        .cloned()
 }
 
 fn session_path(repo: &Path, id: &str) -> PathBuf {
@@ -204,7 +269,11 @@ mod tests {
 
     #[test]
     fn secret_values_are_redacted_and_arrays_are_bounded() {
-        let value = serde_json::json!({"api_key": "sk-secret", "text": "token=private", "items": (0..200).collect::<Vec<_>>()});
+        let value = serde_json::json!({
+            "api_key": "sk-secret",
+            "text": "token=private",
+            "items": (0..200).collect::<Vec<_>>()
+        });
         let clean = sanitize(&value);
         assert_eq!(clean["api_key"], "[REDACTED]");
         assert_eq!(clean["text"], "[REDACTED]");
