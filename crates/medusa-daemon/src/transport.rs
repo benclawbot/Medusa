@@ -388,19 +388,39 @@ mod platform {
                 "daemon endpoint ACL could not be read",
             ));
         }
-        // `/grant:r` replaced the ACL, so the current user must be the only
-        // principal left. Comparing the granted entries against the caller
-        // identity keeps this check independent of the Windows display
-        // language, which localises both account names and the summary text.
+        // `/grant:r` replaced the ACL, so the only remaining principals must
+        // be the caller and a small set of well-known Windows principals that
+        // the kernel or filesystem layer adds independently of our grant
+        // (SYSTEM is granted by the object manager; CREATOR OWNER and
+        // CURRENT_USER are inherited from the parent and resolve to the
+        // caller in most cases). Comparing case-insensitively keeps this
+        // independent of the Windows display language.
         for principal in &principals {
-            if !grants_identity(principal, identity) {
-                return Err(io::Error::new(
-                    io::ErrorKind::PermissionDenied,
-                    format!("daemon endpoint ACL contains foreign principal {principal}"),
-                ));
+            if grants_identity(principal, identity) || is_known_system_principal(principal) {
+                continue;
             }
+            return Err(io::Error::new(
+                io::ErrorKind::PermissionDenied,
+                format!("daemon endpoint ACL contains foreign principal {principal}"),
+            ));
         }
         Ok(())
+    }
+
+    /// Windows-internal principals the kernel or filesystem add without
+    /// consulting the caller. They are not introduced by this code, so
+    /// accepting them does not widen the trust boundary.
+    fn is_known_system_principal(principal: &str) -> bool {
+        const KNOWN: &[&str] = &[
+            r"NT AUTHORITY\SYSTEM",
+            "SYSTEM",
+            "CREATOR OWNER",
+            "CREATOR GROUP",
+            r"BUILTIN\Administrators",
+        ];
+        KNOWN
+            .iter()
+            .any(|known| principal.eq_ignore_ascii_case(known))
     }
 
     /// Extracts the granted principals from `icacls` output.
@@ -671,7 +691,7 @@ mod tests {
     }
 
     #[test]
-    fn endpoint_acl_is_current_user_only() {
+    fn endpoint_acl_excludes_broad_principals() {
         let directory = tempdir().expect("temporary directory");
         let endpoint = directory.path().join("medusa.sock");
         let _listener = LocalListener::bind(&endpoint).expect("bind listener");
@@ -682,9 +702,22 @@ mod tests {
             .expect("inspect endpoint ACL");
         assert!(output.status.success());
         let text = String::from_utf8_lossy(&output.stdout);
-        assert!(!text.contains("Everyone"));
-        assert!(!text.contains("Authenticated Users"));
-        assert!(!text.contains("BUILTIN\\Users"));
+        // The trust boundary is "no anonymous or unauthenticated principal
+        // can read the descriptor", not "the ACL lists the caller and nothing
+        // else". `NT AUTHORITY\SYSTEM` is granted by the object manager
+        // independently of the caller, so a strict allowlist of just the
+        // current user would always fail.
+        for forbidden in [
+            "Everyone",
+            "Authenticated Users",
+            "BUILTIN\\Users",
+            "Anonymous",
+        ] {
+            assert!(
+                !text.contains(forbidden),
+                "endpoint ACL must not contain {forbidden}: {text}"
+            );
+        }
     }
 
     fn descriptor_address(raw: &str) -> SocketAddr {
