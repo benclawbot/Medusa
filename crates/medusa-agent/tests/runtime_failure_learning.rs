@@ -1,4 +1,8 @@
-use std::{fs, path::Path, sync::atomic::{AtomicUsize, Ordering}};
+use std::{
+    fs,
+    path::Path,
+    sync::atomic::{AtomicUsize, Ordering},
+};
 
 use medusa_agent::AgentEngine;
 use medusa_config::Config;
@@ -45,7 +49,10 @@ fn terminal_provider_failure_records_history_and_negative_skill_outcome() {
     install_skill(directory.path());
     let engine = AgentEngine::new(FailingProvider::new(), Config::default());
     let mut session = engine
-        .create_session(directory.path(), "exercise runtime failure handling".to_owned())
+        .create_session(
+            directory.path(),
+            "exercise runtime failure handling".to_owned(),
+        )
         .expect("create session");
 
     let error = engine
@@ -57,22 +64,26 @@ fn terminal_provider_failure_records_history_and_negative_skill_outcome() {
         .path()
         .join(".medusa/learning/failure-history")
         .join(format!("{}.json", session.id));
-    let history_json: serde_json::Value = serde_json::from_slice(
-        &fs::read(history).expect("read failure history"),
-    )
-    .expect("failure history json");
-    assert_eq!(history_json["records"].as_array().expect("records").len(), 4);
+    let history_json: serde_json::Value =
+        serde_json::from_slice(&fs::read(history).expect("read failure history"))
+            .expect("failure history json");
+    assert_eq!(
+        history_json["records"].as_array().expect("records").len(),
+        4
+    );
 
     let outcome = directory
         .path()
         .join(".medusa/learning/skill-outcomes")
         .join(format!("{}.json", session.id));
-    let outcome_json: serde_json::Value = serde_json::from_slice(
-        &fs::read(outcome).expect("read negative skill outcome"),
-    )
-    .expect("skill outcome json");
+    let outcome_json: serde_json::Value =
+        serde_json::from_slice(&fs::read(outcome).expect("read negative skill outcome"))
+            .expect("skill outcome json");
     assert_eq!(outcome_json["completed"], false);
     assert_eq!(outcome_json["verified"], false);
-    assert_eq!(outcome_json["automatically_loaded_skills"], serde_json::json!(["runtime"]));
+    assert_eq!(
+        outcome_json["automatically_loaded_skills"],
+        serde_json::json!(["runtime"])
+    );
     assert_eq!(outcome_json["terminal_failure"]["disposition"], "terminal");
 }
