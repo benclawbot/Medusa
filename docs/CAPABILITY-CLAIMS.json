@@ -3,10 +3,15 @@
   "authority": {
     "source": "production code and tests on main",
     "ledger": "docs/CAPABILITY-EVIDENCE.md",
-    "overview": "README.md"
+    "overview": "README.md",
+    "product_architecture": "docs/ARCHITECTURE.md",
+    "contributor_architecture": "docs/CONTRIBUTOR-ARCHITECTURE.md",
+    "workspace_metadata": "Cargo.toml"
   },
   "required_documents": [
     "README.md",
+    "docs/ARCHITECTURE.md",
+    "docs/CONTRIBUTOR-ARCHITECTURE.md",
     "docs/CAPABILITY-EVIDENCE.md",
     "docs/RELEASE.md",
     "docs/COMPATIBILITY.md",
