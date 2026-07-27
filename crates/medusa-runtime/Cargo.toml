@@ -8,7 +8,7 @@ license.workspace = true
 repository.workspace = true
 
 [lib]
-path = "src/generated_lib.rs"
+path = "src/runtime_root.rs"
 
 [dependencies]
 base64 = "0.22"
