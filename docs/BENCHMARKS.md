@@ -1,51 +1,55 @@
-# Refactor Benchmark Contract
+# Reliability and recovery benchmark contract
 
-The modularization program must remain behavior-preserving and avoid material performance regressions.
+Medusa benchmarks product guarantees through the authoritative `cargo product-acceptance` suite. The benchmark layer scores retained acceptance evidence; it does not replace production runtime tests with synthetic mocks.
 
-## Frozen scenarios
+## Versioned suite
 
-Measure the following scenarios on the same machine, toolchain, build profile, repository fixture, and warm/cold state:
+`benchmarks/reliability-suite.json` defines the benchmark schema, scenarios, run count, metrics, and release-blocking thresholds. Its representative tasks cover:
 
-1. `cargo test --workspace --all-features --no-run`
-   - captures workspace compile and link cost;
-2. `cargo test -p medusa-agent`
-   - captures orchestration and tool-policy test execution;
-3. `cargo test -p medusa-memory`
-   - captures Markdown persistence, indexing, retrieval, and lifecycle behavior;
-4. `cargo test -p medusa-intelligence`
-   - captures parsing, patching, formatting, and impact analysis;
-5. `cargo build --release --locked --bin medusa`
-   - captures release-build cost and final binary size;
-6. `bash scripts/package-smoke.sh`
-   - captures startup and help/version smoke behavior.
+- small verified repair;
+- multi-file bug fix;
+- dependency or API migration;
+- interrupted work and resume after runtime termination;
+- failed verification and rollback;
+- prohibited filesystem or network access;
+- adversarial process spawning.
 
-## Measurement method
+Platform-specific acceptance scenarios may satisfy one benchmark case through `platform_any`. A case passes only when at least one applicable authoritative scenario exists and every selected scenario passes.
 
-Run each command at least five times after one untimed warm-up. Record wall-clock duration, peak resident memory where the platform exposes it, and output binary size for release builds. Compare medians rather than single runs.
+## Deterministic execution
 
-A portable timing example is:
+Run the credential-free suite with:
 
 ```bash
-/usr/bin/time -p cargo test -p medusa-agent
-/usr/bin/time -p cargo test -p medusa-memory
-/usr/bin/time -p cargo test -p medusa-intelligence
-/usr/bin/time -p cargo build --release --locked --bin medusa
-wc -c target/release/medusa
+python3 scripts/reliability-benchmark.py
 ```
 
-On macOS, use `/usr/bin/time -l`; on Linux, `/usr/bin/time -v` may be used for memory evidence.
+The command executes the product acceptance contract twice by default and writes:
 
-## Acceptance threshold
+- `target/reliability-benchmark/reliability-benchmark.json`;
+- `target/reliability-benchmark/reliability-benchmark.md`;
+- the original per-run acceptance summaries and logs.
 
-A median regression greater than 5% requires:
+The report records the exact commit, run count, scenario results, time to verified completion, and threshold failures. A test process exiting successfully is not sufficient: the underlying acceptance scenario must emit its required evidence marker and be recorded as `passed`.
 
-- the raw before/after measurements;
-- an explanation of the cause;
-- evidence that the regression is not measurement noise;
-- explicit approval in the pull request.
+## Metrics and release thresholds
 
-Improvements do not permit weakening correctness, adversarial, coverage, or migration gates.
+The deterministic suite blocks release unless it records:
 
-## Future upgrade
+- 100% verified completion;
+- 0% false completion;
+- 100% successful resume;
+- 100% successful rollback;
+- zero containment violations;
+- zero manual interventions;
+- 100% repeated-run determinism.
 
-Where stable microbenchmarks are useful, add Criterion benchmarks for parsing, retrieval scoring, patch validation, and policy normalization. Do not add synthetic benchmarks that bypass the production path merely to report favorable numbers.
+Historical release reports belong under `benchmarks/results/<release-or-commit>/` and must retain both JSON and Markdown outputs with artifact provenance.
+
+## Optional live-model evaluation
+
+Live-provider evaluation is separate and never substitutes for deterministic runtime evidence. Every live result must record provider, model, complete non-secret configuration, exact commit, and run count. Credentials remain external and are never included in benchmark artifacts.
+
+## Performance measurements
+
+For refactor performance comparisons, measure the same machine, toolchain, build profile, fixture, and warm/cold state. Compare medians across at least five timed runs after one warm-up. A median regression greater than 5% requires raw measurements, a noise analysis, and explicit approval. Performance gains never permit weakening correctness, adversarial, coverage, migration, or recovery gates.
