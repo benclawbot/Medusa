@@ -1,11 +1,6 @@
 #![cfg(windows)]
 
-//! Coverage for the Windows AppContainer command boundary.
-//!
-//! This path previously had no tests, which is how several Windows-only
-//! defects reached users: `icacls` denials on system binaries, verbatim `\\?\`
-//! paths reaching `CreateProcessW`, and `HRESULT` values reported as POSIX
-//! error numbers.
+//! Coverage for the Windows composable sandbox command boundary.
 
 use medusa_process_containment::{WindowsSandboxRestrictions, run_appcontainer};
 
@@ -20,12 +15,14 @@ fn unresolvable_programs_fail_closed() {
 #[test]
 fn declared_restrictions_describe_the_enforced_boundary() {
     let restrictions = WindowsSandboxRestrictions::default();
-    assert_eq!(restrictions.backend, "windows_appcontainer");
+    assert_eq!(restrictions.backend, "windows_base_container");
     for expected in [
         "app_container",
         "network_denied",
+        "bound_filesystem_repository_rw",
+        "bound_filesystem_toolchain_ro",
         "job_kill_on_close",
-        "repository_acl_scope",
+        "no_host_acl_mutation",
     ] {
         assert!(
             restrictions.restrictions.contains(&expected),
@@ -34,9 +31,6 @@ fn declared_restrictions_describe_the_enforced_boundary() {
     }
 }
 
-/// A verbatim working directory makes `CreateProcessW` fail with
-/// `ERROR_FILE_NOT_FOUND`, so the boundary must normalise the prefix itself
-/// instead of forwarding it.
 #[test]
 fn verbatim_repository_paths_are_normalised() {
     let directory = tempfile::tempdir().expect("temporary repository");
@@ -50,17 +44,11 @@ fn verbatim_repository_paths_are_normalised() {
     assert_eq!(error.kind(), std::io::ErrorKind::NotFound);
 }
 
-/// Failures must stay attributable rather than surfacing a misdecoded
-/// `HRESULT` as an unrelated errno.
 #[test]
-fn launch_failures_identify_the_requested_command() {
+fn launch_failures_remain_diagnosable() {
     let directory = tempfile::tempdir().expect("temporary repository");
     let Err(error) = run_appcontainer(directory.path(), "hostname", &[]) else {
         return;
     };
-    let message = error.to_string();
-    assert!(
-        !message.is_empty(),
-        "containment failures must carry a description"
-    );
+    assert!(!error.to_string().is_empty());
 }
