@@ -26,6 +26,10 @@ pub(crate) fn handle(
     session: &mut AgentSession,
     error: &MedusaError,
 ) -> MedusaResult<RuntimeFailureAction> {
+    if session.pending_question.is_some() {
+        return Ok(RuntimeFailureAction::Stop);
+    }
+
     let mut history = load_history(session);
     let signal = signal_from_error(error)?;
     let decision = history.classify(&signal, RetryPolicy::default());
@@ -61,6 +65,7 @@ pub(crate) fn handle(
                     ),
                 }],
             });
+            persist_replan_count(session, performed_replan_count(session).saturating_add(1))?;
             persist(session)?;
             Ok(RuntimeFailureAction::Replan)
         }
@@ -163,7 +168,7 @@ fn continuation_decision(
             plan: &plan,
             confidence: &confidence,
             latest_failure: Some(failure),
-            automatic_replans: history_replan_count(session),
+            automatic_replans: performed_replan_count(session),
             stalled_resumes: 0,
             checkpoint_available: !session.events.is_empty(),
         })
@@ -177,6 +182,13 @@ fn history_path(session: &AgentSession) -> PathBuf {
         .join(format!("{}.json", session.id))
 }
 
+fn replan_count_path(session: &AgentSession) -> PathBuf {
+    session
+        .repo
+        .join(".medusa/learning/replan-counts")
+        .join(format!("{}.txt", session.id))
+}
+
 fn load_history(session: &AgentSession) -> FailureHistory {
     fs::read(history_path(session))
         .ok()
@@ -184,15 +196,22 @@ fn load_history(session: &AgentSession) -> FailureHistory {
         .unwrap_or_default()
 }
 
-fn history_replan_count(session: &AgentSession) -> u32 {
-    load_history(session)
-        .records()
-        .iter()
-        .filter(|record| {
-            record.signal.strategy_invalidated
-                || matches!(record.signal.domain, FailureDomain::Validation)
-        })
-        .count() as u32
+fn performed_replan_count(session: &AgentSession) -> u32 {
+    fs::read_to_string(replan_count_path(session))
+        .ok()
+        .and_then(|value| value.trim().parse().ok())
+        .unwrap_or(0)
+}
+
+fn persist_replan_count(session: &AgentSession, count: u32) -> MedusaResult<()> {
+    let path = replan_count_path(session);
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent)?;
+    }
+    let temporary = path.with_extension("txt.tmp");
+    fs::write(&temporary, count.to_string())?;
+    fs::rename(temporary, path)?;
+    Ok(())
 }
 
 fn persist_history(session: &AgentSession, history: &FailureHistory) -> MedusaResult<()> {
