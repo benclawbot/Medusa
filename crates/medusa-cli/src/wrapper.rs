@@ -25,9 +25,10 @@ fn main() {
     let args = env::args().skip(1).collect::<Vec<_>>();
     let repo = repository_argument(&args).unwrap_or_else(|| PathBuf::from("."));
 
-    if let Some(result) = report_command::try_run(&repo, &args) {
+    if let Some(report_args) = subcommand_arguments(&args, "report") {
+        let command_args = strip_repository_argument(&report_args);
         finish(
-            result,
+            report_command::run(&repo, &command_args),
             Some("usage: medusa report <session-id> [--format markdown|json] [--output PATH]"),
         );
         return;
@@ -196,7 +197,28 @@ mod tests {
             repository_argument(&args),
             Some(PathBuf::from("/workspace/project"))
         );
-        assert!(report_command::try_run(Path::new("/workspace/project"), &args).is_some());
+        assert_eq!(
+            subcommand_arguments(&args, "report"),
+            Some(strings(&[
+                "--repo",
+                "/workspace/project",
+                "session-1",
+                "--format",
+                "json",
+            ]))
+        );
+    }
+
+    #[test]
+    fn report_operands_do_not_trigger_report_dispatch() {
+        assert_eq!(
+            subcommand_arguments(&strings(&["search", "report"]), "report"),
+            None
+        );
+        assert_eq!(
+            subcommand_arguments(&strings(&["--prompt", "report"]), "report"),
+            None
+        );
     }
 
     #[test]
