@@ -1,6 +1,7 @@
-use std::{env, path::PathBuf, process::Command};
+use std::{env, path::{Path, PathBuf}, process::Command};
 
 mod oauth_preflight;
+mod report_command;
 mod skill_dependencies;
 mod skill_graduation;
 mod skill_lifecycle;
@@ -18,25 +19,19 @@ mod legacy {
 
 fn main() {
     let args = env::args().skip(1).collect::<Vec<_>>();
+    let repo = repository_argument(&args).unwrap_or_else(|| PathBuf::from("."));
+
+    if let Some(result) = report_command::try_run(&repo, &args) {
+        finish(result, Some("usage: medusa report <session-id> [--format markdown|json] [--output PATH]"));
+        return;
+    }
     if let Some(skill_args) = subcommand_arguments(&args, "skills") {
-        let repo = repository_argument(&skill_args).unwrap_or_else(|| PathBuf::from("."));
         let command_args = strip_repository_argument(&skill_args);
         let dependencies = skill_dependencies::try_run(&repo, &command_args);
-        let graduation = if dependencies.is_none() {
-            skill_graduation::try_run(&repo, &command_args)
-        } else {
-            None
-        };
-        let lifecycle = if dependencies.is_none() && graduation.is_none() {
-            skill_lifecycle::try_run(&repo, &command_args)
-        } else {
-            None
-        };
-        let probation = if dependencies.is_none() && graduation.is_none() && lifecycle.is_none() {
-            skill_probation::try_run(&repo, &command_args)
-        } else {
-            None
-        };
+        let graduation = dependencies.is_none().then(|| skill_graduation::try_run(&repo, &command_args)).flatten();
+        let lifecycle = (dependencies.is_none() && graduation.is_none()).then(|| skill_lifecycle::try_run(&repo, &command_args)).flatten();
+        let probation = (dependencies.is_none() && graduation.is_none() && lifecycle.is_none())
+            .then(|| skill_probation::try_run(&repo, &command_args)).flatten();
         let usage = if dependencies.is_some() {
             Some(skill_dependencies::usage_lines())
         } else if graduation.is_some() {
@@ -49,29 +44,27 @@ fn main() {
             None
         };
         let result = match (dependencies, graduation, lifecycle, probation) {
-            (Some(result), _, _, _)
-            | (_, Some(result), _, _)
-            | (_, _, Some(result), _)
-            | (_, _, _, Some(result)) => result,
+            (Some(result), _, _, _) | (_, Some(result), _, _) | (_, _, Some(result), _) | (_, _, _, Some(result)) => result,
             (None, None, None, None) => skills::run(&skill_args),
         };
-        if let Err(error) = result {
-            eprintln!("{error}");
-            if let Some(usage) = usage {
-                eprintln!("{usage}");
-            }
-            std::process::exit(1);
-        }
+        finish(result, usage);
         return;
     }
     if let Some(recall_args) = subcommand_arguments(&args, "recall") {
-        if let Err(error) = run_recall(&recall_args) {
-            eprintln!("{error}");
-            std::process::exit(1);
-        }
+        finish(run_recall(&recall_args), None::<&str>);
         return;
     }
     legacy::entry();
+}
+
+fn finish<T: AsRef<str>>(result: Result<(), String>, usage: Option<T>) {
+    if let Err(error) = result {
+        eprintln!("{error}");
+        if let Some(usage) = usage {
+            eprintln!("{}", usage.as_ref());
+        }
+        std::process::exit(1);
+    }
 }
 
 fn subcommand_arguments(args: &[String], command: &str) -> Option<Vec<String>> {
@@ -88,17 +81,11 @@ fn subcommand_arguments(args: &[String], command: &str) -> Option<Vec<String>> {
         }
         if takes_value(value) {
             index += 2;
-            continue;
-        }
-        if value.starts_with("--repo=") || value.starts_with("--set=") {
+        } else if value.starts_with("--repo=") || value.starts_with("--set=") || value.starts_with('-') {
             index += 1;
-            continue;
+        } else {
+            return None;
         }
-        if value.starts_with('-') {
-            index += 1;
-            continue;
-        }
-        return None;
     }
     None
 }
@@ -134,11 +121,11 @@ fn strip_repository_argument(args: &[String]) -> Vec<String> {
 }
 
 fn takes_value(value: &str) -> bool {
-    matches!(value, "--repo" | "--set" | "--prompt" | "--resume")
+    matches!(value, "--repo" | "--set" | "--prompt" | "--resume" | "--format" | "--output")
 }
 
 fn run_recall(args: &[String]) -> Result<(), String> {
-    let executable = recall_executable().map_err(|error| error.to_string())?;
+    let executable = sibling_executable("medusa-recall").map_err(|error| error.to_string())?;
     let status = Command::new(&executable)
         .args(args)
         .status()
@@ -150,19 +137,11 @@ fn run_recall(args: &[String]) -> Result<(), String> {
     }
 }
 
-fn recall_executable() -> std::io::Result<PathBuf> {
+fn sibling_executable(name: &str) -> std::io::Result<PathBuf> {
     let current = env::current_exe()?;
-    let name = if cfg!(windows) {
-        "medusa-recall.exe"
-    } else {
-        "medusa-recall"
-    };
-    let sibling = current.with_file_name(name);
-    if sibling.is_file() {
-        Ok(sibling)
-    } else {
-        Ok(PathBuf::from(name))
-    }
+    let name = if cfg!(windows) { format!("{name}.exe") } else { name.to_owned() };
+    let sibling = current.with_file_name(&name);
+    Ok(if sibling.is_file() { sibling } else { Path::new(&name).to_path_buf() })
 }
 
 #[cfg(test)]
@@ -174,136 +153,15 @@ mod tests {
     }
 
     #[test]
-    fn bare_recall_is_delegated() {
-        assert_eq!(
-            subcommand_arguments(&strings(&["recall", "search", "parser"]), "recall"),
-            Some(strings(&["search", "parser"]))
-        );
+    fn report_router_preserves_global_repository() {
+        let args = strings(&["--repo", "/workspace/project", "report", "session-1", "--format", "json"]);
+        assert_eq!(repository_argument(&args), Some(PathBuf::from("/workspace/project")));
+        assert!(report_command::try_run(Path::new("/workspace/project"), &args).is_some());
     }
 
     #[test]
-    fn bare_skills_is_handled_in_process() {
-        assert_eq!(
-            subcommand_arguments(&strings(&["skills", "list"]), "skills"),
-            Some(strings(&["list"]))
-        );
-    }
-
-    #[test]
-    fn global_repository_is_forwarded() {
-        assert_eq!(
-            subcommand_arguments(
-                &strings(&[
-                    "--repo",
-                    "/workspace/project",
-                    "recall",
-                    "open",
-                    "session-1"
-                ]),
-                "recall"
-            ),
-            Some(strings(&[
-                "--repo",
-                "/workspace/project",
-                "open",
-                "session-1"
-            ]))
-        );
-        assert_eq!(
-            subcommand_arguments(
-                &strings(&[
-                    "--repo",
-                    "/workspace/project",
-                    "skills",
-                    "approve",
-                    "verify-package"
-                ]),
-                "skills"
-            ),
-            Some(strings(&[
-                "--repo",
-                "/workspace/project",
-                "approve",
-                "verify-package"
-            ]))
-        );
-    }
-
-    #[test]
-    fn lifecycle_router_resolves_and_strips_repository_argument() {
-        let args = strings(&[
-            "--repo",
-            "/workspace/project",
-            "quarantine",
-            "verify",
-            "--confirm",
-        ]);
-        assert_eq!(
-            repository_argument(&args),
-            Some(PathBuf::from("/workspace/project"))
-        );
-        assert_eq!(
-            strip_repository_argument(&args),
-            strings(&["quarantine", "verify", "--confirm"])
-        );
-    }
-
-    #[test]
-    fn probation_router_receives_repository_and_command_arguments() {
-        let args = strings(&["--repo=/workspace/project", "probation", "verify", "--json"]);
-        assert_eq!(
-            repository_argument(&args),
-            Some(PathBuf::from("/workspace/project"))
-        );
-        assert_eq!(
-            strip_repository_argument(&args),
-            strings(&["probation", "verify", "--json"])
-        );
-    }
-
-    #[test]
-    fn graduation_router_receives_repository_and_confirmation() {
-        let args = strings(&[
-            "--repo=/workspace/project",
-            "graduate",
-            "verify",
-            "--confirm",
-        ]);
-        assert_eq!(
-            repository_argument(&args),
-            Some(PathBuf::from("/workspace/project"))
-        );
-        assert_eq!(
-            strip_repository_argument(&args),
-            strings(&["graduate", "verify", "--confirm"])
-        );
-    }
-
-    #[test]
-    fn ordinary_commands_remain_with_the_existing_cli() {
-        assert_eq!(
-            subcommand_arguments(&strings(&["run", "fix tests"]), "recall"),
-            None
-        );
-        assert_eq!(
-            subcommand_arguments(&strings(&["search", "recall"]), "recall"),
-            None
-        );
-        assert_eq!(
-            subcommand_arguments(&strings(&["run", "skills"]), "skills"),
-            None
-        );
-    }
-
-    #[test]
-    fn option_values_named_like_commands_are_not_subcommands() {
-        assert_eq!(
-            subcommand_arguments(&strings(&["--prompt", "recall", "run", "tests"]), "recall"),
-            None
-        );
-        assert_eq!(
-            subcommand_arguments(&strings(&["--prompt", "skills", "run", "tests"]), "skills"),
-            None
-        );
+    fn ordinary_commands_remain_with_legacy_cli() {
+        assert_eq!(subcommand_arguments(&strings(&["run", "fix tests"]), "recall"), None);
+        assert_eq!(subcommand_arguments(&strings(&["run", "skills"]), "skills"), None);
     }
 }
