@@ -105,7 +105,7 @@ fn processed_marker(session: &AgentSession) -> PathBuf {
 }
 
 fn verification_result(session: &AgentSession) -> &'static str {
-    if session.completed && !session.evidence.is_empty() {
+    if session.completed && skill_outcomes::verification_passed(session) {
         "verified"
     } else {
         "unverified"
@@ -139,12 +139,15 @@ fn write_json_atomic(path: &Path, value: &Value) -> MedusaResult<()> {
 #[cfg(test)]
 mod tests {
     use medusa_core::SessionId;
+    use medusa_protocol::{Actor, EventPayload};
     use time::OffsetDateTime;
+
+    use crate::evidence::append_event;
 
     use super::*;
 
     fn session(repo: &Path) -> AgentSession {
-        AgentSession {
+        let mut session = AgentSession {
             id: SessionId::new(),
             objective: "Fix and verify the repository".to_owned(),
             repo: repo.to_path_buf(),
@@ -165,7 +168,17 @@ mod tests {
             approval_grants: Vec::new(),
             approval_receipts: Vec::new(),
             rollback_receipts: Vec::new(),
-        }
+        };
+        append_event(
+            &mut session,
+            Actor::System("test".to_owned()),
+            EventPayload::VerificationCompleted {
+                passed: true,
+                evidence: vec!["cargo test --workspace passed".to_owned()],
+            },
+        )
+        .expect("verification event");
+        session
     }
 
     #[test]
