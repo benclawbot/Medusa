@@ -33,7 +33,6 @@ fn bind_module(
 fn main() -> Result<(), Box<dyn Error>> {
     println!("cargo:rerun-if-changed=src/runtime_impl.rs");
     println!("cargo:rerun-if-changed=src/production_orchestrator.rs");
-    println!("cargo:rerun-if-changed=src/recovery.rs");
 
     let manifest = env::var("CARGO_MANIFEST_DIR")?;
     let mut source = fs::read_to_string("src/runtime_impl.rs")?.replace("\r\n", "\n");
