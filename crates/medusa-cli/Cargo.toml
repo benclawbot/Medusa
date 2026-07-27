@@ -32,6 +32,10 @@ path = "src/product_acceptance.rs"
 name = "medusa-proof"
 path = "src/proof.rs"
 
+[[bin]]
+name = "medusa-provider-diagnostic"
+path = "src/provider_diagnostic.rs"
+
 [dependencies]
 clap = { version = "4.5", features = ["derive"] }
 hex.workspace = true
