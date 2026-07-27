@@ -67,25 +67,10 @@ license = "MIT"
 repository = "https://github.com/benclawbot/Medusa"
 
 [workspace.metadata.medusa]
-production_execution_model = "single-agent"
-experimental_multi_agent_crates = [
-  "medusa-worker-read-set",
-  "medusa-worker-transaction",
-  "medusa-repository-snapshot",
-  "medusa-execution-orchestrator",
-  "medusa-multi-agent-scheduler",
-  "medusa-worker-leases",
-  "medusa-commit-barrier",
-  "medusa-repository-rollback",
-  "medusa-execution-replay",
-  "medusa-runtime-supervisor",
-  "medusa-execution-checkpoint",
-  "medusa-time-travel",
-  "medusa-conflict-resolution",
-  "medusa-transaction-coordinator",
-  "medusa-recovery-coordinator",
-  "medusa-consensus",
-]
+production_execution_model = "multi-agent"
+production_orchestrator = "medusa-runtime::production_orchestrator"
+subagent_delegation = "bounded-parent-accountable"
+verification_gate = "repository"
 
 [workspace.dependencies]
 medusa-core = { path = "crates/medusa-core" }
