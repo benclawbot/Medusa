@@ -4,17 +4,81 @@ on:
   pull_request:
     types: [opened, synchronize, reopened, ready_for_review]
   workflow_dispatch:
+    inputs:
+      mode:
+        description: Acceptance mode
+        required: true
+        default: full
+        type: choice
+        options: [smoke, full]
 
 permissions:
   contents: read
+  pull-requests: read
 
 concurrency:
   group: product-acceptance-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
-  product-acceptance:
+  changes:
     if: ${{ github.event_name == 'workflow_dispatch' || github.event.pull_request.draft == false }}
+    runs-on: ubuntu-latest
+    outputs:
+      full: ${{ steps.mode.outputs.full }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - id: mode
+        shell: bash
+        env:
+          DISPATCH_MODE: ${{ inputs.mode }}
+          EVENT_NAME: ${{ github.event_name }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          if [[ "$EVENT_NAME" == workflow_dispatch ]]; then
+            [[ "$DISPATCH_MODE" == full ]] && echo 'full=true' >> "$GITHUB_OUTPUT" || echo 'full=false' >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          if git diff --name-only "$BASE_SHA" "$HEAD_SHA" | grep -Eq '^(.github/workflows/(product-acceptance|release-gates)\.yml|\.cargo/config\.toml|crates/(medusa-cli/src/product_acceptance\.rs|medusa-agent/|medusa-process-containment/|medusa-execution-|medusa-recovery-|medusa-repository-rollback/|medusa-hardening/)|docs/PRODUCT-ACCEPTANCE\.md)'; then
+            echo 'full=true' >> "$GITHUB_OUTPUT"
+          else
+            echo 'full=false' >> "$GITHUB_OUTPUT"
+          fi
+
+  smoke:
+    needs: changes
+    if: ${{ needs.changes.outputs.full != 'true' }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@1.88.0
+      - name: Refresh dependency lock for the merged PR graph
+        run: cargo generate-lockfile
+      - name: Install Linux sandbox backend
+        shell: bash
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y bubblewrap
+          if [[ -e /proc/sys/kernel/apparmor_restrict_unprivileged_userns ]]; then
+            echo 0 | sudo tee /proc/sys/kernel/apparmor_restrict_unprivileged_userns
+          fi
+      - name: Run PR smoke acceptance
+        run: cargo product-acceptance --mode smoke --output product-acceptance-artifacts
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: product-acceptance-smoke-Linux
+          path: |
+            product-acceptance-artifacts/summary.json
+            product-acceptance-artifacts/*.log
+          if-no-files-found: error
+
+  full:
+    needs: changes
+    if: ${{ needs.changes.outputs.full == 'true' }}
     strategy:
       fail-fast: false
       matrix:
@@ -34,12 +98,12 @@ jobs:
           if [[ -e /proc/sys/kernel/apparmor_restrict_unprivileged_userns ]]; then
             echo 0 | sudo tee /proc/sys/kernel/apparmor_restrict_unprivileged_userns
           fi
-      - name: Run product acceptance suite
-        run: cargo product-acceptance --output product-acceptance-artifacts
+      - name: Run full product evidence
+        run: cargo product-acceptance --mode full --output product-acceptance-artifacts
       - uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: product-acceptance-${{ runner.os }}
+          name: product-acceptance-full-${{ runner.os }}
           path: |
             product-acceptance-artifacts/summary.json
             product-acceptance-artifacts/*.log
