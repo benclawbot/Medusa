@@ -3,7 +3,7 @@ use std::{
     path::{Path, PathBuf},
 };
 
-use medusa_protocol::{EventEnvelope, EventPayload};
+use medusa_protocol::EventEnvelope;
 use serde::Serialize;
 use serde_json::{Map, Value};
 use sha2::{Digest, Sha256};
@@ -58,6 +58,7 @@ pub fn run(repo: &Path, args: &[String]) -> Result<(), String> {
     if !matches!(format.as_str(), "markdown" | "md" | "json") {
         return Err("--format must be markdown or json".to_owned());
     }
+
     let path = session_path(repo, session_id);
     let bytes = fs::read(&path).map_err(|error| format!("read {}: {error}", path.display()))?;
     let session: Value = serde_json::from_slice(&bytes)
@@ -69,6 +70,7 @@ pub fn run(repo: &Path, args: &[String]) -> Result<(), String> {
     } else {
         markdown(&report)
     };
+
     if let Some(output) = option_value(args, "--output") {
         fs::write(&output, rendered).map_err(|error| format!("write {output}: {error}"))?;
     } else {
@@ -86,6 +88,7 @@ fn verify_event_chain(session: &Value) -> Result<(), String> {
         serde_json::from_value(events).map_err(|error| format!("parse session events: {error}"))?;
     let mut previous_checksum: Option<&str> = None;
     let mut previous_sequence = 0;
+
     for event in &events {
         event
             .validate()
@@ -146,10 +149,7 @@ fn build_report(session: &Value, requested_id: &str) -> Result<AuditReport, Stri
             "plan_created" | "plan_updated" => orchestration.push(sanitize(&payload)),
             "tool_call_requested" => {
                 requested.push(sanitize(&data));
-                let tool = data
-                    .get("tool")
-                    .and_then(Value::as_str)
-                    .unwrap_or_default();
+                let tool = data.get("tool").and_then(Value::as_str).unwrap_or_default();
                 let paths = mutation_paths(tool, data.get("arguments").unwrap_or(&Value::Null));
                 if !paths.is_empty() {
                     pending_mutations.push((tool.to_owned(), paths));
@@ -158,10 +158,7 @@ fn build_report(session: &Value, requested_id: &str) -> Result<AuditReport, Stri
             "tool_call_denied" => containment.push(sanitize(&data)),
             "tool_execution_completed" => {
                 executed.push(sanitize(&data));
-                let tool = data
-                    .get("tool")
-                    .and_then(Value::as_str)
-                    .unwrap_or_default();
+                let tool = data.get("tool").and_then(Value::as_str).unwrap_or_default();
                 let succeeded = data
                     .get("exit_code")
                     .and_then(Value::as_i64)
@@ -187,16 +184,17 @@ fn build_report(session: &Value, requested_id: &str) -> Result<AuditReport, Stri
             }
             "checkpoint_created" => checkpoints.push(sanitize(&data)),
             "verification_started" | "verification_completed" => {
-                verification.push(sanitize(&payload))
+                verification.push(sanitize(&payload));
             }
             "session_failed" | "session_paused" | "session_resumed" | "session_state_changed" => {
-                failures.push(sanitize(&payload))
+                failures.push(sanitize(&payload));
             }
             "session_completed" => completion_reason = "verified_completion".to_owned(),
             _ => {}
         }
         timeline.push(sanitize(event));
     }
+
     let first = events
         .first()
         .and_then(|event| event.get("checksum"))
@@ -318,7 +316,11 @@ fn redact(text: &str) -> String {
             redact_next = 1;
         } else if secret_like(token) || token.starts_with("sk-") || token.starts_with("ghp_") {
             redacted.push("[REDACTED]");
-            redact_next = if lower.contains("authorization") { 2 } else { 1 };
+            redact_next = if lower.contains("authorization") {
+                2
+            } else {
+                1
+            };
         } else {
             redacted.push(token);
         }
