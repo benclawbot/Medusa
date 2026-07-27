@@ -113,7 +113,8 @@ pub fn analyze(text: &str, config: &ClarityConfig) -> Report {
                 rule: RuleId::InstructionInNote,
                 severity: Severity::Error,
                 line: line_number,
-                message: "move the instruction out of the note and into a procedure step".to_owned(),
+                message: "move the instruction out of the note and into a procedure step"
+                    .to_owned(),
                 excerpt: trimmed.to_owned(),
             });
         }
@@ -123,7 +124,8 @@ pub fn analyze(text: &str, config: &ClarityConfig) -> Report {
                 rule: RuleId::PassiveVoice,
                 severity: Severity::Warning,
                 line: line_number,
-                message: "identify the actor and use active voice when the actor is known".to_owned(),
+                message: "identify the actor and use active voice when the actor is known"
+                    .to_owned(),
                 excerpt: trimmed.to_owned(),
             });
         }
@@ -136,11 +138,16 @@ pub fn analyze(text: &str, config: &ClarityConfig) -> Report {
 }
 
 fn split_sentences(line: &str) -> impl Iterator<Item = &str> {
-    line.split(['.', '!', '?']).map(str::trim).filter(|item| !item.is_empty())
+    line.split(['.', '!', '?'])
+        .map(str::trim)
+        .filter(|item| !item.is_empty())
 }
 
 fn word_count(sentence: &str) -> usize {
-    sentence.split_whitespace().filter(|word| word.chars().any(char::is_alphanumeric)).count()
+    sentence
+        .split_whitespace()
+        .filter(|word| word.chars().any(char::is_alphanumeric))
+        .count()
 }
 
 fn contains_ambiguous_status(line: &str) -> bool {
@@ -161,15 +168,33 @@ fn contains_ambiguous_status(line: &str) -> bool {
 fn note_contains_instruction(line: &str) -> bool {
     let body = line.trim_start_matches("note:").trim_start();
     [
-        "add ", "check ", "continue ", "do ", "install ", "make sure ", "remove ",
-        "run ", "set ", "update ", "use ",
+        "add ",
+        "check ",
+        "continue ",
+        "do ",
+        "install ",
+        "make sure ",
+        "remove ",
+        "run ",
+        "set ",
+        "update ",
+        "use ",
     ]
     .iter()
     .any(|verb| body.starts_with(verb))
 }
 
 fn likely_passive_voice(line: &str) -> bool {
-    const AUXILIARIES: [&str; 8] = [" is ", " are ", " was ", " were ", " be ", " been ", " being ", " will be "];
+    const AUXILIARIES: [&str; 8] = [
+        " is ",
+        " are ",
+        " was ",
+        " were ",
+        " be ",
+        " been ",
+        " being ",
+        " will be ",
+    ];
     let padded = format!(" {line} ");
     AUXILIARIES.iter().any(|auxiliary| {
         padded.find(auxiliary).is_some_and(|position| {
@@ -178,7 +203,9 @@ fn likely_passive_voice(line: &str) -> bool {
                 .next()
                 .is_some_and(|word| {
                     let word = word.trim_matches(|ch: char| !ch.is_alphabetic());
-                    word.ends_with("ed") || ["given", "held", "known", "made", "sent", "shown", "written"].contains(&word)
+                    word.ends_with("ed")
+                        || ["given", "held", "known", "made", "sent", "shown", "written"]
+                            .contains(&word)
                 })
         })
     })
@@ -214,19 +241,40 @@ mod tests {
 
     #[test]
     fn detects_instruction_in_note() {
-        let report = analyze("NOTE: Run the migration before deployment.", &ClarityConfig::default());
-        assert!(report.findings.iter().any(|finding| finding.rule == RuleId::InstructionInNote));
+        let report = analyze(
+            "NOTE: Run the migration before deployment.",
+            &ClarityConfig::default(),
+        );
+        assert!(
+            report
+                .findings
+                .iter()
+                .any(|finding| finding.rule == RuleId::InstructionInNote)
+        );
     }
 
     #[test]
     fn detects_vague_status() {
         let report = analyze("The fix should be good now.", &ClarityConfig::default());
-        assert!(report.findings.iter().any(|finding| finding.rule == RuleId::AmbiguousStatus));
+        assert!(
+            report
+                .findings
+                .iter()
+                .any(|finding| finding.rule == RuleId::AmbiguousStatus)
+        );
     }
 
     #[test]
     fn detects_passive_voice() {
-        let report = analyze("The configuration was changed by Medusa.", &ClarityConfig::default());
-        assert!(report.findings.iter().any(|finding| finding.rule == RuleId::PassiveVoice));
+        let report = analyze(
+            "The configuration was changed by Medusa.",
+            &ClarityConfig::default(),
+        );
+        assert!(
+            report
+                .findings
+                .iter()
+                .any(|finding| finding.rule == RuleId::PassiveVoice)
+        );
     }
 }
