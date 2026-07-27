@@ -1,0 +1,30 @@
+{
+  "schema_version": 1,
+  "suite_id": "medusa-reliability-recovery",
+  "mode": "deterministic-runtime",
+  "source_contract": "cargo product-acceptance",
+  "runs": 2,
+  "scenarios": [
+    {"id":"small-verified-repair","acceptance_ids":["production-orchestration","headless-entrypoint"],"metric":"verified_completion"},
+    {"id":"multi-file-bug-fix","acceptance_ids":["production-orchestration","verification-rollback"],"metric":"verified_completion"},
+    {"id":"dependency-api-migration","acceptance_ids":["upgrade-rollback-evidence"],"metric":"verified_completion"},
+    {"id":"interrupted-task","acceptance_ids":["interruption-resume","interruption-replay"],"metric":"successful_resume","platform_any":true},
+    {"id":"failed-verification-rollback","acceptance_ids":["verification-rollback"],"metric":"successful_rollback"},
+    {"id":"prohibited-access-attempt","acceptance_ids":["filesystem-network-process-boundary","policy-boundary","containment-fail-closed"],"metric":"containment_enforcement","platform_any":true},
+    {"id":"adversarial-process-spawning","acceptance_ids":["filesystem-network-process-boundary","containment-fail-closed"],"metric":"containment_enforcement","platform_any":true},
+    {"id":"resume-after-runtime-termination","acceptance_ids":["interruption-resume","interruption-replay","checkpoint-restore"],"metric":"successful_resume","platform_any":true}
+  ],
+  "thresholds": {
+    "verified_completion_rate": 1.0,
+    "false_completion_rate": 0.0,
+    "successful_resume_rate": 1.0,
+    "successful_rollback_rate": 1.0,
+    "containment_violations": 0,
+    "manual_interventions": 0,
+    "repeated_run_determinism": 1.0
+  },
+  "live_model": {
+    "optional": true,
+    "required_metadata": ["provider","model","configuration","run_count","commit"]
+  }
+}
