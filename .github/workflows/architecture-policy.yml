@@ -26,7 +26,19 @@ jobs:
         with:
           node-version: '22'
       - name: Capture actual TUI and desktop app
-        run: bash .github/capture-real-screenshots.sh
+        run: |
+          set +e
+          bash .github/capture-real-screenshots.sh > /tmp/capture-real-screenshots.log 2>&1
+          status=$?
+          if [ "$status" -ne 0 ]; then
+            tail -n 240 /tmp/capture-real-screenshots.log > capture-real-screenshots-error.log
+            git config user.name github-actions[bot]
+            git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+            git add capture-real-screenshots-error.log
+            git commit -m "ci: record screenshot capture failure"
+            git push origin HEAD:fix/real-product-screenshots
+            exit "$status"
+          fi
 
   architecture-policy:
     name: Shipped crate reachability
