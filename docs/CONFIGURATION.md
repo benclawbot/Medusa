@@ -35,7 +35,7 @@ browser_on_ui_change = true
 
 Configuration precedence is CLI overrides, environment overrides, project TOML, user TOML, then built-in defaults.
 
-`agent.parallel_workers` is retained only for version-1 compatibility. It does not activate the experimental multi-agent transaction stack, and production coding sessions remain single-agent. Do not use this field to infer concurrent coding behavior. See [Multi-agent execution](MULTI-AGENT.md).
+`agent.parallel_workers` is retained for version-1 compatibility and currently controls bounded parallel tool work. It does not create additional independent coding agents in the current production runtime.
 
 ## Migration from ignored fields
 
