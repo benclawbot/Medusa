@@ -1,0 +1,90 @@
+name: Apply issue 378 patch
+
+on:
+  push:
+    branches:
+      - fix/378-tool-output-details
+    paths:
+      - .github/fix-378-trigger
+
+permissions:
+  contents: write
+
+jobs:
+  apply-fix:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: fix/378-tool-output-details
+          fetch-depth: 0
+      - name: Patch runtime output forwarding
+        shell: python
+        run: |
+          from pathlib import Path
+          path = Path("crates/medusa-runtime/src/support.rs")
+          text = path.read_text()
+          replacements = [
+              ('''        AgentUpdate::ToolOutput {
+            tool,
+            output: _,
+            is_error,
+        } => {''', '''        AgentUpdate::ToolOutput {
+            tool,
+            output,
+            is_error,
+        } => {'''),
+              ('''                    details: Vec::new(),
+                },
+                |pending| RuntimeActivity {''', '''                    details: tool_output_details(output),
+                },
+                |pending| RuntimeActivity {'''),
+              ('''                    details: Vec::new(),
+                },
+            );
+            let _ = events.send(RuntimeEvent::Activity(activity));''', '''                    details: tool_output_details(output),
+                },
+            );
+            let _ = events.send(RuntimeEvent::Activity(activity));'''),
+          ]
+          for old, new in replacements:
+              if old not in text:
+                  raise SystemExit(f"expected source fragment not found: {old[:60]!r}")
+              text = text.replace(old, new, 1)
+          marker = 'fn summarize(value: &str) -> String {\n'
+          helper = '''fn tool_output_details(output: &str) -> Vec<String> {
+    let output = output.trim();
+    if output.is_empty() {
+        Vec::new()
+    } else {
+        output.lines().map(str::to_owned).collect()
+    }
+}
+
+'''
+          if helper not in text:
+              text = text.replace(marker, helper + marker, 1)
+          old = '''        assert_eq!(summarize("short line"), "short line");
+        assert!(summarize(&"x".repeat(150)).ends_with("..."));'''
+          new = '''        assert_eq!(summarize("short line"), "short line");
+        assert!(summarize(&"x".repeat(150)).ends_with("..."));
+        assert!(tool_output_details("  \\n").is_empty());
+        assert_eq!(
+            tool_output_details("stdout line\\nstderr: command failed\\n"),
+            vec!["stdout line", "stderr: command failed"]
+        );'''
+          if old not in text:
+              raise SystemExit("test insertion point not found")
+          text = text.replace(old, new, 1)
+          path.write_text(text)
+      - uses: dtolnay/rust-toolchain@stable
+      - run: cargo fmt --all -- --check
+      - run: cargo test -p medusa-runtime
+      - name: Commit fix
+        run: |
+          rm -f .github/fix-378-trigger .github/workflows/fix-378.yml
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git commit -m "fix(runtime): surface tool output details"
+          git push origin HEAD:fix/378-tool-output-details
