@@ -42,9 +42,8 @@ fn denies_loopback_network_access() {
         .expect("nonblocking listener");
     let port = listener.local_addr().expect("listener address").port();
 
-    let script = format!(
-        "$client = New-Object Net.Sockets.TcpClient; $client.Connect('127.0.0.1',{port})"
-    );
+    let script =
+        format!("$client = New-Object Net.Sockets.TcpClient; $client.Connect('127.0.0.1',{port})");
     let output = run_appcontainer(
         repo.path(),
         "powershell.exe",
@@ -70,12 +69,12 @@ fn reports_effective_boundary() {
     let restrictions = WindowsSandboxRestrictions::default();
     assert_eq!(restrictions.backend, "windows_base_container");
     assert!(restrictions.restrictions.contains(&"network_denied"));
-    assert!(restrictions
-        .restrictions
-        .contains(&"bound_filesystem_repository_rw"));
-    assert!(restrictions
-        .restrictions
-        .contains(&"no_host_acl_mutation"));
+    assert!(
+        restrictions
+            .restrictions
+            .contains(&"bound_filesystem_repository_rw")
+    );
+    assert!(restrictions.restrictions.contains(&"no_host_acl_mutation"));
 }
 
 fn acl_snapshot(path: &std::path::Path) -> Vec<u8> {
