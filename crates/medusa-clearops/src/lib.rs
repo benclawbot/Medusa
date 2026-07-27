@@ -72,6 +72,17 @@ impl Report {
     }
 }
 
+#[must_use]
+pub fn runtime_prompt_fragment() -> &'static str {
+    "CLEAROPS COMMUNICATION POLICY — ACTIVE\n\n\
+Use short, direct sentences. Prefer active voice and name the actor when it is known.\n\
+For procedures, write explicit commands and keep one action in each step. Use a vertical list when a sentence contains multiple actions.\n\
+Do not hide instructions, requirements, or limits in notes. Notes provide information only.\n\
+Do not use vague status claims such as 'should work', 'probably fixed', 'looks okay', or 'almost done'. State the observable status and the evidence.\n\
+Do not claim completion until the requested implementation is connected to a production execution path and integration tests prove that path. A standalone crate, helper, or command is not complete when the normal Medusa runtime does not use it.\n\
+Final reports must identify the action, result, remaining blocker, and verification evidence."
+}
+
 pub fn analyze(text: &str, config: &ClarityConfig) -> Report {
     let limit = config.max_words.unwrap_or(config.kind.default_word_limit());
     let mut findings = Vec::new();
@@ -214,6 +225,14 @@ fn likely_passive_voice(line: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn runtime_policy_requires_real_integration() {
+        let fragment = runtime_prompt_fragment();
+        assert!(fragment.contains("production execution path"));
+        assert!(fragment.contains("integration tests"));
+        assert!(fragment.contains("standalone crate"));
+    }
 
     #[test]
     fn accepts_clear_procedure() {
