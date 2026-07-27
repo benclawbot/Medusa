@@ -27,27 +27,35 @@ jobs:
       - name: Apply runtime patch
         shell: python
         run: |
+          import re
           from pathlib import Path
+
           path = Path('crates/medusa-runtime/src/support.rs')
           text = path.read_text()
-          replacements = [
-              (
-                  '        AgentUpdate::ToolOutput {\n            tool,\n            output: _,\n            is_error,\n        } => {',
-                  '        AgentUpdate::ToolOutput {\n            tool,\n            output,\n            is_error,\n        } => {',
-              ),
-              (
-                  '                    details: Vec::new(),\n                },\n                |pending| RuntimeActivity {',
-                  '                    details: tool_output_details(output),\n                },\n                |pending| RuntimeActivity {',
-              ),
-              (
-                  '                    details: Vec::new(),\n                },\n            );\n            let _ = events.send(RuntimeEvent::Activity(activity));',
-                  '                    details: tool_output_details(output),\n                },\n            );\n            let _ = events.send(RuntimeEvent::Activity(activity));',
-              ),
-          ]
-          for old, new in replacements:
-              if old not in text:
-                  raise SystemExit(f'missing expected source fragment: {old[:50]!r}')
-              text = text.replace(old, new, 1)
+
+          text, match_count = re.subn(
+              r'(AgentUpdate::ToolOutput\s*\{\s*tool,\s*)output:\s*_(,\s*is_error,)',
+              r'\1output\2',
+              text,
+              count=1,
+          )
+          if match_count != 1:
+              raise SystemExit(f'expected one ToolOutput binding, found {match_count}')
+
+          block_start = text.index('        AgentUpdate::ToolOutput {')
+          block_end = text.index('        _ => {}', block_start)
+          before = text[:block_start]
+          block = text[block_start:block_end]
+          after = text[block_end:]
+          block, details_count = re.subn(
+              r'details:\s*Vec::new\(\),',
+              'details: tool_output_details(output),',
+              block,
+          )
+          if details_count != 2:
+              raise SystemExit(f'expected two ToolOutput detail fields, found {details_count}')
+          text = before + block + after
+
           marker = 'fn summarize(value: &str) -> String {\n'
           helper = '''fn tool_output_details(output: &str) -> Vec<String> {
               let output = output.trim();
@@ -59,21 +67,22 @@ jobs:
           }
 
           '''
-          if marker not in text:
-              raise SystemExit('missing summarize insertion point')
-          text = text.replace(marker, helper + marker, 1)
-          old = '''        assert_eq!(summarize("short line"), "short line");
-          assert!(summarize(&"x".repeat(150)).ends_with("..."));'''
-          new = '''        assert_eq!(summarize("short line"), "short line");
-          assert!(summarize(&"x".repeat(150)).ends_with("..."));
-          assert!(tool_output_details("  \\n").is_empty());
-          assert_eq!(
-              tool_output_details("stdout line\\nstderr: command failed\\n"),
-              vec!["stdout line", "stderr: command failed"]
-          );'''
-          if old not in text:
-              raise SystemExit('missing test insertion point')
-          path.write_text(text.replace(old, new, 1))
+          if 'fn tool_output_details(' not in text:
+              text = text.replace(marker, helper + marker, 1)
+
+          test_anchor = '        assert!(summarize(&"x".repeat(150)).ends_with("..."));\n'
+          tests = '''        assert!(tool_output_details("  \\n").is_empty());
+              assert_eq!(
+                  tool_output_details("stdout line\\nstderr: command failed\\n"),
+                  vec!["stdout line", "stderr: command failed"]
+              );
+          '''
+          if 'tool_output_details("stdout line' not in text:
+              if test_anchor not in text:
+                  raise SystemExit('missing test insertion point')
+              text = text.replace(test_anchor, test_anchor + tests, 1)
+
+          path.write_text(text)
           Path('.github/fix-378-trigger').unlink(missing_ok=True)
           Path('.github/workflows/fix-378.yml').unlink(missing_ok=True)
       - run: cargo fmt --all
