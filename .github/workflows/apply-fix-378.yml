@@ -4,14 +4,13 @@ on:
   pull_request:
     branches:
       - main
-    paths:
-      - .github/fix-378-trigger
 
 permissions:
   contents: write
 
 jobs:
   apply-fix:
+    if: github.head_ref == 'fix/378-tool-output-details'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
