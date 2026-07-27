@@ -22,6 +22,8 @@ mod world_model_observation {
         "/src/world_model_observation.rs"
     ));
 }
+mod runtime_failure;
+
 use std::{collections::VecDeque, path::Path, sync::Mutex, thread};
 
 use medusa_config::{Config, Mode};
@@ -398,26 +400,39 @@ impl<P: ModelProvider> AgentEngine<P> {
 
     pub fn run_to_completion(&self, session: &mut AgentSession) -> MedusaResult<()> {
         while !session.completed && session.turn < self.config.agent.max_turns {
-            match self.step(session)? {
-                StepOutcome::WaitingForUser => {
-                    return Err(MedusaError::new(
+            match self.step(session) {
+                Ok(StepOutcome::WaitingForUser) => {
+                    let error = MedusaError::new(
                         ErrorCode::DependencyUnavailable,
                         ErrorCategory::Execution,
                         "agent is waiting for a user response",
-                    ));
+                    );
+                    let _ = runtime_failure::handle(session, &error)?;
+                    return Err(error);
                 }
-                StepOutcome::TurnComplete => return Ok(()),
-                StepOutcome::Continue | StepOutcome::Completed => {}
+                Ok(StepOutcome::TurnComplete) => return Ok(()),
+                Ok(StepOutcome::Continue | StepOutcome::Completed) => {}
+                Err(error) => match runtime_failure::handle(session, &error)? {
+                    runtime_failure::RuntimeFailureAction::Retry
+                    | runtime_failure::RuntimeFailureAction::Replan => continue,
+                    runtime_failure::RuntimeFailureAction::Stop => return Err(error),
+                },
             }
         }
         if session.completed {
             Ok(())
         } else {
-            Err(MedusaError::new(
+            let error = MedusaError::new(
                 ErrorCode::InternalInvariant,
                 ErrorCategory::Execution,
                 "agent exhausted max_turns before verification passed",
-            ))
+            );
+            runtime_failure::record_terminal(
+                session,
+                &error,
+                "agent exhausted its bounded runtime without passing verification",
+            )?;
+            Err(error)
         }
     }
 
