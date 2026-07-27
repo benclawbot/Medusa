@@ -122,17 +122,10 @@ fn encode(
 
     write_u16(&mut bytes, VTABLE_START, 22);
     write_u16(&mut bytes, VTABLE_START + 2, TABLE_SIZE as u16);
-    for (index, offset) in [4u16, 8, 0, 9, 0, 10, 0, 12, 16]
-        .into_iter()
-        .enumerate()
-    {
+    for (index, offset) in [4u16, 8, 0, 9, 0, 10, 0, 12, 16].into_iter().enumerate() {
         write_u16(&mut bytes, VTABLE_START + 4 + index * 2, offset);
     }
-    write_i32(
-        &mut bytes,
-        TABLE_START,
-        (TABLE_START - VTABLE_START) as i32,
-    );
+    write_i32(&mut bytes, TABLE_START, (TABLE_START - VTABLE_START) as i32);
     bytes[TABLE_START + 8] = u8::from(app_container);
     bytes[TABLE_START + 9] = u8::from(disallow_win32k);
     bytes[TABLE_START + 10] = u8::from(least_privilege);
@@ -212,6 +205,9 @@ mod tests {
         let table = builder.end_table(table);
         builder.finish(table, Some("SBOX"));
         assert_eq!(&builder.finished_data()[4..8], b"SBOX");
-        assert_eq!(u32::from_le_bytes(builder.finished_data()[0..4].try_into().unwrap()), 32);
+        assert_eq!(
+            u32::from_le_bytes(builder.finished_data()[0..4].try_into().unwrap()),
+            32
+        );
     }
 }
