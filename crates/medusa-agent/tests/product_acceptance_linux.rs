@@ -55,7 +55,7 @@ fn linux_product_boundary_exercises_allowed_write_external_denial_and_network_de
         .execute(
             repository.path(),
             "shell_run",
-            &json!({"program": "git", "args": ["--version"]}),
+            &json!({"program": "python3", "args": ["--version"]}),
         )
         .expect("the network probe executable must be available inside the sandbox");
     tools
@@ -63,8 +63,11 @@ fn linux_product_boundary_exercises_allowed_write_external_denial_and_network_de
             repository.path(),
             "shell_run",
             &json!({
-                "program": "git",
-                "args": ["ls-remote", "https://github.com/rust-lang/rust.git", "HEAD"]
+                "program": "python3",
+                "args": [
+                    "-c",
+                    "import socket; socket.create_connection(('github.com', 443), 5)"
+                ]
             }),
         )
         .expect_err("network access must be denied by the sandbox");
