@@ -27,62 +27,57 @@ jobs:
       - name: Apply runtime patch
         shell: python
         run: |
-          import re
           from pathlib import Path
 
           path = Path('crates/medusa-runtime/src/support.rs')
-          text = path.read_text()
+          lines = path.read_text().splitlines()
 
-          text, match_count = re.subn(
-              r'(AgentUpdate::ToolOutput\s*\{\s*tool,\s*)output:\s*_(,\s*is_error,)',
-              r'\1output\2',
-              text,
-              count=1,
-          )
-          if match_count != 1:
-              raise SystemExit(f'expected one ToolOutput binding, found {match_count}')
+          start = next(i for i, line in enumerate(lines) if 'AgentUpdate::ToolOutput {' in line)
+          end = next(i for i in range(start + 1, len(lines)) if lines[i].strip() == '_ => {}')
 
-          block_start = text.index('        AgentUpdate::ToolOutput {')
-          block_end = text.index('        _ => {}', block_start)
-          before = text[:block_start]
-          block = text[block_start:block_end]
-          after = text[block_end:]
-          block, details_count = re.subn(
-              r'details:\s*Vec::new\(\),',
-              'details: tool_output_details(output),',
-              block,
-          )
-          if details_count != 2:
-              raise SystemExit(f'expected two ToolOutput detail fields, found {details_count}')
-          text = before + block + after
+          output_line = next(i for i in range(start, min(start + 12, end)) if lines[i].strip() == 'output: _,')
+          lines[output_line] = lines[output_line].replace('output: _,', 'output,')
 
-          marker = 'fn summarize(value: &str) -> String {\n'
-          helper = '''fn tool_output_details(output: &str) -> Vec<String> {
-              let output = output.trim();
-              if output.is_empty() {
-                  Vec::new()
-              } else {
-                  output.lines().map(str::to_owned).collect()
-              }
-          }
+          detail_lines = [
+              i for i in range(start, end)
+              if lines[i].strip() == 'details: Vec::new(),'
+          ]
+          if len(detail_lines) != 2:
+              raise SystemExit(f'expected two ToolOutput detail fields, found {len(detail_lines)}')
+          for i in detail_lines:
+              indent = lines[i][:-len(lines[i].lstrip())]
+              lines[i] = f'{indent}details: tool_output_details(output),'
 
-          '''
-          if 'fn tool_output_details(' not in text:
-              text = text.replace(marker, helper + marker, 1)
+          if not any('fn tool_output_details(' in line for line in lines):
+              summarize = next(i for i, line in enumerate(lines) if line.startswith('fn summarize(value: &str)'))
+              helper = [
+                  'fn tool_output_details(output: &str) -> Vec<String> {',
+                  '    let output = output.trim();',
+                  '    if output.is_empty() {',
+                  '        Vec::new()',
+                  '    } else {',
+                  '        output.lines().map(str::to_owned).collect()',
+                  '    }',
+                  '}',
+                  '',
+              ]
+              lines[summarize:summarize] = helper
 
-          test_anchor = '        assert!(summarize(&"x".repeat(150)).ends_with("..."));\n'
-          tests = '''        assert!(tool_output_details("  \\n").is_empty());
-              assert_eq!(
-                  tool_output_details("stdout line\\nstderr: command failed\\n"),
-                  vec!["stdout line", "stderr: command failed"]
-              );
-          '''
-          if 'tool_output_details("stdout line' not in text:
-              if test_anchor not in text:
-                  raise SystemExit('missing test insertion point')
-              text = text.replace(test_anchor, test_anchor + tests, 1)
+          if not any('tool_output_details("stdout line' in line for line in lines):
+              anchor = next(
+                  i for i, line in enumerate(lines)
+                  if 'assert!(summarize(&"x".repeat(150)).ends_with("..."));' in line
+              )
+              tests = [
+                  '        assert!(tool_output_details("  \\n").is_empty());',
+                  '        assert_eq!(',
+                  '            tool_output_details("stdout line\\nstderr: command failed\\n"),',
+                  '            vec!["stdout line", "stderr: command failed"]',
+                  '        );',
+              ]
+              lines[anchor + 1:anchor + 1] = tests
 
-          path.write_text(text)
+          path.write_text('\n'.join(lines) + '\n')
           Path('.github/fix-378-trigger').unlink(missing_ok=True)
           Path('.github/workflows/fix-378.yml').unlink(missing_ok=True)
       - run: cargo fmt --all
