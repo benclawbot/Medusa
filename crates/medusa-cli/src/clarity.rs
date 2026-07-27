@@ -1,9 +1,14 @@
 #![forbid(unsafe_code)]
 
-use std::{fs, io::{self, Read}, path::PathBuf, process::ExitCode};
+use std::{
+    fs,
+    io::{self, Read},
+    path::PathBuf,
+    process::ExitCode,
+};
 
 use clap::{Parser, ValueEnum};
-use medusa_clearops::{analyze, ClarityConfig, TextKind};
+use medusa_clearops::{ClarityConfig, TextKind, analyze};
 
 #[derive(Clone, Copy, Debug, ValueEnum)]
 enum Kind {
@@ -98,7 +103,10 @@ fn read_input(path: Option<&PathBuf>) -> io::Result<String> {
 
 fn print_text_report(report: &medusa_clearops::Report) {
     if report.passed() {
-        println!("PASS: no clarity findings (word limit: {}).", report.word_limit);
+        println!(
+            "PASS: no clarity findings (word limit: {}).",
+            report.word_limit
+        );
         return;
     }
 
