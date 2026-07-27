@@ -37,9 +37,7 @@ mod tests {
         assert_eq!(error.code, ErrorCode::SandboxUnavailable);
         assert_eq!(
             error.context.get("sandbox_backend"),
-            Some(&serde_json::Value::String(
-                "windows_base_container".into()
-            ))
+            Some(&serde_json::Value::String("windows_base_container".into()))
         );
         assert!(
             error
