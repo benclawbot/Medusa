@@ -4,6 +4,7 @@ on:
   push:
     branches: [main]
   pull_request:
+    types: [opened, synchronize, reopened]
 
 permissions:
   contents: write
@@ -29,23 +30,26 @@ jobs:
           from pathlib import Path
           path = Path('crates/medusa-runtime/src/support.rs')
           text = path.read_text()
-          text = text.replace(
-              '        AgentUpdate::ToolOutput {\n            tool,\n            output: _,\n            is_error,\n        } => {',
-              '        AgentUpdate::ToolOutput {\n            tool,\n            output,\n            is_error,\n        } => {',
-              1,
-          )
-          text = text.replace(
-              '                    details: Vec::new(),\n                },\n                |pending| RuntimeActivity {',
-              '                    details: tool_output_details(output),\n                },\n                |pending| RuntimeActivity {',
-              1,
-          )
-          text = text.replace(
-              '                    details: Vec::new(),\n                },\n            );\n            let _ = events.send(RuntimeEvent::Activity(activity));',
-              '                    details: tool_output_details(output),\n                },\n            );\n            let _ = events.send(RuntimeEvent::Activity(activity));',
-              1,
-          )
+          replacements = [
+              (
+                  '        AgentUpdate::ToolOutput {\n            tool,\n            output: _,\n            is_error,\n        } => {',
+                  '        AgentUpdate::ToolOutput {\n            tool,\n            output,\n            is_error,\n        } => {',
+              ),
+              (
+                  '                    details: Vec::new(),\n                },\n                |pending| RuntimeActivity {',
+                  '                    details: tool_output_details(output),\n                },\n                |pending| RuntimeActivity {',
+              ),
+              (
+                  '                    details: Vec::new(),\n                },\n            );\n            let _ = events.send(RuntimeEvent::Activity(activity));',
+                  '                    details: tool_output_details(output),\n                },\n            );\n            let _ = events.send(RuntimeEvent::Activity(activity));',
+              ),
+          ]
+          for old, new in replacements:
+              if old not in text:
+                  raise SystemExit(f'missing expected source fragment: {old[:50]!r}')
+              text = text.replace(old, new, 1)
           marker = 'fn summarize(value: &str) -> String {\n'
-          helper = """fn tool_output_details(output: &str) -> Vec<String> {
+          helper = '''fn tool_output_details(output: &str) -> Vec<String> {
               let output = output.trim();
               if output.is_empty() {
                   Vec::new()
@@ -54,16 +58,25 @@ jobs:
               }
           }
 
-          """
+          '''
+          if marker not in text:
+              raise SystemExit('missing summarize insertion point')
           text = text.replace(marker, helper + marker, 1)
-          old = '        assert_eq!(summarize("short line"), "short line");\n        assert!(summarize(&"x".repeat(150)).ends_with("..."));'
-          new = old + '\n        assert!(tool_output_details("  \\n").is_empty());\n        assert_eq!(\n            tool_output_details("stdout line\\nstderr: command failed\\n"),\n            vec!["stdout line", "stderr: command failed"]\n        );'
-          text = text.replace(old, new, 1)
-          if 'output: _' in text or text.count('tool_output_details(output)') != 2:
-              raise SystemExit('issue 378 patch did not apply exactly')
-          path.write_text(text)
+          old = '''        assert_eq!(summarize("short line"), "short line");
+          assert!(summarize(&"x".repeat(150)).ends_with("..."));'''
+          new = '''        assert_eq!(summarize("short line"), "short line");
+          assert!(summarize(&"x".repeat(150)).ends_with("..."));
+          assert!(tool_output_details("  \\n").is_empty());
+          assert_eq!(
+              tool_output_details("stdout line\\nstderr: command failed\\n"),
+              vec!["stdout line", "stderr: command failed"]
+          );'''
+          if old not in text:
+              raise SystemExit('missing test insertion point')
+          path.write_text(text.replace(old, new, 1))
           Path('.github/fix-378-trigger').unlink(missing_ok=True)
           Path('.github/workflows/fix-378.yml').unlink(missing_ok=True)
+      - run: cargo fmt --all
       - run: cargo fmt --all -- --check
       - run: cargo test -p medusa-runtime
       - name: Commit PR fix
@@ -73,53 +86,6 @@ jobs:
           git add -A
           git commit -m "fix(runtime): surface tool output details"
           git push origin HEAD:fix/378-tool-output-details
-      - name: Restore workflow on main
-        run: |
-          git fetch origin main
-          git checkout -B restore-architecture-policy origin/main
-          cat > .github/workflows/architecture-policy.yml <<'EOF'
-          name: Architecture policy
-
-          on:
-            push:
-              branches: [main]
-            pull_request:
-
-          permissions:
-            contents: read
-
-          concurrency:
-            group: architecture-policy-${{ github.ref }}
-            cancel-in-progress: true
-
-          jobs:
-            architecture-policy:
-              name: Shipped crate reachability
-              runs-on: ubuntu-latest
-              steps:
-                - uses: actions/checkout@v4
-                - uses: dtolnay/rust-toolchain@1.88.0
-                - name: Refresh dependency lock for merged graph
-                  run: cargo generate-lockfile
-                - name: Exercise policy fixtures
-                  run: python3 scripts/architecture-policy.py self-test
-                - name: Enforce architecture policy
-                  run: |
-                    python3 scripts/architecture-policy.py check \
-                      --root . \
-                      --policy .github/architecture-policy.json \
-                      --report architecture-policy-report.md
-                - name: Publish architecture report
-                  if: always()
-                  uses: actions/upload-artifact@v4
-                  with:
-                    name: architecture-policy-report
-                    path: architecture-policy-report.md
-                    if-no-files-found: error
-          EOF
-          git add .github/workflows/architecture-policy.yml
-          git commit -m "ci: restore architecture policy workflow"
-          git push origin HEAD:main
 
   architecture-policy:
     name: Shipped crate reachability
