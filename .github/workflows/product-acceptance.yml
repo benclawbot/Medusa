@@ -27,7 +27,13 @@ jobs:
         run: cargo generate-lockfile
       - name: Install Linux sandbox backend
         if: runner.os == 'Linux'
-        run: sudo apt-get update && sudo apt-get install -y bubblewrap
+        shell: bash
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y bubblewrap
+          if [[ -e /proc/sys/kernel/apparmor_restrict_unprivileged_userns ]]; then
+            echo 0 | sudo tee /proc/sys/kernel/apparmor_restrict_unprivileged_userns
+          fi
       - name: Run product acceptance suite
         run: cargo product-acceptance --output product-acceptance-artifacts
       - uses: actions/upload-artifact@v4
