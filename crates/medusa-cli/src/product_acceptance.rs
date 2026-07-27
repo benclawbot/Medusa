@@ -231,6 +231,7 @@ fn execute_scenario(
     let output = Command::new(cargo_program())
         .args(&args)
         .env("CARGO_TARGET_DIR", &target_dir)
+        .env("MEDUSA_PRODUCT_ACCEPTANCE", "1")
         .output()?;
     let duration = started.elapsed();
     let combined = combine_output(&output);
