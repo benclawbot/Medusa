@@ -44,7 +44,6 @@ fn main() {
     ] {
         bind_module(&mut source, &manifest, declaration, file);
     }
-    source = source.replace(", StepOutcome, TurnUsage,", ", StepOutcome,");
 
     replace_once(
         &mut source,
