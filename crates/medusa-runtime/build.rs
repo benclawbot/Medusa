@@ -35,7 +35,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     println!("cargo:rerun-if-changed=src/production_orchestrator.rs");
 
     let manifest = env::var("CARGO_MANIFEST_DIR")?;
-    let mut source = fs::read_to_string("src/runtime_impl.rs")?;
+    let mut source = fs::read_to_string("src/runtime_impl.rs")?.replace("\r\n", "\n");
 
     for (declaration, file) in [
         ("pub mod commands;", "commands.rs"),
