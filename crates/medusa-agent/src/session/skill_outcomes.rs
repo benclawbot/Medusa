@@ -10,6 +10,7 @@ use time::{OffsetDateTime, format_description::well_known::Rfc3339};
 
 use super::AgentSession;
 use crate::tools::skills::automatically_loaded_names;
+use medusa_failure::FailureDecision;
 
 const ACTIVE_SKILLS_ROOT: &str = ".medusa/skills";
 const SESSION_SKILLS_ROOT: &str = ".medusa/learning/session-skills";
@@ -31,6 +32,16 @@ struct SkillOutcomeRecord {
     turns: u32,
     evidence_count: usize,
     automatically_loaded_skills: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    terminal_failure: Option<TerminalFailure>,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+struct TerminalFailure {
+    code: String,
+    category: String,
+    disposition: String,
+    reason: String,
 }
 
 #[derive(Debug, Default, Eq, PartialEq, Serialize)]
@@ -121,6 +132,7 @@ pub(super) fn record_completed_session(session: &AgentSession) -> MedusaResult<O
             turns: session.turn,
             evidence_count: session.evidence.len(),
             automatically_loaded_skills: skills,
+            terminal_failure: None,
         };
         atomic_json(&destination, &record)?;
     }
@@ -168,6 +180,50 @@ pub(super) fn verification_passed(session: &AgentSession) -> bool {
             _ => None,
         })
         == Some(true)
+}
+
+pub(crate) fn record_terminal_skill_outcome(
+    session: &AgentSession,
+    error: &MedusaError,
+    decision: &FailureDecision,
+    reason: &str,
+) -> MedusaResult<Option<PathBuf>> {
+    let skills = loaded_skill_names(session);
+    if skills.is_empty() {
+        return Ok(None);
+    }
+    let root = session.repo.join(OUTCOME_ROOT);
+    fs::create_dir_all(&root)?;
+    let destination = root.join(format!("{}.json", session.id));
+    let recorded_at = OffsetDateTime::now_utc()
+        .format(&Rfc3339)
+        .map_err(|format_error| {
+            MedusaError::new(
+                ErrorCode::InternalInvariant,
+                ErrorCategory::Internal,
+                format!("could not format skill outcome timestamp: {format_error}"),
+            )
+        })?;
+    let record = SkillOutcomeRecord {
+        schema_version: 2,
+        session_id: session.id.to_string(),
+        objective: session.objective.clone(),
+        recorded_at,
+        completed: false,
+        verified: false,
+        turns: session.turn,
+        evidence_count: session.evidence.len(),
+        automatically_loaded_skills: skills,
+        terminal_failure: Some(TerminalFailure {
+            code: error.code.to_string(),
+            category: format!("{:?}", error.category).to_ascii_lowercase(),
+            disposition: format!("{:?}", decision.disposition).to_ascii_lowercase(),
+            reason: reason.to_owned(),
+        }),
+    };
+    atomic_json(&destination, &record)?;
+    rebuild_effectiveness_summary(&session.repo)?;
+    Ok(Some(destination))
 }
 
 fn rebuild_effectiveness_summary(repo: &Path) -> MedusaResult<PathBuf> {

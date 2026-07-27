@@ -37,7 +37,7 @@ pub use escalation_state::{
     persist_escalation_journal,
 };
 pub use manual_escalation::{export_manual_escalation, import_manual_advice};
-pub(crate) use skill_outcomes::record_loaded_skills;
+pub(crate) use skill_outcomes::{record_loaded_skills, record_terminal_skill_outcome};
 pub(crate) use usage::record_turn_usage;
 #[allow(unused_imports)]
 pub use usage::{SessionUsage, TurnUsage, UsageProvenance, session_usage};
