@@ -6,7 +6,7 @@ This map connects the product architecture in [`ARCHITECTURE.md`](ARCHITECTURE.m
 
 | Surface | Authoritative path | Responsibility |
 |---|---|---|
-| Production orchestration | `medusa-runtime::production_orchestrator` | Plans orchestrated work and feeds the schedule into the single production `AgentEngine`. |
+| Production orchestration | `medusa-runtime::production_orchestrator` | Plans orchestrated work and feeds task contracts and dependencies into the single production `AgentEngine`; schedule waves remain internal planning metadata. |
 | Terminal UI | `crates/medusa-tui` | Renders and drives the shared runtime interactively. |
 | Desktop application | `apps/medusa-desktop` | React/Tauri frontend over the shared runtime and daemon boundary. |
 | Headless CLI | `crates/medusa-cli` | Starts scripted objectives, resume flows, maintenance commands, and explicit approval allowlists. |
