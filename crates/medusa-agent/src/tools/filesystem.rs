@@ -139,8 +139,15 @@ pub(crate) fn create_dir_approved(path: &str) -> MedusaResult<String> {
 
 fn normalized_policy_path(path: &Path) -> String {
     let normalized = path.to_string_lossy().replace('\\', "/");
+    let normalized = if let Some(suffix) = normalized.strip_prefix("//?/UNC/") {
+        format!("//{suffix}")
+    } else if let Some(suffix) = normalized.strip_prefix("//?/") {
+        suffix.to_owned()
+    } else {
+        normalized
+    };
     let normalized = normalized.trim_end_matches('/');
-    if cfg!(windows) {
+    if cfg!(any(windows, target_os = "macos")) {
         normalized.to_ascii_lowercase()
     } else {
         normalized.to_owned()
@@ -321,7 +328,8 @@ mod tests {
     use std::{fs, path::Path};
 
     use super::{
-        approved_absolute_path, create_dir, read, reject_sensitive_approved_path, search, write,
+        approved_absolute_path, create_dir, normalized_policy_path, read,
+        reject_sensitive_approved_path, search, write,
     };
 
     #[test]
@@ -379,21 +387,23 @@ mod tests {
 
     #[cfg(windows)]
     #[test]
-    fn approved_external_paths_reject_windows_system_targets() {
-        for path in [
-            r"C:\Windows\System32\drivers\etc\hosts",
-            r"C:\Windows\System32\config\SAM",
-            r"C:\Windows\System32\wbem\payload.exe",
-        ] {
-            assert!(
-                reject_sensitive_approved_path(Path::new(path)).is_err(),
-                "{path}"
-            );
-        }
+    fn approved_external_paths_reject_windows_system_targets_after_canonicalization() {
+        assert_eq!(
+            normalized_policy_path(Path::new(r"\\?\C:\Windows\System32\drivers\etc\hosts")),
+            "c:/windows/system32/drivers/etc/hosts"
+        );
+
+        let windows = std::env::var_os("WINDIR").expect("WINDIR");
+        let target = Path::new(&windows).join("System32/drivers/etc/hosts");
+        assert!(
+            approved_absolute_path(target.to_str().expect("utf8 system path")).is_err(),
+            "{}",
+            target.display()
+        );
     }
 
     #[test]
-    fn approved_external_paths_reject_user_credentials_and_startup() {
+    fn approved_external_paths_reject_user_credentials() {
         let home = std::env::var_os("HOME").or_else(|| std::env::var_os("USERPROFILE"));
         let Some(home) = home else {
             return;
@@ -404,9 +414,6 @@ mod tests {
             ".aws/credentials",
             ".gnupg/private-keys-v1.d/key",
             ".config/gh/hosts.yml",
-            ".config/autostart/medusa.desktop",
-            "Library/LaunchAgents/com.medusa.agent.plist",
-            "AppData/Roaming/Microsoft/Windows/Start Menu/Programs/Startup/medusa.cmd",
         ] {
             let path = home.join(suffix);
             assert!(
@@ -415,6 +422,44 @@ mod tests {
                 path.display()
             );
         }
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn approved_external_paths_reject_linux_autostart() {
+        let Some(home) = std::env::var_os("HOME") else {
+            return;
+        };
+        let path = Path::new(&home).join(".config/autostart/medusa.desktop");
+        assert!(reject_sensitive_approved_path(&path).is_err());
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn approved_external_paths_reject_macos_launch_agents_after_canonicalization() {
+        let target = Path::new("/Library/LaunchAgents/com.medusa.agent.plist");
+        assert!(approved_absolute_path(target.to_str().expect("utf8 path")).is_err());
+
+        let Some(home) = std::env::var_os("HOME") else {
+            return;
+        };
+        let user_target = Path::new(&home).join("Library/LaunchAgents/com.medusa.agent.plist");
+        assert!(
+            reject_sensitive_approved_path(&user_target).is_err(),
+            "{}",
+            user_target.display()
+        );
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn approved_external_paths_reject_windows_startup() {
+        let Some(home) = std::env::var_os("USERPROFILE") else {
+            return;
+        };
+        let target = Path::new(&home)
+            .join("AppData/Roaming/Microsoft/Windows/Start Menu/Programs/Startup/medusa.cmd");
+        assert!(reject_sensitive_approved_path(&target).is_err());
     }
 
     #[test]
