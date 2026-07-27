@@ -34,5 +34,7 @@ jobs:
         if: always()
         with:
           name: product-acceptance-${{ runner.os }}
-          path: product-acceptance-artifacts
+          path: |
+            product-acceptance-artifacts/summary.json
+            product-acceptance-artifacts/*.log
           if-no-files-found: error
