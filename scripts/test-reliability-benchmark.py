@@ -1,0 +1,66 @@
+#!/usr/bin/env python3
+from __future__ import annotations
+
+import importlib.util
+import json
+import tempfile
+from pathlib import Path
+
+SCRIPT = Path(__file__).with_name("reliability-benchmark.py")
+SPEC = importlib.util.spec_from_file_location("reliability_benchmark", SCRIPT)
+assert SPEC and SPEC.loader
+MODULE = importlib.util.module_from_spec(SPEC)
+SPEC.loader.exec_module(MODULE)
+
+
+def summary(status: str = "passed") -> dict:
+    ids = [
+        "production-orchestration",
+        "headless-entrypoint",
+        "verification-rollback",
+        "upgrade-rollback-evidence",
+        "interruption-resume",
+        "checkpoint-restore",
+        "filesystem-network-process-boundary",
+    ]
+    return {
+        "schema_version": 1,
+        "scenarios": [
+            {"id": item, "status": status, "duration_ms": 10, "log": f"{item}.log"}
+            for item in ids
+        ],
+    }
+
+
+def main() -> int:
+    suite = json.loads(Path("benchmarks/reliability-suite.json").read_text(encoding="utf-8"))
+    report = MODULE.score(suite, [summary(), summary()])
+    assert report["passed"]
+    assert report["metrics"]["verified_completion_rate"] == 1.0
+    assert report["metrics"]["false_completion_rate"] == 0.0
+    assert report["metrics"]["repeated_run_determinism"] == 1.0
+
+    failed = summary()
+    failed["scenarios"][0]["status"] = "failed"
+    report = MODULE.score(suite, [summary(), failed])
+    assert not report["passed"]
+    assert any(item["metric"] == "verified_completion_rate" for item in report["failures"])
+
+    changed = summary()
+    changed["scenarios"].append(
+        {"id": "unexpected", "status": "passed", "duration_ms": 1, "log": "unexpected.log"}
+    )
+    report = MODULE.score(suite, [summary(), changed])
+    assert report["metrics"]["repeated_run_determinism"] == 0.0
+
+    with tempfile.TemporaryDirectory() as directory:
+        output = Path(directory)
+        (output / "report.md").write_text(MODULE.markdown(report), encoding="utf-8")
+        assert "Reliability and recovery benchmark results" in (output / "report.md").read_text()
+
+    print("reliability-benchmark-fixtures-ok")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
