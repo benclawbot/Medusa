@@ -1,0 +1,32 @@
+version = 1
+
+[agent]
+mode = "review"
+max_turns = 8
+parallel_workers = 1
+
+[model]
+provider = "local"
+fallback_providers = []
+name = "fixture-model"
+protocol = "openai"
+temperature_milli = 0
+max_output_tokens = 1024
+context_window_tokens = 8192
+auto_compact_percent = 40
+base_url = "http://127.0.0.1:11434/v1"
+auth = "none"
+tool_calling = true
+streaming = false
+max_retries = 1
+retry_base_delay_ms = 250
+retry_max_delay_ms = 8000
+retry_jitter_ms = 100
+
+[memory]
+enabled = true
+format = "markdown"
+
+[verification]
+required = true
+browser_on_ui_change = false
