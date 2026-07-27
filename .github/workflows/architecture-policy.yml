@@ -4,40 +4,15 @@ on:
   push:
     branches: [main]
   pull_request:
-    types: [reopened]
 
 permissions:
-  contents: write
+  contents: read
 
 concurrency:
   group: architecture-policy-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
-  finalize-pr-385:
-    if: github.event_name == 'pull_request' && github.event.pull_request.number == 385
-    name: Finalize PR 385
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          ref: fix/380-headless-approval
-          fetch-depth: 0
-      - name: Wire headless approval policy
-        run: |
-          git show origin/main:.github/scripts/finalize_pr_385.py > /tmp/finalize_pr_385.py
-          python3 /tmp/finalize_pr_385.py
-      - uses: dtolnay/rust-toolchain@1.88.0
-      - run: cargo fmt --all -- --check
-      - run: cargo test -p medusa-cli
-      - name: Commit implementation
-        run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add crates/medusa-cli/src/main.rs crates/medusa-cli/src/headless_approval.rs
-          git commit -m "fix(cli): support allowlisted headless approvals"
-          git push origin HEAD:fix/380-headless-approval
-
   architecture-policy:
     name: Shipped crate reachability
     runs-on: ubuntu-latest
