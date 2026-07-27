@@ -10,25 +10,27 @@ Medusa's product model is **Plan, Execute Safely, Recover**. The Rust crate grap
 | **Execute Safely** | Apply guarded changes and run commands inside the platform containment boundary. | Runtime events, transactions, command evidence, and repository verification. |
 | **Recover** | Preserve enough authoritative state to resume, retry, roll back, or explain failure without inventing success. | Checkpoints, journals, failure history, replay data, and recovery decisions. |
 
-The production runtime entrypoint is `medusa-runtime::production_orchestrator`. Terminal, desktop, and headless interfaces feed objectives into that shared runtime. The repository verification gate is authoritative for coding completion. The recovery coordinator and persisted `.medusa` state provide the continuation path after interruption or failure.
+The production execution path is `medusa-runtime::RuntimeController -> run_prompt -> medusa-agent::AgentEngine`. Terminal, desktop, daemon, and headless interfaces use that shared single-agent runtime. The repository verification gate is authoritative for coding completion. The recovery coordinator and persisted `.medusa` state provide the continuation path after interruption or failure. See [`PRODUCTION-EXECUTION-TRACE.md`](PRODUCTION-EXECUTION-TRACE.md) for the source-to-entrypoint proof.
 
 ## Runtime event flow
 
 ```mermaid
 flowchart LR
-    UI[Terminal / Desktop / Headless CLI] --> O[Production orchestrator]
-    O --> P[Plan]
+    UI[Terminal / Desktop / Headless CLI] --> C[RuntimeController]
+    C --> A[Single AgentEngine]
+    A --> P[Plan]
     P --> E[Execute Safely]
     E --> V{Repository verification gate}
-    V -->|verified| C[Completion report]
-    V -->|failed or interrupted| R[Recover]
-    R --> P
-    O --> S[(Authoritative .medusa records)]
+    V -->|verified| R[Completion report]
+    V -->|failed or interrupted| X[Recover]
+    X --> A
+    C --> S[(Authoritative .medusa records)]
+    A --> S
     P --> S
     E --> S
     V --> S
-    R --> S
-    O -. runtime events .-> UI
+    X --> S
+    C -. runtime events .-> UI
 ```
 
 Runtime events are the shared frontend contract. Frontends render plans, questions, approvals, tool activity, failures, verification, and completion; they do not independently redefine provider capabilities, execution policy, or completion.
@@ -37,7 +39,7 @@ Runtime events are the shared frontend contract. Frontends render plans, questio
 
 ```mermaid
 flowchart TB
-    subgraph Trusted[Medusa policy and orchestration]
+    subgraph Trusted[Medusa policy and single-agent runtime]
       A[Plan-bound approval]
       T[Transactional repository tools]
       C[Command policy]
@@ -71,20 +73,20 @@ Platform note: Windows command containment requires Windows 11 with `Experimenta
 
 ```mermaid
 flowchart TD
-    P[Primary AgentEngine] --> C[Production orchestrator creates task contracts and dependencies]
-    C --> E[Contracts are added to the same agent prompt]
-    E --> G{Repository verification gate}
+    C[RuntimeController] --> A[One production AgentEngine]
+    A --> G{Repository verification gate}
     G -->|pass| Done[Verified result]
     G -->|fail| Fix[Revise, retry, or recover]
-    Fix --> P
-    C -. planned integration .-> D[Bounded subagent dispatch]
-    D -. planned .-> I[Primary agent validates and integrates results]
-    I -. planned .-> G
+    Fix --> A
+    A -. optional planning metadata .-> P[Task contracts and schedule model]
+    P -. design-only .-> D[Future bounded subagent dispatch]
+    D -. design-only .-> I[Primary agent validates and integrates results]
+    I -. design-only .-> G
 ```
 
-**Current shipped behavior:** orchestrated coding objectives run through one `AgentEngine`. The production orchestrator decomposes the objective, computes a schedule as internal planning metadata, emits one truthful planning event, and supplies task contracts and dependencies to the same agent. It does not present schedule waves as dispatched work. Scheduler, worker, and parent/subagent result APIs exist as implementation scaffolding, but production `run_prompt` does not yet dispatch subagents.
+**Current shipped behavior:** every coding objective runs through one `AgentEngine`. `run_prompt` does not call scheduler, worker, lease, consensus, transaction-coordinator, or parent/subagent integration APIs. The public `medusa-runtime::production_orchestrator` export has been removed; planning helpers are exposed only as `medusa-runtime::orchestration_planning`, explicitly marked non-production metadata.
 
-**Planned delegation contract:** when subagent execution is wired into the production runtime, the primary agent remains accountable for checking evidence, resolving conflicts, integrating accepted work, and presenting the combined repository state to the verification gate. Delegation will never transfer completion authority.
+**Design-only delegation contract:** if subagent execution is promoted later, the primary agent remains accountable for checking evidence, resolving conflicts, integrating accepted work, and presenting the combined repository state to the verification gate. Delegation never transfers completion authority.
 
 ## Verification gate
 
@@ -130,14 +132,16 @@ Repository-local durable state lives under `.medusa`. Exact filenames and schema
 | Concern | Authoritative record | Authority rule |
 |---|---|---|
 | Plans | Persisted session plan and current plan fingerprint | Approvals and execution must bind to the active plan. |
-| Execution | Runtime event log, tool activity, transactions, changed paths, process records | Proposed text is not execution evidence. |
+| Execution | Runtime event log, tool activity, transactions, changed paths, process records | Proposed text and planning metadata are not execution evidence. |
 | Verification | Verification commands, results, browser evidence, overrides, and completion status | Required verification decides coding completion. |
 | Reports | Final session report derived from runtime and verification evidence | Reports summarize records; they do not override them. |
 | Learning | Provenance-bearing Markdown lessons, recall records, and skill outcomes | Only verified outcomes can become accepted positive learning. |
 | Recovery | Checkpoints, failure history, transaction journals, snapshots, replay and recovery decisions | Recovery preserves failed and interrupted states rather than rewriting them as success. |
 
+Persisted schedule, contract, role, or wave labels must not be rendered as proof that workers or subagents were dispatched. Production sessions represent one `AgentEngine` and one authoritative `AgentSession` until a future versioned execution schema proves otherwise.
+
 ## Capability evidence and drift control
 
-Every production capability presented here must map to shipped production paths, executable tests, and canonical repository gates in [`CAPABILITY-CLAIMS.json`](CAPABILITY-CLAIMS.json) and [`CAPABILITY-EVIDENCE.md`](CAPABILITY-EVIDENCE.md). Run both `python3 scripts/check-product-architecture.py` and `python3 scripts/check-capability-evidence.py` after changing architecture or capability claims. The first validates architecture headings, diagrams, workspace metadata, runtime wording, contributor paths, evidence-ledger status, and README links; the second validates required documents, evidence paths, gates, and ledger synchronization. Experimental, planned, or prerequisite-limited behavior must be labelled where it appears.
+Every production capability presented here must map to shipped production paths, executable tests, and canonical repository gates in [`CAPABILITY-CLAIMS.json`](CAPABILITY-CLAIMS.json) and [`CAPABILITY-EVIDENCE.md`](CAPABILITY-EVIDENCE.md). Run both `python3 scripts/check-product-architecture.py` and `python3 scripts/check-capability-evidence.py` after changing architecture or capability claims. The first validates the single-agent entrypoint trace, workspace metadata, runtime exports, production call path, contributor map, persisted-session wording, and README links; the second validates required documents, evidence paths, gates, and ledger synchronization. Experimental, design-only, or prerequisite-limited behavior must be labelled where it appears.
 
 For crate-level ownership and entrypoints, see [Contributor architecture map](CONTRIBUTOR-ARCHITECTURE.md).

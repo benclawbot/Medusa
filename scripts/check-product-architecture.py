@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Validate the public product architecture against production metadata."""
+"""Validate public architecture against the authoritative production execution path."""
 
 from __future__ import annotations
 
@@ -69,7 +69,10 @@ def validate(root: Path) -> None:
     architecture = read(root, "docs/ARCHITECTURE.md")
     contributor = read(root, "docs/CONTRIBUTOR-ARCHITECTURE.md")
     evidence = read(root, "docs/CAPABILITY-EVIDENCE.md")
-    runtime = read(root, "crates/medusa-runtime/src/production_orchestrator.rs")
+    trace = read(root, "docs/PRODUCTION-EXECUTION-TRACE.md")
+    planning = read(root, "crates/medusa-runtime/src/production_orchestrator.rs")
+    runtime_root = read(root, "crates/medusa-runtime/src/runtime_root_generated.rs")
+    runtime = read(root, "crates/medusa-runtime/src/lib.rs")
     readme = read(root, "README.md")
     cargo_text = read(root, "Cargo.toml")
 
@@ -92,14 +95,15 @@ def validate(root: Path) -> None:
     for path in REQUIRED_CONTRIBUTOR_PATHS:
         require(contributor, path, "docs/CONTRIBUTOR-ARCHITECTURE.md")
         if not (root / path).exists():
-            raise ArchitectureError(f"contributor map references missing production path: {path}")
+            raise ArchitectureError(f"contributor map references missing path: {path}")
 
     cargo = tomllib.loads(cargo_text)
     metadata = cargo.get("workspace", {}).get("metadata", {}).get("medusa", {})
     expected = {
-        "production_execution_model": "single-agent-orchestrated",
-        "production_orchestrator": "medusa-runtime::production_orchestrator",
-        "subagent_delegation": "planned-bounded-parent-accountable",
+        "production_execution_model": "single-agent",
+        "production_entrypoint": "medusa-runtime::RuntimeController -> run_prompt -> medusa-agent::AgentEngine",
+        "orchestration_planning": "medusa-runtime::orchestration_planning (non-production metadata only)",
+        "subagent_delegation": "design-only-disabled",
         "verification_gate": "repository",
     }
     if metadata != expected:
@@ -108,38 +112,56 @@ def validate(root: Path) -> None:
             f"expected {expected!r}, got {metadata!r}"
         )
 
-    require(architecture, metadata["production_orchestrator"], "docs/ARCHITECTURE.md")
-    require(architecture, "one `AgentEngine`", "docs/ARCHITECTURE.md")
-    require(architecture, "task contracts and dependencies", "docs/ARCHITECTURE.md")
-    require(architecture, "does not yet dispatch subagents", "docs/ARCHITECTURE.md")
-    require(architecture, "primary agent remains accountable", "docs/ARCHITECTURE.md")
-    require(architecture, "repository verification gate", "docs/ARCHITECTURE.md")
-    require(architecture, "platform- or prerequisite-limited", "docs/ARCHITECTURE.md")
-    require(architecture, "scripts/check-product-architecture.py", "docs/ARCHITECTURE.md")
-    forbid(architecture, "Schedule is added to the same agent prompt", "docs/ARCHITECTURE.md")
+    for document, context in ((architecture, "docs/ARCHITECTURE.md"), (contributor, "docs/CONTRIBUTOR-ARCHITECTURE.md"), (trace, "docs/PRODUCTION-EXECUTION-TRACE.md")):
+        require(document, "RuntimeController", context)
+        require(document, "run_prompt", context)
+        require(document, "AgentEngine", context)
+        require(document, "single-agent", context)
 
-    require(contributor, metadata["production_orchestrator"], "docs/CONTRIBUTOR-ARCHITECTURE.md")
-    require(contributor, "primary agent validates evidence", "docs/CONTRIBUTOR-ARCHITECTURE.md")
-    require(contributor, "not dispatched by production `run_prompt`", "docs/CONTRIBUTOR-ARCHITECTURE.md")
-    require(contributor, "task contracts and dependencies", "docs/CONTRIBUTOR-ARCHITECTURE.md")
+    require(architecture, "medusa-runtime::orchestration_planning", "docs/ARCHITECTURE.md")
+    require(architecture, "does not call scheduler", "docs/ARCHITECTURE.md")
+    require(architecture, "must not be rendered as proof", "docs/ARCHITECTURE.md")
+    forbid(architecture, "production runtime entrypoint is `medusa-runtime::production_orchestrator`", "docs/ARCHITECTURE.md")
 
-    require(runtime, "Production execution mode: single-agent orchestrated", "production orchestrator")
-    require(runtime, "No workers or subagents are dispatched", "production orchestrator")
-    require(runtime, "no workers were dispatched", "production orchestrator events")
-    require(runtime, "allowed: false", "production delegation policy")
-    forbid(runtime, "Production multi-agent execution is active", "production orchestrator")
-    forbid(runtime, "title: format!(\"Dispatch wave", "production orchestrator events")
+    require(contributor, "Design-only and disabled", "docs/CONTRIBUTOR-ARCHITECTURE.md")
+    require(contributor, "not called by production `run_prompt`", "docs/CONTRIBUTOR-ARCHITECTURE.md")
+    forbid(contributor, "| Production orchestration | `medusa-runtime::production_orchestrator`", "docs/CONTRIBUTOR-ARCHITECTURE.md")
+
+    require(runtime_root, "mod production_orchestrator;", "runtime root")
+    require(runtime_root, "pub mod orchestration_planning", "runtime root")
+    forbid(runtime_root, "pub mod production_orchestrator;", "runtime root")
+
+    require(runtime, "let engine = AgentEngine::new(provider, config);", "production run_prompt")
+    require(runtime, ".step_with_observer_and_context(&mut session", "production run_prompt")
+    run_prompt = runtime.split("fn run_prompt(", 1)[1].split("\nfn append_followups", 1)[0]
+    for forbidden_call in (
+        "production_orchestrator::",
+        "orchestration_planning::",
+        "medusa_multi_agent_scheduler",
+        "medusa_workers",
+        "medusa_worker_leases",
+        "medusa_consensus",
+        "validate_subagent_result",
+    ):
+        forbid(run_prompt, forbidden_call, "production run_prompt")
+    if run_prompt.count("AgentEngine::new(") != 1:
+        raise ArchitectureError("production run_prompt must construct exactly one AgentEngine")
+
+    require(planning, "No workers or subagents are dispatched", "orchestration planning")
+    require(planning, "allowed: false", "orchestration planning delegation policy")
+    forbid(planning, "Production multi-agent execution is active", "orchestration planning")
+    forbid(planning, "title: format!(\"Dispatch wave", "orchestration planning events")
+
+    require(trace, "not called by `run_prompt`", "production execution trace")
+    require(trace, "does not create worker engines", "production execution trace")
+    require(trace, "must never be rendered as evidence", "production execution trace")
 
     require(evidence, "## Planned and scaffolding behavior", "docs/CAPABILITY-EVIDENCE.md")
     require(evidence, "not shipped production capabilities", "docs/CAPABILITY-EVIDENCE.md")
     shipped_section = evidence.split("## Shipped on `main`", 1)[1].split(
         "## Planned and scaffolding behavior", 1
     )[0]
-    forbid(
-        shipped_section,
-        "parallel workers with isolated worktrees",
-        "docs/CAPABILITY-EVIDENCE.md shipped section",
-    )
+    forbid(shipped_section, "parallel workers with isolated worktrees", "docs/CAPABILITY-EVIDENCE.md shipped section")
 
 
 if __name__ == "__main__":
