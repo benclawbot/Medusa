@@ -92,7 +92,10 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
     }
     let scenario_duration = scenario_started.elapsed();
 
-    let passed = results.iter().filter(|result| result.status == "passed").count();
+    let passed = results
+        .iter()
+        .filter(|result| result.status == "passed")
+        .count();
     let failed = results.len().saturating_sub(passed);
     let summary = Summary {
         schema_version: 2,
@@ -146,32 +149,119 @@ fn scenario(
     filter: Option<&'static str>,
     smoke: bool,
 ) -> Scenario {
-    Scenario { id, guarantee, package, filter, marker: filter, smoke }
+    Scenario {
+        id,
+        guarantee,
+        package,
+        filter,
+        marker: filter,
+        smoke,
+    }
 }
 
 fn scenarios(mode: Mode) -> Vec<Scenario> {
     let mut all = vec![
-        scenario("production-orchestration", "Production orchestration passes its authoritative integration suite.", "medusa-execution-orchestrator", None, true),
-        scenario("headless-entrypoint", "The shipped CLI retains the supported headless run entrypoint.", "medusa-cli", Some("headless_run_remains_available"), true),
-        scenario("checkpoint-restore", "Execution checkpoints persist and restore deterministically.", "medusa-execution-checkpoint", None, false),
-        scenario("verification-rollback", "Repository changes roll back after failed integration.", "medusa-repository-rollback", None, false),
-        scenario("escalation", "Policy-sensitive states route through bounded escalation.", "medusa-escalation", None, false),
-        scenario("corrupted-state-recovery", "Recovery handles invalid durable state without unsafe continuation.", "medusa-recovery-coordinator", None, false),
-        scenario("upgrade-rollback-evidence", "Install, upgrade, and rollback remain byte-exact and auditable.", "medusa-hardening", Some("clean_install_upgrade_and_rollback_are_byte_exact"), false),
+        scenario(
+            "production-orchestration",
+            "Production orchestration passes its authoritative integration suite.",
+            "medusa-execution-orchestrator",
+            None,
+            true,
+        ),
+        scenario(
+            "headless-entrypoint",
+            "The shipped CLI retains the supported headless run entrypoint.",
+            "medusa-cli",
+            Some("headless_run_remains_available"),
+            true,
+        ),
+        scenario(
+            "checkpoint-restore",
+            "Execution checkpoints persist and restore deterministically.",
+            "medusa-execution-checkpoint",
+            None,
+            false,
+        ),
+        scenario(
+            "verification-rollback",
+            "Repository changes roll back after failed integration.",
+            "medusa-repository-rollback",
+            None,
+            false,
+        ),
+        scenario(
+            "escalation",
+            "Policy-sensitive states route through bounded escalation.",
+            "medusa-escalation",
+            None,
+            false,
+        ),
+        scenario(
+            "corrupted-state-recovery",
+            "Recovery handles invalid durable state without unsafe continuation.",
+            "medusa-recovery-coordinator",
+            None,
+            false,
+        ),
+        scenario(
+            "upgrade-rollback-evidence",
+            "Install, upgrade, and rollback remain byte-exact and auditable.",
+            "medusa-hardening",
+            Some("clean_install_upgrade_and_rollback_are_byte_exact"),
+            false,
+        ),
     ];
 
     match env::consts::OS {
         "windows" => {
-            all.push(scenario("containment-fail-closed", "Windows containment fails closed when the backend cannot launch.", "medusa-process-containment", Some("unresolvable_programs_fail_closed"), true));
-            all.push(scenario("interruption-replay", "Interrupted execution replays from durable evidence.", "medusa-execution-replay", None, false));
+            all.push(scenario(
+                "containment-fail-closed",
+                "Windows containment fails closed when the backend cannot launch.",
+                "medusa-process-containment",
+                Some("unresolvable_programs_fail_closed"),
+                true,
+            ));
+            all.push(scenario(
+                "interruption-replay",
+                "Interrupted execution replays from durable evidence.",
+                "medusa-execution-replay",
+                None,
+                false,
+            ));
         }
         "linux" => {
-            all.push(scenario("filesystem-network-process-boundary", "The real Bubblewrap backend allows repository writes and denies external writes and network access.", "medusa-agent", Some("linux_product_boundary_exercises_allowed_write_external_denial_and_network_denial"), true));
-            all.push(scenario("interruption-resume", "Interrupted repair resumes with exact durable evidence.", "medusa-agent", Some("fixture_bug_fix_survives_restart_with_exact_evidence"), false));
+            all.push(scenario(
+                "filesystem-network-process-boundary",
+                "The real Bubblewrap backend allows repository writes and denies external writes and network access.",
+                "medusa-agent",
+                Some(
+                    "linux_product_boundary_exercises_allowed_write_external_denial_and_network_denial",
+                ),
+                true,
+            ));
+            all.push(scenario(
+                "interruption-resume",
+                "Interrupted repair resumes with exact durable evidence.",
+                "medusa-agent",
+                Some("fixture_bug_fix_survives_restart_with_exact_evidence"),
+                false,
+            ));
         }
         "macos" => {
-            all.push(scenario("policy-boundary", "The macOS runtime enforces hard shell-command denials.", "medusa-agent", Some("dangerous_shell_commands_are_denied"), true));
-            all.push(scenario("interruption-resume", "Interrupted repair resumes with exact durable evidence.", "medusa-agent", Some("fixture_bug_fix_survives_restart_with_exact_evidence"), false));
+            all.push(scenario(
+                "policy-boundary",
+                "The macOS runtime enforces hard shell-command denials.",
+                "medusa-agent",
+                Some("dangerous_shell_commands_are_denied"),
+                true,
+            ));
+            all.push(scenario(
+                "interruption-resume",
+                "Interrupted repair resumes with exact durable evidence.",
+                "medusa-agent",
+                Some("fixture_bug_fix_survives_restart_with_exact_evidence"),
+                false,
+            ));
         }
         _ => {}
     }
@@ -188,7 +278,11 @@ fn prebuild(
     output_dir: &Path,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let packages: BTreeSet<_> = scenarios.iter().map(|item| item.package).collect();
-    let mut args = vec!["test".to_string(), "--no-run".to_string(), "--locked".to_string()];
+    let mut args = vec![
+        "test".to_string(),
+        "--no-run".to_string(),
+        "--locked".to_string(),
+    ];
     for package in packages {
         args.extend(["-p".to_string(), package.to_string()]);
     }
@@ -209,7 +303,12 @@ fn execute(
     output_dir: &Path,
     target_dir: &Path,
 ) -> Result<ScenarioResult, Box<dyn std::error::Error>> {
-    let mut args = vec!["test".to_string(), "-p".to_string(), scenario.package.to_string(), "--locked".to_string()];
+    let mut args = vec![
+        "test".to_string(),
+        "-p".to_string(),
+        scenario.package.to_string(),
+        "--locked".to_string(),
+    ];
     if let Some(filter) = scenario.filter {
         args.push(filter.to_string());
     }
@@ -226,12 +325,17 @@ fn execute(
     let log_path = output_dir.join(format!("{}.log", scenario.id));
     fs::write(&log_path, &combined)?;
 
-    let marker_present = scenario.marker.is_none_or(|marker| combined.contains(marker));
+    let marker_present = scenario
+        .marker
+        .is_none_or(|marker| combined.contains(marker));
     let passed = output.status.success() && marker_present;
     let detail = if !output.status.success() {
         Some(format!("cargo exited with status {}", status(&output)))
     } else if !marker_present {
-        Some("required test marker was not present; the filter may have matched zero tests".to_string())
+        Some(
+            "required test marker was not present; the filter may have matched zero tests"
+                .to_string(),
+        )
     } else {
         None
     };
@@ -248,11 +352,18 @@ fn execute(
 }
 
 fn cargo() -> &'static str {
-    if cfg!(windows) { "cargo.exe" } else { "cargo" }
+    if cfg!(windows) {
+        "cargo.exe"
+    } else {
+        "cargo"
+    }
 }
 
 fn status(output: &Output) -> String {
-    output.status.code().map_or_else(|| "terminated".to_string(), |code| code.to_string())
+    output
+        .status
+        .code()
+        .map_or_else(|| "terminated".to_string(), |code| code.to_string())
 }
 
 fn combine(output: &Output) -> String {
