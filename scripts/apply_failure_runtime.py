@@ -374,3 +374,5 @@ if needle not in text:
     raise SystemExit('skill outcome insertion point changed')
 text = text.replace(needle, '\n' + terminal + needle, 1)
 outcomes.write_text(text)
+
+# trigger
