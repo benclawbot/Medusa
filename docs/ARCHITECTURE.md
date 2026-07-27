@@ -7,7 +7,7 @@ Medusa's product model is **Plan, Execute Safely, Recover**. The Rust crate grap
 | Product concept | User-visible responsibility | Completion evidence |
 |---|---|---|
 | **Plan** | Turn an objective and repository context into an explicit, reviewable plan. | Persisted plan state and plan-bound approvals. |
-| **Execute Safely** | Delegate bounded work, apply guarded changes, and run commands inside the platform containment boundary. | Runtime events, transactions, command evidence, and repository verification. |
+| **Execute Safely** | Apply guarded changes and run commands inside the platform containment boundary. | Runtime events, transactions, command evidence, and repository verification. |
 | **Recover** | Preserve enough authoritative state to resume, retry, roll back, or explain failure without inventing success. | Checkpoints, journals, failure history, replay data, and recovery decisions. |
 
 The production runtime entrypoint is `medusa-runtime::production_orchestrator`. Terminal, desktop, and headless interfaces feed objectives into that shared runtime. The repository verification gate is authoritative for coding completion. The recovery coordinator and persisted `.medusa` state provide the continuation path after interruption or failure.
@@ -71,20 +71,20 @@ Platform note: Windows command containment requires Windows 11 with `Experimenta
 
 ```mermaid
 flowchart TD
-    P[Primary agent] --> D[Create bounded delegation]
-    D --> S1[Subagent A]
-    D --> S2[Subagent B]
-    S1 --> E1[Evidence and proposed changes]
-    S2 --> E2[Evidence and proposed changes]
-    E1 --> I[Primary agent validates and integrates]
-    E2 --> I
-    I --> G{Commit / verification gates}
+    P[Primary AgentEngine] --> C[Production orchestrator creates task contracts and dependencies]
+    C --> E[Contracts are added to the same agent prompt]
+    E --> G{Repository verification gate}
     G -->|pass| Done[Verified result]
     G -->|fail| Fix[Revise, retry, or recover]
     Fix --> P
+    C -. planned integration .-> D[Bounded subagent dispatch]
+    D -. planned .-> I[Primary agent validates and integrates results]
+    I -. planned .-> G
 ```
 
-Subagents may inspect, implement, or verify bounded tasks. The primary agent remains accountable for checking their evidence, resolving conflicts, integrating accepted work, and presenting the final result to the verification gate. Delegation never transfers completion authority.
+**Current shipped behavior:** orchestrated coding objectives run through one `AgentEngine`. The production orchestrator decomposes the objective, computes a schedule as internal planning metadata, emits one truthful planning event, and supplies task contracts and dependencies to the same agent. It does not present schedule waves as dispatched work. Scheduler, worker, and parent/subagent result APIs exist as implementation scaffolding, but production `run_prompt` does not yet dispatch subagents.
+
+**Planned delegation contract:** when subagent execution is wired into the production runtime, the primary agent remains accountable for checking evidence, resolving conflicts, integrating accepted work, and presenting the combined repository state to the verification gate. Delegation will never transfer completion authority.
 
 ## Verification gate
 
@@ -138,6 +138,6 @@ Repository-local durable state lives under `.medusa`. Exact filenames and schema
 
 ## Capability evidence and drift control
 
-Every production capability presented here must map to shipped production paths, executable tests, and canonical repository gates in [`CAPABILITY-CLAIMS.json`](CAPABILITY-CLAIMS.json) and [`CAPABILITY-EVIDENCE.md`](CAPABILITY-EVIDENCE.md). `scripts/check-capability-evidence.py` validates the architecture headings, diagrams, workspace metadata, required documents, evidence paths, and ledger synchronization. Experimental or prerequisite-limited behavior must be labelled where it appears.
+Every production capability presented here must map to shipped production paths, executable tests, and canonical repository gates in [`CAPABILITY-CLAIMS.json`](CAPABILITY-CLAIMS.json) and [`CAPABILITY-EVIDENCE.md`](CAPABILITY-EVIDENCE.md). Run both `python3 scripts/check-product-architecture.py` and `python3 scripts/check-capability-evidence.py` after changing architecture or capability claims. The first validates architecture headings, diagrams, workspace metadata, runtime wording, contributor paths, evidence-ledger status, and README links; the second validates required documents, evidence paths, gates, and ledger synchronization. Experimental, planned, or prerequisite-limited behavior must be labelled where it appears.
 
 For crate-level ownership and entrypoints, see [Contributor architecture map](CONTRIBUTOR-ARCHITECTURE.md).

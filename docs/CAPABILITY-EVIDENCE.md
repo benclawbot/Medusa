@@ -4,7 +4,7 @@ This document is the durable evidence ledger for capabilities shipped on `main`.
 
 ## Evidence rules
 
-A capability is **shipped** only when production code, behavioral tests, and named repository gates are represented in the checked-out commit. Branch-only diagnostics, temporary workflows, design documents, and historical completion statements do not count as shipped behavior.
+A capability is **shipped** only when production code, behavioral tests, and named repository gates are represented in the checked-out commit. Branch-only diagnostics, temporary workflows, design documents, implementation scaffolding, and historical completion statements do not count as shipped behavior.
 
 The authoritative order is:
 
@@ -36,9 +36,12 @@ Additional shipped product boundaries remain covered by the workspace and the ca
 - transcript rendering, clipboard text and image prompts, queued guidance, plans, questions, cancellation, and resume;
 - desktop session discovery, multi-file diffs, structured approvals, memory browsing, accessibility, and repository-to-PR flows through the shared runtime;
 - browser verification through the Playwright sidecar;
-- parallel workers with isolated worktrees and deterministic conflict handling;
 - skills, hooks, MCP isolation, optional Desktop Commander integration, provenance, and redaction;
 - source-size, panic, dependency, migration, rollback, fuzz, chaos, security, packaging, and live-provider hardening.
+
+## Planned and scaffolding behavior
+
+The multi-agent scheduler, worker leases, isolated worker transaction paths, commit barrier, consensus, and conflict-resolution crates are retained implementation scaffolding. The production runtime currently uses one `AgentEngine`; it computes task contracts and schedule metadata but does not dispatch workers or subagents. Parallel worker execution, isolated worktree dispatch, and parent/subagent result integration are therefore **not shipped production capabilities** and must not be represented as completed work or active runtime events.
 
 ## Canonical gates
 

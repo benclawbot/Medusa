@@ -67,9 +67,9 @@ license = "MIT"
 repository = "https://github.com/benclawbot/Medusa"
 
 [workspace.metadata.medusa]
-production_execution_model = "multi-agent"
+production_execution_model = "single-agent-orchestrated"
 production_orchestrator = "medusa-runtime::production_orchestrator"
-subagent_delegation = "bounded-parent-accountable"
+subagent_delegation = "planned-bounded-parent-accountable"
 verification_gate = "repository"
 
 [workspace.dependencies]
