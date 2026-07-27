@@ -105,7 +105,7 @@ mod tests {
         assert!(read_only.contains("CLEAROPS COMMUNICATION POLICY — ACTIVE"));
         assert!(read_only.contains("production execution path"));
 
-        let full = apply("base".to_owned(), Mode::Autonomous);
+        let full = apply("base".to_owned(), Mode::Yolo);
         assert!(full.contains("CLEAROPS COMMUNICATION POLICY — ACTIVE"));
         assert!(full.contains("MINIMAL CODING POLICY — ACTIVE"));
     }
