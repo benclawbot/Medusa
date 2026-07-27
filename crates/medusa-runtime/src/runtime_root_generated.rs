@@ -4,8 +4,7 @@ mod recovery {
     use std::{fs, path::Path};
 
     use medusa_recovery_coordinator::{
-        CheckpointPresentation, RecoveryPreview, RecoveryView, RecoveryViewInput,
-        VerificationState,
+        CheckpointPresentation, RecoveryPreview, RecoveryView, RecoveryViewInput, VerificationState,
     };
     use serde::Deserialize;
 
@@ -42,7 +41,10 @@ mod recovery {
         let mut paths = entries
             .filter_map(Result::ok)
             .map(|entry| entry.path())
-            .filter(|path| path.extension().is_some_and(|extension| extension == "json"))
+            .filter(|path| {
+                path.extension()
+                    .is_some_and(|extension| extension == "json")
+            })
             .collect::<Vec<_>>();
         paths.sort();
 
