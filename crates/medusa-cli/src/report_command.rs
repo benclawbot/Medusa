@@ -3,6 +3,7 @@ use std::{
     path::{Path, PathBuf},
 };
 
+use medusa_protocol::{EventEnvelope, EventPayload};
 use serde::Serialize;
 use serde_json::{Map, Value};
 use sha2::{Digest, Sha256};
@@ -46,15 +47,13 @@ struct Provenance {
     report_fingerprint: String,
 }
 
-pub fn try_run(repo: &Path, args: &[String]) -> Option<Result<(), String>> {
-    let position = args.iter().position(|arg| arg == "report")?;
-    let session_id = args.get(position + 1).cloned().ok_or_else(|| {
-        "usage: medusa report <session-id> [--format markdown|json] [--output PATH]".to_owned()
-    });
-    Some(session_id.and_then(|session_id| run(repo, &session_id, args)))
-}
-
-fn run(repo: &Path, session_id: &str, args: &[String]) -> Result<(), String> {
+pub fn run(repo: &Path, args: &[String]) -> Result<(), String> {
+    let session_id = args
+        .iter()
+        .find(|arg| !arg.starts_with('-'))
+        .ok_or_else(|| {
+            "usage: medusa report <session-id> [--format markdown|json] [--output PATH]".to_owned()
+        })?;
     let format = option_value(args, "--format").unwrap_or_else(|| "markdown".to_owned());
     if !matches!(format.as_str(), "markdown" | "md" | "json") {
         return Err("--format must be markdown or json".to_owned());
@@ -63,6 +62,7 @@ fn run(repo: &Path, session_id: &str, args: &[String]) -> Result<(), String> {
     let bytes = fs::read(&path).map_err(|error| format!("read {}: {error}", path.display()))?;
     let session: Value = serde_json::from_slice(&bytes)
         .map_err(|error| format!("parse {}: {error}", path.display()))?;
+    verify_event_chain(&session)?;
     let report = build_report(&session, session_id)?;
     let rendered = if format == "json" {
         serde_json::to_string_pretty(&report).map_err(|error| error.to_string())?
@@ -73,6 +73,37 @@ fn run(repo: &Path, session_id: &str, args: &[String]) -> Result<(), String> {
         fs::write(&output, rendered).map_err(|error| format!("write {output}: {error}"))?;
     } else {
         println!("{rendered}");
+    }
+    Ok(())
+}
+
+fn verify_event_chain(session: &Value) -> Result<(), String> {
+    let events = session
+        .get("events")
+        .cloned()
+        .unwrap_or_else(|| Value::Array(Vec::new()));
+    let events: Vec<EventEnvelope> =
+        serde_json::from_value(events).map_err(|error| format!("parse session events: {error}"))?;
+    let mut previous_checksum: Option<&str> = None;
+    let mut previous_sequence = 0;
+    for event in &events {
+        event
+            .validate()
+            .map_err(|error| format!("invalid event {}: {error}", event.sequence))?;
+        if event.sequence <= previous_sequence {
+            return Err(format!(
+                "invalid event order: sequence {} follows {}",
+                event.sequence, previous_sequence
+            ));
+        }
+        if event.previous_hash.as_deref() != previous_checksum {
+            return Err(format!(
+                "invalid event chain at sequence {}: previous hash does not match",
+                event.sequence
+            ));
+        }
+        previous_sequence = event.sequence;
+        previous_checksum = Some(&event.checksum);
     }
     Ok(())
 }
@@ -91,6 +122,7 @@ fn build_report(session: &Value, requested_id: &str) -> Result<AuditReport, Stri
     let mut files_changed = Vec::new();
     let mut requested = Vec::new();
     let mut executed = Vec::new();
+    let mut pending_mutations: Vec<(String, Vec<String>)> = Vec::new();
     let mut containment = Vec::new();
     let mut checkpoints = Vec::new();
     let mut failures = Vec::new();
@@ -112,15 +144,44 @@ fn build_report(session: &Value, requested_id: &str) -> Result<AuditReport, Stri
         match event_type {
             "model_request_started" => routes.push(sanitize(&data)),
             "plan_created" | "plan_updated" => orchestration.push(sanitize(&payload)),
-            "tool_call_requested" => requested.push(sanitize(&data)),
+            "tool_call_requested" => {
+                requested.push(sanitize(&data));
+                let tool = data
+                    .get("tool")
+                    .and_then(Value::as_str)
+                    .unwrap_or_default();
+                let paths = mutation_paths(tool, data.get("arguments").unwrap_or(&Value::Null));
+                if !paths.is_empty() {
+                    pending_mutations.push((tool.to_owned(), paths));
+                }
+            }
             "tool_call_denied" => containment.push(sanitize(&data)),
-            "tool_execution_completed" => executed.push(sanitize(&data)),
+            "tool_execution_completed" => {
+                executed.push(sanitize(&data));
+                let tool = data
+                    .get("tool")
+                    .and_then(Value::as_str)
+                    .unwrap_or_default();
+                let succeeded = data
+                    .get("exit_code")
+                    .and_then(Value::as_i64)
+                    .is_none_or(|code| code == 0);
+                if let Some(position) = pending_mutations
+                    .iter()
+                    .position(|(pending_tool, _)| pending_tool == tool)
+                {
+                    let (_, paths) = pending_mutations.remove(position);
+                    if succeeded {
+                        for path in paths {
+                            push_unique(&mut files_changed, path);
+                        }
+                    }
+                }
+            }
             "file_transaction_committed" => {
                 if let Some(paths) = data.get("paths").and_then(Value::as_array) {
                     for path in paths.iter().filter_map(Value::as_str) {
-                        if !files_changed.iter().any(|existing| existing == path) {
-                            files_changed.push(path.to_owned());
-                        }
+                        push_unique(&mut files_changed, path.to_owned());
                     }
                 }
             }
@@ -190,6 +251,33 @@ fn build_report(session: &Value, requested_id: &str) -> Result<AuditReport, Stri
     Ok(report)
 }
 
+fn mutation_paths(tool: &str, arguments: &Value) -> Vec<String> {
+    let mut paths = Vec::new();
+    if !matches!(
+        tool,
+        "fs_write" | "patch_apply" | "fs_rename" | "fs_move" | "fs_delete"
+    ) {
+        return paths;
+    }
+    for key in ["path", "file", "destination", "to", "source", "from"] {
+        if let Some(path) = arguments.get(key).and_then(Value::as_str) {
+            push_unique(&mut paths, path.to_owned());
+        }
+    }
+    if let Some(items) = arguments.get("paths").and_then(Value::as_array) {
+        for path in items.iter().filter_map(Value::as_str) {
+            push_unique(&mut paths, path.to_owned());
+        }
+    }
+    paths
+}
+
+fn push_unique(items: &mut Vec<String>, value: String) {
+    if !items.contains(&value) {
+        items.push(value);
+    }
+}
+
 fn sanitize(value: &Value) -> Value {
     match value {
         Value::String(text) => Value::String(redact(text)),
@@ -215,17 +303,27 @@ fn sanitize(value: &Value) -> Value {
 
 fn redact(text: &str) -> String {
     let bounded = text.chars().take(MAX_STRING).collect::<String>();
-    bounded
-        .split_whitespace()
-        .map(|token| {
-            if secret_like(token) || token.starts_with("sk-") || token.starts_with("ghp_") {
-                "[REDACTED]"
-            } else {
-                token
-            }
-        })
-        .collect::<Vec<_>>()
-        .join(" ")
+    let tokens = bounded.split_whitespace().collect::<Vec<_>>();
+    let mut redacted = Vec::with_capacity(tokens.len());
+    let mut redact_next = 0_u8;
+    for token in tokens {
+        let lower = token.to_ascii_lowercase();
+        if redact_next > 0 {
+            redacted.push("[REDACTED]");
+            redact_next -= 1;
+            continue;
+        }
+        if lower == "bearer" {
+            redacted.push("[REDACTED]");
+            redact_next = 1;
+        } else if secret_like(token) || token.starts_with("sk-") || token.starts_with("ghp_") {
+            redacted.push("[REDACTED]");
+            redact_next = if lower.contains("authorization") { 2 } else { 1 };
+        } else {
+            redacted.push(token);
+        }
+    }
+    redacted.join(" ")
 }
 
 fn secret_like(value: &str) -> bool {
@@ -234,8 +332,12 @@ fn secret_like(value: &str) -> bool {
         || lower.contains("apikey")
         || lower.contains("authorization")
         || lower.contains("password")
+        || lower.contains("passwd")
         || lower.contains("secret")
         || lower.contains("token=")
+        || lower == "--token"
+        || lower == "--password"
+        || lower == "-p"
 }
 
 fn markdown(report: &AuditReport) -> String {
@@ -260,7 +362,30 @@ fn option_value(args: &[String], name: &str) -> Option<String> {
 }
 
 fn session_path(repo: &Path, id: &str) -> PathBuf {
-    repo.join(".medusa/sessions").join(format!("{id}.json"))
+    let primary = repo.join(".medusa/sessions").join(format!("{id}.json"));
+    if primary.is_file() {
+        primary
+    } else {
+        fallback_session_root(repo).join(format!("{id}.json"))
+    }
+}
+
+fn fallback_session_root(repo: &Path) -> PathBuf {
+    let root = std::env::var_os("LOCALAPPDATA")
+        .or_else(|| std::env::var_os("APPDATA"))
+        .map(PathBuf::from)
+        .or_else(|| std::env::var_os("HOME").map(PathBuf::from))
+        .unwrap_or_else(std::env::temp_dir);
+    root.join("Medusa/sessions").join(repository_key(repo))
+}
+
+fn repository_key(repo: &Path) -> String {
+    let mut hash = 0xcbf2_9ce4_8422_2325_u64;
+    for byte in repo.to_string_lossy().as_bytes() {
+        hash ^= u64::from(*byte);
+        hash = hash.wrapping_mul(0x0000_0100_0000_01b3);
+    }
+    format!("{hash:016x}")
 }
 
 #[cfg(test)]
@@ -268,15 +393,26 @@ mod tests {
     use super::*;
 
     #[test]
-    fn secret_values_are_redacted_and_arrays_are_bounded() {
+    fn secret_values_and_following_credentials_are_redacted() {
         let value = serde_json::json!({
             "api_key": "sk-secret",
-            "text": "token=private",
+            "password_command": "curl --password hunter2 Authorization: Bearer abc123",
             "items": (0..200).collect::<Vec<_>>()
         });
         let clean = sanitize(&value);
         assert_eq!(clean["api_key"], "[REDACTED]");
-        assert_eq!(clean["text"], "[REDACTED]");
+        let command = clean["password_command"].as_str().unwrap();
+        assert!(!command.contains("hunter2"));
+        assert!(!command.contains("abc123"));
         assert_eq!(clean["items"].as_array().unwrap().len(), MAX_ITEMS);
+    }
+
+    #[test]
+    fn successful_mutation_paths_are_derived_from_requested_tools() {
+        assert_eq!(
+            mutation_paths("fs_write", &serde_json::json!({"path": "src/lib.rs"})),
+            vec!["src/lib.rs"]
+        );
+        assert!(mutation_paths("fs_read", &serde_json::json!({"path": "src/lib.rs"})).is_empty());
     }
 }
