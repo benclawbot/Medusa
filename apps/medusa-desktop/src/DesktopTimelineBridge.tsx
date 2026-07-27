@@ -188,7 +188,8 @@ export function DesktopTimelineBridge() {
             </div>
             <div className="timeline-activity">
               {activityEvents.map((event) => {
-                const isExpanded = expanded[event.id] ?? event.status === "failed" || (structured.busy && event.status === "running");
+                const defaultExpanded = event.status === "failed" || (structured.busy && event.status === "running");
+                const isExpanded = expanded[event.id] ?? defaultExpanded;
                 return (
                   <article className={`timeline-activity-card ${event.status}`} key={event.id}>
                     <button
