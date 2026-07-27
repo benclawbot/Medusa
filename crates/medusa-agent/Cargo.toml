@@ -10,6 +10,7 @@ repository.workspace = true
 hex.workspace = true
 medusa-browser-client = { path = "../medusa-browser-client" }
 medusa-capabilities = { path = "../medusa-capabilities" }
+medusa-clearops = { path = "../medusa-clearops" }
 medusa-commit-barrier = { path = "../medusa-commit-barrier" }
 medusa-config = { path = "../medusa-config" }
 medusa-conflict-resolution = { path = "../medusa-conflict-resolution" }
