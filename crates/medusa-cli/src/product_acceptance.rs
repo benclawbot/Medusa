@@ -343,9 +343,7 @@ fn execute(
     Ok(ScenarioResult {
         id: scenario.id.to_string(),
         guarantee: scenario.guarantee.to_string(),
-        command: std::iter::once(cargo().to_string())
-            .chain(args)
-            .collect(),
+        command: std::iter::once(cargo().to_string()).chain(args).collect(),
         status: if passed { "passed" } else { "failed" }.to_string(),
         duration_ms,
         log: log_path.display().to_string(),
