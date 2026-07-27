@@ -159,10 +159,15 @@ fn loaded_skill_names(session: &AgentSession) -> Vec<String> {
 }
 
 pub(super) fn verification_passed(session: &AgentSession) -> bool {
-    session.events.iter().rev().find_map(|event| match &event.payload {
-        medusa_protocol::EventPayload::VerificationCompleted { passed, .. } => Some(*passed),
-        _ => None,
-    }) == Some(true)
+    session
+        .events
+        .iter()
+        .rev()
+        .find_map(|event| match &event.payload {
+            medusa_protocol::EventPayload::VerificationCompleted { passed, .. } => Some(*passed),
+            _ => None,
+        })
+        == Some(true)
 }
 
 fn rebuild_effectiveness_summary(repo: &Path) -> MedusaResult<PathBuf> {
@@ -428,10 +433,9 @@ mod tests {
         let outcome = record_completed_session(&session)
             .expect("record outcome")
             .expect("outcome path");
-        let value: serde_json::Value = serde_json::from_slice(
-            &fs::read(outcome).expect("read outcome"),
-        )
-        .expect("outcome json");
+        let value: serde_json::Value =
+            serde_json::from_slice(&fs::read(outcome).expect("read outcome"))
+                .expect("outcome json");
         assert_eq!(
             value["automatically_loaded_skills"],
             serde_json::json!(["release", "verify"])
