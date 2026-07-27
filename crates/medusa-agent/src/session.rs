@@ -235,7 +235,7 @@ pub(crate) fn persist(session: &AgentSession) -> MedusaResult<()> {
     persisted?;
     if session.events.last().is_some_and(|event| {
         matches!(
-            event.payload,
+            &event.payload,
             medusa_protocol::EventPayload::ModelRequestStarted { .. }
         )
     }) {
