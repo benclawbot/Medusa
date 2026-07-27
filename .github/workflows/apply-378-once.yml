@@ -1,0 +1,114 @@
+name: Apply issue 378 once
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - .github/workflows/apply-378-once.yml
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: fix/378-tool-output-details
+          fetch-depth: 0
+      - name: Apply runtime fix
+        shell: python
+        run: |
+          from pathlib import Path
+
+          path = Path("crates/medusa-runtime/src/support.rs")
+          text = path.read_text()
+
+          replacements = [
+              (
+                  """        AgentUpdate::ToolOutput {
+              tool,
+              output: _,
+              is_error,
+          } => {""",
+                  """        AgentUpdate::ToolOutput {
+              tool,
+              output,
+              is_error,
+          } => {""",
+              ),
+              (
+                  """                    details: Vec::new(),
+                  },
+                  |pending| RuntimeActivity {""",
+                  """                    details: tool_output_details(output),
+                  },
+                  |pending| RuntimeActivity {""",
+              ),
+              (
+                  """                    details: Vec::new(),
+                  },
+              );
+              let _ = events.send(RuntimeEvent::Activity(activity));""",
+                  """                    details: tool_output_details(output),
+                  },
+              );
+              let _ = events.send(RuntimeEvent::Activity(activity));""",
+              ),
+          ]
+
+          for old, new in replacements:
+              if old not in text:
+                  raise SystemExit(f"expected source fragment not found: {old[:80]!r}")
+              text = text.replace(old, new, 1)
+
+          marker = "fn summarize(value: &str) -> String {\n"
+          helper = """fn tool_output_details(output: &str) -> Vec<String> {
+              let output = output.trim();
+              if output.is_empty() {
+                  Vec::new()
+              } else {
+                  output.lines().map(str::to_owned).collect()
+              }
+          }
+
+          """
+          if helper not in text:
+              if marker not in text:
+                  raise SystemExit("summarize marker not found")
+              text = text.replace(marker, helper + marker, 1)
+
+          old = """        assert_eq!(summarize("short line"), "short line");
+          assert!(summarize(&"x".repeat(150)).ends_with("..."));"""
+          new = """        assert_eq!(summarize("short line"), "short line");
+          assert!(summarize(&"x".repeat(150)).ends_with("..."));
+          assert!(tool_output_details("  \\n").is_empty());
+          assert_eq!(
+              tool_output_details("stdout line\\nstderr: command failed\\n"),
+              vec!["stdout line", "stderr: command failed"]
+          );"""
+          if old not in text:
+              raise SystemExit("formatting helper test marker not found")
+          text = text.replace(old, new, 1)
+          path.write_text(text)
+      - uses: dtolnay/rust-toolchain@stable
+      - run: cargo fmt --all
+      - run: cargo test -p medusa-runtime
+      - name: Commit branch fix
+        run: |
+          rm -f .github/workflows/fix-378.yml .github/fix-378-trigger
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git commit -m "fix(runtime): surface tool output details"
+          git push origin HEAD:fix/378-tool-output-details
+      - name: Remove one-shot workflow from main
+        run: |
+          git fetch origin main
+          git checkout -B main origin/main
+          rm -f .github/workflows/apply-378-once.yml .github/fix-378-trigger
+          git add -A
+          git commit -m "chore: remove one-shot issue 378 workflow"
+          git push origin main
