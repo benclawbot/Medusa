@@ -71,18 +71,18 @@ Platform note: Windows command containment requires Windows 11 with `Experimenta
 
 ```mermaid
 flowchart TD
-    P[Primary AgentEngine] --> S[Production orchestrator creates a schedule]
-    S --> E[Schedule is added to the same agent prompt]
+    P[Primary AgentEngine] --> C[Production orchestrator creates task contracts and dependencies]
+    C --> E[Contracts are added to the same agent prompt]
     E --> G{Repository verification gate}
     G -->|pass| Done[Verified result]
     G -->|fail| Fix[Revise, retry, or recover]
     Fix --> P
-    S -. planned integration .-> D[Bounded subagent dispatch]
+    C -. planned integration .-> D[Bounded subagent dispatch]
     D -. planned .-> I[Primary agent validates and integrates results]
     I -. planned .-> G
 ```
 
-**Current shipped behavior:** orchestrated coding objectives still run through one `AgentEngine`. The production orchestrator plans work, emits scheduling events, and supplies that schedule to the same agent. Scheduler, worker, and parent/subagent result APIs exist as implementation scaffolding, but production `run_prompt` does not yet dispatch subagents.
+**Current shipped behavior:** orchestrated coding objectives run through one `AgentEngine`. The production orchestrator decomposes the objective, computes a schedule as internal planning metadata, emits one truthful planning event, and supplies task contracts and dependencies to the same agent. It does not present schedule waves as dispatched work. Scheduler, worker, and parent/subagent result APIs exist as implementation scaffolding, but production `run_prompt` does not yet dispatch subagents.
 
 **Planned delegation contract:** when subagent execution is wired into the production runtime, the primary agent remains accountable for checking evidence, resolving conflicts, integrating accepted work, and presenting the combined repository state to the verification gate. Delegation will never transfer completion authority.
 
@@ -138,6 +138,6 @@ Repository-local durable state lives under `.medusa`. Exact filenames and schema
 
 ## Capability evidence and drift control
 
-Every production capability presented here must map to shipped production paths, executable tests, and canonical repository gates in [`CAPABILITY-CLAIMS.json`](CAPABILITY-CLAIMS.json) and [`CAPABILITY-EVIDENCE.md`](CAPABILITY-EVIDENCE.md). Run both `python3 scripts/check-product-architecture.py` and `python3 scripts/check-capability-evidence.py` after changing architecture or capability claims. The first validates architecture headings, diagrams, workspace metadata, contributor paths, and README links; the second validates required documents, evidence paths, gates, and ledger synchronization. Experimental, planned, or prerequisite-limited behavior must be labelled where it appears.
+Every production capability presented here must map to shipped production paths, executable tests, and canonical repository gates in [`CAPABILITY-CLAIMS.json`](CAPABILITY-CLAIMS.json) and [`CAPABILITY-EVIDENCE.md`](CAPABILITY-EVIDENCE.md). Run both `python3 scripts/check-product-architecture.py` and `python3 scripts/check-capability-evidence.py` after changing architecture or capability claims. The first validates architecture headings, diagrams, workspace metadata, runtime wording, contributor paths, evidence-ledger status, and README links; the second validates required documents, evidence paths, gates, and ledger synchronization. Experimental, planned, or prerequisite-limited behavior must be labelled where it appears.
 
 For crate-level ownership and entrypoints, see [Contributor architecture map](CONTRIBUTOR-ARCHITECTURE.md).
