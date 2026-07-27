@@ -4,50 +4,15 @@ on:
   push:
     branches: [main]
   pull_request:
-    types: [opened, reopened]
 
 permissions:
-  contents: write
+  contents: read
 
 concurrency:
   group: architecture-policy-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
-  finalize-pr-382:
-    if: github.event_name == 'pull_request' && github.event.pull_request.number == 382
-    name: Finalize PR 382
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          ref: fix/378-tool-output-details
-          fetch-depth: 0
-      - name: Update runtime expectation and restore lockfile
-        run: |
-          python3 - <<'PY'
-          from pathlib import Path
-          path = Path('crates/medusa-runtime/src/tests.rs')
-          text = path.read_text()
-          old = '    assert!(completed.details.is_empty());\n'
-          new = '    assert_eq!(completed.details, vec!["line one", "line two"]);\n'
-          if text.count(old) != 1:
-              raise SystemExit(f'expected one stale details assertion, found {text.count(old)}')
-          path.write_text(text.replace(old, new, 1))
-          PY
-          git fetch origin main
-          git checkout origin/main -- Cargo.lock
-      - uses: dtolnay/rust-toolchain@1.88.0
-      - run: cargo fmt --all -- --check
-      - run: cargo test -p medusa-runtime --lib
-      - name: Commit cleanup
-        run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add crates/medusa-runtime/src/tests.rs Cargo.lock
-          git commit -m "test(runtime): expect surfaced tool output details"
-          git push origin HEAD:fix/378-tool-output-details
-
   architecture-policy:
     name: Shipped crate reachability
     runs-on: ubuntu-latest

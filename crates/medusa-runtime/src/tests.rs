@@ -195,7 +195,7 @@ fn tool_call_is_shown_as_one_high_level_row() {
     assert_eq!(started.id, completed.id);
     assert_eq!(completed.title, "Read(src/lib.rs)");
     assert!(started.details.is_empty());
-    assert!(completed.details.is_empty());
+    assert_eq!(completed.details, vec!["line one", "line two"]);
 }
 
 #[test]
