@@ -322,7 +322,8 @@ struct SandboxApi {
 impl SandboxApi {
     fn load() -> io::Result<Self> {
         let dll = wide_null(OsStr::new(PROCESSMODEL_DLL));
-        let module = unsafe { LoadLibraryExW(dll.as_ptr(), null_mut(), LOAD_LIBRARY_SEARCH_SYSTEM32) };
+        let module =
+            unsafe { LoadLibraryExW(dll.as_ptr(), null_mut(), LOAD_LIBRARY_SEARCH_SYSTEM32) };
         if module.is_null() {
             return Err(io::Error::new(
                 io::ErrorKind::Unsupported,
