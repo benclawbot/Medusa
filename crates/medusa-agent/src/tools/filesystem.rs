@@ -158,7 +158,9 @@ fn reject_sensitive_approved_path(path: &Path) -> MedusaResult<()> {
     use medusa_core::{ErrorCategory, ErrorCode, MedusaError};
 
     let normalized = normalized_policy_path(path);
-    let components = normalized.split('/').filter(|component| !component.is_empty());
+    let components = normalized
+        .split('/')
+        .filter(|component| !component.is_empty());
     if components
         .clone()
         .any(|component| component.eq_ignore_ascii_case(".git"))
@@ -166,7 +168,10 @@ fn reject_sensitive_approved_path(path: &Path) -> MedusaResult<()> {
         return Err(MedusaError::new(
             ErrorCode::PolicyDenied,
             ErrorCategory::Policy,
-            format!("approved external path is sensitive and cannot be modified: {}", path.display()),
+            format!(
+                "approved external path is sensitive and cannot be modified: {}",
+                path.display()
+            ),
         ));
     }
 
@@ -212,7 +217,10 @@ fn reject_sensitive_approved_path(path: &Path) -> MedusaResult<()> {
         return Err(MedusaError::new(
             ErrorCode::PolicyDenied,
             ErrorCategory::Policy,
-            format!("approved external path is sensitive and cannot be modified: {}", path.display()),
+            format!(
+                "approved external path is sensitive and cannot be modified: {}",
+                path.display()
+            ),
         ));
     }
 
@@ -352,14 +360,20 @@ mod tests {
 
     #[test]
     fn approved_external_paths_reject_git_metadata() {
-        assert!(reject_sensitive_approved_path(Path::new("/tmp/project/.git/hooks/pre-commit")).is_err());
+        assert!(
+            reject_sensitive_approved_path(Path::new("/tmp/project/.git/hooks/pre-commit"))
+                .is_err()
+        );
     }
 
     #[cfg(unix)]
     #[test]
     fn approved_external_paths_reject_unix_system_targets() {
         for path in ["/etc/hosts", "/bin/tool", "/sbin/tool", "/usr/bin/tool"] {
-            assert!(reject_sensitive_approved_path(Path::new(path)).is_err(), "{path}");
+            assert!(
+                reject_sensitive_approved_path(Path::new(path)).is_err(),
+                "{path}"
+            );
         }
     }
 
@@ -371,7 +385,10 @@ mod tests {
             r"C:\Windows\System32\config\SAM",
             r"C:\Windows\System32\wbem\payload.exe",
         ] {
-            assert!(reject_sensitive_approved_path(Path::new(path)).is_err(), "{path}");
+            assert!(
+                reject_sensitive_approved_path(Path::new(path)).is_err(),
+                "{path}"
+            );
         }
     }
 
@@ -392,7 +409,11 @@ mod tests {
             "AppData/Roaming/Microsoft/Windows/Start Menu/Programs/Startup/medusa.cmd",
         ] {
             let path = home.join(suffix);
-            assert!(reject_sensitive_approved_path(&path).is_err(), "{}", path.display());
+            assert!(
+                reject_sensitive_approved_path(&path).is_err(),
+                "{}",
+                path.display()
+            );
         }
     }
 
@@ -400,7 +421,10 @@ mod tests {
     fn approved_external_path_outside_denylist_remains_allowed_by_path_policy() {
         let directory = tempfile::tempdir().expect("tempdir");
         let target = directory.path().join("exports/report.txt");
-        assert_eq!(approved_absolute_path(target.to_str().expect("utf8 path")).expect("allowed"), target);
+        assert_eq!(
+            approved_absolute_path(target.to_str().expect("utf8 path")).expect("allowed"),
+            target
+        );
     }
 
     #[cfg(unix)]
