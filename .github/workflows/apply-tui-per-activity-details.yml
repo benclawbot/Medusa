@@ -1,0 +1,38 @@
+name: Apply TUI per-activity details
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+    paths:
+      - scripts/apply-tui-per-activity-details.py
+      - .github/workflows/apply-tui-per-activity-details.yml
+
+permissions:
+  contents: write
+
+jobs:
+  apply-and-test:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: feat/tui-per-activity-details
+          fetch-depth: 0
+      - uses: dtolnay/rust-toolchain@1.88.0
+        with:
+          components: rustfmt
+      - name: Apply exact TUI patch
+        run: python3 scripts/apply-tui-per-activity-details.py
+      - name: Format changed Rust sources
+        run: cargo fmt -- crates/medusa-tui/src/app.rs crates/medusa-tui/src/render.rs crates/medusa-tui/src/render/support.rs crates/medusa-tui/src/lib.rs
+      - name: Run TUI tests
+        run: cargo test -p medusa-tui
+      - name: Commit tested implementation
+        run: |
+          set -euo pipefail
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add crates/medusa-tui/src/app.rs crates/medusa-tui/src/render.rs crates/medusa-tui/src/render/support.rs crates/medusa-tui/src/lib.rs
+          git commit -m "feat(tui): expand activity details individually"
+          git push origin HEAD:feat/tui-per-activity-details
