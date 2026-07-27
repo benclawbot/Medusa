@@ -23,6 +23,7 @@ mod lessons;
 mod manual_escalation;
 mod recall;
 mod skill_drafts;
+#[allow(dead_code)]
 mod skill_outcomes;
 mod skill_probation;
 #[path = "usage.rs"]
