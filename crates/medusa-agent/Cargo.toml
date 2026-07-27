@@ -13,6 +13,7 @@ medusa-capabilities = { path = "../medusa-capabilities" }
 medusa-clearops = { path = "../medusa-clearops" }
 medusa-commit-barrier = { path = "../medusa-commit-barrier" }
 medusa-config = { path = "../medusa-config" }
+# Runtime failure classification and continuation policy are exercised by AgentEngine.
 medusa-confidence = { path = "../medusa-confidence" }
 medusa-continuation = { path = "../medusa-continuation" }
 medusa-conflict-resolution = { path = "../medusa-conflict-resolution" }
