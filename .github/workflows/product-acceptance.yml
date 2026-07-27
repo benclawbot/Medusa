@@ -3,6 +3,8 @@ name: Product Acceptance
 on:
   pull_request:
     types: [opened, synchronize, reopened, ready_for_review]
+  push:
+    branches: [main]
   workflow_dispatch:
 
 permissions:
@@ -13,8 +15,40 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  product-acceptance:
-    if: ${{ github.event_name == 'workflow_dispatch' || github.event.pull_request.draft == false }}
+  pr-smoke:
+    if: ${{ github.event_name == 'pull_request' && github.event.pull_request.draft == false }}
+    name: PR smoke acceptance
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: dtolnay/rust-toolchain@1.88.0
+      - name: Refresh dependency lock for the merged PR graph
+        run: cargo generate-lockfile
+      - name: Install Linux sandbox backend
+        shell: bash
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y bubblewrap
+          if [[ -e /proc/sys/kernel/apparmor_restrict_unprivileged_userns ]]; then
+            echo 0 | sudo tee /proc/sys/kernel/apparmor_restrict_unprivileged_userns
+          fi
+      - name: Run shared-target PR smoke acceptance
+        run: python3 scripts/product-acceptance-smoke.py --output product-acceptance-smoke-artifacts
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: product-acceptance-pr-smoke
+          path: |
+            product-acceptance-smoke-artifacts/summary.json
+            product-acceptance-smoke-artifacts/*.log
+          if-no-files-found: error
+
+  full-evidence:
+    if: ${{ github.event_name == 'workflow_dispatch' || github.event_name == 'push' }}
+    name: Full evidence (${{ matrix.os }})
     strategy:
       fail-fast: false
       matrix:
@@ -23,7 +57,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@1.88.0
-      - name: Refresh dependency lock for the merged PR graph
+      - name: Refresh dependency lock for the merged commit graph
         run: cargo generate-lockfile
       - name: Install Linux sandbox backend
         if: runner.os == 'Linux'
@@ -34,7 +68,7 @@ jobs:
           if [[ -e /proc/sys/kernel/apparmor_restrict_unprivileged_userns ]]; then
             echo 0 | sudo tee /proc/sys/kernel/apparmor_restrict_unprivileged_userns
           fi
-      - name: Run product acceptance suite
+      - name: Run authoritative product acceptance suite
         run: cargo product-acceptance --output product-acceptance-artifacts
       - uses: actions/upload-artifact@v4
         if: always()
