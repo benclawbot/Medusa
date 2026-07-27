@@ -1,0 +1,376 @@
+from pathlib import Path
+
+root = Path('.')
+
+def replace(path, old, new):
+    p = root / path
+    text = p.read_text()
+    if old not in text:
+        raise SystemExit(f'missing expected text in {path}: {old[:80]!r}')
+    p.write_text(text.replace(old, new, 1))
+
+replace('crates/medusa-agent/Cargo.toml',
+        'medusa-config = { path = "../medusa-config" }\n',
+        'medusa-config = { path = "../medusa-config" }\nmedusa-confidence = { path = "../medusa-confidence" }\nmedusa-continuation = { path = "../medusa-continuation" }\n')
+replace('crates/medusa-agent/Cargo.toml',
+        'medusa-escalation = { path = "../medusa-escalation" }\n',
+        'medusa-escalation = { path = "../medusa-escalation" }\nmedusa-failure = { path = "../medusa-failure" }\n')
+
+runtime = r'''use std::{fs, path::PathBuf, thread, time::Duration};
+
+use medusa_confidence::{
+    Confidence, ConfidenceObservation, ConfidenceReason, TodoConfidenceHistory, TodoId,
+};
+use medusa_continuation::{
+    ContinuationAction, ContinuationContext, ContinuationController, ContinuationPolicy,
+    PlanSnapshot, TodoSnapshot, TodoState,
+};
+use medusa_core::{ErrorCategory, ErrorCode, MedusaError, MedusaResult};
+use medusa_failure::{
+    FailureDecision, FailureDomain, FailureHistory, FailureRecord, FailureSignal, RetryPolicy,
+};
+use medusa_provider::{Message, MessageBlock, Role};
+use time::OffsetDateTime;
+
+use crate::session::{
+    AgentPlanStepStatus, AgentSession, persist, record_terminal_skill_outcome,
+};
+
+pub(crate) enum RuntimeFailureAction {
+    Retry,
+    Replan,
+    Stop,
+}
+
+pub(crate) fn handle(
+    session: &mut AgentSession,
+    error: &MedusaError,
+) -> MedusaResult<RuntimeFailureAction> {
+    let mut history = load_history(session);
+    let signal = signal_from_error(error)?;
+    let decision = history.classify(&signal, RetryPolicy::default());
+    history
+        .append(FailureRecord {
+            sequence: history.records().len() as u32,
+            occurred_at: OffsetDateTime::now_utc(),
+            signal,
+        })
+        .map_err(validation_error)?;
+    persist_history(session, &history)?;
+
+    let continuation = continuation_decision(session, &decision)?;
+    match continuation.action {
+        ContinuationAction::Retry { backoff_ms, .. } => {
+            if let Some(delay) = backoff_ms {
+                thread::sleep(Duration::from_millis(delay));
+            }
+            persist(session)?;
+            Ok(RuntimeFailureAction::Retry)
+        }
+        ContinuationAction::Replan { reason } => {
+            for step in &mut session.plan {
+                if step.status != AgentPlanStepStatus::Completed {
+                    step.status = AgentPlanStepStatus::Pending;
+                }
+            }
+            session.messages.push(Message {
+                role: Role::User,
+                content: vec![MessageBlock::Text {
+                    text: format!(
+                        "Runtime failure policy requires a revised strategy. {reason}. Last error: {error}"
+                    ),
+                }],
+            });
+            persist(session)?;
+            Ok(RuntimeFailureAction::Replan)
+        }
+        ContinuationAction::Stop { reason } | ContinuationAction::Block { reason } => {
+            record_terminal_skill_outcome(session, error, &decision, &reason)?;
+            persist(session)?;
+            Ok(RuntimeFailureAction::Stop)
+        }
+        ContinuationAction::Complete
+        | ContinuationAction::Resume { .. }
+        | ContinuationAction::Spike(_) => {
+            record_terminal_skill_outcome(
+                session,
+                error,
+                &decision,
+                "failure continuation produced an unsafe terminal action",
+            )?;
+            persist(session)?;
+            Ok(RuntimeFailureAction::Stop)
+        }
+    }
+}
+
+pub(crate) fn record_terminal(
+    session: &AgentSession,
+    error: &MedusaError,
+    reason: &str,
+) -> MedusaResult<()> {
+    let decision = FailureDecision {
+        disposition: medusa_failure::FailureDisposition::Terminal,
+        reason: reason.to_owned(),
+        attempt: 1,
+        remaining_attempts: 0,
+        backoff_ms: None,
+    };
+    record_terminal_skill_outcome(session, error, &decision, reason)?;
+    Ok(())
+}
+
+fn signal_from_error(error: &MedusaError) -> MedusaResult<FailureSignal> {
+    let domain = match error.category {
+        ErrorCategory::Validation => FailureDomain::Validation,
+        ErrorCategory::Policy => FailureDomain::Policy,
+        ErrorCategory::Environment => FailureDomain::Filesystem,
+        ErrorCategory::Execution => match error.code {
+            ErrorCode::PolicyDenied => FailureDomain::Policy,
+            ErrorCode::ToolExecutionFailed => FailureDomain::Tool,
+            ErrorCode::DependencyUnavailable
+                if error.message.to_ascii_lowercase().contains("user") =>
+            {
+                FailureDomain::User
+            }
+            ErrorCode::DependencyUnavailable => FailureDomain::Provider,
+            _ => FailureDomain::Internal,
+        },
+        ErrorCategory::Transient => FailureDomain::Network,
+        ErrorCategory::Persistence => FailureDomain::Filesystem,
+        ErrorCategory::Internal => FailureDomain::Internal,
+    };
+    let signal = FailureSignal::new(domain, error.code.to_string(), error.message.clone())
+        .map_err(validation_error)?;
+    Ok(if error.retryable {
+        signal.transient()
+    } else {
+        signal
+    })
+}
+
+fn continuation_decision(
+    session: &AgentSession,
+    failure: &FailureDecision,
+) -> MedusaResult<medusa_continuation::ContinuationDecision> {
+    let todo_id = TodoId::parse("runtime-step").map_err(validation_error)?;
+    let plan = PlanSnapshot {
+        plan_id: session.id.to_string(),
+        revision: u64::from(session.turn).saturating_add(1),
+        captured_at: OffsetDateTime::now_utc(),
+        todos: vec![TodoSnapshot {
+            id: todo_id.clone(),
+            state: TodoState::InProgress,
+            dependencies: Vec::new(),
+        }],
+    };
+    let mut confidence = TodoConfidenceHistory::new(todo_id);
+    confidence
+        .append(
+            ConfidenceObservation::new(
+                1,
+                OffsetDateTime::now_utc(),
+                Confidence::from_basis_points(8_000).map_err(validation_error)?,
+                ConfidenceReason::ToolFailure,
+                "runtime failure classification",
+            )
+            .map_err(validation_error)?,
+        )
+        .map_err(validation_error)?;
+    ContinuationController::new(ContinuationPolicy::default())
+        .map_err(validation_error)?
+        .decide(ContinuationContext {
+            plan: &plan,
+            confidence: &confidence,
+            latest_failure: Some(failure),
+            automatic_replans: history_replan_count(session),
+            stalled_resumes: 0,
+            checkpoint_available: !session.events.is_empty(),
+        })
+        .map_err(validation_error)
+}
+
+fn history_path(session: &AgentSession) -> PathBuf {
+    session
+        .repo
+        .join(".medusa/learning/failure-history")
+        .join(format!("{}.json", session.id))
+}
+
+fn load_history(session: &AgentSession) -> FailureHistory {
+    fs::read(history_path(session))
+        .ok()
+        .and_then(|bytes| serde_json::from_slice(&bytes).ok())
+        .unwrap_or_default()
+}
+
+fn history_replan_count(session: &AgentSession) -> u32 {
+    load_history(session)
+        .records()
+        .iter()
+        .filter(|record| {
+            record.signal.strategy_invalidated
+                || matches!(record.signal.domain, FailureDomain::Validation)
+        })
+        .count() as u32
+}
+
+fn persist_history(session: &AgentSession, history: &FailureHistory) -> MedusaResult<()> {
+    let path = history_path(session);
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent)?;
+    }
+    let temporary = path.with_extension("json.tmp");
+    fs::write(&temporary, serde_json::to_vec_pretty(history)?)?;
+    fs::rename(temporary, path)?;
+    Ok(())
+}
+
+fn validation_error(message: &'static str) -> MedusaError {
+    MedusaError::new(
+        ErrorCode::InvalidInput,
+        ErrorCategory::Validation,
+        message,
+    )
+}
+'''
+(root / 'crates/medusa-agent/src/runtime_failure.rs').write_text(runtime)
+
+engine = root / 'crates/medusa-agent/src/engine.rs'
+text = engine.read_text()
+marker = 'use std::{collections::VecDeque, path::Path, sync::Mutex, thread};\n'
+text = text.replace(marker, 'mod runtime_failure;\n\n' + marker, 1)
+old = '''        while !session.completed && session.turn < self.config.agent.max_turns {
+            match self.step(session)? {
+                StepOutcome::WaitingForUser => {
+                    return Err(MedusaError::new(
+                        ErrorCode::DependencyUnavailable,
+                        ErrorCategory::Execution,
+                        "agent is waiting for a user response",
+                    ));
+                }
+                StepOutcome::TurnComplete => return Ok(()),
+                StepOutcome::Continue | StepOutcome::Completed => {}
+            }
+        }
+        if session.completed {
+            Ok(())
+        } else {
+            Err(MedusaError::new(
+                ErrorCode::InternalInvariant,
+                ErrorCategory::Execution,
+                "agent exhausted max_turns before verification passed",
+            ))
+        }'''
+new = '''        while !session.completed && session.turn < self.config.agent.max_turns {
+            match self.step(session) {
+                Ok(StepOutcome::WaitingForUser) => {
+                    let error = MedusaError::new(
+                        ErrorCode::DependencyUnavailable,
+                        ErrorCategory::Execution,
+                        "agent is waiting for a user response",
+                    );
+                    let _ = runtime_failure::handle(session, &error)?;
+                    return Err(error);
+                }
+                Ok(StepOutcome::TurnComplete) => return Ok(()),
+                Ok(StepOutcome::Continue | StepOutcome::Completed) => {}
+                Err(error) => match runtime_failure::handle(session, &error)? {
+                    runtime_failure::RuntimeFailureAction::Retry
+                    | runtime_failure::RuntimeFailureAction::Replan => continue,
+                    runtime_failure::RuntimeFailureAction::Stop => return Err(error),
+                },
+            }
+        }
+        if session.completed {
+            Ok(())
+        } else {
+            let error = MedusaError::new(
+                ErrorCode::InternalInvariant,
+                ErrorCategory::Execution,
+                "agent exhausted max_turns before verification passed",
+            );
+            runtime_failure::record_terminal(
+                session,
+                &error,
+                "agent exhausted its bounded runtime without passing verification",
+            )?;
+            Err(error)
+        }'''
+if old not in text:
+    raise SystemExit('run_to_completion block changed')
+engine.write_text(text.replace(old, new, 1))
+
+replace('crates/medusa-agent/src/session.rs',
+        'pub(crate) use skill_outcomes::record_loaded_skills;\n',
+        'pub(crate) use skill_outcomes::{record_loaded_skills, record_terminal_skill_outcome};\n')
+
+outcomes = root / 'crates/medusa-agent/src/session/skill_outcomes.rs'
+text = outcomes.read_text()
+text = text.replace('use crate::tools::skills::automatically_loaded_names;\n',
+                    'use crate::tools::skills::automatically_loaded_names;\nuse medusa_failure::FailureDecision;\n', 1)
+text = text.replace('    automatically_loaded_skills: Vec<String>,\n}',
+'''    automatically_loaded_skills: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    terminal_failure: Option<TerminalFailure>,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+struct TerminalFailure {
+    code: String,
+    category: String,
+    disposition: String,
+    reason: String,
+}''', 1)
+text = text.replace('            automatically_loaded_skills: skills,\n        };',
+                    '            automatically_loaded_skills: skills,\n            terminal_failure: None,\n        };', 1)
+needle = '\nfn rebuild_effectiveness_summary(repo: &Path) -> MedusaResult<PathBuf> {'
+terminal = r'''
+pub(crate) fn record_terminal_skill_outcome(
+    session: &AgentSession,
+    error: &MedusaError,
+    decision: &FailureDecision,
+    reason: &str,
+) -> MedusaResult<Option<PathBuf>> {
+    let skills = loaded_skill_names(session);
+    if skills.is_empty() {
+        return Ok(None);
+    }
+    let root = session.repo.join(OUTCOME_ROOT);
+    fs::create_dir_all(&root)?;
+    let destination = root.join(format!("{}.json", session.id));
+    let recorded_at = OffsetDateTime::now_utc()
+        .format(&Rfc3339)
+        .map_err(|format_error| {
+            MedusaError::new(
+                ErrorCode::InternalInvariant,
+                ErrorCategory::Internal,
+                format!("could not format skill outcome timestamp: {format_error}"),
+            )
+        })?;
+    let record = SkillOutcomeRecord {
+        schema_version: 2,
+        session_id: session.id.to_string(),
+        objective: session.objective.clone(),
+        recorded_at,
+        completed: false,
+        verified: false,
+        turns: session.turn,
+        evidence_count: session.evidence.len(),
+        automatically_loaded_skills: skills,
+        terminal_failure: Some(TerminalFailure {
+            code: error.code.to_string(),
+            category: format!("{:?}", error.category).to_ascii_lowercase(),
+            disposition: format!("{:?}", decision.disposition).to_ascii_lowercase(),
+            reason: reason.to_owned(),
+        }),
+    };
+    atomic_json(&destination, &record)?;
+    rebuild_effectiveness_summary(&session.repo)?;
+    Ok(Some(destination))
+}
+'''
+if needle not in text:
+    raise SystemExit('skill outcome insertion point changed')
+text = text.replace(needle, '\n' + terminal + needle, 1)
+outcomes.write_text(text)
