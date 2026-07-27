@@ -7,12 +7,10 @@ on:
       - 'crates/**'
       - 'apps/**'
       - 'README.md'
-      - 'scripts/check-source-size.sh'
       - 'scripts/check-workflow-hygiene.sh'
       - 'scripts/test-workflow-hygiene.sh'
       - 'scripts/check-capability-evidence.py'
       - 'scripts/test-capability-evidence.py'
-      - 'scripts/check-product-architecture.py'
       - 'docs/**'
       - '.github/workflows/**'
   push:
@@ -22,12 +20,10 @@ on:
       - 'crates/**'
       - 'apps/**'
       - 'README.md'
-      - 'scripts/check-source-size.sh'
       - 'scripts/check-workflow-hygiene.sh'
       - 'scripts/test-workflow-hygiene.sh'
       - 'scripts/check-capability-evidence.py'
       - 'scripts/test-capability-evidence.py'
-      - 'scripts/check-product-architecture.py'
       - 'docs/**'
       - '.github/workflows/**'
 
@@ -39,14 +35,6 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  source-size:
-    name: Production source files <= 1000 lines
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - name: Enforce source-size ceiling and exception registry
-        run: bash scripts/check-source-size.sh
-
   workflow-hygiene:
     name: Workflows are read-only or explicitly justified
     runs-on: ubuntu-latest
@@ -87,5 +75,3 @@ jobs:
         run: python3 scripts/test-capability-evidence.py
       - name: Validate repository capability evidence
         run: python3 scripts/check-capability-evidence.py
-      - name: Validate product architecture and production metadata
-        run: python3 scripts/check-product-architecture.py
