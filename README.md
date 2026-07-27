@@ -4,241 +4,289 @@
 
 # Medusa
 
-Medusa is a production-grade autonomous coding agent written in Rust. It combines an interactive terminal, a shared React/Tauri desktop runtime, repository-aware tools, durable Markdown memory, guarded execution, persistent background jobs, multi-worker coordination, browser verification, and release-grade validation.
+Medusa is a repository-aware coding agent written in Rust. It can inspect an existing codebase, plan a change, edit files, run guarded commands, verify the result, preserve the session, and continue later through a terminal interface, a desktop application, or a headless CLI command.
 
-## Highlights
+Medusa is strongest when the task belongs inside a real repository: fixing a failing test, tracing a bug across files, making a bounded feature change, reviewing impact, running the relevant checks, and leaving durable evidence of what happened.
 
-- **Interactive by default** — run `medusa` in a repository to open the terminal interface.
-- **Autonomous coding loop** — inspect, plan, edit, verify, and iterate until completion evidence is available.
-- **Minimal coding by default** — every implementation turn follows a native decision ladder that favors reuse, standard and platform capabilities, the smallest correct diff, root-cause fixes, and explicit dependency justification.
-- **Shared frontend runtime** — the TUI and Zeus-derived desktop entry point use the same `medusa-runtime` controller instead of separate agent stacks.
-- **Activity-first desktop** — the desktop conversation now keeps live plan progress, expandable tool activity, approvals, and working state in one central execution timeline.
-- **Validated desktop packages** — CI builds unsigned Linux DEB/AppImage, macOS app/DMG, and Windows NSIS artifacts with synchronized version metadata and SHA-256 evidence.
-- **Attested draft releases** — pushed version tags build CLI and desktop assets on all three platforms, generate deterministic CycloneDX and SHA-256 evidence, attach GitHub/Sigstore provenance, and create a draft release without automatic publication.
-- **Visible user conversation** — user prompts, assistant responses, Markdown, tool activity, questions, and queued follow-ups remain in one transcript.
-- **Mid-turn guidance** — submit extra detail while Medusa is working; it is preserved immediately and injected at the next safe agent-turn boundary.
-- **Clipboard-native input** — paste text or screenshots with `Ctrl+V`; supported providers receive screenshots as image context.
-- **Repository-aware tooling** — bounded file access, search, atomic writes, patch transactions, shell execution, Git checkpoints, and targeted verification.
-- **Semantic targeted verification** — after successful mutations, Medusa builds a repository code index, analyzes changed symbols and affected files, selects impacted tests, surfaces API-risk signals, executes graph-selected validation commands directly, and preserves broad verification fallbacks when semantic selection is unavailable.
-- **Persistent background jobs** — bounded daemon workers and queues, overload backpressure, race-safe cancellation, graceful draining, descendant-safe forced shutdown, reconnect, and restart recovery on Linux, macOS, and Windows.
-- **Browser verification** — a persistent Playwright sidecar can navigate, click, fill, press, capture screenshots, evaluate JavaScript, and manage tabs.
-- **Persistent memory** — Markdown-first storage with validation, indexing, retrieval, lifecycle management, and provenance controls.
-- **Parallel workers** — isolated worktrees, deterministic merge behavior, conflict detection, and cleanup safeguards.
-- **Extensions and MCP** — skills, hooks, MCP isolation, optional Desktop Commander integration, redaction, and checksummed provenance.
-- **Production hardening** — panic-free production targets, source-size and workflow guardrails, dependency metrics, migrations, rollback evidence, fuzzing, chaos recovery, security checks, cross-platform packages, and live-provider validation.
+## What Medusa is good at
 
-## Minimal coding philosophy
+- **Working in existing repositories.** Medusa searches and reads the project before editing, uses repository-aware file and Git tools, and keeps mutations inside guarded transaction boundaries.
+- **Small, verified changes.** The runtime prefers the smallest complete fix, records changed paths, selects targeted checks when possible, and requires verification before an autonomous coding session is considered complete.
+- **Long-running work.** Sessions, plans, prompts, tool activity, verification evidence, and recovery state are stored under the repository's `.medusa` directory and can be resumed.
+- **Explaining what it is doing.** The TUI and desktop app share the same runtime event stream, including assistant output, plans, tool activity, questions, approvals, failures, and completion state.
+- **Operating with explicit boundaries.** Repository writes are path-checked and transactional, sensitive external paths remain denied, dangerous shell operations fail closed, and approval grants are tied to the exact action and current plan.
+- **Learning from completed work.** Verified sessions can contribute bounded repository-local recall and Markdown lessons. Failed sessions retain failure history and negative skill outcomes instead of being counted as successful experience.
 
-Medusa is designed to produce the **smallest correct change**, not the largest generated solution. For every non-read-only coding turn, the agent receives an always-on implementation policy before it plans or edits code. The default policy level is `full`.
+Medusa is not a general-purpose shell replacement. It intentionally rejects commands and paths that would weaken its containment or persistence boundaries.
 
-Medusa stops at the first applicable option in this order:
+## Interfaces
 
-1. Do not implement speculative or unnecessary functionality.
-2. Reuse an existing repository helper, type, component, command, or established pattern.
-3. Prefer the language standard library.
-4. Prefer a native platform, browser, operating-system, database, or framework capability.
-5. Reuse an already-installed dependency.
-6. Use a direct expression when it remains clear and correct.
-7. Otherwise, implement the smallest complete solution.
+Medusa has one production runtime with three user-facing entry points:
 
-Before choosing, Medusa inspects the affected flow and relevant callers. Bug fixes should repair the shared root cause once rather than accumulate symptom guards. New abstractions, wrappers, configuration, scaffolding, and dependencies must earn their place; consolidation and deletion are preferred when they leave the code clearer and complete.
-
-Minimalism never overrides correctness or required safeguards. Medusa must preserve security controls, trust-boundary validation, accessibility, data integrity, loss-preventing error handling, concurrency correctness, compatibility requirements, and anything explicitly requested. It must not weaken or rewrite tests merely to hide a broken implementation. Tests change only when intended behavior changes or new behavior needs coverage, and the smallest relevant verification should always be run.
-
-| Typical coding-agent tendency | Medusa default |
+| Interface | Use it for |
 |---|---|
-| Generate a fresh solution immediately | Inspect and reuse the repository first |
-| Add abstractions for possible future needs | Implement only demonstrated requirements |
-| Add a dependency for convenience | Prefer stdlib, native capabilities, and installed dependencies |
-| Patch each visible symptom | Trace and fix the shared root cause |
-| Touch broad areas to make the design “cleaner” | Prefer the fewest files and shortest correct diff |
-| Change tests until CI passes | Preserve the intended contract and fix product code |
+| Terminal UI | Interactive coding sessions, questions, approvals, attachments, plans, and live activity. |
+| Desktop app | The same runtime in a React/Tauri interface with a central execution timeline, session navigation, diffs, memory views, settings, and approvals. |
+| Headless CLI | Scripted objectives, resumable sessions, and unattended runs with an explicit command-approval allowlist. |
 
-The policy can be overridden for a process with `MEDUSA_CODING_POLICY`:
-
-```bash
-export MEDUSA_CODING_POLICY=full
-medusa
-```
-
-Supported values are:
-
-| Value | Behavior |
-|---|---|
-| `off` | Do not inject the minimal coding policy. |
-| `lite` | Build the requested change, while briefly surfacing a materially simpler alternative when one exists. |
-| `full` | Default. Enforce the complete decision ladder and prefer the shortest correct diff with the fewest touched files. |
-| `ultra` | Apply strict YAGNI, challenge speculative requirements, and prefer deletion over addition while still shipping the smallest useful result. |
-
-Read-only sessions do not receive this implementation policy because they cannot change the repository.
-
-## Current status and evidence
-
-- the Rust agent core, TUI, and frontend-neutral runtime
-- the Zeus-derived React/Tauri desktop entry point
-- durable sessions, prompt drafts, and Markdown memory
-- guarded repository tools, browser verification, and parallel workers
-- semantic code indexing and mutation-aware targeted verification
-- Markdown rendering, user/assistant transcript separation, and mid-turn follow-ups
-- optional Desktop Commander MCP integration
-- panic-free production targets and least-privilege workflow guards
-- cross-platform daemon transport, recovery, and shared TUI/Desktop lifecycle supervision
-- bounded daemon workers and queues with explicit overload backpressure
-- graceful drain semantics plus race-safe per-job cancellation and immediate process-tree shutdown
-- evidence-based dependency pruning with permanent base/current graph metrics
-- validated unsigned desktop bundles for Linux, macOS, and Windows with version synchronization and SHA-256 manifests
-- a tag-bound, draft-only release workflow with deterministic SBOM/checksum evidence and short-lived OIDC provenance attestations
-
-| Area | Current evidence |
-|---|---|
-| Interactive product surface | `medusa` launches the TUI; transcript preservation, Markdown rendering, clipboard input, cancellation, metrics, skills, queued follow-ups, questions, plans, and daemon lifecycle transitions are implemented in `medusa-tui`. |
-| Agent and repository runtime | `medusa-runtime` owns frontend-neutral interactive session control. Planning, tools, policy, verification, intelligence, memory, and persistence remain implemented across the Rust workspace. |
-| Semantic verification | The runtime builds a `CodeIndex` after successful mutations and analyzes persisted changed paths with `ReviewImpact`. Verification evidence records changed symbols, affected files, impacted tests, API-risk signals, selection reasons, executed commands, output, and exit status. Existing repository-wide, static-site, and standalone-artifact verification paths remain available as fallbacks. |
-| Background daemon | `medusa-daemon` provides one durable contract on Linux, macOS, and Windows. It has four fixed workers and a 32-job queue by default, `daemon_busy` backpressure, finite IPC limits, shared frontend supervision, graceful draining, per-job cancellation, and immediate process-tree shutdown. |
-| Desktop | `apps/medusa-desktop` adapts the same runtime commands, events, plans, questions, cancellation, follow-ups, skills, provider settings, policy, and daemon lifecycle as the TUI. The activity-first UI projects live plans, runtime activity, approvals, and working state into the central transcript. CI builds and validates unsigned DEB/AppImage, app/DMG, and NSIS artifacts. |
-| Dependency hygiene | PR #52 removed five proven-unused direct dependency edges while preserving the resolved package graph. Read-only base/current metrics run in CI. |
-| Release publication | A pushed version tag must match synchronized Rust/Tauri/npm metadata, the event SHA, the remote tag target, and `main` ancestry. Read-only platform jobs build the CLI and desktop assets; the final reviewed writer generates `medusa-release-manifest.json`, `SHA256SUMS`, a deterministic CycloneDX SBOM, GitHub/Sigstore attestations, and a draft GitHub Release. It never publishes automatically. |
-| Release evidence | `CI`, `Daemon`, `Desktop`, `Refactor Guardrails`, and `Release Gates` enforce formatting, Clippy, panic-free production targets, tests, docs, source-size limits, workflow hygiene, dependency policy, security checks, three-platform integration, desktop bundle validation, coverage, adversarial tests, packages, and live MiniMax scenarios. |
-
-See [Capability evidence](docs/CAPABILITY-EVIDENCE.md) for the auditable mapping from shipped capabilities to code and gates.
-
-## Requirements
-
-- Git
-- Rust 1.88 or newer and Cargo; the repository pins Rust 1.88.0
-- `MINIMAX_API_KEY` for live MiniMax execution
-- Node.js 22 when browser verification, Desktop Commander, desktop development, or desktop packaging is used
+The production coding path is a single authoritative agent loop. Transaction-oriented multi-agent crates remain experimental workspace components and are not presented as the default product execution model.
 
 ## Installation
 
-Install the latest CLI in one line:
+### Prerequisites
 
-```powershell
+- Git
+- Rust 1.88 or newer; this repository pins Rust 1.88.0
+- A supported model connection
+- Node.js 22 when using ChatGPT OAuth, browser verification, desktop development, or desktop packaging
+
+### Install the CLI from `main`
+
+```bash
 cargo install --git https://github.com/benclawbot/Medusa.git --locked medusa-cli
 ```
 
-Installed binaries can check whether they match the current `main` branch without changing the installation:
+Confirm the installation:
 
-```text
-medusa update --check
+```bash
+medusa --version
+medusa doctor
 ```
 
-`medusa update` resolves the current immutable commit on `main`, compares it with the commit embedded in the running binary, and builds `medusa-cli` directly from that branch with Cargo. It requires Cargo and Git access to GitHub. The update runs in a detached helper after the CLI exits; on Windows the helper stops Medusa background processes that use the same executable before Cargo replaces it, then restarts Medusa. Package-managed Linux and macOS installations are not overwritten: Medusa reports the corresponding package-manager command instead. For unattended maintenance, use `medusa update --automatic`.
-
-Set `MEDUSA_UPDATE_POLICY=check` to make a normal `medusa update` report availability only, or `MEDUSA_UPDATE_POLICY=automatic` to permit verified unattended replacement. The command-line `--check` and `--automatic` flags take precedence for a single invocation.
-
-For a development checkout instead:
+### Install from a local checkout
 
 ```bash
 git clone https://github.com/benclawbot/Medusa.git
 cd Medusa
 cargo install --path crates/medusa-cli --locked
-medusa --version
 medusa doctor
 ```
 
-`medusa doctor` reports a provider-credential failure until `MINIMAX_API_KEY` is configured. The remaining diagnostics still verify Git, Cargo, repository access, writable state, schema support, and optional integrations.
+### Desktop application
 
-The release workflow creates a draft only after a version tag is pushed. Draft assets remain unsigned at the operating-system level and require maintainer review before any public publication. See [Release process](docs/RELEASE.md) and [Release compatibility](docs/COMPATIBILITY.md).
+The release workflow builds unsigned desktop packages for:
 
-### Windows
+- Linux: Debian package and AppImage
+- macOS: application archive and DMG
+- Windows: NSIS installer
 
-Install Git, Rustup, and optional Node.js 22 with Winget:
+Release assets remain draft-only until a maintainer reviews the packages, checksums, SBOM, and provenance. Windows packages are not Authenticode-signed, macOS packages are not Developer ID signed or notarized, and Linux packages are not distributed through a signed package repository.
 
-```powershell
-winget install --id Git.Git -e --accept-package-agreements --accept-source-agreements
-winget install --id Rustlang.Rustup -e --accept-package-agreements --accept-source-agreements
-winget install --id OpenJS.NodeJS.22 -e --accept-package-agreements --accept-source-agreements
-rustup toolchain install 1.88.0 --profile minimal --component clippy,rustfmt
-rustup default 1.88.0
-```
+For desktop development from source, install Node.js 22, then use the scripts in `apps/medusa-desktop`.
 
-Ensure `%USERPROFILE%\.cargo\bin` is on the user `PATH`, then configure the provider credential outside the repository:
+## First run
 
-```powershell
-$env:MINIMAX_API_KEY = '<your-key>'
-medusa doctor
-```
-
-### macOS and Linux
-
-Install Git and a native build toolchain, then install Rustup and the pinned toolchain:
+Run Medusa inside a repository:
 
 ```bash
-source "$HOME/.cargo/env"
-rustup toolchain install 1.88.0 --profile minimal --component clippy,rustfmt
-rustup default 1.88.0
-export MINIMAX_API_KEY='<your-key>'
-medusa doctor
+cd /path/to/project
+medusa
 ```
 
-Debian or Ubuntu users can install the system prerequisites with:
+On the first interactive launch, Medusa asks you to choose a model connection and stores the non-secret profile in your user configuration directory:
+
+- Linux and macOS: `${XDG_CONFIG_HOME:-~/.config}/medusa/provider.toml`
+- Windows: `%APPDATA%\medusa\provider.toml`
+
+API keys are read from the environment and are not written to `provider.toml`.
+
+### Direct provider routes
+
+The Rust provider layer directly implements Anthropic Messages-compatible routes:
+
+| Route | Credential |
+|---|---|
+| MiniMax | `MINIMAX_API_KEY` |
+| Anthropic | `ANTHROPIC_API_KEY` |
+| Anthropic-compatible endpoint | `MEDUSA_API_KEY` and optionally `MEDUSA_BASE_URL` |
+
+MiniMax is the default route. A custom base URL can be supplied through configuration or the provider-specific environment variable.
+
+### Gateway and OpenAI-compatible connections
+
+First-run setup also supports local or externally supplied gateways, including OmniRoute, OpenAI-compatible endpoints, local model runtimes, the OpenAI API, and ChatGPT OAuth.
+
+ChatGPT OAuth is provided through the external `openai-oauth` loopback gateway, not by an embedded OAuth implementation. Medusa expects it at `127.0.0.1:10531` and can start it with:
 
 ```bash
-sudo apt update
-sudo apt install -y build-essential git curl pkg-config
+npx --yes openai-oauth@latest --detach
 ```
 
-Do not commit API keys or other credentials.
+Node.js is required. The gateway owns the OAuth credential; Medusa communicates with its local OpenAI-compatible endpoint and does not read the gateway's credential file.
 
-## Quick start
+Review or reset the saved connection with:
 
-Open the TUI in the current repository:
+```bash
+medusa config show
+medusa config reset
+medusa config
+```
+
+## Everyday use
+
+Open the interactive terminal in the current repository:
 
 ```bash
 medusa
 ```
 
-Open another repository or begin with a prepared prompt:
+Open another repository or begin with a prompt:
 
 ```bash
-medusa --repo /path/to/repository
+medusa --repo /path/to/project
 medusa --prompt "Fix the failing tests and verify the result"
 ```
 
-Resume work:
+Resume a known session or continue the most recent one:
 
 ```bash
 medusa --resume <session-id>
 medusa --continue
 ```
 
-### Interactive controls
+Run a headless objective:
 
-| Key | Action |
-|---|---|
-| `Enter` | Submit the prompt, or queue a follow-up while Medusa is working |
-| `Shift+Enter` | Insert a new line |
-| `Ctrl+V` | Paste clipboard text or attach a screenshot |
-| `Ctrl+C` | Cancel the active task; press twice within one second to exit |
-| `Ctrl+D` | Exit when the composer is empty |
-| `Esc` | Cancel the active task or close the current modal |
-
-Prompt drafts and attachments persist under the repository's `.medusa` directory until submission. Rejected submissions restore the draft. Mid-turn follow-ups remain visible immediately and are applied before the next model turn.
-
-Installed skills are directly invokable by name. Built-in commands take precedence over same-named skills:
-
-```text
-/skills
-/release
-/release prepare version 1.0
-/release@user
+```bash
+medusa run "Fix the failing tests and verify the result"
 ```
 
-Typing `/` filters built-in commands and installed skills; Tab completes the selected entry. Selected skill instructions are ephemeral system context and are not written into durable session messages.
+A normal headless run stops if the agent needs user input. For unattended approval of known shell commands, create an allowlist containing one exact command per line:
 
-## Background daemon
+```text
+# .medusa/approve.txt
+cargo test --workspace
+cargo fmt --all -- --check
+```
 
-`medusa-daemon` owns repository-scoped background jobs, reconnectable IPC, durable job records, process ownership, bounded execution, restart recovery, per-job cancellation, graceful draining, and immediate process-tree shutdown.
+Then run:
 
-- Linux and macOS use `.medusa/daemon/medusa.sock` as a Unix-domain socket.
-- Windows uses the same path as an endpoint descriptor containing an ephemeral loopback TCP address; non-loopback descriptors are rejected.
-- A new connection is used per request, so clients can disconnect while daemon-owned jobs continue.
-- Production defaults are four concurrent workers and 32 queued jobs.
-- A full queue returns `daemon_busy`; rejected work does not retain a durable job record.
-- Local reads and writes time out after five seconds; requests larger than 64 KiB are rejected.
-- Graceful shutdown stops request acceptance, drains queued and running accepted jobs, joins workers, and releases ownership.
-- `Cancel { job_id }` removes queued work before execution or terminates the running job's complete process tree.
-- Immediate shutdown cancels queued and running work before worker join and persists each cancelled record as rollback-readable `interrupted` state.
-- Unix jobs run in isolated process groups with TERM/KILL escalation.
-- GNU/Linux delimits negative process-group IDs with `--` and distinguishes terminated zombies from live descendants through `/proc` state inspection.
+```bash
+medusa run \
+  --non-interactive \
+  --approve-allowlist .medusa/approve.txt \
+  "Fix the failing tests and verify the result"
+```
+
+The allowlist does not bypass policy. The runtime still validates the exact action, the current plan fingerprint, command restrictions, containment, and approval expiry before execution.
+
+Useful maintenance commands:
+
+```bash
+medusa doctor
+medusa migrate
+medusa update --check
+medusa update
+```
+
+`medusa update --check` is read-only. Source-installed binaries can update from a verified immutable commit on `main`; package-managed installations are not overwritten and instead report the relevant package-manager command.
+
+## Configuration
+
+Medusa loads typed configuration with unknown fields denied. The supported runtime sections are:
+
+```toml
+version = 1
+
+[agent]
+mode = "yolo"              # yolo, review, or read-only
+max_turns = 500
+parallel_workers = 4        # bounded parallel read-only tool work
+
+[model]
+provider = "minimax"
+name = "MiniMax-M3"
+protocol = "anthropic"     # anthropic or openai
+base_url = "https://api.minimax.io/anthropic"
+auth = "api-key"           # api-key or none
+tool_calling = true
+streaming = false
+max_output_tokens = 32768
+context_window_tokens = 1000000
+auto_compact_percent = 40
+max_retries = 1
+retry_base_delay_ms = 250
+retry_max_delay_ms = 8000
+retry_jitter_ms = 100
+
+[memory]
+enabled = true
+format = "markdown"
+
+[verification]
+required = true
+browser_on_ui_change = true
+```
+
+Fallback providers are complete routes with their own provider, model, protocol, endpoint, authentication mode, capabilities, and retry policy. A fallback does not inherit the primary provider's credentials or request-specific fields.
+
+Command-line overrides use `--set key=value`:
+
+```bash
+medusa --set agent.mode=read-only
+medusa --set verification.browser_on_ui_change=false
+```
+
+## Verification and safety
+
+Medusa treats successful model output and successful repository work as different things. Coding completion requires repository verification.
+
+After mutations, the runtime can build a code index, inspect changed symbols and affected files, select impacted tests, detect public API risk, and run targeted commands. It falls back to broader repository checks when semantic selection is unavailable or unsafe.
+
+Browser verification is automatically considered for effective UI changes when `verification.browser_on_ui_change` is enabled. Documentation-only, generated, snapshot-only, lockfile, and build-output changes are excluded. A browser run records the route, assertions, screenshots, console errors, override state, and result. Missing browser or dev-server prerequisites produce an actionable failure rather than a false pass.
+
+Shell execution fails closed when the platform containment backend is unavailable:
+
+- Linux uses Bubblewrap.
+- macOS uses Seatbelt.
+- Windows uses the Windows 11 composable sandbox API with repository read/write binding, toolchain read-only binding, network denial, an environment allowlist, and Job Object limits.
+
+Windows command containment therefore requires Windows 11 with `Experimental_CreateProcessInSandbox` available. There is no unsandboxed fallback through the sandbox API.
+
+## Persistent state
+
+Repository-local state is stored under `.medusa`, including sessions, prompts, daemon records, verification evidence, memory, failure history, skill outcomes, checkpoints, and transaction journals.
+
+Medusa's durable memory is Markdown-first. Recall is repository-scoped and bounded; it does not treat every previous session as trustworthy. Completed-session learning requires verified evidence, starts accepted lessons in probation, and preserves provenance.
+
+## Platform support
+
+The canonical workflows test the Rust workspace and daemon behavior across Linux, macOS, and Windows. Desktop CI builds and validates unsigned packages on all three platforms. Release gates also cover coverage, security checks, adversarial regressions, fuzz smoke tests, chaos and migration recovery, documentation/schema consistency, package smoke tests, and live provider scenarios.
+
+Platform support does not imply identical containment internals or operating-system signing. See the safety and desktop installation sections above for those boundaries.
+
+## Current limitations
+
+- The production execution model is single-agent. Experimental multi-agent and transaction-coordination crates are not the default runtime path.
+- ChatGPT OAuth depends on the separately distributed `openai-oauth` gateway and Node.js.
+- Browser verification depends on Node.js, Playwright-sidecar availability, and a reachable development route.
+- Provider streaming is represented in configuration and capability checks, but the native Anthropic-compatible adapter currently performs non-streaming requests.
+- Screenshot input is accepted only when the selected provider declares compatible image support.
+- Desktop release packages are unsigned at the operating-system level.
+- The repository is evolving quickly; run `medusa update --check` and `medusa doctor` before diagnosing an older source installation.
+
+## Project documentation
+
+The README is the product overview and installation guide. Retained documentation should describe current operation rather than implementation history:
+
+- [Configuration](docs/CONFIGURATION.md)
+- [Release process](docs/RELEASE.md)
+- [Release compatibility](docs/COMPATIBILITY.md)
+- [Security hardening](docs/SECURITY-HARDENING.md)
+- [Observability](docs/OBSERVABILITY.md)
+- [Desktop distribution](docs/DESKTOP-DISTRIBUTION.md)
+- [Capability evidence](docs/CAPABILITY-EVIDENCE.md)
+
+## Development
+
+Use the pinned toolchain and run the repository gates relevant to your change:
+
+```bash
+cargo fmt --all -- --check
+cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
+cargo test --workspace --all-features --locked
+cargo doc --workspace --all-features --no-deps
+```
+
+Frontend and desktop changes must also pass the checks defined in `apps/medusa-desktop` and the Desktop workflow.
+
+Medusa is licensed under the MIT License.
