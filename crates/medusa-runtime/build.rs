@@ -38,7 +38,6 @@ fn main() -> Result<(), Box<dyn Error>> {
     let manifest = env::var("CARGO_MANIFEST_DIR")?;
     let mut source = fs::read_to_string("src/runtime_impl.rs")?.replace("\r\n", "\n");
 
-    replace_once(&mut source, "mod support;\n", "mod support;\nmod recovery;\n")?;
     for (declaration, file) in [
         ("pub mod commands;", "commands.rs"),
         ("mod error;", "error.rs"),
@@ -50,7 +49,6 @@ fn main() -> Result<(), Box<dyn Error>> {
             "skill_dependency_locks.rs",
         ),
         ("mod support;", "support.rs"),
-        ("mod recovery;", "recovery.rs"),
         ("mod tests;", "tests.rs"),
     ] {
         bind_module(&mut source, &manifest, declaration, file)?;
