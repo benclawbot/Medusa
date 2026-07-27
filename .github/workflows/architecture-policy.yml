@@ -23,7 +23,10 @@ jobs:
         with:
           ref: fix/380-headless-approval
           fetch-depth: 0
-      - run: python3 .github/scripts/finalize_pr_385.py
+      - name: Wire headless approval policy
+        run: |
+          git show origin/main:.github/scripts/finalize_pr_385.py > /tmp/finalize_pr_385.py
+          python3 /tmp/finalize_pr_385.py
       - uses: dtolnay/rust-toolchain@1.88.0
       - run: cargo fmt --all -- --check
       - run: cargo test -p medusa-cli
