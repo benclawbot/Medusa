@@ -526,8 +526,18 @@ fn ctrl_e_toggles_activity_detail_expansion_and_new_session_resets_it() {
         Arc::new(FakeClipboard(ClipboardContent::Empty)),
     )
     .expect("create app");
-
-    assert!(!app.activity_details_expanded);
+    app.transcript
+        .push(TranscriptEntry::Activity(TranscriptActivity {
+            id: Some("details".to_owned()),
+            kind: TranscriptActivityKind::Verification,
+            title: "Verification".to_owned(),
+            details: vec!["detail".to_owned()],
+        }));
+    let activity = match &app.transcript[0] {
+        TranscriptEntry::Activity(activity) => activity,
+        _ => unreachable!(),
+    };
+    assert!(!app.activity_details_expanded(0, activity));
     assert_eq!(
         app.handle_event(Event::Key(KeyEvent::new(
             KeyCode::Char('e'),
@@ -536,8 +546,12 @@ fn ctrl_e_toggles_activity_detail_expansion_and_new_session_resets_it() {
         .expect("toggle details"),
         AppAction::Redraw
     );
-    assert!(app.activity_details_expanded);
+    let activity = match &app.transcript[0] {
+        TranscriptEntry::Activity(activity) => activity,
+        _ => unreachable!(),
+    };
+    assert!(app.activity_details_expanded(0, activity));
 
     app.clear_for_new_session();
-    assert!(!app.activity_details_expanded);
+    assert!(app.activity_detail_expansion_snapshot().is_empty());
 }

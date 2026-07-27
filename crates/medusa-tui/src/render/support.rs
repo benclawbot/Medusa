@@ -72,7 +72,7 @@ fn activity_group_heading(group: ActivityGroup) -> StyledLine {
 pub(crate) fn transcript_lines(app: &AppState, width: u16) -> Vec<StyledLine> {
     let mut lines = Vec::new();
     let mut previous_activity_group = None;
-    for entry in &app.transcript {
+    for (entry_index, entry) in app.transcript.iter().enumerate() {
         match entry {
             TranscriptEntry::User(draft) => {
                 previous_activity_group = None;
@@ -119,7 +119,10 @@ pub(crate) fn transcript_lines(app: &AppState, width: u16) -> Vec<StyledLine> {
                     lines.push(activity_group_heading(group));
                     previous_activity_group = Some(group);
                 }
-                lines.extend(activity_lines(activity, app.activity_details_expanded));
+                lines.extend(activity_lines(
+                    activity,
+                    app.activity_details_expanded(entry_index, activity),
+                ));
             }
             TranscriptEntry::System(message) => {
                 previous_activity_group = None;

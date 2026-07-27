@@ -358,6 +358,75 @@ mod tests {
     }
 
     #[test]
+    fn ctrl_e_expands_only_the_latest_activity_with_details() {
+        let directory = tempfile::tempdir().expect("tempdir");
+        let mut app = AppState::new(
+            directory.path().to_path_buf(),
+            "per-activity-details",
+            "",
+            Arc::new(UnsupportedClipboard),
+        )
+        .expect("app");
+        app.dismiss_welcome_for_event(&Event::Paste(String::new()));
+        app.transcript.extend([
+            TranscriptEntry::Activity(TranscriptActivity {
+                id: Some("first".to_owned()),
+                kind: TranscriptActivityKind::Verification,
+                title: "First verification".to_owned(),
+                details: (1..=8).map(|index| format!("first {index}")).collect(),
+            }),
+            TranscriptEntry::Activity(TranscriptActivity {
+                id: Some("second".to_owned()),
+                kind: TranscriptActivityKind::Verification,
+                title: "Second verification".to_owned(),
+                details: (1..=8).map(|index| format!("second {index}")).collect(),
+            }),
+        ]);
+
+        let ctrl_e = Event::Key(crossterm::event::KeyEvent::new(
+            KeyCode::Char('e'),
+            KeyModifiers::CONTROL,
+        ));
+        assert!(matches!(
+            app.handle_event(ctrl_e.clone()).expect("expand"),
+            AppAction::Redraw
+        ));
+        assert!(!app.activity_details_expanded(
+            0,
+            match &app.transcript[0] {
+                TranscriptEntry::Activity(activity) => activity,
+                _ => unreachable!(),
+            },
+        ));
+        assert!(app.activity_details_expanded(
+            1,
+            match &app.transcript[1] {
+                TranscriptEntry::Activity(activity) => activity,
+                _ => unreachable!(),
+            },
+        ));
+
+        app.transcript
+            .push(TranscriptEntry::Activity(TranscriptActivity {
+                id: None,
+                kind: TranscriptActivityKind::Progress,
+                title: "Legacy activity".to_owned(),
+                details: vec!["legacy detail".to_owned()],
+            }));
+        assert!(matches!(
+            app.handle_event(ctrl_e).expect("expand legacy"),
+            AppAction::Redraw
+        ));
+        assert!(app.activity_details_expanded(
+            2,
+            match &app.transcript[2] {
+                TranscriptEntry::Activity(activity) => activity,
+                _ => unreachable!(),
+            },
+        ));
+    }
+
+    #[test]
     fn spinner_changes_only_one_retained_frame_row() {
         let directory = tempfile::tempdir().expect("tempdir");
         let mut app = AppState::new(
