@@ -1,9 +1,9 @@
 name: Apply issue 378 patch
 
 on:
-  push:
+  pull_request:
     branches:
-      - fix/378-tool-output-details
+      - main
     paths:
       - .github/fix-378-trigger
 
