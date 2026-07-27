@@ -165,6 +165,8 @@ jobs:
       - uses: dtolnay/rust-toolchain@1.88.0
       - name: Refresh dependency lock for the merged PR graph
         run: cargo generate-lockfile
+      - name: Install Linux sandbox backend
+        run: sudo apt-get update && sudo apt-get install -y bubblewrap
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
