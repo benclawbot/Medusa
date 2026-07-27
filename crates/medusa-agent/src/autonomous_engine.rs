@@ -46,7 +46,7 @@ impl<P: ModelProvider> AgentEngine<P> {
         let mut execution = autonomous_execution::AutonomousExecution::load(session)?;
         execution.complete(session, task_id, worker_id)?;
         session.updated_at = OffsetDateTime::now_utc();
-        finalize_autonomous_completion(session, execution.is_complete())?;
+        finalize_autonomous_completion(session, &mut execution)?;
         persist(session)
     }
 
@@ -75,7 +75,7 @@ impl<P: ModelProvider> AgentEngine<P> {
         execution.review(session, task_id, reviewer_id, approved, feedback)?;
         let assignments = execution.dispatch_ready(session)?;
         session.updated_at = OffsetDateTime::now_utc();
-        finalize_autonomous_completion(session, execution.is_complete())?;
+        finalize_autonomous_completion(session, &mut execution)?;
         persist(session)?;
         Ok(assignment_pairs(assignments))
     }
@@ -196,13 +196,19 @@ fn assignment_pairs(
 
 fn finalize_autonomous_completion(
     session: &mut AgentSession,
-    execution_complete: bool,
+    execution: &mut autonomous_execution::AutonomousExecution,
 ) -> MedusaResult<()> {
-    if !execution_complete {
+    if !execution.is_complete() {
         session.completed = false;
         return Ok(());
     }
 
+    let artifact_paths = session
+        .tool_artifacts
+        .iter()
+        .filter_map(|path| path.strip_prefix(&session.repo).ok().unwrap_or(path).to_str())
+        .map(str::to_owned)
+        .collect::<Vec<_>>();
     append_event(
         session,
         Actor::System("autonomous_verification".to_owned()),
@@ -210,7 +216,7 @@ fn finalize_autonomous_completion(
             commands: Vec::new(),
         },
     )?;
-    let verification = targeted_verification_for_paths(&session.repo, &[])?;
+    let verification = targeted_verification_for_paths(&session.repo, &artifact_paths)?;
     append_event(
         session,
         Actor::System("autonomous_verification".to_owned()),
@@ -221,5 +227,8 @@ fn finalize_autonomous_completion(
     )?;
     session.evidence.extend(verification.evidence);
     session.completed = verification.passed;
+    if !verification.passed {
+        execution.reopen_last_completed(session)?;
+    }
     Ok(())
 }
