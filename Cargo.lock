@@ -1021,7 +1021,6 @@ dependencies = [
  "hex",
  "medusa-browser-client",
  "medusa-capabilities",
- "medusa-clearops",
  "medusa-commit-barrier",
  "medusa-config",
  "medusa-conflict-resolution",
@@ -1089,20 +1088,12 @@ dependencies = [
 ]
 
 [[package]]
-name = "medusa-clearops"
-version = "1.0.0"
-dependencies = [
- "serde",
-]
-
-[[package]]
 name = "medusa-cli"
 version = "1.0.0"
 dependencies = [
  "clap",
  "medusa-agent",
  "medusa-capabilities",
- "medusa-clearops",
  "medusa-config",
  "medusa-core",
  "medusa-daemon",
