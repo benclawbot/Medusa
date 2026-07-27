@@ -90,9 +90,9 @@ def validate(root: Path) -> None:
     cargo = tomllib.loads(cargo_text)
     metadata = cargo.get("workspace", {}).get("metadata", {}).get("medusa", {})
     expected = {
-        "production_execution_model": "multi-agent",
+        "production_execution_model": "single-agent-orchestrated",
         "production_orchestrator": "medusa-runtime::production_orchestrator",
-        "subagent_delegation": "bounded-parent-accountable",
+        "subagent_delegation": "planned-bounded-parent-accountable",
         "verification_gate": "repository",
     }
     if metadata != expected:
@@ -102,11 +102,15 @@ def validate(root: Path) -> None:
         )
 
     require(architecture, metadata["production_orchestrator"], "docs/ARCHITECTURE.md")
+    require(architecture, "one `AgentEngine`", "docs/ARCHITECTURE.md")
+    require(architecture, "does not yet dispatch subagents", "docs/ARCHITECTURE.md")
     require(architecture, "primary agent remains accountable", "docs/ARCHITECTURE.md")
     require(architecture, "repository verification gate", "docs/ARCHITECTURE.md")
     require(architecture, "platform- or prerequisite-limited", "docs/ARCHITECTURE.md")
+    require(architecture, "scripts/check-product-architecture.py", "docs/ARCHITECTURE.md")
     require(contributor, metadata["production_orchestrator"], "docs/CONTRIBUTOR-ARCHITECTURE.md")
     require(contributor, "primary agent validates evidence", "docs/CONTRIBUTOR-ARCHITECTURE.md")
+    require(contributor, "not dispatched by production `run_prompt`", "docs/CONTRIBUTOR-ARCHITECTURE.md")
 
 
 if __name__ == "__main__":
