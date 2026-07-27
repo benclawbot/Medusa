@@ -32,13 +32,13 @@ Medusa has one production runtime with three user-facing entry points:
 ### Terminal UI
 
 <p align="center">
-  <img src="docs/assets/medusa-tui.svg" alt="Medusa terminal interface during a verified coding task" width="100%">
+  <img src="docs/assets/medusa-tui.png" alt="Medusa terminal interface during a verified coding task" width="100%">
 </p>
 
 ### Desktop application
 
 <p align="center">
-  <img src="docs/assets/medusa-desktop.svg" alt="Medusa desktop application showing chat, plan, activity, and usage" width="100%">
+  <img src="docs/assets/medusa-desktop.png" alt="Medusa desktop application showing chat, plan, activity, and usage" width="100%">
 </p>
 
 ## Installation
