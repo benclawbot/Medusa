@@ -26,6 +26,7 @@ path = "src/product_acceptance.rs"
 
 [dependencies]
 clap = { version = "4.5", features = ["derive"] }
+hex.workspace = true
 medusa-agent = { path = "../medusa-agent" }
 medusa-capabilities = { path = "../medusa-capabilities" }
 medusa-clearops = { path = "../medusa-clearops" }
@@ -36,6 +37,7 @@ medusa-daemon = { path = "../medusa-daemon" }
 medusa-extensions = { path = "../medusa-extensions" }
 medusa-github = { path = "../medusa-github" }
 medusa-hardening = { path = "../medusa-hardening" }
+medusa-protocol.workspace = true
 medusa-provider = { path = "../medusa-provider" }
 medusa-runtime = { path = "../medusa-runtime" }
 medusa-tui = { path = "../medusa-tui" }
@@ -43,6 +45,7 @@ medusa-update = { path = "../medusa-update" }
 reqwest.workspace = true
 serde.workspace = true
 serde_json.workspace = true
+sha2.workspace = true
 toml.workspace = true
 walkdir = "2.5"
 
