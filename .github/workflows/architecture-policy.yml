@@ -4,94 +4,15 @@ on:
   push:
     branches: [main]
   pull_request:
-    types: [opened, synchronize, reopened]
 
 permissions:
-  contents: write
+  contents: read
 
 concurrency:
   group: architecture-policy-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
-  apply-issue-378:
-    if: github.event_name == 'pull_request' && github.event.pull_request.number == 382
-    name: Apply issue 378 source fix
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          ref: fix/378-tool-output-details
-          fetch-depth: 0
-      - uses: dtolnay/rust-toolchain@1.88.0
-      - name: Apply runtime patch
-        shell: python
-        run: |
-          from pathlib import Path
-
-          path = Path('crates/medusa-runtime/src/support.rs')
-          lines = path.read_text().splitlines()
-
-          start = next(i for i, line in enumerate(lines) if 'AgentUpdate::ToolOutput {' in line)
-          end = next(i for i in range(start + 1, len(lines)) if lines[i].strip() == '_ => {}')
-
-          output_line = next(i for i in range(start, min(start + 12, end)) if lines[i].strip() == 'output: _,')
-          lines[output_line] = lines[output_line].replace('output: _,', 'output,')
-
-          detail_lines = [
-              i for i in range(start, end)
-              if lines[i].strip() == 'details: Vec::new(),'
-          ]
-          if len(detail_lines) != 2:
-              raise SystemExit(f'expected two ToolOutput detail fields, found {len(detail_lines)}')
-          for i in detail_lines:
-              indent = lines[i][:-len(lines[i].lstrip())]
-              lines[i] = f'{indent}details: tool_output_details(output),'
-
-          if not any('fn tool_output_details(' in line for line in lines):
-              summarize = next(i for i, line in enumerate(lines) if line.startswith('fn summarize(value: &str)'))
-              helper = [
-                  'fn tool_output_details(output: &str) -> Vec<String> {',
-                  '    let output = output.trim();',
-                  '    if output.is_empty() {',
-                  '        Vec::new()',
-                  '    } else {',
-                  '        output.lines().map(str::to_owned).collect()',
-                  '    }',
-                  '}',
-                  '',
-              ]
-              lines[summarize:summarize] = helper
-
-          if not any('tool_output_details("stdout line' in line for line in lines):
-              anchor = next(
-                  i for i, line in enumerate(lines)
-                  if 'assert!(summarize(&"x".repeat(150)).ends_with("..."));' in line
-              )
-              tests = [
-                  '        assert!(tool_output_details("  \\n").is_empty());',
-                  '        assert_eq!(',
-                  '            tool_output_details("stdout line\\nstderr: command failed\\n"),',
-                  '            vec!["stdout line", "stderr: command failed"]',
-                  '        );',
-              ]
-              lines[anchor + 1:anchor + 1] = tests
-
-          path.write_text('\n'.join(lines) + '\n')
-          Path('.github/fix-378-trigger').unlink(missing_ok=True)
-          Path('.github/workflows/fix-378.yml').unlink(missing_ok=True)
-      - run: cargo fmt --all
-      - run: cargo fmt --all -- --check
-      - run: cargo test -p medusa-runtime
-        continue-on-error: true
-      - name: Commit PR fix
-        run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add -A
-          git commit -m "fix(runtime): surface tool output details"
-          git push origin HEAD:fix/378-tool-output-details
-
   architecture-policy:
     name: Shipped crate reachability
     runs-on: ubuntu-latest
