@@ -260,6 +260,8 @@ Platform support does not imply identical containment internals or operating-sys
 
 The README is the product overview and installation guide. Retained documentation describes current operation:
 
+- [Product architecture: Plan, Execute Safely, Recover](docs/ARCHITECTURE.md)
+- [Contributor architecture map](docs/CONTRIBUTOR-ARCHITECTURE.md)
 - [Configuration](docs/CONFIGURATION.md)
 - [Release process](docs/RELEASE.md)
 - [Release compatibility](docs/COMPATIBILITY.md)

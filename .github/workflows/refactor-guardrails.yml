@@ -12,6 +12,7 @@ on:
       - 'scripts/test-workflow-hygiene.sh'
       - 'scripts/check-capability-evidence.py'
       - 'scripts/test-capability-evidence.py'
+      - 'scripts/check-product-architecture.py'
       - 'docs/**'
       - '.github/workflows/**'
   push:
@@ -26,6 +27,7 @@ on:
       - 'scripts/test-workflow-hygiene.sh'
       - 'scripts/check-capability-evidence.py'
       - 'scripts/test-capability-evidence.py'
+      - 'scripts/check-product-architecture.py'
       - 'docs/**'
       - '.github/workflows/**'
 
@@ -85,3 +87,5 @@ jobs:
         run: python3 scripts/test-capability-evidence.py
       - name: Validate repository capability evidence
         run: python3 scripts/check-capability-evidence.py
+      - name: Validate product architecture and production metadata
+        run: python3 scripts/check-product-architecture.py
