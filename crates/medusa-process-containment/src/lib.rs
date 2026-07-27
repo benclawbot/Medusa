@@ -11,8 +11,8 @@ mod flatbuffer_builder;
 mod windows;
 
 #[cfg(windows)]
-pub(crate) use flatbuffer_builder::FlatBufferBuilder;
-#[cfg(windows)]
 pub use base_container::{WindowsSandboxRestrictions, run_appcontainer};
+#[cfg(windows)]
+pub(crate) use flatbuffer_builder::FlatBufferBuilder;
 #[cfg(windows)]
 pub use windows::{WindowsJob, process_is_alive};
