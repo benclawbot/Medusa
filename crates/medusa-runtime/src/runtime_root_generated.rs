@@ -1,3 +1,5 @@
+mod recovery;
+
 include!(concat!(env!("OUT_DIR"), "/runtime_generated.rs"));
 
 #[rustfmt::skip]
