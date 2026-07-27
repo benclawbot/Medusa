@@ -48,11 +48,34 @@ pub(super) fn center_or_crop(line: &str, block_width: usize, width: u16) -> Stri
         .collect()
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum ActivityGroup {
+    Execution,
+    Verification,
+}
+
+fn activity_group(activity: &TranscriptActivity) -> ActivityGroup {
+    if matches!(activity.kind, TranscriptActivityKind::Verification) {
+        ActivityGroup::Verification
+    } else {
+        ActivityGroup::Execution
+    }
+}
+
+fn activity_group_heading(group: ActivityGroup) -> StyledLine {
+    match group {
+        ActivityGroup::Execution => StyledLine::new("Execution activity", Color::DarkYellow),
+        ActivityGroup::Verification => StyledLine::new("Verification evidence", Color::Blue),
+    }
+}
+
 pub(crate) fn transcript_lines(app: &AppState, width: u16) -> Vec<StyledLine> {
     let mut lines = Vec::new();
+    let mut previous_activity_group = None;
     for entry in &app.transcript {
         match entry {
             TranscriptEntry::User(draft) => {
+                previous_activity_group = None;
                 let text = if draft.text.is_empty() {
                     "(attachment-only prompt)"
                 } else {
@@ -81,13 +104,27 @@ pub(crate) fn transcript_lines(app: &AppState, width: u16) -> Vec<StyledLine> {
                     ));
                 }
             }
-            TranscriptEntry::Assistant(text) => lines.extend(
-                super::markdown::markdown_block_lines("Medusa  ", Color::Magenta, text, width),
-            ),
+            TranscriptEntry::Assistant(text) => {
+                previous_activity_group = None;
+                lines.extend(super::markdown::markdown_block_lines(
+                    "Medusa  ",
+                    Color::Magenta,
+                    text,
+                    width,
+                ));
+            }
             TranscriptEntry::Activity(activity) => {
+                let group = activity_group(activity);
+                if previous_activity_group != Some(group) {
+                    lines.push(activity_group_heading(group));
+                    previous_activity_group = Some(group);
+                }
                 lines.extend(activity_lines(activity, app.activity_details_expanded));
             }
-            TranscriptEntry::System(message) => lines.push(system_line(message)),
+            TranscriptEntry::System(message) => {
+                previous_activity_group = None;
+                lines.push(system_line(message));
+            }
         }
     }
     lines
@@ -647,15 +684,18 @@ pub(crate) fn activity_lines(activity: &TranscriptActivity, expanded: bool) -> V
     } else {
         Color::Grey
     };
-    let marker = if matches!(activity.kind, TranscriptActivityKind::Error) {
-        "✻"
-    } else {
-        "●"
+    let (marker, lifecycle) = match activity.kind {
+        TranscriptActivityKind::Done => ("✓", "succeeded"),
+        TranscriptActivityKind::Error => ("✻", "failed"),
+        TranscriptActivityKind::Verification => ("◇", "verified"),
+        TranscriptActivityKind::Assistant
+        | TranscriptActivityKind::Progress
+        | TranscriptActivityKind::Tool => ("●", "running"),
     };
     let mut lines = vec![StyledLine::with_marker(
         format!("{marker} "),
         color,
-        &activity.title,
+        format!("[{lifecycle}] {}", activity.title),
         foreground,
     )];
     if !matches!(

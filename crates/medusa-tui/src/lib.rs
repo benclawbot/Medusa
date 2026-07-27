@@ -310,8 +310,51 @@ mod tests {
                 false,
             );
             assert_eq!(lines.len(), 1);
-            assert_eq!(lines[0].text, "High-level step");
+            assert_eq!(lines[0].text, "[running] High-level step");
         }
+    }
+
+    #[test]
+    fn structured_activity_groups_and_lifecycle_labels_render() {
+        let directory = tempfile::tempdir().expect("tempdir");
+        let mut app = AppState::new(
+            directory.path().to_path_buf(),
+            "structured-activity",
+            "",
+            Arc::new(UnsupportedClipboard),
+        )
+        .expect("app");
+        app.transcript.extend([
+            TranscriptEntry::Activity(TranscriptActivity {
+                id: Some("run".to_owned()),
+                kind: TranscriptActivityKind::Progress,
+                title: "Inspect repository".to_owned(),
+                details: vec![],
+            }),
+            TranscriptEntry::Activity(TranscriptActivity {
+                id: Some("done".to_owned()),
+                kind: TranscriptActivityKind::Done,
+                title: "Patch applied".to_owned(),
+                details: vec![],
+            }),
+            TranscriptEntry::Activity(TranscriptActivity {
+                id: Some("verify".to_owned()),
+                kind: TranscriptActivityKind::Verification,
+                title: "Focused tests passed".to_owned(),
+                details: vec!["cargo test -p medusa-tui".to_owned()],
+            }),
+        ]);
+
+        let lines = transcript_lines(&app, 100);
+        let text = lines
+            .iter()
+            .map(|line| line.text.as_str())
+            .collect::<Vec<_>>();
+        assert!(text.contains(&"Execution activity"));
+        assert!(text.contains(&"[running] Inspect repository"));
+        assert!(text.contains(&"[succeeded] Patch applied"));
+        assert!(text.contains(&"Verification evidence"));
+        assert!(text.contains(&"[verified] Focused tests passed"));
     }
 
     #[test]
