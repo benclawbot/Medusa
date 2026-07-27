@@ -4,38 +4,15 @@ on:
   push:
     branches: [main]
   pull_request:
-    types: [opened, reopened]
 
 permissions:
-  contents: write
+  contents: read
 
 concurrency:
   group: architecture-policy-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
-  finalize-pr-382:
-    if: github.event_name == 'pull_request' && github.event.pull_request.number == 382
-    name: Finalize PR 382
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          ref: fix/378-tool-output-details
-          fetch-depth: 0
-      - uses: dtolnay/rust-toolchain@1.88.0
-      - run: cargo fmt --all -- --check
-      - run: cargo test -p medusa-runtime --lib
-      - name: Restore lockfile and commit cleanup
-        run: |
-          git fetch origin main
-          git checkout origin/main -- Cargo.lock
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add Cargo.lock
-          git commit -m "chore: restore unrelated lockfile" || exit 0
-          git push origin HEAD:fix/378-tool-output-details
-
   architecture-policy:
     name: Shipped crate reachability
     runs-on: ubuntu-latest
