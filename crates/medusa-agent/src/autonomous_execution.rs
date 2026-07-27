@@ -297,10 +297,7 @@ impl AutonomousExecution {
         self.sync_and_persist(session)
     }
 
-    pub fn reopen_last_completed(
-        &mut self,
-        session: &mut AgentSession,
-    ) -> MedusaResult<()> {
+    pub fn reopen_last_completed(&mut self, session: &mut AgentSession) -> MedusaResult<()> {
         self.ensure_session(session)?;
         let task_id = (0..session.plan.len())
             .rev()
