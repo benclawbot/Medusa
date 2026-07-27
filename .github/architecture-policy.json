@@ -28,7 +28,17 @@
     "crates/medusa-cli/src/skill_graduation.rs",
     "crates/medusa-cli/src/skill_probation.rs",
     "crates/medusa-cli/src/skill_lifecycle.rs",
-    "crates/medusa-cli/src/oauth_preflight.rs"
+    "crates/medusa-cli/src/oauth_preflight.rs",
+    "crates/medusa-runtime/src/commands.rs",
+    "crates/medusa-runtime/src/error.rs",
+    "crates/medusa-runtime/src/generated_lib.rs",
+    "crates/medusa-runtime/src/lib.rs",
+    "crates/medusa-runtime/src/lifecycle.rs",
+    "crates/medusa-runtime/src/production_orchestrator.rs",
+    "crates/medusa-runtime/src/prompt.rs",
+    "crates/medusa-runtime/src/runtime_impl.rs",
+    "crates/medusa-runtime/src/support.rs",
+    "crates/medusa-runtime/src/tests.rs"
   ],
   "crate_exemptions": {}
 }
