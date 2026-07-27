@@ -46,95 +46,65 @@ fn main() {
 fn run() -> Result<(), Box<dyn std::error::Error>> {
     let output_dir = parse_output_dir()?;
     fs::create_dir_all(&output_dir)?;
-
     let scenarios = scenarios_for_platform();
     let mut results = Vec::with_capacity(scenarios.len());
-
     for scenario in scenarios {
         println!("==> {}: {}", scenario.id, scenario.guarantee);
         let result = execute_scenario(&scenario, &output_dir)?;
         println!("    {} ({} ms)", result.status, result.duration_ms);
         results.push(result);
     }
-
     let passed = results.iter().filter(|result| result.status == "passed").count();
     let failed = results.len().saturating_sub(passed);
     let summary = AcceptanceSummary {
         schema_version: 1,
-        generated_unix_seconds: SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_secs(),
+        generated_unix_seconds: SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_secs(),
         platform: env::consts::OS.to_string(),
         passed,
         failed,
         total: results.len(),
         scenarios: results,
     };
-
     let summary_path = output_dir.join("summary.json");
     fs::write(&summary_path, serde_json::to_vec_pretty(&summary)?)?;
     println!("summary: {}", summary_path.display());
-
     if failed > 0 {
         return Err(format!("{failed} product acceptance scenario(s) failed").into());
     }
-
     Ok(())
 }
 
 fn parse_output_dir() -> Result<PathBuf, Box<dyn std::error::Error>> {
     let mut args = env::args().skip(1);
     let mut output = PathBuf::from("target/product-acceptance");
-
     while let Some(arg) = args.next() {
         match arg.as_str() {
-            "--output" => {
-                let value = args.next().ok_or("--output requires a path")?;
-                output = PathBuf::from(value);
-            }
+            "--output" => output = PathBuf::from(args.next().ok_or("--output requires a path")?),
             "--help" | "-h" => {
-                println!(
-                    "Usage: cargo product-acceptance [--output PATH]\n\nRuns the authoritative product-level safety and recovery acceptance suite."
-                );
+                println!("Usage: cargo product-acceptance [--output PATH]\n\nRuns the authoritative product-level safety and recovery acceptance suite.");
                 std::process::exit(0);
             }
             other => return Err(format!("unknown argument: {other}").into()),
         }
     }
-
     Ok(output)
 }
 
 fn scenarios_for_platform() -> Vec<Scenario> {
     let mut scenarios = vec![
         Scenario {
-            id: "production-runtime",
-            guarantee: "The shared production runtime used by shipped entrypoints passes its full integration suite.",
-            package: "medusa-runtime",
+            id: "production-orchestration",
+            guarantee: "The production orchestration layer passes its authoritative integration suite.",
+            package: "medusa-execution-orchestrator",
             filter: None,
             required_marker: None,
         },
         Scenario {
             id: "headless-entrypoint",
-            guarantee: "The shipped CLI and headless lifecycle pass their integration suite.",
+            guarantee: "The shipped CLI retains the supported headless run entrypoint.",
             package: "medusa-cli",
-            filter: None,
-            required_marker: None,
-        },
-        Scenario {
-            id: "process-tree-containment",
-            guarantee: "The platform containment backend enforces bounded process execution and process-tree cleanup.",
-            package: "medusa-process-containment",
-            filter: None,
-            required_marker: None,
-        },
-        Scenario {
-            id: "interruption-resume",
-            guarantee: "An interrupted repository repair resumes through durable runtime state with exact evidence.",
-            package: "medusa-agent",
-            filter: Some("fixture_bug_fix_survives_restart_with_exact_evidence"),
-            required_marker: Some("fixture_bug_fix_survives_restart_with_exact_evidence"),
+            filter: Some("headless_run_remains_available"),
+            required_marker: Some("headless_run_remains_available"),
         },
         Scenario {
             id: "checkpoint-restore",
@@ -173,6 +143,38 @@ fn scenarios_for_platform() -> Vec<Scenario> {
         },
     ];
 
+    if env::consts::OS == "windows" {
+        scenarios.push(Scenario {
+            id: "containment-fail-closed",
+            guarantee: "Windows containment fails closed when a requested program cannot be resolved or the platform backend is unavailable.",
+            package: "medusa-process-containment",
+            filter: Some("unresolvable_programs_fail_closed"),
+            required_marker: Some("unresolvable_programs_fail_closed"),
+        });
+        scenarios.push(Scenario {
+            id: "interruption-replay",
+            guarantee: "Interrupted execution can be replayed from durable evidence on Windows.",
+            package: "medusa-execution-replay",
+            filter: None,
+            required_marker: None,
+        });
+    } else {
+        scenarios.push(Scenario {
+            id: "process-tree-containment",
+            guarantee: "The platform containment backend enforces bounded process execution and process-tree cleanup.",
+            package: "medusa-process-containment",
+            filter: None,
+            required_marker: None,
+        });
+        scenarios.push(Scenario {
+            id: "interruption-resume",
+            guarantee: "An interrupted repository repair resumes through durable runtime state with exact evidence.",
+            package: "medusa-agent",
+            filter: Some("fixture_bug_fix_survives_restart_with_exact_evidence"),
+            required_marker: Some("fixture_bug_fix_survives_restart_with_exact_evidence"),
+        });
+    }
+
     if env::consts::OS == "linux" {
         scenarios.push(Scenario {
             id: "filesystem-network-boundary",
@@ -182,57 +184,41 @@ fn scenarios_for_platform() -> Vec<Scenario> {
             required_marker: Some("sandbox_blocks_network_and_external_writes"),
         });
     }
-
     scenarios
 }
 
-fn execute_scenario(
-    scenario: &Scenario,
-    output_dir: &Path,
-) -> Result<ScenarioResult, Box<dyn std::error::Error>> {
-    let mut args = vec![
-        "test".to_string(),
-        "-p".to_string(),
-        scenario.package.to_string(),
-        "--locked".to_string(),
-    ];
+fn execute_scenario(scenario: &Scenario, output_dir: &Path) -> Result<ScenarioResult, Box<dyn std::error::Error>> {
+    let mut args = vec!["test".to_string(), "-p".to_string(), scenario.package.to_string(), "--locked".to_string()];
     if let Some(filter) = scenario.filter {
         args.push(filter.to_string());
     }
     args.push("--".to_string());
     args.push("--nocapture".to_string());
 
+    let target_dir = output_dir.join("targets").join(scenario.id);
+    fs::create_dir_all(&target_dir)?;
     let started = Instant::now();
-    let output = Command::new(cargo_program()).args(&args).output()?;
+    let output = Command::new(cargo_program())
+        .args(&args)
+        .env("CARGO_TARGET_DIR", &target_dir)
+        .output()?;
     let duration = started.elapsed();
     let combined = combine_output(&output);
     let log_path = output_dir.join(format!("{}.log", scenario.id));
     fs::write(&log_path, combined.as_bytes())?;
-
-    let marker_present = scenario
-        .required_marker
-        .is_none_or(|marker| combined.contains(marker));
+    let marker_present = scenario.required_marker.is_none_or(|marker| combined.contains(marker));
     let passed = output.status.success() && marker_present;
     let detail = if !output.status.success() {
-        Some(format!(
-            "cargo exited with status {}",
-            output
-                .status
-                .code()
-                .map_or_else(|| "terminated".to_string(), |code| code.to_string())
-        ))
+        Some(format!("cargo exited with status {}", output.status.code().map_or_else(|| "terminated".to_string(), |code| code.to_string())))
     } else if !marker_present {
         Some("required test marker was not present; the filter may have matched zero tests".to_string())
     } else {
         None
     };
-
     Ok(ScenarioResult {
         id: scenario.id.to_string(),
         guarantee: scenario.guarantee.to_string(),
-        command: std::iter::once(cargo_program().to_string())
-            .chain(args)
-            .collect(),
+        command: std::iter::once(cargo_program().to_string()).chain(args).collect(),
         status: if passed { "passed" } else { "failed" }.to_string(),
         duration_ms: duration.as_millis(),
         log: log_path.display().to_string(),
