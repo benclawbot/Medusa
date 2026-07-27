@@ -9,10 +9,12 @@ fi
 
 cargo build --release --locked --bin medusa
 MEDUSA="$(pwd)/target/release/medusa"
-ROOT="$(mktemp -d)"
+# Keep the fixture outside /tmp: Linux containment mounts a private tmpfs at
+# /tmp, so a repository created there is intentionally invisible in bwrap.
+ROOT="$(pwd)/target/live-e2e-work"
 ARTIFACTS="$(pwd)/live-e2e-artifacts"
 REPO="$ROOT/multi-language-repair"
-rm -rf "$ARTIFACTS"
+rm -rf "$ROOT" "$ARTIFACTS"
 mkdir -p "$ARTIFACTS" "$REPO/src" "$REPO/.medusa/sessions"
 test -d "$REPO/.medusa/sessions"
 test -w "$REPO/.medusa/sessions"
