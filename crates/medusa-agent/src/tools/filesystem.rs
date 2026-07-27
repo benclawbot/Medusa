@@ -68,7 +68,31 @@ fn repository_listing(repo: &Path) -> String {
     entries.join("\n")
 }
 
+/// Rejects mutations aimed at the Git metadata directory.
+///
+/// Repository-relative writes are otherwise unattended, and `.git/hooks`
+/// entries execute on the next Git invocation, which would let a repository
+/// write escalate into code execution outside the command sandbox. Reads are
+/// unaffected so that Git state remains inspectable.
+fn reject_git_metadata(relative: &str) -> MedusaResult<()> {
+    let first = Path::new(relative)
+        .components()
+        .find_map(|component| match component {
+            std::path::Component::Normal(name) => name.to_str(),
+            _ => None,
+        });
+    if first.is_some_and(|name| name.eq_ignore_ascii_case(".git")) {
+        return Err(medusa_core::MedusaError::new(
+            medusa_core::ErrorCode::PolicyDenied,
+            medusa_core::ErrorCategory::Policy,
+            format!("refusing to modify Git metadata: {relative}"),
+        ));
+    }
+    Ok(())
+}
+
 pub(crate) fn write(repo: &Path, relative: &str, content: &str) -> MedusaResult<String> {
+    reject_git_metadata(relative)?;
     apply_atomic(
         repo,
         &[FileMutation {
@@ -80,6 +104,7 @@ pub(crate) fn write(repo: &Path, relative: &str, content: &str) -> MedusaResult<
 }
 
 pub(crate) fn create_dir(repo: &Path, relative: &str) -> MedusaResult<String> {
+    reject_git_metadata(relative)?;
     let path = safe_path(repo, relative)?;
     fs::create_dir_all(&path)?;
     Ok(format!("created directory {}", path.display()))

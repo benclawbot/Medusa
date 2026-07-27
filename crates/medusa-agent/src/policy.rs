@@ -72,15 +72,29 @@ pub(crate) fn safe_path(repo: &Path, relative: &str) -> MedusaResult<PathBuf> {
 pub fn validate_shell_command(program: &str, args: &[String]) -> MedusaResult<()> {
     validate_shell_command_hard_denials(program, args)?;
     #[cfg(not(target_os = "linux"))]
-    validate_portable_shell_command(
-        &Path::new(program)
-            .file_name()
-            .and_then(|name| name.to_str())
-            .unwrap_or(program)
-            .to_ascii_lowercase(),
-        args,
-    )?;
+    validate_portable_shell_command(&portable_program_name(program), args)?;
     Ok(())
+}
+
+/// Normalises a program name for the portable allowlist.
+///
+/// Windows resolves commands to `cargo.exe` or `git.exe`, so the executable
+/// extension is removed before matching the allowlist. The hard-denial list
+/// keeps comparing the full file name, which is why entries such as `cmd.exe`
+/// are spelled out there.
+#[cfg(not(target_os = "linux"))]
+fn portable_program_name(program: &str) -> String {
+    let name = Path::new(program)
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or(program)
+        .to_ascii_lowercase();
+    for extension in [".exe", ".com", ".cmd", ".bat"] {
+        if let Some(stem) = name.strip_suffix(extension) {
+            return stem.to_owned();
+        }
+    }
+    name
 }
 
 pub(crate) fn validate_shell_command_hard_denials(
@@ -359,6 +373,33 @@ fn sandbox_unavailable(message: impl Into<String>) -> MedusaError {
         .context
         .insert("effective_restrictions".into(), serde_json::json!([]));
     error
+}
+
+#[cfg(all(test, not(target_os = "linux")))]
+mod portable_tests {
+    use super::*;
+
+    #[test]
+    fn windows_executable_extensions_still_match_the_allowlist() {
+        // Windows resolves `cargo` to `cargo.exe`; both must be accepted.
+        validate_shell_command("cargo", &["test".to_owned()]).expect("cargo test");
+        validate_shell_command("cargo.exe", &["test".to_owned()]).expect("cargo.exe test");
+        validate_shell_command("git.exe", &["status".to_owned()]).expect("git.exe status");
+        validate_shell_command(r"C:\Users\dev\.cargo\bin\cargo.exe", &["build".to_owned()])
+            .expect("absolute cargo.exe");
+    }
+
+    #[test]
+    fn extension_stripping_does_not_widen_the_allowlist() {
+        assert!(validate_shell_command("python.exe", &["-c".to_owned()]).is_err());
+        assert!(validate_shell_command("cargo.exe", &["publish".to_owned()]).is_err());
+    }
+
+    #[test]
+    fn hard_denials_still_match_windows_shell_executables() {
+        assert!(validate_shell_command("cmd.exe", &["/c".to_owned()]).is_err());
+        assert!(validate_shell_command("powershell.exe", &["-c".to_owned()]).is_err());
+    }
 }
 
 fn policy_denied(message: impl Into<String>) -> MedusaError {

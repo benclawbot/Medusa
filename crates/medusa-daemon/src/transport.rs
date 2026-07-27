@@ -381,34 +381,75 @@ mod platform {
             )));
         }
         let text = String::from_utf8_lossy(&output.stdout);
-        if !text.contains(&identity.sid) && !text.contains(&identity.account) {
+        let principals = acl_principals(path, &text);
+        if principals.is_empty() {
             return Err(io::Error::new(
                 io::ErrorKind::PermissionDenied,
-                "daemon endpoint ACL does not grant the current user",
+                "daemon endpoint ACL could not be read",
             ));
         }
-        for forbidden in [
-            "Everyone",
-            "Authenticated Users",
-            "BUILTIN\\Users",
-            "Users:",
-        ] {
-            if text.contains(forbidden) {
+        // `/grant:r` replaced the ACL, so the current user must be the only
+        // principal left. Comparing the granted entries against the caller
+        // identity keeps this check independent of the Windows display
+        // language, which localises both account names and the summary text.
+        for principal in &principals {
+            if !grants_identity(principal, identity) {
                 return Err(io::Error::new(
                     io::ErrorKind::PermissionDenied,
-                    format!("daemon endpoint ACL contains broad principal {forbidden}"),
+                    format!("daemon endpoint ACL contains foreign principal {principal}"),
                 ));
             }
         }
         Ok(())
     }
 
+    /// Extracts the granted principals from `icacls` output.
+    ///
+    /// Entries are rendered as `PRINCIPAL:(RIGHTS)`, with the inspected path
+    /// prefixed onto the first line only.
+    fn acl_principals(path: &Path, text: &str) -> Vec<String> {
+        let displayed = path.to_string_lossy().to_string();
+        let mut principals = Vec::new();
+        for line in text.lines() {
+            let entry = line
+                .strip_prefix(displayed.as_str())
+                .unwrap_or(line)
+                .trim_start();
+            let Some(index) = entry.find(":(") else {
+                continue;
+            };
+            let principal = entry[..index].trim();
+            if !principal.is_empty() {
+                principals.push(principal.to_owned());
+            }
+        }
+        principals
+    }
+
+    /// Compares an `icacls` principal against the caller identity.
+    ///
+    /// `icacls` resolves SIDs to account names, and `whoami` may report the
+    /// machine component in a different case, so both forms are compared
+    /// case-insensitively.
+    fn grants_identity(principal: &str, identity: &UserIdentity) -> bool {
+        principal.eq_ignore_ascii_case(&identity.account)
+            || principal.eq_ignore_ascii_case(&identity.sid)
+            || principal
+                .trim_start_matches('*')
+                .eq_ignore_ascii_case(&identity.sid)
+    }
+
     fn run_icacls(path: &Path, args: &[&str]) -> io::Result<()> {
-        let status = Command::new("icacls.exe").arg(path).args(args).status()?;
-        if status.success() {
+        // `.output()` keeps icacls progress text out of the inherited streams,
+        // which would otherwise interleave with agent and TUI output.
+        let output = Command::new("icacls.exe").arg(path).args(args).output()?;
+        if output.status.success() {
             Ok(())
         } else {
-            Err(io::Error::other(format!("icacls.exe failed with {status}")))
+            Err(io::Error::other(format!(
+                "icacls.exe failed with {}",
+                output.status
+            )))
         }
     }
 
