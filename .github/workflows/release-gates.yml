@@ -163,9 +163,11 @@ jobs:
   live-minimax-coding-e2e:
     if: ${{ github.event_name == 'workflow_dispatch' || github.event.pull_request.draft == false }}
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    timeout-minutes: 35
     env:
       MINIMAX_API_KEY: ${{ secrets.MINIMAX_API_KEY }}
+      LIVE_E2E_TIMEOUT_SECONDS: '1500'
+      LIVE_E2E_HEARTBEAT_SECONDS: '60'
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@1.88.0
@@ -192,7 +194,7 @@ jobs:
       - name: Mask live credential defensively
         shell: bash
         run: echo "::add-mask::$MINIMAX_API_KEY"
-      - name: Run three autonomous coding scenarios
+      - name: Run one autonomous session with three independent validations
         shell: bash
         run: bash scripts/live-coding-e2e.sh
       - uses: actions/upload-artifact@v4
@@ -200,4 +202,4 @@ jobs:
         with:
           name: live-minimax-coding-evidence
           path: live-e2e-artifacts
-          if-no-files-found: ignore
+          if-no-files-found: warn
