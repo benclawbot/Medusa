@@ -2,6 +2,8 @@
 mod action_history;
 #[path = "model.rs"]
 mod model;
+#[path = "session_history.rs"]
+mod session_history;
 #[path = "snapshot_builder.rs"]
 mod snapshot_builder;
 #[allow(unused_imports)]
@@ -13,6 +15,9 @@ pub use action_history::{
     record_authorized_action,
 };
 pub use model::*;
+pub use session_history::{
+    REVIEW_HISTORY_SCHEMA_VERSION, ReviewAuditExport, ReviewHistoryError, ReviewSessionHistory,
+};
 pub use snapshot_builder::{
     ChangeEvidence, HunkEvidence, ReviewSnapshotBuildError, ReviewSnapshotInput,
     build_review_snapshot,
