@@ -6,7 +6,12 @@ pub use medusa_recovery_coordinator::{
 };
 
 mod recovery {
-    use std::{convert::Infallible, fs, path::Path, time::{SystemTime, UNIX_EPOCH}};
+    use std::{
+        convert::Infallible,
+        fs,
+        path::Path,
+        time::{SystemTime, UNIX_EPOCH},
+    };
 
     use medusa_recovery_coordinator::{
         AuthorizedRecoveryAction, CheckpointPresentation, RecoveryActionExecutor,
@@ -58,9 +63,9 @@ mod recovery {
                     self.repository_fingerprint.clone(),
                     VerificationState::Incomplete,
                 ),
-                RecoveryOperation::Abandon => RecoveryExecutionOutcome::cancelled(
-                    VerificationState::Incomplete,
-                ),
+                RecoveryOperation::Abandon => {
+                    RecoveryExecutionOutcome::cancelled(VerificationState::Incomplete)
+                }
                 RecoveryOperation::RestoreCheckpoint => RecoveryExecutionOutcome::failed_closed(
                     "checkpoint payload restoration is not available in the runtime executor",
                     Some(self.repository_fingerprint.clone()),
