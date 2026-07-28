@@ -1,5 +1,4 @@
 use std::{
-    collections::BTreeMap,
     fs,
     path::{Path, PathBuf},
 };
@@ -139,15 +138,6 @@ impl MutationJournal {
                 later_mutation_ids: later,
             }
         }
-    }
-
-    #[must_use]
-    pub fn by_path(&self) -> BTreeMap<&str, Vec<&MutationRecord>> {
-        let mut grouped = BTreeMap::<&str, Vec<&MutationRecord>>::new();
-        for record in &self.records {
-            grouped.entry(&record.path).or_default().push(record);
-        }
-        grouped
     }
 }
 
