@@ -22,6 +22,7 @@ mod pull_requests;
 mod runtime {
     include!("runtime.rs");
     include!("runtime_resume.rs");
+    include!("runtime_recovery.rs");
 }
 mod sessions;
 #[cfg(test)]
@@ -57,7 +58,8 @@ use mutations::{
 use pull_requests::runtime_create_draft_pull_request;
 use runtime::{
     RuntimeRegistry, runtime_cancel, runtime_close, runtime_command, runtime_command_suggestions,
-    runtime_configure_model, runtime_poll, runtime_resume, runtime_start, runtime_submit,
+    runtime_configure_model, runtime_poll, runtime_recovery_action, runtime_resume, runtime_start,
+    runtime_submit,
 };
 use sessions::{runtime_list_sessions, runtime_read_session};
 use worktree::runtime_read_worktree;
@@ -77,6 +79,7 @@ pub fn run() -> tauri::Result<()> {
             runtime_cancel,
             runtime_poll,
             runtime_configure_model,
+            runtime_recovery_action,
             runtime_list_sessions,
             runtime_read_session,
             runtime_read_diff,
