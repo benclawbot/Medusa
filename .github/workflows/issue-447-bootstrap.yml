@@ -29,20 +29,22 @@ jobs:
         run: cargo fmt --all -- --check
 
       - name: Focused runtime tests
+        id: focused
         shell: bash
         run: |
           set +e
-          cargo test -p medusa-runtime command_processing_does_not_wait_for_capability_discovery 2>&1 | tee /tmp/issue-447-focused.log
-          status=${PIPESTATUS[0]}
-          if [ "$status" -ne 0 ]; then
-            tail -n 200 /tmp/issue-447-focused.log > .github/issue-447-failure.log
-            git config user.name github-actions[bot]
-            git config user.email 41898282+github-actions[bot]@users.noreply.github.com
-            git add .github/issue-447-failure.log
-            git commit -m "ci: capture issue 447 focused test failure"
-            git push origin HEAD:${{ github.head_ref }}
-          fi
+          cargo test -p medusa-runtime command_processing_does_not_wait_for_capability_discovery > /tmp/issue-447-focused.log 2>&1
+          status=$?
+          echo "status=$status" >> "$GITHUB_OUTPUT"
           exit "$status"
+
+      - name: Upload focused test diagnostics
+        if: failure() && steps.focused.outputs.status != '0'
+        uses: actions/upload-artifact@v4
+        with:
+          name: issue-447-focused-diagnostics
+          path: /tmp/issue-447-focused.log
+          if-no-files-found: error
 
       - name: Runtime test suite
         run: cargo test -p medusa-runtime
