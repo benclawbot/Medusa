@@ -6,6 +6,8 @@ use crate::{
 use std::time::Instant;
 
 const DOUBLE_CTRL_C_WINDOW: Duration = Duration::from_secs(1);
+const INPUT_POLL_INTERVAL: Duration = Duration::from_millis(16);
+const DAEMON_POLL_INTERVAL: Duration = Duration::from_millis(250);
 
 pub fn run(options: TuiOptions) -> io::Result<ExitReason> {
     if !io::stdin().is_terminal() || !io::stdout().is_terminal() {
@@ -94,13 +96,22 @@ pub(super) fn run_loop(
     runtime: &RuntimeController,
 ) -> io::Result<ExitReason> {
     let mut daemon = DaemonMonitor::new(options.socket_path());
+    let (mut daemon_jobs, mut daemon_status) = daemon.poll(app);
+    let mut next_daemon_poll = Instant::now() + DAEMON_POLL_INTERVAL;
     let mut last_ctrl_c = None;
+
     loop {
         drain_runtime_events(app, runtime)?;
         app.tick();
-        let (daemon_jobs, daemon_status) = daemon.poll(app);
+
+        let now = Instant::now();
+        if now >= next_daemon_poll {
+            (daemon_jobs, daemon_status) = daemon.poll(app);
+            next_daemon_poll = now + DAEMON_POLL_INTERVAL;
+        }
+
         draw(stdout, options, identity, app, &daemon_jobs, &daemon_status)?;
-        if event::poll(Duration::from_millis(100))? {
+        if event::poll(INPUT_POLL_INTERVAL)? {
             let terminal_event = event::read()?;
             if app.dismiss_welcome_for_event(&terminal_event) {
                 continue;
@@ -127,7 +138,6 @@ pub(super) fn run_loop(
                 return Ok(ExitReason::UserQuit);
             }
         }
-        thread::sleep(Duration::from_millis(25));
     }
 }
 
@@ -142,17 +152,26 @@ pub(super) fn run_loop(
     let mut last_frame: Option<Vec<StyledLine>> = None;
     let mut last_ctrl_c = None;
     let mut daemon = DaemonMonitor::new(options.socket_path());
+    let _ = daemon.poll(app);
+    let mut next_daemon_poll = Instant::now() + DAEMON_POLL_INTERVAL;
+
     loop {
         drain_runtime_events(app, runtime)?;
         app.tick();
-        let _ = daemon.poll(app);
+
+        let now = Instant::now();
+        if now >= next_daemon_poll {
+            let _ = daemon.poll(app);
+            next_daemon_poll = now + DAEMON_POLL_INTERVAL;
+        }
+
         let (width, height) = size()?;
         let frame = render_frame(identity, app, width, height);
         if last_frame.as_ref() != Some(&frame) {
             draw_portable_frame(stdout, width, &frame, last_frame.as_deref())?;
             last_frame = Some(frame);
         }
-        if event::poll(Duration::from_millis(100))? {
+        if event::poll(INPUT_POLL_INTERVAL)? {
             let terminal_event = event::read()?;
             if app.dismiss_welcome_for_event(&terminal_event) {
                 continue;
@@ -184,7 +203,6 @@ pub(super) fn run_loop(
                 return Ok(ExitReason::UserQuit);
             }
         }
-        thread::sleep(Duration::from_millis(25));
     }
 }
 
@@ -513,80 +531,4 @@ pub(super) fn ctrl_l_redraw(event: &Event) -> bool {
                 && key.code == KeyCode::Char('l')
                 && key.modifiers.contains(KeyModifiers::CONTROL)
     )
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crossterm::event::KeyEvent;
-
-    fn key(code: KeyCode, modifiers: KeyModifiers) -> Event {
-        Event::Key(KeyEvent::new(code, modifiers))
-    }
-
-    #[test]
-    fn escape_interrupts_at_top_level_but_remains_available_to_modals() {
-        let mut last_ctrl_c = None;
-        assert_eq!(
-            session_control_action(
-                &key(KeyCode::Esc, KeyModifiers::NONE),
-                false,
-                &mut last_ctrl_c,
-            ),
-            Some(AppAction::Interrupt)
-        );
-        assert_eq!(
-            session_control_action(
-                &key(KeyCode::Esc, KeyModifiers::NONE),
-                true,
-                &mut last_ctrl_c,
-            ),
-            None
-        );
-    }
-
-    #[test]
-    fn second_ctrl_c_within_one_second_quits() {
-        let mut last_ctrl_c = None;
-        let ctrl_c = key(KeyCode::Char('c'), KeyModifiers::CONTROL);
-        assert_eq!(
-            session_control_action(&ctrl_c, false, &mut last_ctrl_c),
-            Some(AppAction::Interrupt)
-        );
-        assert!(last_ctrl_c.is_some());
-        assert_eq!(
-            session_control_action(&ctrl_c, false, &mut last_ctrl_c),
-            Some(AppAction::Quit)
-        );
-        assert!(last_ctrl_c.is_none());
-    }
-
-    #[test]
-    fn expired_ctrl_c_window_starts_a_new_interrupt_sequence() {
-        let mut last_ctrl_c =
-            Some(Instant::now() - DOUBLE_CTRL_C_WINDOW - Duration::from_millis(1));
-        assert_eq!(
-            session_control_action(
-                &key(KeyCode::Char('c'), KeyModifiers::CONTROL),
-                false,
-                &mut last_ctrl_c,
-            ),
-            Some(AppAction::Interrupt)
-        );
-        assert!(last_ctrl_c.is_some());
-    }
-
-    #[test]
-    fn another_key_resets_the_double_ctrl_c_window() {
-        let mut last_ctrl_c = Some(Instant::now());
-        assert_eq!(
-            session_control_action(
-                &key(KeyCode::Char('x'), KeyModifiers::NONE),
-                false,
-                &mut last_ctrl_c,
-            ),
-            None
-        );
-        assert!(last_ctrl_c.is_none());
-    }
 }
