@@ -441,16 +441,16 @@ fn migrate(mut value: serde_json::Value) -> Result<serde_json::Value, Continuity
                 .or_insert_with(|| serde_json::Value::Array(Vec::new()));
             object.entry("task").or_insert_with(|| {
                 serde_json::json!({
-          "plan_state": null,
-          "active_step": null,
-          "attention_required": false,
-          "approvals": [],
-          "checkpoints": [],
-          "recovery_state": null,
-          "verification_evidence": [],
-          "file_changes": [],
-          "completion_status": null,
-      })
+                    "plan_state": null,
+                    "active_step": null,
+                    "attention_required": false,
+                    "approvals": [],
+                    "checkpoints": [],
+                    "recovery_state": null,
+                    "verification_evidence": [],
+                    "file_changes": [],
+                    "completion_status": null,
+                })
             });
             object
                 .entry("events")
