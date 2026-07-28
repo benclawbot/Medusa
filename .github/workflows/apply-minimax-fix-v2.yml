@@ -20,6 +20,25 @@ jobs:
           git apply /tmp/minimax.patch
           python - <<'PY'
           from pathlib import Path
+
+          runtime_path = Path('crates/medusa-runtime/src/runtime_impl.rs')
+          runtime_text = runtime_path.read_text()
+          wrapper_old = '''fn execute_slash_command(
+              state: &mut RuntimeState,
+              command: SlashCommand,
+              events: &Sender<RuntimeEvent>,
+              cancel: &AtomicBool,
+          )'''
+          wrapper_new = '''fn execute_slash_command(
+              state: &mut RuntimeState,
+              command: SlashCommand,
+              events: &Sender<RuntimeEvent>,
+              cancel: &Arc<AtomicBool>,
+          )'''
+          if wrapper_old not in runtime_text:
+              raise SystemExit('runtime slash-command cancellation anchor not found')
+          runtime_path.write_text(runtime_text.replace(wrapper_old, wrapper_new))
+
           path = Path('crates/medusa-runtime/build_main.rs')
           text = path.read_text()
           replacements = [
@@ -39,6 +58,10 @@ jobs:
                   r'"            let outcome = engine\n                .step_with_observer_and_context(&mut session, Some(skill_context.as_str()), |update| {\n                    forward_update(update, events, &mut updates);\n                })\n                .map_err(RuntimeError::agent)?;"',
                   r'"            let outcome = match engine.step_with_observer_and_context(\n                &mut session,\n                Some(skill_context.as_str()),\n                |update| {\n                    forward_update(update, events, &mut updates);\n                },\n            ) {\n                Ok(outcome) => outcome,\n                Err(_) if cancel_requested(cancel, submission) => {\n                    return Ok(RuntimeEvent::Cancelled);\n                }\n                Err(error) => return Err(RuntimeError::agent(error)),\n            };"',
               ),
+              (
+                  '"fn execute_slash_command(\\n    state: &mut RuntimeState,\\n    command: SlashCommand,\\n    events: &Sender<RuntimeEvent>,\\n    cancel: &AtomicBool,\\n)"',
+                  '"fn execute_slash_command(\\n    state: &mut RuntimeState,\\n    command: SlashCommand,\\n    events: &Sender<RuntimeEvent>,\\n    cancel: &Arc<AtomicBool>,\\n)"',
+              ),
           ]
           for old, new in replacements:
               if old not in text:
@@ -46,8 +69,6 @@ jobs:
               text = text.replace(old, new)
           path.write_text(text)
 
-          # The runtime entry points now require the shared Arc token. Keep test
-          # helpers and fixtures aligned with that signature.
           for test_path in [
               Path('crates/medusa-runtime/src/tests.rs'),
               Path('crates/medusa-runtime/tests/controller_runtime_coverage.rs'),
