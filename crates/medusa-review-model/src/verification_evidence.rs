@@ -178,7 +178,9 @@ fn validate_evidence(
     let mut paths = BTreeSet::new();
     for path in &evidence.affected_paths {
         if !paths.insert(path.clone()) {
-            return Err(VerificationEvidenceError::DuplicateAffectedPath(path.clone()));
+            return Err(VerificationEvidenceError::DuplicateAffectedPath(
+                path.clone(),
+            ));
         }
         if !known_paths.contains(path) {
             return Err(VerificationEvidenceError::UnknownAffectedPath(path.clone()));
@@ -194,9 +196,7 @@ fn validate_evidence(
 
 #[cfg(test)]
 mod tests {
-    use crate::{
-        ChangeKind, ReviewFile, ReviewProvenance, ReviewSnapshot, ReviewState,
-    };
+    use crate::{ChangeKind, ReviewFile, ReviewProvenance, ReviewSnapshot, ReviewState};
 
     use super::*;
 
@@ -248,7 +248,10 @@ mod tests {
         )
         .unwrap();
         assert_eq!(snapshot.files[0].verification, VerificationState::Verified);
-        assert_eq!(snapshot.files[0].provenance.verification_event_ids, vec!["verify-1"]);
+        assert_eq!(
+            snapshot.files[0].provenance.verification_event_ids,
+            vec!["verify-1"]
+        );
         assert_eq!(report.files[0].state, VerificationState::Verified);
     }
 
@@ -287,7 +290,9 @@ mod tests {
         invalid.affected_paths = vec!["other.rs".into()];
         assert_eq!(
             associate_verification_evidence(&mut snapshot, &[invalid]),
-            Err(VerificationEvidenceError::UnknownAffectedPath("other.rs".into()))
+            Err(VerificationEvidenceError::UnknownAffectedPath(
+                "other.rs".into()
+            ))
         );
 
         let mut valid = evidence(VerificationOutcome::Passed, "file-v2");
