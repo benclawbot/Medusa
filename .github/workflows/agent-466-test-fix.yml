@@ -1,0 +1,70 @@
+name: Agent 466 test fix
+
+on:
+  push:
+    branches:
+      - agent/466-mutation-provenance
+
+permissions:
+  contents: write
+
+jobs:
+  fix-and-validate:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: agent/466-mutation-provenance
+          fetch-depth: 0
+      - uses: dtolnay/rust-toolchain@1.88.0
+        with:
+          components: rustfmt, clippy
+      - name: Restrict repository fingerprinting to authoritative writes
+        shell: python
+        run: |
+          from pathlib import Path
+          path = Path('crates/medusa-agent/src/transaction.rs')
+          text = path.read_text()
+          old = '    let repository_before = repository_fingerprint(repo)?;\n    let mut resolved = Vec::with_capacity(mutations.len());\n'
+          new = '''    let repository_before = if context.is_some() {
+        Some(repository_fingerprint(repo)?)
+    } else {
+        None
+    };
+    let mut resolved = Vec::with_capacity(mutations.len());
+'''
+          if old not in text:
+              raise SystemExit('repository_before declaration not found')
+          text = text.replace(old, new, 1)
+          old = '''    if let Some(context) = context {
+        let repository_after = repository_fingerprint(repo)?;
+'''
+          new = '''    if let Some(context) = context {
+        let repository_before = repository_before.ok_or_else(|| {
+            provenance_boundary_error("authoritative mutation fingerprint is unavailable")
+        })?;
+        let repository_after = repository_fingerprint(repo)?;
+'''
+          if old not in text:
+              raise SystemExit('context block not found')
+          path.write_text(text.replace(old, new, 1))
+      - name: Format
+        run: cargo fmt --all
+      - name: Remove helper workflow
+        run: rm .github/workflows/agent-466-test-fix.yml
+      - name: Commit source fix
+        run: |
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add crates/medusa-agent/src/transaction.rs .github/workflows/agent-466-test-fix.yml
+          git commit -m "fix: fingerprint only authoritative repository mutations"
+          git push origin HEAD:agent/466-mutation-provenance
+      - name: Clippy
+        run: cargo clippy --workspace --all-targets --all-features -- -D warnings
+      - name: Tests
+        run: cargo test --workspace --all-features
+      - name: Documentation
+        env:
+          RUSTDOCFLAGS: -D warnings
+        run: cargo doc --workspace --all-features --no-deps
