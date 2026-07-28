@@ -41,7 +41,9 @@ pub fn run(options: TuiOptions) -> io::Result<ExitReason> {
     run_loop(terminal.stdout(), &options, &identity, &mut app, &runtime)
 }
 
-fn runtime_for_options(options: &TuiOptions) -> Result<RuntimeController, RuntimeError> {
+fn runtime_for_options(
+    options: &TuiOptions,
+) -> Result<RuntimeController, crate::runtime::RuntimeError> {
     if let Some(session_id) = options.resume_session.as_deref() {
         return RuntimeController::start_resumed(options.repo.clone(), session_id);
     }
@@ -405,7 +407,7 @@ pub(super) fn drain_runtime_events(
                 });
             }
             RuntimeEvent::AssistantText(text) => {
-                app.record_assistant_text(text);
+                app.append_assistant_text(text);
             }
             RuntimeEvent::Activity(activity) => {
                 app.record_activity(TranscriptActivity {
@@ -422,11 +424,9 @@ pub(super) fn drain_runtime_events(
                     details: activity.details,
                 });
             }
-            RuntimeEvent::Plan(plan) => {
-                app.set_plan(plan);
-            }
+            RuntimeEvent::Plan(plan) => app.set_plan(plan),
             RuntimeEvent::Question(question) => {
-                app.open_question(question.questions);
+                app.show_question_modal(question.questions);
             }
             RuntimeEvent::Usage {
                 input_tokens,
@@ -439,7 +439,7 @@ pub(super) fn drain_runtime_events(
                 estimated_cost_microusd,
                 provenance,
             } => {
-                app.record_turn_usage(
+                app.set_usage(UsageSummary {
                     input_tokens,
                     output_tokens,
                     cache_read_input_tokens,
@@ -449,11 +449,9 @@ pub(super) fn drain_runtime_events(
                     tokens_per_second_milli,
                     estimated_cost_microusd,
                     provenance,
-                );
+                });
             }
-            RuntimeEvent::Progress { turn } => {
-                app.update_turn(turn);
-            }
+            RuntimeEvent::Progress { turn } => app.update_turn(turn),
             RuntimeEvent::Settings {
                 model,
                 effort,
@@ -462,7 +460,7 @@ pub(super) fn drain_runtime_events(
                 context_window_tokens,
                 auto_compact_percent,
             } => {
-                app.set_runtime_settings(
+                app.update_runtime_settings(
                     model,
                     effort,
                     plan_mode,
@@ -472,78 +470,104 @@ pub(super) fn drain_runtime_events(
                 );
             }
             RuntimeEvent::Notice { title, details } => {
-                let status = title.to_ascii_lowercase();
-                app.record_activity(TranscriptActivity {
-                    id: None,
-                    kind: TranscriptActivityKind::Progress,
-                    title,
-                    details,
-                });
-                app.status = status;
+                app.transcript
+                    .push(TranscriptEntry::System(format_notice(title, details)));
             }
-            RuntimeEvent::NewSession => {
-                app.clear_for_new_session();
-            }
+            RuntimeEvent::NewSession => app.reset_session(),
             RuntimeEvent::Compacted { message } => {
-                app.compact_transcript(message);
+                app.transcript.push(TranscriptEntry::System(message));
             }
             RuntimeEvent::Completed { session_id } => {
-                app.record_activity(TranscriptActivity {
-                    id: None,
-                    kind: TranscriptActivityKind::Done,
-                    title: "Task completed".to_owned(),
-                    details: vec![format!("session {session_id}")],
-                });
-                app.status = "completed".to_owned();
                 app.finish_run();
+                app.status = format!("session completed: {session_id}");
             }
             RuntimeEvent::TurnFinished => {
-                app.status = "ready".to_owned();
                 app.finish_run();
+                app.status = "ready for follow-up".to_owned();
             }
             RuntimeEvent::Cancelled => {
-                app.record_activity(TranscriptActivity {
-                    id: None,
-                    kind: TranscriptActivityKind::Done,
-                    title: "Task cancelled".to_owned(),
-                    details: Vec::new(),
-                });
-                app.status = "cancelled".to_owned();
-                app.finish_run();
+                app.cancel_run();
+                app.status = "run cancelled".to_owned();
             }
             RuntimeEvent::Failed(error) => {
-                app.record_activity(TranscriptActivity {
-                    id: None,
-                    kind: TranscriptActivityKind::Error,
-                    title: "Task failed".to_owned(),
-                    details: vec![error],
-                });
-                app.status = "agent failed".to_owned();
-                app.finish_run();
+                app.fail_run(error.clone());
+                app.transcript
+                    .push(TranscriptEntry::System(format!("error: {error}")));
+                app.status = "run failed".to_owned();
             }
         }
     }
     Ok(())
 }
 
-pub(super) fn ctrl_d_on_empty(event: &Event, app: &AppState) -> bool {
+fn format_notice(title: String, details: Vec<String>) -> String {
+    if details.is_empty() {
+        return title;
+    }
+    format!("{title}: {}", details.join(" · "))
+}
+
+fn ctrl_d_on_empty(event: &Event, app: &AppState) -> bool {
     matches!(
         event,
-        Event::Key(key)
-            if key.kind == KeyEventKind::Press
-                && key.code == KeyCode::Char('d')
-                && key.modifiers.contains(KeyModifiers::CONTROL)
-                && app.composer.draft.text.is_empty()
-                && app.composer.draft.attachments.is_empty()
+        Event::Key(KeyEvent {
+            code: KeyCode::Char('d'),
+            modifiers,
+            kind: KeyEventKind::Press,
+            ..
+        }) if modifiers.contains(KeyModifiers::CONTROL) && app.composer.is_empty()
     )
 }
 
-pub(super) fn ctrl_l_redraw(event: &Event) -> bool {
+fn ctrl_l_redraw(event: &Event) -> bool {
     matches!(
         event,
-        Event::Key(key)
-            if key.kind == KeyEventKind::Press
-                && key.code == KeyCode::Char('l')
-                && key.modifiers.contains(KeyModifiers::CONTROL)
+        Event::Key(KeyEvent {
+            code: KeyCode::Char('l'),
+            modifiers,
+            kind: KeyEventKind::Press,
+            ..
+        }) if modifiers.contains(KeyModifiers::CONTROL)
     )
+}
+
+fn selected_text(
+    frame: &[StyledLine],
+    width: u16,
+    selection: TextSelection,
+) -> String {
+    let mut output = String::new();
+    for (row, line) in frame.iter().enumerate() {
+        let row = u16::try_from(row).unwrap_or(u16::MAX);
+        if row < selection.start.row || row > selection.end.row {
+            continue;
+        }
+        let mut text = line
+            .segments
+            .iter()
+            .map(|segment| segment.text.as_str())
+            .collect::<String>();
+        let visible_width = usize::from(width);
+        if text.chars().count() > visible_width {
+            text = text.chars().take(visible_width).collect();
+        }
+        let start = if row == selection.start.row {
+            usize::from(selection.start.column.min(width))
+        } else {
+            0
+        };
+        let end = if row == selection.end.row {
+            usize::from(selection.end.column.saturating_add(1).min(width))
+        } else {
+            text.chars().count()
+        };
+        if start < end {
+            let selected = text.chars().skip(start).take(end - start).collect::<String>();
+            if !output.is_empty() {
+                output.push('\n');
+            }
+            output.push_str(&selected);
+        }
+    }
+    output
 }
