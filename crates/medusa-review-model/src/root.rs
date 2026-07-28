@@ -1,5 +1,6 @@
 #[path = "model.rs"]
 mod model;
+#[path = "snapshot_builder.rs"]
 mod snapshot_builder;
 
 pub use model::*;
