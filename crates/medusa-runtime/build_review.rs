@@ -21,6 +21,10 @@ fn write_generated_review(out_dir: &Path) -> Result<PathBuf, Box<dyn Error>> {
         "    // Validate the state transition on a clone before touching the worktree.\n    // This prevents an error such as Accepted -> Reverted from being reported only\n    // after a destructive mutation has already happened.\n    let mut validation_snapshot = state.snapshot.clone();\n    record_authorized_action(\n        &mut validation_snapshot,\n        authorized.clone(),\n        actor,\n        now_unix_ms(),\n        state.snapshot.repository_fingerprint.clone(),\n    )\n    .map_err(|error| ReviewWorkflowError::Rejected(error.to_string()))?;\n\n    match &request {",
     )?;
     source = source.replace("        &authorized,", "        authorized.clone(),");
+    source = source.replace(
+        "        let patch = String::from_utf8(untracked.stdout)\n            .map_err(|_| ReviewWorkflowError::Git(\"untracked diff was not UTF-8\".to_owned()))?\n            .replace(\"a/dev/null\", \"a/dev/null\");",
+        "        let patch = String::from_utf8(untracked.stdout)\n            .map_err(|_| ReviewWorkflowError::Git(\"untracked diff was not UTF-8\".to_owned()))?;",
+    );
     replace_once(
         &mut source,
         "    state.history.export(generated_at_unix_ms).map_err(Into::into)",
