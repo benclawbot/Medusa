@@ -19,6 +19,7 @@ mod github_repository;
 mod memories;
 mod mutations;
 mod pull_requests;
+mod review;
 mod runtime {
     include!("runtime.rs");
     include!("runtime_resume.rs");
@@ -56,6 +57,7 @@ use mutations::{
     runtime_commit_changes, runtime_create_branch, runtime_create_checkpoint, runtime_push_branch,
 };
 use pull_requests::runtime_create_draft_pull_request;
+use review::{runtime_apply_review_action, runtime_export_review_audit, runtime_read_review};
 use runtime::{
     RuntimeRegistry, runtime_cancel, runtime_close, runtime_command, runtime_command_suggestions,
     runtime_configure_model, runtime_poll, runtime_recovery_action, runtime_resume, runtime_start,
@@ -80,6 +82,9 @@ pub fn run() -> tauri::Result<()> {
             runtime_poll,
             runtime_configure_model,
             runtime_recovery_action,
+            runtime_read_review,
+            runtime_apply_review_action,
+            runtime_export_review_audit,
             runtime_list_sessions,
             runtime_read_session,
             runtime_read_diff,
