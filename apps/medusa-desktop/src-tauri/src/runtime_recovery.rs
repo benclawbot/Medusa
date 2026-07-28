@@ -50,7 +50,7 @@ fn parse_recovery_operation(value: &str) -> Result<RecoveryOperation, String> {
 }
 
 #[cfg(test)]
-mod tests {
+mod recovery_action_tests {
     use super::*;
 
     #[test]
