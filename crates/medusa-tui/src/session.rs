@@ -23,7 +23,11 @@ pub fn run(options: TuiOptions) -> io::Result<ExitReason> {
     let draft_key = options
         .resume_session
         .clone()
-        .or_else(|| options.continue_latest.then(|| "continue-latest".to_owned()))
+        .or_else(|| {
+            options
+                .continue_latest
+                .then(|| "continue-latest".to_owned())
+        })
         .unwrap_or_else(|| "current".to_owned());
     let mut app = AppState::new(
         options.repo.clone(),
