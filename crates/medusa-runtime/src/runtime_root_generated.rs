@@ -103,8 +103,9 @@ mod recovery {
                 .find(|checkpoint| checkpoint.id == checkpoint_id)
         });
         let checkpoint_integrity_verified = match request.operation {
-            RecoveryOperation::RestoreCheckpoint => selected_checkpoint
-                .is_some_and(|checkpoint| checkpoint.integrity_verified),
+            RecoveryOperation::RestoreCheckpoint => {
+                selected_checkpoint.is_some_and(|checkpoint| checkpoint.integrity_verified)
+            }
             _ => true,
         };
         let matching_preview = request.checkpoint_id.as_deref().and_then(|checkpoint_id| {
