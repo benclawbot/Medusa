@@ -3,14 +3,14 @@ fn main() -> Result<(), Box<dyn Error>> {
     println!("cargo:rerun-if-changed=src/production_orchestrator.rs");
     println!("cargo:rerun-if-changed=src/recovery_tui.inc");
     println!("cargo:rerun-if-changed=src/commands.rs");
-    println!("cargo:rerun-if-changed=src/review.rs");
-    println!("cargo:rerun-if-changed=src/review_tests.rs");
+    println!("cargo:rerun-if-changed=src/review.inc");
+    println!("cargo:rerun-if-changed=src/review_tests.inc");
 
     let manifest = env::var("CARGO_MANIFEST_DIR")?;
     let out_dir = PathBuf::from(env::var("OUT_DIR")?);
     let commands = write_generated_commands(&out_dir)?;
-    let review = write_generated_review(&out_dir)?;
     let review_tests = write_generated_review_tests(&out_dir)?;
+    let review = write_generated_review(&out_dir, &review_tests)?;
     let mut source = fs::read_to_string("src/runtime_impl.rs")?.replace("\r\n", "\n");
 
     replace_once(
@@ -21,7 +21,10 @@ fn main() -> Result<(), Box<dyn Error>> {
     replace_once(
         &mut source,
         "pub mod commands;",
-        &format!("#[path = \"{}\"]\npub mod commands;", commands.display().to_string().replace('\\', "/")),
+        &format!(
+            "#[path = \"{}\"]\npub mod commands;",
+            commands.display().to_string().replace('\\', "/")
+        ),
     )?;
     replace_once(
         &mut source,
@@ -30,11 +33,6 @@ fn main() -> Result<(), Box<dyn Error>> {
             "pub mod prompt;\n#[path = \"{}\"]\npub mod review;\npub mod skill_dependencies;",
             review.display().to_string().replace('\\', "/")
         ),
-    )?;
-    replace_once(
-        &mut source,
-        "#[cfg(test)]\nmod tests;",
-        &format!("#[cfg(test)]\nmod tests;\n#[cfg(test)]\n#[path = \"{}\"]\nmod review_tests;", review_tests.display().to_string().replace('\\', "/")),
     )?;
 
     for (declaration, file) in [
