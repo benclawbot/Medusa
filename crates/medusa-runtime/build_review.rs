@@ -25,6 +25,10 @@ fn write_generated_review(out_dir: &Path) -> Result<PathBuf, Box<dyn Error>> {
         "        let patch = String::from_utf8(untracked.stdout)\n            .map_err(|_| ReviewWorkflowError::Git(\"untracked diff was not UTF-8\".to_owned()))?\n            .replace(\"a/dev/null\", \"a/dev/null\");",
         "        let patch = String::from_utf8(untracked.stdout)\n            .map_err(|_| ReviewWorkflowError::Git(\"untracked diff was not UTF-8\".to_owned()))?;",
     );
+    source = source.replace(
+        "\n#[cfg(test)]\n#[path = \"review_tests.rs\"]\nmod tests;\n",
+        "\n",
+    );
     replace_once(
         &mut source,
         "    state.history.export(generated_at_unix_ms).map_err(Into::into)",
