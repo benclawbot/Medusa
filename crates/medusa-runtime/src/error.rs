@@ -1,6 +1,6 @@
 use std::{
     io,
-    path::PathBuf,
+    path::{Path, PathBuf},
     sync::{
         Arc, Mutex,
         atomic::{AtomicBool, Ordering},
@@ -141,7 +141,7 @@ impl RuntimeController {
     }
 }
 
-fn latest_session_id(repo: &PathBuf) -> Result<String, RuntimeError> {
+fn latest_session_id(repo: &Path) -> Result<String, RuntimeError> {
     list_sessions(repo)
         .map_err(RuntimeError::agent)?
         .into_iter()
@@ -155,8 +155,8 @@ fn latest_session_id(repo: &PathBuf) -> Result<String, RuntimeError> {
         })
 }
 
-fn validate_resumed_session(repo: &PathBuf, session: &AgentSession) -> Result<(), RuntimeError> {
-    if session.repo != *repo {
+fn validate_resumed_session(repo: &Path, session: &AgentSession) -> Result<(), RuntimeError> {
+    if session.repo.as_path() != repo {
         return Err(RuntimeError::InvalidCommand(format!(
             "session {} belongs to {}, not {}",
             session.id,
