@@ -1,6 +1,6 @@
 use std::fs;
 
-use medusa_agent::{session_browser::list_sessions, AgentEngine};
+use medusa_agent::{AgentEngine, session_browser::list_sessions};
 use medusa_config::Config;
 use medusa_provider::{ModelProvider, ModelRequest, ModelResponse};
 use medusa_runtime::RuntimeController;
