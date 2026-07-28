@@ -1,4 +1,7 @@
-fn write_generated_review(out_dir: &Path) -> Result<PathBuf, Box<dyn Error>> {
+fn write_generated_review(
+    out_dir: &Path,
+    review_tests: &Path,
+) -> Result<PathBuf, Box<dyn Error>> {
     let mut source = fs::read_to_string("src/review.inc")?.replace("\r\n", "\n");
     replace_once(
         &mut source,
@@ -25,15 +28,16 @@ fn write_generated_review(out_dir: &Path) -> Result<PathBuf, Box<dyn Error>> {
         "        let patch = String::from_utf8(untracked.stdout)\n            .map_err(|_| ReviewWorkflowError::Git(\"untracked diff was not UTF-8\".to_owned()))?\n            .replace(\"a/dev/null\", \"a/dev/null\");",
         "        let patch = String::from_utf8(untracked.stdout)\n            .map_err(|_| ReviewWorkflowError::Git(\"untracked diff was not UTF-8\".to_owned()))?;",
     );
-    source = source.replace(
-        "\n#[cfg(test)]\n#[path = \"review_tests.rs\"]\nmod tests;\n",
-        "\n",
-    );
+    source = source.replace("#[cfg(test)]\n#[path = \"review_tests.rs\"]\nmod tests;", "");
     replace_once(
         &mut source,
         "    state.history.export(generated_at_unix_ms).map_err(Into::into)",
         "    let mut export = state.history.export(generated_at_unix_ms)?;\n    export.resulting_repository_fingerprint = state\n        .history\n        .events\n        .last()\n        .map(|event| event.repository_fingerprint_after.clone());\n    Ok(export)",
     )?;
+    source.push_str(&format!(
+        "\n#[cfg(test)]\n#[path = \"{}\"]\nmod tests;\n",
+        review_tests.display().to_string().replace('\\', "/")
+    ));
     let output = out_dir.join("review_generated.rs");
     fs::write(&output, source)?;
     Ok(output)
