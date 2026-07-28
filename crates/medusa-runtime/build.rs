@@ -33,6 +33,7 @@ fn bind_module(
 fn main() -> Result<(), Box<dyn Error>> {
     println!("cargo:rerun-if-changed=src/runtime_impl.rs");
     println!("cargo:rerun-if-changed=src/production_orchestrator.rs");
+    println!("cargo:rerun-if-changed=src/recovery_tui.inc");
 
     let manifest = env::var("CARGO_MANIFEST_DIR")?;
     let mut source = fs::read_to_string("src/runtime_impl.rs")?.replace("\r\n", "\n");
@@ -52,6 +53,11 @@ fn main() -> Result<(), Box<dyn Error>> {
     ] {
         bind_module(&mut source, &manifest, declaration, file)?;
     }
+
+    let recovery_source = fs::read_to_string("src/recovery_tui.inc")?.replace("\r\n", "\n");
+    source.push_str("\nmod recovery_tui {\n");
+    source.push_str(&recovery_source);
+    source.push_str("\n}\n");
 
     replace_once(
         &mut source,
@@ -74,7 +80,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     replace_once(
         &mut source,
         "            RuntimeCommand::Shutdown => break,",
-        "            RuntimeCommand::Recovery { view, request, preflight } => {\n                match recovery::execute_action(&state.repo, &view, &request, preflight) {\n                    Ok(receipt) => {\n                        let _ = events.send(RuntimeEvent::RecoveryCompleted(receipt));\n                    }\n                    Err(error) => {\n                        let _ = events.send(RuntimeEvent::Notice {\n                            title: \"Recovery action failed closed\".to_owned(),\n                            details: vec![error],\n                        });\n                    }\n                }\n            }\n            RuntimeCommand::Shutdown => break,",
+        "            RuntimeCommand::Recovery { view, request, preflight } => {\n                match recovery_tui::execute_view_action(&state.repo, &view, &request, preflight) {\n                    Ok(receipt) => {\n                        let _ = events.send(RuntimeEvent::RecoveryCompleted(receipt));\n                    }\n                    Err(error) => {\n                        let _ = events.send(RuntimeEvent::Notice {\n                            title: \"Recovery action failed closed\".to_owned(),\n                            details: vec![error],\n                        });\n                    }\n                }\n            }\n            RuntimeCommand::Shutdown => break,",
     )?;
 
     replace_once(
@@ -87,6 +93,12 @@ fn main() -> Result<(), Box<dyn Error>> {
         &mut source,
         "    let engine = AgentEngine::new(provider, config);\n    let selected_skill = state.pending_skill.clone();\n    let skill_context = selected_skill.as_ref().map(SelectedSkill::prompt_context);\n    let content = message_blocks(&draft)?;\n",
         "    let engine = AgentEngine::new(provider, config);\n    let selected_skill = state.pending_skill.clone();\n    let execution_plan = crate::production_orchestrator::plan(&draft)\n        .map_err(RuntimeError::agent)?;\n    for event in crate::production_orchestrator::events(&execution_plan) {\n        let _ = events.send(event);\n    }\n    let orchestration_context = crate::production_orchestrator::runtime_context(&execution_plan);\n    let skill_context = selected_skill\n        .as_ref()\n        .map(SelectedSkill::prompt_context)\n        .map(|skill| format!(\"{skill}\\n\\n{orchestration_context}\"))\n        .unwrap_or(orchestration_context);\n    let content = message_blocks(&draft)?;\n",
+    )?;
+
+    replace_once(
+        &mut source,
+        "        SlashCommand::Skill { selector, task } => {",
+        "        SlashCommand::Skill { selector, task } if selector.eq_ignore_ascii_case(\"recovery\") => {\n            match recovery_tui::execute_command(&state.repo, task.as_deref()) {\n                Ok(Some(receipt)) => { let _ = events.send(RuntimeEvent::RecoveryCompleted(receipt)); }\n                Ok(None) => {\n                    for event in recovery::startup_events(&state.repo) { let _ = events.send(event); }\n                    let _ = events.send(RuntimeEvent::Notice {\n                        title: \"Recovery commands\".to_owned(),\n                        details: vec![\"/recovery inspect|resume|verify|abandon or /recovery restore <checkpoint> [--confirm]\".to_owned()],\n                    });\n                }\n                Err(error) => { let _ = events.send(RuntimeEvent::Notice { title: \"Recovery action failed closed\".to_owned(), details: vec![error] }); }\n            }\n        }\n        SlashCommand::Skill { selector, task } => {",
     )?;
 
     replace_once(
