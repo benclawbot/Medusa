@@ -58,15 +58,21 @@ jobs:
                   r'"            let outcome = engine\n                .step_with_observer_and_context(&mut session, Some(skill_context.as_str()), |update| {\n                    forward_update(update, events, &mut updates);\n                })\n                .map_err(RuntimeError::agent)?;"',
                   r'"            let outcome = match engine.step_with_observer_and_context(\n                &mut session,\n                Some(skill_context.as_str()),\n                |update| {\n                    forward_update(update, events, &mut updates);\n                },\n            ) {\n                Ok(outcome) => outcome,\n                Err(_) if cancel_requested(cancel, submission) => {\n                    return Ok(RuntimeEvent::Cancelled);\n                }\n                Err(error) => return Err(RuntimeError::agent(error)),\n            };"',
               ),
-              (
-                  '"fn execute_slash_command(\\n    state: &mut RuntimeState,\\n    command: SlashCommand,\\n    events: &Sender<RuntimeEvent>,\\n    cancel: &AtomicBool,\\n)"',
-                  '"fn execute_slash_command(\\n    state: &mut RuntimeState,\\n    command: SlashCommand,\\n    events: &Sender<RuntimeEvent>,\\n    cancel: &Arc<AtomicBool>,\\n)"',
-              ),
           ]
           for old, new in replacements:
               if old not in text:
                   raise SystemExit(f'runtime build generator anchor not found: {old}')
               text = text.replace(old, new)
+
+          write_anchor = '    fs::write(out_dir.join("runtime_generated.rs"), source)?;'
+          write_replacement = '''    source = source.replace(
+              "cancel: &AtomicBool",
+              "cancel: &Arc<AtomicBool>",
+          );
+              fs::write(out_dir.join("runtime_generated.rs"), source)?;'''
+          if write_anchor not in text:
+              raise SystemExit('runtime generated-write anchor not found')
+          text = text.replace(write_anchor, write_replacement)
           path.write_text(text)
 
           for test_path in [
