@@ -76,14 +76,6 @@ impl PromptDraft {
     }
 
     pub fn add_image(&mut self, image: ClipboardImage) -> Result<(), ClipboardError> {
-        self.add_image_with_origin(image, AttachmentOrigin::Clipboard)
-    }
-
-    pub fn add_image_with_origin(
-        &mut self,
-        image: ClipboardImage,
-        origin: AttachmentOrigin,
-    ) -> Result<(), ClipboardError> {
         image.validate()?;
         let image_count = self
             .attachments
@@ -108,7 +100,6 @@ impl PromptDraft {
             height: image.height,
             rgba: image.rgba,
             source_format: image.source_format,
-            origin,
         }));
         self.revision = self.revision.saturating_add(1);
         Ok(())
@@ -134,21 +125,12 @@ impl PromptAttachment {
             Self::File(attachment) => attachment.byte_len,
         }
     }
-
-    pub fn origin(&self) -> AttachmentOrigin {
-        match self {
-            Self::PastedText(attachment) => attachment.origin.clone(),
-            Self::Image(attachment) => attachment.origin.clone(),
-            Self::File(attachment) => attachment.origin.clone(),
-        }
-    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct TextAttachment {
     pub display_name: String,
     pub text: String,
-    pub origin: AttachmentOrigin,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -158,14 +140,12 @@ pub struct ImageAttachment {
     pub height: u32,
     pub rgba: Vec<u8>,
     pub source_format: Option<String>,
-    pub origin: AttachmentOrigin,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct FileAttachment {
     pub path: PathBuf,
     pub byte_len: usize,
-    pub origin: AttachmentOrigin,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -259,20 +239,31 @@ mod tests {
     use super::*;
 
     #[test]
-    fn image_origin_is_preserved() {
+    fn multiline_paste_is_inserted_as_inert_text() {
+        let mut draft = PromptDraft {
+            text: "before after".to_owned(),
+            ..PromptDraft::default()
+        };
+        draft
+            .insert_pasted_text(7, "echo unsafe\r\nsecond line\rthird")
+            .expect("paste text");
+        assert_eq!(draft.text, "before echo unsafe\nsecond line\nthirdafter");
+        assert_eq!(draft.revision, 1);
+    }
+
+    #[test]
+    fn valid_rgba_screenshot_becomes_attachment() {
         let mut draft = PromptDraft::default();
         draft
-            .add_image_with_origin(
-                ClipboardImage {
-                    width: 2,
-                    height: 1,
-                    rgba: vec![0; 8],
-                    source_format: Some("image/png".to_owned()),
-                },
-                AttachmentOrigin::Screenshot,
-            )
+            .add_image(ClipboardImage {
+                width: 2,
+                height: 1,
+                rgba: vec![0; 8],
+                source_format: Some("image/png".to_owned()),
+            })
             .expect("attach image");
-        assert_eq!(draft.attachments[0].origin(), AttachmentOrigin::Screenshot);
+        assert_eq!(draft.attachments.len(), 1);
+        assert_eq!(draft.total_attachment_bytes(), 8);
     }
 
     #[test]
