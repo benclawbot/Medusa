@@ -1,6 +1,6 @@
 use std::{
     io,
-    path::PathBuf,
+    path::{Path, PathBuf},
     sync::{
         Arc, Mutex,
         atomic::{AtomicBool, Ordering},
@@ -9,7 +9,7 @@ use std::{
     thread,
 };
 
-use medusa_agent::{AgentEngine, AgentSession};
+use medusa_agent::{session_browser::list_sessions, AgentEngine, AgentSession};
 use medusa_capabilities::CapabilityRegistry;
 use medusa_provider::ConfiguredProvider;
 
@@ -91,6 +91,12 @@ impl RuntimeController {
         Self::start_resumed_with_state(repo, session_id, state)
     }
 
+    /// Continues the most recently updated durable session for this repository.
+    pub fn start_continue_latest(repo: PathBuf) -> Result<Self, RuntimeError> {
+        let session_id = latest_session_id(&repo)?;
+        Self::start_resumed(repo, &session_id)
+    }
+
     fn start_resumed_with_state(
         repo: PathBuf,
         session_id: &str,
@@ -135,8 +141,22 @@ impl RuntimeController {
     }
 }
 
-fn validate_resumed_session(repo: &PathBuf, session: &AgentSession) -> Result<(), RuntimeError> {
-    if session.repo != *repo {
+fn latest_session_id(repo: &Path) -> Result<String, RuntimeError> {
+    list_sessions(repo)
+        .map_err(RuntimeError::agent)?
+        .into_iter()
+        .next()
+        .map(|session| session.id)
+        .ok_or_else(|| {
+            RuntimeError::InvalidCommand(format!(
+                "no durable sessions exist for {}",
+                repo.display()
+            ))
+        })
+}
+
+fn validate_resumed_session(repo: &Path, session: &AgentSession) -> Result<(), RuntimeError> {
+    if session.repo.as_path() != repo {
         return Err(RuntimeError::InvalidCommand(format!(
             "session {} belongs to {}, not {}",
             session.id,

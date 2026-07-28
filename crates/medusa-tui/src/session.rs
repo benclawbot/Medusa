@@ -23,6 +23,11 @@ pub fn run(options: TuiOptions) -> io::Result<ExitReason> {
     let draft_key = options
         .resume_session
         .clone()
+        .or_else(|| {
+            options
+                .continue_latest
+                .then(|| "continue-latest".to_owned())
+        })
         .unwrap_or_else(|| "current".to_owned());
     let mut app = AppState::new(
         options.repo.clone(),
@@ -31,9 +36,21 @@ pub fn run(options: TuiOptions) -> io::Result<ExitReason> {
         clipboard,
     )?;
     let identity = UiIdentity::for_repo(&options.repo);
-    let runtime = RuntimeController::start(options.repo.clone());
+    let runtime = runtime_for_options(&options).map_err(runtime_error)?;
     let mut terminal = TerminalGuard::enter()?;
     run_loop(terminal.stdout(), &options, &identity, &mut app, &runtime)
+}
+
+fn runtime_for_options(
+    options: &TuiOptions,
+) -> Result<RuntimeController, crate::runtime::RuntimeError> {
+    if let Some(session_id) = options.resume_session.as_deref() {
+        return RuntimeController::start_resumed(options.repo.clone(), session_id);
+    }
+    if options.continue_latest {
+        return RuntimeController::start_continue_latest(options.repo.clone());
+    }
+    Ok(RuntimeController::start(options.repo.clone()))
 }
 
 struct TerminalGuard {
