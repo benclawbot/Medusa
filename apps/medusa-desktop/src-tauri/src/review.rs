@@ -5,6 +5,7 @@ use medusa_runtime::review::{
     ReviewWorkspace, apply_review_action, export_review_audit, read_review_workspace,
 };
 
+// Review actions update persisted review state only; they never commit, push, or merge.
 #[tauri::command]
 pub fn runtime_read_review(repo: String) -> Result<ReviewWorkspace, String> {
     read_review_workspace(&PathBuf::from(repo)).map_err(|error| error.to_string())
