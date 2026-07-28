@@ -23,43 +23,16 @@ jobs:
         shell: python
         run: |
           from pathlib import Path
+          from textwrap import dedent
 
-          def replace_once(path: str, old: str, new: str) -> None:
-              file = Path(path)
-              text = file.read_text()
-              count = text.count(old)
-              if count != 1:
-                  raise SystemExit(f"{path}: expected exactly one anchor, found {count}")
-              file.write_text(text.replace(old, new, 1))
-
-          runtime = "crates/medusa-runtime/src/runtime_impl.rs"
-          replace_once(
-              runtime,
-              '''fn worker_loop_with_state(
-              mut state: RuntimeState,
-              commands: Receiver<RuntimeCommand>,
-              events: Sender<RuntimeEvent>,
-              cancel: Arc<AtomicBool>,
-              submission: Arc<Mutex<SubmissionState>>,
-          ) {
-              let _ = events.send(state.settings_event());
-              let capability_event = match CapabilityRegistry::discover(state.repo.clone()) {
-                  Ok(registry) => RuntimeEvent::Notice {
-                      title: "Runtime capabilities".to_owned(),
-                      details: registry
-                          .prompt_summary()
-                          .lines()
-                          .map(str::to_owned)
-                          .collect(),
-                  },
-                  Err(error) => RuntimeEvent::Notice {
-                      title: "Runtime capabilities unavailable".to_owned(),
-                      details: vec![error.to_string()],
-                  },
-              };
-              let _ = events.send(capability_event);
-          ''',
-              '''fn worker_loop_with_state(
+          runtime_path = Path("crates/medusa-runtime/src/runtime_impl.rs")
+          runtime = runtime_path.read_text()
+          start_marker = "fn worker_loop_with_state("
+          loop_marker = "    while let Ok(command) = commands.recv() {"
+          start = runtime.index(start_marker)
+          loop = runtime.index(loop_marker, start)
+          prefix = dedent('''\
+          fn worker_loop_with_state(
               state: RuntimeState,
               commands: Receiver<RuntimeCommand>,
               events: Sender<RuntimeEvent>,
@@ -100,17 +73,12 @@ jobs:
                       details: vec![format!("failed to start capability discovery: {error}")],
                   });
               }
-          ''',
-          )
-          replace_once(
-              runtime,
-              '''    mark_idle(&submission, true);
-          }
+          ''')
+          runtime = runtime[:start] + prefix + runtime[loop:]
 
-          fn cancel_requested''',
-              '''    mark_idle(&submission, true);
-          }
-
+          cancel_marker = "fn cancel_requested("
+          cancel = runtime.index(cancel_marker)
+          helper = dedent('''\
           fn capability_event(repo: PathBuf) -> RuntimeEvent {
               match CapabilityRegistry::discover(repo) {
                   Ok(registry) => RuntimeEvent::Notice {
@@ -128,15 +96,17 @@ jobs:
               }
           }
 
-          fn cancel_requested''',
-          )
+          ''')
+          runtime = runtime[:cancel] + helper + runtime[cancel:]
+          runtime_path.write_text(runtime)
 
-          tests = "crates/medusa-runtime/src/tests.rs"
-          replace_once(
-              tests,
-              '''#[test]
-          fn text_prompt_becomes_user_message_block()''',
-              '''#[test]
+          tests_path = Path("crates/medusa-runtime/src/tests.rs")
+          tests = tests_path.read_text()
+          test_marker = "#[test]\nfn text_prompt_becomes_user_message_block()"
+          if tests.count(test_marker) != 1:
+              raise SystemExit("tests anchor mismatch")
+          regression = dedent('''\
+          #[test]
           fn command_processing_does_not_wait_for_capability_discovery() {
               use std::{
                   sync::{Arc, Mutex, mpsc},
@@ -198,20 +168,18 @@ jobs:
               worker.join().expect("worker joins");
           }
 
-          #[test]
-          fn text_prompt_becomes_user_message_block()''',
-          )
+          ''')
+          tests_path.write_text(tests.replace(test_marker, regression + test_marker, 1))
 
-          replace_once(
-              "crates/medusa-runtime/build.rs",
-              '"    let _ = events.send(state.settings_event());\\n    let capability_event =",',
-              '"    let _ = events.send(state.settings_event());\\n    let capability_repo =",',
-          )
-          replace_once(
-              "crates/medusa-runtime/build.rs",
-              '"    let _ = events.send(state.settings_event());\\n    for recovery_event in recovery::startup_events(&state.repo) {\\n        let _ = events.send(recovery_event);\\n    }\\n    let capability_event =",',
-              '"    let _ = events.send(state.settings_event());\\n    for recovery_event in recovery::startup_events(&state.repo) {\\n        let _ = events.send(recovery_event);\\n    }\\n    let capability_repo =",',
-          )
+          build_path = Path("crates/medusa-runtime/build.rs")
+          build = build_path.read_text()
+          old_a = '"    let _ = events.send(state.settings_event());\\n    let capability_event =",'
+          new_a = '"    let _ = events.send(state.settings_event());\\n    let capability_repo =",'
+          old_b = '"    let _ = events.send(state.settings_event());\\n    for recovery_event in recovery::startup_events(&state.repo) {\\n        let _ = events.send(recovery_event);\\n    }\\n    let capability_event =",'
+          new_b = '"    let _ = events.send(state.settings_event());\\n    for recovery_event in recovery::startup_events(&state.repo) {\\n        let _ = events.send(recovery_event);\\n    }\\n    let capability_repo =",'
+          if build.count(old_a) != 1 or build.count(old_b) != 1:
+              raise SystemExit("build anchors mismatch")
+          build_path.write_text(build.replace(old_a, new_a, 1).replace(old_b, new_b, 1))
 
       - name: Remove bootstrap files
         run: rm .github/issue-447-runtime-fix.patch .github/workflows/issue-447-bootstrap.yml
