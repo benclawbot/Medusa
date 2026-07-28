@@ -1,8 +1,23 @@
+diff --git a/crates/medusa-runtime/build.rs b/crates/medusa-runtime/build.rs
+index f9cb459..a1599f5 100644
+--- a/crates/medusa-runtime/build.rs
++++ b/crates/medusa-runtime/build.rs
+@@ -79,8 +79,8 @@ fn main() -> Result<(), Box<dyn Error>> {
+ 
+     replace_once(
+         &mut source,
+-        "    let _ = events.send(state.settings_event());\n    let capability_event =",
+-        "    let _ = events.send(state.settings_event());\n    for recovery_event in recovery::startup_events(&state.repo) {\n        let _ = events.send(recovery_event);\n    }\n    let capability_event =",
++        "    let _ = events.send(state.settings_event());\n    let capability_repo =",
++        "    let _ = events.send(state.settings_event());\n    for recovery_event in recovery::startup_events(&state.repo) {\n        let _ = events.send(recovery_event);\n    }\n    let capability_repo =",
+     )?;
+ 
+     replace_once(
 diff --git a/crates/medusa-runtime/src/runtime_impl.rs b/crates/medusa-runtime/src/runtime_impl.rs
-index 5fce18d..e90b1f2 100644
+index 5fce18d..23075d3 100644
 --- a/crates/medusa-runtime/src/runtime_impl.rs
 +++ b/crates/medusa-runtime/src/runtime_impl.rs
-@@ -272,28 +272,46 @@ impl Drop for RuntimeController {
+@@ -274,25 +274,43 @@ impl Drop for RuntimeController {
  }
  
  fn worker_loop_with_state(
@@ -64,7 +79,7 @@ index 5fce18d..e90b1f2 100644
      while let Ok(command) = commands.recv() {
          match command {
              RuntimeCommand::Submit(draft) => {
-@@ -361,6 +379,23 @@ fn worker_loop_with_state(
+@@ -359,6 +377,23 @@ fn worker_loop_with_state(
      mark_idle(&submission, true);
  }
  
@@ -89,14 +104,13 @@ index 5fce18d..e90b1f2 100644
      if cancel.load(Ordering::SeqCst) {
          mark_idle(submission, true);
 diff --git a/crates/medusa-runtime/src/tests.rs b/crates/medusa-runtime/src/tests.rs
-index c97d846..1fe87da 100644
+index c97d846..229011d 100644
 --- a/crates/medusa-runtime/src/tests.rs
 +++ b/crates/medusa-runtime/src/tests.rs
-@@ -14,6 +14,68 @@ use super::support::{
- };
+@@ -15,6 +15,68 @@ use tempfile::tempdir;
  use super::*;
  
-+#[test]
+ #[test]
 +fn command_processing_does_not_wait_for_capability_discovery() {
 +    use std::{
 +        sync::{Arc, Mutex, mpsc},
@@ -158,6 +172,7 @@ index c97d846..1fe87da 100644
 +    worker.join().expect("worker joins");
 +}
 +
- #[test]
++#[test]
  fn text_prompt_becomes_user_message_block() {
      let draft = PromptDraft {
+         text: "fix the failing test".to_owned(),
