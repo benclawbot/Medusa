@@ -5,7 +5,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     println!("cargo:rerun-if-changed=src/commands.rs");
     println!("cargo:rerun-if-changed=src/review.inc");
     println!("cargo:rerun-if-changed=src/review_tests.inc");
-    println!("cargo:rerun-if-changed=src/prompt/attachment.rs");
+    println!("cargo:rerun-if-changed=src/attachment.rs");
 
     let manifest = env::var("CARGO_MANIFEST_DIR")?;
     let out_dir = PathBuf::from(env::var("OUT_DIR")?);
@@ -38,7 +38,7 @@ fn main() -> Result<(), Box<dyn Error>> {
 
     for (declaration, file) in [
         ("mod error;", "error.rs"),
-        ("pub mod attachment;", "prompt/attachment.rs"),
+        ("pub mod attachment;", "attachment.rs"),
         ("pub mod lifecycle;", "lifecycle.rs"),
         ("pub mod prompt;", "prompt.rs"),
         ("pub mod skill_dependencies;", "skill_dependencies.rs"),
