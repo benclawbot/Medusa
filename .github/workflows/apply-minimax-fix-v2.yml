@@ -31,7 +31,22 @@ jobs:
       - name: Format
         run: cargo fmt --all
       - name: Clippy
-        run: cargo clippy --workspace --all-targets --all-features -- -D warnings
+        shell: bash
+        run: |
+          set +e
+          cargo clippy --workspace --all-targets --all-features --message-format short -- -D warnings >clippy.log 2>&1
+          status=$?
+          if [ "$status" -ne 0 ]; then
+            grep -E '(^error|: error|warning:|could not compile)' clippy.log | tail -n 160 >clippy-diagnostics.txt || true
+            tail -n 200 clippy.log >>clippy-diagnostics.txt
+          fi
+          exit "$status"
+      - name: Upload Clippy diagnostics
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: minimax-v2-clippy-diagnostics
+          path: clippy-diagnostics.txt
       - name: Test workspace
         run: cargo test --workspace --all-features
       - name: Commit validated source
