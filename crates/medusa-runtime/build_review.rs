@@ -24,6 +24,11 @@ fn write_generated_review(
     );
     replace_once(
         &mut source,
+        "    let authorized = state\n        .snapshot\n        .authorize(request.clone())",
+        "    if let ReviewActionRequest::RevertFile { path, .. } = &request {\n        let file = state\n            .snapshot\n            .file(path)\n            .ok_or_else(|| ReviewWorkflowError::Rejected(\"changed file is not present in the review snapshot\".to_owned()))?;\n        if file\n            .hunks\n            .iter()\n            .any(|hunk| hunk.ambiguous || hunk.overlaps_later_edits)\n        {\n            return Err(ReviewWorkflowError::Rejected(\n                \"whole-file revert is unsafe because tracked-file write provenance is ambiguous\"\n                    .to_owned(),\n            ));\n        }\n    }\n    let authorized = state\n        .snapshot\n        .authorize(request.clone())",
+    )?;
+    replace_once(
+        &mut source,
         "    match &request {",
         "    // Validate the state transition on a clone before touching the worktree.\n    // This prevents an error such as Accepted -> Reverted from being reported only\n    // after a destructive mutation has already happened.\n    let mut validation_snapshot = state.snapshot.clone();\n    record_authorized_action(\n        &mut validation_snapshot,\n        authorized.clone(),\n        actor,\n        now_unix_ms(),\n        state.snapshot.repository_fingerprint.clone(),\n    )\n    .map_err(|error| ReviewWorkflowError::Rejected(error.to_string()))?;\n\n    match &request {",
     )?;
