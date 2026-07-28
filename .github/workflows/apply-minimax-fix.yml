@@ -19,6 +19,15 @@ jobs:
       - name: Format check
         run: cargo fmt --all -- --check
       - name: Clippy
-        run: cargo clippy --quiet --workspace --all-targets --all-features --message-format short -- -D warnings
+        shell: bash
+        run: |
+          set +e
+          cargo clippy --workspace --all-targets --all-features --message-format short -- -D warnings >clippy.log 2>&1
+          status=$?
+          if [ "$status" -ne 0 ]; then
+            echo "--- Clippy diagnostics ---"
+            grep -E '(^error|: error|warning:|could not compile)' clippy.log | tail -n 120 || tail -n 120 clippy.log
+          fi
+          exit "$status"
       - name: Test workspace
         run: cargo test --quiet --workspace --all-features
