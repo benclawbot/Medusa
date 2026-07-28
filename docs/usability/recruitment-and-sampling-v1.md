@@ -28,11 +28,15 @@ A participant is classified as first-time only when they have never previously u
 
 ### Novice coding-agent cohort
 
-A participant is classified as novice when they are first-time or have completed fewer than three substantive coding tasks with a coding agent. This broader novice label may be used for analysis, but it does not replace the separate first-time minimum.
+A participant is classified as novice when they are first-time or have completed one or two substantive coding tasks with a coding agent. This broader novice label may be used for analysis, but only the zero-task subgroup satisfies the separate first-time minimum.
+
+### Intermediate coding-agent cohort
+
+A participant is classified as intermediate when they have completed three to nine substantive coding tasks with a coding agent. Intermediate participants may fill supplemental or reserve slots, but they satisfy neither the first-time nor the experienced minimum.
 
 ### Experienced coding-agent cohort
 
-A participant is classified as experienced when they use coding agents regularly or have completed at least ten substantive coding tasks with one.
+A participant is classified as experienced when they have completed at least ten substantive coding tasks with a coding agent.
 
 ### Rust familiarity
 
@@ -84,6 +88,8 @@ Ask only the minimum needed for assignment:
 5. Have you previously seen the Medusa usability fixture or task script?
 6. Do you need an accessibility accommodation for the session?
 
+Map the second response deterministically: `none` to first-time and novice, `one or two` to novice, `three to nine` to intermediate, and `ten or more` to experienced.
+
 Do not collect employer, exact job title, repository names, account identifiers, or credentials unless separately required and consented for study administration. Administrative contact details must remain outside the repository and must not appear in findings.
 
 ## Sampling matrix
@@ -96,10 +102,10 @@ Fill this before scheduling scored sessions.
 | P02 | first-time | any | different from P01 where practical | alternate client | conflict | open |
 | P03 | experienced | any | supported | TUI/desktop | clean | open |
 | P04 | experienced | any | supported | alternate client | conflict | open |
-| P05 | either | any | fill platform gap | fill client gap | clean | open |
-| P06 | either | any | fill platform gap | fill client gap | conflict | open |
-| Reserve 1 | either | any | any supported | any supported | either | open |
-| Reserve 2 | either | any | any supported | any supported | either | open |
+| P05 | novice/intermediate/experienced | any | fill platform gap | fill client gap | clean | open |
+| P06 | novice/intermediate/experienced | any | fill platform gap | fill client gap | conflict | open |
+| Reserve 1 | any defined cohort | any | any supported | any supported | either | open |
+| Reserve 2 | any defined cohort | any | any supported | any supported | either | open |
 
 Do not assign a participant to a client/platform combination that has not passed the fixture validation matrix.
 
@@ -107,6 +113,8 @@ Do not assign a participant to a client/platform combination that has not passed
 
 - Balance clean and conflict rollback-preview variants across cohorts.
 - Preserve at least two first-time assignments through completion and exclusions.
+- Preserve at least two experienced assignments through completion and exclusions.
+- Assign intermediate participants only to supplemental or reserve slots.
 - Avoid assigning all novice participants to one client or operating system.
 - Alternate task variants where multiple equivalent fixtures exist.
 - Keep the participant script and success thresholds unchanged within a study version.
@@ -152,7 +160,7 @@ Extend recruitment when:
 
 - fewer than six sessions remain valid,
 - fewer than two valid first-time participants remain,
-- experienced-participant minimums are not met,
+- fewer than two valid experienced participants remain,
 - only one operating system is represented,
 - a high-severity finding appears isolated to an unrepresented client/platform combination that can reasonably be tested,
 - protocol deviations make a required task incomparable across sessions.
@@ -168,7 +176,7 @@ The aggregate findings report must state:
 - number completed
 - number valid
 - exclusions by reason
-- first-time, novice, and experienced cohort counts
+- first-time, novice, intermediate, and experienced cohort counts
 - operating systems represented
 - clients represented
 - fixture and protocol versions used
