@@ -29,7 +29,7 @@ Before recruitment:
 
 ### 2. Recruit and assign
 
-Use the recruitment plan to fill at least six valid participant slots plus reserves. Ensure novice and experienced cohorts, at least two operating systems, and supported client coverage are represented.
+Use the recruitment plan to fill at least six valid participant slots plus reserves. Ensure at least two true first-time users, at least two experienced users, at least two operating systems, and supported client coverage are represented.
 
 Store names, contact details, scheduling information, and compensation data outside the repository.
 
@@ -73,7 +73,8 @@ Every critical or high-severity usability failure requires a concrete follow-up 
 A study conclusion is valid only when all are true:
 
 - at least six participant sessions are valid
-- at least two novice and two experienced coding-agent users are represented
+- at least two participants are true first-time coding-agent users with no prior substantive coding-agent task
+- at least two experienced coding-agent users are represented
 - at least two operating systems are represented
 - success thresholds were fixed before scored sessions
 - quickstart, timeline/state comprehension, approvals, failed verification, interruption/resume, rollback preview, and audit export were exercised
