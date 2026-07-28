@@ -200,9 +200,8 @@ pub fn load(repo: &Path) -> MedusaResult<MutationJournal> {
         return Ok(MutationJournal::default());
     }
     let bytes = fs::read(&path)?;
-    let journal: MutationJournal = serde_json::from_slice(&bytes).map_err(|error| {
-        provenance_error(format!("mutation provenance is corrupt: {error}"))
-    })?;
+    let journal: MutationJournal = serde_json::from_slice(&bytes)
+        .map_err(|error| provenance_error(format!("mutation provenance is corrupt: {error}")))?;
     if journal.schema_version != MUTATION_PROVENANCE_SCHEMA_VERSION {
         return Err(provenance_error(format!(
             "unsupported mutation provenance schema version: {}",
@@ -217,7 +216,9 @@ pub fn load(repo: &Path) -> MedusaResult<MutationJournal> {
 
 pub fn persist(repo: &Path, journal: &MutationJournal) -> MedusaResult<()> {
     if journal.schema_version != MUTATION_PROVENANCE_SCHEMA_VERSION {
-        return Err(provenance_error("cannot persist unsupported provenance schema"));
+        return Err(provenance_error(
+            "cannot persist unsupported provenance schema",
+        ));
     }
     let path = repo.join(PROVENANCE_PATH);
     if let Some(parent) = path.parent() {
@@ -241,10 +242,14 @@ fn validate_record(record: &MutationRecord) -> MedusaResult<()> {
         || record.repository_fingerprint_before.trim().is_empty()
         || record.repository_fingerprint_after.trim().is_empty()
     {
-        return Err(provenance_error("mutation provenance contains an empty identity field"));
+        return Err(provenance_error(
+            "mutation provenance contains an empty identity field",
+        ));
     }
     if record.context.occurred_at_unix_ms < 0 {
-        return Err(provenance_error("mutation provenance timestamp is negative"));
+        return Err(provenance_error(
+            "mutation provenance timestamp is negative",
+        ));
     }
     if record.scope.preimage_len == 0 && record.scope.postimage_len == 0 {
         return Err(provenance_error("mutation provenance scope is empty"));
@@ -263,7 +268,9 @@ fn validate_record(record: &MutationRecord) -> MedusaResult<()> {
     ] {
         if let Some(bytes) = bytes {
             if bytes.len() != expected_len || fingerprint(bytes) != *expected_fingerprint {
-                return Err(provenance_error("mutation provenance retained evidence is invalid"));
+                return Err(provenance_error(
+                    "mutation provenance retained evidence is invalid",
+                ));
             }
         }
     }
@@ -275,7 +282,9 @@ fn retain(bytes: &[u8]) -> Option<Vec<u8>> {
 }
 
 fn ranges_overlap(left: &MutationScope, right: &MutationScope) -> bool {
-    let left_end = left.start_byte.saturating_add(left.postimage_len.max(left.preimage_len));
+    let left_end = left
+        .start_byte
+        .saturating_add(left.postimage_len.max(left.preimage_len));
     let right_end = right
         .start_byte
         .saturating_add(right.postimage_len.max(right.preimage_len));
@@ -346,7 +355,10 @@ mod tests {
         let id = first.id.clone();
         journal.append(first).unwrap();
         journal.append(record(2, 8, b"q", b"r")).unwrap();
-        assert_eq!(journal.validate_scope(&id, b"xyz-----r"), ScopeValidation::Current);
+        assert_eq!(
+            journal.validate_scope(&id, b"xyz-----r"),
+            ScopeValidation::Current
+        );
     }
 
     #[test]
@@ -372,7 +384,10 @@ mod tests {
         let first = record(1, 0, b"old", b"new");
         let id = first.id.clone();
         journal.append(first).unwrap();
-        assert_eq!(journal.validate_scope(&id, b"NEW"), ScopeValidation::Drifted);
+        assert_eq!(
+            journal.validate_scope(&id, b"NEW"),
+            ScopeValidation::Drifted
+        );
     }
 
     #[test]
