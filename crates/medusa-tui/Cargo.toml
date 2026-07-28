@@ -17,6 +17,7 @@ crossterm = "0.29"
 hex.workspace = true
 medusa-config = { path = "../medusa-config" }
 medusa-daemon = { path = "../medusa-daemon" }
+medusa-recovery-coordinator = { path = "../medusa-recovery-coordinator" }
 medusa-runtime = { path = "../medusa-runtime" }
 serde.workspace = true
 serde_json.workspace = true
