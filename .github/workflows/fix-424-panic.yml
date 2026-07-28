@@ -1,17 +1,21 @@
 name: Fix 424 panic audit
 
 on:
+  pull_request:
+    branches:
+      - main
+    types:
+      - synchronize
   push:
     branches:
       - agent/424-session-continuity
-    paths:
-      - .github/workflows/fix-424-panic.yml
 
 permissions:
   contents: write
 
 jobs:
   apply:
+    if: github.event_name == 'push' || github.head_ref == 'agent/424-session-continuity'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
