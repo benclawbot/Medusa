@@ -56,6 +56,7 @@ members = [
   "crates/medusa-conflict-resolution",
   "crates/medusa-transaction-coordinator",
   "crates/medusa-recovery-coordinator",
+  "crates/medusa-review-model",
   "crates/medusa-consensus",
 ]
 
