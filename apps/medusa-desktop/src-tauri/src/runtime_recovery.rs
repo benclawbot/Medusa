@@ -1,7 +1,6 @@
 use medusa_runtime::{
     RecoveryActionRequest, RecoveryOperation, RecoveryPreflightEvidence, RecoveryView,
 };
-use tauri::State;
 
 use crate::dto::DesktopRecoveryActionRequest;
 
@@ -9,7 +8,7 @@ use crate::dto::DesktopRecoveryActionRequest;
 pub fn runtime_recovery_action(
     runtime_id: String,
     request: DesktopRecoveryActionRequest,
-    registry: State<'_, RuntimeRegistry>,
+    registry: tauri::State<'_, RuntimeRegistry>,
 ) -> Result<(), String> {
     let view: RecoveryView = serde_json::from_value(request.recovery)
         .map_err(|error| format!("invalid recovery view: {error}"))?;
