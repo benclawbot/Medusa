@@ -150,14 +150,14 @@ fn windows_source_script(
     let executable = powershell_quote(executable);
     let script = powershell_quote(script);
     format!(
-        "$parentPid = {parent_pid}\nwhile (Get-Process -Id $parentPid -ErrorAction SilentlyContinue) {{ Start-Sleep -Milliseconds 200 }}\nGet-Process -Name medusa -ErrorAction SilentlyContinue | Where-Object {{ $_.Path -eq {executable} }} | Stop-Process -Force\nwhile (Get-Process -Name medusa -ErrorAction SilentlyContinue | Where-Object {{ $_.Path -eq {executable} }}) {{ Start-Sleep -Milliseconds 200 }}\n& cargo install --git '{REPOSITORY_URL}' --rev {revision} --locked --force --bin medusa medusa-cli\nif ($LASTEXITCODE -eq 0) {{ Start-Process -FilePath {executable} }}\nRemove-Item -LiteralPath {script} -Force\n"
+        "$parentPid = {parent_pid}\nwhile (Get-Process -Id $parentPid -ErrorAction SilentlyContinue) {{ Start-Sleep -Milliseconds 200 }}\nGet-Process -Name medusa -ErrorAction SilentlyContinue | Where-Object {{ $_.Path -eq {executable} }} | Stop-Process -Force\nwhile (Get-Process -Name medusa -ErrorAction SilentlyContinue | Where-Object {{ $_.Path -eq {executable} }}) {{ Start-Sleep -Milliseconds 200 }}\n& cargo install --git '{REPOSITORY_URL}' --rev {revision} --locked --force --bin medusa medusa-cli\nif ($LASTEXITCODE -eq 0) {{ Start-Process -FilePath {executable} -ArgumentList '--fresh' }}\nRemove-Item -LiteralPath {script} -Force\n"
     )
 }
 
 #[cfg(any(not(windows), test))]
 fn unix_source_script(parent_pid: u32, executable: &Path, script: &Path, revision: &str) -> String {
     format!(
-        "#!/bin/sh\nwhile kill -0 {parent_pid} 2>/dev/null; do sleep 1; done\ncargo install --git '{REPOSITORY_URL}' --rev {revision} --locked --force --bin medusa medusa-cli && exec '{}'\nrm -f '{}'\n",
+        "#!/bin/sh\nwhile kill -0 {parent_pid} 2>/dev/null; do sleep 1; done\ncargo install --git '{REPOSITORY_URL}' --rev {revision} --locked --force --bin medusa medusa-cli && exec '{}' --fresh\nrm -f '{}'\n",
         shell_quote(executable),
         shell_quote(script),
     )
@@ -270,7 +270,9 @@ mod tests {
         assert!(windows.contains("Stop-Process -Force"));
         assert!(windows.contains(&format!("--rev {REVISION} --locked --force")));
         assert!(!windows.contains("--branch main"));
-        assert!(windows.contains(r"Start-Process -FilePath 'C:\bin\medusa.exe'"));
+        assert!(windows.contains(
+            r"Start-Process -FilePath 'C:\bin\medusa.exe' -ArgumentList '--fresh'"
+        ));
 
         let unix = unix_source_script(
             4242,
@@ -280,5 +282,6 @@ mod tests {
         );
         assert!(unix.contains(&format!("--rev {REVISION} --locked --force")));
         assert!(!unix.contains("--branch main"));
+        assert!(unix.contains("exec '/usr/local/bin/medusa' --fresh"));
     }
 }
