@@ -56,7 +56,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     replace_once(
         &mut source,
         "    ConfigureModel(ModelConfiguration),\n    Shutdown,",
-        "    ConfigureModel(ModelConfiguration),\n    Recovery {\n        view: medusa_recovery_coordinator::RecoveryView,\n        request: medusa_recovery_coordinator::RecoveryActionRequest,\n        preflight: medusa_recovery_coordinator::RecoveryPreflightEvidence,\n    },\n    Shutdown,",
+        "    ConfigureModel(ModelConfiguration),\n    Recovery {\n        view: Box<medusa_recovery_coordinator::RecoveryView>,\n        request: medusa_recovery_coordinator::RecoveryActionRequest,\n        preflight: medusa_recovery_coordinator::RecoveryPreflightEvidence,\n    },\n    Shutdown,",
     )?;
 
     replace_once(
@@ -68,7 +68,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     replace_once(
         &mut source,
         "    pub fn cancel(&self) -> bool {",
-        "    pub fn execute_recovery(\n        &self,\n        view: medusa_recovery_coordinator::RecoveryView,\n        request: medusa_recovery_coordinator::RecoveryActionRequest,\n        preflight: medusa_recovery_coordinator::RecoveryPreflightEvidence,\n    ) -> Result<(), RuntimeError> {\n        if lock_submission(&self.submission).busy {\n            return Err(RuntimeError::Busy);\n        }\n        self.commands\n            .send(RuntimeCommand::Recovery { view, request, preflight })\n            .map_err(|_| RuntimeError::WorkerStopped)\n    }\n\n    pub fn cancel(&self) -> bool {",
+        "    pub fn execute_recovery(\n        &self,\n        view: medusa_recovery_coordinator::RecoveryView,\n        request: medusa_recovery_coordinator::RecoveryActionRequest,\n        preflight: medusa_recovery_coordinator::RecoveryPreflightEvidence,\n    ) -> Result<(), RuntimeError> {\n        if lock_submission(&self.submission).busy {\n            return Err(RuntimeError::Busy);\n        }\n        self.commands\n            .send(RuntimeCommand::Recovery { view: Box::new(view), request, preflight })\n            .map_err(|_| RuntimeError::WorkerStopped)\n    }\n\n    pub fn cancel(&self) -> bool {",
     )?;
 
     replace_once(
