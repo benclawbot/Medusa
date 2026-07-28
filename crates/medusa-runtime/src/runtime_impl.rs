@@ -484,14 +484,14 @@ fn run_prompt(
     state: &mut RuntimeState,
     draft: PromptDraft,
     events: &Sender<RuntimeEvent>,
-    cancel: &AtomicBool,
+    cancel: &Arc<AtomicBool>,
     submission: &Arc<Mutex<SubmissionState>>,
 ) -> Result<RuntimeEvent, RuntimeError> {
     let config = state.config.clone();
     let max_turns = config.agent.max_turns;
     let provider = ConfiguredProvider::manager_from_config(&config, state.session_api_key.clone())
         .map_err(RuntimeError::agent)?;
-    let engine = AgentEngine::new(provider, config);
+    let engine = AgentEngine::new_with_cancellation(provider, config, Arc::clone(cancel));
     let selected_skill = state.pending_skill.clone();
     let skill_context = selected_skill.as_ref().map(SelectedSkill::prompt_context);
     let content = message_blocks(&draft)?;
@@ -532,11 +532,19 @@ fn run_prompt(
             if session.turn >= max_turns {
                 return Err(RuntimeError::TurnLimit(max_turns));
             }
-            let outcome = engine
-                .step_with_observer_and_context(&mut session, skill_context.as_deref(), |update| {
+            let outcome = match engine.step_with_observer_and_context(
+                &mut session,
+                skill_context.as_deref(),
+                |update| {
                     forward_update(update, events, &mut updates);
-                })
-                .map_err(RuntimeError::agent)?;
+                },
+            ) {
+                Ok(outcome) => outcome,
+                Err(_) if cancel_requested(cancel, submission) => {
+                    return Ok(RuntimeEvent::Cancelled);
+                }
+                Err(error) => return Err(RuntimeError::agent(error)),
+            };
             let _ = events.send(RuntimeEvent::Progress { turn: session.turn });
 
             if matches!(outcome, StepOutcome::Continue | StepOutcome::TurnComplete)
@@ -621,7 +629,7 @@ fn execute_slash_command(
     state: &mut RuntimeState,
     command: SlashCommand,
     events: &Sender<RuntimeEvent>,
-    cancel: &AtomicBool,
+    cancel: &Arc<AtomicBool>,
 ) -> Result<Option<RuntimeEvent>, RuntimeError> {
     let submission = Arc::new(Mutex::new(SubmissionState {
         busy: true,
@@ -634,7 +642,7 @@ fn execute_slash_command_with_submission(
     state: &mut RuntimeState,
     command: SlashCommand,
     events: &Sender<RuntimeEvent>,
-    cancel: &AtomicBool,
+    cancel: &Arc<AtomicBool>,
     submission: &Arc<Mutex<SubmissionState>>,
 ) -> Result<Option<RuntimeEvent>, RuntimeError> {
     match command {

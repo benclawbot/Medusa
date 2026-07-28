@@ -337,7 +337,7 @@ fn effort_command_updates_the_runtime_turn_budget() {
             effort: Some(Effort::Medium),
         },
         &sender,
-        &AtomicBool::new(false),
+        &Arc::new(AtomicBool::new(false)),
     )
     .expect("set effort");
     assert_eq!(state.config.agent.max_turns, 200);
@@ -359,7 +359,7 @@ fn goal_command_is_durable_and_guides_the_next_agent_turn() {
             objective: Some("Build a responsive portfolio".to_owned()),
         },
         &sender,
-        &AtomicBool::new(false),
+        &Arc::new(AtomicBool::new(false)),
     )
     .expect("set goal");
 
@@ -395,7 +395,7 @@ fn direct_skill_command_stages_validated_context_for_the_next_prompt() {
             task: None,
         },
         &sender,
-        &AtomicBool::new(false),
+        &Arc::new(AtomicBool::new(false)),
     )
     .expect("load skill");
 

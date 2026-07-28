@@ -1,7 +1,16 @@
 //! Provider-neutral model contracts and the MiniMax Anthropic-compatible adapter.
 
 mod manager;
-use std::{env, sync::OnceLock, time::Duration};
+use std::{
+    env,
+    sync::{
+        OnceLock,
+        atomic::{AtomicBool, Ordering},
+        mpsc,
+    },
+    thread,
+    time::Duration,
+};
 
 use medusa_config::{Config, FallbackProviderConfig};
 use medusa_core::{ErrorCategory, ErrorCode, MedusaError, MedusaResult};
@@ -124,6 +133,21 @@ pub struct ModelResponse {
 pub trait ModelProvider {
     fn complete(&self, request: &ModelRequest) -> MedusaResult<ModelResponse>;
 
+    fn complete_cancellable(
+        &self,
+        request: &ModelRequest,
+        cancel: &AtomicBool,
+    ) -> MedusaResult<ModelResponse> {
+        if cancel.load(Ordering::SeqCst) {
+            return Err(cancelled_provider_error());
+        }
+        let response = self.complete(request)?;
+        if cancel.load(Ordering::SeqCst) {
+            return Err(cancelled_provider_error());
+        }
+        Ok(response)
+    }
+
     fn capabilities(&self) -> ProviderCapabilities {
         ProviderCapabilities::default()
     }
@@ -135,6 +159,7 @@ pub trait ModelProvider {
 }
 
 /// Anthropic Messages API adapter for MiniMax, Anthropic, and compatible providers.
+#[derive(Clone)]
 pub struct MiniMaxProvider {
     client: Client,
     base_url: String,
@@ -289,6 +314,51 @@ fn provider_settings(provider: &str) -> MedusaResult<ProviderSettings> {
 
 impl ModelProvider for MiniMaxProvider {
     fn complete(&self, request: &ModelRequest) -> MedusaResult<ModelResponse> {
+        self.complete_request(request)
+    }
+
+    fn complete_cancellable(
+        &self,
+        request: &ModelRequest,
+        cancel: &AtomicBool,
+    ) -> MedusaResult<ModelResponse> {
+        if cancel.load(Ordering::SeqCst) {
+            return Err(cancelled_provider_error());
+        }
+        let provider = self.clone();
+        let request = request.clone();
+        let (sender, receiver) = mpsc::sync_channel(1);
+        thread::Builder::new()
+            .name("medusa-provider-request".to_owned())
+            .spawn(move || {
+                let _ = sender.send(provider.complete_request(&request));
+            })
+            .map_err(|error| {
+                provider_response_error(format!("could not start request worker: {error}"))
+            })?;
+        loop {
+            if cancel.load(Ordering::SeqCst) {
+                return Err(cancelled_provider_error());
+            }
+            match receiver.recv_timeout(Duration::from_millis(50)) {
+                Ok(result) => return result,
+                Err(mpsc::RecvTimeoutError::Timeout) => {}
+                Err(mpsc::RecvTimeoutError::Disconnected) => {
+                    return Err(provider_response_error(
+                        "provider request worker stopped unexpectedly",
+                    ));
+                }
+            }
+        }
+    }
+
+    fn capabilities(&self) -> ProviderCapabilities {
+        self.capabilities.clone()
+    }
+}
+
+impl MiniMaxProvider {
+    fn complete_request(&self, request: &ModelRequest) -> MedusaResult<ModelResponse> {
         self.validate_request(request)?;
         let endpoint = format!("{}/v1/messages", self.base_url);
         let response = self
@@ -305,10 +375,14 @@ impl ModelProvider for MiniMaxProvider {
         }
         Err(response_error(response))
     }
+}
 
-    fn capabilities(&self) -> ProviderCapabilities {
-        self.capabilities.clone()
-    }
+fn cancelled_provider_error() -> MedusaError {
+    MedusaError::new(
+        ErrorCode::DependencyUnavailable,
+        ErrorCategory::Transient,
+        "provider request cancelled",
+    )
 }
 
 fn minimax_capabilities_from_environment() -> ProviderCapabilities {
@@ -632,6 +706,17 @@ impl ModelProvider for ConfiguredProvider {
         }
     }
 
+    fn complete_cancellable(
+        &self,
+        request: &ModelRequest,
+        cancel: &AtomicBool,
+    ) -> MedusaResult<ModelResponse> {
+        match self {
+            Self::Anthropic(provider) => provider.complete_cancellable(request, cancel),
+            Self::OpenAi(provider) => provider.complete_cancellable(request, cancel),
+        }
+    }
+
     fn capabilities(&self) -> ProviderCapabilities {
         match self {
             Self::Anthropic(provider) => provider.capabilities(),
@@ -679,7 +764,13 @@ impl OpenAiProvider {
             .or_else(|| env::var(format!("{provider}_BASE_URL")).ok())
             .or_else(|| env::var("OPENAI_BASE_URL").ok())
             .or_else(|| env::var("MEDUSA_BASE_URL").ok())
-            .unwrap_or_else(|| "https://api.openai.com/v1".to_owned());
+            .unwrap_or_else(|| {
+                if config.model.provider.eq_ignore_ascii_case("minimax") {
+                    "https://api.minimax.io/v1".to_owned()
+                } else {
+                    "https://api.openai.com/v1".to_owned()
+                }
+            });
         Ok(Self {
             client: shared_http_client()?,
             base_url: base_url.trim_end_matches('/').to_owned(),
