@@ -13,6 +13,7 @@ path = "src/runtime_root_generated.rs"
 
 [dependencies]
 base64 = "0.22"
+hex.workspace = true
 medusa-agent = { path = "../medusa-agent" }
 medusa-capabilities = { path = "../medusa-capabilities" }
 medusa-config = { path = "../medusa-config" }
