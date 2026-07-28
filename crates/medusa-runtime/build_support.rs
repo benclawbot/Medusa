@@ -1,4 +1,4 @@
-use std::{env, error::Error, fs, io, path::PathBuf};
+use std::{env, error::Error, fs, io, path::{Path, PathBuf}};
 
 fn replace_once(source: &mut String, needle: &str, replacement: &str) -> io::Result<()> {
     let position = source.find(needle).ok_or_else(|| {
@@ -30,7 +30,7 @@ fn bind_module(
     )
 }
 
-fn write_generated_commands(out_dir: &PathBuf) -> Result<PathBuf, Box<dyn Error>> {
+fn write_generated_commands(out_dir: &Path) -> Result<PathBuf, Box<dyn Error>> {
     let mut source = fs::read_to_string("src/commands.rs")?.replace("\r\n", "\n");
     replace_once(
         &mut source,
