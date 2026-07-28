@@ -310,8 +310,16 @@ mod tests {
 
         assert_eq!(command.get_program(), "cmd");
         assert_eq!(arguments, ["/D", "/S", "/C", r"C:\bin\medusa.update.cmd"]);
-        assert!(!arguments.iter().any(|argument| argument.eq_ignore_ascii_case("/K")));
-        assert!(!arguments.iter().any(|argument| argument.eq_ignore_ascii_case("start")));
+        assert!(
+            !arguments
+                .iter()
+                .any(|argument| argument.eq_ignore_ascii_case("/K"))
+        );
+        assert!(
+            !arguments
+                .iter()
+                .any(|argument| argument.eq_ignore_ascii_case("start"))
+        );
     }
 
     #[test]
@@ -330,9 +338,7 @@ mod tests {
         assert!(script.contains("tasklist /fi \"PID eq 4242\""));
         assert!(script.contains("goto wait_for_parent"));
         assert!(script.contains("move /y \"C:\\bin\\medusa.update-new.exe\""));
-        assert!(script.contains(
-            "start \"\" /B \"C:\\bin\\medusa.exe\" \"resume\" \"session-1\""
-        ));
+        assert!(script.contains("start \"\" /B \"C:\\bin\\medusa.exe\" \"resume\" \"session-1\""));
         assert!(script.ends_with("endlocal\r\nexit /b 0\r\n"));
     }
 }
