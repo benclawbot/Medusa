@@ -133,4 +133,18 @@ jobs:
           name: minimax-v2-clippy-diagnostics
           path: clippy-diagnostics.txt
       - name: Test workspace
-        run: cargo test --workspace --all-features
+        shell: bash
+        run: |
+          set +e
+          cargo test --workspace --all-features >test.log 2>&1
+          status=$?
+          if [ "$status" -ne 0 ]; then
+            tail -n 400 test.log >test-diagnostics.txt
+          fi
+          exit "$status"
+      - name: Upload test diagnostics
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: minimax-v2-test-diagnostics
+          path: test-diagnostics.txt
