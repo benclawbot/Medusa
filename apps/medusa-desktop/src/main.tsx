@@ -6,6 +6,7 @@ import { DesktopUpdateControl } from "./DesktopUpdateControl";
 import { DiffDock } from "./DiffDock";
 import { EngineeringDashboardLauncher } from "./EngineeringDashboard";
 import { MemoryDock } from "./MemoryDock";
+import { RecoveryDock } from "./RecoveryDock";
 import { SessionDock } from "./SessionDock";
 import "./styles.css";
 import "./medusa-desktop.css";
@@ -24,6 +25,7 @@ ReactDOM.createRoot(document.getElementById("root") as HTMLElement).render(
     <SessionDock />
     <DiffDock />
     <MemoryDock />
+    <RecoveryDock />
     <DesktopUpdateControl />
     <EngineeringDashboardLauncher />
   </React.StrictMode>,
