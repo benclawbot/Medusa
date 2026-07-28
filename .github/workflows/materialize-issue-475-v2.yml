@@ -6,6 +6,7 @@ on:
       - main
     paths:
       - .github/materialize_issue_475.py
+      - .github/materialize_issue_475_capabilities.py
       - .github/materialize_issue_475_tests.py
       - .github/workflows/materialize-issue-475-v2.yml
 
@@ -24,6 +25,7 @@ jobs:
       - name: Apply provider change
         run: |
           python3 .github/materialize_issue_475.py
+          python3 .github/materialize_issue_475_capabilities.py
           python3 .github/materialize_issue_475_tests.py
       - name: Format
         run: cargo fmt --all
@@ -36,6 +38,6 @@ jobs:
           git config user.name github-actions[bot]
           git config user.email 41898282+github-actions[bot]@users.noreply.github.com
           git add crates/medusa-provider/src/lib.rs crates/medusa-provider/tests/openai_provider.rs
-          git rm .github/issue-475-openai-image-input.patch .github/materialize_issue_475.py .github/materialize_issue_475_tests.py .github/workflows/materialize-issue-475.yml .github/workflows/materialize-issue-475-v2.yml
+          git rm .github/issue-475-openai-image-input.patch .github/materialize_issue_475.py .github/materialize_issue_475_capabilities.py .github/materialize_issue_475_tests.py .github/workflows/materialize-issue-475.yml .github/workflows/materialize-issue-475-v2.yml
           git commit -m "Add OpenAI image input support"
           git push origin HEAD:issue-475-openai-image-input
