@@ -1,6 +1,14 @@
 //! Provider routing with bounded retry, failover, response caching, and health snapshots.
 
-use std::{collections::BTreeMap, sync::Mutex, thread, time::Duration};
+use std::{
+    collections::BTreeMap,
+    sync::{
+        Mutex,
+        atomic::{AtomicBool, Ordering},
+    },
+    thread,
+    time::Duration,
+};
 
 use medusa_core::{ErrorCategory, ErrorCode, MedusaError, MedusaResult};
 use serde::{Deserialize, Serialize};
@@ -288,6 +296,34 @@ impl<P> ProviderManager<P> {
 
 impl<P: ModelProvider> ModelProvider for ProviderManager<P> {
     fn complete(&self, request: &ModelRequest) -> MedusaResult<ModelResponse> {
+        self.complete_with_cancel(request, None)
+    }
+
+    fn complete_cancellable(
+        &self,
+        request: &ModelRequest,
+        cancel: &AtomicBool,
+    ) -> MedusaResult<ModelResponse> {
+        self.complete_with_cancel(request, Some(cancel))
+    }
+
+    fn capabilities(&self) -> ProviderCapabilities {
+        self.providers
+            .first()
+            .map_or_else(ProviderCapabilities::default, ModelProvider::capabilities)
+    }
+
+    fn execution_status(&self) -> Option<Value> {
+        ProviderManager::execution_status(self)
+    }
+}
+
+impl<P: ModelProvider> ProviderManager<P> {
+    fn complete_with_cancel(
+        &self,
+        request: &ModelRequest,
+        cancel: Option<&AtomicBool>,
+    ) -> MedusaResult<ModelResponse> {
         let key = serde_json::to_string(request).map_err(|error| {
             MedusaError::new(
                 ErrorCode::InvalidConfiguration,
@@ -311,7 +347,10 @@ impl<P: ModelProvider> ModelProvider for ProviderManager<P> {
                 .map_or_else(RouteRetryPolicy::default, |profile| profile.retry);
             for attempt in 0..=policy.max_retries {
                 self.record_attempt(index);
-                match provider.complete(request) {
+                match cancel.map_or_else(
+                    || provider.complete(request),
+                    |flag| provider.complete_cancellable(request, flag),
+                ) {
                     Ok(response) => {
                         self.record_success(index);
                         if let Ok(mut cache) = self.cache.lock() {
@@ -326,7 +365,22 @@ impl<P: ModelProvider> ModelProvider for ProviderManager<P> {
                             RetryDisposition::Retry if attempt < policy.max_retries => {
                                 let delay_ms = policy.delay_ms(&error, index, attempt);
                                 self.record_retry(index, delay_ms);
-                                (self.sleeper)(Duration::from_millis(delay_ms));
+                                if let Some(flag) = cancel {
+                                    let deadline =
+                                        std::time::Instant::now() + Duration::from_millis(delay_ms);
+                                    while std::time::Instant::now() < deadline {
+                                        if flag.load(Ordering::SeqCst) {
+                                            return Err(MedusaError::new(
+                                                ErrorCode::DependencyUnavailable,
+                                                ErrorCategory::Transient,
+                                                "provider request cancelled",
+                                            ));
+                                        }
+                                        thread::sleep(Duration::from_millis(25));
+                                    }
+                                } else {
+                                    (self.sleeper)(Duration::from_millis(delay_ms));
+                                }
                             }
                             RetryDisposition::Retry | RetryDisposition::Failover
                                 if has_fallback =>
@@ -351,16 +405,6 @@ impl<P: ModelProvider> ModelProvider for ProviderManager<P> {
                 "no model providers are configured",
             )
         }))
-    }
-
-    fn capabilities(&self) -> ProviderCapabilities {
-        self.providers
-            .first()
-            .map_or_else(ProviderCapabilities::default, ModelProvider::capabilities)
-    }
-
-    fn execution_status(&self) -> Option<Value> {
-        ProviderManager::execution_status(self)
     }
 }
 

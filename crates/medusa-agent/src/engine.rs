@@ -24,7 +24,12 @@ mod world_model_observation {
 }
 mod runtime_failure;
 
-use std::{collections::VecDeque, path::Path, sync::Mutex, thread};
+use std::{
+    collections::VecDeque,
+    path::Path,
+    sync::{Arc, Mutex, atomic::AtomicBool},
+    thread,
+};
 
 use medusa_config::{Config, Mode};
 use medusa_core::{ErrorCategory, ErrorCode, MedusaError, MedusaResult, SessionId};
@@ -119,6 +124,7 @@ pub struct AgentEngine<P> {
     config: Config,
     desktop_commander_settings: DesktopCommanderSettings,
     desktop_commander: Mutex<Option<DesktopCommanderClient>>,
+    cancellation: Arc<AtomicBool>,
 }
 
 fn audited_tool_name(name: &str, input: &serde_json::Value) -> String {
@@ -138,6 +144,22 @@ impl<P: ModelProvider> AgentEngine<P> {
             config,
             desktop_commander_settings: DesktopCommanderSettings::from_env(),
             desktop_commander: Mutex::new(None),
+            cancellation: Arc::new(AtomicBool::new(false)),
+        }
+    }
+
+    #[must_use]
+    pub fn new_with_cancellation(
+        provider: P,
+        config: Config,
+        cancellation: Arc<AtomicBool>,
+    ) -> Self {
+        Self {
+            provider,
+            config,
+            desktop_commander_settings: DesktopCommanderSettings::from_env(),
+            desktop_commander: Mutex::new(None),
+            cancellation,
         }
     }
 
@@ -544,7 +566,10 @@ impl<P: ModelProvider> AgentEngine<P> {
             temperature_milli: self.config.model.temperature_milli,
         };
         let request_started = std::time::Instant::now();
-        let response = match self.provider.complete(&request) {
+        let response = match self
+            .provider
+            .complete_cancellable(&request, &self.cancellation)
+        {
             Ok(response) => response,
             Err(error) if context_budget::is_context_limit_rejection(&error.to_string()) => {
                 if !compacted {
@@ -557,7 +582,8 @@ impl<P: ModelProvider> AgentEngine<P> {
                     validate_messages(&session.messages, &self.provider.capabilities())?;
                     request.messages = session.messages.clone();
                 }
-                self.provider.complete(&request)?
+                self.provider
+                    .complete_cancellable(&request, &self.cancellation)?
             }
             Err(error) => return Err(error),
         };

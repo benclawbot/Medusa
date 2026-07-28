@@ -461,7 +461,12 @@ impl ModelModal {
 
 fn model_options_for(provider: &str, current_model: &str) -> Vec<String> {
     let mut models = match provider {
-        "minimax" => vec!["MiniMax-M3".to_owned(), "MiniMax-M2.7".to_owned()],
+        "minimax" => vec![
+            "MiniMax-M3".to_owned(),
+            "MiniMax-M2.7".to_owned(),
+            "MiniMax-M2.7-highspeed".to_owned(),
+            "MiniMax-M2.5".to_owned(),
+        ],
         "anthropic" => vec![
             "claude-opus-4-6".to_owned(),
             "claude-sonnet-4-6".to_owned(),

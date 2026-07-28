@@ -92,17 +92,17 @@ fn main() -> Result<(), Box<dyn Error>> {
 
     replace_once(
         &mut source,
-        "    let engine = AgentEngine::new(provider, config);\n    let selected_skill = state.pending_skill.clone();\n    let skill_context = selected_skill.as_ref().map(SelectedSkill::prompt_context);\n    let content = message_blocks(&draft)?;\n",
-        "    let resuming_pending_question = state\n        .session\n        .as_ref()\n        .is_some_and(|session| session.pending_question.is_some());\n    if !resuming_pending_question {\n        crate::review::capture_review_baseline(&state.repo)\n            .map_err(|error| RuntimeError::agent(error.to_string()))?;\n    }\n    let engine = AgentEngine::new(provider, config);\n    let selected_skill = state.pending_skill.clone();\n    let execution_plan = crate::production_orchestrator::plan(&draft).map_err(RuntimeError::agent)?;\n    for event in crate::production_orchestrator::events(&execution_plan) { let _ = events.send(event); }\n    let orchestration_context = crate::production_orchestrator::runtime_context(&execution_plan);\n    let skill_context = selected_skill.as_ref().map(SelectedSkill::prompt_context).map(|skill| format!(\"{skill}\\n\\n{orchestration_context}\")).unwrap_or(orchestration_context);\n    let content = message_blocks(&draft)?;\n",
+        "    let engine = AgentEngine::new_with_cancellation(provider, config, Arc::clone(cancel));\n    let selected_skill = state.pending_skill.clone();\n    let skill_context = selected_skill.as_ref().map(SelectedSkill::prompt_context);\n    let content = message_blocks(&draft)?;\n",
+        "    let resuming_pending_question = state\n        .session\n        .as_ref()\n        .is_some_and(|session| session.pending_question.is_some());\n    if !resuming_pending_question {\n        crate::review::capture_review_baseline(&state.repo)\n            .map_err(|error| RuntimeError::agent(error.to_string()))?;\n    }\n    let engine = AgentEngine::new_with_cancellation(provider, config, Arc::clone(cancel));\n    let selected_skill = state.pending_skill.clone();\n    let execution_plan = crate::production_orchestrator::plan(&draft).map_err(RuntimeError::agent)?;\n    for event in crate::production_orchestrator::events(&execution_plan) { let _ = events.send(event); }\n    let orchestration_context = crate::production_orchestrator::runtime_context(&execution_plan);\n    let skill_context = selected_skill.as_ref().map(SelectedSkill::prompt_context).map(|skill| format!(\"{skill}\\n\\n{orchestration_context}\")).unwrap_or(orchestration_context);\n    let content = message_blocks(&draft)?;\n",
     )?;
     replace_once(
         &mut source,
-        "step_with_observer_and_context(&mut session, skill_context.as_deref(), |update| {",
-        "step_with_observer_and_context(&mut session, Some(skill_context.as_str()), |update| {",
+        "                skill_context.as_deref(),\n                |update| {",
+        "                Some(skill_context.as_str()),\n                |update| {",
     )?;
     replace_once(
         &mut source,
-        "            let outcome = engine\n                .step_with_observer_and_context(&mut session, Some(skill_context.as_str()), |update| {\n                    forward_update(update, events, &mut updates);\n                })\n                .map_err(RuntimeError::agent)?;",
+        "            let outcome = match engine.step_with_observer_and_context(\n                &mut session,\n                Some(skill_context.as_str()),\n                |update| {\n                    forward_update(update, events, &mut updates);\n                },\n            ) {\n                Ok(outcome) => outcome,\n                Err(_) if cancel_requested(cancel, submission) => {\n                    return Ok(RuntimeEvent::Cancelled);\n                }\n                Err(error) => return Err(RuntimeError::agent(error)),\n            };",
         "            let provider_activity_id = format!(\"provider-request-{}\", session.turn.saturating_add(1));\n            let _ = events.send(RuntimeEvent::Activity(RuntimeActivity {\n                id: Some(provider_activity_id.clone()),\n                kind: RuntimeActivityKind::Progress,\n                title: format!(\n                    \"Waiting for {} / {} response\",\n                    state.config.model.provider, state.config.model.name\n                ),\n                details: vec![\n                    \"The provider request has a 120-second per-attempt timeout.\".to_owned(),\n                    \"A bounded route retry or failover may follow; press Esc to cancel.\".to_owned(),\n                ],\n            }));\n            let provider_started_at = std::time::Instant::now();\n            let outcome = engine\n                .step_with_observer_and_context(&mut session, Some(skill_context.as_str()), |update| {\n                    forward_update(update, events, &mut updates);\n                })\n                .map_err(RuntimeError::agent)?;\n            let provider_duration_ms = u64::try_from(provider_started_at.elapsed().as_millis())\n                .unwrap_or(u64::MAX);\n            let _ = events.send(RuntimeEvent::Activity(RuntimeActivity {\n                id: Some(provider_activity_id),\n                kind: RuntimeActivityKind::Done,\n                title: \"Model response received\".to_owned(),\n                details: vec![format!(\"completed in {provider_duration_ms} ms\")],\n            }));",
     )?;
     replace_once(
@@ -111,6 +111,10 @@ fn main() -> Result<(), Box<dyn Error>> {
         "    let verified = matches!(&result, Ok(RuntimeEvent::Completed { .. }));\n    let failed = result.is_err();\n    if let Err(error) = crate::production_orchestrator::persist_outcome(&state.repo, &draft, &execution_plan, verified, failed) {\n        let _ = events.send(RuntimeEvent::Notice { title: \"Runtime learning record unavailable\".to_owned(), details: vec![error.to_string()] });\n    }\n    state.session = Some(session);\n    result\n}\n\nfn append_followups",
     )?;
 
+    source = source.replace(
+    "cancel: &AtomicBool",
+    "cancel: &Arc<AtomicBool>",
+);
     fs::write(out_dir.join("runtime_generated.rs"), source)?;
     Ok(())
 }

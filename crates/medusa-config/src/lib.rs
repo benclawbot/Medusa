@@ -147,7 +147,7 @@ impl Default for ModelConfig {
             provider: "minimax".into(),
             fallback_providers: Vec::new(),
             name: "MiniMax-M3".into(),
-            protocol: "anthropic".into(),
+            protocol: "openai".into(),
             temperature_milli: 200,
             max_output_tokens: 32_768,
             context_window_tokens: 1_000_000,

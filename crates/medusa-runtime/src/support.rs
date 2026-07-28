@@ -112,7 +112,7 @@ pub(super) fn is_supported_provider(provider: &str) -> bool {
 
 pub(super) fn protocol_for_provider(provider: &str) -> &'static str {
     match provider {
-        "minimax" | "anthropic" | "anthropic-compatible" => "anthropic",
+        "anthropic" | "anthropic-compatible" => "anthropic",
         _ => "openai",
     }
 }
