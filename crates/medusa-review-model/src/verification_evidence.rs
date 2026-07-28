@@ -55,6 +55,8 @@ pub struct VerificationReport {
 pub enum VerificationEvidenceError {
     #[error("verification evidence id must not be empty")]
     EmptyEvidenceId,
+    #[error("verification evidence id is duplicated: {0}")]
+    DuplicateEvidenceId(String),
     #[error("verification check name must not be empty")]
     EmptyCheckName,
     #[error("verification timestamp must not be negative")]
@@ -78,7 +80,13 @@ pub fn associate_verification_evidence(
         .iter()
         .map(|file| file.path.clone())
         .collect::<BTreeSet<_>>();
+    let mut evidence_ids = BTreeSet::new();
     for item in evidence {
+        if !evidence_ids.insert(item.id.clone()) {
+            return Err(VerificationEvidenceError::DuplicateEvidenceId(
+                item.id.clone(),
+            ));
+        }
         validate_evidence(item, &known_paths)?;
     }
 
@@ -102,47 +110,44 @@ pub fn associate_verification_evidence(
 
     let mut files = Vec::with_capacity(snapshot.files.len());
     for file in &mut snapshot.files {
-        let mut related = by_path.remove(&file.path).unwrap_or_default();
-        related.sort_by(|left, right| {
-            left.completed_at_unix_ms
-                .cmp(&right.completed_at_unix_ms)
-                .then_with(|| left.id.cmp(&right.id))
-        });
-        related.dedup_by(|left, right| left.id == right.id);
-
-        let latest_change_is_verified = related
-            .iter()
-            .any(|item| item.repository_fingerprint == file.current_fingerprint);
-        let has_failed = related
-            .iter()
-            .any(|item| item.outcome == VerificationOutcome::Failed);
-        let has_stale = !related.is_empty() && !latest_change_is_verified;
-
-        file.verification = if has_failed {
-            VerificationState::Failed
-        } else if has_stale {
-            VerificationState::Stale
-        } else if latest_change_is_verified {
-            VerificationState::Verified
-        } else {
-            VerificationState::Unverified
-        };
-
-        let evidence_ids = related
-            .iter()
-            .map(|item| item.id.clone())
-            .collect::<BTreeSet<_>>()
-            .into_iter()
-            .collect::<Vec<_>>();
-        file.provenance.verification_event_ids = evidence_ids.clone();
-
-        let unresolved_diagnostics = related
-            .iter()
+        let related = by_path.remove(&file.path).unwrap_or_default();
+        let latest_by_check = latest_evidence_by_check(related);
+        let repository_is_current = latest_by_check
+            .values()
+            .any(|item| item.repository_fingerprint == snapshot.repository_fingerprint);
+        let unresolved_diagnostics = latest_by_check
+            .values()
             .flat_map(|item| item.diagnostics.iter())
             .filter(|diagnostic| diagnostic.path == file.path)
             .filter(|diagnostic| diagnostic.severity == DiagnosticSeverity::Error)
             .cloned()
             .collect::<Vec<_>>();
+        let has_failed = latest_by_check.values().any(|item| {
+            item.outcome == VerificationOutcome::Failed
+                || item.diagnostics.iter().any(|diagnostic| {
+                    diagnostic.path == file.path
+                        && diagnostic.severity == DiagnosticSeverity::Error
+                })
+        });
+        let has_stale = !latest_by_check.is_empty() && !repository_is_current;
+
+        file.verification = if has_failed {
+            VerificationState::Failed
+        } else if has_stale {
+            VerificationState::Stale
+        } else if repository_is_current {
+            VerificationState::Verified
+        } else {
+            VerificationState::Unverified
+        };
+
+        let evidence_ids = latest_by_check
+            .values()
+            .map(|item| item.id.clone())
+            .collect::<BTreeSet<_>>()
+            .into_iter()
+            .collect::<Vec<_>>();
+        file.provenance.verification_event_ids = evidence_ids.clone();
 
         files.push(FileVerificationSummary {
             path: file.path.clone(),
@@ -156,6 +161,21 @@ pub fn associate_verification_evidence(
         files,
         unmatched_diagnostics,
     })
+}
+
+fn latest_evidence_by_check(
+    mut related: Vec<&VerificationEvidence>,
+) -> BTreeMap<String, &VerificationEvidence> {
+    related.sort_by(|left, right| {
+        left.completed_at_unix_ms
+            .cmp(&right.completed_at_unix_ms)
+            .then_with(|| left.id.cmp(&right.id))
+    });
+    let mut latest = BTreeMap::new();
+    for item in related {
+        latest.insert(item.check_name.clone(), item);
+    }
+    latest
 }
 
 fn validate_evidence(
@@ -202,30 +222,34 @@ mod tests {
 
     use super::*;
 
+    fn review_file(path: &str) -> ReviewFile {
+        ReviewFile {
+            path: path.into(),
+            previous_path: None,
+            kind: ChangeKind::Modified,
+            origin: ChangeOrigin::Medusa,
+            binary: false,
+            policy_sensitive: false,
+            verification: VerificationState::Unverified,
+            review_state: ReviewState::Unreviewed,
+            snapshot_fingerprint: format!("{path}-v1"),
+            current_fingerprint: format!("{path}-v2"),
+            hunks: vec![],
+            provenance: ReviewProvenance {
+                task_step_id: Some("step-1".into()),
+                tool_execution_id: None,
+                rationale: None,
+                verification_event_ids: vec![],
+            },
+        }
+    }
+
     fn snapshot() -> ReviewSnapshot {
         ReviewSnapshot {
             id: "snapshot-1".into(),
-            repository_fingerprint: "repo-1".into(),
+            repository_fingerprint: "repo-v2".into(),
             created_at_unix_ms: 1,
-            files: vec![ReviewFile {
-                path: "src/lib.rs".into(),
-                previous_path: None,
-                kind: ChangeKind::Modified,
-                origin: ChangeOrigin::Medusa,
-                binary: false,
-                policy_sensitive: false,
-                verification: VerificationState::Unverified,
-                review_state: ReviewState::Unreviewed,
-                snapshot_fingerprint: "file-v1".into(),
-                current_fingerprint: "file-v2".into(),
-                hunks: vec![],
-                provenance: ReviewProvenance {
-                    task_step_id: Some("step-1".into()),
-                    tool_execution_id: None,
-                    rationale: None,
-                    verification_event_ids: vec![],
-                },
-            }],
+            files: vec![review_file("src/lib.rs")],
         }
     }
 
@@ -242,11 +266,11 @@ mod tests {
     }
 
     #[test]
-    fn marks_file_verified_when_evidence_matches_latest_content() {
+    fn marks_file_verified_when_evidence_matches_latest_repository() {
         let mut snapshot = snapshot();
         let report = associate_verification_evidence(
             &mut snapshot,
-            &[evidence(VerificationOutcome::Passed, "file-v2")],
+            &[evidence(VerificationOutcome::Passed, "repo-v2")],
         )
         .unwrap();
         assert_eq!(snapshot.files[0].verification, VerificationState::Verified);
@@ -258,11 +282,26 @@ mod tests {
     }
 
     #[test]
+    fn repository_level_evidence_verifies_multiple_affected_files() {
+        let mut snapshot = snapshot();
+        snapshot.files.push(review_file("src/main.rs"));
+        let mut item = evidence(VerificationOutcome::Passed, "repo-v2");
+        item.affected_paths.push("src/main.rs".into());
+        let report = associate_verification_evidence(&mut snapshot, &[item]).unwrap();
+        assert!(
+            report
+                .files
+                .iter()
+                .all(|file| file.state == VerificationState::Verified)
+        );
+    }
+
+    #[test]
     fn marks_file_stale_after_later_edit_invalidates_evidence() {
         let mut snapshot = snapshot();
         associate_verification_evidence(
             &mut snapshot,
-            &[evidence(VerificationOutcome::Passed, "file-v1")],
+            &[evidence(VerificationOutcome::Passed, "repo-v1")],
         )
         .unwrap();
         assert_eq!(snapshot.files[0].verification, VerificationState::Stale);
@@ -270,9 +309,22 @@ mod tests {
     }
 
     #[test]
+    fn successful_rerun_supersedes_earlier_failure_for_the_same_check() {
+        let mut snapshot = snapshot();
+        let mut failed = evidence(VerificationOutcome::Failed, "repo-v2");
+        failed.id = "verify-failed".into();
+        let mut passed = evidence(VerificationOutcome::Passed, "repo-v2");
+        passed.id = "verify-passed".into();
+        passed.completed_at_unix_ms = 20;
+        let report = associate_verification_evidence(&mut snapshot, &[failed, passed]).unwrap();
+        assert_eq!(report.files[0].state, VerificationState::Verified);
+        assert_eq!(report.files[0].evidence_ids, vec!["verify-passed"]);
+    }
+
+    #[test]
     fn failed_check_and_diagnostic_block_verified_completion() {
         let mut snapshot = snapshot();
-        let mut failed = evidence(VerificationOutcome::Failed, "file-v2");
+        let mut failed = evidence(VerificationOutcome::Failed, "repo-v2");
         failed.diagnostics.push(VerificationDiagnostic {
             path: "src/lib.rs".into(),
             message: "type mismatch".into(),
@@ -286,9 +338,38 @@ mod tests {
     }
 
     #[test]
+    fn error_diagnostic_fails_file_even_when_check_outcome_is_passed() {
+        let mut snapshot = snapshot();
+        let mut contradictory = evidence(VerificationOutcome::Passed, "repo-v2");
+        contradictory.diagnostics.push(VerificationDiagnostic {
+            path: "src/lib.rs".into(),
+            message: "unresolved compiler error".into(),
+            severity: DiagnosticSeverity::Error,
+            line: None,
+        });
+        let report = associate_verification_evidence(&mut snapshot, &[contradictory]).unwrap();
+        assert_eq!(report.files[0].state, VerificationState::Failed);
+        assert!(!snapshot.completion_state().verification_current);
+    }
+
+    #[test]
+    fn rejects_duplicate_evidence_ids_across_the_batch() {
+        let mut snapshot = snapshot();
+        let first = evidence(VerificationOutcome::Failed, "repo-v2");
+        let mut second = evidence(VerificationOutcome::Passed, "repo-v2");
+        second.completed_at_unix_ms = 20;
+        assert_eq!(
+            associate_verification_evidence(&mut snapshot, &[first, second]),
+            Err(VerificationEvidenceError::DuplicateEvidenceId(
+                "verify-1".into()
+            ))
+        );
+    }
+
+    #[test]
     fn rejects_unknown_affected_paths_but_surfaces_unmatched_diagnostics() {
         let mut snapshot = snapshot();
-        let mut invalid = evidence(VerificationOutcome::Passed, "file-v2");
+        let mut invalid = evidence(VerificationOutcome::Passed, "repo-v2");
         invalid.affected_paths = vec!["other.rs".into()];
         assert_eq!(
             associate_verification_evidence(&mut snapshot, &[invalid]),
@@ -297,7 +378,7 @@ mod tests {
             ))
         );
 
-        let mut valid = evidence(VerificationOutcome::Passed, "file-v2");
+        let mut valid = evidence(VerificationOutcome::Passed, "repo-v2");
         valid.diagnostics.push(VerificationDiagnostic {
             path: "workspace".into(),
             message: "global failure".into(),
