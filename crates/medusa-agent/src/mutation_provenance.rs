@@ -151,6 +151,7 @@ impl MutationJournal {
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 pub fn build_record(
     context: MutationContext,
     path: String,

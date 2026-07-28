@@ -12,9 +12,7 @@ use crate::policy::safe_path;
 
 #[path = "mutation_provenance.rs"]
 mod mutation_provenance;
-pub use mutation_provenance::{
-    MutationContext, MutationJournal, MutationKind, MutationRecord, ScopeValidation,
-};
+pub use mutation_provenance::{MutationContext, MutationKind, ScopeValidation};
 use mutation_provenance::{build_record, load as load_provenance, persist as persist_provenance};
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -89,6 +87,7 @@ pub fn apply_atomic(repo: &Path, mutations: &[FileMutation]) -> MedusaResult<Tra
 /// Applies every repository mutation through the rollback-capable boundary and atomically records
 /// authoritative mutation provenance. If provenance persistence fails, all committed file writes
 /// are rolled back before returning an error.
+#[allow(dead_code)]
 pub fn apply_atomic_with_context(
     repo: &Path,
     mutations: &[FileMutation],
@@ -248,6 +247,7 @@ fn apply_atomic_inner(
     })
 }
 
+#[allow(dead_code)]
 pub fn preview_selective_revert(repo: &Path, mutation_id: &str) -> MedusaResult<RevertPreview> {
     let journal = load_provenance(repo)?;
     let record = journal
@@ -285,6 +285,7 @@ pub fn preview_selective_revert(repo: &Path, mutation_id: &str) -> MedusaResult<
     })
 }
 
+#[allow(dead_code)]
 pub fn apply_selective_revert(
     repo: &Path,
     mutation_id: &str,
