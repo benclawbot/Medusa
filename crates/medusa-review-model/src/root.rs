@@ -4,6 +4,7 @@ mod action_history;
 mod model;
 #[path = "snapshot_builder.rs"]
 mod snapshot_builder;
+#[allow(unused_imports)]
 #[path = "verification_evidence.rs"]
 mod verification_evidence;
 
