@@ -43,6 +43,9 @@ struct Cli {
     overrides: Vec<(String, String)>,
     #[arg(long)]
     prompt: Option<String>,
+    /// Start a fresh interactive session, ignoring all durable session state.
+    #[arg(long, conflicts_with_all = ["continue", "resume_session"])]
+    fresh: bool,
     #[arg(long, conflicts_with = "resume_session")]
     r#continue: bool,
     #[arg(long = "resume", value_name = "SESSION", conflicts_with = "continue")]
@@ -149,11 +152,11 @@ fn run() -> MedusaResult<()> {
         return Ok(());
     };
 
-    if cli.prompt.is_some() || cli.r#continue || cli.resume_session.is_some() {
+    if cli.prompt.is_some() || cli.fresh || cli.r#continue || cli.resume_session.is_some() {
         return Err(MedusaError::new(
             ErrorCode::InvalidConfiguration,
             ErrorCategory::Validation,
-            "--prompt, --continue, and --resume are interactive-only and cannot be combined with a subcommand",
+            "--prompt, --fresh, --continue, and --resume are interactive-only and cannot be combined with a subcommand",
         ));
     }
 
