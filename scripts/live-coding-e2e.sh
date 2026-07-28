@@ -7,6 +7,41 @@ if [[ -z "${MINIMAX_API_KEY:-}" ]]; then
   exit 2
 fi
 
+LIVE_E2E_TIMEOUT_SECONDS="${LIVE_E2E_TIMEOUT_SECONDS:-1500}"
+HEARTBEAT_SECONDS="${LIVE_E2E_HEARTBEAT_SECONDS:-60}"
+STARTED_AT="$(date +%s)"
+CURRENT_PHASE="initialization"
+HEARTBEAT_PID=""
+
+log_phase() {
+  CURRENT_PHASE="$1"
+  printf '[live-e2e] phase=%s elapsed=%ss\n' "$CURRENT_PHASE" "$(( $(date +%s) - STARTED_AT ))"
+}
+
+write_failure_summary() {
+  local exit_code=$?
+  mkdir -p "${ARTIFACTS:-live-e2e-artifacts}"
+  printf '{"passed":0,"total":3,"sessions":1,"provider":"minimax","credential_persisted":false,"verification_contract_unchanged":false,"result":"failed","phase":"%s","exit_code":%d,"elapsed_seconds":%d}\n' \
+    "$CURRENT_PHASE" "$exit_code" "$(( $(date +%s) - STARTED_AT ))" \
+    > "${ARTIFACTS:-live-e2e-artifacts}/summary.json"
+  printf 'name=multi-language-repair\nresult=failed\nphase=%s\nexit_code=%d\nelapsed_seconds=%d\n' \
+    "$CURRENT_PHASE" "$exit_code" "$(( $(date +%s) - STARTED_AT ))" \
+    > "${ARTIFACTS:-live-e2e-artifacts}/failure.txt"
+  exit "$exit_code"
+}
+
+cleanup() {
+  if [[ -n "$HEARTBEAT_PID" ]]; then
+    kill "$HEARTBEAT_PID" 2>/dev/null || true
+    wait "$HEARTBEAT_PID" 2>/dev/null || true
+  fi
+  rm -rf "${ROOT:-}"
+}
+
+trap write_failure_summary ERR
+trap cleanup EXIT
+
+log_phase "build-medusa"
 cargo build --release --locked --bin medusa
 MEDUSA="$(pwd)/target/release/medusa"
 # Keep the fixture outside /tmp: Linux containment mounts a private tmpfs at
@@ -18,8 +53,8 @@ rm -rf "$ROOT" "$ARTIFACTS"
 mkdir -p "$ARTIFACTS" "$REPO/src" "$REPO/.medusa/sessions"
 test -d "$REPO/.medusa/sessions"
 test -w "$REPO/.medusa/sessions"
-trap 'rm -rf "$ROOT"' EXIT
 
+log_phase "prepare-fixture"
 git -C "$REPO" init -q -b main
 git -C "$REPO" config user.name "Medusa Live E2E"
 git -C "$REPO" config user.email "medusa-e2e@example.invalid"
@@ -84,10 +119,37 @@ PACKAGE_BEFORE="$(sha256sum "$REPO/package.json" | awk '{print $1}')"
 
 OBJECTIVE="Inspect this repository and repair all three product defects without modifying verify.sh, test.mjs, package.json, fixtures, or expected outputs. Correct value.txt to the verified value, robustly implement src/slugify.py while preserving its public API, and repair the counter transitions in src/counter.js. Run ./verify.sh, iterate until every check passes, and stop only after all three independent validations succeed."
 
-echo "::group::live coding test: multi-language-repair"
-"$MEDUSA" --repo "$REPO" run "$OBJECTIVE" 2>&1 | tee "$ARTIFACTS/multi-language-repair.log"
-echo "::endgroup::"
+log_phase "autonomous-session"
+printf '[live-e2e] session=multi-language-repair validations=3 timeout=%ss heartbeat=%ss\n' \
+  "$LIVE_E2E_TIMEOUT_SECONDS" "$HEARTBEAT_SECONDS"
+(
+  while sleep "$HEARTBEAT_SECONDS"; do
+    printf '[live-e2e] heartbeat phase=%s elapsed=%ss session=multi-language-repair\n' \
+      "$CURRENT_PHASE" "$(( $(date +%s) - STARTED_AT ))"
+  done
+) &
+HEARTBEAT_PID=$!
 
+echo "::group::live coding session: multi-language-repair (3 independent validations)"
+set +e
+timeout --signal=TERM --kill-after=30s "${LIVE_E2E_TIMEOUT_SECONDS}s" \
+  "$MEDUSA" --repo "$REPO" run "$OBJECTIVE" 2>&1 | tee "$ARTIFACTS/multi-language-repair.log"
+MEDUSA_STATUS=${PIPESTATUS[0]}
+set -e
+kill "$HEARTBEAT_PID" 2>/dev/null || true
+wait "$HEARTBEAT_PID" 2>/dev/null || true
+HEARTBEAT_PID=""
+echo "::endgroup::"
+if [[ "$MEDUSA_STATUS" -eq 124 || "$MEDUSA_STATUS" -eq 137 ]]; then
+  echo "[live-e2e] autonomous session timed out after ${LIVE_E2E_TIMEOUT_SECONDS}s" >&2
+  exit 124
+fi
+if [[ "$MEDUSA_STATUS" -ne 0 ]]; then
+  echo "[live-e2e] autonomous session exited with status $MEDUSA_STATUS" >&2
+  exit "$MEDUSA_STATUS"
+fi
+
+log_phase "verify-contract-integrity"
 VERIFIER_AFTER="$(sha256sum "$REPO/verify.sh" | awk '{print $1}')"
 TEST_AFTER="$(sha256sum "$REPO/test.mjs" | awk '{print $1}')"
 PACKAGE_AFTER="$(sha256sum "$REPO/package.json" | awk '{print $1}')"
@@ -97,11 +159,13 @@ test "$TEST_BEFORE" = "$TEST_AFTER"
 test "$PACKAGE_BEFORE" = "$PACKAGE_AFTER"
 test -x "$REPO/verify.sh"
 
+log_phase "run-independent-verification"
 (cd "$REPO" && ./verify.sh) | tee -a "$ARTIFACTS/multi-language-repair.log"
 test "$(tr -d '\n' < "$REPO/value.txt")" = "42"
 test -s "$REPO/src/slugify.py"
 test -s "$REPO/src/counter.js"
 
+log_phase "collect-evidence"
 mkdir -p "$ARTIFACTS/multi-language-repair"
 git -C "$REPO" diff --binary > "$ARTIFACTS/multi-language-repair/change.patch"
 git -C "$REPO" status --short > "$ARTIFACTS/multi-language-repair/status.txt"
@@ -113,7 +177,10 @@ printf '%s\n' \
   "objective=$OBJECTIVE" \
   "result=passed" \
   "independent_assertions=3" \
+  "elapsed_seconds=$(( $(date +%s) - STARTED_AT ))" \
   > "$ARTIFACTS/multi-language-repair/result.txt"
 
-printf '{"passed":3,"total":3,"sessions":1,"provider":"minimax","credential_persisted":false,"verification_contract_unchanged":true}\n' > "$ARTIFACTS/summary.json"
+printf '{"passed":3,"total":3,"sessions":1,"provider":"minimax","credential_persisted":false,"verification_contract_unchanged":true,"result":"passed","elapsed_seconds":%d}\n' \
+  "$(( $(date +%s) - STARTED_AT ))" > "$ARTIFACTS/summary.json"
+log_phase "complete"
 echo "live-coding-e2e-ok:3/3-in-one-session"
