@@ -3,7 +3,7 @@ on:
   pull_request:
     branches: [main]
 permissions:
-  contents: write
+  contents: read
 jobs:
   apply-and-validate:
     runs-on: ubuntu-latest
@@ -19,16 +19,6 @@ jobs:
       - name: Format check
         run: cargo fmt --all -- --check
       - name: Clippy
-        run: cargo clippy --workspace --all-targets --all-features -- -D warnings
+        run: cargo clippy --quiet --workspace --all-targets --all-features --message-format short -- -D warnings
       - name: Test workspace
-        run: cargo test --workspace --all-features
-      - name: Commit validated source changes
-        if: success()
-        run: |
-          rm .github/minimax-m3-openai-cancellation.patch
-          rm .github/workflows/apply-minimax-fix.yml
-          git config user.name github-actions[bot]
-          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
-          git add -A
-          git commit -m "Fix MiniMax M3 OpenAI routing and request cancellation [applied-minimax-fix]"
-          git push origin HEAD:${{ github.head_ref }}
+        run: cargo test --quiet --workspace --all-features
