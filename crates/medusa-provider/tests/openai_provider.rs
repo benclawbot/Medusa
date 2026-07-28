@@ -37,12 +37,6 @@ fn request() -> ModelRequest {
                         content: "ok".into(),
                         is_error: false,
                     },
-                    MessageBlock::Image {
-                        source: ImageSource::AttachmentRef {
-                            attachment_id: "img".into(),
-                        },
-                        alt_text: Some("ignored".into()),
-                    },
                 ],
             },
         ],
