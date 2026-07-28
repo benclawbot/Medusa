@@ -71,6 +71,14 @@ impl RuntimeController {
             inner: medusa_runtime::RuntimeController::start(repo),
         }
     }
+    pub fn start_resumed(repo: PathBuf, session_id: &str) -> Result<Self, RuntimeError> {
+        medusa_runtime::RuntimeController::start_resumed(repo, session_id)
+            .map(|inner| Self { inner })
+    }
+    pub fn start_continue_latest(repo: PathBuf) -> Result<Self, RuntimeError> {
+        medusa_runtime::RuntimeController::start_continue_latest(repo)
+            .map(|inner| Self { inner })
+    }
     pub fn submit(&self, draft: PromptDraft) -> Result<SubmitDisposition, RuntimeError> {
         self.inner.submit(draft)
     }
