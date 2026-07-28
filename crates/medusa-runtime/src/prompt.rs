@@ -1,3 +1,1 @@
-mod attachment;
-
-pub use attachment::*;
+pub use crate::attachment::*;
