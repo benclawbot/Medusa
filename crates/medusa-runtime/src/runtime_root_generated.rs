@@ -1,10 +1,18 @@
 include!(concat!(env!("OUT_DIR"), "/runtime_generated.rs"));
 
+pub use medusa_recovery_coordinator::{
+    RecoveryActionRequest, RecoveryAuditRecord, RecoveryExecutionReceipt, RecoveryOperation,
+    RecoveryPreflightEvidence, RecoveryView,
+};
+
 mod recovery {
-    use std::{fs, path::Path};
+    use std::{convert::Infallible, fs, path::Path, time::{SystemTime, UNIX_EPOCH}};
 
     use medusa_recovery_coordinator::{
-        CheckpointPresentation, RecoveryPreview, RecoveryView, RecoveryViewInput, VerificationState,
+        AuthorizedRecoveryAction, CheckpointPresentation, RecoveryActionExecutor,
+        RecoveryActionRequest, RecoveryActionService, RecoveryExecutionOutcome,
+        RecoveryExecutionReceipt, RecoveryOperation, RecoveryPreflightEvidence, RecoveryPreview,
+        RecoveryView, RecoveryViewInput, VerificationState,
     };
     use serde::Deserialize;
 
@@ -23,6 +31,67 @@ mod recovery {
         containment_must_be_reestablished: bool,
         checkpoints: Vec<CheckpointPresentation>,
         selected_preview: Option<RecoveryPreview>,
+    }
+
+    struct RuntimeRecoveryExecutor {
+        repository_fingerprint: String,
+    }
+
+    impl RecoveryActionExecutor for RuntimeRecoveryExecutor {
+        type Error = Infallible;
+
+        fn execute(
+            &mut self,
+            _repository: &Path,
+            action: &AuthorizedRecoveryAction,
+        ) -> Result<RecoveryExecutionOutcome, Self::Error> {
+            let outcome = match action.operation {
+                RecoveryOperation::Inspect => RecoveryExecutionOutcome::succeeded(
+                    self.repository_fingerprint.clone(),
+                    VerificationState::Unknown,
+                ),
+                RecoveryOperation::Resume => RecoveryExecutionOutcome::succeeded(
+                    self.repository_fingerprint.clone(),
+                    VerificationState::Incomplete,
+                ),
+                RecoveryOperation::RetryVerification => RecoveryExecutionOutcome::succeeded(
+                    self.repository_fingerprint.clone(),
+                    VerificationState::Incomplete,
+                ),
+                RecoveryOperation::Abandon => RecoveryExecutionOutcome::cancelled(
+                    VerificationState::Incomplete,
+                ),
+                RecoveryOperation::RestoreCheckpoint => RecoveryExecutionOutcome::failed_closed(
+                    "checkpoint payload restoration is not available in the runtime executor",
+                    Some(self.repository_fingerprint.clone()),
+                    VerificationState::Incomplete,
+                ),
+            };
+            Ok(outcome)
+        }
+    }
+
+    pub(crate) fn execute_action(
+        repo: &Path,
+        view: &RecoveryView,
+        request: &RecoveryActionRequest,
+        preflight: RecoveryPreflightEvidence,
+    ) -> Result<RecoveryExecutionReceipt, String> {
+        let executor = RuntimeRecoveryExecutor {
+            repository_fingerprint: preflight.repository_fingerprint_before.clone(),
+        };
+        let mut service = RecoveryActionService::new(executor);
+        service
+            .execute_and_audit(repo, view, request, preflight, now_unix_ms())
+            .map_err(|error| error.to_string())
+    }
+
+    fn now_unix_ms() -> i64 {
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .ok()
+            .and_then(|duration| i64::try_from(duration.as_millis()).ok())
+            .unwrap_or_default()
     }
 
     pub(crate) fn startup_events(repo: &Path) -> Vec<RuntimeEvent> {
