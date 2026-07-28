@@ -45,6 +45,20 @@ jobs:
                   raise SystemExit(f'runtime build generator anchor not found: {old}')
               text = text.replace(old, new)
           path.write_text(text)
+
+          # The runtime entry points now require the shared Arc token. Keep test
+          # helpers and fixtures aligned with that signature.
+          for test_path in [
+              Path('crates/medusa-runtime/src/tests.rs'),
+              Path('crates/medusa-runtime/tests/controller_runtime_coverage.rs'),
+          ]:
+              test_text = test_path.read_text()
+              test_text = test_text.replace('cancel: &AtomicBool', 'cancel: &Arc<AtomicBool>')
+              test_text = test_text.replace(
+                  'let cancel = AtomicBool::new(false);',
+                  'let cancel = Arc::new(AtomicBool::new(false));',
+              )
+              test_path.write_text(test_text)
           PY
       - name: Format
         run: cargo fmt --all
