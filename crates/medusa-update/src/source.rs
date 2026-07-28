@@ -270,9 +270,10 @@ mod tests {
         assert!(windows.contains("Stop-Process -Force"));
         assert!(windows.contains(&format!("--rev {REVISION} --locked --force")));
         assert!(!windows.contains("--branch main"));
-        assert!(windows.contains(
-            r"Start-Process -FilePath 'C:\bin\medusa.exe' -ArgumentList '--fresh'"
-        ));
+        assert!(
+            windows
+                .contains(r"Start-Process -FilePath 'C:\bin\medusa.exe' -ArgumentList '--fresh'")
+        );
 
         let unix = unix_source_script(
             4242,
