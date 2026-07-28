@@ -12,6 +12,7 @@ import "./styles.css";
 import "./medusa-desktop.css";
 import "./recovery.css";
 import "./diff-dock.css";
+import "./reviewDiff.css";
 import "./memory-browser.css";
 import "./accessibility.css";
 import "./desktop-ux-overhaul.css";
