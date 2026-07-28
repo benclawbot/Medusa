@@ -45,15 +45,35 @@ pub struct SessionEvent {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum SessionEventKind {
-    ClientAttached { client_kind: ClientKind, mode: AttachmentMode },
+    ClientAttached {
+        client_kind: ClientKind,
+        mode: AttachmentMode,
+    },
     ClientDetached,
-    OwnershipHandedOff { from_client_id: String, to_client_id: String },
-    TaskStateChanged { state: String },
-    VerificationRecorded { check_id: String, outcome: String },
-    ApprovalRecorded { approval_id: String, decision: String },
-    CheckpointRecorded { checkpoint_id: String },
-    RecoveryStateChanged { state: String },
-    CompletionRecorded { status: String },
+    OwnershipHandedOff {
+        from_client_id: String,
+        to_client_id: String,
+    },
+    TaskStateChanged {
+        state: String,
+    },
+    VerificationRecorded {
+        check_id: String,
+        outcome: String,
+    },
+    ApprovalRecorded {
+        approval_id: String,
+        decision: String,
+    },
+    CheckpointRecorded {
+        checkpoint_id: String,
+    },
+    RecoveryStateChanged {
+        state: String,
+    },
+    CompletionRecorded {
+        status: String,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
@@ -183,7 +203,10 @@ impl ContinuityStore {
         &self.path
     }
 
-    pub fn create(&self, session_id: impl Into<String>) -> Result<ContinuitySession, ContinuityError> {
+    pub fn create(
+        &self,
+        session_id: impl Into<String>,
+    ) -> Result<ContinuitySession, ContinuityError> {
         let session = ContinuitySession::new(session_id);
         self.persist(&session)?;
         Ok(session)
@@ -332,7 +355,9 @@ impl ContinuityStore {
     {
         let mut session = self.load()?;
         if let Some(existing) = session.event(event_id) {
-            if existing.client_id == client_id && existing.occurred_at_unix_ms == occurred_at_unix_ms {
+            if existing.client_id == client_id
+                && existing.occurred_at_unix_ms == occurred_at_unix_ms
+            {
                 return Ok(ApplyOutcome::Replayed(session));
             }
             return Err(ContinuityError::ConflictingReplay {
@@ -592,7 +617,10 @@ mod tests {
         assert_eq!(desktop_view, tui_view);
         assert_eq!(desktop_view, completed);
         assert_eq!(desktop_view.owner_client_id.as_deref(), Some("tui-1"));
-        assert_eq!(desktop_view.task.completion_status.as_deref(), Some("verified"));
+        assert_eq!(
+            desktop_view.task.completion_status.as_deref(),
+            Some("verified")
+        );
         assert_eq!(
             desktop_view
                 .events
