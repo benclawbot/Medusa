@@ -43,9 +43,9 @@ impl RecoveryView {
             return Err(RecoveryActionRejection::SessionMismatch);
         }
 
-        let availability = self
-            .action(request.operation)
-            .ok_or_else(|| RecoveryActionRejection::ActionUnavailable("action is unknown".into()))?;
+        let availability = self.action(request.operation).ok_or_else(|| {
+            RecoveryActionRejection::ActionUnavailable("action is unknown".into())
+        })?;
         if !availability.enabled {
             return Err(RecoveryActionRejection::ActionUnavailable(
                 availability.reason.clone(),
