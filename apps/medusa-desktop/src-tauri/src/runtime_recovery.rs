@@ -1,6 +1,4 @@
-use medusa_runtime::{
-    RecoveryActionRequest, RecoveryOperation, RecoveryPreflightEvidence, RecoveryView,
-};
+use medusa_runtime::{RecoveryActionRequest, RecoveryOperation, recovery_action_context};
 
 use crate::dto::DesktopRecoveryActionRequest;
 
@@ -10,23 +8,40 @@ pub fn runtime_recovery_action(
     request: DesktopRecoveryActionRequest,
     registry: tauri::State<'_, RuntimeRegistry>,
 ) -> Result<(), String> {
-    let view: RecoveryView = serde_json::from_value(request.recovery)
-        .map_err(|error| format!("invalid recovery view: {error}"))?;
-    let operation = parse_recovery_operation(&request.operation)?;
-    let action = RecoveryActionRequest {
-        session_id: view.session_id.clone(),
+    let DesktopRecoveryActionRequest {
+        recovery,
         operation,
-        checkpoint_id: request.checkpoint_id,
-        confirmed_destructive_effects: request.confirmed_destructive_effects,
-    };
-    let preflight = RecoveryPreflightEvidence {
-        repository_fingerprint_before: request.repository_fingerprint_before,
-        checkpoint_integrity_verified: request.checkpoint_integrity_verified,
-        repository_preconditions_verified: request.repository_preconditions_verified,
-        conflicting_uncommitted_paths: request.conflicting_uncommitted_paths,
-        unresolved_risks: request.unresolved_risks,
+        checkpoint_id,
+        confirmed_destructive_effects,
+        repository_fingerprint_before,
+        checkpoint_integrity_verified,
+        repository_preconditions_verified,
+        conflicting_uncommitted_paths,
+        unresolved_risks,
+    } = request;
+    let _untrusted_frontend_evidence = (
+        repository_fingerprint_before,
+        checkpoint_integrity_verified,
+        repository_preconditions_verified,
+        conflicting_uncommitted_paths,
+        unresolved_risks,
+    );
+    let session_id = recovery
+        .get("session_id")
+        .or_else(|| recovery.get("sessionId"))
+        .and_then(serde_json::Value::as_str)
+        .filter(|value| !value.trim().is_empty())
+        .ok_or_else(|| "recovery request is missing a session id".to_owned())?
+        .to_owned();
+    let operation = parse_recovery_operation(&operation)?;
+    let action = RecoveryActionRequest {
+        session_id,
+        operation,
+        checkpoint_id,
+        confirmed_destructive_effects,
     };
     registry.with_entry(&runtime_id, |entry| {
+        let (view, preflight) = recovery_action_context(&entry.repo, &action)?;
         entry
             .controller
             .execute_recovery(view, action, preflight)

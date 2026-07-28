@@ -5,6 +5,13 @@ pub use medusa_recovery_coordinator::{
     RecoveryPreflightEvidence, RecoveryView,
 };
 
+pub fn recovery_action_context(
+    repo: &std::path::Path,
+    request: &RecoveryActionRequest,
+) -> Result<(RecoveryView, RecoveryPreflightEvidence), String> {
+    recovery::action_context(repo, request)
+}
+
 mod recovery {
     use std::{
         convert::Infallible,
@@ -74,6 +81,83 @@ mod recovery {
             };
             Ok(outcome)
         }
+    }
+
+    pub(crate) fn action_context(
+        repo: &Path,
+        request: &RecoveryActionRequest,
+    ) -> Result<(RecoveryView, RecoveryPreflightEvidence), String> {
+        let view = discover(repo)
+            .into_iter()
+            .find(|view| view.session_id == request.session_id)
+            .ok_or_else(|| {
+                format!(
+                    "recovery session {} is no longer available; refresh recovery state",
+                    request.session_id
+                )
+            })?;
+
+        let selected_checkpoint = request.checkpoint_id.as_deref().and_then(|checkpoint_id| {
+            view.checkpoints
+                .iter()
+                .find(|checkpoint| checkpoint.id == checkpoint_id)
+        });
+        let checkpoint_integrity_verified = match request.operation {
+            RecoveryOperation::RestoreCheckpoint => {
+                selected_checkpoint.is_some_and(|checkpoint| checkpoint.integrity_verified)
+            }
+            _ => true,
+        };
+        let matching_preview = request.checkpoint_id.as_deref().and_then(|checkpoint_id| {
+            view.selected_preview
+                .as_ref()
+                .filter(|preview| preview.checkpoint_id == checkpoint_id)
+        });
+        let conflicting_uncommitted_paths = matching_preview
+            .map(|preview| {
+                preview
+                    .files
+                    .iter()
+                    .filter(|file| file.would_overwrite_uncommitted_work)
+                    .map(|file| file.path.clone())
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default();
+        let mut unresolved_risks = matching_preview
+            .map(|preview| preview.unresolved_risks.clone())
+            .unwrap_or_default();
+        if matches!(request.operation, RecoveryOperation::RestoreCheckpoint)
+            && matching_preview.is_none()
+        {
+            unresolved_risks.push(
+                "No authoritative preview exists for the selected checkpoint; regenerate it."
+                    .to_owned(),
+            );
+        }
+        if matches!(request.operation, RecoveryOperation::RestoreCheckpoint)
+            && !checkpoint_integrity_verified
+        {
+            unresolved_risks.push(
+                "The selected checkpoint is missing or failed integrity verification.".to_owned(),
+            );
+        }
+        let repository_preconditions_verified = match request.operation {
+            RecoveryOperation::RestoreCheckpoint => matching_preview.is_some_and(|preview| {
+                preview.repository_matches_checkpoint_base
+                    && checkpoint_integrity_verified
+                    && conflicting_uncommitted_paths.is_empty()
+                    && unresolved_risks.is_empty()
+            }),
+            _ => !view.current_repository_fingerprint.is_empty(),
+        };
+        let evidence = RecoveryPreflightEvidence {
+            repository_fingerprint_before: view.current_repository_fingerprint.clone(),
+            checkpoint_integrity_verified,
+            repository_preconditions_verified,
+            conflicting_uncommitted_paths,
+            unresolved_risks,
+        };
+        Ok((view, evidence))
     }
 
     pub(crate) fn execute_action(
@@ -185,6 +269,27 @@ mod recovery {
             }
         }
 
+        fn write_record(repo: &Path, preview: Option<RecoveryPreview>) {
+            let directory = repo.join(RECOVERY_DIRECTORY);
+            fs::create_dir_all(&directory).expect("create recovery directory");
+            let record = serde_json::json!({
+                "session_id": "session-a",
+                "last_durable_step": "implement",
+                "interrupted_operation": "cargo test",
+                "current_repository_fingerprint": "b".repeat(64),
+                "verification": "Incomplete",
+                "approvals_must_be_reestablished": true,
+                "containment_must_be_reestablished": true,
+                "checkpoints": [checkpoint()],
+                "selected_preview": preview
+            });
+            fs::write(
+                directory.join("a.json"),
+                serde_json::to_vec_pretty(&record).expect("serialize recovery record"),
+            )
+            .expect("write recovery record");
+        }
+
         #[test]
         fn discovers_recovery_records_in_stable_filename_order() {
             let repo = tempdir().expect("temporary repository");
@@ -218,6 +323,34 @@ mod recovery {
                     .iter()
                     .all(|view| view.approvals_must_be_reestablished)
             );
+        }
+
+        #[test]
+        fn action_context_reloads_authoritative_view_and_fails_closed_without_preview() {
+            let repo = tempdir().expect("temporary repository");
+            write_record(repo.path(), None);
+            let request = RecoveryActionRequest {
+                session_id: "session-a".to_owned(),
+                operation: RecoveryOperation::RestoreCheckpoint,
+                checkpoint_id: Some("checkpoint-1".to_owned()),
+                confirmed_destructive_effects: true,
+            };
+            let (view, evidence) = action_context(repo.path(), &request).expect("action context");
+            assert_eq!(view.session_id, "session-a");
+            assert!(!evidence.repository_preconditions_verified);
+            assert!(!evidence.unresolved_risks.is_empty());
+        }
+
+        #[test]
+        fn missing_or_stale_session_is_rejected() {
+            let repo = tempdir().expect("temporary repository");
+            let request = RecoveryActionRequest {
+                session_id: "missing".to_owned(),
+                operation: RecoveryOperation::Inspect,
+                checkpoint_id: None,
+                confirmed_destructive_effects: false,
+            };
+            assert!(action_context(repo.path(), &request).is_err());
         }
 
         #[test]
