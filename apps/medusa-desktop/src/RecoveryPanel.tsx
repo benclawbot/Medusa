@@ -9,7 +9,8 @@ interface Props {
 }
 
 export function RecoveryPanel({ recovery, busy = false, onAction }: Props) {
-  const defaultCheckpoint = recovery.selectedPreview?.checkpointId ?? recovery.checkpoints.at(-1)?.id ?? "";
+  const latestCheckpoint = recovery.checkpoints[recovery.checkpoints.length - 1];
+  const defaultCheckpoint = recovery.selectedPreview?.checkpointId ?? latestCheckpoint?.id ?? "";
   const [checkpointId, setCheckpointId] = useState(defaultCheckpoint);
   const [confirmed, setConfirmed] = useState(false);
 
