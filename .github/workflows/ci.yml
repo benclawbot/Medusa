@@ -6,50 +6,13 @@ on:
   pull_request:
 
 permissions:
-  contents: write
+  contents: read
 
 concurrency:
   group: ci-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
-  apply-424-panic-fix:
-    if: github.event_name == 'pull_request' && github.head_ref == 'agent/424-session-continuity'
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          ref: agent/424-session-continuity
-          fetch-depth: 0
-      - name: Apply audited migration fix
-        shell: bash
-        run: |
-          python3 - <<'PY'
-          from pathlib import Path
-          path = Path('crates/medusa-session-continuity/src/root.rs')
-          text = path.read_text()
-          old = 'serde_json::to_value(AuthoritativeTaskState::default()).expect("serializable")'
-          new = '''serde_json::json!({
-                    "plan_state": null,
-                    "active_step": null,
-                    "attention_required": false,
-                    "approvals": [],
-                    "checkpoints": [],
-                    "recovery_state": null,
-                    "verification_evidence": [],
-                    "file_changes": [],
-                    "completion_status": null,
-                })'''
-          if old not in text:
-              raise SystemExit('expected migration panic path not found')
-          path.write_text(text.replace(old, new, 1))
-          PY
-          git config user.name github-actions[bot]
-          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
-          git add crates/medusa-session-continuity/src/root.rs
-          git commit -m "Remove panic path from continuity migration"
-          git push origin HEAD:agent/424-session-continuity
-
   quality:
     name: Workspace quality
     runs-on: ubuntu-latest
