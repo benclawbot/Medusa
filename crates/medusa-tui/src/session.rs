@@ -531,11 +531,7 @@ fn ctrl_l_redraw(event: &Event) -> bool {
     )
 }
 
-fn selected_text(
-    frame: &[StyledLine],
-    width: u16,
-    selection: TextSelection,
-) -> String {
+fn selected_text(frame: &[StyledLine], width: u16, selection: TextSelection) -> String {
     let mut output = String::new();
     for (row, line) in frame.iter().enumerate() {
         let row = u16::try_from(row).unwrap_or(u16::MAX);
@@ -562,7 +558,11 @@ fn selected_text(
             text.chars().count()
         };
         if start < end {
-            let selected = text.chars().skip(start).take(end - start).collect::<String>();
+            let selected = text
+                .chars()
+                .skip(start)
+                .take(end - start)
+                .collect::<String>();
             if !output.is_empty() {
                 output.push('\n');
             }
