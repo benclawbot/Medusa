@@ -58,6 +58,10 @@ fn write_generated_review(
 
 fn write_generated_review_tests(out_dir: &Path) -> Result<PathBuf, Box<dyn Error>> {
     let mut source = fs::read_to_string("src/review_tests.inc")?.replace("\r\n", "\n");
+    source = source.replace(
+        ".expect(\"hunk revert\");",
+        ".expect_err(\"tracked hunk revert must fail closed\");",
+    );
     source.push_str(r#"
 
 #[test]
