@@ -6,7 +6,7 @@ fn write_generated_review(
     replace_once(
         &mut source,
         "    if path.exists() {\n        return Ok(());\n    }",
-        "    // Rotate the baseline before every task so only changes present before that task\n    // are classified as pre-existing user work.\n    if path.exists() { fs::remove_file(&path).map_err(|error| ReviewWorkflowError::State(error.to_string()))?; }",
+        "    // Rotate the baseline before every new task so only changes present before that task\n    // are classified as pre-existing user work. Pending-question resumes skip this call.\n    if path.exists() { fs::remove_file(&path).map_err(|error| ReviewWorkflowError::State(error.to_string()))?; }",
     )?;
     replace_once(
         &mut source,
@@ -18,6 +18,10 @@ fn write_generated_review(
         "            review_state: prior_states\n                .get(&path)\n                .copied()\n                .unwrap_or(ReviewState::Unreviewed),",
         "            review_state: prior_states\n                .get(&path)\n                .filter(|(fingerprint, _)| fingerprint == &current_fingerprint)\n                .map(|(_, state)| *state)\n                .unwrap_or(ReviewState::Unreviewed),",
     )?;
+    source = source.replace(
+        "                overlaps_later_edits: false,",
+        "                // Without per-write provenance, a tracked-file hunk can contain edits made\n                // by the user while the task was running. Fail closed instead of allowing a\n                // destructive selective revert. Newly added files remain safely revertible.\n                overlaps_later_edits: file.kind != ChangeKind::Added,",
+    );
     replace_once(
         &mut source,
         "    match &request {",
@@ -83,6 +87,23 @@ fn rejected_transition_does_not_mutate_worktree() {
     }, "test");
     assert!(result.is_err());
     assert_eq!(std::fs::read_to_string(repo.path().join("tracked.txt")).unwrap(), "accepted change\n");
+}
+
+#[test]
+fn tracked_file_hunks_fail_closed_without_write_provenance() {
+    let repo = repository();
+    capture_review_baseline(repo.path()).expect("baseline");
+    std::fs::write(repo.path().join("tracked.txt"), "agent and user edits\n").expect("edit");
+    let workspace = read_review_workspace(repo.path()).expect("review");
+    let file = workspace.snapshot.file("tracked.txt").expect("file");
+    assert!(file.hunks.iter().all(|hunk| hunk.overlaps_later_edits));
+    let result = apply_review_action(repo.path(), ReviewActionRequest::RevertFile {
+        path: file.path.clone(),
+        expected_snapshot_id: workspace.snapshot.id.clone(),
+        expected_file_fingerprint: file.current_fingerprint.clone(),
+    }, "test");
+    assert!(result.is_err());
+    assert_eq!(std::fs::read_to_string(repo.path().join("tracked.txt")).unwrap(), "agent and user edits\n");
 }
 "#);
     let output = out_dir.join("review_tests_generated.rs");
