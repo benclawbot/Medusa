@@ -303,9 +303,10 @@ pub fn apply_selective_revert(
         .start_byte
         .checked_add(preview.remove_len)
         .ok_or_else(|| provenance_boundary_error("selective revert scope overflow"))?;
-    let expected = record.scope.retained_postimage.as_deref().ok_or_else(|| {
-        provenance_boundary_error("selective revert postimage is unavailable")
-    })?;
+    let expected =
+        record.scope.retained_postimage.as_deref().ok_or_else(|| {
+            provenance_boundary_error("selective revert postimage is unavailable")
+        })?;
     if current.get(preview.start_byte..end) != Some(expected) {
         return Err(provenance_boundary_error(
             "selective revert scope changed during authorization",
