@@ -3,7 +3,7 @@ on:
   pull_request:
     branches: [main]
 permissions:
-  contents: write
+  contents: read
 jobs:
   apply-and-validate:
     runs-on: ubuntu-latest
@@ -22,14 +22,30 @@ jobs:
           from pathlib import Path
           path = Path('crates/medusa-runtime/build_main.rs')
           text = path.read_text()
-          old = 'AgentEngine::new(provider, config)'
-          new = 'AgentEngine::new_with_cancellation(provider, config, Arc::clone(cancel))'
-          if old not in text:
-              raise SystemExit('runtime build generator anchor not found')
-          path.write_text(text.replace(old, new))
+          replacements = [
+              (
+                  'AgentEngine::new(provider, config)',
+                  'AgentEngine::new_with_cancellation(provider, config, Arc::clone(cancel))',
+              ),
+              (
+                  '"step_with_observer_and_context(&mut session, skill_context.as_deref(), |update| {"',
+                  '"                skill_context.as_deref(),\\n                |update| {"',
+              ),
+              (
+                  '"step_with_observer_and_context(&mut session, Some(skill_context.as_str()), |update| {"',
+                  '"                Some(skill_context.as_str()),\\n                |update| {"',
+              ),
+          ]
+          for old, new in replacements:
+              if old not in text:
+                  raise SystemExit(f'runtime build generator anchor not found: {old}')
+              text = text.replace(old, new)
+          path.write_text(text)
           PY
       - name: Format
         run: cargo fmt --all
+      - name: Format check
+        run: cargo fmt --all -- --check
       - name: Clippy
         shell: bash
         run: |
@@ -49,11 +65,3 @@ jobs:
           path: clippy-diagnostics.txt
       - name: Test workspace
         run: cargo test --workspace --all-features
-      - name: Commit validated source
-        run: |
-          rm .github/workflows/apply-minimax-fix-v2.yml
-          git config user.name github-actions[bot]
-          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
-          git add -A
-          git commit -m "Fix MiniMax M3 OpenAI routing and request cancellation"
-          git push origin HEAD:${{ github.head_ref }}
