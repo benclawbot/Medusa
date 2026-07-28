@@ -3,7 +3,7 @@ on:
   pull_request:
     branches: [main]
 permissions:
-  contents: read
+  contents: write
 jobs:
   apply-and-validate:
     runs-on: ubuntu-latest
@@ -126,35 +126,14 @@ jobs:
       - name: Format check
         run: cargo fmt --all -- --check
       - name: Clippy
-        shell: bash
-        run: |
-          set +e
-          cargo clippy --workspace --all-targets --all-features --message-format short -- -D warnings >clippy.log 2>&1
-          status=$?
-          if [ "$status" -ne 0 ]; then
-            grep -E '(^error|: error|warning:|could not compile)' clippy.log | tail -n 160 >clippy-diagnostics.txt || true
-            tail -n 200 clippy.log >>clippy-diagnostics.txt
-          fi
-          exit "$status"
-      - name: Upload Clippy diagnostics
-        if: failure()
-        uses: actions/upload-artifact@v4
-        with:
-          name: minimax-v2-clippy-diagnostics
-          path: clippy-diagnostics.txt
+        run: cargo clippy --workspace --all-targets --all-features -- -D warnings
       - name: Test workspace
-        shell: bash
+        run: cargo test --workspace --all-features
+      - name: Commit validated source
         run: |
-          set +e
-          cargo test --workspace --all-features >test.log 2>&1
-          status=$?
-          if [ "$status" -ne 0 ]; then
-            tail -n 400 test.log >test-diagnostics.txt
-          fi
-          exit "$status"
-      - name: Upload test diagnostics
-        if: failure()
-        uses: actions/upload-artifact@v4
-        with:
-          name: minimax-v2-test-diagnostics
-          path: test-diagnostics.txt
+          rm -f .github/workflows/apply-minimax-fix-v2.yml
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add -A
+          git commit -m "Fix MiniMax M3 OpenAI routing and request cancellation"
+          git push origin HEAD:${{ github.head_ref }}
