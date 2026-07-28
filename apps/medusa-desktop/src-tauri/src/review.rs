@@ -1,4 +1,7 @@
-use std::path::PathBuf;
+use std::{
+    path::PathBuf,
+    time::{SystemTime, UNIX_EPOCH},
+};
 
 use medusa_review_model::ReviewActionRequest;
 use medusa_runtime::review::{
@@ -51,6 +54,13 @@ pub fn runtime_apply_review_action(
 
 #[tauri::command]
 pub fn runtime_export_review_audit(repo: String) -> Result<serde_json::Value, String> {
-    let audit = export_review_audit(&PathBuf::from(repo), 0).map_err(|error| error.to_string())?;
+    let generated_at_unix_ms = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_err(|error| error.to_string())?
+        .as_millis();
+    let generated_at_unix_ms = i64::try_from(generated_at_unix_ms)
+        .map_err(|_| "audit export timestamp exceeded i64".to_owned())?;
+    let audit = export_review_audit(&PathBuf::from(repo), generated_at_unix_ms)
+        .map_err(|error| error.to_string())?;
     serde_json::to_value(audit).map_err(|error| error.to_string())
 }
