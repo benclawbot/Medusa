@@ -44,6 +44,24 @@ pub struct DesktopModelConfiguration {
     pub api_key: Option<String>,
 }
 
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DesktopRecoveryActionRequest {
+    pub recovery: serde_json::Value,
+    pub operation: String,
+    #[serde(default)]
+    pub checkpoint_id: Option<String>,
+    #[serde(default)]
+    pub confirmed_destructive_effects: bool,
+    pub repository_fingerprint_before: String,
+    pub checkpoint_integrity_verified: bool,
+    pub repository_preconditions_verified: bool,
+    #[serde(default)]
+    pub conflicting_uncommitted_paths: Vec<String>,
+    #[serde(default)]
+    pub unresolved_risks: Vec<String>,
+}
+
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub enum DesktopSubmitDisposition {
@@ -60,6 +78,10 @@ pub enum DesktopSubmitDisposition {
 pub enum DesktopRuntimeEvent {
     RecoveryAvailable {
         recovery: serde_json::Value,
+    },
+    RecoveryCompleted {
+        record: serde_json::Value,
+        audit_path: String,
     },
     Started,
     AssistantText {
@@ -174,6 +196,15 @@ impl From<RuntimeEvent> for DesktopRuntimeEvent {
                         "warnings": [format!("Recovery payload serialization failed: {error}")]
                     })
                 }),
+            },
+            RuntimeEvent::RecoveryCompleted(receipt) => Self::RecoveryCompleted {
+                record: serde_json::to_value(receipt.record).unwrap_or_else(|error| {
+                    serde_json::json!({
+                        "outcome": "failedClosed",
+                        "reason": format!("Recovery receipt serialization failed: {error}")
+                    })
+                }),
+                audit_path: receipt.audit_path.to_string_lossy().into_owned(),
             },
             RuntimeEvent::Started => Self::Started,
             RuntimeEvent::AssistantText(text) => Self::AssistantText { text },
