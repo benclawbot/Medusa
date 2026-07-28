@@ -39,7 +39,9 @@ fn continue_latest_selects_the_most_recent_durable_session() {
         Err(error) => error,
     };
     assert!(
-        error.to_string().contains("missing provider credential"),
+        error
+            .to_string()
+            .contains("missing provider credential in MINIMAX_API_KEY"),
         "continue-latest must select a durable session before provider setup: {error}"
     );
 }

@@ -1021,17 +1021,13 @@ dependencies = [
  "hex",
  "medusa-browser-client",
  "medusa-capabilities",
- "medusa-clearops",
  "medusa-commit-barrier",
- "medusa-confidence",
  "medusa-config",
  "medusa-conflict-resolution",
  "medusa-consensus",
- "medusa-continuation",
  "medusa-core",
  "medusa-escalation",
  "medusa-extensions",
- "medusa-failure",
  "medusa-intelligence",
  "medusa-memory",
  "medusa-multi-agent-scheduler",
@@ -1092,21 +1088,12 @@ dependencies = [
 ]
 
 [[package]]
-name = "medusa-clearops"
-version = "1.0.0"
-dependencies = [
- "serde",
-]
-
-[[package]]
 name = "medusa-cli"
 version = "1.0.0"
 dependencies = [
  "clap",
- "hex",
  "medusa-agent",
  "medusa-capabilities",
- "medusa-clearops",
  "medusa-config",
  "medusa-core",
  "medusa-daemon",
@@ -1114,7 +1101,6 @@ dependencies = [
  "medusa-extensions",
  "medusa-github",
  "medusa-hardening",
- "medusa-protocol",
  "medusa-provider",
  "medusa-runtime",
  "medusa-tui",
@@ -1122,7 +1108,6 @@ dependencies = [
  "reqwest",
  "serde",
  "serde_json",
- "sha2",
  "tempfile",
  "toml",
  "walkdir",
@@ -1507,9 +1492,7 @@ version = "1.0.0"
 dependencies = [
  "hex",
  "serde",
- "serde_json",
  "sha2",
- "tempfile",
  "thiserror",
 ]
 
@@ -1534,27 +1517,15 @@ dependencies = [
 ]
 
 [[package]]
-name = "medusa-review-model"
-version = "1.0.0"
-dependencies = [
- "hex",
- "serde",
- "sha2",
- "thiserror",
-]
-
-[[package]]
 name = "medusa-runtime"
 version = "1.0.0"
 dependencies = [
  "base64",
- "hex",
  "medusa-agent",
  "medusa-capabilities",
  "medusa-config",
  "medusa-context",
  "medusa-continuation",
- "medusa-core",
  "medusa-execution-checkpoint",
  "medusa-execution-orchestrator",
  "medusa-execution-replay",
@@ -1563,11 +1534,8 @@ dependencies = [
  "medusa-memory",
  "medusa-memory-consolidation",
  "medusa-memory-writeback",
- "medusa-multi-agent-scheduler",
  "medusa-protocol",
  "medusa-provider",
- "medusa-recovery-coordinator",
- "medusa-review-model",
  "medusa-testkit",
  "medusa-time-travel",
  "medusa-turn-assembly",
@@ -1632,7 +1600,6 @@ dependencies = [
  "hex",
  "medusa-config",
  "medusa-daemon",
- "medusa-recovery-coordinator",
  "medusa-runtime",
  "serde",
  "serde_json",
