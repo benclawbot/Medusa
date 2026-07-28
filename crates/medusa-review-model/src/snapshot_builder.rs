@@ -60,7 +60,9 @@ pub enum ReviewSnapshotBuildError {
 pub fn build_review_snapshot(
     mut input: ReviewSnapshotInput,
 ) -> Result<ReviewSnapshot, ReviewSnapshotBuildError> {
-    input.changes.sort_by(|left, right| left.path.cmp(&right.path));
+    input
+        .changes
+        .sort_by(|left, right| left.path.cmp(&right.path));
     validate_changes(&input.changes)?;
 
     let files = input
@@ -153,7 +155,11 @@ fn build_file(mut change: ChangeEvidence) -> ReviewFile {
     }
 }
 
-fn snapshot_id(repository_fingerprint: &str, created_at_unix_ms: i64, files: &[ReviewFile]) -> String {
+fn snapshot_id(
+    repository_fingerprint: &str,
+    created_at_unix_ms: i64,
+    files: &[ReviewFile],
+) -> String {
     let mut hasher = Sha256::new();
     hasher.update(b"medusa-review-snapshot/v1\0");
     hash_field(&mut hasher, repository_fingerprint.as_bytes());
