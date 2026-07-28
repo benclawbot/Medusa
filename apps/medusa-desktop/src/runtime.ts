@@ -3,6 +3,57 @@ import { invoke } from "@tauri-apps/api/core";
 export type Effort = "low" | "medium" | "high" | "auto";
 export type SubmitDisposition = "started" | "queued";
 
+export type RecoveryHealth = "ready" | "needsConfirmation" | "blocked" | "corrupt" | "Ready" | "NeedsConfirmation" | "Blocked" | "Corrupt";
+export type VerificationState = "verified" | "failed" | "incomplete" | "unknown" | "Verified" | "Failed" | "Incomplete" | "Unknown";
+export type RecoveryOperation = "inspect" | "resume" | "restoreCheckpoint" | "retryVerification" | "abandon";
+
+export interface RecoveryCheckpoint {
+  id: string;
+  sequence: number;
+  createdAtUnixMs: number;
+  taskStep: string;
+  reason: string;
+  repositoryFingerprint: string;
+  verification: VerificationState;
+  provenance: string;
+  integrityVerified: boolean;
+}
+
+export interface RecoveryPreviewFile {
+  path: string;
+  kind: string;
+  wouldOverwriteUncommittedWork: boolean;
+}
+
+export interface RecoveryPreview {
+  checkpointId: string;
+  files: RecoveryPreviewFile[];
+  unresolvedRisks: string[];
+  repositoryMatchesCheckpointBase: boolean;
+}
+
+export interface RecoveryActionAvailability {
+  operation: RecoveryOperation;
+  enabled: boolean;
+  requiresConfirmation: boolean;
+  reason: string;
+}
+
+export interface RecoveryView {
+  sessionId: string;
+  health: RecoveryHealth;
+  lastDurableStep: string;
+  interruptedOperation?: string;
+  currentRepositoryFingerprint: string;
+  verification: VerificationState;
+  approvalsMustBeReestablished: boolean;
+  containmentMustBeReestablished: boolean;
+  checkpoints: RecoveryCheckpoint[];
+  selectedPreview?: RecoveryPreview;
+  actions: RecoveryActionAvailability[];
+  warnings: string[];
+}
+
 export interface RuntimeStartResponse {
   runtimeId: string;
   repo: string;
@@ -91,6 +142,8 @@ export interface QuestionPrompt {
 }
 
 export type RuntimeEvent =
+  | { type: "recoveryAvailable"; recovery: RecoveryView }
+  | { type: "recoveryCompleted"; record: unknown; auditPath: string }
   | { type: "started" }
   | { type: "assistantText"; text: string }
   | { type: "activity"; activity: RuntimeActivity }
@@ -154,6 +207,15 @@ const pendingResumeKey = "medusa.desktop.resumeSession";
 const emptyTimeline: TimelineSnapshot = { plan: [], activities: [], busy: false };
 let timelineSnapshot: TimelineSnapshot = emptyTimeline;
 const timelineListeners = new Set<() => void>();
+const recoveryListeners = new Set<() => void>();
+let recoverySnapshot: RecoveryView | undefined;
+let recoveryCompletion: { auditPath: string } | undefined;
+
+function publishRecovery(recovery: RecoveryView | undefined, completion?: { auditPath: string }): void {
+  recoverySnapshot = recovery;
+  recoveryCompletion = completion;
+  recoveryListeners.forEach((listener) => listener());
+}
 
 function publishTimeline(next: TimelineSnapshot): void {
   timelineSnapshot = next;
@@ -210,6 +272,19 @@ export function subscribeTimeline(listener: () => void): () => void {
   return () => timelineListeners.delete(listener);
 }
 
+export function getRecoverySnapshot(): RecoveryView | undefined {
+  return recoverySnapshot;
+}
+
+export function getRecoveryCompletion(): { auditPath: string } | undefined {
+  return recoveryCompletion;
+}
+
+export function subscribeRecovery(listener: () => void): () => void {
+  recoveryListeners.add(listener);
+  return () => recoveryListeners.delete(listener);
+}
+
 export async function startRuntime(repo?: string): Promise<RuntimeStartResponse> {
   const pendingSession = window.localStorage.getItem(pendingResumeKey);
   const response = repo && pendingSession
@@ -217,6 +292,7 @@ export async function startRuntime(repo?: string): Promise<RuntimeStartResponse>
     : await invoke<RuntimeStartResponse>("runtime_start", repo ? { repo } : {});
   if (repo && pendingSession) window.localStorage.removeItem(pendingResumeKey);
   publishTimeline({ ...emptyTimeline, runtimeId: response.runtimeId });
+  publishRecovery(undefined);
   return response;
 }
 
@@ -243,6 +319,7 @@ export async function listRuntimeMemories(
 export async function closeRuntime(runtimeId: string): Promise<void> {
   await invoke("runtime_close", { runtimeId });
   if (timelineSnapshot.runtimeId === runtimeId) publishTimeline(emptyTimeline);
+  publishRecovery(undefined);
 }
 
 export async function submitRuntime(
@@ -270,6 +347,11 @@ export async function cancelRuntime(runtimeId: string): Promise<boolean> {
 export async function pollRuntime(runtimeId: string): Promise<RuntimeEvent[]> {
   const events = await invoke<RuntimeEvent[]>("runtime_poll", { runtimeId, maxEvents: 200 });
   reduceTimeline(runtimeId, events);
+  for (const event of events) {
+    if (event.type === "recoveryAvailable") publishRecovery(event.recovery);
+    if (event.type === "recoveryCompleted") publishRecovery(undefined, { auditPath: event.auditPath });
+    if (event.type === "newSession") publishRecovery(undefined);
+  }
   return events;
 }
 
@@ -278,4 +360,36 @@ export async function configureRuntime(
   configuration: ModelConfiguration,
 ): Promise<void> {
   await invoke("runtime_configure_model", { runtimeId, configuration });
+}
+
+export async function performRecoveryAction(
+  runtimeId: string,
+  recovery: RecoveryView,
+  operation: RecoveryOperation,
+  checkpointId?: string,
+  confirmedDestructiveEffects = false,
+): Promise<void> {
+  const checkpoint = checkpointId
+    ? recovery.checkpoints.find((item) => item.id === checkpointId)
+    : undefined;
+  const preview = recovery.selectedPreview?.checkpointId === checkpointId
+    ? recovery.selectedPreview
+    : undefined;
+
+  await invoke("runtime_recovery_action", {
+    runtimeId,
+    request: {
+      recovery,
+      operation,
+      checkpointId,
+      confirmedDestructiveEffects,
+      repositoryFingerprintBefore: recovery.currentRepositoryFingerprint,
+      checkpointIntegrityVerified: checkpoint?.integrityVerified ?? operation !== "restoreCheckpoint",
+      repositoryPreconditionsVerified: preview?.repositoryMatchesCheckpointBase ?? operation !== "restoreCheckpoint",
+      conflictingUncommittedPaths: preview?.files
+        .filter((file) => file.wouldOverwriteUncommittedWork)
+        .map((file) => file.path) ?? [],
+      unresolvedRisks: preview?.unresolvedRisks ?? [],
+    },
+  });
 }
