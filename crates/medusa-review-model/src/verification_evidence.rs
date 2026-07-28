@@ -3,7 +3,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
-use crate::{ChangeOrigin, ReviewSnapshot, VerificationState};
+use crate::{ReviewSnapshot, VerificationState};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum VerificationOutcome {
@@ -196,7 +196,9 @@ fn validate_evidence(
 
 #[cfg(test)]
 mod tests {
-    use crate::{ChangeKind, ReviewFile, ReviewProvenance, ReviewSnapshot, ReviewState};
+    use crate::{
+        ChangeKind, ChangeOrigin, ReviewFile, ReviewProvenance, ReviewSnapshot, ReviewState,
+    };
 
     use super::*;
 
