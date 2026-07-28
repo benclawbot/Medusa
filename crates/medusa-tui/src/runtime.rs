@@ -6,7 +6,10 @@ use crate::app::{
 use crate::clipboard::PromptDraft;
 use crate::commands::{ModelConfiguration, SlashCommand};
 
-pub use medusa_runtime::{RuntimeActivity, RuntimeActivityKind, RuntimeError, SubmitDisposition};
+pub use medusa_runtime::{
+    RecoveryActionRequest, RecoveryOperation, RecoveryPreflightEvidence, RecoveryView,
+    RuntimeActivity, RuntimeActivityKind, RuntimeError, SubmitDisposition,
+};
 
 #[derive(Debug)]
 pub enum RuntimeEvent {
@@ -77,6 +80,14 @@ impl RuntimeController {
     pub fn configure_model(&self, configuration: ModelConfiguration) -> Result<(), RuntimeError> {
         self.inner.configure_model(configuration)
     }
+    pub fn execute_recovery(
+        &self,
+        view: RecoveryView,
+        request: RecoveryActionRequest,
+        preflight: RecoveryPreflightEvidence,
+    ) -> Result<(), RuntimeError> {
+        self.inner.execute_recovery(view, request, preflight)
+    }
     pub fn cancel(&self) -> bool {
         self.inner.cancel()
     }
@@ -94,6 +105,15 @@ fn map_event(event: medusa_runtime::RuntimeEvent) -> RuntimeEvent {
         medusa_runtime::RuntimeEvent::RecoveryAvailable(view) => RuntimeEvent::Notice {
             title: "Recovery available".to_owned(),
             details: recovery_details(&view),
+        },
+        medusa_runtime::RuntimeEvent::RecoveryCompleted(receipt) => RuntimeEvent::Notice {
+            title: "Recovery action recorded".to_owned(),
+            details: vec![
+                format!("Session: {}", receipt.record.session_id),
+                format!("Action: {:?}", receipt.record.operation),
+                format!("Outcome: {:?}", receipt.record.outcome),
+                format!("Audit: {}", receipt.audit_path.display()),
+            ],
         },
         medusa_runtime::RuntimeEvent::Started => RuntimeEvent::Started,
         medusa_runtime::RuntimeEvent::AssistantText(text) => RuntimeEvent::AssistantText(text),
