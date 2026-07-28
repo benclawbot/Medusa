@@ -1,5 +1,5 @@
 fn write_generated_review(out_dir: &Path) -> Result<PathBuf, Box<dyn Error>> {
-    let mut source = fs::read_to_string("src/review.rs")?.replace("\r\n", "\n");
+    let mut source = fs::read_to_string("src/review.inc")?.replace("\r\n", "\n");
     replace_once(
         &mut source,
         "    if path.exists() {\n        return Ok(());\n    }",
@@ -32,7 +32,7 @@ fn write_generated_review(out_dir: &Path) -> Result<PathBuf, Box<dyn Error>> {
 }
 
 fn write_generated_review_tests(out_dir: &Path) -> Result<PathBuf, Box<dyn Error>> {
-    let mut source = fs::read_to_string("src/review_tests.rs")?.replace("\r\n", "\n");
+    let mut source = fs::read_to_string("src/review_tests.inc")?.replace("\r\n", "\n");
     source.push_str(r#"
 
 #[test]
