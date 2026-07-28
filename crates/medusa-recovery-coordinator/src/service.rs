@@ -131,9 +131,7 @@ mod tests {
     use std::{convert::Infallible, fs};
 
     use super::*;
-    use crate::{
-        CheckpointPresentation, RecoveryOperation, RecoveryViewInput, VerificationState,
-    };
+    use crate::{CheckpointPresentation, RecoveryOperation, RecoveryViewInput, VerificationState};
     use tempfile::tempdir;
 
     #[derive(Default)]
@@ -204,7 +202,13 @@ mod tests {
         };
 
         let receipt = service
-            .execute_and_audit(repo.path(), &view(), &request, preflight(), 1_700_000_000_000)
+            .execute_and_audit(
+                repo.path(),
+                &view(),
+                &request,
+                preflight(),
+                1_700_000_000_000,
+            )
             .expect("execute recovery");
 
         assert_eq!(receipt.record.outcome, RecoveryActionOutcome::Succeeded);
@@ -251,7 +255,13 @@ mod tests {
             confirmed_destructive_effects: false,
         };
         let receipt = service
-            .execute_and_audit(repo.path(), &view(), &request, preflight(), 1_700_000_000_001)
+            .execute_and_audit(
+                repo.path(),
+                &view(),
+                &request,
+                preflight(),
+                1_700_000_000_001,
+            )
             .unwrap();
 
         let raw = fs::read(&receipt.audit_path).unwrap();
