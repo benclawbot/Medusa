@@ -727,6 +727,7 @@ impl ModelProvider for ConfiguredProvider {
 
 pub struct OpenAiProvider {
     client: Client,
+    provider: String,
     base_url: String,
     api_key: Option<String>,
     model: String,
@@ -773,6 +774,7 @@ impl OpenAiProvider {
             });
         Ok(Self {
             client: shared_http_client()?,
+            provider: config.model.provider.clone(),
             base_url: base_url.trim_end_matches('/').to_owned(),
             api_key,
             model: config.model.name.clone(),
@@ -784,7 +786,8 @@ impl OpenAiProvider {
         })
     }
 
-    fn request_body(&self, request: &ModelRequest) -> Value {
+    fn request_body(&self, request: &ModelRequest) -> MedusaResult<Value> {
+        self.validate_request(request)?;
         let mut messages = vec![json!({"role": "system", "content": request.system})];
         for message in &request.messages {
             let role = match message.role {
@@ -808,7 +811,7 @@ impl OpenAiProvider {
                     } => messages.push(json!({
                         "role": "tool", "tool_call_id": tool_use_id, "content": content
                     })),
-                    MessageBlock::Image { .. } => {}
+                    MessageBlock::Image { .. } => return Err(self.unsupported_image_error()),
                 }
             }
             let mut wire = json!({"role": role, "content": text});
@@ -821,19 +824,17 @@ impl OpenAiProvider {
             "type": "function",
             "function": {"name": tool.name, "description": tool.description, "parameters": tool.input_schema}
         })).collect();
-        json!({
+        Ok(json!({
             "model": self.model,
             "messages": messages,
             "tools": tools,
             "max_tokens": request.max_tokens,
             "temperature": f64::from(request.temperature_milli) / 1000.0,
             "stream": false
-        })
+        }))
     }
-}
 
-impl ModelProvider for OpenAiProvider {
-    fn complete(&self, request: &ModelRequest) -> MedusaResult<ModelResponse> {
+    fn validate_request(&self, request: &ModelRequest) -> MedusaResult<()> {
         if !request.tools.is_empty() && !self.capabilities.tool_calling {
             return Err(MedusaError::new(
                 ErrorCode::DependencyUnavailable,
@@ -841,11 +842,48 @@ impl ModelProvider for OpenAiProvider {
                 "selected route does not support tool calling",
             ));
         }
+        if request
+            .messages
+            .iter()
+            .flat_map(|message| &message.content)
+            .any(|block| matches!(block, MessageBlock::Image { .. }))
+        {
+            return Err(self.unsupported_image_error());
+        }
+        Ok(())
+    }
+
+    fn unsupported_image_error(&self) -> MedusaError {
+        let mut error = MedusaError::new(
+            ErrorCode::DependencyUnavailable,
+            ErrorCategory::Validation,
+            format!(
+                "provider route does not support image input: provider={} model={} endpoint={}",
+                self.provider, self.model, self.base_url
+            ),
+        );
+        error
+            .context
+            .insert("provider".to_owned(), Value::from(self.provider.clone()));
+        error
+            .context
+            .insert("model".to_owned(), Value::from(self.model.clone()));
+        error
+            .context
+            .insert("endpoint".to_owned(), Value::from(self.base_url.clone()));
+        error
+            .context
+            .insert("content_type".to_owned(), Value::from("image"));
+        error
+    }
+}
+
+impl ModelProvider for OpenAiProvider {
+    fn complete(&self, request: &ModelRequest) -> MedusaResult<ModelResponse> {
+        self.validate_request(request)?;
+        let body = self.request_body(request)?;
         let endpoint = format!("{}/chat/completions", self.base_url);
-        let mut builder = self
-            .client
-            .post(&endpoint)
-            .json(&self.request_body(request));
+        let mut builder = self.client.post(&endpoint).json(&body);
         if let Some(key) = &self.api_key {
             builder = builder.bearer_auth(key);
         }
@@ -982,6 +1020,51 @@ mod tests {
             }
         }
         assert!(!TextOnly.capabilities().image_input);
+    }
+
+    #[test]
+    fn openai_rejects_images_before_request_serialization() {
+        let provider = OpenAiProvider {
+            client: Client::new(),
+            provider: "openai-compatible".to_owned(),
+            base_url: "https://example.invalid/v1".to_owned(),
+            api_key: None,
+            model: "text-only-test".to_owned(),
+            capabilities: ProviderCapabilities::default(),
+        };
+        let request = ModelRequest {
+            system: String::new(),
+            messages: vec![Message {
+                role: Role::User,
+                content: vec![MessageBlock::Image {
+                    source: ImageSource::Base64 {
+                        media_type: "image/png".to_owned(),
+                        data: "AAEC".to_owned(),
+                    },
+                    alt_text: None,
+                }],
+            }],
+            tools: Vec::new(),
+            max_tokens: 32,
+            temperature_milli: 0,
+        };
+
+        let error = provider
+            .request_body(&request)
+            .expect_err("image must be rejected");
+        assert_eq!(error.category, ErrorCategory::Validation);
+        assert_eq!(
+            error.context.get("provider"),
+            Some(&Value::from("openai-compatible"))
+        );
+        assert_eq!(
+            error.context.get("model"),
+            Some(&Value::from("text-only-test"))
+        );
+        assert_eq!(
+            error.context.get("content_type"),
+            Some(&Value::from("image"))
+        );
     }
 
     #[test]
