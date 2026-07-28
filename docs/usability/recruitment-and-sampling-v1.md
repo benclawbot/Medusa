@@ -12,7 +12,7 @@ Define how participants are recruited, screened, assigned, and counted so the st
 
 A study wave is valid only when it includes at least six completed, consented sessions and all of the following are represented:
 
-- at least two first-time or near-first-time coding-agent users
+- at least two first-time coding-agent users with no prior coding-agent use
 - at least two experienced coding-agent users
 - at least two operating systems
 - both TUI and desktop clients where the tested build supports them
@@ -22,9 +22,13 @@ A participant may satisfy more than one requirement. Do not stop recruiting mere
 
 ## Cohort definitions
 
+### First-time coding-agent cohort
+
+A participant is classified as first-time only when they have never previously used a coding agent for a substantive coding task. At least two valid participants must meet this exact definition; near-first-time participants do not satisfy the frozen protocol minimum.
+
 ### Novice coding-agent cohort
 
-A participant is classified as novice when they have never used a coding agent or have completed fewer than three substantive coding tasks with one.
+A participant is classified as novice when they are first-time or have completed fewer than three substantive coding tasks with a coding agent. This broader novice label may be used for analysis, but it does not replace the separate first-time minimum.
 
 ### Experienced coding-agent cohort
 
@@ -74,7 +78,7 @@ Avoid recruiting only highly enthusiastic coding-agent users. Do not advertise t
 Ask only the minimum needed for assignment:
 
 1. Which operating systems can you use for the session?
-2. How often have you used a coding agent: never, fewer than three substantive tasks, occasionally, or regularly?
+2. How many substantive coding tasks have you previously completed with a coding agent: none, one or two, three to nine, or ten or more?
 3. Are you familiar with Rust and Cargo tooling: yes or no?
 4. Have you contributed code or design work to Medusa?
 5. Have you previously seen the Medusa usability fixture or task script?
@@ -88,8 +92,8 @@ Fill this before scheduling scored sessions.
 
 | Slot | Cohort | Rust familiarity | Operating system | Client | Rollback variant | Status |
 | --- | --- | --- | --- | --- | --- | --- |
-| P01 | novice | unfamiliar preferred | Linux/macOS/Windows | TUI/desktop | clean | open |
-| P02 | novice | any | different from P01 where practical | alternate client | conflict | open |
+| P01 | first-time | unfamiliar preferred | Linux/macOS/Windows | TUI/desktop | clean | open |
+| P02 | first-time | any | different from P01 where practical | alternate client | conflict | open |
 | P03 | experienced | any | supported | TUI/desktop | clean | open |
 | P04 | experienced | any | supported | alternate client | conflict | open |
 | P05 | either | any | fill platform gap | fill client gap | clean | open |
@@ -102,6 +106,7 @@ Do not assign a participant to a client/platform combination that has not passed
 ## Assignment rules
 
 - Balance clean and conflict rollback-preview variants across cohorts.
+- Preserve at least two first-time assignments through completion and exclusions.
 - Avoid assigning all novice participants to one client or operating system.
 - Alternate task variants where multiple equivalent fixtures exist.
 - Keep the participant script and success thresholds unchanged within a study version.
@@ -146,7 +151,8 @@ Do not declare the acceptance criteria met until six valid sessions are complete
 Extend recruitment when:
 
 - fewer than six sessions remain valid,
-- novice or experienced minimums are not met,
+- fewer than two valid first-time participants remain,
+- experienced-participant minimums are not met,
 - only one operating system is represented,
 - a high-severity finding appears isolated to an unrepresented client/platform combination that can reasonably be tested,
 - protocol deviations make a required task incomparable across sessions.
@@ -162,7 +168,7 @@ The aggregate findings report must state:
 - number completed
 - number valid
 - exclusions by reason
-- cohort counts
+- first-time, novice, and experienced cohort counts
 - operating systems represented
 - clients represented
 - fixture and protocol versions used
