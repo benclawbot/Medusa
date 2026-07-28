@@ -1,9 +1,9 @@
 name: Materialize issue 475
 
 on:
-  push:
+  pull_request:
     branches:
-      - issue-475-openai-image-input
+      - main
     paths:
       - .github/issue-475-openai-image-input.patch
       - .github/workflows/materialize-issue-475.yml
@@ -13,6 +13,7 @@ permissions:
 
 jobs:
   materialize:
+    if: github.head_ref == 'issue-475-openai-image-input'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
