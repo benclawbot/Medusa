@@ -1,0 +1,47 @@
+name: Bootstrap issue 447 fix
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+    branches: [main]
+
+permissions:
+  contents: write
+
+jobs:
+  apply-and-validate:
+    if: github.head_ref == 'perf/447-async-capability-discovery'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.head_ref }}
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Apply exact runtime patch
+        run: git apply --check .github/issue-447-runtime-fix.patch && git apply .github/issue-447-runtime-fix.patch
+
+      - name: Remove bootstrap files
+        run: rm .github/issue-447-runtime-fix.patch .github/workflows/issue-447-bootstrap.yml
+
+      - name: Format
+        run: cargo fmt --all -- --check
+
+      - name: Focused runtime tests
+        run: cargo test -p medusa-runtime command_processing_does_not_wait_for_capability_discovery
+
+      - name: Runtime test suite
+        run: cargo test -p medusa-runtime
+
+      - name: Runtime clippy
+        run: cargo clippy -p medusa-runtime --all-targets -- -D warnings
+
+      - name: Commit validated source changes
+        run: |
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add crates/medusa-runtime/src/lib.rs crates/medusa-runtime/src/tests.rs
+          git add -u .github
+          git commit -m "perf(runtime): unblock first prompt during capability discovery"
+          git push origin HEAD:${{ github.head_ref }}
