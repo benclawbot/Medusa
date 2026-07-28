@@ -6,6 +6,9 @@ rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
 
+[lib]
+path = "src/model.rs"
+
 [dependencies]
 serde.workspace = true
 thiserror.workspace = true
