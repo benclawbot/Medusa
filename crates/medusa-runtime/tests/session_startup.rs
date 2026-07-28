@@ -1,8 +1,8 @@
 use std::fs;
 
-use medusa_agent::{AgentEngine, session_browser::list_sessions};
+use medusa_agent::{session_browser::list_sessions, AgentEngine};
 use medusa_config::Config;
-use medusa_provider::{ModelProvider, ModelRequest, ModelResponse, Usage};
+use medusa_provider::{ModelProvider, ModelRequest, ModelResponse};
 use medusa_runtime::RuntimeController;
 
 struct NeverCalled;
@@ -25,7 +25,10 @@ fn continue_latest_selects_the_most_recent_durable_session() {
         .expect("second session");
 
     let sessions = list_sessions(directory.path()).expect("sessions");
-    assert_eq!(sessions.first().map(|session| session.id.as_str()), Some(second.id.as_str()));
+    assert_eq!(
+        sessions.first().map(|session| session.id.as_str()),
+        Some(second.id.as_str())
+    );
     assert_ne!(first.id, second.id);
 
     let runtime = RuntimeController::start_continue_latest(directory.path().to_path_buf())
@@ -37,7 +40,12 @@ fn continue_latest_selects_the_most_recent_durable_session() {
 fn continue_latest_fails_when_repository_has_no_sessions() {
     let directory = tempfile::tempdir().expect("tempdir");
     fs::create_dir_all(directory.path().join(".medusa")).expect("state directory");
-    let error = RuntimeController::start_continue_latest(directory.path().to_path_buf())
-        .expect_err("missing session must fail");
+    let error = match RuntimeController::start_continue_latest(directory.path().to_path_buf()) {
+        Ok(runtime) => {
+            drop(runtime);
+            panic!("missing session must fail")
+        }
+        Err(error) => error,
+    };
     assert!(error.to_string().contains("no durable sessions exist"));
 }
