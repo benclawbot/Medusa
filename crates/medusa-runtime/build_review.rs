@@ -28,6 +28,10 @@ fn write_generated_review(
         "        let patch = String::from_utf8(untracked.stdout)\n            .map_err(|_| ReviewWorkflowError::Git(\"untracked diff was not UTF-8\".to_owned()))?\n            .replace(\"a/dev/null\", \"a/dev/null\");",
         "        let patch = String::from_utf8(untracked.stdout)\n            .map_err(|_| ReviewWorkflowError::Git(\"untracked diff was not UTF-8\".to_owned()))?;",
     );
+    source = source.replace(
+        "    Ok(String::from_utf8_lossy(&output.stdout).lines().map(str::to_owned).collect())",
+        "    Ok(String::from_utf8_lossy(&output.stdout)\n        .lines()\n        .filter(|path| !path.starts_with(\".medusa/review/\"))\n        .map(str::to_owned)\n        .collect())",
+    );
     source = source.replace("#[cfg(test)]\n#[path = \"review_tests.rs\"]\nmod tests;", "");
     replace_once(
         &mut source,
@@ -51,34 +55,34 @@ fn write_generated_review_tests(out_dir: &Path) -> Result<PathBuf, Box<dyn Error
 fn refresh_resets_acceptance_after_file_content_changes() {
     let repo = repository();
     capture_review_baseline(repo.path()).expect("baseline");
-    std::fs::write(repo.path().join("src/lib.rs"), "pub fn value() -> u8 { 2 }\n").expect("edit");
+    std::fs::write(repo.path().join("tracked.txt"), "changed once\n").expect("edit");
     let first = read_review_workspace(repo.path()).expect("first review");
-    let file = first.snapshot.file("src/lib.rs").expect("file");
+    let file = first.snapshot.file("tracked.txt").expect("file");
     apply_review_action(repo.path(), ReviewActionRequest::AcceptFile {
         path: file.path.clone(), expected_snapshot_id: first.snapshot.id.clone()
     }, "test").expect("accept");
-    std::fs::write(repo.path().join("src/lib.rs"), "pub fn value() -> u8 { 3 }\n").expect("edit again");
+    std::fs::write(repo.path().join("tracked.txt"), "changed twice\n").expect("edit again");
     let refreshed = read_review_workspace(repo.path()).expect("refresh");
-    assert_eq!(refreshed.snapshot.file("src/lib.rs").unwrap().review_state, medusa_review_model::ReviewState::Unreviewed);
+    assert_eq!(refreshed.snapshot.file("tracked.txt").unwrap().review_state, medusa_review_model::ReviewState::Unreviewed);
 }
 
 #[test]
 fn rejected_transition_does_not_mutate_worktree() {
     let repo = repository();
     capture_review_baseline(repo.path()).expect("baseline");
-    std::fs::write(repo.path().join("src/lib.rs"), "pub fn value() -> u8 { 2 }\n").expect("edit");
+    std::fs::write(repo.path().join("tracked.txt"), "accepted change\n").expect("edit");
     let first = read_review_workspace(repo.path()).expect("review");
-    let file = first.snapshot.file("src/lib.rs").expect("file").clone();
+    let file = first.snapshot.file("tracked.txt").expect("file").clone();
     let accepted = apply_review_action(repo.path(), ReviewActionRequest::AcceptFile {
         path: file.path.clone(), expected_snapshot_id: first.snapshot.id.clone()
     }, "test").expect("accept");
-    let accepted_file = accepted.snapshot.file("src/lib.rs").unwrap();
+    let accepted_file = accepted.snapshot.file("tracked.txt").unwrap();
     let result = apply_review_action(repo.path(), ReviewActionRequest::RevertFile {
-        path: "src/lib.rs".to_owned(), expected_snapshot_id: accepted.snapshot.id.clone(),
+        path: "tracked.txt".to_owned(), expected_snapshot_id: accepted.snapshot.id.clone(),
         expected_file_fingerprint: accepted_file.current_fingerprint.clone(),
     }, "test");
     assert!(result.is_err());
-    assert_eq!(std::fs::read_to_string(repo.path().join("src/lib.rs")).unwrap(), "pub fn value() -> u8 { 2 }\n");
+    assert_eq!(std::fs::read_to_string(repo.path().join("tracked.txt")).unwrap(), "accepted change\n");
 }
 "#);
     let output = out_dir.join("review_tests_generated.rs");
