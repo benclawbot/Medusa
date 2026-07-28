@@ -78,7 +78,7 @@ pub fn preview(
 /// Applies repository mutations without claiming selective-revert provenance.
 ///
 /// Callers that possess authoritative session and activity identity should use
-/// [`apply_atomic_with_context`]. Legacy callers remain safe, but their writes are explicitly
+/// `apply_atomic_with_context`. Legacy callers remain safe, but their writes are explicitly
 /// unavailable for provenance-authorized selective revert.
 pub fn apply_atomic(repo: &Path, mutations: &[FileMutation]) -> MedusaResult<TransactionOutcome> {
     apply_atomic_inner(repo, mutations, None)
