@@ -91,6 +91,12 @@ fn main() -> Result<(), Box<dyn Error>> {
 
     replace_once(
         &mut source,
+        "        SlashCommand::Skill { selector, task } => {",
+        "        SlashCommand::Skill { selector, task } if selector.eq_ignore_ascii_case(\"recovery\") => {\n            match recovery::execute_tui_command(&state.repo, task.as_deref()) {\n                Ok(Some(receipt)) => { let _ = events.send(RuntimeEvent::RecoveryCompleted(receipt)); }\n                Ok(None) => {\n                    for event in recovery::startup_events(&state.repo) { let _ = events.send(event); }\n                    let _ = events.send(RuntimeEvent::Notice {\n                        title: \"Recovery commands\".to_owned(),\n                        details: vec![\"/recovery inspect|resume|verify|abandon or /recovery restore <checkpoint> [--confirm]\".to_owned()],\n                    });\n                }\n                Err(error) => { let _ = events.send(RuntimeEvent::Notice { title: \"Recovery action failed closed\".to_owned(), details: vec![error] }); }\n            }\n        }\n        SlashCommand::Skill { selector, task } => {",
+    )?;
+
+    replace_once(
+        &mut source,
         "step_with_observer_and_context(&mut session, skill_context.as_deref(), |update| {",
         "step_with_observer_and_context(&mut session, Some(skill_context.as_str()), |update| {",
     )?;
