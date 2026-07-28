@@ -1,0 +1,126 @@
+name: Apply issue 447 runtime fix
+
+on:
+  push:
+    branches:
+      - perf/447-async-capability-discovery
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: perf/447-async-capability-discovery
+          fetch-depth: 0
+
+      - name: Apply surgical runtime patch
+        shell: python
+        run: |
+          from pathlib import Path
+
+          path = Path('crates/medusa-runtime/src/lib.rs')
+          source = path.read_text()
+          old = '''    let _ = events.send(state.settings_event());
+    let capability_event = match CapabilityRegistry::discover(state.repo.clone()) {
+        Ok(registry) => RuntimeEvent::Notice {
+            title: "Runtime capabilities".to_owned(),
+            details: registry
+                .prompt_summary()
+                .lines()
+                .map(str::to_owned)
+                .collect(),
+        },
+        Err(error) => RuntimeEvent::Notice {
+            title: "Runtime capabilities unavailable".to_owned(),
+            details: vec![error.to_string()],
+        },
+    };
+    let _ = events.send(capability_event);
+    while let Ok(command) = commands.recv() {
+'''
+          new = '''    let _ = events.send(state.settings_event());
+    spawn_capability_discovery(state.repo.clone(), events.clone());
+    while let Ok(command) = commands.recv() {
+'''
+          if old not in source:
+              raise SystemExit('expected synchronous capability discovery block not found')
+          source = source.replace(old, new, 1)
+
+          anchor = '''fn cancel_requested(cancel: &AtomicBool, submission: &Arc<Mutex<SubmissionState>>) -> bool {
+'''
+          helper = '''fn spawn_capability_discovery(repo: PathBuf, events: Sender<RuntimeEvent>) {
+    let spawn_result = thread::Builder::new()
+        .name("medusa-capability-discovery".to_owned())
+        .spawn(move || {
+            let event = match CapabilityRegistry::discover(repo) {
+                Ok(registry) => RuntimeEvent::Notice {
+                    title: "Runtime capabilities".to_owned(),
+                    details: registry
+                        .prompt_summary()
+                        .lines()
+                        .map(str::to_owned)
+                        .collect(),
+                },
+                Err(error) => RuntimeEvent::Notice {
+                    title: "Runtime capabilities unavailable".to_owned(),
+                    details: vec![error.to_string()],
+                },
+            };
+            let _ = events.send(event);
+        });
+
+    if let Err(error) = spawn_result {
+        let _ = events.send(RuntimeEvent::Notice {
+            title: "Runtime capabilities unavailable".to_owned(),
+            details: vec![format!("failed to start capability discovery: {error}")],
+        });
+    }
+}
+
+'''
+          if anchor not in source:
+              raise SystemExit('capability helper insertion anchor not found')
+          source = source.replace(anchor, helper + anchor, 1)
+          path.write_text(source)
+
+          test_path = Path('crates/medusa-runtime/src/tests.rs')
+          tests = test_path.read_text()
+          test = '''
+#[test]
+fn capability_discovery_is_off_the_command_loop_critical_path() {
+    let source = include_str!("lib.rs");
+    let spawn = source
+        .find("spawn_capability_discovery(state.repo.clone(), events.clone());")
+        .expect("async discovery call");
+    let receive = source
+        .find("while let Ok(command) = commands.recv()")
+        .expect("command receive loop");
+    assert!(spawn < receive);
+    assert!(!source[..receive].contains("CapabilityRegistry::discover(state.repo.clone())"));
+}
+'''
+          if 'fn capability_discovery_is_off_the_command_loop_critical_path()' not in tests:
+              test_path.write_text(tests + test)
+
+          Path('.github/workflows/apply-447.yml').unlink()
+
+      - name: Format
+        run: cargo fmt --all
+
+      - name: Focused validation
+        run: |
+          cargo test -p medusa-runtime capability_discovery_is_off_the_command_loop_critical_path
+          cargo clippy -p medusa-runtime --all-targets -- -D warnings
+
+      - name: Commit applied fix
+        run: |
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add crates/medusa-runtime/src/lib.rs crates/medusa-runtime/src/tests.rs .github/workflows/apply-447.yml
+          git commit -m "perf(runtime): discover capabilities off prompt path"
+          git push origin HEAD:perf/447-async-capability-discovery
