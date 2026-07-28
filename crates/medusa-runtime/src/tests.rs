@@ -15,6 +15,68 @@ use super::support::{
 use super::*;
 
 #[test]
+fn command_processing_does_not_wait_for_capability_discovery() {
+    use std::{
+        sync::{Arc, Mutex, mpsc},
+        thread,
+        time::Duration,
+    };
+
+    let directory = tempdir().expect("temporary directory");
+    let state = RuntimeState::load(directory.path().to_path_buf()).expect("runtime state");
+    let (command_tx, command_rx) = mpsc::channel();
+    let (event_tx, event_rx) = mpsc::channel();
+    let cancel = Arc::new(AtomicBool::new(false));
+    let submission = Arc::new(Mutex::new(SubmissionState::default()));
+    let (discovery_started_tx, discovery_started_rx) = mpsc::channel();
+    let (release_tx, release_rx) = mpsc::channel();
+
+    let worker = thread::spawn(move || {
+        worker_loop_with_discovery(
+            state,
+            command_rx,
+            event_tx,
+            cancel,
+            submission,
+            move |_| {
+                discovery_started_tx.send(()).expect("signal discovery start");
+                release_rx.recv().expect("release discovery");
+                RuntimeEvent::Notice {
+                    title: "Runtime capabilities".to_owned(),
+                    details: vec!["ready".to_owned()],
+                }
+            },
+        );
+    });
+
+    assert!(matches!(
+        event_rx.recv_timeout(Duration::from_secs(1)),
+        Ok(RuntimeEvent::Settings { .. })
+    ));
+    discovery_started_rx
+        .recv_timeout(Duration::from_secs(1))
+        .expect("discovery started");
+
+    command_tx
+        .send(RuntimeCommand::Slash(SlashCommand::Help))
+        .expect("send help command");
+    assert!(matches!(
+        event_rx.recv_timeout(Duration::from_secs(1)),
+        Ok(RuntimeEvent::Notice { title, .. }) if title == "Slash commands"
+    ));
+
+    release_tx.send(()).expect("release discovery");
+    assert!(matches!(
+        event_rx.recv_timeout(Duration::from_secs(1)),
+        Ok(RuntimeEvent::Notice { title, .. }) if title == "Runtime capabilities"
+    ));
+    command_tx
+        .send(RuntimeCommand::Shutdown)
+        .expect("stop worker");
+    worker.join().expect("worker joins");
+}
+
+#[test]
 fn text_prompt_becomes_user_message_block() {
     let draft = PromptDraft {
         text: "fix the failing test".to_owned(),
