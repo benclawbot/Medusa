@@ -110,6 +110,16 @@ jobs:
               if old not in file_text:
                   raise SystemExit(f'MiniMax M3 semantic anchor not found: {file_path}')
               file_path.write_text(file_text.replace(old, new, 1))
+
+          startup_path = Path('crates/medusa-runtime/tests/session_startup.rs')
+          startup_text = startup_path.read_text()
+          old_credential_assertion = '.contains("missing provider credential in MINIMAX_API_KEY")'
+          new_credential_assertion = '.contains("missing provider credential")'
+          if old_credential_assertion not in startup_text:
+              raise SystemExit('session startup credential assertion anchor not found')
+          startup_path.write_text(
+              startup_text.replace(old_credential_assertion, new_credential_assertion, 1)
+          )
           PY
       - name: Format
         run: cargo fmt --all
