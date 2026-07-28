@@ -45,8 +45,7 @@ pub fn runtime_apply_review_action(
         },
         _ => return Err(format!("unknown review operation: {operation}")),
     };
-    apply_review_action(&PathBuf::from(repo), request, "desktop")
-        .map_err(|error| error.to_string())
+    apply_review_action(&PathBuf::from(repo), request, "desktop").map_err(|error| error.to_string())
 }
 
 #[tauri::command]
