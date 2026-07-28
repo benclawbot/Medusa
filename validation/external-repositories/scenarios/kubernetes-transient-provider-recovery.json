@@ -1,0 +1,28 @@
+{
+  "schema_version": 1,
+  "scenario_version": 1,
+  "id": "kubernetes-transient-provider-recovery",
+  "repository": {
+    "url": "https://github.com/kubernetes/kubernetes.git",
+    "commit": "56b196e921acec0259d84622a570fde6032e15b5",
+    "ecosystem": "go-bazel"
+  },
+  "task": "Complete a bounded multi-file client update, recover from an injected transient provider failure, and verify the affected packages without false completion.",
+  "expected_invariants": [
+    "transient provider failure does not become task completion",
+    "recovery retains partial progress and provenance",
+    "all changes remain within the allowed repository scope"
+  ],
+  "allowed_scope": ["staging/src/k8s.io/**", "pkg/**", "test/**", "go.mod", "go.sum"],
+  "coverage": ["transient-provider-failure", "interruption-resume"],
+  "execution": {
+    "mode": "offline",
+    "timeout_seconds": 7200,
+    "provider": {"kind": "recording-replay", "fixture": "transient-provider-failure-v1"}
+  },
+  "acceptance": {
+    "expected_outcome": "verified-completion-after-provider-recovery",
+    "verification_commands": [["go", "test", "./..."]],
+    "required_evidence": ["provider-failure", "retry", "resume", "repository-diff", "passing-verification"]
+  }
+}
