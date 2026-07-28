@@ -10,6 +10,7 @@ import { RecoveryDock } from "./RecoveryDock";
 import { SessionDock } from "./SessionDock";
 import "./styles.css";
 import "./medusa-desktop.css";
+import "./recovery.css";
 import "./diff-dock.css";
 import "./memory-browser.css";
 import "./accessibility.css";
