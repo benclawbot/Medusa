@@ -35,10 +35,7 @@ impl RecoveryAuditStore {
         }
     }
 
-    pub fn append(
-        &self,
-        record: &RecoveryAuditRecord,
-    ) -> Result<PathBuf, RecoveryAuditStoreError> {
+    pub fn append(&self, record: &RecoveryAuditRecord) -> Result<PathBuf, RecoveryAuditStoreError> {
         if !record.verify() {
             return Err(RecoveryAuditStoreError::InvalidRecord);
         }
