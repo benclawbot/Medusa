@@ -272,28 +272,46 @@ impl Drop for RuntimeController {
 }
 
 fn worker_loop_with_state(
-    mut state: RuntimeState,
+    state: RuntimeState,
     commands: Receiver<RuntimeCommand>,
     events: Sender<RuntimeEvent>,
     cancel: Arc<AtomicBool>,
     submission: Arc<Mutex<SubmissionState>>,
 ) {
+    worker_loop_with_discovery(
+        state,
+        commands,
+        events,
+        cancel,
+        submission,
+        capability_event,
+    );
+}
+
+fn worker_loop_with_discovery<F>(
+    mut state: RuntimeState,
+    commands: Receiver<RuntimeCommand>,
+    events: Sender<RuntimeEvent>,
+    cancel: Arc<AtomicBool>,
+    submission: Arc<Mutex<SubmissionState>>,
+    discover: F,
+) where
+    F: FnOnce(PathBuf) -> RuntimeEvent + Send + 'static,
+{
     let _ = events.send(state.settings_event());
-    let capability_event = match CapabilityRegistry::discover(state.repo.clone()) {
-        Ok(registry) => RuntimeEvent::Notice {
-            title: "Runtime capabilities".to_owned(),
-            details: registry
-                .prompt_summary()
-                .lines()
-                .map(str::to_owned)
-                .collect(),
-        },
-        Err(error) => RuntimeEvent::Notice {
+    let capability_repo = state.repo.clone();
+    let capability_events = events.clone();
+    if let Err(error) = thread::Builder::new()
+        .name("medusa-capability-discovery".to_owned())
+        .spawn(move || {
+            let _ = capability_events.send(discover(capability_repo));
+        })
+    {
+        let _ = events.send(RuntimeEvent::Notice {
             title: "Runtime capabilities unavailable".to_owned(),
-            details: vec![error.to_string()],
-        },
-    };
-    let _ = events.send(capability_event);
+            details: vec![format!("failed to start capability discovery: {error}")],
+        });
+    }
     while let Ok(command) = commands.recv() {
         match command {
             RuntimeCommand::Submit(draft) => {
@@ -359,6 +377,23 @@ fn worker_loop_with_state(
         }
     }
     mark_idle(&submission, true);
+}
+
+fn capability_event(repo: PathBuf) -> RuntimeEvent {
+    match CapabilityRegistry::discover(repo) {
+        Ok(registry) => RuntimeEvent::Notice {
+            title: "Runtime capabilities".to_owned(),
+            details: registry
+                .prompt_summary()
+                .lines()
+                .map(str::to_owned)
+                .collect(),
+        },
+        Err(error) => RuntimeEvent::Notice {
+            title: "Runtime capabilities unavailable".to_owned(),
+            details: vec![error.to_string()],
+        },
+    }
 }
 
 fn cancel_requested(cancel: &AtomicBool, submission: &Arc<Mutex<SubmissionState>>) -> bool {

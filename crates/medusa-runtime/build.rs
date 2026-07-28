@@ -79,8 +79,8 @@ fn main() -> Result<(), Box<dyn Error>> {
 
     replace_once(
         &mut source,
-        "    let _ = events.send(state.settings_event());\n    let capability_event =",
-        "    let _ = events.send(state.settings_event());\n    for recovery_event in recovery::startup_events(&state.repo) {\n        let _ = events.send(recovery_event);\n    }\n    let capability_event =",
+        "    let _ = events.send(state.settings_event());\n    let capability_repo =",
+        "    let _ = events.send(state.settings_event());\n    for recovery_event in recovery::startup_events(&state.repo) {\n        let _ = events.send(recovery_event);\n    }\n    let capability_repo =",
     )?;
 
     replace_once(
