@@ -15,8 +15,8 @@ pub use action::{AuthorizedRecoveryAction, RecoveryActionRejection, RecoveryActi
 pub use audit::{RecoveryActionOutcome, RecoveryAuditRecord, RecoveryPreflightEvidence};
 pub use legacy::*;
 pub use preflight::{
-    build_restore_preflight, snapshot_fingerprint, RecoveryPreflightError,
-    RecoveryPreflightReport, RepositoryFileState, RepositorySnapshot,
+    RecoveryPreflightError, RecoveryPreflightReport, RepositoryFileState, RepositorySnapshot,
+    build_restore_preflight, snapshot_fingerprint,
 };
 pub use service::{
     RecoveryActionExecutor, RecoveryActionService, RecoveryExecutionError,
