@@ -205,9 +205,7 @@ mod tests {
     #[test]
     fn rejects_conflicting_event_with_reused_identity() {
         let mut history = ReviewSessionHistory::new("session-1").unwrap();
-        history
-            .append(event("event-1", "snapshot-1", 20))
-            .unwrap();
+        history.append(event("event-1", "snapshot-1", 20)).unwrap();
         let mut conflicting = event("event-1", "snapshot-1", 20);
         conflicting.actor = "user:bob".into();
 
@@ -274,12 +272,8 @@ mod tests {
     #[test]
     fn filters_history_by_review_snapshot_identity() {
         let mut history = ReviewSessionHistory::new("session-1").unwrap();
-        history
-            .append(event("event-1", "snapshot-1", 10))
-            .unwrap();
-        history
-            .append(event("event-2", "snapshot-2", 20))
-            .unwrap();
+        history.append(event("event-1", "snapshot-1", 10)).unwrap();
+        history.append(event("event-2", "snapshot-2", 20)).unwrap();
 
         let events = history.events_for_snapshot("snapshot-2");
         assert_eq!(events.len(), 1);
