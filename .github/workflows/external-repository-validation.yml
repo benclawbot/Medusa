@@ -1,0 +1,29 @@
+name: External Repository Validation
+
+on:
+  pull_request:
+    paths:
+      - 'validation/external-repositories/**'
+      - 'scripts/external-validation.py'
+      - 'docs/EXTERNAL-REPOSITORY-VALIDATION.md'
+      - '.github/workflows/external-repository-validation.yml'
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  contracts:
+    name: Validate external repository contracts
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Validate manifests and corpus coverage
+        run: python3 scripts/external-validation.py validate
+      - name: Run deterministic report self-test
+        run: python3 scripts/external-validation.py self-test
