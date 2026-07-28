@@ -89,7 +89,7 @@ mod tests {
         RecoveryViewInput, VerificationState,
     };
 
-    fn view(conflicting: bool) -> RecoveryView {
+    fn view(conflicting: bool, containment_recheck: bool) -> RecoveryView {
         RecoveryView::build(RecoveryViewInput {
             session_id: "session-1".into(),
             last_durable_step: "implement".into(),
@@ -97,7 +97,7 @@ mod tests {
             current_repository_fingerprint: "b".repeat(64),
             verification: VerificationState::Incomplete,
             approvals_must_be_reestablished: false,
-            containment_must_be_reestablished: false,
+            containment_must_be_reestablished: containment_recheck,
             checkpoints: vec![CheckpointPresentation {
                 id: "cp-1".into(),
                 sequence: 1,
@@ -125,7 +125,7 @@ mod tests {
 
     #[test]
     fn destructive_restore_requires_explicit_confirmation() {
-        let result = view(true).authorize_action(&RecoveryActionRequest {
+        let result = view(true, false).authorize_action(&RecoveryActionRequest {
             session_id: "session-1".into(),
             operation: RecoveryOperation::RestoreCheckpoint,
             checkpoint_id: Some("cp-1".into()),
@@ -136,7 +136,7 @@ mod tests {
 
     #[test]
     fn confirmed_restore_is_authorized_and_records_confirmation() {
-        let action = view(true)
+        let action = view(true, false)
             .authorize_action(&RecoveryActionRequest {
                 session_id: "session-1".into(),
                 operation: RecoveryOperation::RestoreCheckpoint,
@@ -150,7 +150,7 @@ mod tests {
 
     #[test]
     fn stale_checkpoint_selection_fails_closed() {
-        let result = view(false).authorize_action(&RecoveryActionRequest {
+        let result = view(false, false).authorize_action(&RecoveryActionRequest {
             session_id: "session-1".into(),
             operation: RecoveryOperation::RestoreCheckpoint,
             checkpoint_id: Some("cp-other".into()),
@@ -164,9 +164,7 @@ mod tests {
 
     #[test]
     fn disabled_actions_preserve_the_view_reason() {
-        let mut blocked = view(false);
-        blocked.containment_must_be_reestablished = true;
-        let result = blocked.authorize_action(&RecoveryActionRequest {
+        let result = view(false, true).authorize_action(&RecoveryActionRequest {
             session_id: "session-1".into(),
             operation: RecoveryOperation::Resume,
             checkpoint_id: None,
