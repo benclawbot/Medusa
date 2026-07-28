@@ -2,9 +2,7 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use thiserror::Error;
 
-use crate::{
-    AuthorizedReviewAction, ReviewActionRequest, ReviewSnapshot, ReviewState,
-};
+use crate::{AuthorizedReviewAction, ReviewActionRequest, ReviewSnapshot, ReviewState};
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum ReviewAuditScope {
@@ -157,10 +155,9 @@ fn apply_action(
                 ReviewAuditDecision::Reverted,
             ))
         }
-        ReviewActionRequest::AcceptTask { .. } => Ok((
-            ReviewAuditScope::Task,
-            ReviewAuditDecision::Accepted,
-        )),
+        ReviewActionRequest::AcceptTask { .. } => {
+            Ok((ReviewAuditScope::Task, ReviewAuditDecision::Accepted))
+        }
     }
 }
 
@@ -204,8 +201,7 @@ fn hash_field(hasher: &mut Sha256, value: &[u8]) {
 #[cfg(test)]
 mod tests {
     use crate::{
-        ChangeKind, ChangeOrigin, ReviewFile, ReviewHunk, ReviewProvenance,
-        VerificationState,
+        ChangeKind, ChangeOrigin, ReviewFile, ReviewHunk, ReviewProvenance, VerificationState,
     };
 
     use super::*;
@@ -255,17 +251,15 @@ mod tests {
                 expected_snapshot_id: snapshot.id.clone(),
             })
             .unwrap();
-        let event = record_authorized_action(
-            &mut snapshot,
-            authorized,
-            "user:alice",
-            42,
-            "repo-after",
-        )
-        .unwrap();
+        let event =
+            record_authorized_action(&mut snapshot, authorized, "user:alice", 42, "repo-after")
+                .unwrap();
 
         assert_eq!(snapshot.files[0].review_state, ReviewState::Accepted);
-        assert_eq!(snapshot.files[0].hunks[0].review_state, ReviewState::Accepted);
+        assert_eq!(
+            snapshot.files[0].hunks[0].review_state,
+            ReviewState::Accepted
+        );
         assert_eq!(event.decision, ReviewAuditDecision::Accepted);
         assert_eq!(event.repository_fingerprint_before, "repo-before");
         assert_eq!(event.repository_fingerprint_after, "repo-after");
@@ -284,14 +278,9 @@ mod tests {
                 expected_hunk_fingerprint: "hunk-1".into(),
             })
             .unwrap();
-        let event = record_authorized_action(
-            &mut snapshot,
-            authorized,
-            "user:alice",
-            43,
-            "repo-after",
-        )
-        .unwrap();
+        let event =
+            record_authorized_action(&mut snapshot, authorized, "user:alice", 43, "repo-after")
+                .unwrap();
 
         assert_eq!(snapshot.files[0].review_state, ReviewState::Reverted);
         assert_eq!(event.decision, ReviewAuditDecision::Reverted);
@@ -318,13 +307,7 @@ mod tests {
         };
 
         assert_eq!(
-            record_authorized_action(
-                &mut snapshot,
-                authorized,
-                "user:alice",
-                44,
-                "repo-after",
-            ),
+            record_authorized_action(&mut snapshot, authorized, "user:alice", 44, "repo-after",),
             Err(ReviewAuditError::ConflictingReviewState)
         );
     }
@@ -340,22 +323,11 @@ mod tests {
                 expected_snapshot_id: "snapshot-1".into(),
             },
         };
-        let first_event = record_authorized_action(
-            &mut first,
-            action.clone(),
-            "user:alice",
-            45,
-            "repo-after",
-        )
-        .unwrap();
-        let second_event = record_authorized_action(
-            &mut second,
-            action,
-            "user:alice",
-            45,
-            "repo-after",
-        )
-        .unwrap();
+        let first_event =
+            record_authorized_action(&mut first, action.clone(), "user:alice", 45, "repo-after")
+                .unwrap();
+        let second_event =
+            record_authorized_action(&mut second, action, "user:alice", 45, "repo-after").unwrap();
         assert_eq!(first_event.id, second_event.id);
     }
 }
