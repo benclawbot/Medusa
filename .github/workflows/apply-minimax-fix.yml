@@ -1,21 +1,27 @@
-name: Apply MiniMax fix
+name: Apply and validate MiniMax fix
 on:
-  push:
-    branches:
-      - fix/minimax-m3-openai-cancellation
+  pull_request:
+    branches: [main]
 permissions:
   contents: write
 jobs:
-  apply:
-    if: ${{ !contains(github.event.head_commit.message, '[applied-minimax-fix]') }}
+  apply-and-validate:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
         with:
+          ref: ${{ github.head_ref }}
           fetch-depth: 0
       - name: Apply patch
         run: git apply .github/minimax-m3-openai-cancellation.patch
-      - name: Commit source changes
+      - name: Format check
+        run: cargo fmt --all -- --check
+      - name: Clippy
+        run: cargo clippy --workspace --all-targets --all-features -- -D warnings
+      - name: Test workspace
+        run: cargo test --workspace --all-features
+      - name: Commit validated source changes
+        if: success()
         run: |
           rm .github/minimax-m3-openai-cancellation.patch
           rm .github/workflows/apply-minimax-fix.yml
@@ -23,4 +29,4 @@ jobs:
           git config user.email 41898282+github-actions[bot]@users.noreply.github.com
           git add -A
           git commit -m "Fix MiniMax M3 OpenAI routing and request cancellation [applied-minimax-fix]"
-          git push
+          git push origin HEAD:${{ github.head_ref }}
