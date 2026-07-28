@@ -29,6 +29,7 @@
     "crates/medusa-cli/src/skill_probation.rs",
     "crates/medusa-cli/src/skill_lifecycle.rs",
     "crates/medusa-cli/src/oauth_preflight.rs",
+    "crates/medusa-runtime/src/attachment.rs",
     "crates/medusa-runtime/src/commands.rs",
     "crates/medusa-runtime/src/error.rs",
     "crates/medusa-runtime/src/generated_lib.rs",
