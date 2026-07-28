@@ -29,6 +29,7 @@ medusa-memory-writeback = { path = "../medusa-memory-writeback" }
 medusa-multi-agent-scheduler = { path = "../medusa-multi-agent-scheduler" }
 medusa-protocol = { path = "../medusa-protocol" }
 medusa-provider = { path = "../medusa-provider" }
+medusa-recovery-coordinator = { path = "../medusa-recovery-coordinator" }
 medusa-time-travel = { path = "../medusa-time-travel" }
 medusa-turn-assembly = { path = "../medusa-turn-assembly" }
 png = "0.17"

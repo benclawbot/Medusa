@@ -55,6 +55,18 @@ fn main() -> Result<(), Box<dyn Error>> {
 
     replace_once(
         &mut source,
+        "pub enum RuntimeEvent {\n    Started,",
+        "pub enum RuntimeEvent {\n    RecoveryAvailable(medusa_recovery_coordinator::RecoveryView),\n    Started,",
+    )?;
+
+    replace_once(
+        &mut source,
+        "    let _ = events.send(state.settings_event());\n    let capability_event =",
+        "    let _ = events.send(state.settings_event());\n    for recovery_event in recovery::startup_events(&state.repo) {\n        let _ = events.send(recovery_event);\n    }\n    let capability_event =",
+    )?;
+
+    replace_once(
+        &mut source,
         "    let engine = AgentEngine::new(provider, config);\n    let selected_skill = state.pending_skill.clone();\n    let skill_context = selected_skill.as_ref().map(SelectedSkill::prompt_context);\n    let content = message_blocks(&draft)?;\n",
         "    let engine = AgentEngine::new(provider, config);\n    let selected_skill = state.pending_skill.clone();\n    let execution_plan = crate::production_orchestrator::plan(&draft)\n        .map_err(RuntimeError::agent)?;\n    for event in crate::production_orchestrator::events(&execution_plan) {\n        let _ = events.send(event);\n    }\n    let orchestration_context = crate::production_orchestrator::runtime_context(&execution_plan);\n    let skill_context = selected_skill\n        .as_ref()\n        .map(SelectedSkill::prompt_context)\n        .map(|skill| format!(\"{skill}\\n\\n{orchestration_context}\"))\n        .unwrap_or(orchestration_context);\n    let content = message_blocks(&draft)?;\n",
     )?;

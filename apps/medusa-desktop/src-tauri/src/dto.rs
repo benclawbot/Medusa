@@ -58,6 +58,9 @@ pub enum DesktopSubmitDisposition {
     rename_all_fields = "camelCase"
 )]
 pub enum DesktopRuntimeEvent {
+    RecoveryAvailable {
+        recovery: serde_json::Value,
+    },
     Started,
     AssistantText {
         text: String,
@@ -164,6 +167,14 @@ pub struct DesktopQuestionOption {
 impl From<RuntimeEvent> for DesktopRuntimeEvent {
     fn from(event: RuntimeEvent) -> Self {
         match event {
+            RuntimeEvent::RecoveryAvailable(recovery) => Self::RecoveryAvailable {
+                recovery: serde_json::to_value(recovery).unwrap_or_else(|error| {
+                    serde_json::json!({
+                        "health": "corrupt",
+                        "warnings": [format!("Recovery payload serialization failed: {error}")]
+                    })
+                }),
+            },
             RuntimeEvent::Started => Self::Started,
             RuntimeEvent::AssistantText(text) => Self::AssistantText { text },
             RuntimeEvent::Activity(activity) => Self::Activity {
