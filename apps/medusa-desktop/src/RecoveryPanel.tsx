@@ -27,6 +27,7 @@ export function RecoveryPanel({ recovery, busy = false, onAction }: Props) {
     ? recovery.selectedPreview
     : undefined;
   const restore = actionByOperation.get("restoreCheckpoint");
+  const restoreNeedsConfirmation = restore?.requiresConfirmation ?? false;
 
   const run = (operation: RecoveryOperation) => {
     const selectedCheckpoint = operation === "restoreCheckpoint" ? checkpointId : undefined;
@@ -94,7 +95,7 @@ export function RecoveryPanel({ recovery, busy = false, onAction }: Props) {
         <p className="muted-copy">Select a checkpoint with a generated preview before restore. Inspection never modifies the working tree.</p>
       )}
 
-      {restore?.requiresConfirmation && (
+      {restoreNeedsConfirmation && (
         <label className="recovery-confirm">
           <input type="checkbox" checked={confirmed} onChange={(event) => setConfirmed(event.target.checked)} />
           I understand that recovery may overwrite uncommitted work.
@@ -105,7 +106,7 @@ export function RecoveryPanel({ recovery, busy = false, onAction }: Props) {
         <button onClick={() => run("inspect")} disabled={busy || !actionByOperation.get("inspect")?.enabled}><Search size={15} />Inspect</button>
         <button onClick={() => run("resume")} disabled={busy || !actionByOperation.get("resume")?.enabled}>Resume</button>
         <button onClick={() => run("retryVerification")} disabled={busy || !actionByOperation.get("retryVerification")?.enabled}>Retry verification</button>
-        <button className="danger" onClick={() => run("restoreCheckpoint")} disabled={busy || !restore?.enabled || !checkpointId || (restore.requiresConfirmation && !confirmed)}><RotateCcw size={15} />Restore</button>
+        <button className="danger" onClick={() => run("restoreCheckpoint")} disabled={busy || !restore?.enabled || !checkpointId || (restoreNeedsConfirmation && !confirmed)}><RotateCcw size={15} />Restore</button>
         <button onClick={() => run("abandon")} disabled={busy || !actionByOperation.get("abandon")?.enabled}>Abandon</button>
       </div>
     </section>
