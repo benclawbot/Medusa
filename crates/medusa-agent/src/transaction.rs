@@ -182,7 +182,9 @@ fn apply_atomic_inner(
                 return Err(MedusaError::new(
                     ErrorCode::InternalInvariant,
                     ErrorCategory::Execution,
-                    format!("mutation provenance unavailable after write; rollback={rollback}: {error}"),
+                    format!(
+                        "mutation provenance unavailable after write; rollback={rollback}: {error}"
+                    ),
                 ));
             }
         };
@@ -273,11 +275,7 @@ pub fn preview_selective_revert(repo: &Path, mutation_id: &str) -> MedusaResult<
             )));
         }
     }
-    let restore_len = record
-        .scope
-        .retained_preimage
-        .as_ref()
-        .map_or(0, Vec::len);
+    let restore_len = record.scope.retained_preimage.as_ref().map_or(0, Vec::len);
     Ok(RevertPreview {
         mutation_id: record.id.clone(),
         path: record.path.clone(),
@@ -305,11 +303,9 @@ pub fn apply_selective_revert(
         .start_byte
         .checked_add(preview.remove_len)
         .ok_or_else(|| provenance_boundary_error("selective revert scope overflow"))?;
-    let expected = record
-        .scope
-        .retained_postimage
-        .as_deref()
-        .ok_or_else(|| provenance_boundary_error("selective revert postimage is unavailable"))?;
+    let expected = record.scope.retained_postimage.as_deref().ok_or_else(|| {
+        provenance_boundary_error("selective revert postimage is unavailable")
+    })?;
     if current.get(preview.start_byte..end) != Some(expected) {
         return Err(provenance_boundary_error(
             "selective revert scope changed during authorization",
@@ -353,7 +349,11 @@ fn minimal_scope<'a>(before: &'a [u8], after: &'a [u8]) -> (usize, &'a [u8], &'a
         .count();
     let before_end = before.len().saturating_sub(suffix);
     let after_end = after.len().saturating_sub(suffix);
-    (prefix, &before[prefix..before_end], &after[prefix..after_end])
+    (
+        prefix,
+        &before[prefix..before_end],
+        &after[prefix..after_end],
+    )
 }
 
 fn repository_fingerprint(repo: &Path) -> MedusaResult<String> {
@@ -447,7 +447,10 @@ mod tests {
         .expect("transaction");
         assert!(!outcome.rolled_back);
         assert!(outcome.mutation_ids.is_empty());
-        assert_eq!(fs::read_to_string(directory.path().join("a.txt")).unwrap(), "a");
+        assert_eq!(
+            fs::read_to_string(directory.path().join("a.txt")).unwrap(),
+            "a"
+        );
         assert_eq!(
             fs::read_to_string(directory.path().join("nested/b.txt")).unwrap(),
             "b"
@@ -462,7 +465,11 @@ mod tests {
             .current_dir(directory.path())
             .status()
             .unwrap();
-        fs::write(directory.path().join("value.txt"), "user-before\nold\nuser-after\n").unwrap();
+        fs::write(
+            directory.path().join("value.txt"),
+            "user-before\nold\nuser-after\n",
+        )
+        .unwrap();
         let outcome = apply_atomic_with_context(
             directory.path(),
             &[FileMutation {
@@ -477,8 +484,9 @@ mod tests {
             "USER-BEFORE\nnew\nuser-after\n",
         )
         .unwrap();
-        let reverted = apply_selective_revert(directory.path(), &outcome.mutation_ids[0], &context(2))
-            .unwrap();
+        let reverted =
+            apply_selective_revert(directory.path(), &outcome.mutation_ids[0], &context(2))
+                .unwrap();
         assert_eq!(reverted.mutation_ids.len(), 1);
         assert_eq!(
             fs::read_to_string(directory.path().join("value.txt")).unwrap(),
