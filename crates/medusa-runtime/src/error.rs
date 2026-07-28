@@ -9,7 +9,9 @@ use std::{
     thread,
 };
 
-use medusa_agent::{session_browser::list_sessions, AgentEngine, AgentSession};
+use medusa_agent::{
+    session_browser::list_sessions, AgentEngine, AgentPlanStepStatus, AgentSession,
+};
 use medusa_capabilities::CapabilityRegistry;
 use medusa_provider::ConfiguredProvider;
 
@@ -106,10 +108,11 @@ impl RuntimeController {
             ConfiguredProvider::manager_from_config(&state.config, state.session_api_key.clone())
                 .map_err(RuntimeError::agent)?;
         let engine = AgentEngine::new(provider, state.config.clone());
-        let session = engine
+        let mut session = engine
             .load_session(&repo, session_id)
             .map_err(RuntimeError::agent)?;
         validate_resumed_session(&repo, &session)?;
+        let interrupted_steps = recover_interrupted_session(&repo, &mut session)?;
         state.session = Some(session);
 
         let (command_tx, command_rx) = mpsc::channel();
@@ -128,6 +131,7 @@ impl RuntimeController {
                     worker_events,
                     worker_cancel,
                     worker_submission,
+                    interrupted_steps,
                 );
             })
             .map_err(RuntimeError::Io)?;
@@ -155,6 +159,36 @@ fn latest_session_id(repo: &Path) -> Result<String, RuntimeError> {
         })
 }
 
+fn recover_interrupted_session(
+    repo: &Path,
+    session: &mut AgentSession,
+) -> Result<Vec<String>, RuntimeError> {
+    let mut interrupted = Vec::new();
+    for step in &mut session.plan {
+        if step.status == AgentPlanStepStatus::InProgress {
+            step.status = AgentPlanStepStatus::Failed;
+            interrupted.push(step.title.clone());
+        }
+    }
+    if interrupted.is_empty() {
+        return Ok(interrupted);
+    }
+    session.updated_at = time::OffsetDateTime::now_utc();
+    let path = repo
+        .join(".medusa/sessions")
+        .join(format!("{}.json", session.id));
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    let temporary = path.with_extension("json.tmp");
+    std::fs::write(
+        &temporary,
+        serde_json::to_vec_pretty(session).map_err(RuntimeError::agent)?,
+    )?;
+    std::fs::rename(temporary, path)?;
+    Ok(interrupted)
+}
+
 fn validate_resumed_session(repo: &Path, session: &AgentSession) -> Result<(), RuntimeError> {
     if session.repo.as_path() != repo {
         return Err(RuntimeError::InvalidCommand(format!(
@@ -173,8 +207,18 @@ fn resumed_worker_loop(
     events: mpsc::Sender<RuntimeEvent>,
     cancel: Arc<AtomicBool>,
     submission: Arc<Mutex<SubmissionState>>,
+    interrupted_steps: Vec<String>,
 ) {
     let _ = events.send(state.settings_event());
+    if !interrupted_steps.is_empty() {
+        let _ = events.send(RuntimeEvent::Notice {
+            title: "Interrupted work recovered".to_owned(),
+            details: interrupted_steps
+                .into_iter()
+                .map(|title| format!("Marked failed after restart: {title}"))
+                .collect(),
+        });
+    }
     if let Some(session) = state.session.as_ref() {
         let _ = events.send(RuntimeEvent::Notice {
             title: "Session resumed".to_owned(),
@@ -288,4 +332,54 @@ fn resumed_worker_loop(
     }
     cancel.store(true, Ordering::SeqCst);
     mark_idle(&submission, true);
+}
+
+#[cfg(test)]
+mod interruption_tests {
+    use super::*;
+    use medusa_agent::AgentPlanStep;
+
+    #[test]
+    fn resumed_session_never_preserves_in_progress_plan_steps() {
+        let directory = tempfile::tempdir().expect("tempdir");
+        let repo = directory.path();
+        let now = time::OffsetDateTime::now_utc();
+        let mut session = AgentSession {
+            id: medusa_core::SessionId::new(),
+            objective: "recover".into(),
+            repo: repo.to_path_buf(),
+            created_at: now,
+            updated_at: now,
+            completed: false,
+            turn: 1,
+            plan: vec![AgentPlanStep {
+                title: "provider request".into(),
+                status: AgentPlanStepStatus::InProgress,
+            }],
+            pending_question: None,
+            messages: Vec::new(),
+            events: Vec::new(),
+            evidence: Vec::new(),
+            tool_artifacts: Vec::new(),
+            world_model: None,
+            approval_grants: Vec::new(),
+            approval_receipts: Vec::new(),
+            rollback_receipts: Vec::new(),
+        };
+        let interrupted = recover_interrupted_session(repo, &mut session).expect("recover");
+        assert_eq!(interrupted, ["provider request"]);
+        assert_eq!(session.plan[0].status, AgentPlanStepStatus::Failed);
+        let bytes = std::fs::read(
+            repo.join(".medusa/sessions")
+                .join(format!("{}.json", session.id)),
+        )
+        .expect("durable session");
+        let restored: AgentSession = serde_json::from_slice(&bytes).expect("session json");
+        assert_eq!(restored.plan[0].status, AgentPlanStepStatus::Failed);
+        assert!(
+            recover_interrupted_session(repo, &mut restored.clone())
+                .expect("idempotent")
+                .is_empty()
+        );
+    }
 }
