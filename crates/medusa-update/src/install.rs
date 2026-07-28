@@ -120,9 +120,7 @@ impl AtomicInstaller {
         let content =
             windows_replace_script(std::process::id(), &backup, &self.target, &staged, restart);
         fs::write(&script, content)?;
-        Command::new("cmd")
-            .args(["/C", "start", "", "/B"])
-            .arg(&script)
+        windows_helper_command(&script)
             .spawn()
             .map(|_| ())
             .map_err(io_error)
@@ -132,6 +130,16 @@ impl AtomicInstaller {
     fn schedule_windows_replace(&self, _candidate: &Path, _restart: &Restart) -> MedusaResult<()> {
         unreachable!("windows replacement is only selected on Windows")
     }
+}
+
+#[cfg(any(windows, test))]
+fn windows_helper_command(script: &Path) -> Command {
+    let mut command = Command::new("cmd");
+    // Launch the batch helper directly under /C. Using `start` for a .cmd file
+    // can route through a persistent `cmd /K`, leaving an interactive prompt
+    // behind after the update completes.
+    command.args(["/D", "/S", "/C"]).arg(script);
+    command
 }
 
 #[cfg(any(windows, test))]
@@ -149,7 +157,7 @@ fn windows_replace_script(
         .collect::<Vec<_>>()
         .join(" ");
     format!(
-        "@echo off\r\nsetlocal\r\n:wait_for_parent\r\ntasklist /fi \"PID eq {parent_pid}\" /nh | find \"{parent_pid}\" >nul\r\nif not errorlevel 1 (\r\n  timeout /t 1 /nobreak >nul\r\n  goto wait_for_parent\r\n)\r\nif exist \"{backup}\" del /f /q \"{backup}\"\r\nif exist \"{target}\" move /y \"{target}\" \"{backup}\"\r\nmove /y \"{candidate}\" \"{target}\"\r\nstart \"\" \"{target}\" {restart_args}\r\ndel /f /q \"%~f0\"\r\n",
+        "@echo off\r\nsetlocal\r\n:wait_for_parent\r\ntasklist /fi \"PID eq {parent_pid}\" /nh | find \"{parent_pid}\" >nul\r\nif not errorlevel 1 (\r\n  timeout /t 1 /nobreak >nul\r\n  goto wait_for_parent\r\n)\r\nif exist \"{backup}\" del /f /q \"{backup}\"\r\nif exist \"{target}\" move /y \"{target}\" \"{backup}\"\r\nmove /y \"{candidate}\" \"{target}\"\r\nstart \"\" /B \"{target}\" {restart_args}\r\ndel /f /q \"%~f0\"\r\nendlocal\r\nexit /b 0\r\n",
         backup = backup.display(),
         target = target.display(),
         candidate = candidate.display(),
@@ -292,6 +300,29 @@ mod tests {
     }
 
     #[test]
+    fn windows_handoff_uses_non_persistent_command_processor() {
+        let script = Path::new(r"C:\bin\medusa.update.cmd");
+        let command = windows_helper_command(script);
+        let arguments = command
+            .get_args()
+            .map(|argument| argument.to_string_lossy().into_owned())
+            .collect::<Vec<_>>();
+
+        assert_eq!(command.get_program(), "cmd");
+        assert_eq!(arguments, ["/D", "/S", "/C", r"C:\bin\medusa.update.cmd"]);
+        assert!(
+            !arguments
+                .iter()
+                .any(|argument| argument.eq_ignore_ascii_case("/K"))
+        );
+        assert!(
+            !arguments
+                .iter()
+                .any(|argument| argument.eq_ignore_ascii_case("start"))
+        );
+    }
+
+    #[test]
     fn windows_handoff_waits_for_the_running_binary_before_replacement() {
         let restart = Restart {
             arguments: vec!["resume".into(), "session-1".into()],
@@ -307,6 +338,7 @@ mod tests {
         assert!(script.contains("tasklist /fi \"PID eq 4242\""));
         assert!(script.contains("goto wait_for_parent"));
         assert!(script.contains("move /y \"C:\\bin\\medusa.update-new.exe\""));
-        assert!(script.contains("start \"\" \"C:\\bin\\medusa.exe\" \"resume\" \"session-1\""));
+        assert!(script.contains("start \"\" /B \"C:\\bin\\medusa.exe\" \"resume\" \"session-1\""));
+        assert!(script.ends_with("endlocal\r\nexit /b 0\r\n"));
     }
 }
