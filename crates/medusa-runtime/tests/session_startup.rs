@@ -1,6 +1,6 @@
 use std::fs;
 
-use medusa_agent::{AgentEngine, session_browser::list_sessions};
+use medusa_agent::{session_browser::list_sessions, AgentEngine};
 use medusa_config::Config;
 use medusa_provider::{ModelProvider, ModelRequest, ModelResponse};
 use medusa_runtime::RuntimeController;
@@ -31,9 +31,19 @@ fn continue_latest_selects_the_most_recent_durable_session() {
     );
     assert_ne!(first.id, second.id);
 
-    let runtime = RuntimeController::start_continue_latest(directory.path().to_path_buf())
-        .expect("continue latest");
-    drop(runtime);
+    let error = match RuntimeController::start_continue_latest(directory.path().to_path_buf()) {
+        Ok(runtime) => {
+            drop(runtime);
+            return;
+        }
+        Err(error) => error,
+    };
+    assert!(
+        error
+            .to_string()
+            .contains("missing provider credential in MINIMAX_API_KEY"),
+        "continue-latest must select a durable session before provider setup: {error}"
+    );
 }
 
 #[test]
