@@ -6,8 +6,14 @@ use std::{
 
 use medusa_core::{ErrorCategory, ErrorCode, MedusaError, MedusaResult};
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 
 use crate::policy::safe_path;
+
+#[path = "mutation_provenance.rs"]
+mod mutation_provenance;
+pub use mutation_provenance::{MutationContext, MutationKind, ScopeValidation};
+use mutation_provenance::{build_record, load as load_provenance, persist as persist_provenance};
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct FileMutation {
@@ -28,6 +34,17 @@ pub struct TransactionOutcome {
     pub affected_files: Vec<String>,
     pub rolled_back: bool,
     pub detail: String,
+    #[serde(default)]
+    pub mutation_ids: Vec<String>,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct RevertPreview {
+    pub mutation_id: String,
+    pub path: String,
+    pub start_byte: usize,
+    pub remove_len: usize,
+    pub restore_len: usize,
 }
 
 #[derive(Debug)]
@@ -58,11 +75,32 @@ pub fn preview(
     }
 }
 
-/// Applies every repository file mutation through one symlink-aware, rollback-capable boundary.
+/// Applies repository mutations without claiming selective-revert provenance.
 ///
-/// All targets are resolved and validated before parent directories or temporary files are
-/// created. This prevents a later invalid mutation from leaving earlier staging artifacts behind.
+/// Callers that possess authoritative session and activity identity should use
+/// `apply_atomic_with_context`. Legacy callers remain safe, but their writes are explicitly
+/// unavailable for provenance-authorized selective revert.
 pub fn apply_atomic(repo: &Path, mutations: &[FileMutation]) -> MedusaResult<TransactionOutcome> {
+    apply_atomic_inner(repo, mutations, None)
+}
+
+/// Applies every repository mutation through the rollback-capable boundary and atomically records
+/// authoritative mutation provenance. If provenance persistence fails, all committed file writes
+/// are rolled back before returning an error.
+#[allow(dead_code)]
+pub fn apply_atomic_with_context(
+    repo: &Path,
+    mutations: &[FileMutation],
+    context: &MutationContext,
+) -> MedusaResult<TransactionOutcome> {
+    apply_atomic_inner(repo, mutations, Some(context))
+}
+
+fn apply_atomic_inner(
+    repo: &Path,
+    mutations: &[FileMutation],
+    context: Option<&MutationContext>,
+) -> MedusaResult<TransactionOutcome> {
     if mutations.is_empty() {
         return Err(MedusaError::new(
             ErrorCode::InvalidConfiguration,
@@ -71,6 +109,11 @@ pub fn apply_atomic(repo: &Path, mutations: &[FileMutation]) -> MedusaResult<Tra
         ));
     }
 
+    let repository_before = if context.is_some() {
+        Some(repository_fingerprint(repo)?)
+    } else {
+        None
+    };
     let mut resolved = Vec::with_capacity(mutations.len());
     let mut unique_targets = BTreeSet::new();
     for mutation in mutations {
@@ -132,14 +175,215 @@ pub fn apply_atomic(repo: &Path, mutations: &[FileMutation]) -> MedusaResult<Tra
         }
     }
 
+    let mut mutation_ids = Vec::new();
+    if let Some(context) = context {
+        let repository_before = repository_before.ok_or_else(|| {
+            provenance_boundary_error("authoritative mutation fingerprint is unavailable")
+        })?;
+        let repository_after = repository_fingerprint(repo)?;
+        let mut journal = match load_provenance(repo) {
+            Ok(journal) => journal,
+            Err(error) => {
+                let rollback = rollback(&backups);
+                return Err(MedusaError::new(
+                    ErrorCode::InternalInvariant,
+                    ErrorCategory::Execution,
+                    format!(
+                        "mutation provenance unavailable after write; rollback={rollback}: {error}"
+                    ),
+                ));
+            }
+        };
+        for (index, ((mutation, _), backup)) in resolved.iter().zip(&backups).enumerate() {
+            let before = backup.content.as_deref().unwrap_or_default();
+            let after = mutation.content.as_bytes();
+            let (start_byte, preimage, postimage) = minimal_scope(before, after);
+            let mut item_context = context.clone();
+            item_context.sequence = item_context
+                .sequence
+                .checked_add(index as u64)
+                .ok_or_else(|| provenance_boundary_error("mutation sequence overflow"))?;
+            let kind = if backup.content.is_none() {
+                MutationKind::Added
+            } else {
+                MutationKind::Modified
+            };
+            let record = build_record(
+                item_context,
+                mutation.path.clone(),
+                kind,
+                repository_before.clone(),
+                repository_after.clone(),
+                start_byte,
+                preimage,
+                postimage,
+            );
+            mutation_ids.push(record.id.clone());
+            if let Err(error) = journal.append(record) {
+                let rollback = rollback(&backups);
+                return Err(MedusaError::new(
+                    ErrorCode::InternalInvariant,
+                    ErrorCategory::Execution,
+                    format!("mutation provenance conflict; rollback={rollback}: {error}"),
+                ));
+            }
+        }
+        if let Err(error) = persist_provenance(repo, &journal) {
+            let rollback = rollback(&backups);
+            return Err(MedusaError::new(
+                ErrorCode::InternalInvariant,
+                ErrorCategory::Execution,
+                format!("mutation provenance persistence failed; rollback={rollback}: {error}"),
+            ));
+        }
+    }
+
     Ok(TransactionOutcome {
         affected_files: mutations
             .iter()
             .map(|mutation| mutation.path.clone())
             .collect(),
         rolled_back: false,
-        detail: "all file mutations committed through the repository boundary".to_owned(),
+        detail: if context.is_some() {
+            "all file mutations committed with authoritative provenance"
+        } else {
+            "all file mutations committed; selective revert provenance unavailable"
+        }
+        .to_owned(),
+        mutation_ids,
     })
+}
+
+#[allow(dead_code)]
+pub fn preview_selective_revert(repo: &Path, mutation_id: &str) -> MedusaResult<RevertPreview> {
+    let journal = load_provenance(repo)?;
+    let record = journal
+        .records
+        .iter()
+        .find(|record| record.id == mutation_id)
+        .ok_or_else(|| provenance_boundary_error("mutation provenance record is missing"))?;
+    let current = fs::read(safe_path(repo, &record.path)?)?;
+    match journal.validate_scope(mutation_id, &current) {
+        ScopeValidation::Current => {}
+        ScopeValidation::MissingEvidence => {
+            return Err(provenance_boundary_error(
+                "selective revert requires retained inverse evidence",
+            ));
+        }
+        ScopeValidation::Drifted => {
+            return Err(provenance_boundary_error(
+                "selective revert rejected because the authored scope drifted",
+            ));
+        }
+        ScopeValidation::DependencyConflict { later_mutation_ids } => {
+            return Err(provenance_boundary_error(format!(
+                "selective revert rejected because later mutations overlap: {}",
+                later_mutation_ids.join(", ")
+            )));
+        }
+    }
+    let restore_len = record.scope.retained_preimage.as_ref().map_or(0, Vec::len);
+    Ok(RevertPreview {
+        mutation_id: record.id.clone(),
+        path: record.path.clone(),
+        start_byte: record.scope.start_byte,
+        remove_len: record.scope.postimage_len,
+        restore_len,
+    })
+}
+
+#[allow(dead_code)]
+pub fn apply_selective_revert(
+    repo: &Path,
+    mutation_id: &str,
+    context: &MutationContext,
+) -> MedusaResult<TransactionOutcome> {
+    let preview = preview_selective_revert(repo, mutation_id)?;
+    let journal = load_provenance(repo)?;
+    let record = journal
+        .records
+        .iter()
+        .find(|record| record.id == mutation_id)
+        .ok_or_else(|| provenance_boundary_error("mutation provenance record disappeared"))?;
+    let path = safe_path(repo, &preview.path)?;
+    let current = fs::read(&path)?;
+    let end = preview
+        .start_byte
+        .checked_add(preview.remove_len)
+        .ok_or_else(|| provenance_boundary_error("selective revert scope overflow"))?;
+    let expected =
+        record.scope.retained_postimage.as_deref().ok_or_else(|| {
+            provenance_boundary_error("selective revert postimage is unavailable")
+        })?;
+    if current.get(preview.start_byte..end) != Some(expected) {
+        return Err(provenance_boundary_error(
+            "selective revert scope changed during authorization",
+        ));
+    }
+    let restore = record
+        .scope
+        .retained_preimage
+        .as_deref()
+        .ok_or_else(|| provenance_boundary_error("selective revert preimage is unavailable"))?;
+    let mut reverted = Vec::with_capacity(current.len() - preview.remove_len + restore.len());
+    reverted.extend_from_slice(&current[..preview.start_byte]);
+    reverted.extend_from_slice(restore);
+    reverted.extend_from_slice(&current[end..]);
+    let content = String::from_utf8(reverted).map_err(|_| {
+        provenance_boundary_error("selective revert of non-UTF-8 content is unavailable")
+    })?;
+    apply_atomic_with_context(
+        repo,
+        &[FileMutation {
+            path: preview.path,
+            content,
+        }],
+        context,
+    )
+}
+
+fn minimal_scope<'a>(before: &'a [u8], after: &'a [u8]) -> (usize, &'a [u8], &'a [u8]) {
+    let prefix = before
+        .iter()
+        .zip(after)
+        .take_while(|(left, right)| left == right)
+        .count();
+    let remaining_before = &before[prefix..];
+    let remaining_after = &after[prefix..];
+    let suffix = remaining_before
+        .iter()
+        .rev()
+        .zip(remaining_after.iter().rev())
+        .take_while(|(left, right)| left == right)
+        .count();
+    let before_end = before.len().saturating_sub(suffix);
+    let after_end = after.len().saturating_sub(suffix);
+    (
+        prefix,
+        &before[prefix..before_end],
+        &after[prefix..after_end],
+    )
+}
+
+fn repository_fingerprint(repo: &Path) -> MedusaResult<String> {
+    let output = std::process::Command::new("git")
+        .args(["diff", "--binary", "--no-ext-diff", "--", "."])
+        .current_dir(repo)
+        .output()?;
+    if !output.status.success() {
+        return Err(provenance_boundary_error(
+            "could not fingerprint repository working tree",
+        ));
+    }
+    Ok(hex::encode(Sha256::digest(&output.stdout)))
+}
+
+fn provenance_boundary_error(message: impl Into<String>) -> MedusaError {
+    MedusaError::new(
+        ErrorCode::InternalInvariant,
+        ErrorCategory::Execution,
+        message.into(),
+    )
 }
 
 fn rollback(backups: &[Backup]) -> &'static str {
@@ -177,9 +421,25 @@ fn cleanup_staged(staged: &[(PathBuf, PathBuf)]) {
 mod tests {
     use super::*;
 
+    fn context(sequence: u64) -> MutationContext {
+        MutationContext {
+            session_id: "session-1".into(),
+            task_step_id: Some("step-1".into()),
+            activity_id: format!("tool-{sequence}"),
+            actor: "medusa".into(),
+            sequence,
+            occurred_at_unix_ms: 10,
+        }
+    }
+
     #[test]
     fn commits_multiple_files() {
         let directory = tempfile::tempdir().expect("tempdir");
+        std::process::Command::new("git")
+            .args(["init", "-q"])
+            .current_dir(directory.path())
+            .status()
+            .unwrap();
         let outcome = apply_atomic(
             directory.path(),
             &[
@@ -195,6 +455,7 @@ mod tests {
         )
         .expect("transaction");
         assert!(!outcome.rolled_back);
+        assert!(outcome.mutation_ids.is_empty());
         assert_eq!(
             fs::read_to_string(directory.path().join("a.txt")).unwrap(),
             "a"
@@ -202,6 +463,68 @@ mod tests {
         assert_eq!(
             fs::read_to_string(directory.path().join("nested/b.txt")).unwrap(),
             "b"
+        );
+    }
+
+    #[test]
+    fn records_minimal_scope_and_preserves_non_overlapping_user_edits_on_revert() {
+        let directory = tempfile::tempdir().expect("tempdir");
+        std::process::Command::new("git")
+            .args(["init", "-q"])
+            .current_dir(directory.path())
+            .status()
+            .unwrap();
+        fs::write(
+            directory.path().join("value.txt"),
+            "user-before\nold\nuser-after\n",
+        )
+        .unwrap();
+        let outcome = apply_atomic_with_context(
+            directory.path(),
+            &[FileMutation {
+                path: "value.txt".into(),
+                content: "user-before\nnew\nuser-after\n".into(),
+            }],
+            &context(1),
+        )
+        .unwrap();
+        fs::write(
+            directory.path().join("value.txt"),
+            "USER-BEFORE\nnew\nuser-after\n",
+        )
+        .unwrap();
+        let reverted =
+            apply_selective_revert(directory.path(), &outcome.mutation_ids[0], &context(2))
+                .unwrap();
+        assert_eq!(reverted.mutation_ids.len(), 1);
+        assert_eq!(
+            fs::read_to_string(directory.path().join("value.txt")).unwrap(),
+            "USER-BEFORE\nold\nuser-after\n"
+        );
+    }
+
+    #[test]
+    fn overlapping_user_edit_rejects_selective_revert() {
+        let directory = tempfile::tempdir().expect("tempdir");
+        std::process::Command::new("git")
+            .args(["init", "-q"])
+            .current_dir(directory.path())
+            .status()
+            .unwrap();
+        fs::write(directory.path().join("value.txt"), "old").unwrap();
+        let outcome = apply_atomic_with_context(
+            directory.path(),
+            &[FileMutation {
+                path: "value.txt".into(),
+                content: "new".into(),
+            }],
+            &context(1),
+        )
+        .unwrap();
+        fs::write(directory.path().join("value.txt"), "NEW").unwrap();
+        assert!(
+            apply_selective_revert(directory.path(), &outcome.mutation_ids[0], &context(2))
+                .is_err()
         );
     }
 
