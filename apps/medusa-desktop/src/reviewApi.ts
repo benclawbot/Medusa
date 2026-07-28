@@ -25,7 +25,13 @@ export interface ReviewFileModel {
   hunks: ReviewHunkModel[];
 }
 export interface ReviewSnapshotModel { id: string; files: ReviewFileModel[]; }
-export interface ReviewDiffHunk { id: string; header: string; patch: string; }
+export interface ReviewDiffHunk {
+  id: string;
+  header: string;
+  patch: string;
+  ambiguous?: boolean;
+  overlaps_later_edits?: boolean;
+}
 export interface ReviewDiffFile { path: string; previous_path?: string; patch: string; hunks: ReviewDiffHunk[]; }
 export interface ReviewWorkspace {
   snapshot: ReviewSnapshotModel;
