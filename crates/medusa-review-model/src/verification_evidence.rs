@@ -125,8 +125,7 @@ pub fn associate_verification_evidence(
         let has_failed = latest_by_check.values().any(|item| {
             item.outcome == VerificationOutcome::Failed
                 || item.diagnostics.iter().any(|diagnostic| {
-                    diagnostic.path == file.path
-                        && diagnostic.severity == DiagnosticSeverity::Error
+                    diagnostic.path == file.path && diagnostic.severity == DiagnosticSeverity::Error
                 })
         });
         let has_stale = !latest_by_check.is_empty() && !repository_is_current;
