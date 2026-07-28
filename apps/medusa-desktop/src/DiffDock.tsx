@@ -29,6 +29,27 @@ const empty: ReviewWorkspace = {
   },
 };
 
+function splitPatch(patch: string): { before: string; after: string } {
+  const before: string[] = [];
+  const after: string[] = [];
+  for (const line of patch.split("\n")) {
+    if (line.startsWith("+++") || line.startsWith("---")) {
+      before.push(line);
+      after.push(line);
+    } else if (line.startsWith("+")) {
+      before.push("");
+      after.push(line);
+    } else if (line.startsWith("-")) {
+      before.push(line);
+      after.push("");
+    } else {
+      before.push(line);
+      after.push(line);
+    }
+  }
+  return { before: before.join("\n"), after: after.join("\n") };
+}
+
 export function DiffDock() {
   const [open, setOpen] = useState(false);
   const [repo, setRepo] = useState(
@@ -86,6 +107,14 @@ export function DiffDock() {
     (file) => file.path === selectedPath,
   );
   const selectedDiff = review.files.find((file) => file.path === selectedPath);
+  const splitSelectedPatch = useMemo(
+    () => splitPatch(selectedDiff?.patch ?? ""),
+    [selectedDiff?.patch],
+  );
+  const revertSafe =
+    selectedModel?.hunks.every(
+      (hunk) => !hunk.ambiguous && !hunk.overlaps_later_edits,
+    ) ?? false;
 
   const act = useCallback(
     async (
@@ -285,7 +314,13 @@ export function DiffDock() {
                             selectedModel.origin !== "Medusa" ||
                             selectedModel.binary ||
                             selectedModel.kind === "Renamed" ||
+                            !revertSafe ||
                             loading
+                          }
+                          title={
+                            revertSafe
+                              ? undefined
+                              : "Revert is disabled because tracked-file provenance is ambiguous."
                           }
                           onClick={() => void act("revert-file", selectedModel)}
                         >
@@ -298,6 +333,23 @@ export function DiffDock() {
                         Binary content is shown safely without a text preview.
                         Selective revert is disabled.
                       </div>
+                    ) : layout === "side-by-side" ? (
+                      <div
+                        className="review-side-by-side"
+                        style={{
+                          display: "grid",
+                          gridTemplateColumns: "minmax(0, 1fr) minmax(0, 1fr)",
+                          gap: "1px",
+                          overflow: "auto",
+                        }}
+                      >
+                        <pre className="review-patch" aria-label="Before changes">
+                          {splitSelectedPatch.before}
+                        </pre>
+                        <pre className="review-patch" aria-label="After changes">
+                          {splitSelectedPatch.after}
+                        </pre>
+                      </div>
                     ) : (
                       <pre className="review-patch">{selectedDiff.patch}</pre>
                     )}
@@ -309,7 +361,14 @@ export function DiffDock() {
                             disabled={
                               selectedModel.origin !== "Medusa" ||
                               selectedModel.kind === "Renamed" ||
+                              hunk.ambiguous ||
+                              hunk.overlaps_later_edits ||
                               loading
+                            }
+                            title={
+                              hunk.ambiguous || hunk.overlaps_later_edits
+                                ? "Hunk revert is disabled because write provenance is ambiguous."
+                                : undefined
                             }
                             onClick={() =>
                               void act("revert-hunk", selectedModel, hunk.id)
