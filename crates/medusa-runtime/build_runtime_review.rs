@@ -40,7 +40,10 @@ fn runtime_review_arm() -> &'static str {
                     let _ = events.send(RuntimeEvent::Notice { title: "Hunk reverted".to_owned(), details: vec!["The selected Medusa hunk was reverted safely.".to_owned()] });
                 }
                 ReviewCommand::Export => {
-                    let generated_at = SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_millis() as i64;
+                    let generated_at = std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .unwrap_or_default()
+                        .as_millis() as i64;
                     let export = crate::review::export_review_audit(&state.repo, generated_at)
                         .map_err(|error| RuntimeError::agent(error.to_string()))?;
                     let json = serde_json::to_string_pretty(&export).map_err(|error| RuntimeError::agent(error.to_string()))?;
