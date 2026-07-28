@@ -248,6 +248,21 @@ fn resumed_worker_loop(
                     });
                 }
             }
+            RuntimeCommand::Recovery {
+                view,
+                request,
+                preflight,
+            } => match super::recovery::execute_action(&state.repo, &view, &request, preflight) {
+                Ok(receipt) => {
+                    let _ = events.send(RuntimeEvent::RecoveryCompleted(receipt));
+                }
+                Err(error) => {
+                    let _ = events.send(RuntimeEvent::Notice {
+                        title: "Recovery action failed closed".to_owned(),
+                        details: vec![error],
+                    });
+                }
+            },
             RuntimeCommand::Shutdown => break,
         }
     }

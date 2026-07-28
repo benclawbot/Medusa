@@ -55,8 +55,26 @@ fn main() -> Result<(), Box<dyn Error>> {
 
     replace_once(
         &mut source,
+        "    ConfigureModel(ModelConfiguration),\n    Shutdown,",
+        "    ConfigureModel(ModelConfiguration),\n    Recovery {\n        view: Box<medusa_recovery_coordinator::RecoveryView>,\n        request: medusa_recovery_coordinator::RecoveryActionRequest,\n        preflight: medusa_recovery_coordinator::RecoveryPreflightEvidence,\n    },\n    Shutdown,",
+    )?;
+
+    replace_once(
+        &mut source,
         "pub enum RuntimeEvent {\n    Started,",
-        "pub enum RuntimeEvent {\n    RecoveryAvailable(medusa_recovery_coordinator::RecoveryView),\n    Started,",
+        "pub enum RuntimeEvent {\n    RecoveryAvailable(medusa_recovery_coordinator::RecoveryView),\n    RecoveryCompleted(medusa_recovery_coordinator::RecoveryExecutionReceipt),\n    Started,",
+    )?;
+
+    replace_once(
+        &mut source,
+        "    pub fn cancel(&self) -> bool {",
+        "    pub fn execute_recovery(\n        &self,\n        view: medusa_recovery_coordinator::RecoveryView,\n        request: medusa_recovery_coordinator::RecoveryActionRequest,\n        preflight: medusa_recovery_coordinator::RecoveryPreflightEvidence,\n    ) -> Result<(), RuntimeError> {\n        if lock_submission(&self.submission).busy {\n            return Err(RuntimeError::Busy);\n        }\n        self.commands\n            .send(RuntimeCommand::Recovery { view: Box::new(view), request, preflight })\n            .map_err(|_| RuntimeError::WorkerStopped)\n    }\n\n    pub fn cancel(&self) -> bool {",
+    )?;
+
+    replace_once(
+        &mut source,
+        "            RuntimeCommand::Shutdown => break,",
+        "            RuntimeCommand::Recovery { view, request, preflight } => {\n                match recovery::execute_action(&state.repo, &view, &request, preflight) {\n                    Ok(receipt) => {\n                        let _ = events.send(RuntimeEvent::RecoveryCompleted(receipt));\n                    }\n                    Err(error) => {\n                        let _ = events.send(RuntimeEvent::Notice {\n                            title: \"Recovery action failed closed\".to_owned(),\n                            details: vec![error],\n                        });\n                    }\n                }\n            }\n            RuntimeCommand::Shutdown => break,",
     )?;
 
     replace_once(
