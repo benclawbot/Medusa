@@ -109,7 +109,11 @@ fn apply_atomic_inner(
         ));
     }
 
-    let repository_before = repository_fingerprint(repo)?;
+    let repository_before = if context.is_some() {
+        Some(repository_fingerprint(repo)?)
+    } else {
+        None
+    };
     let mut resolved = Vec::with_capacity(mutations.len());
     let mut unique_targets = BTreeSet::new();
     for mutation in mutations {
@@ -173,6 +177,9 @@ fn apply_atomic_inner(
 
     let mut mutation_ids = Vec::new();
     if let Some(context) = context {
+        let repository_before = repository_before.ok_or_else(|| {
+            provenance_boundary_error("authoritative mutation fingerprint is unavailable")
+        })?;
         let repository_after = repository_fingerprint(repo)?;
         let mut journal = match load_provenance(repo) {
             Ok(journal) => journal,
