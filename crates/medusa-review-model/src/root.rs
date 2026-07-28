@@ -17,7 +17,7 @@ pub use snapshot_builder::{
     build_review_snapshot,
 };
 pub use verification_evidence::{
-    DiagnosticSeverity, FileVerificationSummary, VerificationDiagnostic,
-    VerificationEvidence, VerificationEvidenceError, VerificationOutcome, VerificationReport,
+    DiagnosticSeverity, FileVerificationSummary, VerificationDiagnostic, VerificationEvidence,
+    VerificationEvidenceError, VerificationOutcome, VerificationReport,
     associate_verification_evidence,
 };
