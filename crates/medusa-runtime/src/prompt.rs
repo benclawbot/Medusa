@@ -1,4 +1,1 @@
-#[path = "attachment.rs"]
-mod attachment;
-
-pub use attachment::*;
+include!("attachment.rs");
