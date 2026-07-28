@@ -1,0 +1,448 @@
+diff --git a/crates/medusa-agent/src/engine.rs b/crates/medusa-agent/src/engine.rs
+index e0f7bc5..fcb360b 100644
+--- a/crates/medusa-agent/src/engine.rs
++++ b/crates/medusa-agent/src/engine.rs
+@@ -24,7 +24,7 @@ mod world_model_observation {
+ }
+ mod runtime_failure;
+ 
+-use std::{collections::VecDeque, path::Path, sync::Mutex, thread};
++use std::{collections::VecDeque, path::Path, sync::{Arc, Mutex, atomic::AtomicBool}, thread};
+ 
+ use medusa_config::{Config, Mode};
+ use medusa_core::{ErrorCategory, ErrorCode, MedusaError, MedusaResult, SessionId};
+@@ -119,6 +119,7 @@ pub struct AgentEngine<P> {
+     config: Config,
+     desktop_commander_settings: DesktopCommanderSettings,
+     desktop_commander: Mutex<Option<DesktopCommanderClient>>,
++    cancellation: Arc<AtomicBool>,
+ }
+ 
+ fn audited_tool_name(name: &str, input: &serde_json::Value) -> String {
+@@ -138,6 +139,22 @@ impl<P: ModelProvider> AgentEngine<P> {
+             config,
+             desktop_commander_settings: DesktopCommanderSettings::from_env(),
+             desktop_commander: Mutex::new(None),
++            cancellation: Arc::new(AtomicBool::new(false)),
++        }
++    }
++
++    #[must_use]
++    pub fn new_with_cancellation(
++        provider: P,
++        config: Config,
++        cancellation: Arc<AtomicBool>,
++    ) -> Self {
++        Self {
++            provider,
++            config,
++            desktop_commander_settings: DesktopCommanderSettings::from_env(),
++            desktop_commander: Mutex::new(None),
++            cancellation,
+         }
+     }
+ 
+@@ -544,7 +561,7 @@ impl<P: ModelProvider> AgentEngine<P> {
+             temperature_milli: self.config.model.temperature_milli,
+         };
+         let request_started = std::time::Instant::now();
+-        let response = match self.provider.complete(&request) {
++        let response = match self.provider.complete_cancellable(&request, &self.cancellation) {
+             Ok(response) => response,
+             Err(error) if context_budget::is_context_limit_rejection(&error.to_string()) => {
+                 if !compacted {
+@@ -557,7 +574,7 @@ impl<P: ModelProvider> AgentEngine<P> {
+                     validate_messages(&session.messages, &self.provider.capabilities())?;
+                     request.messages = session.messages.clone();
+                 }
+-                self.provider.complete(&request)?
++                self.provider.complete_cancellable(&request, &self.cancellation)?
+             }
+             Err(error) => return Err(error),
+         };
+diff --git a/crates/medusa-config/src/lib.rs b/crates/medusa-config/src/lib.rs
+index c59962c..0e9928f 100644
+--- a/crates/medusa-config/src/lib.rs
++++ b/crates/medusa-config/src/lib.rs
+@@ -147,7 +147,7 @@ impl Default for ModelConfig {
+             provider: "minimax".into(),
+             fallback_providers: Vec::new(),
+             name: "MiniMax-M3".into(),
+-            protocol: "anthropic".into(),
++            protocol: "openai".into(),
+             temperature_milli: 200,
+             max_output_tokens: 32_768,
+             context_window_tokens: 1_000_000,
+diff --git a/crates/medusa-provider/src/lib.rs b/crates/medusa-provider/src/lib.rs
+index cff30b8..83ccfd0 100644
+--- a/crates/medusa-provider/src/lib.rs
++++ b/crates/medusa-provider/src/lib.rs
+@@ -1,7 +1,12 @@
+ //! Provider-neutral model contracts and the MiniMax Anthropic-compatible adapter.
+ 
+ mod manager;
+-use std::{env, sync::OnceLock, time::Duration};
++use std::{
++    env,
++    sync::{OnceLock, atomic::{AtomicBool, Ordering}, mpsc},
++    thread,
++    time::Duration,
++};
+ 
+ use medusa_config::{Config, FallbackProviderConfig};
+ use medusa_core::{ErrorCategory, ErrorCode, MedusaError, MedusaResult};
+@@ -124,6 +129,21 @@ pub struct ModelResponse {
+ pub trait ModelProvider {
+     fn complete(&self, request: &ModelRequest) -> MedusaResult<ModelResponse>;
+ 
++    fn complete_cancellable(
++        &self,
++        request: &ModelRequest,
++        cancel: &AtomicBool,
++    ) -> MedusaResult<ModelResponse> {
++        if cancel.load(Ordering::SeqCst) {
++            return Err(cancelled_provider_error());
++        }
++        let response = self.complete(request)?;
++        if cancel.load(Ordering::SeqCst) {
++            return Err(cancelled_provider_error());
++        }
++        Ok(response)
++    }
++
+     fn capabilities(&self) -> ProviderCapabilities {
+         ProviderCapabilities::default()
+     }
+@@ -135,6 +155,7 @@ pub trait ModelProvider {
+ }
+ 
+ /// Anthropic Messages API adapter for MiniMax, Anthropic, and compatible providers.
++#[derive(Clone)]
+ pub struct MiniMaxProvider {
+     client: Client,
+     base_url: String,
+@@ -289,6 +310,47 @@ fn provider_settings(provider: &str) -> MedusaResult<ProviderSettings> {
+ 
+ impl ModelProvider for MiniMaxProvider {
+     fn complete(&self, request: &ModelRequest) -> MedusaResult<ModelResponse> {
++        self.complete_request(request)
++    }
++
++    fn complete_cancellable(
++        &self,
++        request: &ModelRequest,
++        cancel: &AtomicBool,
++    ) -> MedusaResult<ModelResponse> {
++        if cancel.load(Ordering::SeqCst) {
++            return Err(cancelled_provider_error());
++        }
++        let provider = self.clone();
++        let request = request.clone();
++        let (sender, receiver) = mpsc::sync_channel(1);
++        thread::Builder::new()
++            .name("medusa-provider-request".to_owned())
++            .spawn(move || {
++                let _ = sender.send(provider.complete_request(&request));
++            })
++            .map_err(|error| provider_response_error(format!("could not start request worker: {error}")))?;
++        loop {
++            if cancel.load(Ordering::SeqCst) {
++                return Err(cancelled_provider_error());
++            }
++            match receiver.recv_timeout(Duration::from_millis(50)) {
++                Ok(result) => return result,
++                Err(mpsc::RecvTimeoutError::Timeout) => {}
++                Err(mpsc::RecvTimeoutError::Disconnected) => {
++                    return Err(provider_response_error("provider request worker stopped unexpectedly"));
++                }
++            }
++        }
++    }
++
++    fn capabilities(&self) -> ProviderCapabilities {
++        self.capabilities.clone()
++    }
++}
++
++impl MiniMaxProvider {
++    fn complete_request(&self, request: &ModelRequest) -> MedusaResult<ModelResponse> {
+         self.validate_request(request)?;
+         let endpoint = format!("{}/v1/messages", self.base_url);
+         let response = self
+@@ -305,10 +367,14 @@ impl ModelProvider for MiniMaxProvider {
+         }
+         Err(response_error(response))
+     }
++}
+ 
+-    fn capabilities(&self) -> ProviderCapabilities {
+-        self.capabilities.clone()
+-    }
++fn cancelled_provider_error() -> MedusaError {
++    MedusaError::new(
++        ErrorCode::DependencyUnavailable,
++        ErrorCategory::Transient,
++        "provider request cancelled",
++    )
+ }
+ 
+ fn minimax_capabilities_from_environment() -> ProviderCapabilities {
+@@ -632,6 +698,17 @@ impl ModelProvider for ConfiguredProvider {
+         }
+     }
+ 
++    fn complete_cancellable(
++        &self,
++        request: &ModelRequest,
++        cancel: &AtomicBool,
++    ) -> MedusaResult<ModelResponse> {
++        match self {
++            Self::Anthropic(provider) => provider.complete_cancellable(request, cancel),
++            Self::OpenAi(provider) => provider.complete_cancellable(request, cancel),
++        }
++    }
++
+     fn capabilities(&self) -> ProviderCapabilities {
+         match self {
+             Self::Anthropic(provider) => provider.capabilities(),
+@@ -679,7 +756,13 @@ impl OpenAiProvider {
+             .or_else(|| env::var(format!("{provider}_BASE_URL")).ok())
+             .or_else(|| env::var("OPENAI_BASE_URL").ok())
+             .or_else(|| env::var("MEDUSA_BASE_URL").ok())
+-            .unwrap_or_else(|| "https://api.openai.com/v1".to_owned());
++            .unwrap_or_else(|| {
++                if config.model.provider.eq_ignore_ascii_case("minimax") {
++                    "https://api.minimax.io/v1".to_owned()
++                } else {
++                    "https://api.openai.com/v1".to_owned()
++                }
++            });
+         Ok(Self {
+             client: shared_http_client()?,
+             base_url: base_url.trim_end_matches('/').to_owned(),
+diff --git a/crates/medusa-provider/src/manager.rs b/crates/medusa-provider/src/manager.rs
+index 87c95d3..ef6383e 100644
+--- a/crates/medusa-provider/src/manager.rs
++++ b/crates/medusa-provider/src/manager.rs
+@@ -1,6 +1,11 @@
+ //! Provider routing with bounded retry, failover, response caching, and health snapshots.
+ 
+-use std::{collections::BTreeMap, sync::Mutex, thread, time::Duration};
++use std::{
++    collections::BTreeMap,
++    sync::{Mutex, atomic::{AtomicBool, Ordering}},
++    thread,
++    time::Duration,
++};
+ 
+ use medusa_core::{ErrorCategory, ErrorCode, MedusaError, MedusaResult};
+ use serde::{Deserialize, Serialize};
+@@ -288,6 +293,34 @@ impl<P> ProviderManager<P> {
+ 
+ impl<P: ModelProvider> ModelProvider for ProviderManager<P> {
+     fn complete(&self, request: &ModelRequest) -> MedusaResult<ModelResponse> {
++        self.complete_with_cancel(request, None)
++    }
++
++    fn complete_cancellable(
++        &self,
++        request: &ModelRequest,
++        cancel: &AtomicBool,
++    ) -> MedusaResult<ModelResponse> {
++        self.complete_with_cancel(request, Some(cancel))
++    }
++
++    fn capabilities(&self) -> ProviderCapabilities {
++        self.providers
++            .first()
++            .map_or_else(ProviderCapabilities::default, ModelProvider::capabilities)
++    }
++
++    fn execution_status(&self) -> Option<Value> {
++        ProviderManager::execution_status(self)
++    }
++}
++
++impl<P: ModelProvider> ProviderManager<P> {
++    fn complete_with_cancel(
++        &self,
++        request: &ModelRequest,
++        cancel: Option<&AtomicBool>,
++    ) -> MedusaResult<ModelResponse> {
+         let key = serde_json::to_string(request).map_err(|error| {
+             MedusaError::new(
+                 ErrorCode::InvalidConfiguration,
+@@ -311,7 +344,7 @@ impl<P: ModelProvider> ModelProvider for ProviderManager<P> {
+                 .map_or_else(RouteRetryPolicy::default, |profile| profile.retry);
+             for attempt in 0..=policy.max_retries {
+                 self.record_attempt(index);
+-                match provider.complete(request) {
++                match cancel.map_or_else(|| provider.complete(request), |flag| provider.complete_cancellable(request, flag)) {
+                     Ok(response) => {
+                         self.record_success(index);
+                         if let Ok(mut cache) = self.cache.lock() {
+@@ -326,7 +359,21 @@ impl<P: ModelProvider> ModelProvider for ProviderManager<P> {
+                             RetryDisposition::Retry if attempt < policy.max_retries => {
+                                 let delay_ms = policy.delay_ms(&error, index, attempt);
+                                 self.record_retry(index, delay_ms);
+-                                (self.sleeper)(Duration::from_millis(delay_ms));
++                                if let Some(flag) = cancel {
++                                    let deadline = std::time::Instant::now() + Duration::from_millis(delay_ms);
++                                    while std::time::Instant::now() < deadline {
++                                        if flag.load(Ordering::SeqCst) {
++                                            return Err(MedusaError::new(
++                                                ErrorCode::DependencyUnavailable,
++                                                ErrorCategory::Transient,
++                                                "provider request cancelled",
++                                            ));
++                                        }
++                                        thread::sleep(Duration::from_millis(25));
++                                    }
++                                } else {
++                                    (self.sleeper)(Duration::from_millis(delay_ms));
++                                }
+                             }
+                             RetryDisposition::Retry | RetryDisposition::Failover
+                                 if has_fallback =>
+@@ -353,15 +400,6 @@ impl<P: ModelProvider> ModelProvider for ProviderManager<P> {
+         }))
+     }
+ 
+-    fn capabilities(&self) -> ProviderCapabilities {
+-        self.providers
+-            .first()
+-            .map_or_else(ProviderCapabilities::default, ModelProvider::capabilities)
+-    }
+-
+-    fn execution_status(&self) -> Option<Value> {
+-        ProviderManager::execution_status(self)
+-    }
+ }
+ 
+ fn classify_error(error: &MedusaError, has_fallback: bool) -> RetryDisposition {
+diff --git a/crates/medusa-runtime/src/runtime_impl.rs b/crates/medusa-runtime/src/runtime_impl.rs
+index e90b1f2..e387b79 100644
+--- a/crates/medusa-runtime/src/runtime_impl.rs
++++ b/crates/medusa-runtime/src/runtime_impl.rs
+@@ -484,14 +484,14 @@ fn run_prompt(
+     state: &mut RuntimeState,
+     draft: PromptDraft,
+     events: &Sender<RuntimeEvent>,
+-    cancel: &AtomicBool,
++    cancel: &Arc<AtomicBool>,
+     submission: &Arc<Mutex<SubmissionState>>,
+ ) -> Result<RuntimeEvent, RuntimeError> {
+     let config = state.config.clone();
+     let max_turns = config.agent.max_turns;
+     let provider = ConfiguredProvider::manager_from_config(&config, state.session_api_key.clone())
+         .map_err(RuntimeError::agent)?;
+-    let engine = AgentEngine::new(provider, config);
++    let engine = AgentEngine::new_with_cancellation(provider, config, Arc::clone(cancel));
+     let selected_skill = state.pending_skill.clone();
+     let skill_context = selected_skill.as_ref().map(SelectedSkill::prompt_context);
+     let content = message_blocks(&draft)?;
+@@ -532,11 +532,19 @@ fn run_prompt(
+             if session.turn >= max_turns {
+                 return Err(RuntimeError::TurnLimit(max_turns));
+             }
+-            let outcome = engine
+-                .step_with_observer_and_context(&mut session, skill_context.as_deref(), |update| {
++            let outcome = match engine.step_with_observer_and_context(
++                &mut session,
++                skill_context.as_deref(),
++                |update| {
+                     forward_update(update, events, &mut updates);
+-                })
+-                .map_err(RuntimeError::agent)?;
++                },
++            ) {
++                Ok(outcome) => outcome,
++                Err(_) if cancel_requested(cancel, submission) => {
++                    return Ok(RuntimeEvent::Cancelled);
++                }
++                Err(error) => return Err(RuntimeError::agent(error)),
++            };
+             let _ = events.send(RuntimeEvent::Progress { turn: session.turn });
+ 
+             if matches!(outcome, StepOutcome::Continue | StepOutcome::TurnComplete)
+@@ -634,7 +642,7 @@ fn execute_slash_command_with_submission(
+     state: &mut RuntimeState,
+     command: SlashCommand,
+     events: &Sender<RuntimeEvent>,
+-    cancel: &AtomicBool,
++    cancel: &Arc<AtomicBool>,
+     submission: &Arc<Mutex<SubmissionState>>,
+ ) -> Result<Option<RuntimeEvent>, RuntimeError> {
+     match command {
+diff --git a/crates/medusa-runtime/src/support.rs b/crates/medusa-runtime/src/support.rs
+index b33a039..b4ad873 100644
+--- a/crates/medusa-runtime/src/support.rs
++++ b/crates/medusa-runtime/src/support.rs
+@@ -112,7 +112,7 @@ pub(super) fn is_supported_provider(provider: &str) -> bool {
+ 
+ pub(super) fn protocol_for_provider(provider: &str) -> &'static str {
+     match provider {
+-        "minimax" | "anthropic" | "anthropic-compatible" => "anthropic",
++        "anthropic" | "anthropic-compatible" => "anthropic",
+         _ => "openai",
+     }
+ }
+diff --git a/crates/medusa-runtime/src/tests.rs b/crates/medusa-runtime/src/tests.rs
+index 1fe87da..21139f9 100644
+--- a/crates/medusa-runtime/src/tests.rs
++++ b/crates/medusa-runtime/src/tests.rs
+@@ -138,7 +138,7 @@ fn provider_usage_forwards_legacy_and_normalized_telemetry() {
+     forward_update(
+         &AgentUpdate::Event(EventPayload::ModelRequestStarted {
+             provider: "minimax".to_owned(),
+-            model: "MiniMax-M3".to_owned(),
++            model: "MiniMax-M2.7".to_owned(),
+         }),
+         &sender,
+         &mut state,
+diff --git a/crates/medusa-runtime/tests/controller_runtime_coverage.rs b/crates/medusa-runtime/tests/controller_runtime_coverage.rs
+index 315b320..641bf98 100644
+--- a/crates/medusa-runtime/tests/controller_runtime_coverage.rs
++++ b/crates/medusa-runtime/tests/controller_runtime_coverage.rs
+@@ -145,7 +145,7 @@ fn controller_exercises_non_agent_command_lifecycle() {
+     controller
+         .configure_model(ModelConfiguration {
+             provider: "minimax".into(),
+-            model: "MiniMax-M3".into(),
++            model: "MiniMax-M2.7".into(),
+             effort: Effort::Medium,
+             api_key: Some("temporary".into()),
+         })
+diff --git a/crates/medusa-tui/src/app/models.rs b/crates/medusa-tui/src/app/models.rs
+index 47ec6f7..4c99c46 100644
+--- a/crates/medusa-tui/src/app/models.rs
++++ b/crates/medusa-tui/src/app/models.rs
+@@ -461,7 +461,12 @@ impl ModelModal {
+ 
+ fn model_options_for(provider: &str, current_model: &str) -> Vec<String> {
+     let mut models = match provider {
+-        "minimax" => vec!["MiniMax-M3".to_owned(), "MiniMax-M2.7".to_owned()],
++        "minimax" => vec![
++            "MiniMax-M3".to_owned(),
++            "MiniMax-M2.7".to_owned(),
++            "MiniMax-M2.7-highspeed".to_owned(),
++            "MiniMax-M2.5".to_owned(),
++        ],
+         "anthropic" => vec![
+             "claude-opus-4-6".to_owned(),
+             "claude-sonnet-4-6".to_owned(),
+diff --git a/docs/CONFIGURATION.md b/docs/CONFIGURATION.md
+index 1facd58..c2f6b18 100644
+--- a/docs/CONFIGURATION.md
++++ b/docs/CONFIGURATION.md
+@@ -15,8 +15,8 @@ parallel_workers = 4
+ [model]
+ provider = "minimax"
+ fallback_providers = []
+-name = "MiniMax-M3"
+-protocol = "anthropic"
++name = "MiniMax-M2.7"
++protocol = "openai"
+ temperature_milli = 200
+ max_output_tokens = 32768
+ context_window_tokens = 1000000
