@@ -33,15 +33,10 @@ fn bind_module(
 fn main() -> Result<(), Box<dyn Error>> {
     println!("cargo:rerun-if-changed=src/runtime_impl.rs");
     println!("cargo:rerun-if-changed=src/production_orchestrator.rs");
-    println!("cargo:rerun-if-changed=src/recovery_tui.rs");
+    println!("cargo:rerun-if-changed=src/recovery_tui.inc");
 
     let manifest = env::var("CARGO_MANIFEST_DIR")?;
     let mut source = fs::read_to_string("src/runtime_impl.rs")?.replace("\r\n", "\n");
-    replace_once(
-        &mut source,
-        "mod support;",
-        "mod support;\nmod recovery_tui;",
-    )?;
 
     for (declaration, file) in [
         ("pub mod commands;", "commands.rs"),
@@ -54,11 +49,15 @@ fn main() -> Result<(), Box<dyn Error>> {
             "skill_dependency_locks.rs",
         ),
         ("mod support;", "support.rs"),
-        ("mod recovery_tui;", "recovery_tui.rs"),
         ("mod tests;", "tests.rs"),
     ] {
         bind_module(&mut source, &manifest, declaration, file)?;
     }
+
+    let recovery_source = fs::read_to_string("src/recovery_tui.inc")?.replace("\r\n", "\n");
+    source.push_str("\nmod recovery_tui {\n");
+    source.push_str(&recovery_source);
+    source.push_str("\n}\n");
 
     replace_once(
         &mut source,
