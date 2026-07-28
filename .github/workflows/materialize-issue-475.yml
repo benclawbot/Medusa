@@ -1,0 +1,39 @@
+name: Materialize issue 475
+
+on:
+  push:
+    branches:
+      - issue-475-openai-image-input
+    paths:
+      - .github/issue-475-openai-image-input.patch
+      - .github/workflows/materialize-issue-475.yml
+
+permissions:
+  contents: write
+
+jobs:
+  materialize:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: issue-475-openai-image-input
+          fetch-depth: 0
+      - name: Apply provider change
+        run: |
+          git apply --check .github/issue-475-openai-image-input.patch
+          git apply .github/issue-475-openai-image-input.patch
+      - name: Format
+        run: cargo fmt --all
+      - name: Provider tests
+        run: cargo test -p medusa-provider
+      - name: Provider clippy
+        run: cargo clippy -p medusa-provider --all-targets -- -D warnings
+      - name: Commit validated source
+        run: |
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add crates/medusa-provider/src/lib.rs
+          git rm .github/issue-475-openai-image-input.patch .github/workflows/materialize-issue-475.yml
+          git commit -m "Add OpenAI image input support"
+          git push origin HEAD:issue-475-openai-image-input
