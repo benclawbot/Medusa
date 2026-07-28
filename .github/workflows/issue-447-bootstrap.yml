@@ -19,8 +19,190 @@ jobs:
           fetch-depth: 0
           token: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Apply exact runtime patch
-        run: git apply --check .github/issue-447-runtime-fix.patch && git apply .github/issue-447-runtime-fix.patch
+      - name: Apply exact runtime transformations
+        shell: bash
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          def replace_once(path: str, old: str, new: str) -> None:
+              file = Path(path)
+              text = file.read_text()
+              count = text.count(old)
+              if count != 1:
+                  raise SystemExit(f"expected one anchor in {path}, found {count}")
+              file.write_text(text.replace(old, new, 1))
+
+          replace_once(
+              "crates/medusa-runtime/src/runtime_impl.rs",
+              '''fn worker_loop_with_state(
+              mut state: RuntimeState,
+              commands: Receiver<RuntimeCommand>,
+              events: Sender<RuntimeEvent>,
+              cancel: Arc<AtomicBool>,
+              submission: Arc<Mutex<SubmissionState>>,
+          ) {
+              let _ = events.send(state.settings_event());
+              let capability_event = match CapabilityRegistry::discover(state.repo.clone()) {
+                  Ok(registry) => RuntimeEvent::Notice {
+                      title: "Runtime capabilities".to_owned(),
+                      details: registry
+                          .prompt_summary()
+                          .lines()
+                          .map(str::to_owned)
+                          .collect(),
+                  },
+                  Err(error) => RuntimeEvent::Notice {
+                      title: "Runtime capabilities unavailable".to_owned(),
+                      details: vec![error.to_string()],
+                  },
+              };
+              let _ = events.send(capability_event);
+          ''',
+              '''fn worker_loop_with_state(
+              state: RuntimeState,
+              commands: Receiver<RuntimeCommand>,
+              events: Sender<RuntimeEvent>,
+              cancel: Arc<AtomicBool>,
+              submission: Arc<Mutex<SubmissionState>>,
+          ) {
+              worker_loop_with_discovery(
+                  state,
+                  commands,
+                  events,
+                  cancel,
+                  submission,
+                  capability_event,
+              );
+          }
+
+          fn worker_loop_with_discovery<F>(
+              mut state: RuntimeState,
+              commands: Receiver<RuntimeCommand>,
+              events: Sender<RuntimeEvent>,
+              cancel: Arc<AtomicBool>,
+              submission: Arc<Mutex<SubmissionState>>,
+              discover: F,
+          ) where
+              F: FnOnce(PathBuf) -> RuntimeEvent + Send + 'static,
+          {
+              let _ = events.send(state.settings_event());
+              let capability_repo = state.repo.clone();
+              let capability_events = events.clone();
+              if let Err(error) = thread::Builder::new()
+                  .name("medusa-capability-discovery".to_owned())
+                  .spawn(move || {
+                      let _ = capability_events.send(discover(capability_repo));
+                  })
+              {
+                  let _ = events.send(RuntimeEvent::Notice {
+                      title: "Runtime capabilities unavailable".to_owned(),
+                      details: vec![format!("failed to start capability discovery: {error}")],
+                  });
+              }
+          ''',
+          )
+
+          replace_once(
+              "crates/medusa-runtime/src/runtime_impl.rs",
+              '''fn cancel_requested(cancel: &AtomicBool, submission: &Arc<Mutex<SubmissionState>>) -> bool {''',
+              '''fn capability_event(repo: PathBuf) -> RuntimeEvent {
+              match CapabilityRegistry::discover(repo) {
+                  Ok(registry) => RuntimeEvent::Notice {
+                      title: "Runtime capabilities".to_owned(),
+                      details: registry
+                          .prompt_summary()
+                          .lines()
+                          .map(str::to_owned)
+                          .collect(),
+                  },
+                  Err(error) => RuntimeEvent::Notice {
+                      title: "Runtime capabilities unavailable".to_owned(),
+                      details: vec![error.to_string()],
+                  },
+              }
+          }
+
+          fn cancel_requested(cancel: &AtomicBool, submission: &Arc<Mutex<SubmissionState>>) -> bool {''',
+          )
+
+          replace_once(
+              "crates/medusa-runtime/build.rs",
+              '''        "    let _ = events.send(state.settings_event());\\n    let capability_event =",
+                  "    let _ = events.send(state.settings_event());\\n    for recovery_event in recovery::startup_events(&state.repo) {\\n        let _ = events.send(recovery_event);\\n    }\\n    let capability_event =",''',
+              '''        "    let _ = events.send(state.settings_event());\\n    let capability_repo =",
+                  "    let _ = events.send(state.settings_event());\\n    for recovery_event in recovery::startup_events(&state.repo) {\\n        let _ = events.send(recovery_event);\\n    }\\n    let capability_repo =",''',
+          )
+
+          test = '''#[test]
+          fn command_processing_does_not_wait_for_capability_discovery() {
+              use std::{
+                  sync::{Arc, Mutex, mpsc},
+                  thread,
+                  time::Duration,
+              };
+
+              let directory = tempdir().expect("temporary directory");
+              let state = RuntimeState::load(directory.path().to_path_buf()).expect("runtime state");
+              let (command_tx, command_rx) = mpsc::channel();
+              let (event_tx, event_rx) = mpsc::channel();
+              let cancel = Arc::new(AtomicBool::new(false));
+              let submission = Arc::new(Mutex::new(SubmissionState::default()));
+              let (discovery_started_tx, discovery_started_rx) = mpsc::channel();
+              let (release_tx, release_rx) = mpsc::channel();
+
+              let worker = thread::spawn(move || {
+                  worker_loop_with_discovery(
+                      state,
+                      command_rx,
+                      event_tx,
+                      cancel,
+                      submission,
+                      move |_| {
+                          discovery_started_tx.send(()).expect("signal discovery start");
+                          release_rx.recv().expect("release discovery");
+                          RuntimeEvent::Notice {
+                              title: "Runtime capabilities".to_owned(),
+                              details: vec!["ready".to_owned()],
+                          }
+                      },
+                  );
+              });
+
+              assert!(matches!(
+                  event_rx.recv_timeout(Duration::from_secs(1)),
+                  Ok(RuntimeEvent::Settings { .. })
+              ));
+              discovery_started_rx
+                  .recv_timeout(Duration::from_secs(1))
+                  .expect("discovery started");
+
+              command_tx
+                  .send(RuntimeCommand::Slash(SlashCommand::Help))
+                  .expect("send help command");
+              assert!(matches!(
+                  event_rx.recv_timeout(Duration::from_secs(1)),
+                  Ok(RuntimeEvent::Notice { title, .. }) if title == "Slash commands"
+              ));
+
+              release_tx.send(()).expect("release discovery");
+              assert!(matches!(
+                  event_rx.recv_timeout(Duration::from_secs(1)),
+                  Ok(RuntimeEvent::Notice { title, .. }) if title == "Runtime capabilities"
+              ));
+              command_tx
+                  .send(RuntimeCommand::Shutdown)
+                  .expect("stop worker");
+              worker.join().expect("worker joins");
+          }
+
+          '''
+          replace_once(
+              "crates/medusa-runtime/src/tests.rs",
+              "use super::*;\n\n",
+              "use super::*;\n\n" + test,
+          )
+          PY
 
       - name: Remove bootstrap files
         run: rm .github/issue-447-runtime-fix.patch .github/workflows/issue-447-bootstrap.yml
