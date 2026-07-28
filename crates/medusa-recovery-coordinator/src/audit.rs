@@ -74,7 +74,7 @@ impl RecoveryAuditRecord {
         hasher.update(self.schema_version.to_be_bytes());
         hasher.update(self.recorded_at_unix_ms.to_be_bytes());
         hash_field(&mut hasher, &self.session_id);
-        hash_field(&mut hasher, &format!("{:?}", self.operation));
+        hash_field(&mut hasher, recovery_operation_id(self.operation));
         hash_optional(&mut hasher, self.checkpoint_id.as_deref());
         hasher.update([u8::from(self.confirmation_recorded)]);
         hash_field(&mut hasher, &self.authorization_reason);
@@ -88,10 +88,47 @@ impl RecoveryAuditRecord {
         for risk in &self.preflight.unresolved_risks {
             hash_field(&mut hasher, risk);
         }
-        hash_field(&mut hasher, &format!("{:?}", self.outcome));
+        hash_recovery_outcome(&mut hasher, &self.outcome);
         hash_optional(&mut hasher, self.repository_fingerprint_after.as_deref());
-        hash_field(&mut hasher, &format!("{:?}", self.verification_outcome));
+        hash_field(
+            &mut hasher,
+            verification_state_id(self.verification_outcome),
+        );
         hex::encode(hasher.finalize())
+    }
+}
+
+fn recovery_operation_id(operation: RecoveryOperation) -> &'static str {
+    match operation {
+        RecoveryOperation::Inspect => "recovery-operation/inspect/v1",
+        RecoveryOperation::Resume => "recovery-operation/resume/v1",
+        RecoveryOperation::RestoreCheckpoint => "recovery-operation/restore-checkpoint/v1",
+        RecoveryOperation::RetryVerification => "recovery-operation/retry-verification/v1",
+        RecoveryOperation::Abandon => "recovery-operation/abandon/v1",
+    }
+}
+
+fn verification_state_id(state: VerificationState) -> &'static str {
+    match state {
+        VerificationState::Verified => "verification-state/verified/v1",
+        VerificationState::Failed => "verification-state/failed/v1",
+        VerificationState::Incomplete => "verification-state/incomplete/v1",
+        VerificationState::Unknown => "verification-state/unknown/v1",
+    }
+}
+
+fn hash_recovery_outcome(hasher: &mut Sha256, outcome: &RecoveryActionOutcome) {
+    match outcome {
+        RecoveryActionOutcome::Succeeded => {
+            hash_field(hasher, "recovery-outcome/succeeded/v1");
+        }
+        RecoveryActionOutcome::Cancelled => {
+            hash_field(hasher, "recovery-outcome/cancelled/v1");
+        }
+        RecoveryActionOutcome::FailedClosed { reason } => {
+            hash_field(hasher, "recovery-outcome/failed-closed/v1");
+            hash_field(hasher, reason);
+        }
     }
 }
 
@@ -161,6 +198,37 @@ mod tests {
         );
         assert!(record.verify());
         assert_eq!(record.outcome, RecoveryActionOutcome::Cancelled);
+    }
+
+    #[test]
+    fn failed_closed_reason_is_part_of_stable_evidence() {
+        let mut record = RecoveryAuditRecord::new(
+            1_700_000_000_000,
+            &action(),
+            preflight(),
+            RecoveryActionOutcome::FailedClosed {
+                reason: "checkpoint drift".into(),
+            },
+            None,
+            VerificationState::Failed,
+        );
+        assert!(record.verify());
+        if let RecoveryActionOutcome::FailedClosed { reason } = &mut record.outcome {
+            reason.push_str(" altered");
+        }
+        assert!(!record.verify());
+    }
+
+    #[test]
+    fn canonical_enum_ids_are_explicit_and_versioned() {
+        assert_eq!(
+            recovery_operation_id(RecoveryOperation::RestoreCheckpoint),
+            "recovery-operation/restore-checkpoint/v1"
+        );
+        assert_eq!(
+            verification_state_id(VerificationState::Incomplete),
+            "verification-state/incomplete/v1"
+        );
     }
 
     #[test]
