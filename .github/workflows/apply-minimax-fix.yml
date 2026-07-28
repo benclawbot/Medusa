@@ -14,6 +14,8 @@ jobs:
           fetch-depth: 0
       - name: Apply patch
         run: git apply .github/minimax-m3-openai-cancellation.patch
+      - name: Format source
+        run: cargo fmt --all
       - name: Format check
         run: cargo fmt --all -- --check
       - name: Clippy
