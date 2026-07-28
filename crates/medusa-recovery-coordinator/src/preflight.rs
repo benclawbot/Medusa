@@ -4,9 +4,7 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use thiserror::Error;
 
-use crate::{
-    FileChangeKind, RecoveryFileChange, RecoveryPreflightEvidence, RecoveryPreview,
-};
+use crate::{FileChangeKind, RecoveryFileChange, RecoveryPreflightEvidence, RecoveryPreview};
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct RepositoryFileState {
@@ -119,7 +117,9 @@ pub fn build_restore_preflight(
     Ok(RecoveryPreflightReport { preview, evidence })
 }
 
-pub fn snapshot_fingerprint(files: &[RepositoryFileState]) -> Result<String, RecoveryPreflightError> {
+pub fn snapshot_fingerprint(
+    files: &[RepositoryFileState],
+) -> Result<String, RecoveryPreflightError> {
     let indexed = index(files)?;
     let mut hasher = Sha256::new();
     for (path, fingerprint) in indexed {
@@ -137,7 +137,9 @@ fn validate_snapshot(snapshot: &RepositorySnapshot) -> Result<(), RecoveryPrefli
     index(&snapshot.files).map(|_| ())
 }
 
-fn index(files: &[RepositoryFileState]) -> Result<BTreeMap<String, String>, RecoveryPreflightError> {
+fn index(
+    files: &[RepositoryFileState],
+) -> Result<BTreeMap<String, String>, RecoveryPreflightError> {
     let mut indexed = BTreeMap::new();
     for file in files {
         validate_path(&file.path)?;
@@ -203,14 +205,9 @@ mod tests {
     fn preview_is_file_level_deterministic_and_non_mutating() {
         let checkpoint = snapshot(1, &[("src/a.rs", 1), ("src/b.rs", 2)]);
         let current = snapshot(1, &[("src/a.rs", 9), ("src/c.rs", 3)]);
-        let report = build_restore_preflight(
-            "cp-1",
-            &checkpoint,
-            &current,
-            ["src/a.rs".to_owned()],
-            true,
-        )
-        .unwrap();
+        let report =
+            build_restore_preflight("cp-1", &checkpoint, &current, ["src/a.rs".to_owned()], true)
+                .unwrap();
 
         assert_eq!(
             report
@@ -264,10 +261,19 @@ mod tests {
     #[test]
     fn snapshot_fingerprint_is_order_independent() {
         let left = vec![
-            RepositoryFileState { path: "b".into(), content_fingerprint: fp(2) },
-            RepositoryFileState { path: "a".into(), content_fingerprint: fp(1) },
+            RepositoryFileState {
+                path: "b".into(),
+                content_fingerprint: fp(2),
+            },
+            RepositoryFileState {
+                path: "a".into(),
+                content_fingerprint: fp(1),
+            },
         ];
         let right = vec![left[1].clone(), left[0].clone()];
-        assert_eq!(snapshot_fingerprint(&left).unwrap(), snapshot_fingerprint(&right).unwrap());
+        assert_eq!(
+            snapshot_fingerprint(&left).unwrap(),
+            snapshot_fingerprint(&right).unwrap()
+        );
     }
 }
