@@ -1,0 +1,1264 @@
+diff --git a/Cargo.lock b/Cargo.lock
+index 253f94c..0158633 100644
+--- a/Cargo.lock
++++ b/Cargo.lock
+@@ -1029,6 +1029,7 @@ dependencies = [
+  "medusa-escalation",
+  "medusa-extensions",
+  "medusa-intelligence",
++ "medusa-improvement",
+  "medusa-memory",
+  "medusa-multi-agent-scheduler",
+  "medusa-process-containment",
+diff --git a/crates/medusa-agent/Cargo.toml b/crates/medusa-agent/Cargo.toml
+index bcfd6a7..014bc9b 100644
+--- a/crates/medusa-agent/Cargo.toml
++++ b/crates/medusa-agent/Cargo.toml
+@@ -23,6 +23,7 @@ medusa-escalation = { path = "../medusa-escalation" }
+ medusa-failure = { path = "../medusa-failure" }
+ medusa-extensions = { path = "../medusa-extensions" }
+ medusa-intelligence = { path = "../medusa-intelligence" }
++medusa-improvement = { path = "../medusa-improvement" }
+ medusa-memory = { path = "../medusa-memory" }
+ medusa-multi-agent-scheduler = { path = "../medusa-multi-agent-scheduler" }
+ medusa-process-containment.workspace = true
+diff --git a/crates/medusa-agent/src/engine.rs b/crates/medusa-agent/src/engine.rs
+index 4834f54..4be6a79 100644
+--- a/crates/medusa-agent/src/engine.rs
++++ b/crates/medusa-agent/src/engine.rs
+@@ -1,6 +1,8 @@
+ #[allow(dead_code)]
+ #[path = "autonomous_execution.rs"]
+ mod autonomous_execution;
++#[path = "learning_retrieval.rs"]
++mod learning_retrieval;
+ mod context_budget {
+     include!(concat!(
+         env!("CARGO_MANIFEST_DIR"),
+@@ -513,6 +515,25 @@ impl<P: ModelProvider> AgentEngine<P> {
+             ),
+             self.config.agent.mode,
+         );
++        match learning_retrieval::retrieve_for_session(session, self.config.agent.mode) {
++            Ok(Some(retrieval)) => {
++                if let Some(fragment) = retrieval.system_fragment {
++                    system.push_str("\n\n");
++                    system.push_str(&fragment);
++                }
++                observer(&AgentUpdate::ToolOutput {
++                    tool: "learning_retrieval".to_owned(),
++                    output: retrieval.status,
++                    is_error: false,
++                });
++            }
++            Ok(None) => {}
++            Err(error) => observer(&AgentUpdate::ToolOutput {
++                tool: "learning_retrieval".to_owned(),
++                output: error.to_string(),
++                is_error: true,
++            }),
++        }
+         let tools = available_tools(self.config.agent.mode, &self.desktop_commander_settings);
+         let mut budget = context_budget::PromptBudget::for_request(
+             &system,
+diff --git a/crates/medusa-agent/src/learning_retrieval.rs b/crates/medusa-agent/src/learning_retrieval.rs
+new file mode 100644
+index 0000000..a0cd81f
+--- /dev/null
++++ b/crates/medusa-agent/src/learning_retrieval.rs
+@@ -0,0 +1,423 @@
++use std::{
++    collections::BTreeSet,
++    env, fs,
++    fs::OpenOptions,
++    io::Write,
++    path::{Path, PathBuf},
++};
++
++use medusa_config::Mode;
++use medusa_core::{ErrorCategory, ErrorCode, MedusaError, MedusaResult};
++use medusa_improvement::{
++    retrieval::{RetrievalQuery, RetrievalResult},
++    scoped_memory::{RepositoryIdentity, ScopeContext, ScopedMemoryStore},
++};
++use medusa_provider::{MessageBlock, Role};
++use serde::Serialize;
++use sha2::{Digest, Sha256};
++use time::OffsetDateTime;
++
++use crate::session::AgentSession;
++
++const MAX_SELECTED_LEARNINGS: usize = 8;
++
++pub(crate) struct AgentLearningRetrieval {
++    pub system_fragment: Option<String>,
++    pub status: String,
++}
++
++#[derive(Serialize)]
++#[serde(rename_all = "camelCase")]
++struct SelectionAudit<'a> {
++    session_id: &'a str,
++    turn: u32,
++    objective_digest: String,
++    decisions: &'a [medusa_improvement::retrieval::RetrievalDecision],
++    recorded_at_unix_ms: i64,
++}
++
++pub(crate) fn retrieve_for_session(
++    session: &AgentSession,
++    mode: Mode,
++) -> MedusaResult<Option<AgentLearningRetrieval>> {
++    let Some(user_store) = user_store_path() else {
++        return Ok(None);
++    };
++    let repository_store = session.repo.join(".medusa/learnings.json");
++    if !user_store.is_file() && !repository_store.is_file() {
++        return Ok(None);
++    }
++
++    let store = ScopedMemoryStore::new(user_store, Some(repository_store));
++    let now_unix_ms = OffsetDateTime::now_utc().unix_timestamp().saturating_mul(1_000);
++    retrieve_from_store(session, mode, &store, owner_id(), now_unix_ms)
++}
++
++fn retrieve_from_store(
++    session: &AgentSession,
++    mode: Mode,
++    store: &ScopedMemoryStore,
++    owner_id: String,
++    now_unix_ms: i64,
++) -> MedusaResult<Option<AgentLearningRetrieval>> {
++    let context = ScopeContext {
++        owner_id,
++        repository: repository_identity(&session.repo),
++        workspace_id: env::var("MEDUSA_WORKSPACE_ID").ok(),
++        organization_id: env::var("MEDUSA_ORGANIZATION_ID").ok(),
++        session_id: Some(session.id.to_string()),
++        task_id: Some(format!("{}-turn-{}", session.id, session.turn.saturating_add(1))),
++        task_kind: Some(infer_task_kind(&session.objective)),
++        artifact_kind: Some(infer_artifact_kind(&session.objective)),
++        context_tags: context_tags(&session.objective, mode),
++    };
++    let base_query = RetrievalQuery {
++        context,
++        objective: session.objective.clone(),
++        phase: None,
++        now_unix_ms,
++        max_results: MAX_SELECTED_LEARNINGS,
++        suppressed_learning_ids: BTreeSet::new(),
++        approved_high_impact_ids: BTreeSet::new(),
++    };
++    let initial = store.retrieve(&base_query).map_err(retrieval_error)?;
++    let latest_user_text = latest_user_text(session);
++    let (suppressed, approved) = explicit_overrides(&initial, &latest_user_text);
++    let result = if suppressed.is_empty() && approved.is_empty() {
++        initial
++    } else {
++        store
++            .retrieve(&RetrievalQuery {
++                suppressed_learning_ids: suppressed,
++                approved_high_impact_ids: approved,
++                ..base_query
++            })
++            .map_err(retrieval_error)?
++    };
++    let mut status = result.status_summary();
++    if mode != Mode::ReadOnly
++        && let Err(error) = persist_audit(session, &result, now_unix_ms)
++    {
++        status.push_str(&format!("\nSelection audit could not be persisted: {error}"));
++    }
++    Ok(Some(AgentLearningRetrieval {
++        system_fragment: result.system_fragment(),
++        status,
++    }))
++}
++
++fn user_store_path() -> Option<PathBuf> {
++    if let Some(root) = env::var_os("MEDUSA_HOME").map(PathBuf::from) {
++        return Some(preferred_learning_path(&root));
++    }
++    env::var_os("HOME")
++        .or_else(|| env::var_os("USERPROFILE"))
++        .map(PathBuf::from)
++        .map(|home| preferred_learning_path(&home.join(".medusa")))
++}
++
++fn preferred_learning_path(root: &Path) -> PathBuf {
++    let legacy = root.join("learnings.json");
++    if legacy.is_file() {
++        legacy
++    } else {
++        root.join("learning/learnings.json")
++    }
++}
++
++fn owner_id() -> String {
++    env::var("MEDUSA_OWNER_ID")
++        .or_else(|_| env::var("USER"))
++        .or_else(|_| env::var("USERNAME"))
++        .unwrap_or_else(|_| "default".to_owned())
++}
++
++fn repository_identity(repo: &Path) -> Option<RepositoryIdentity> {
++    let canonical = fs::canonicalize(repo).unwrap_or_else(|_| repo.to_path_buf());
++    let origin = git_origin(repo).unwrap_or_else(|| canonical.to_string_lossy().into_owned());
++    let common = git_common_directory(repo).unwrap_or(canonical);
++    RepositoryIdentity::new(&origin, &common.to_string_lossy()).ok()
++}
++
++fn git_origin(repo: &Path) -> Option<String> {
++    let config = git_directory(repo)?.join("config");
++    let content = fs::read_to_string(config).ok()?;
++    let mut in_origin = false;
++    for line in content.lines() {
++        let trimmed = line.trim();
++        if trimmed.starts_with('[') {
++            in_origin = trimmed == "[remote \"origin\"]";
++            continue;
++        }
++        if in_origin
++            && let Some(value) = trimmed.strip_prefix("url =")
++        {
++            return Some(value.trim().to_owned());
++        }
++    }
++    None
++}
++
++fn git_common_directory(repo: &Path) -> Option<PathBuf> {
++    let git = git_directory(repo)?;
++    let common = git.join("commondir");
++    if let Ok(value) = fs::read_to_string(common) {
++        let value = value.trim();
++        if !value.is_empty() {
++            let path = PathBuf::from(value);
++            return Some(if path.is_absolute() { path } else { git.join(path) });
++        }
++    }
++    Some(git)
++}
++
++fn git_directory(repo: &Path) -> Option<PathBuf> {
++    let dot_git = repo.join(".git");
++    if dot_git.is_dir() {
++        return Some(dot_git);
++    }
++    let content = fs::read_to_string(dot_git).ok()?;
++    let target = content.trim().strip_prefix("gitdir:")?.trim();
++    let path = PathBuf::from(target);
++    Some(if path.is_absolute() { path } else { repo.join(path) })
++}
++
++fn infer_task_kind(objective: &str) -> String {
++    let lower = objective.to_ascii_lowercase();
++    if contains_any(&lower, &["research", "investigate", "compare sources"]) {
++        "research"
++    } else if contains_any(&lower, &["write", "document", "memo", "report"]) {
++        "writing"
++    } else if contains_any(&lower, &["review", "audit", "inspect"]) {
++        "review"
++    } else {
++        "coding"
++    }
++    .to_owned()
++}
++
++fn infer_artifact_kind(objective: &str) -> String {
++    let lower = objective.to_ascii_lowercase();
++    if contains_any(&lower, &["presentation", "slides", "deck"]) {
++        "presentation"
++    } else if contains_any(&lower, &["spreadsheet", "workbook", "sheet"]) {
++        "spreadsheet"
++    } else if contains_any(&lower, &["document", "memo", "report"]) {
++        "document"
++    } else {
++        "repository"
++    }
++    .to_owned()
++}
++
++fn context_tags(objective: &str, mode: Mode) -> BTreeSet<String> {
++    let mut tags = objective
++        .split(|character: char| {
++            !character.is_alphanumeric() && character != '-' && character != '_'
++        })
++        .filter(|value| value.len() > 2)
++        .map(|value| value.to_ascii_lowercase())
++        .collect::<BTreeSet<_>>();
++    tags.insert(if mode == Mode::ReadOnly {
++        "read_only".to_owned()
++    } else {
++        "execution".to_owned()
++    });
++    tags
++}
++
++fn latest_user_text(session: &AgentSession) -> String {
++    session
++        .messages
++        .iter()
++        .rev()
++        .find(|message| message.role == Role::User)
++        .map(|message| {
++            message
++                .content
++                .iter()
++                .filter_map(|block| match block {
++                    MessageBlock::Text { text } => Some(text.as_str()),
++                    _ => None,
++                })
++                .collect::<Vec<_>>()
++                .join("\n")
++        })
++        .unwrap_or_default()
++        .to_ascii_lowercase()
++}
++
++fn explicit_overrides(
++    result: &RetrievalResult,
++    user_text: &str,
++) -> (BTreeSet<String>, BTreeSet<String>) {
++    let mut suppressed = BTreeSet::new();
++    let mut approved = BTreeSet::new();
++    for decision in &result.decisions {
++        let id = decision.learning_id.to_ascii_lowercase();
++        if [
++            format!("suppress learning {id}"),
++            format!("disable learning {id}"),
++            format!("do not apply learning {id}"),
++        ]
++        .iter()
++        .any(|phrase| user_text.contains(phrase))
++        {
++            suppressed.insert(decision.learning_id.clone());
++        }
++        if [
++            format!("approve learning {id}"),
++            format!("apply learning {id}"),
++        ]
++        .iter()
++        .any(|phrase| user_text.contains(phrase))
++        {
++            approved.insert(decision.learning_id.clone());
++        }
++    }
++    (suppressed, approved)
++}
++
++fn persist_audit(
++    session: &AgentSession,
++    result: &RetrievalResult,
++    now_unix_ms: i64,
++) -> MedusaResult<()> {
++    let path = session
++        .repo
++        .join(".medusa/learning/selection-audit")
++        .join(format!("{}.jsonl", session.id));
++    if let Some(parent) = path.parent() {
++        fs::create_dir_all(parent)?;
++    }
++    let audit = SelectionAudit {
++        session_id: session.id.as_str(),
++        turn: session.turn.saturating_add(1),
++        objective_digest: hex::encode(Sha256::digest(session.objective.as_bytes())),
++        decisions: &result.decisions,
++        recorded_at_unix_ms: now_unix_ms,
++    };
++    let line = serde_json::to_string(&audit)?;
++    let mut file = OpenOptions::new().create(true).append(true).open(path)?;
++    writeln!(file, "{line}")?;
++    Ok(())
++}
++
++fn retrieval_error(error: medusa_improvement::scoped_memory::StoreError) -> MedusaError {
++    MedusaError::new(
++        ErrorCode::PersistenceFailed,
++        ErrorCategory::Persistence,
++        format!("learned behavior retrieval failed: {error}"),
++    )
++}
++
++fn contains_any(value: &str, needles: &[&str]) -> bool {
++    needles.iter().any(|needle| value.contains(needle))
++}
++
++#[cfg(test)]
++mod tests {
++    use super::*;
++    use medusa_core::SessionId;
++    use medusa_improvement::scoped_memory::{
++        Applicability, LearningProvenance, LearningScope, LearningState, ScopedLearning,
++    };
++    use medusa_provider::{Message, MessageBlock};
++    use tempfile::TempDir;
++
++    fn session(repo: &Path, text: &str) -> AgentSession {
++        AgentSession {
++            id: SessionId::new(),
++            objective: "Validate the repository using GitHub CI".to_owned(),
++            repo: repo.to_path_buf(),
++            created_at: OffsetDateTime::now_utc(),
++            updated_at: OffsetDateTime::now_utc(),
++            completed: false,
++            turn: 0,
++            plan: Vec::new(),
++            pending_question: None,
++            messages: vec![Message {
++                role: Role::User,
++                content: vec![MessageBlock::Text {
++                    text: text.to_owned(),
++                }],
++            }],
++            events: Vec::new(),
++            evidence: Vec::new(),
++            tool_artifacts: Vec::new(),
++            world_model: None,
++            approval_grants: Vec::new(),
++            approval_receipts: Vec::new(),
++            rollback_receipts: Vec::new(),
++        }
++    }
++
++    fn learning(owner: &str) -> ScopedLearning {
++        ScopedLearning {
++            id: "github-ci".to_owned(),
++            conflict_key: "validation.default".to_owned(),
++            owner_id: owner.to_owned(),
++            scope: LearningScope::User,
++            version: 1,
++            state: LearningState::Active,
++            generalized_rule: "Use GitHub CI as the authoritative validator".to_owned(),
++            provenance: LearningProvenance {
++                source_signal_ids: vec!["signal".to_owned()],
++                evidence_digests: vec!["0".repeat(64)],
++                generalized_from_private_content: false,
++            },
++            applicability: Applicability::default(),
++            created_at_unix_ms: 1,
++            updated_at_unix_ms: 1,
++        }
++    }
++
++    #[test]
++    fn shared_agent_retrieval_emits_explanation_and_audit() {
++        let temp = TempDir::new().unwrap();
++        let home = temp.path().join("home");
++        let repo = temp.path().join("repo");
++        fs::create_dir_all(&repo).unwrap();
++        let owner = "retrieval-test-user";
++        let store = ScopedMemoryStore::new(home.join("learning/learnings.json"), None);
++        store.upsert(learning(owner), 0).unwrap();
++        let session = session(&repo, "Validate this with GitHub CI");
++        let retrieval = retrieve_from_store(
++            &session,
++            Mode::Yolo,
++            &store,
++            owner.to_owned(),
++            10,
++        )
++        .unwrap()
++        .expect("retrieval");
++        assert!(retrieval.status.contains("Applied github-ci"));
++        assert!(retrieval
++            .system_fragment
++            .as_deref()
++            .is_some_and(|fragment| fragment.contains("authoritative validator")));
++        assert!(repo
++            .join(".medusa/learning/selection-audit")
++            .join(format!("{}.jsonl", session.id))
++            .is_file());
++    }
++
++    #[test]
++    fn user_can_suppress_selected_learning_for_current_task() {
++        let initial = RetrievalResult {
++            selected: Vec::new(),
++            decisions: vec![medusa_improvement::retrieval::RetrievalDecision {
++                learning_id: "github-ci".to_owned(),
++                conflict_key: "validation.default".to_owned(),
++                kind: medusa_improvement::retrieval::RetrievalDecisionKind::Selected,
++                score: Some(1),
++                reason: "matched".to_owned(),
++            }],
++            conflicts: Vec::new(),
++        };
++        let (suppressed, approved) =
++            explicit_overrides(&initial, "do not apply learning github-ci");
++        assert!(suppressed.contains("github-ci"));
++        assert!(approved.is_empty());
++    }
++}
+diff --git a/crates/medusa-improvement/src/lib.rs b/crates/medusa-improvement/src/lib.rs
+index 8bc2443..02279d7 100644
+--- a/crates/medusa-improvement/src/lib.rs
++++ b/crates/medusa-improvement/src/lib.rs
+@@ -5,6 +5,7 @@ pub mod correction_signals;
+ pub mod lesson_inference;
+ #[allow(clippy::expect_used)]
+ pub mod regression_replay;
++pub mod retrieval;
+ pub mod scoped_memory;
+ #[allow(clippy::collapsible_if)]
+ pub mod solution_selection;
+diff --git a/crates/medusa-improvement/src/retrieval.rs b/crates/medusa-improvement/src/retrieval.rs
+new file mode 100644
+index 0000000..77f3c86
+--- /dev/null
++++ b/crates/medusa-improvement/src/retrieval.rs
+@@ -0,0 +1,798 @@
++//! Explainable, deterministic retrieval of approved scoped learnings.
++//!
++//! Retrieval deliberately builds on the authoritative scope resolver. It does not create a second
++//! persistence model: active entries, scope precedence, repository identity, and conflict history
++//! remain owned by [`ScopedMemoryStore`]. This layer adds relevance ranking, stale-item suppression,
++//! per-task overrides, high-impact approval gates, and concise explanations.
++
++use std::collections::{BTreeMap, BTreeSet};
++
++use serde::{Deserialize, Serialize};
++
++use crate::scoped_memory::{
++    LearningScope, ResolvedLearning, ScopeConflict, ScopeContext, ScopedLearning,
++    ScopedMemoryStore, StoreError,
++};
++
++const STALE_AFTER_MS: i64 = 180 * 24 * 60 * 60 * 1_000;
++const MAX_CONSIDERED: usize = 4_096;
++
++#[derive(Clone, Copy, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize)]
++#[serde(rename_all = "snake_case")]
++pub enum ApplicationPhase {
++    Planning,
++    ToolSelection,
++    Execution,
++    Verification,
++    Completion,
++    ResponseStyle,
++}
++
++#[derive(Clone, Debug, Eq, PartialEq)]
++pub struct RetrievalQuery {
++    pub context: ScopeContext,
++    pub objective: String,
++    pub phase: Option<ApplicationPhase>,
++    pub now_unix_ms: i64,
++    pub max_results: usize,
++    pub suppressed_learning_ids: BTreeSet<String>,
++    pub approved_high_impact_ids: BTreeSet<String>,
++}
++
++#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
++#[serde(rename_all = "snake_case")]
++pub enum RetrievalDecisionKind {
++    Selected,
++    Rejected,
++    Suppressed,
++    Shadowed,
++    Conflict,
++    RequiresApproval,
++}
++
++#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
++pub struct RetrievalDecision {
++    pub learning_id: String,
++    pub conflict_key: String,
++    pub kind: RetrievalDecisionKind,
++    pub score: Option<i64>,
++    pub reason: String,
++}
++
++#[derive(Clone, Debug, Eq, PartialEq)]
++pub struct SelectedLearning {
++    pub learning: ScopedLearning,
++    pub phase: ApplicationPhase,
++    pub score: i64,
++    pub explanation: String,
++}
++
++#[derive(Clone, Debug, Default, Eq, PartialEq)]
++pub struct RetrievalResult {
++    pub selected: Vec<SelectedLearning>,
++    pub decisions: Vec<RetrievalDecision>,
++    pub conflicts: Vec<ScopeConflict>,
++}
++
++impl RetrievalResult {
++    #[must_use]
++    pub fn system_fragment(&self) -> Option<String> {
++        if self.selected.is_empty() {
++            return None;
++        }
++        let mut output = String::from(
++            "Approved learned behavior selected for this task. Apply it only at the listed phase, preserve the user's current intent, and prefer repository-specific behavior over broader behavior:\n",
++        );
++        for selected in &self.selected {
++            output.push_str(&format!(
++                "- [{}] phase={}; {}\n  Rule: {}\n",
++                selected.learning.id,
++                phase_name(selected.phase),
++                selected.explanation,
++                selected.learning.generalized_rule.trim()
++            ));
++        }
++        Some(output)
++    }
++
++    #[must_use]
++    pub fn status_summary(&self) -> String {
++        let rejected = self
++            .decisions
++            .iter()
++            .filter(|decision| decision.kind == RetrievalDecisionKind::Rejected)
++            .count();
++        let blocked = self
++            .decisions
++            .iter()
++            .filter(|decision| {
++                matches!(
++                    decision.kind,
++                    RetrievalDecisionKind::Suppressed
++                        | RetrievalDecisionKind::RequiresApproval
++                        | RetrievalDecisionKind::Conflict
++                )
++            })
++            .count();
++        let mut lines = vec![format!(
++            "Learning retrieval: {} selected, {rejected} rejected, {blocked} suppressed or blocked.",
++            self.selected.len()
++        )];
++        for selected in &self.selected {
++            lines.push(format!(
++                "Applied {} at {}: {}",
++                selected.learning.id,
++                phase_name(selected.phase),
++                selected.explanation
++            ));
++        }
++        for decision in self.decisions.iter().filter(|decision| {
++            matches!(
++                decision.kind,
++                RetrievalDecisionKind::Conflict | RetrievalDecisionKind::RequiresApproval
++            )
++        }) {
++            lines.push(format!("Blocked {}: {}", decision.learning_id, decision.reason));
++        }
++        lines.join("\n")
++    }
++}
++
++#[derive(Clone, Debug)]
++struct RankedCandidate {
++    learning: ScopedLearning,
++    phase: ApplicationPhase,
++    score: i64,
++    explanation: String,
++}
++
++impl ScopedMemoryStore {
++    pub fn retrieve(&self, query: &RetrievalQuery) -> Result<RetrievalResult, StoreError> {
++        if query.objective.trim().is_empty() {
++            return Err(StoreError::Validation("retrieval objective cannot be empty"));
++        }
++        if query.max_results == 0 {
++            return Ok(RetrievalResult::default());
++        }
++
++        let resolution = self.resolve(&query.context)?;
++        let objective = normalize(&query.objective);
++        let objective_tokens = keyword_tokens(&objective);
++        let mut result = RetrievalResult {
++            conflicts: resolution.conflicts.clone(),
++            ..RetrievalResult::default()
++        };
++        let mut ranked = Vec::new();
++
++        for resolved in resolution.resolved.into_iter().take(MAX_CONSIDERED) {
++            record_shadowed(&resolved, &mut result);
++            let learning = resolved.winner;
++            let decision = |kind, score, reason: String| RetrievalDecision {
++                learning_id: learning.id.clone(),
++                conflict_key: learning.conflict_key.clone(),
++                kind,
++                score,
++                reason,
++            };
++
++            if query.suppressed_learning_ids.contains(&learning.id) {
++                result.decisions.push(decision(
++                    RetrievalDecisionKind::Suppressed,
++                    None,
++                    "disabled for the current task by the user".to_owned(),
++                ));
++                continue;
++            }
++            if is_stale(&learning, query.now_unix_ms) {
++                result.decisions.push(decision(
++                    RetrievalDecisionKind::Rejected,
++                    None,
++                    "learning is stale and requires revalidation".to_owned(),
++                ));
++                continue;
++            }
++            if explicit_negative_match(&learning, &objective, &query.context.context_tags) {
++                result.decisions.push(decision(
++                    RetrievalDecisionKind::Rejected,
++                    None,
++                    "an explicit exclusion or negative task instruction matched".to_owned(),
++                ));
++                continue;
++            }
++
++            let phase = infer_phase(&learning);
++            if query.phase.is_some_and(|requested| requested != phase) {
++                result.decisions.push(decision(
++                    RetrievalDecisionKind::Rejected,
++                    None,
++                    format!("learning applies during {}, not this phase", phase_name(phase)),
++                ));
++                continue;
++            }
++
++            let learning_tokens = keyword_tokens(&format!(
++                "{} {}",
++                learning.conflict_key, learning.generalized_rule
++            ));
++            let overlap = objective_tokens.intersection(&learning_tokens).count();
++            let structural = structural_match(&learning, &query.context);
++            if overlap == 0 && !structural {
++                result.decisions.push(decision(
++                    RetrievalDecisionKind::Rejected,
++                    None,
++                    "no deterministic relevance signal matched".to_owned(),
++                ));
++                continue;
++            }
++
++            if unresolved_equal_precedence_conflict(&resolved) {
++                result.decisions.push(decision(
++                    RetrievalDecisionKind::Conflict,
++                    None,
++                    "equally specific active learnings conflict; explicit resolution is required"
++                        .to_owned(),
++                ));
++                continue;
++            }
++            if is_high_impact(&learning)
++                && !query.approved_high_impact_ids.contains(&learning.id)
++            {
++                result.decisions.push(decision(
++                    RetrievalDecisionKind::RequiresApproval,
++                    None,
++                    "high-impact learned behavior requires approval for the current task"
++                        .to_owned(),
++                ));
++                continue;
++            }
++
++            let score = rank_score(&learning, overlap, structural, query.now_unix_ms);
++            let explanation = explain(&learning, overlap, structural);
++            ranked.push(RankedCandidate {
++                learning,
++                phase,
++                score,
++                explanation,
++            });
++        }
++
++        ranked.sort_by(|left, right| {
++            right
++                .score
++                .cmp(&left.score)
++                .then_with(|| right.learning.scope.precedence().cmp(&left.learning.scope.precedence()))
++                .then_with(|| right.learning.version.cmp(&left.learning.version))
++                .then_with(|| left.learning.id.cmp(&right.learning.id))
++        });
++        for candidate in ranked.into_iter().take(query.max_results) {
++            result.decisions.push(RetrievalDecision {
++                learning_id: candidate.learning.id.clone(),
++                conflict_key: candidate.learning.conflict_key.clone(),
++                kind: RetrievalDecisionKind::Selected,
++                score: Some(candidate.score),
++                reason: candidate.explanation.clone(),
++            });
++            result.selected.push(SelectedLearning {
++                learning: candidate.learning,
++                phase: candidate.phase,
++                score: candidate.score,
++                explanation: candidate.explanation,
++            });
++        }
++        Ok(result)
++    }
++}
++
++fn record_shadowed(resolved: &ResolvedLearning, result: &mut RetrievalResult) {
++    for shadowed in &resolved.shadowed {
++        result.decisions.push(RetrievalDecision {
++            learning_id: shadowed.id.clone(),
++            conflict_key: shadowed.conflict_key.clone(),
++            kind: RetrievalDecisionKind::Shadowed,
++            score: None,
++            reason: format!(
++                "shadowed by {} at the more specific {} scope",
++                resolved.winner.id,
++                scope_name(resolved.winner.scope)
++            ),
++        });
++    }
++}
++
++fn unresolved_equal_precedence_conflict(resolved: &ResolvedLearning) -> bool {
++    resolved
++        .shadowed
++        .iter()
++        .any(|item| item.scope == resolved.winner.scope && item.version == resolved.winner.version)
++}
++
++fn is_stale(learning: &ScopedLearning, now_unix_ms: i64) -> bool {
++    now_unix_ms.saturating_sub(learning.updated_at_unix_ms) > STALE_AFTER_MS
++}
++
++fn explicit_negative_match(
++    learning: &ScopedLearning,
++    objective: &str,
++    context_tags: &BTreeSet<String>,
++) -> bool {
++    learning
++        .applicability
++        .excluded_contexts
++        .iter()
++        .any(|excluded| {
++            let excluded = normalize(excluded);
++            objective.contains(&excluded) || context_tags.contains(&excluded)
++        })
++        || learning
++            .retrieval
++            .negative_triggers
++            .iter()
++            .any(|trigger| objective.contains(&normalize(trigger)))
++}
++
++fn structural_match(learning: &ScopedLearning, context: &ScopeContext) -> bool {
++    let task_match = learning.applicability.task_kinds.is_empty()
++        || context
++            .task_kind
++            .as_ref()
++            .is_some_and(|kind| learning.applicability.task_kinds.contains(kind));
++    let artifact_match = learning.applicability.artifact_kinds.is_empty()
++        || context
++            .artifact_kind
++            .as_ref()
++            .is_some_and(|kind| learning.applicability.artifact_kinds.contains(kind));
++    let tags_match = learning.applicability.context_tags.is_empty()
++        || !learning
++            .applicability
++            .context_tags
++            .is_disjoint(&context.context_tags);
++    task_match && artifact_match && tags_match
++}
++
++fn is_high_impact(learning: &ScopedLearning) -> bool {
++    learning.retrieval.high_impact
++        || learning.conflict_key.starts_with("policy.")
++        || learning.conflict_key.starts_with("execution.")
++        || learning.conflict_key.starts_with("deployment.")
++}
++
++fn infer_phase(learning: &ScopedLearning) -> ApplicationPhase {
++    learning
++        .retrieval
++        .phases
++        .iter()
++        .next()
++        .copied()
++        .unwrap_or_else(|| {
++            let key = learning.conflict_key.as_str();
++            if key.starts_with("planning.") {
++                ApplicationPhase::Planning
++            } else if key.starts_with("tool.") {
++                ApplicationPhase::ToolSelection
++            } else if key.starts_with("verification.") || key.starts_with("testing.") {
++                ApplicationPhase::Verification
++            } else if key.starts_with("completion.") {
++                ApplicationPhase::Completion
++            } else if key.starts_with("response.") || key.starts_with("style.") {
++                ApplicationPhase::ResponseStyle
++            } else {
++                ApplicationPhase::Execution
++            }
++        })
++}
++
++fn rank_score(
++    learning: &ScopedLearning,
++    overlap: usize,
++    structural: bool,
++    now_unix_ms: i64,
++) -> i64 {
++    let scope = i64::from(learning.scope.precedence()) * 10_000;
++    let keyword = i64::try_from(overlap).unwrap_or(i64::MAX / 1_000) * 1_000;
++    let structural = if structural { 750 } else { 0 };
++    let confidence = i64::from(learning.retrieval.confidence_milli.min(1_000));
++    let validation = i64::from(learning.retrieval.validation_quality_milli.min(1_000));
++    let recency = (STALE_AFTER_MS
++        .saturating_sub(now_unix_ms.saturating_sub(learning.updated_at_unix_ms))
++        / (24 * 60 * 60 * 1_000))
++        .max(0);
++    scope + keyword + structural + confidence + validation + recency
++}
++
++fn explain(learning: &ScopedLearning, overlap: usize, structural: bool) -> String {
++    let mut reasons = vec![format!(
++        "{} scope matched with precedence {}",
++        scope_name(learning.scope),
++        learning.scope.precedence()
++    )];
++    if overlap > 0 {
++        reasons.push(format!("{overlap} objective keyword(s) matched"));
++    }
++    if structural {
++        reasons.push("task, artifact, or context constraints matched".to_owned());
++    }
++    reasons.push(format!(
++        "confidence {}%, validation {}%",
++        learning.retrieval.confidence_milli / 10,
++        learning.retrieval.validation_quality_milli / 10
++    ));
++    reasons.join("; ")
++}
++
++fn normalize(value: &str) -> String {
++    value
++        .to_ascii_lowercase()
++        .split_whitespace()
++        .collect::<Vec<_>>()
++        .join(" ")
++}
++
++fn keyword_tokens(value: &str) -> BTreeSet<String> {
++    const STOP_WORDS: &[&str] = &[
++        "the", "and", "for", "with", "that", "this", "from", "into", "when", "where", "use",
++        "using", "should", "must", "only", "current", "task", "behavior", "learned",
++    ];
++    normalize(value)
++        .split(|character: char| !character.is_alphanumeric() && character != '-' && character != '_')
++        .filter(|token| token.len() > 2 && !STOP_WORDS.contains(token))
++        .map(ToOwned::to_owned)
++        .collect()
++}
++
++fn phase_name(phase: ApplicationPhase) -> &'static str {
++    match phase {
++        ApplicationPhase::Planning => "planning",
++        ApplicationPhase::ToolSelection => "tool selection",
++        ApplicationPhase::Execution => "execution",
++        ApplicationPhase::Verification => "verification",
++        ApplicationPhase::Completion => "completion",
++        ApplicationPhase::ResponseStyle => "response style",
++    }
++}
++
++fn scope_name(scope: LearningScope) -> &'static str {
++    match scope {
++        LearningScope::Global => "global",
++        LearningScope::User => "user",
++        LearningScope::Organization => "organization",
++        LearningScope::Workspace => "workspace",
++        LearningScope::Repository => "repository",
++        LearningScope::Session => "session",
++        LearningScope::Task => "task",
++    }
++}
++
++#[cfg(test)]
++mod tests {
++    use super::*;
++    use std::time::{Duration, Instant};
++    use tempfile::TempDir;
++
++    use crate::scoped_memory::{
++        Applicability, LearningProvenance, LearningState, RepositoryIdentity, RetrievalMetadata,
++    };
++
++    fn repository() -> RepositoryIdentity {
++        RepositoryIdentity::new("https://example.com/owner/repo.git", "/tmp/repo.git").unwrap()
++    }
++
++    fn context(repository: Option<RepositoryIdentity>) -> ScopeContext {
++        ScopeContext {
++            owner_id: "user-1".to_owned(),
++            repository,
++            workspace_id: None,
++            organization_id: None,
++            session_id: Some("session-1".to_owned()),
++            task_id: Some("task-1".to_owned()),
++            task_kind: Some("coding".to_owned()),
++            artifact_kind: Some("repository".to_owned()),
++            context_tags: ["rust".to_owned()].into_iter().collect(),
++        }
++    }
++
++    fn learning(
++        id: &str,
++        conflict_key: &str,
++        scope: LearningScope,
++        rule: &str,
++        updated_at_unix_ms: i64,
++    ) -> ScopedLearning {
++        ScopedLearning {
++            id: id.to_owned(),
++            conflict_key: conflict_key.to_owned(),
++            owner_id: "user-1".to_owned(),
++            scope,
++            version: 1,
++            state: LearningState::Active,
++            generalized_rule: rule.to_owned(),
++            provenance: LearningProvenance {
++                source_signal_ids: vec!["signal-1".to_owned()],
++                evidence_digests: vec!["0".repeat(64)],
++                generalized_from_private_content: false,
++            },
++            applicability: Applicability::default(),
++            retrieval: RetrievalMetadata {
++                confidence_milli: 900,
++                validation_quality_milli: 900,
++                ..RetrievalMetadata::default()
++            },
++            created_at_unix_ms: updated_at_unix_ms,
++            updated_at_unix_ms,
++        }
++    }
++
++    fn query(context: ScopeContext, objective: &str, now_unix_ms: i64) -> RetrievalQuery {
++        RetrievalQuery {
++            context,
++            objective: objective.to_owned(),
++            phase: None,
++            now_unix_ms,
++            max_results: 8,
++            suppressed_learning_ids: BTreeSet::new(),
++            approved_high_impact_ids: BTreeSet::new(),
++        }
++    }
++
++    #[test]
++    fn repository_specific_behavior_overrides_user_behavior() {
++        let temp = TempDir::new().unwrap();
++        let store = ScopedMemoryStore::new(
++            temp.path().join("user.json"),
++            Some(temp.path().join("repo.json")),
++        );
++        store
++            .upsert(
++                learning(
++                    "user-ci",
++                    "validation.default",
++                    LearningScope::User,
++                    "Use GitHub CI for validation",
++                    10,
++                ),
++                0,
++            )
++            .unwrap();
++        let mut specific = learning(
++            "repo-ci",
++            "validation.default",
++            LearningScope::Repository,
++            "Use the repository release-gates workflow in GitHub CI",
++            10,
++        );
++        specific.applicability.repository = Some(repository());
++        specific.applicability.task_kinds.insert("coding".to_owned());
++        store.upsert(specific, 0).unwrap();
++
++        let result = store
++            .retrieve(&query(
++                context(Some(repository())),
++                "Validate this change with GitHub CI",
++                20,
++            ))
++            .unwrap();
++        assert_eq!(result.selected.len(), 1);
++        assert_eq!(result.selected[0].learning.id, "repo-ci");
++        assert!(result.decisions.iter().any(|decision| {
++            decision.learning_id == "user-ci" && decision.kind == RetrievalDecisionKind::Shadowed
++        }));
++    }
++
++    #[test]
++    fn nearby_explicitly_excluded_task_does_not_trigger() {
++        let temp = TempDir::new().unwrap();
++        let store = ScopedMemoryStore::new(temp.path().join("user.json"), None);
++        let mut item = learning(
++            "ci",
++            "validation.ci",
++            LearningScope::User,
++            "Use GitHub CI for repository validation",
++            10,
++        );
++        item.applicability
++            .excluded_contexts
++            .insert("no-ci".to_owned());
++        store.upsert(item, 0).unwrap();
++        let mut ctx = context(None);
++        ctx.context_tags.insert("no-ci".to_owned());
++
++        let result = store
++            .retrieve(&query(ctx, "Review the code without CI", 20))
++            .unwrap();
++        assert!(result.selected.is_empty());
++    }
++
++    #[test]
++    fn stale_and_high_impact_items_are_blocked() {
++        let temp = TempDir::new().unwrap();
++        let store = ScopedMemoryStore::new(temp.path().join("user.json"), None);
++        store
++            .upsert(
++                learning(
++                    "old",
++                    "formatting.old",
++                    LearningScope::User,
++                    "Use the old report format",
++                    1,
++                ),
++                0,
++            )
++            .unwrap();
++        store
++            .upsert(
++                learning(
++                    "deploy",
++                    "production.deploy",
++                    LearningScope::User,
++                    "Deploy to production after tests",
++                    STALE_AFTER_MS + 10,
++                ),
++                1,
++            )
++            .unwrap();
++        let now = STALE_AFTER_MS * 2 + 2;
++        let result = store
++            .retrieve(&query(
++                context(None),
++                "Deploy this service to production using the old format",
++                now,
++            ))
++            .unwrap();
++        assert!(result.selected.is_empty());
++        assert!(result.decisions.iter().any(|decision| {
++            decision.learning_id == "old" && decision.kind == RetrievalDecisionKind::Rejected
++        }));
++        assert!(result.decisions.iter().any(|decision| {
++            decision.learning_id == "deploy"
++                && decision.kind == RetrievalDecisionKind::RequiresApproval
++        }));
++    }
++
++    #[test]
++    fn user_can_suppress_one_learning_for_the_current_task() {
++        let temp = TempDir::new().unwrap();
++        let store = ScopedMemoryStore::new(temp.path().join("user.json"), None);
++        store
++            .upsert(
++                learning(
++                    "concise",
++                    "response.style",
++                    LearningScope::User,
++                    "Keep the final response concise",
++                    10,
++                ),
++                0,
++            )
++            .unwrap();
++        let mut request = query(context(None), "Write a concise response", 20);
++        request
++            .suppressed_learning_ids
++            .insert("concise".to_owned());
++        let result = store.retrieve(&request).unwrap();
++        assert!(result.selected.is_empty());
++        assert!(result.decisions.iter().any(|decision| {
++            decision.learning_id == "concise"
++                && decision.kind == RetrievalDecisionKind::Suppressed
++        }));
++    }
++
++    #[test]
++    fn labelled_fixture_measures_precision_recall_and_false_positive_rate() {
++        let temp = TempDir::new().unwrap();
++        let store = ScopedMemoryStore::new(temp.path().join("user.json"), None);
++        let fixtures = [
++            ("ci", "validation.ci", "Use GitHub CI for validation"),
++            ("slides", "artifact.slides", "Use visual hierarchy in slide decks"),
++            ("memo", "artifact.memo", "Use an answer-first structure in memos"),
++        ];
++        for (index, (id, key, rule)) in fixtures.iter().enumerate() {
++            store
++                .upsert(
++                    learning(id, key, LearningScope::User, rule, 10),
++                    u64::try_from(index).unwrap(),
++                )
++                .unwrap();
++        }
++        let cases = [
++            ("Validate this repository with GitHub CI", Some("ci")),
++            ("Create a slide deck with strong visual hierarchy", Some("slides")),
++            ("Draft an answer-first legal memo", Some("memo")),
++            ("Explain a Rust lifetime", None),
++        ];
++        let mut true_positive = 0_u32;
++        let mut false_positive = 0_u32;
++        let mut false_negative = 0_u32;
++        for (objective, expected) in cases {
++            let result = store
++                .retrieve(&query(context(None), objective, 20))
++                .unwrap();
++            let actual = result.selected.first().map(|item| item.learning.id.as_str());
++            match (expected, actual) {
++                (Some(expected), Some(actual)) if expected == actual => true_positive += 1,
++                (Some(_), None) => false_negative += 1,
++                (None, Some(_)) | (Some(_), Some(_)) => false_positive += 1,
++                (None, None) => {}
++            }
++        }
++        let precision = f64::from(true_positive)
++            / f64::from((true_positive + false_positive).max(1));
++        let recall = f64::from(true_positive)
++            / f64::from((true_positive + false_negative).max(1));
++        let false_positive_rate = f64::from(false_positive) / 4.0;
++        assert!(precision >= 0.99, "precision={precision}");
++        assert!(recall >= 0.99, "recall={recall}");
++        assert!(false_positive_rate <= 0.01, "fpr={false_positive_rate}");
++    }
++
++    #[test]
++    fn retrieval_is_bounded_for_a_large_corpus() {
++        let temp = TempDir::new().unwrap();
++        let store = ScopedMemoryStore::new(temp.path().join("user.json"), None);
++        for index in 0..500_u64 {
++            store
++                .upsert(
++                    learning(
++                        &format!("item-{index}"),
++                        &format!("topic.{index}"),
++                        LearningScope::User,
++                        &format!("Apply specialized behavior number {index}"),
++                        10,
++                    ),
++                    index,
++                )
++                .unwrap();
++        }
++        let started = Instant::now();
++        let result = store
++            .retrieve(&RetrievalQuery {
++                max_results: 5,
++                ..query(context(None), "Apply specialized behavior number 499", 20)
++            })
++            .unwrap();
++        assert!(result.selected.len() <= 5);
++        assert!(started.elapsed() < Duration::from_secs(2));
++    }
++}
