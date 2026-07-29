@@ -124,10 +124,7 @@ mod tests {
 
     #[test]
     fn shipped_shell_path_emits_ranking_and_escalation_evidence() {
-        let recommendation = tool_orchestration::recommend(
-            "shell_run",
-            "cargo test --workspace",
-        );
+        let recommendation = tool_orchestration::recommend("shell_run", "cargo test --workspace");
         let cache = tool_orchestration::CacheEvidence {
             status: "bypass".into(),
             key: String::new(),
