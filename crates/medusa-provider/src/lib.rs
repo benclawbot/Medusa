@@ -862,6 +862,7 @@ impl OpenAiProvider {
                     },
                 }
             }
+            let has_content = !text.is_empty() || !content_parts.is_empty();
             let content = if content_parts
                 .iter()
                 .any(|part| part["type"] == Value::String("image_url".to_owned()))
@@ -870,7 +871,7 @@ impl OpenAiProvider {
             } else {
                 Value::String(text)
             };
-            if !text.is_empty() || !content_parts.is_empty() || !tool_calls.is_empty() {
+            if has_content || !tool_calls.is_empty() {
                 let mut wire = json!({"role": role, "content": content});
                 if !tool_calls.is_empty() {
                     wire["tool_calls"] = Value::Array(tool_calls);
