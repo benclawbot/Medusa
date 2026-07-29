@@ -280,7 +280,10 @@ pub(crate) fn cache_lookup(
             CacheEvidence {
                 status: "miss".into(),
                 key,
-                reason: format!("{}; {}", "repository fingerprint changed", invalidation.reason),
+                reason: format!(
+                    "{}; {}",
+                    "repository fingerprint changed", invalidation.reason
+                ),
             },
         ));
     }
