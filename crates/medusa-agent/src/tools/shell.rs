@@ -3,30 +3,53 @@ use std::path::Path;
 use medusa_core::{ErrorCategory, ErrorCode, MedusaError, MedusaResult};
 
 use crate::{
+    output_envelope::{OutputMode, adapt_command},
     policy::{sandboxed_command, validate_shell_command},
-    tools::format_command_output,
 };
 
-pub(crate) fn run(repo: &Path, program: &str, args: &[String]) -> MedusaResult<String> {
+pub(crate) fn run(
+    repo: &Path,
+    program: &str,
+    args: &[String],
+    mode: OutputMode,
+) -> MedusaResult<String> {
     validate_shell_command(program, args)?;
-    run_validated(repo, program, args)
+    run_validated(repo, program, args, mode)
 }
 
-pub(crate) fn run_approved(repo: &Path, program: &str, args: &[String]) -> MedusaResult<String> {
+pub(crate) fn run_approved(
+    repo: &Path,
+    program: &str,
+    args: &[String],
+    mode: OutputMode,
+) -> MedusaResult<String> {
     validate_shell_command(program, args)?;
-    run_validated(repo, program, args)
+    run_validated(repo, program, args, mode)
 }
 
-fn run_validated(repo: &Path, program: &str, args: &[String]) -> MedusaResult<String> {
+fn run_validated(
+    repo: &Path,
+    program: &str,
+    args: &[String],
+    mode: OutputMode,
+) -> MedusaResult<String> {
     let output = sandboxed_command(repo, program, args)?;
-    let evidence = format_command_output(program, args, &output.stdout, &output.stderr);
+    let evidence = adapt_command(
+        program,
+        args,
+        &output.stdout,
+        &output.stderr,
+        output.status.success(),
+        mode,
+    )
+    .to_string();
     if output.status.success() {
-        Ok(evidence.join("\n"))
+        Ok(evidence)
     } else {
         Err(MedusaError::new(
             ErrorCode::ToolExecutionFailed,
             ErrorCategory::Execution,
-            evidence.join("\n"),
+            evidence,
         ))
     }
 }
