@@ -1,8 +1,9 @@
 name: Apply OpenAI sequencing fix
 
 on:
-  push:
-    branches: [fix/openai-tool-result-message-sequencing]
+  pull_request:
+    branches: [main]
+    types: [opened, synchronize, reopened]
 
 permissions:
   contents: write
