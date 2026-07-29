@@ -26,9 +26,13 @@ pub(crate) fn run_approved(repo: &Path, program: &str, args: &[String]) -> Medus
 fn run_validated(repo: &Path, program: &str, args: &[String]) -> MedusaResult<String> {
     let input_summary = format!("{} {}", program, args.join(" "));
     let recommendation = tool_orchestration::recommend("shell_run", &input_summary);
-    let (_, cache_evidence) = tool_orchestration::cache_lookup(repo, "shell_run", &input_summary)?;
-    let orchestration_evidence =
-        tool_orchestration::format_evidence(&recommendation, &cache_evidence);
+    let (cached, mut cache_evidence) =
+        tool_orchestration::cache_lookup(repo, "shell_run", &input_summary)?;
+    if let Some(cached) = cached {
+        let orchestration_evidence =
+            tool_orchestration::format_evidence(&recommendation, &cache_evidence);
+        return Ok(format!("{cached}\n{orchestration_evidence}"));
+    }
 
     let started = Instant::now();
     let output = sandboxed_command(repo, program, args)?;
@@ -57,6 +61,12 @@ fn run_validated(repo: &Path, program: &str, args: &[String]) -> MedusaResult<St
     let trace_path = tool_telemetry::append_trace(repo, &trace)?;
 
     let mut evidence = adapted.to_string();
+    if output.status.success() {
+        cache_evidence =
+            tool_orchestration::cache_store(repo, "shell_run", &input_summary, &evidence)?;
+    }
+    let orchestration_evidence =
+        tool_orchestration::format_evidence(&recommendation, &cache_evidence);
     evidence.push('\n');
     evidence.push_str(&orchestration_evidence);
     evidence.push_str(&format!(
@@ -128,7 +138,7 @@ mod tests {
         let cache = tool_orchestration::CacheEvidence {
             status: "bypass".into(),
             key: String::new(),
-            reason: "tool is not cacheable".into(),
+            reason: "tool invocation is not safely cacheable".into(),
         };
         let evidence = tool_orchestration::format_evidence(&recommendation, &cache);
         assert!(evidence.contains("selected=shell_run"));
