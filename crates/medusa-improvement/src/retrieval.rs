@@ -410,31 +410,16 @@ fn explicitly_excluded(learning: &ScopedLearning, context: &TaskContext) -> bool
         "{} {} {}",
         learning.id, learning.conflict_key, learning.generalized_rule
     ));
-    context.explicit_exclusions.iter().any(|excluded| {
-        learning_terms
-            .iter()
-            .any(|term| bounded_word_variant(excluded, term))
-    }) || !learning
-        .applicability
-        .excluded_contexts
-        .is_disjoint(&context.scope.context_tags)
-}
-
-fn bounded_word_variant(left: &str, right: &str) -> bool {
-    if left == right {
-        return true;
-    }
-    let (shorter, longer) = if left.len() <= right.len() {
-        (left, right)
-    } else {
-        (right, left)
-    };
-    if shorter.len() < 4 {
-        return false;
-    }
-    longer
-        .strip_prefix(shorter)
-        .is_some_and(|suffix| matches!(suffix, "s" | "es" | "ed" | "ing"))
+    let exclusion_terms = context
+        .explicit_exclusions
+        .iter()
+        .flat_map(|excluded| expanded_terms(excluded))
+        .collect::<BTreeSet<_>>();
+    !exclusion_terms.is_disjoint(&learning_terms)
+        || !learning
+            .applicability
+            .excluded_contexts
+            .is_disjoint(&context.scope.context_tags)
 }
 
 fn equal_scope_conflict(resolved: &ResolvedLearning) -> bool {
