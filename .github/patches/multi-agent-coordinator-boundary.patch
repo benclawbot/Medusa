@@ -1,8 +1,16 @@
 diff --git a/crates/medusa-agent/src/engine.rs b/crates/medusa-agent/src/engine.rs
-index 4834f54..ffae79a 100644
+index 4834f54..b13e940 100644
 --- a/crates/medusa-agent/src/engine.rs
 +++ b/crates/medusa-agent/src/engine.rs
-@@ -125,6 +125,8 @@ pub struct AgentEngine<P> {
+@@ -50,6 +50,7 @@ use crate::{
+         AgentPlanStep, AgentQuestion, AgentQuestionItem, AgentQuestionOption, AgentSession,
+         PendingToolApproval, bootstrap, load, persist,
+     },
++    team::{AgentExecutionPolicy, TeamMemberContext},
+     tools::{execute_approved_tool, execute_tool, input_string},
+     verification::targeted_verification_for_paths,
+ };
+@@ -125,6 +126,8 @@ pub struct AgentEngine<P> {
      desktop_commander_settings: DesktopCommanderSettings,
      desktop_commander: Mutex<Option<DesktopCommanderClient>>,
      cancellation: Arc<AtomicBool>,
@@ -11,7 +19,7 @@ index 4834f54..ffae79a 100644
  }
  
  fn audited_tool_name(name: &str, input: &serde_json::Value) -> String {
-@@ -145,6 +147,8 @@ impl<P: ModelProvider> AgentEngine<P> {
+@@ -145,6 +148,8 @@ impl<P: ModelProvider> AgentEngine<P> {
              desktop_commander_settings: DesktopCommanderSettings::from_env(),
              desktop_commander: Mutex::new(None),
              cancellation: Arc::new(AtomicBool::new(false)),
@@ -20,7 +28,7 @@ index 4834f54..ffae79a 100644
          }
      }
  
-@@ -160,9 +164,23 @@ impl<P: ModelProvider> AgentEngine<P> {
+@@ -160,9 +165,23 @@ impl<P: ModelProvider> AgentEngine<P> {
              desktop_commander_settings: DesktopCommanderSettings::from_env(),
              desktop_commander: Mutex::new(None),
              cancellation,
@@ -44,7 +52,7 @@ index 4834f54..ffae79a 100644
      fn execute_desktop_commander(
          &self,
          repo: &Path,
-@@ -513,7 +531,15 @@ impl<P: ModelProvider> AgentEngine<P> {
+@@ -513,7 +532,15 @@ impl<P: ModelProvider> AgentEngine<P> {
              ),
              self.config.agent.mode,
          );
@@ -61,7 +69,7 @@ index 4834f54..ffae79a 100644
          let mut budget = context_budget::PromptBudget::for_request(
              &system,
              &session.messages,
-@@ -657,7 +683,9 @@ impl<P: ModelProvider> AgentEngine<P> {
+@@ -657,7 +684,9 @@ impl<P: ModelProvider> AgentEngine<P> {
                  .iter()
                  .take(parallel_tool_limit(self.config.agent.parallel_workers))
                  .take_while(|(_, name, _)| {
@@ -72,7 +80,7 @@ index 4834f54..ffae79a 100644
                  })
                  .count();
              let batch_len = parallel_count.max(1);
-@@ -687,7 +715,13 @@ impl<P: ModelProvider> AgentEngine<P> {
+@@ -687,7 +716,13 @@ impl<P: ModelProvider> AgentEngine<P> {
                          "tool batch was unexpectedly empty",
                      )
                  })?;
@@ -87,7 +95,7 @@ index 4834f54..ffae79a 100644
                      let plan = plan_from_input(&input);
                      if plan.is_empty() {
                          Ok("Visible task plan update ignored because it was empty.".to_owned())
-@@ -715,6 +749,21 @@ impl<P: ModelProvider> AgentEngine<P> {
+@@ -715,6 +750,21 @@ impl<P: ModelProvider> AgentEngine<P> {
                          }
                          Err(error) => Err(error),
                      }
@@ -355,3 +363,16 @@ index 3e4d250..efa7d88 100644
      pub fn is_complete(&self) -> bool {
          self.states
              .values()
+diff --git a/crates/medusa-agent/src/team.rs b/crates/medusa-agent/src/team.rs
+index 5b57cce..abcdef0 100644
+--- a/crates/medusa-agent/src/team.rs
++++ b/crates/medusa-agent/src/team.rs
+@@ -189,7 +189,7 @@ impl TeamRuntime {
+                 next_sequence: 1,
+             })),
+         };
+-        validate_state(&runtime.lock()?)?;
++        validate_state(&*runtime.lock()?)?;
+         runtime.persist()?;
+         Ok(runtime)
+     }
