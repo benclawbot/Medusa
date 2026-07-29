@@ -7,6 +7,12 @@ on:
     paths:
       - validation/ship-start-anywhere.patch
       - .github/workflows/apply-start-anywhere-source.yml
+  pull_request:
+    branches:
+      - main
+    paths:
+      - validation/ship-start-anywhere.patch
+      - .github/workflows/apply-start-anywhere-source.yml
 
 permissions:
   contents: write
