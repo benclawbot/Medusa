@@ -1,5 +1,7 @@
 fn main() -> Result<(), Box<dyn Error>> {
     println!("cargo:rerun-if-changed=src/runtime_impl.rs");
+    println!("cargo:rerun-if-changed=src/generated_lib.rs");
+    println!("cargo:rerun-if-changed=src/lib.rs");
     println!("cargo:rerun-if-changed=src/production_orchestrator.rs");
     println!("cargo:rerun-if-changed=src/tool_policy.inc");
     println!("cargo:rerun-if-changed=src/recovery_tui.inc");
@@ -12,6 +14,11 @@ fn main() -> Result<(), Box<dyn Error>> {
     println!("cargo:rerun-if-changed=src/openai_realtime.rs");
     println!("cargo:rerun-if-changed=src/voice.rs");
     println!("cargo:rerun-if-changed=src/voice_agent_bridge.rs");
+
+    let compatibility_root = fs::read_to_string("src/generated_lib.rs")?;
+    if !compatibility_root.contains("include!(\"lib.rs\");") {
+        return Err("generated_lib.rs must retain the lib.rs compatibility root".into());
+    }
 
     let manifest = env::var("CARGO_MANIFEST_DIR")?;
     let out_dir = PathBuf::from(env::var("OUT_DIR")?);

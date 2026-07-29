@@ -39,7 +39,7 @@ jobs:
     name: Workflows are read-only or explicitly justified
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
       - name: Test workflow hygiene guard
         run: bash scripts/test-workflow-hygiene.sh
       - name: Audit repository workflows
@@ -49,7 +49,7 @@ jobs:
     name: Public API and benchmark baseline present
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
       - name: Validate baseline documents
         shell: bash
         run: |
@@ -67,8 +67,8 @@ jobs:
     name: Capability claims match code, tests, gates, and docs
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
         with:
           python-version: '3.12'
       - name: Run adversarial synchronization fixtures

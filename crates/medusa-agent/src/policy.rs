@@ -70,31 +70,11 @@ pub(crate) fn safe_path(repo: &Path, relative: &str) -> MedusaResult<PathBuf> {
 }
 
 pub fn validate_shell_command(program: &str, args: &[String]) -> MedusaResult<()> {
-    validate_shell_command_hard_denials(program, args)?;
-    #[cfg(not(target_os = "linux"))]
-    validate_portable_shell_command(&portable_program_name(program), args)?;
-    Ok(())
-}
-
-/// Normalises a program name for the portable allowlist.
-///
-/// Windows resolves commands to `cargo.exe` or `git.exe`, so the executable
-/// extension is removed before matching the allowlist. The hard-denial list
-/// keeps comparing the full file name, which is why entries such as `cmd.exe`
-/// are spelled out there.
-#[cfg(not(target_os = "linux"))]
-fn portable_program_name(program: &str) -> String {
-    let name = Path::new(program)
-        .file_name()
-        .and_then(|name| name.to_str())
-        .unwrap_or(program)
-        .to_ascii_lowercase();
-    for extension in [".exe", ".com", ".cmd", ".bat"] {
-        if let Some(stem) = name.strip_suffix(extension) {
-            return stem.to_owned();
-        }
-    }
-    name
+    // Admission is platform-neutral. The hard-denial policy blocks commands that
+    // can escape containment or mutate host security state; every remaining
+    // executable is constrained by bubblewrap, Seatbelt, or AppContainer at
+    // execution time. This keeps language/toolchain support consistent across OSes.
+    validate_shell_command_hard_denials(program, args)
 }
 
 pub(crate) fn validate_shell_command_hard_denials(
@@ -149,7 +129,9 @@ pub(crate) fn validate_shell_command_hard_denials(
         "cmd",
         "cmd.exe",
         "powershell",
+        "powershell.exe",
         "pwsh",
+        "pwsh.exe",
     ];
     if DENIED_PROGRAMS.contains(&basename.as_str()) {
         return Err(policy_denied(format!("hard-denied command: {program}")));
@@ -188,7 +170,13 @@ pub(crate) fn validate_shell_command_hard_denials(
         )));
     }
 
-    if basename == "git" {
+    let normalized_program = basename
+        .strip_suffix(".exe")
+        .or_else(|| basename.strip_suffix(".com"))
+        .or_else(|| basename.strip_suffix(".cmd"))
+        .or_else(|| basename.strip_suffix(".bat"))
+        .unwrap_or(&basename);
+    if normalized_program == "git" {
         let first = args.first().map(String::as_str).unwrap_or_default();
         if matches!(first, "push" | "clean" | "reset" | "reflog" | "gc")
             || (first == "config"
@@ -206,39 +194,6 @@ pub(crate) fn validate_shell_command_hard_denials(
         }
     }
     Ok(())
-}
-
-#[cfg(not(target_os = "linux"))]
-fn validate_portable_shell_command(program: &str, args: &[String]) -> MedusaResult<()> {
-    let first = args.first().map(String::as_str).unwrap_or_default();
-    let allowed = match program {
-        "cargo" => matches!(
-            first,
-            "build"
-                | "check"
-                | "clippy"
-                | "fmt"
-                | "metadata"
-                | "test"
-                | "tree"
-                | "--version"
-                | "version"
-        ),
-        "git" => matches!(
-            first,
-            "branch" | "diff" | "log" | "ls-files" | "rev-parse" | "show" | "status"
-        ),
-        "fd" | "find" | "ls" | "rg" | "tree" => true,
-        _ => false,
-    };
-    if allowed {
-        Ok(())
-    } else {
-        Err(policy_denied(format!(
-            "portable shell command is not approved: {program} {}",
-            args.join(" ")
-        )))
-    }
 }
 
 pub(crate) fn sandboxed_command(
@@ -375,35 +330,48 @@ fn sandbox_unavailable(message: impl Into<String>) -> MedusaError {
     error
 }
 
-#[cfg(all(test, not(target_os = "linux")))]
-mod portable_tests {
+fn policy_denied(message: impl Into<String>) -> MedusaError {
+    MedusaError::new(ErrorCode::PolicyDenied, ErrorCategory::Policy, message)
+}
+
+#[cfg(test)]
+mod command_admission_tests {
     use super::*;
 
     #[test]
-    fn windows_executable_extensions_still_match_the_allowlist() {
-        // Windows resolves `cargo` to `cargo.exe`; both must be accepted.
-        validate_shell_command("cargo", &["test".to_owned()]).expect("cargo test");
-        validate_shell_command("cargo.exe", &["test".to_owned()]).expect("cargo.exe test");
-        validate_shell_command("git.exe", &["status".to_owned()]).expect("git.exe status");
-        validate_shell_command(r"C:\Users\dev\.cargo\bin\cargo.exe", &["build".to_owned()])
-            .expect("absolute cargo.exe");
+    fn contained_language_toolchains_are_admitted_on_every_platform() {
+        for program in [
+            "python",
+            "python.exe",
+            "node",
+            "node.exe",
+            "npm",
+            "npm.cmd",
+            "pytest",
+            "pytest.exe",
+            "dotnet",
+            "dotnet.exe",
+        ] {
+            validate_shell_command(program, &["--version".to_owned()]).unwrap_or_else(|error| {
+                panic!("{program} should be admitted to the OS sandbox: {error}")
+            });
+        }
     }
 
     #[test]
-    fn extension_stripping_does_not_widen_the_allowlist() {
-        assert!(validate_shell_command("python.exe", &["-c".to_owned()]).is_err());
-        assert!(validate_shell_command("cargo.exe", &["publish".to_owned()]).is_err());
+    fn host_shells_and_exfiltration_tools_remain_denied() {
+        for program in ["bash", "sh", "cmd.exe", "powershell.exe", "curl", "ssh"] {
+            assert!(validate_shell_command(program, &["--version".to_owned()]).is_err());
+        }
     }
 
     #[test]
-    fn hard_denials_still_match_windows_shell_executables() {
-        assert!(validate_shell_command("cmd.exe", &["/c".to_owned()]).is_err());
-        assert!(validate_shell_command("powershell.exe", &["-c".to_owned()]).is_err());
+    fn dangerous_git_mutations_remain_denied() {
+        assert!(validate_shell_command("git", &["push".to_owned()]).is_err());
+        assert!(
+            validate_shell_command("git.exe", &["reset".to_owned(), "--hard".to_owned()]).is_err()
+        );
     }
-}
-
-fn policy_denied(message: impl Into<String>) -> MedusaError {
-    MedusaError::new(ErrorCode::PolicyDenied, ErrorCategory::Policy, message)
 }
 
 #[cfg(all(test, not(any(target_os = "linux", target_os = "macos", windows))))]

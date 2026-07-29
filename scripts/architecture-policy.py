@@ -24,6 +24,16 @@ PATH_MOD_RE = re.compile(
     re.M,
 )
 INCLUDE_RE = re.compile(r"include!\s*\(\s*\"([^\"]+\.rs)\"\s*\)")
+MANIFEST_INCLUDE_RE = re.compile(
+    r'include!\s*\(\s*concat!\s*\(\s*env!\s*\(\s*"CARGO_MANIFEST_DIR"\s*\)\s*,\s*"/([^"]+\.rs)"\s*\)\s*\)',
+    re.S,
+)
+BUILD_SOURCE_RE = re.compile(
+    r'(?:read_to_string|read|File::open)\s*\(\s*"(src/[^"]+\.rs)"\s*\)',
+    re.S,
+)
+RERUN_SOURCE_RE = re.compile(r'cargo:rerun-if-changed=(src/[^"\\]+\.rs)')
+BOUND_MODULE_RE = re.compile(r'\(\s*"[^"]+"\s*,\s*"([^"]+\.rs)"\s*\)')
 
 
 def run(command: list[str], cwd: pathlib.Path) -> str:
@@ -90,7 +100,7 @@ def active_modules(crate_root: pathlib.Path, package: dict[str, Any]) -> set[pat
             child = (path.parent / relative).resolve()
             if child.exists():
                 queue.append(child)
-        base = module_base(path)
+        base = path.parent if path in roots else module_base(path)
         for name in MOD_RE.findall(text):
             candidates = (base / f"{name}.rs", base / name / "mod.rs")
             child = next((candidate for candidate in candidates if candidate.exists()), None)
@@ -103,6 +113,62 @@ def active_modules(crate_root: pathlib.Path, package: dict[str, Any]) -> set[pat
             except ValueError:
                 continue
             if child.exists():
+                queue.append(child)
+        for relative in MANIFEST_INCLUDE_RE.findall(text):
+            child = (crate_root / relative).resolve()
+            if child.exists():
+                queue.append(child)
+
+    # Build-generated crate roots are production code too. Follow the source
+    # files consumed by build.rs/build support so generated modules cannot hide
+    # behind a blanket exemption.
+    manifest = crate_root / "Cargo.toml"
+    build_candidates = [crate_root / "build.rs"]
+    if manifest.exists():
+        manifest_text = manifest.read_text(encoding="utf-8")
+        match = re.search(r'^build\s*=\s*"([^"]+)"', manifest_text, re.M)
+        if match:
+            build_candidates.append(crate_root / match.group(1))
+    build_queue = deque(path.resolve() for path in build_candidates if path.exists())
+    seen_build: set[pathlib.Path] = set()
+    while build_queue:
+        build_path = build_queue.popleft()
+        if build_path in seen_build:
+            continue
+        seen_build.add(build_path)
+        build_text = build_path.read_text(encoding="utf-8")
+        for relative in INCLUDE_RE.findall(build_text):
+            child = (build_path.parent / relative).resolve()
+            if child.exists():
+                build_queue.append(child)
+        for relative in BUILD_SOURCE_RE.findall(build_text):
+            child = (crate_root / relative).resolve()
+            if child.exists():
+                queue.append(child)
+        for relative in RERUN_SOURCE_RE.findall(build_text):
+            child = (crate_root / relative).resolve()
+            if child.exists():
+                queue.append(child)
+        for relative in BOUND_MODULE_RE.findall(build_text):
+            child = (crate_root / "src" / relative).resolve()
+            if child.exists():
+                queue.append(child)
+
+    # Process any modules discovered through build generation.
+    while queue:
+        path = queue.popleft().resolve()
+        if path in active or not path.is_file():
+            continue
+        active.add(path)
+        text = path.read_text(encoding="utf-8")
+        for relative in MANIFEST_INCLUDE_RE.findall(text):
+            child = (crate_root / relative).resolve()
+            if child.exists():
+                queue.append(child)
+        base = path.parent if path in roots else module_base(path)
+        for name in MOD_RE.findall(text):
+            child = next((candidate for candidate in (base / f"{name}.rs", base / name / "mod.rs") if candidate.exists()), None)
+            if child is not None:
                 queue.append(child)
     return active
 
@@ -196,6 +262,10 @@ def self_test() -> int:
     assert "orphan" not in reachable(graph, {"root"}, set(KINDS))
     assert module_base(pathlib.Path("src/server.rs")) == pathlib.Path("src/server")
     assert module_base(pathlib.Path("src/lib.rs")) == pathlib.Path("src")
+    assert MANIFEST_INCLUDE_RE.findall('include!(concat!(env!("CARGO_MANIFEST_DIR"), "/src/engine.rs"))') == ["src/engine.rs"]
+    assert BUILD_SOURCE_RE.findall('fs::read_to_string("src/runtime_impl.rs")?') == ["src/runtime_impl.rs"]
+    assert RERUN_SOURCE_RE.findall('println!("cargo:rerun-if-changed=src/runtime_impl.rs");') == ["src/runtime_impl.rs"]
+    assert BOUND_MODULE_RE.findall('("mod error;", "error.rs")') == ["error.rs"]
     print("architecture policy self-test passed")
     return 0
 
