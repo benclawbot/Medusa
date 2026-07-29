@@ -195,16 +195,43 @@ pub enum Event {
     Connected,
     UserSpeechStarted,
     UserSpeechStopped,
-    UserTranscriptDelta { item_id: String, delta: String },
-    UserTranscriptFinal { item_id: String, transcript: String },
-    AssistantTranscriptDelta { item_id: String, delta: String },
-    AssistantTranscriptFinal { item_id: String, transcript: String },
-    AssistantAudioDelta { item_id: String, audio_base64: String },
-    AssistantAudioDone { item_id: String },
-    ResponseStarted { response_id: String },
-    ResponseDone { response_id: String },
-    RateLimited { retry_after_ms: Option<u64> },
-    Error { code: String, message: String, retryable: bool },
+    UserTranscriptDelta {
+        item_id: String,
+        delta: String,
+    },
+    UserTranscriptFinal {
+        item_id: String,
+        transcript: String,
+    },
+    AssistantTranscriptDelta {
+        item_id: String,
+        delta: String,
+    },
+    AssistantTranscriptFinal {
+        item_id: String,
+        transcript: String,
+    },
+    AssistantAudioDelta {
+        item_id: String,
+        audio_base64: String,
+    },
+    AssistantAudioDone {
+        item_id: String,
+    },
+    ResponseStarted {
+        response_id: String,
+    },
+    ResponseDone {
+        response_id: String,
+    },
+    RateLimited {
+        retry_after_ms: Option<u64>,
+    },
+    Error {
+        code: String,
+        message: String,
+        retryable: bool,
+    },
 }
 
 pub trait Wire: Send {
@@ -431,12 +458,10 @@ fn translate_event(payload: &Value) -> Result<Event, TransportError> {
             item_id: string("item_id")?,
             delta: string("delta")?,
         }),
-        "conversation.item.input_audio_transcription.completed" => {
-            Ok(Event::UserTranscriptFinal {
-                item_id: string("item_id")?,
-                transcript: string("transcript")?,
-            })
-        }
+        "conversation.item.input_audio_transcription.completed" => Ok(Event::UserTranscriptFinal {
+            item_id: string("item_id")?,
+            transcript: string("transcript")?,
+        }),
         "response.audio_transcript.delta" => Ok(Event::AssistantTranscriptDelta {
             item_id: string("item_id")?,
             delta: string("delta")?,
@@ -598,8 +623,8 @@ mod tests {
             "type": "error",
             "error": { "code": "rate_limit", "message": "slow down", "retryable": true }
         }));
-        let mut transport = Transport::new(wire, capability(), SessionConfig::default())
-            .expect("transport");
+        let mut transport =
+            Transport::new(wire, capability(), SessionConfig::default()).expect("transport");
         assert!(matches!(
             transport.next_event().expect("event"),
             Some(Event::ResponseStarted { .. })
@@ -626,10 +651,7 @@ mod tests {
             .iter()
             .filter_map(|value| value["type"].as_str())
             .collect::<Vec<_>>();
-        assert_eq!(
-            kinds,
-            vec!["response.cancel", "conversation.item.truncate"]
-        );
+        assert_eq!(kinds, vec!["response.cancel", "conversation.item.truncate"]);
     }
 
     #[test]
