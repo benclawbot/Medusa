@@ -124,12 +124,21 @@ pub fn verification_plan(objective: &str) -> VerificationPlan {
         requirements.push(VerificationRequirement::Package);
         rationale.push("package-boundary change requires package-level verification".to_owned());
     }
-    if ["workspace", "repository-wide", "architecture", "release", "all tests", "ci"]
-        .iter()
-        .any(|marker| lower.contains(marker))
+    if [
+        "workspace",
+        "repository-wide",
+        "architecture",
+        "release",
+        "all tests",
+        "ci",
+    ]
+    .iter()
+    .any(|marker| lower.contains(marker))
     {
         requirements.push(VerificationRequirement::Workspace);
-        rationale.push("cross-cutting or release-sensitive change requires workspace verification".to_owned());
+        rationale.push(
+            "cross-cutting or release-sensitive change requires workspace verification".to_owned(),
+        );
     }
     requirements.dedup();
     VerificationPlan {
@@ -166,19 +175,39 @@ pub fn trace(
 #[must_use]
 pub fn classify_failure(error: &str) -> FailureClass {
     let lower = error.to_ascii_lowercase();
-    if ["timeout", "temporarily", "connection reset", "rate limit", "429", "503"]
-        .iter()
-        .any(|marker| lower.contains(marker))
+    if [
+        "timeout",
+        "temporarily",
+        "connection reset",
+        "rate limit",
+        "429",
+        "503",
+    ]
+    .iter()
+    .any(|marker| lower.contains(marker))
     {
         FailureClass::Transient
-    } else if ["unauthorized", "forbidden", "credential", "api key", "401", "403"]
-        .iter()
-        .any(|marker| lower.contains(marker))
+    } else if [
+        "unauthorized",
+        "forbidden",
+        "credential",
+        "api key",
+        "401",
+        "403",
+    ]
+    .iter()
+    .any(|marker| lower.contains(marker))
     {
         FailureClass::Authentication
-    } else if ["invalid argument", "schema", "malformed", "bad request", "400"]
-        .iter()
-        .any(|marker| lower.contains(marker))
+    } else if [
+        "invalid argument",
+        "schema",
+        "malformed",
+        "bad request",
+        "400",
+    ]
+    .iter()
+    .any(|marker| lower.contains(marker))
     {
         FailureClass::InvalidRequest
     } else if ["unsupported", "not available", "not implemented"]
@@ -191,9 +220,15 @@ pub fn classify_failure(error: &str) -> FailureClass {
         .any(|marker| lower.contains(marker))
     {
         FailureClass::ResourceExhausted
-    } else if ["compile", "test failed", "assertion", "permission denied", "conflict"]
-        .iter()
-        .any(|marker| lower.contains(marker))
+    } else if [
+        "compile",
+        "test failed",
+        "assertion",
+        "permission denied",
+        "conflict",
+    ]
+    .iter()
+    .any(|marker| lower.contains(marker))
     {
         FailureClass::Deterministic
     } else {
