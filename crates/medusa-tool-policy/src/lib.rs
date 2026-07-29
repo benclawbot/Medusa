@@ -83,7 +83,9 @@ impl ToolBudgets {
             && self.remaining_time_ms >= estimate.latency_ms
             && self.remaining_input_tokens >= estimate.input_tokens
             && self.remaining_output_tokens
-                >= estimate.output_tokens.saturating_add(self.reserved_final_tokens)
+                >= estimate
+                    .output_tokens
+                    .saturating_add(self.reserved_final_tokens)
             && self.remaining_monetary_microunits >= estimate.monetary_microunits
     }
 }
@@ -151,10 +153,7 @@ impl ToolRegistry {
                     score,
                     rationale: vec![
                         format!("supports {intent}"),
-                        format!(
-                            "estimated output {} tokens",
-                            tool.estimate.output_tokens
-                        ),
+                        format!("estimated output {} tokens", tool.estimate.output_tokens),
                     ],
                     output_mode: if tool.output_modes.contains(&mode) {
                         mode
