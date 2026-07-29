@@ -1,6 +1,7 @@
 fn main() -> Result<(), Box<dyn Error>> {
     println!("cargo:rerun-if-changed=src/runtime_impl.rs");
     println!("cargo:rerun-if-changed=src/production_orchestrator.rs");
+    println!("cargo:rerun-if-changed=src/tool_policy.rs");
     println!("cargo:rerun-if-changed=src/recovery_tui.inc");
     println!("cargo:rerun-if-changed=src/commands.rs");
     println!("cargo:rerun-if-changed=src/review.inc");
@@ -36,7 +37,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         &mut source,
         "pub mod prompt;\npub mod skill_dependencies;",
         &format!(
-            "pub mod attachment;\nmod learning_retrieval;\npub mod learning_review;\npub mod openai_realtime;\npub mod prompt;\n#[path = \"{}\"]\npub mod review;\npub mod voice;\npub mod voice_agent_bridge;\npub mod skill_dependencies;",
+            "pub mod attachment;\nmod learning_retrieval;\npub mod learning_review;\npub mod openai_realtime;\npub mod prompt;\n#[path = \"{}\"]\npub mod review;\nmod tool_policy;\npub mod voice;\npub mod voice_agent_bridge;\npub mod skill_dependencies;",
             review.display().to_string().replace('\\', "/")
         ),
     )?;
@@ -49,6 +50,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         ("pub mod lifecycle;", "lifecycle.rs"),
         ("pub mod openai_realtime;", "openai_realtime.rs"),
         ("pub mod prompt;", "prompt.rs"),
+        ("mod tool_policy;", "tool_policy.rs"),
         ("pub mod voice;", "voice.rs"),
         ("pub mod voice_agent_bridge;", "voice_agent_bridge.rs"),
         ("pub mod skill_dependencies;", "skill_dependencies.rs"),
@@ -106,7 +108,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     replace_once(
         &mut source,
         "    let engine = AgentEngine::new_with_cancellation(provider, config, Arc::clone(cancel));\n    let selected_skill = state.pending_skill.clone();\n    let skill_context = selected_skill.as_ref().map(SelectedSkill::prompt_context);\n    let content = message_blocks(&draft)?;\n",
-        "    let resuming_pending_question = state\n        .session\n        .as_ref()\n        .is_some_and(|session| session.pending_question.is_some());\n    if !resuming_pending_question {\n        crate::review::capture_review_baseline(&state.repo)\n            .map_err(|error| RuntimeError::agent(error.to_string()))?;\n    }\n    let engine = AgentEngine::new_with_cancellation(provider, config, Arc::clone(cancel));\n    let selected_skill = state.pending_skill.clone();\n    let execution_plan = crate::production_orchestrator::plan(&draft).map_err(RuntimeError::agent)?;\n    for event in crate::production_orchestrator::events(&execution_plan) { let _ = events.send(event); }\n    let orchestration_context = crate::production_orchestrator::runtime_context(&execution_plan);\n    let learning_context = crate::learning_retrieval::select(\n        &state.repo,\n        &draft,\n        state.session.as_ref().map(|session| session.id.as_str()),\n        events,\n    );\n    let mut task_context = vec![orchestration_context];\n    if let Some(learning) = learning_context.prompt_context { task_context.push(learning); }\n    if let Some(skill) = selected_skill.as_ref().map(SelectedSkill::prompt_context) { task_context.push(skill); }\n    let skill_context = task_context.join(\"\\n\\n\");\n    let content = message_blocks(&draft)?;\n",
+        "    let resuming_pending_question = state\n        .session\n        .as_ref()\n        .is_some_and(|session| session.pending_question.is_some());\n    if !resuming_pending_question {\n        crate::review::capture_review_baseline(&state.repo)\n            .map_err(|error| RuntimeError::agent(error.to_string()))?;\n    }\n    let engine = AgentEngine::new_with_cancellation(provider, config, Arc::clone(cancel));\n    let selected_skill = state.pending_skill.clone();\n    let execution_plan = crate::production_orchestrator::plan(&draft).map_err(RuntimeError::agent)?;\n    for event in crate::production_orchestrator::events(&execution_plan) { let _ = events.send(event); }\n    let orchestration_context = crate::production_orchestrator::runtime_context(&execution_plan);\n    let tool_policy_context = crate::tool_policy::runtime_context(&draft).map_err(RuntimeError::agent)?;\n    let learning_context = crate::learning_retrieval::select(\n        &state.repo,\n        &draft,\n        state.session.as_ref().map(|session| session.id.as_str()),\n        events,\n    );\n    let mut task_context = vec![orchestration_context, tool_policy_context];\n    if let Some(learning) = learning_context.prompt_context { task_context.push(learning); }\n    if let Some(skill) = selected_skill.as_ref().map(SelectedSkill::prompt_context) { task_context.push(skill); }\n    let skill_context = task_context.join(\"\\n\\n\");\n    let content = message_blocks(&draft)?;\n",
     )?;
     replace_once(
         &mut source,
