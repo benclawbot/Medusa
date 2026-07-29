@@ -16,6 +16,7 @@ mod github_merge;
 mod github_private_repository;
 mod github_pull_request_mutations;
 mod github_repository;
+mod learning_privacy;
 mod memories;
 mod mutations;
 mod pull_requests;
@@ -52,6 +53,10 @@ use github_pull_request_mutations::{
     runtime_review_github_pull_request, runtime_update_github_pull_request,
 };
 use github_repository::runtime_github_repository_access;
+use learning_privacy::{
+    runtime_delete_improvement, runtime_export_learning_audit, runtime_learning_privacy,
+    runtime_redact_improvement, runtime_update_learning_privacy,
+};
 use memories::runtime_list_memories;
 use mutations::{
     runtime_commit_changes, runtime_create_branch, runtime_create_checkpoint, runtime_push_branch,
@@ -112,6 +117,11 @@ pub fn run() -> tauri::Result<()> {
             runtime_engineering_dashboard,
             runtime_generate_improvement,
             runtime_update_improvement,
+            runtime_learning_privacy,
+            runtime_update_learning_privacy,
+            runtime_redact_improvement,
+            runtime_delete_improvement,
+            runtime_export_learning_audit,
             desktop_update_status,
             desktop_update_from_main,
         ])
