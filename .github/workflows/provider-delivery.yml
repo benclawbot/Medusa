@@ -18,8 +18,8 @@ jobs:
   diagnostic:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@1.88.0
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: dtolnay/rust-toolchain@39b0b3842c7e8bbf6904c0bfc3d9006fdd4dc4e0 # 1.88.0
       - name: Refresh dependency lock for the merged PR graph
         run: cargo generate-lockfile
       - name: Format provider diagnostic
@@ -45,7 +45,7 @@ jobs:
           for secret_name in ('OPENAI_API_KEY', 'ANTHROPIC_API_KEY', 'MINIMAX_API_KEY', 'MEDUSA_API_KEY'):
               assert secret_name not in serialized
           PY
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: provider-diagnostic
           path: provider-diagnostic.json
