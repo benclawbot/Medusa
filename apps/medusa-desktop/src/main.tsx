@@ -5,6 +5,7 @@ import { DesktopTimelineBridge } from "./DesktopTimelineBridge";
 import { DesktopUpdateControl } from "./DesktopUpdateControl";
 import { DiffDock } from "./DiffDock";
 import { EngineeringDashboardLauncher } from "./EngineeringDashboard";
+import { LearningDock } from "./LearningDock";
 import { MemoryDock } from "./MemoryDock";
 import { RecoveryDock } from "./RecoveryDock";
 import { SessionDock } from "./SessionDock";
@@ -38,6 +39,7 @@ ReactDOM.createRoot(document.getElementById("root") as HTMLElement).render(
     <MemoryDock />
     <RecoveryDock />
     <DesktopUpdateControl />
+    <LearningDock />
     <EngineeringDashboardLauncher />
   </React.StrictMode>,
 );
