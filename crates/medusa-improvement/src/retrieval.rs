@@ -211,7 +211,8 @@ pub fn retrieve_resolution(
         if context.suppressed_learning_ids.contains(&winner.id) {
             result.considered.push(SelectionRecord {
                 disposition: SelectionDisposition::Suppressed,
-                explanation: "suppressed for this task without deleting the learned item".to_owned(),
+                explanation: "suppressed for this task without deleting the learned item"
+                    .to_owned(),
                 ..base
             });
             continue;
@@ -258,8 +259,7 @@ pub fn retrieve_resolution(
             continue;
         }
 
-        if impact == LearningImpact::High
-            && !context.approved_high_impact_ids.contains(&winner.id)
+        if impact == LearningImpact::High && !context.approved_high_impact_ids.contains(&winner.id)
         {
             result.considered.push(SelectionRecord {
                 disposition: SelectionDisposition::ReviewRequired,
@@ -367,15 +367,20 @@ fn relevance_score(
     let key_terms = expanded_terms(&learning.conflict_key);
     let rule_overlap = objective_terms.intersection(&rule_terms).count();
     let key_overlap = objective_terms.intersection(&key_terms).count();
-    let exact_task = context.scope.task_kind.as_ref().is_some_and(|task_kind| {
-        learning.applicability.task_kinds.contains(task_kind)
-    });
+    let exact_task = context
+        .scope
+        .task_kind
+        .as_ref()
+        .is_some_and(|task_kind| learning.applicability.task_kinds.contains(task_kind));
     let exact_artifact = context
         .scope
         .artifact_kind
         .as_ref()
         .is_some_and(|artifact_kind| {
-            learning.applicability.artifact_kinds.contains(artifact_kind)
+            learning
+                .applicability
+                .artifact_kinds
+                .contains(artifact_kind)
         });
     let recency = recency_score(learning.updated_at_unix_ms, context.now_unix_ms);
     let evidence = u32::try_from(learning.provenance.evidence_digests.len())
@@ -433,9 +438,12 @@ fn selection_explanation(
     score: u32,
 ) -> String {
     let mut reasons = Vec::new();
-    if context.scope.task_kind.as_ref().is_some_and(|task_kind| {
-        learning.applicability.task_kinds.contains(task_kind)
-    }) {
+    if context
+        .scope
+        .task_kind
+        .as_ref()
+        .is_some_and(|task_kind| learning.applicability.task_kinds.contains(task_kind))
+    {
         reasons.push("task kind matched".to_owned());
     }
     if context
@@ -443,7 +451,10 @@ fn selection_explanation(
         .artifact_kind
         .as_ref()
         .is_some_and(|artifact_kind| {
-            learning.applicability.artifact_kinds.contains(artifact_kind)
+            learning
+                .applicability
+                .artifact_kinds
+                .contains(artifact_kind)
         })
     {
         reasons.push("artifact kind matched".to_owned());
@@ -458,7 +469,10 @@ fn selection_explanation(
     if reasons.is_empty() {
         reasons.push("the task wording matched the learned rule and trigger key".to_owned());
     }
-    format!("{}; deterministic relevance score {score}", reasons.join(", "))
+    format!(
+        "{}; deterministic relevance score {score}",
+        reasons.join(", ")
+    )
 }
 
 fn application_phase(learning: &ScopedLearning) -> ApplicationPhase {
@@ -518,10 +532,7 @@ fn learning_impact(learning: &ScopedLearning) -> LearningImpact {
 }
 
 fn recency_score(updated_at_unix_ms: i64, now_unix_ms: i64) -> u32 {
-    let age_days = now_unix_ms
-        .saturating_sub(updated_at_unix_ms)
-        .max(0)
-        / (24 * 60 * 60 * 1_000);
+    let age_days = now_unix_ms.saturating_sub(updated_at_unix_ms).max(0) / (24 * 60 * 60 * 1_000);
     match age_days {
         0..=7 => 50,
         8..=30 => 35,
@@ -546,8 +557,14 @@ const fn scope_weight(scope: LearningScope) -> u8 {
 fn expanded_terms(value: &str) -> BTreeSet<String> {
     let mut terms = normalized_terms(value);
     let expansions = [
-        (&["all", "complete", "comprehensive", "exhaustive"][..], "completeness"),
-        (&["test", "tests", "verify", "validation"][..], "verification"),
+        (
+            &["all", "complete", "comprehensive", "exhaustive"][..],
+            "completeness",
+        ),
+        (
+            &["test", "tests", "verify", "validation"][..],
+            "verification",
+        ),
         (&["release", "deploy", "publish"][..], "release"),
         (&["docs", "documentation", "readme"][..], "documentation"),
         (&["fix", "bug", "defect", "repair"][..], "bugfix"),
@@ -564,8 +581,8 @@ fn expanded_terms(value: &str) -> BTreeSet<String> {
 
 fn normalized_terms(value: &str) -> BTreeSet<String> {
     const STOP_WORDS: &[&str] = &[
-        "a", "an", "and", "are", "as", "at", "be", "by", "for", "from", "in", "is",
-        "it", "of", "on", "or", "that", "the", "this", "to", "use", "with",
+        "a", "an", "and", "are", "as", "at", "be", "by", "for", "from", "in", "is", "it", "of",
+        "on", "or", "that", "the", "this", "to", "use", "with",
     ];
     value
         .split(|character: char| !character.is_ascii_alphanumeric())
@@ -628,8 +645,7 @@ mod tests {
         TaskContext {
             scope: ScopeContext {
                 owner_id: "user-1".to_owned(),
-                repository: RepositoryIdentity::new("https://example.test/repo", "/repo/.git")
-                    .ok(),
+                repository: RepositoryIdentity::new("https://example.test/repo", "/repo/.git").ok(),
                 workspace_id: None,
                 organization_id: None,
                 session_id: Some("session-1".to_owned()),
@@ -667,10 +683,16 @@ mod tests {
                 winner: item,
                 shadowed: Vec::new(),
             }]),
-            &context("create a comprehensive repository test plan", Some("testing")),
+            &context(
+                "create a comprehensive repository test plan",
+                Some("testing"),
+            ),
             &RetrievalConfig::default(),
         );
-        assert_eq!(result.selected_ids(), BTreeSet::from(["complete-audit".to_owned()]));
+        assert_eq!(
+            result.selected_ids(),
+            BTreeSet::from(["complete-audit".to_owned()])
+        );
         assert!(result.selected[0].explanation.contains("task kind matched"));
         assert!(result.prompt_context().unwrap().contains("complete-audit"));
     }
@@ -783,8 +805,7 @@ mod tests {
         task.approved_high_impact_ids
             .insert("deploy-rule".to_owned());
         assert_eq!(
-            retrieve_resolution(&set, &task, &RetrievalConfig::default()).selected[0]
-                .learning_id,
+            retrieve_resolution(&set, &task, &RetrievalConfig::default()).selected[0].learning_id,
             "deploy-rule"
         );
     }
