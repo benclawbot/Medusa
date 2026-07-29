@@ -110,9 +110,10 @@ fn classify_command(program: &str, args: &[String]) -> CommandFamily {
         .to_ascii_lowercase();
     match executable.as_str() {
         "git" => CommandFamily::Git,
-        "cargo" if args
-            .first()
-            .is_some_and(|arg| matches!(arg.as_str(), "test" | "nextest")) =>
+        "cargo"
+            if args
+                .first()
+                .is_some_and(|arg| matches!(arg.as_str(), "test" | "nextest")) =>
         {
             CommandFamily::Test
         }
