@@ -56,16 +56,15 @@ pub(crate) fn apply(mut prompt: String, mode: Mode) -> String {
         append_fragment(&mut prompt, &prompt_fragment_for(level));
     }
 
-    let discovery_route = route(
+    let routed_input_bytes = prompt.len().min(64 * 1024);
+    let discovery_route = route_summary(
         AuxiliaryWorkload::RepositoryDiscoverySummary,
-        prompt.len().min(64 * 1024),
-    )
-    .expect("bounded repository prompt routing must be valid");
-    let skill_route = route(
+        routed_input_bytes,
+    );
+    let skill_route = route_summary(
         AuxiliaryWorkload::SkillCatalogExtraction,
-        prompt.len().min(64 * 1024),
-    )
-    .expect("bounded skill prompt routing must be valid");
+        routed_input_bytes,
+    );
     let protected = build_protected_context(
         "PROTECTED CONTEXT PIPELINE — ACTIVE\nCritical constraints and action evidence below survive deterministic pruning and provider fallback.",
         [
@@ -77,16 +76,25 @@ pub(crate) fn apply(mut prompt: String, mode: Mode) -> String {
             ContextItem {
                 tier: ContextTier::RepositoryDiscovery,
                 reference: "route:repository-discovery".into(),
-                text: format_route(&discovery_route),
+                text: discovery_route,
             },
             ContextItem {
                 tier: ContextTier::Decision,
                 reference: "route:skill-catalog".into(),
-                text: format_route(&skill_route),
+                text: skill_route,
             },
         ],
     );
     render_protected_context(&protected)
+}
+
+fn route_summary(workload: AuxiliaryWorkload, input_bytes: usize) -> String {
+    match route(workload, input_bytes) {
+        Ok(decision) => format_route(&decision),
+        Err(error) => format!(
+            "[aux-route workload={workload:?}; status=failed; error={error}; permissions=preserved; fallback=blocked]"
+        ),
+    }
 }
 
 fn append_fragment(prompt: &mut String, fragment: &str) {
