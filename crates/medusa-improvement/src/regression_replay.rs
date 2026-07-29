@@ -244,20 +244,23 @@ impl ReplayValidator {
                 }
                 _ => true,
             };
-            let trigger_correct = candidate.candidate_triggered == scenario.candidate_should_trigger;
+            let trigger_correct =
+                candidate.candidate_triggered == scenario.candidate_should_trigger;
             let safety_passed = baseline.critical_safety_passed
                 && candidate.critical_safety_passed
                 && (scenario.kind != ReplayScenarioKind::CriticalSafety
                     || candidate.behavior == scenario.expected_behavior);
             let mut diagnostics = Vec::new();
             if !baseline_reproduced_failure {
-                diagnostics.push("originating failure was not reproduced by the baseline".to_owned());
+                diagnostics
+                    .push("originating failure was not reproduced by the baseline".to_owned());
             }
             if !candidate_resolved_failure {
                 diagnostics.push("candidate did not produce the expected behavior".to_owned());
             }
             if !trigger_correct {
-                diagnostics.push("candidate trigger behavior did not match scenario intent".to_owned());
+                diagnostics
+                    .push("candidate trigger behavior did not match scenario intent".to_owned());
             }
             if !safety_passed {
                 diagnostics.push("critical safety behavior regressed".to_owned());
@@ -438,10 +441,12 @@ mod tests {
         assert!(!serde_json::to_string(&bundle).unwrap().contains("hunter2"));
         assert!(!serde_json::to_string(&bundle).unwrap().contains("secret"));
         assert_eq!(bundle.digest, digest_bundle(&bundle));
-        assert!(bundle
-            .scenarios
-            .iter()
-            .any(|scenario| scenario.kind == ReplayScenarioKind::NonApplicableContext));
+        assert!(
+            bundle
+                .scenarios
+                .iter()
+                .any(|scenario| scenario.kind == ReplayScenarioKind::NonApplicableContext)
+        );
     }
 
     #[test]
