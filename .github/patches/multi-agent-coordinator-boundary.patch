@@ -1,0 +1,357 @@
+diff --git a/crates/medusa-agent/src/engine.rs b/crates/medusa-agent/src/engine.rs
+index 4834f54..ffae79a 100644
+--- a/crates/medusa-agent/src/engine.rs
++++ b/crates/medusa-agent/src/engine.rs
+@@ -125,6 +125,8 @@ pub struct AgentEngine<P> {
+     desktop_commander_settings: DesktopCommanderSettings,
+     desktop_commander: Mutex<Option<DesktopCommanderClient>>,
+     cancellation: Arc<AtomicBool>,
++    execution_policy: AgentExecutionPolicy,
++    team_context: Option<TeamMemberContext>,
+ }
+ 
+ fn audited_tool_name(name: &str, input: &serde_json::Value) -> String {
+@@ -145,6 +147,8 @@ impl<P: ModelProvider> AgentEngine<P> {
+             desktop_commander_settings: DesktopCommanderSettings::from_env(),
+             desktop_commander: Mutex::new(None),
+             cancellation: Arc::new(AtomicBool::new(false)),
++            execution_policy: AgentExecutionPolicy::unrestricted(),
++            team_context: None,
+         }
+     }
+ 
+@@ -160,9 +164,23 @@ impl<P: ModelProvider> AgentEngine<P> {
+             desktop_commander_settings: DesktopCommanderSettings::from_env(),
+             desktop_commander: Mutex::new(None),
+             cancellation,
++            execution_policy: AgentExecutionPolicy::unrestricted(),
++            team_context: None,
+         }
+     }
+ 
++    #[must_use]
++    pub fn with_execution_policy(mut self, policy: AgentExecutionPolicy) -> Self {
++        self.execution_policy = policy;
++        self
++    }
++
++    #[must_use]
++    pub fn with_team_context(mut self, context: TeamMemberContext) -> Self {
++        self.team_context = Some(context);
++        self
++    }
++
+     fn execute_desktop_commander(
+         &self,
+         repo: &Path,
+@@ -513,7 +531,15 @@ impl<P: ModelProvider> AgentEngine<P> {
+             ),
+             self.config.agent.mode,
+         );
+-        let tools = available_tools(self.config.agent.mode, &self.desktop_commander_settings);
++        if let Some(team) = &self.team_context {
++            system.push_str("\n\n");
++            system.push_str(&team.prompt_context()?);
++        }
++        let mut tools = available_tools(self.config.agent.mode, &self.desktop_commander_settings);
++        if let Some(team) = &self.team_context {
++            tools.extend(team.definitions());
++        }
++        tools.retain(|tool| self.execution_policy.allows(&tool.name));
+         let mut budget = context_budget::PromptBudget::for_request(
+             &system,
+             &session.messages,
+@@ -657,7 +683,9 @@ impl<P: ModelProvider> AgentEngine<P> {
+                 .iter()
+                 .take(parallel_tool_limit(self.config.agent.parallel_workers))
+                 .take_while(|(_, name, _)| {
+-                    parallel_safe_tool(name) && tool_allowed(self.config.agent.mode, name)
++                    parallel_safe_tool(name)
++                        && tool_allowed(self.config.agent.mode, name)
++                        && self.execution_policy.allows(name)
+                 })
+                 .count();
+             let batch_len = parallel_count.max(1);
+@@ -687,7 +715,13 @@ impl<P: ModelProvider> AgentEngine<P> {
+                         "tool batch was unexpectedly empty",
+                     )
+                 })?;
+-                let result = if name == "update_plan" {
++                let result = if !self.execution_policy.allows(&name) {
++                    Err(MedusaError::new(
++                        ErrorCode::PolicyDenied,
++                        ErrorCategory::Policy,
++                        format!("tool `{name}` is denied by the role-bound execution policy"),
++                    ))
++                } else if name == "update_plan" {
+                     let plan = plan_from_input(&input);
+                     if plan.is_empty() {
+                         Ok("Visible task plan update ignored because it was empty.".to_owned())
+@@ -715,6 +749,21 @@ impl<P: ModelProvider> AgentEngine<P> {
+                         }
+                         Err(error) => Err(error),
+                     }
++                } else if self
++                    .team_context
++                    .as_ref()
++                    .is_some_and(|team| team.handles(&name))
++                {
++                    self.team_context
++                        .as_ref()
++                        .ok_or_else(|| {
++                            MedusaError::new(
++                                ErrorCode::InternalInvariant,
++                                ErrorCategory::Internal,
++                                "team tool context disappeared",
++                            )
++                        })?
++                        .execute(&name, &input)
+                 } else if name == "desktop_commander" && tool_allowed(self.config.agent.mode, &name)
+                 {
+                     self.execute_desktop_commander(&session.repo, &input)
+diff --git a/crates/medusa-agent/src/lib.rs b/crates/medusa-agent/src/lib.rs
+index 7d28391..5f07b5a 100644
+--- a/crates/medusa-agent/src/lib.rs
++++ b/crates/medusa-agent/src/lib.rs
+@@ -1,4 +1,4 @@
+-//! Persistent single-agent orchestration and built-in tools.
++//! Persistent single-agent execution, role-bound team contexts, and built-in tools.
+ 
+ mod approval;
+ mod engine;
+@@ -11,6 +11,7 @@ mod session;
+ pub mod session_browser;
+ pub mod tools;
+ mod transaction;
++pub mod team;
+ mod verification;
+ mod worker_execution;
+ pub mod world_model_session;
+@@ -30,12 +31,17 @@ pub use session::{
+     import_manual_advice, launch_browser_assisted_escalation, load_escalation_journal,
+     persist_escalation_journal, render_chatgpt_prompt, session_usage,
+ };
++pub use team::{
++    AgentExecutionPolicy, TeamMember, TeamMemberContext, TeamMemberLifecycle, TeamRole,
++    TeamRuntime,
++};
+ pub use transaction::{
+     FileMutation, TransactionOutcome, TransactionPreview, apply_atomic, preview,
+ };
+ pub use verification::{VerificationResult, targeted_verification};
+ pub use worker_execution::{
+-    LeasedAssignment, WorkerCompletion, WorkerExecutionController, WorkerProgressSummary,
++    LeasedAssignment, TeamTaskView, WorkerCompletion, WorkerExecutionController,
++    WorkerProgressSummary,
+ };
+ 
+ #[cfg(test)]
+@@ -334,6 +340,42 @@ mod tests {
+         }));
+     }
+ 
++    #[test]
++    fn reviewer_execution_policy_denies_repository_mutation() {
++        let directory = tempfile::tempdir().expect("temporary directory");
++        let engine = AgentEngine::new(
++            ScriptedProvider::new(vec![response(
++                vec![ResponseBlock::ToolUse {
++                    id: "write-1".into(),
++                    name: "fs_write".into(),
++                    input: json!({"path": "blocked.txt", "content": "nope"}),
++                }],
++                "tool_use",
++            )]),
++            Config::default(),
++        )
++        .with_execution_policy(AgentExecutionPolicy::for_team_role(TeamRole::Reviewer));
++        let mut session = engine
++            .create_session(directory.path(), "review the proposed change".to_owned())
++            .expect("session");
++        let mut updates = Vec::new();
++
++        assert_eq!(
++            engine
++                .step_with_observer(&mut session, |update| updates.push(update.clone()))
++                .expect("reviewer step"),
++            StepOutcome::Continue
++        );
++        assert!(!directory.path().join("blocked.txt").exists());
++        assert!(updates.iter().any(|update| {
++            matches!(
++                update,
++                AgentUpdate::Event(EventPayload::ToolCallDenied { tool, .. })
++                    if tool == "fs_write"
++            )
++        }));
++    }
++
+     #[test]
+     fn model_plan_updates_are_persisted_and_observed() {
+         let directory = tempfile::tempdir().expect("temporary directory");
+diff --git a/crates/medusa-agent/src/worker_execution.rs b/crates/medusa-agent/src/worker_execution.rs
+index 342d450..c09bde5 100644
+--- a/crates/medusa-agent/src/worker_execution.rs
++++ b/crates/medusa-agent/src/worker_execution.rs
+@@ -10,7 +10,7 @@ use std::{
+     path::PathBuf,
+ };
+ 
+-use medusa_multi_agent_scheduler::{DynamicSchedule, Task, Worker as ScheduledWorker};
++use medusa_multi_agent_scheduler::{DynamicSchedule, Task, TaskState, Worker as ScheduledWorker};
+ use medusa_progress::{ProgressEvent, ProgressKind};
+ use medusa_worker_leases::WorkerLease;
+ use medusa_workers::{Worker, WorkerState};
+@@ -18,6 +18,12 @@ use serde::{Deserialize, Serialize};
+ 
+ use crate::transaction::WorkerMutationProposal;
+ 
++#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
++pub struct TeamTaskView {
++    pub task: Task,
++    pub state: TaskState,
++}
++
+ #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+ pub struct LeasedAssignment {
+     pub task_id: String,
+@@ -252,6 +258,26 @@ impl WorkerExecutionController {
+         Ok(expired)
+     }
+ 
++    pub fn complete_without_mutation(
++        &mut self,
++        task_id: &str,
++        worker_id: &str,
++        lease_epoch: u64,
++        now_ms: u64,
++    ) -> Result<WorkerCompletion, String> {
++        let lease = self.current_lease(task_id, worker_id, lease_epoch)?;
++        if lease.expired(now_ms).map_err(str::to_owned)? {
++            return Err("completion was submitted after lease expiry".into());
++        }
++        self.accept_completion(task_id, worker_id, lease_epoch)?;
++        Ok(WorkerCompletion {
++            task_id: task_id.to_owned(),
++            worker_id: worker_id.to_owned(),
++            lease_epoch,
++            transaction_proposals: Vec::new(),
++        })
++    }
++
+     pub fn complete(
+         &mut self,
+         task_id: &str,
+@@ -276,25 +302,7 @@ impl WorkerExecutionController {
+         {
+             return Err("worker completion must contain matching transaction proposals".into());
+         }
+-        self.state
+-            .schedule
+-            .complete(task_id, worker_id)
+-            .map_err(str::to_owned)?;
+-        self.state.leases.remove(task_id);
+-        self.state
+-            .completed_epochs
+-            .insert(task_id.to_owned(), lease_epoch);
+-        if let Some(worker) = self.state.workers.get_mut(worker_id) {
+-            worker.state = WorkerState::Succeeded;
+-        }
+-        self.state.summary.active = self.state.summary.active.saturating_sub(1);
+-        self.state.summary.completed = self.state.summary.completed.saturating_add(1);
+-        self.push_progress(
+-            ProgressKind::ToolFinished,
+-            format!("task {task_id} completed and is awaiting transaction commit"),
+-            Some(task_id.to_owned()),
+-        )?;
+-        self.persist()?;
++        self.accept_completion(task_id, worker_id, lease_epoch)?;
+         Ok(WorkerCompletion {
+             task_id: task_id.to_owned(),
+             worker_id: worker_id.to_owned(),
+@@ -377,6 +385,61 @@ impl WorkerExecutionController {
+         &self.state.execution_id
+     }
+ 
++    #[must_use]
++    pub fn is_complete(&self) -> bool {
++        self.state.schedule.is_complete()
++    }
++
++    #[must_use]
++    pub fn has_terminal_failure(&self) -> bool {
++        self.state.schedule.has_terminal_failure()
++    }
++
++    #[must_use]
++    pub fn blocked_tasks(&self) -> Vec<String> {
++        self.state.schedule.blocked_tasks()
++    }
++
++    #[must_use]
++    pub fn task_views(&self) -> Vec<TeamTaskView> {
++        self.state
++            .schedule
++            .tasks_with_state()
++            .into_iter()
++            .map(|(task, state)| TeamTaskView { task, state })
++            .collect()
++    }
++
++    fn accept_completion(
++        &mut self,
++        task_id: &str,
++        worker_id: &str,
++        lease_epoch: u64,
++    ) -> Result<(), String> {
++        if self.state.completed_epochs.contains_key(task_id) {
++            return Err("task completion was already accepted".into());
++        }
++        self.state
++            .schedule
++            .complete(task_id, worker_id)
++            .map_err(str::to_owned)?;
++        self.state.leases.remove(task_id);
++        self.state
++            .completed_epochs
++            .insert(task_id.to_owned(), lease_epoch);
++        if let Some(worker) = self.state.workers.get_mut(worker_id) {
++            worker.state = WorkerState::Succeeded;
++        }
++        self.state.summary.active = self.state.summary.active.saturating_sub(1);
++        self.state.summary.completed = self.state.summary.completed.saturating_add(1);
++        self.push_progress(
++            ProgressKind::ToolFinished,
++            format!("task {task_id} completed"),
++            Some(task_id.to_owned()),
++        )?;
++        self.persist()
++    }
++
+     fn current_lease(
+         &self,
+         task_id: &str,
+diff --git a/crates/medusa-multi-agent-scheduler/src/lib.rs b/crates/medusa-multi-agent-scheduler/src/lib.rs
+index 3e4d250..efa7d88 100644
+--- a/crates/medusa-multi-agent-scheduler/src/lib.rs
++++ b/crates/medusa-multi-agent-scheduler/src/lib.rs
+@@ -332,6 +332,19 @@ impl DynamicSchedule {
+         self.states.get(task_id)
+     }
+ 
++    #[must_use]
++    pub fn tasks_with_state(&self) -> Vec<(Task, TaskState)> {
++        self.tasks
++            .iter()
++            .filter_map(|(id, task)| {
++                self.states
++                    .get(id)
++                    .cloned()
++                    .map(|state| (task.clone(), state))
++            })
++            .collect()
++    }
++
+     pub fn is_complete(&self) -> bool {
+         self.states
+             .values()
