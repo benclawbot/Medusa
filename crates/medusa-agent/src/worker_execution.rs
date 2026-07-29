@@ -10,13 +10,19 @@ use std::{
     path::PathBuf,
 };
 
-use medusa_multi_agent_scheduler::{DynamicSchedule, Task, Worker as ScheduledWorker};
+use medusa_multi_agent_scheduler::{DynamicSchedule, Task, TaskState, Worker as ScheduledWorker};
 use medusa_progress::{ProgressEvent, ProgressKind};
 use medusa_worker_leases::WorkerLease;
 use medusa_workers::{Worker, WorkerState};
 use serde::{Deserialize, Serialize};
 
 use crate::transaction::WorkerMutationProposal;
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct TeamTaskView {
+    pub task: Task,
+    pub state: TaskState,
+}
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct LeasedAssignment {
@@ -252,6 +258,26 @@ impl WorkerExecutionController {
         Ok(expired)
     }
 
+    pub fn complete_without_mutation(
+        &mut self,
+        task_id: &str,
+        worker_id: &str,
+        lease_epoch: u64,
+        now_ms: u64,
+    ) -> Result<WorkerCompletion, String> {
+        let lease = self.current_lease(task_id, worker_id, lease_epoch)?;
+        if lease.expired(now_ms).map_err(str::to_owned)? {
+            return Err("completion was submitted after lease expiry".into());
+        }
+        self.accept_completion(task_id, worker_id, lease_epoch)?;
+        Ok(WorkerCompletion {
+            task_id: task_id.to_owned(),
+            worker_id: worker_id.to_owned(),
+            lease_epoch,
+            transaction_proposals: Vec::new(),
+        })
+    }
+
     pub fn complete(
         &mut self,
         task_id: &str,
@@ -276,25 +302,7 @@ impl WorkerExecutionController {
         {
             return Err("worker completion must contain matching transaction proposals".into());
         }
-        self.state
-            .schedule
-            .complete(task_id, worker_id)
-            .map_err(str::to_owned)?;
-        self.state.leases.remove(task_id);
-        self.state
-            .completed_epochs
-            .insert(task_id.to_owned(), lease_epoch);
-        if let Some(worker) = self.state.workers.get_mut(worker_id) {
-            worker.state = WorkerState::Succeeded;
-        }
-        self.state.summary.active = self.state.summary.active.saturating_sub(1);
-        self.state.summary.completed = self.state.summary.completed.saturating_add(1);
-        self.push_progress(
-            ProgressKind::ToolFinished,
-            format!("task {task_id} completed and is awaiting transaction commit"),
-            Some(task_id.to_owned()),
-        )?;
-        self.persist()?;
+        self.accept_completion(task_id, worker_id, lease_epoch)?;
         Ok(WorkerCompletion {
             task_id: task_id.to_owned(),
             worker_id: worker_id.to_owned(),
@@ -375,6 +383,61 @@ impl WorkerExecutionController {
 
     pub fn execution_id(&self) -> &str {
         &self.state.execution_id
+    }
+
+    #[must_use]
+    pub fn is_complete(&self) -> bool {
+        self.state.schedule.is_complete()
+    }
+
+    #[must_use]
+    pub fn has_terminal_failure(&self) -> bool {
+        self.state.schedule.has_terminal_failure()
+    }
+
+    #[must_use]
+    pub fn blocked_tasks(&self) -> Vec<String> {
+        self.state.schedule.blocked_tasks()
+    }
+
+    #[must_use]
+    pub fn task_views(&self) -> Vec<TeamTaskView> {
+        self.state
+            .schedule
+            .tasks_with_state()
+            .into_iter()
+            .map(|(task, state)| TeamTaskView { task, state })
+            .collect()
+    }
+
+    fn accept_completion(
+        &mut self,
+        task_id: &str,
+        worker_id: &str,
+        lease_epoch: u64,
+    ) -> Result<(), String> {
+        if self.state.completed_epochs.contains_key(task_id) {
+            return Err("task completion was already accepted".into());
+        }
+        self.state
+            .schedule
+            .complete(task_id, worker_id)
+            .map_err(str::to_owned)?;
+        self.state.leases.remove(task_id);
+        self.state
+            .completed_epochs
+            .insert(task_id.to_owned(), lease_epoch);
+        if let Some(worker) = self.state.workers.get_mut(worker_id) {
+            worker.state = WorkerState::Succeeded;
+        }
+        self.state.summary.active = self.state.summary.active.saturating_sub(1);
+        self.state.summary.completed = self.state.summary.completed.saturating_add(1);
+        self.push_progress(
+            ProgressKind::ToolFinished,
+            format!("task {task_id} completed"),
+            Some(task_id.to_owned()),
+        )?;
+        self.persist()
     }
 
     fn current_lease(

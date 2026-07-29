@@ -332,6 +332,19 @@ impl DynamicSchedule {
         self.states.get(task_id)
     }
 
+    #[must_use]
+    pub fn tasks_with_state(&self) -> Vec<(Task, TaskState)> {
+        self.tasks
+            .iter()
+            .filter_map(|(id, task)| {
+                self.states
+                    .get(id)
+                    .cloned()
+                    .map(|state| (task.clone(), state))
+            })
+            .collect()
+    }
+
     pub fn is_complete(&self) -> bool {
         self.states
             .values()

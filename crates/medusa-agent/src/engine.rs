@@ -50,6 +50,7 @@ use crate::{
         AgentPlanStep, AgentQuestion, AgentQuestionItem, AgentQuestionOption, AgentSession,
         PendingToolApproval, bootstrap, load, persist,
     },
+    team::{AgentExecutionPolicy, TeamMemberContext},
     tools::{execute_approved_tool, execute_tool, input_string},
     verification::targeted_verification_for_paths,
 };
@@ -125,6 +126,8 @@ pub struct AgentEngine<P> {
     desktop_commander_settings: DesktopCommanderSettings,
     desktop_commander: Mutex<Option<DesktopCommanderClient>>,
     cancellation: Arc<AtomicBool>,
+    execution_policy: AgentExecutionPolicy,
+    team_context: Option<TeamMemberContext>,
 }
 
 fn audited_tool_name(name: &str, input: &serde_json::Value) -> String {
@@ -145,6 +148,8 @@ impl<P: ModelProvider> AgentEngine<P> {
             desktop_commander_settings: DesktopCommanderSettings::from_env(),
             desktop_commander: Mutex::new(None),
             cancellation: Arc::new(AtomicBool::new(false)),
+            execution_policy: AgentExecutionPolicy::unrestricted(),
+            team_context: None,
         }
     }
 
@@ -160,7 +165,21 @@ impl<P: ModelProvider> AgentEngine<P> {
             desktop_commander_settings: DesktopCommanderSettings::from_env(),
             desktop_commander: Mutex::new(None),
             cancellation,
+            execution_policy: AgentExecutionPolicy::unrestricted(),
+            team_context: None,
         }
+    }
+
+    #[must_use]
+    pub fn with_execution_policy(mut self, policy: AgentExecutionPolicy) -> Self {
+        self.execution_policy = policy;
+        self
+    }
+
+    #[must_use]
+    pub fn with_team_context(mut self, context: TeamMemberContext) -> Self {
+        self.team_context = Some(context);
+        self
     }
 
     fn execute_desktop_commander(
@@ -513,7 +532,15 @@ impl<P: ModelProvider> AgentEngine<P> {
             ),
             self.config.agent.mode,
         );
-        let tools = available_tools(self.config.agent.mode, &self.desktop_commander_settings);
+        if let Some(team) = &self.team_context {
+            system.push_str("\n\n");
+            system.push_str(&team.prompt_context()?);
+        }
+        let mut tools = available_tools(self.config.agent.mode, &self.desktop_commander_settings);
+        if let Some(team) = &self.team_context {
+            tools.extend(team.definitions());
+        }
+        tools.retain(|tool| self.execution_policy.allows(&tool.name));
         let mut budget = context_budget::PromptBudget::for_request(
             &system,
             &session.messages,
@@ -657,7 +684,9 @@ impl<P: ModelProvider> AgentEngine<P> {
                 .iter()
                 .take(parallel_tool_limit(self.config.agent.parallel_workers))
                 .take_while(|(_, name, _)| {
-                    parallel_safe_tool(name) && tool_allowed(self.config.agent.mode, name)
+                    parallel_safe_tool(name)
+                        && tool_allowed(self.config.agent.mode, name)
+                        && self.execution_policy.allows(name)
                 })
                 .count();
             let batch_len = parallel_count.max(1);
@@ -687,7 +716,23 @@ impl<P: ModelProvider> AgentEngine<P> {
                         "tool batch was unexpectedly empty",
                     )
                 })?;
-                let result = if name == "update_plan" {
+                let result = if !self.execution_policy.allows(&name) {
+                    let reason =
+                        format!("tool `{name}` is denied by the role-bound execution policy");
+                    append_observed(
+                        session,
+                        EventPayload::ToolCallDenied {
+                            tool: audited_tool_name(&name, &input),
+                            reason: reason.clone(),
+                        },
+                        &mut observer,
+                    )?;
+                    Err(MedusaError::new(
+                        ErrorCode::PolicyDenied,
+                        ErrorCategory::Policy,
+                        reason,
+                    ))
+                } else if name == "update_plan" {
                     let plan = plan_from_input(&input);
                     if plan.is_empty() {
                         Ok("Visible task plan update ignored because it was empty.".to_owned())
@@ -715,6 +760,21 @@ impl<P: ModelProvider> AgentEngine<P> {
                         }
                         Err(error) => Err(error),
                     }
+                } else if self
+                    .team_context
+                    .as_ref()
+                    .is_some_and(|team| team.handles(&name))
+                {
+                    self.team_context
+                        .as_ref()
+                        .ok_or_else(|| {
+                            MedusaError::new(
+                                ErrorCode::InternalInvariant,
+                                ErrorCategory::Internal,
+                                "team tool context disappeared",
+                            )
+                        })?
+                        .execute(&name, &input)
                 } else if name == "desktop_commander" && tool_allowed(self.config.agent.mode, &name)
                 {
                     self.execute_desktop_commander(&session.repo, &input)
