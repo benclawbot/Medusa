@@ -59,23 +59,6 @@ git -C "$REPO" init -q -b main
 git -C "$REPO" config user.name "Medusa Live E2E"
 git -C "$REPO" config user.email "medusa-e2e@example.invalid"
 
-# MiniMax-M3's OpenAI-compatible endpoint rejects the empty user message that
-# follows a tool result in the current generic OpenAI serializer. Exercise the
-# same model through MiniMax's Anthropic-compatible endpoint so the live gate
-# retains real tool use and multi-turn validation without weakening coverage.
-cat > "$REPO/.medusa/config.toml" <<'EOF'
-version = 1
-
-[model]
-provider = "minimax"
-name = "MiniMax-M3"
-protocol = "anthropic"
-base_url = "https://api.minimax.io/anthropic"
-auth = "api-key"
-tool_calling = true
-streaming = false
-EOF
-
 cat > "$REPO/value.txt" <<'EOF'
 41
 EOF
@@ -150,7 +133,15 @@ HEARTBEAT_PID=$!
 echo "::group::live coding session: multi-language-repair (3 independent validations)"
 set +e
 timeout --signal=TERM --kill-after=30s "${LIVE_E2E_TIMEOUT_SECONDS}s" \
-  "$MEDUSA" --repo "$REPO" run "$OBJECTIVE" 2>&1 | tee "$ARTIFACTS/multi-language-repair.log"
+  "$MEDUSA" --repo "$REPO" \
+    --set model.provider=minimax \
+    --set model.name=MiniMax-M3 \
+    --set model.protocol=anthropic \
+    --set model.base_url=https://api.minimax.io/anthropic \
+    --set model.auth=api-key \
+    --set model.tool_calling=true \
+    --set model.streaming=false \
+    run "$OBJECTIVE" 2>&1 | tee "$ARTIFACTS/multi-language-repair.log"
 MEDUSA_STATUS=${PIPESTATUS[0]}
 set -e
 kill "$HEARTBEAT_PID" 2>/dev/null || true
