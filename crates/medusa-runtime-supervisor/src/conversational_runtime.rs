@@ -7,8 +7,8 @@
 use std::collections::BTreeMap;
 
 use crate::conversational::{
-    CancellationDisposition, ConversationalSupervisor, RegistrySnapshot, SupervisorEvent, TaskRecord,
-    TaskStatus,
+    CancellationDisposition, ConversationalSupervisor, RegistrySnapshot, SupervisorEvent,
+    TaskRecord, TaskStatus,
 };
 
 pub trait WorkerHandle {
@@ -79,8 +79,13 @@ impl<W: WorkerHandle> ConversationalRuntime<W> {
             .collect())
     }
 
-    pub fn pause_task(&mut self, task_id: &str) -> Result<CoordinatorEvent, RuntimeControlError<W::Error>> {
-        self.worker_mut(task_id)?.pause().map_err(RuntimeControlError::Worker)?;
+    pub fn pause_task(
+        &mut self,
+        task_id: &str,
+    ) -> Result<CoordinatorEvent, RuntimeControlError<W::Error>> {
+        self.worker_mut(task_id)?
+            .pause()
+            .map_err(RuntimeControlError::Worker)?;
         let event = self
             .supervisor
             .transition(task_id, TaskStatus::Paused)
@@ -88,8 +93,13 @@ impl<W: WorkerHandle> ConversationalRuntime<W> {
         Ok(CoordinatorEvent::Supervisor(event))
     }
 
-    pub fn resume_task(&mut self, task_id: &str) -> Result<CoordinatorEvent, RuntimeControlError<W::Error>> {
-        self.worker_mut(task_id)?.resume().map_err(RuntimeControlError::Worker)?;
+    pub fn resume_task(
+        &mut self,
+        task_id: &str,
+    ) -> Result<CoordinatorEvent, RuntimeControlError<W::Error>> {
+        self.worker_mut(task_id)?
+            .resume()
+            .map_err(RuntimeControlError::Worker)?;
         let event = self
             .supervisor
             .transition(task_id, TaskStatus::Active)
@@ -225,7 +235,9 @@ mod tests {
     #[test]
     fn stopping_speech_does_not_change_worker_state() {
         let mut runtime = ConversationalRuntime::new("conversation").unwrap();
-        runtime.register_task(task("a"), MockWorker::default()).unwrap();
+        runtime
+            .register_task(task("a"), MockWorker::default())
+            .unwrap();
         runtime
             .supervisor
             .transition("a", TaskStatus::Active)
@@ -236,17 +248,32 @@ mod tests {
                 .unwrap(),
             vec![CoordinatorEvent::SpeechStopped]
         );
-        assert_eq!(runtime.supervisor().task("a").unwrap().status, TaskStatus::Active);
+        assert_eq!(
+            runtime.supervisor().task("a").unwrap().status,
+            TaskStatus::Active
+        );
     }
 
     #[test]
     fn cancelling_one_task_does_not_cancel_another() {
         let mut runtime = ConversationalRuntime::new("conversation").unwrap();
-        runtime.register_task(task("a"), MockWorker::default()).unwrap();
-        runtime.register_task(task("b"), MockWorker::default()).unwrap();
-        runtime.cancel_task("a", CancellationDisposition::ArchiveChanges).unwrap();
-        assert_eq!(runtime.supervisor().task("a").unwrap().status, TaskStatus::Cancelling);
-        assert_eq!(runtime.supervisor().task("b").unwrap().status, TaskStatus::Queued);
+        runtime
+            .register_task(task("a"), MockWorker::default())
+            .unwrap();
+        runtime
+            .register_task(task("b"), MockWorker::default())
+            .unwrap();
+        runtime
+            .cancel_task("a", CancellationDisposition::ArchiveChanges)
+            .unwrap();
+        assert_eq!(
+            runtime.supervisor().task("a").unwrap().status,
+            TaskStatus::Cancelling
+        );
+        assert_eq!(
+            runtime.supervisor().task("b").unwrap().status,
+            TaskStatus::Queued
+        );
         assert!(runtime.workers.get("a").unwrap().process_tree_terminated);
         assert!(!runtime.workers.get("b").unwrap().process_tree_terminated);
     }
@@ -254,19 +281,41 @@ mod tests {
     #[test]
     fn cancel_all_terminates_every_active_process_tree() {
         let mut runtime = ConversationalRuntime::new("conversation").unwrap();
-        runtime.register_task(task("a"), MockWorker::default()).unwrap();
-        runtime.register_task(task("b"), MockWorker::default()).unwrap();
-        runtime.cancel_all(CancellationDisposition::RevertChanges).unwrap();
-        assert!(runtime.workers.values().all(|worker| worker.process_tree_terminated));
-        assert!(runtime.supervisor().tasks().all(|task| task.status == TaskStatus::Cancelling));
+        runtime
+            .register_task(task("a"), MockWorker::default())
+            .unwrap();
+        runtime
+            .register_task(task("b"), MockWorker::default())
+            .unwrap();
+        runtime
+            .cancel_all(CancellationDisposition::RevertChanges)
+            .unwrap();
+        assert!(
+            runtime
+                .workers
+                .values()
+                .all(|worker| worker.process_tree_terminated)
+        );
+        assert!(
+            runtime
+                .supervisor()
+                .tasks()
+                .all(|task| task.status == TaskStatus::Cancelling)
+        );
     }
 
     #[test]
     fn snapshot_restoration_keeps_tasks_but_requires_worker_reattachment() {
         let mut runtime = ConversationalRuntime::new("conversation").unwrap();
-        runtime.register_task(task("a"), MockWorker::default()).unwrap();
-        let mut restored = ConversationalRuntime::<MockWorker>::restore(runtime.snapshot()).unwrap();
+        runtime
+            .register_task(task("a"), MockWorker::default())
+            .unwrap();
+        let mut restored =
+            ConversationalRuntime::<MockWorker>::restore(runtime.snapshot()).unwrap();
         assert!(restored.supervisor().task("a").is_some());
-        assert_eq!(restored.pause_task("a"), Err(RuntimeControlError::MissingWorker));
+        assert_eq!(
+            restored.pause_task("a"),
+            Err(RuntimeControlError::MissingWorker)
+        );
     }
 }
