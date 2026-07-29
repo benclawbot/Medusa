@@ -1,0 +1,55 @@
+name: Apply production multi-agent preflight
+
+on:
+  pull_request:
+    branches:
+      - main
+    paths:
+      - .github/patches/preflight-*.patch
+      - .github/workflows/apply-production-multi-agent-preflight.yml
+
+permissions:
+  contents: write
+
+jobs:
+  apply-and-validate:
+    if: github.event.pull_request.head.repo.full_name == github.repository && github.head_ref == 'agent/production-multi-agent-preflight'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: agent/production-multi-agent-preflight
+          fetch-depth: 0
+      - name: Apply staged refactor patches
+        shell: bash
+        run: |
+          set -euo pipefail
+          mapfile -t patches < <(find .github/patches -maxdepth 1 -name 'preflight-*.patch' -print | sort)
+          test "${#patches[@]}" -eq 8
+          for patch in "${patches[@]}"; do
+            echo "Checking ${patch}"
+            git apply --check "${patch}"
+            git apply "${patch}"
+          done
+          rm -f .github/patches/preflight-*.patch
+          rm -f .github/workflows/apply-production-multi-agent-preflight.yml
+      - name: Format
+        run: cargo fmt --all
+      - name: Validate architecture and capability evidence
+        run: |
+          python3 scripts/check-product-architecture.py
+          python3 scripts/check-capability-evidence.py
+      - name: Check workspace
+        run: cargo check --workspace --all-features
+      - name: Lint affected crates
+        run: cargo clippy -p medusa-runtime -p medusa-agent -p medusa-multi-agent-scheduler --all-targets --all-features -- -D warnings
+      - name: Test affected crates
+        run: cargo test -p medusa-runtime -p medusa-agent -p medusa-multi-agent-scheduler --all-features
+      - name: Commit validated source
+        run: |
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add -A
+          git diff --cached --check
+          git commit -m "Dispatch durable read-only teammates from run_prompt"
+          git push origin HEAD:agent/production-multi-agent-preflight
