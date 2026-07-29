@@ -15,3 +15,5 @@ Components that duplicate these responsibilities must be consolidated or removed
 ## Current production slice
 
 Coordinated prompts dispatch independent planner and risk-reviewer sessions in parallel. Each teammate receives a role-bound read-only policy, a durable lease, a separate session, and a repository-snapshot-bound context packet. Their validated evidence is added to protected parent context. The parent is the only mutation authority and cannot report completed coordinated work until repository verification passes.
+
+Durable coordinator records live under `.medusa/executions/<execution-id>`. The execution identity binds the task plan to a deterministic repository-content fingerprint, so cached teammate evidence is invalidated whenever relevant repository content changes.
