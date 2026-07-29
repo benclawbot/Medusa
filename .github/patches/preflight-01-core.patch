@@ -1,0 +1,138 @@
+diff --git a/Cargo.toml b/Cargo.toml
+index 8f0c466..aef1d16 100644
+--- a/Cargo.toml
++++ b/Cargo.toml
+@@ -72,10 +72,10 @@ license = "MIT"
+ repository = "https://github.com/benclawbot/Medusa"
+ 
+ [workspace.metadata.medusa]
+-production_execution_model = "single-agent-execution-with-integrated-orchestration"
+-production_entrypoint = "medusa-runtime::RuntimeController -> run_prompt -> production_orchestrator::plan -> medusa-agent::AgentEngine"
+-orchestration_planning = "production runtime path; dependency-aware contracts and schedule waves guide the single executing AgentEngine"
+-subagent_delegation = "runtime-disabled; scheduler, leases, transactions, consensus, rollback, replay, and recovery are integrated as planning, safety, durability, and verification services without dispatching independent model agents"
++production_execution_model = "bounded-read-only-teammates-with-parent-owned-mutation"
++production_entrypoint = "medusa-runtime::RuntimeController -> run_prompt -> multi_agent_coordinator::run_preflight -> bounded medusa-agent::AgentEngine teammates -> parent medusa-agent::AgentEngine"
++orchestration_planning = "production runtime path; task contracts and schedule waves drive durable read-only teammate dispatch"
++subagent_delegation = "production-read-only; mutating teammate dispatch remains disabled until worktree isolation and guarded integration are enabled"
+ verification_gate = "repository"
+ 
+ [workspace.dependencies]
+diff --git a/crates/medusa-agent/src/worker_execution.rs b/crates/medusa-agent/src/worker_execution.rs
+index c09bde5..7fa5676 100644
+--- a/crates/medusa-agent/src/worker_execution.rs
++++ b/crates/medusa-agent/src/worker_execution.rs
+@@ -258,6 +258,63 @@ impl WorkerExecutionController {
+         Ok(expired)
+     }
+ 
++    pub fn recover_interrupted(&mut self) -> Result<Vec<String>, String> {
++        let interrupted = self
++            .state
++            .leases
++            .values()
++            .map(|lease| {
++                (
++                    lease.task_id.clone(),
++                    lease.worker_id.clone(),
++                    lease.lease_epoch,
++                )
++            })
++            .collect::<Vec<_>>();
++        for (task_id, worker_id, _epoch) in &interrupted {
++            self.state
++                .schedule
++                .fail(task_id, worker_id, "runtime interrupted", true)
++                .map_err(str::to_owned)?;
++            self.state
++                .schedule
++                .set_worker_health(worker_id, true)
++                .map_err(str::to_owned)?;
++            self.state.leases.remove(task_id);
++            if let Some(worker) = self.state.workers.get_mut(worker_id) {
++                worker.state = WorkerState::Ready;
++            }
++            self.state.summary.active = self.state.summary.active.saturating_sub(1);
++            self.state.summary.retries = self.state.summary.retries.saturating_add(1);
++            self.push_progress(
++                ProgressKind::Retrying,
++                format!("task {task_id} requeued after runtime interruption"),
++                Some(task_id.clone()),
++            )?;
++        }
++        self.persist()?;
++        Ok(interrupted
++            .into_iter()
++            .map(|(task_id, _, _)| task_id)
++            .collect())
++    }
++
++    pub fn accept_persisted_completion(
++        &mut self,
++        task_id: &str,
++        worker_id: &str,
++        lease_epoch: u64,
++    ) -> Result<WorkerCompletion, String> {
++        self.current_lease(task_id, worker_id, lease_epoch)?;
++        self.accept_completion(task_id, worker_id, lease_epoch)?;
++        Ok(WorkerCompletion {
++            task_id: task_id.to_owned(),
++            worker_id: worker_id.to_owned(),
++            lease_epoch,
++            transaction_proposals: Vec::new(),
++        })
++    }
++
+     pub fn complete_without_mutation(
+         &mut self,
+         task_id: &str,
+@@ -666,6 +723,38 @@ mod tests {
+         );
+     }
+ 
++    #[test]
++    fn interrupted_leases_requeue_with_new_epochs() {
++        let directory = tempfile::tempdir().unwrap();
++        let path = directory.path().join("execution.json");
++        let mut controller = controller(&path);
++        let first = controller.dispatch(100, 100).unwrap().remove(0);
++
++        let mut restored = WorkerExecutionController::load(&path).unwrap();
++        assert_eq!(restored.recover_interrupted().unwrap(), vec!["analyze"]);
++        let second = restored.dispatch(200, 100).unwrap().remove(0);
++        assert_eq!(second.task_id, first.task_id);
++        assert!(second.lease_epoch > first.lease_epoch);
++    }
++
++    #[test]
++    fn persisted_completion_is_accepted_after_restart() {
++        let directory = tempfile::tempdir().unwrap();
++        let path = directory.path().join("execution.json");
++        let mut controller = controller(&path);
++        let assignment = controller.dispatch(100, 100).unwrap().remove(0);
++
++        let mut restored = WorkerExecutionController::load(&path).unwrap();
++        restored
++            .accept_persisted_completion(
++                &assignment.task_id,
++                &assignment.worker_id,
++                assignment.lease_epoch,
++            )
++            .unwrap();
++        assert!(restored.is_complete());
++    }
++
+     #[test]
+     fn cancellation_releases_lease_and_survives_restart() {
+         let directory = tempfile::tempdir().unwrap();
+diff --git a/crates/medusa-runtime/Cargo.toml b/crates/medusa-runtime/Cargo.toml
+index 3d6a4f7..f0055c8 100644
+--- a/crates/medusa-runtime/Cargo.toml
++++ b/crates/medusa-runtime/Cargo.toml
+@@ -39,6 +39,7 @@ medusa-time-travel = { path = "../medusa-time-travel" }
+ medusa-tool-control = { path = "../medusa-tool-control" }
+ medusa-tool-policy = { path = "../medusa-tool-policy" }
+ medusa-turn-assembly = { path = "../medusa-turn-assembly" }
++medusa-workers = { path = "../medusa-workers" }
+ png = "0.17"
+ serde.workspace = true
+ serde_json.workspace = true
