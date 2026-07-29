@@ -94,6 +94,10 @@ export interface ImageAttachment {
   kind: "image";
   name: string;
   dataUrl: string;
+  mediaType?: string;
+  sizeBytes?: number;
+  width?: number;
+  height?: number;
 }
 
 export interface TextAttachment {
