@@ -1,6 +1,7 @@
-use std::path::Path;
+use std::{fs, path::Path};
 
 use medusa_core::{ErrorCategory, ErrorCode, MedusaError, MedusaResult};
+use sha2::{Digest, Sha256};
 
 use crate::{
     output_envelope::{OutputMode, adapt_command},
@@ -19,15 +20,28 @@ pub(crate) fn run_approved(repo: &Path, program: &str, args: &[String]) -> Medus
 
 fn run_validated(repo: &Path, program: &str, args: &[String]) -> MedusaResult<String> {
     let output = sandboxed_command(repo, program, args)?;
-    let evidence = adapt_command(
+    let command = format!("command={} {}", program, args.join(" "));
+    let raw = format!(
+        "{command}\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let adapted = adapt_command(
         program,
         args,
         &output.stdout,
         &output.stderr,
         output.status.success(),
         OutputMode::Compact,
-    )
-    .to_string();
+    );
+    let mut evidence = adapted.to_string();
+    if adapted.expansion_handle.is_some() {
+        let path = persist_expansion(repo, &raw)?;
+        evidence.push_str(&format!(
+            "\n[output-expansion path={}; retrieve_with=fs_read]",
+            path.display()
+        ));
+    }
     if output.status.success() {
         Ok(evidence)
     } else {
@@ -36,5 +50,46 @@ fn run_validated(repo: &Path, program: &str, args: &[String]) -> MedusaResult<St
             ErrorCategory::Execution,
             evidence,
         ))
+    }
+}
+
+fn persist_expansion(repo: &Path, raw: &str) -> MedusaResult<std::path::PathBuf> {
+    let digest = Sha256::digest(format!("shell_run\0{raw}").as_bytes());
+    let relative = Path::new(".medusa")
+        .join("output-expansions")
+        .join(format!("{}.txt", hex::encode(&digest[..8])));
+    let absolute = repo.join(&relative);
+    if let Some(parent) = absolute.parent() {
+        fs::create_dir_all(parent)?;
+    }
+    if !absolute.exists() {
+        fs::write(&absolute, raw)?;
+    }
+    Ok(relative)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn expansion_path_is_deterministic_and_readable() {
+        let directory = tempfile::tempdir().expect("temporary repository");
+        let first = persist_expansion(
+            directory.path(),
+            "command=cargo test\nstdout:\nok\nstderr:\n",
+        )
+        .expect("persist expansion");
+        let second = persist_expansion(
+            directory.path(),
+            "command=cargo test\nstdout:\nok\nstderr:\n",
+        )
+        .expect("persist expansion again");
+        assert_eq!(first, second);
+        assert!(first.starts_with(".medusa/output-expansions"));
+        assert_eq!(
+            fs::read_to_string(directory.path().join(first)).expect("read expansion"),
+            "command=cargo test\nstdout:\nok\nstderr:\n"
+        );
     }
 }
