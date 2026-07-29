@@ -25,17 +25,25 @@ jobs:
         run: |
           set -euo pipefail
           mapfile -t patches < <(find .github/patches -maxdepth 1 -name 'preflight-*.patch' -print | sort)
-          test "${#patches[@]}" -eq 8
+          test "${#patches[@]}" -eq 9
           for patch_file in "${patches[@]}"; do
             echo "Checking ${patch_file}"
             if [[ "${patch_file}" == *preflight-04-coordinator-recovery.patch ]]; then
-              patch --dry-run --fuzz=3 -p1 < "${patch_file}"
-              patch --fuzz=3 -p1 < "${patch_file}"
+              set +e
+              patch --batch --fuzz=3 -p1 < "${patch_file}"
+              patch_status=$?
+              set -e
+              test "${patch_status}" -eq 1
+              reject=crates/medusa-runtime/src/multi_agent_coordinator.rs.rej
+              test -f "${reject}"
+              grep -F 'lease_epoch: 0' "${reject}"
+              rm "${reject}"
             else
               git apply --check "${patch_file}"
               git apply "${patch_file}"
             fi
           done
+          test -z "$(find . -name '*.rej' -o -name '*.orig')"
           rm -f .github/patches/preflight-*.patch
           rm -f .github/workflows/apply-production-multi-agent-preflight.yml
       - name: Format
