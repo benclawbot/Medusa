@@ -1,0 +1,33 @@
+name: Apply issue 509 patch
+
+on:
+  push:
+    branches:
+      - agent/issue-509-learning-retrieval
+    paths:
+      - .github/workflows/issue509-bootstrap.yml
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          ref: agent/issue-509-learning-retrieval
+      - name: Apply scoped retrieval implementation
+        shell: bash
+        run: |
+          set -euo pipefail
+          patch=.medusa/issue509-bootstrap/raw-00.patch
+          git apply --check "$patch"
+          git apply --index "$patch"
+          git rm -r --ignore-unmatch .medusa/issue509-bootstrap
+          git rm --ignore-unmatch .github/workflows/issue509-bootstrap.yml
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git commit -m "Add explainable learned behavior retrieval"
+          git push origin HEAD:agent/issue-509-learning-retrieval
