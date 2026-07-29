@@ -31,3 +31,4 @@ jobs:
           git config user.email 41898282+github-actions[bot]@users.noreply.github.com
           git commit -m "Add explainable learned behavior retrieval"
           git push origin HEAD:agent/issue-509-learning-retrieval
+# retry bootstrap
