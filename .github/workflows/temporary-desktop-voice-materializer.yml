@@ -3,11 +3,14 @@ on:
   workflow_dispatch:
   push:
     branches: [agent/issue-484-desktop-voice-controls]
+  pull_request:
+    types: [reopened]
+    branches: [main]
 permissions:
   contents: write
 jobs:
   apply:
-    if: github.actor != 'github-actions[bot]'
+    if: github.actor != 'github-actions[bot]' && github.head_ref == 'agent/issue-484-desktop-voice-controls'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
