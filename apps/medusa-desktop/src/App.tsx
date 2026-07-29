@@ -8,6 +8,7 @@ import {
   FolderOpen,
   Gauge,
   ImagePlus,
+  Maximize2,
   ListChecks,
   MessageSquare,
   OctagonX,
@@ -78,6 +79,15 @@ const defaultModelPreferences: ModelPreferences = {
 };
 let messageCounter = 0;
 const nextMessageId = () => ++messageCounter;
+const MAX_IMAGE_BYTES = 20 * 1024 * 1024;
+const SUPPORTED_IMAGE_TYPES = new Set(["image/png", "image/jpeg", "image/webp", "image/gif"]);
+
+function formatBytes(bytes?: number): string {
+  if (bytes === undefined) return "unknown size";
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+}
 
 function basename(path: string): string {
   return path.split(/[\\/]/).filter(Boolean).pop() ?? path;
@@ -103,15 +113,34 @@ function loadModelPreferences(): ModelPreferences {
 
 function readImage(file: File): Promise<DesktopAttachment> {
   return new Promise((resolve, reject) => {
+    if (!SUPPORTED_IMAGE_TYPES.has(file.type)) {
+      reject(new Error(`Unsupported image type ${file.type || "unknown"}. Use PNG, JPEG, WebP, or GIF.`));
+      return;
+    }
+    if (file.size > MAX_IMAGE_BYTES) {
+      reject(new Error(`${file.name || "Image"} is ${formatBytes(file.size)}; the maximum is 20 MB.`));
+      return;
+    }
     const reader = new FileReader();
     reader.onload = () => {
       if (typeof reader.result !== "string") {
-        reject(new Error("The pasted image could not be read."));
+        reject(new Error("The image could not be read."));
         return;
       }
-      resolve({ kind: "image", name: file.name || "pasted-image.png", dataUrl: reader.result });
+      const image = new Image();
+      image.onload = () => resolve({
+        kind: "image",
+        name: file.name || "pasted-image.png",
+        dataUrl: reader.result as string,
+        mediaType: file.type,
+        sizeBytes: file.size,
+        width: image.naturalWidth,
+        height: image.naturalHeight,
+      });
+      image.onerror = () => reject(new Error(`${file.name || "Image"} could not be decoded.`));
+      image.src = reader.result;
     };
-    reader.onerror = () => reject(new Error("The pasted image could not be read."));
+    reader.onerror = () => reject(new Error("The image could not be read."));
     reader.readAsDataURL(file);
   });
 }
@@ -172,6 +201,8 @@ export function App() {
   const [slashSuggestions, setSlashSuggestions] = useState<CommandSuggestion[]>([]);
   const [slashSelection, setSlashSelection] = useState(0);
   const [attachments, setAttachments] = useState<DesktopAttachment[]>([]);
+  const [previewImage, setPreviewImage] = useState<Extract<DesktopAttachment, { kind: "image" }>>();
+  const [draggingImage, setDraggingImage] = useState(false);
   const [busy, setBusy] = useState(false);
   const [turn, setTurn] = useState(0);
   const [error, setError] = useState<string>();
@@ -183,6 +214,7 @@ export function App() {
   const pollBusy = useRef(false);
   const transcriptRef = useRef<HTMLDivElement>(null);
   const composerRef = useRef<HTMLTextAreaElement>(null);
+  const imageInputRef = useRef<HTMLInputElement>(null);
 
   const applyEvent = useCallback((event: RuntimeEvent) => {
     switch (event.type) {
@@ -418,20 +450,42 @@ export function App() {
     ]);
   };
 
+
+  const addImages = async (files: File[]) => {
+    if (!files.length) return;
+    try {
+      const next = await Promise.all(files.map(readImage));
+      setAttachments((current) => [...current, ...next]);
+      setError(undefined);
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : String(cause));
+    }
+  };
+
+  const imageCompatibility = useMemo(() => {
+    const normalized = provider.trim().toLowerCase();
+    if (normalized === "anthropic" || normalized === "openai" || normalized === "chatgpt-oauth") {
+      return { supported: true, text: `${model} is configured for image input.` };
+    }
+    if (normalized === "anthropic-compatible") {
+      return { supported: false, text: "This compatible route is text-only unless image support is explicitly configured." };
+    }
+    return { supported: undefined, text: "Image compatibility will be verified by the runtime before upload." };
+  }, [provider, model]);
+
   const onPaste = async (event: React.ClipboardEvent<HTMLTextAreaElement>) => {
     const images = Array.from(event.clipboardData.files).filter((file) => file.type.startsWith("image/"));
     if (!images.length) return;
     event.preventDefault();
-    try {
-      const next = await Promise.all(images.map(readImage));
-      setAttachments((current) => [...current, ...next]);
-    } catch (cause) {
-      setError(String(cause));
-    }
+    await addImages(images);
   };
 
   const sendText = async (text: string, suppliedAttachments = attachments) => {
     if (!runtimeId || (!text.trim() && suppliedAttachments.length === 0)) return;
+    if (suppliedAttachments.some((attachment) => attachment.kind === "image") && imageCompatibility.supported === false) {
+      setError(`${imageCompatibility.text} Switch model/route or remove the image.`);
+      return;
+    }
     const clean = text.trim();
     setError(undefined);
     setQuestions([]);
@@ -517,6 +571,7 @@ export function App() {
   const totalTokens = usage.input + usage.output;
 
   return (
+    <>
     <main className="app-shell medusa-shell">
       <aside className="sidebar">
         <div className="window-dots" aria-hidden="true">
@@ -616,17 +671,43 @@ export function App() {
             <footer className="composer-wrap">
               {!!error && <div className="error-banner"><OctagonX size={15} /> {error}</div>}
               {!!attachments.length && (
-                <div className="attachment-strip">
-                  {attachments.map((attachment, index) => (
-                    <span key={`${attachment.kind}-${index}`}>
-                      {attachment.kind === "image" ? <ImagePlus size={13} /> : <FilePlus2 size={13} />}
-                      {attachment.kind === "file" ? basename(attachment.path) : attachment.name}
-                      <button onClick={() => setAttachments((current) => current.filter((_, item) => item !== index))} aria-label="Remove attachment"><X size={12} /></button>
-                    </span>
-                  ))}
-                </div>
+                <>
+                  <div className="attachment-strip" aria-label="Attached context">
+                    {attachments.map((attachment, index) => attachment.kind === "image" ? (
+                      <article className="image-attachment-card" key={`${attachment.kind}-${index}`}>
+                        <button className="image-preview-button" onClick={() => setPreviewImage(attachment)} aria-label={`Preview ${attachment.name}`}>
+                          <img src={attachment.dataUrl} alt={attachment.name} />
+                          <Maximize2 size={14} />
+                        </button>
+                        <div><strong>{attachment.name}</strong><small>{attachment.width && attachment.height ? `${attachment.width}×${attachment.height} · ` : ""}{attachment.mediaType?.replace("image/", "").toUpperCase()} · {formatBytes(attachment.sizeBytes)}</small></div>
+                        <button className="remove-attachment" onClick={() => setAttachments((current) => current.filter((_, item) => item !== index))} aria-label={`Remove ${attachment.name}`}><X size={14} /></button>
+                      </article>
+                    ) : (
+                      <span key={`${attachment.kind}-${index}`}>
+                        <FilePlus2 size={13} />
+                        {attachment.kind === "file" ? basename(attachment.path) : attachment.name}
+                        <button onClick={() => setAttachments((current) => current.filter((_, item) => item !== index))} aria-label="Remove attachment"><X size={12} /></button>
+                      </span>
+                    ))}
+                  </div>
+                  {attachments.some((attachment) => attachment.kind === "image") && (
+                    <div className={`image-compatibility ${imageCompatibility.supported === false ? "unsupported" : imageCompatibility.supported ? "supported" : "unknown"}`} role="status">
+                      {imageCompatibility.text}
+                    </div>
+                  )}
+                </>
               )}
-              <div className="composer-card">
+              <div
+                className={`composer-card${draggingImage ? " dragging-image" : ""}`}
+                onDragEnter={(event) => { event.preventDefault(); setDraggingImage(true); }}
+                onDragOver={(event) => event.preventDefault()}
+                onDragLeave={(event) => { if (!event.currentTarget.contains(event.relatedTarget as Node | null)) setDraggingImage(false); }}
+                onDrop={(event) => {
+                  event.preventDefault();
+                  setDraggingImage(false);
+                  void addImages(Array.from(event.dataTransfer.files).filter((file) => file.type.startsWith("image/")));
+                }}
+              >
                 {!!slashSuggestions.length && (
                   <div className="slash-menu" role="listbox" aria-label="Slash commands">
                     {slashSuggestions.map((suggestion, index) => (
@@ -682,8 +763,10 @@ export function App() {
                 />
                 <div className="composer-bottom">
                   <div className="composer-tools">
-                    <button onClick={addFiles} disabled={!runtimeId} title="Attach repository files"><FilePlus2 size={16} /></button>
-                    <span>Shift+Enter for a new line</span>
+                    <input ref={imageInputRef} className="visually-hidden" type="file" accept="image/png,image/jpeg,image/webp,image/gif" multiple onChange={(event) => { void addImages(Array.from(event.target.files ?? [])); event.target.value = ""; }} />
+                    <button onClick={() => imageInputRef.current?.click()} disabled={!runtimeId} title="Attach images" aria-label="Attach images"><ImagePlus size={16} /></button>
+                    <button onClick={addFiles} disabled={!runtimeId || !repo} title="Attach repository files"><FilePlus2 size={16} /></button>
+                    <span>Paste, drop, or choose images · Shift+Enter for a new line</span>
                   </div>
                   <div className="composer-actions">
                     {busy && <button className="cancel-button" onClick={cancel}><Square size={13} /> Cancel</button>}
@@ -753,5 +836,15 @@ export function App() {
         </section>
       </aside>
     </main>
+      {previewImage && (
+        <div className="image-preview-modal" role="dialog" aria-modal="true" aria-label={`Preview ${previewImage.name}`} onClick={() => setPreviewImage(undefined)}>
+          <div className="image-preview-content" onClick={(event) => event.stopPropagation()}>
+            <div><strong>{previewImage.name}</strong><small>{previewImage.width}×{previewImage.height} · {formatBytes(previewImage.sizeBytes)}</small></div>
+            <button onClick={() => setPreviewImage(undefined)} aria-label="Close image preview"><X size={18} /></button>
+            <img src={previewImage.dataUrl} alt={previewImage.name} />
+          </div>
+        </div>
+      )}
+    </>
   );
 }
