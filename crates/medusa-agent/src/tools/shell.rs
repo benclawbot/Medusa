@@ -1,10 +1,13 @@
 use std::{fs, path::Path, time::Instant};
 
 use medusa_core::{ErrorCategory, ErrorCode, MedusaError, MedusaResult};
+use serde_json::json;
 use sha2::{Digest, Sha256};
 
 #[path = "../tool_orchestration.rs"]
 mod tool_orchestration;
+#[path = "../tool_scheduler.rs"]
+mod tool_scheduler;
 #[path = "../tool_telemetry.rs"]
 mod tool_telemetry;
 
@@ -26,12 +29,22 @@ pub(crate) fn run_approved(repo: &Path, program: &str, args: &[String]) -> Medus
 fn run_validated(repo: &Path, program: &str, args: &[String]) -> MedusaResult<String> {
     let input_summary = format!("{} {}", program, args.join(" "));
     let recommendation = tool_orchestration::recommend("shell_run", &input_summary);
+    let mut execution_budget = tool_scheduler::ExecutionBudget::for_turn(1);
+    let schedule = execution_budget.schedule_batch(1, 0)?;
+    let scheduler_evidence = tool_scheduler::ExecutionBudget::format_schedule(&schedule);
+    let input = json!({"program": program, "args": args});
+    let call_digest = execution_budget.before_call("shell_run", &input)?;
     let (cached, mut cache_evidence) =
         tool_orchestration::cache_lookup(repo, "shell_run", &input_summary)?;
     if let Some(cached) = cached {
+        execution_budget.record_output(&cached)?;
+        let verification = execution_budget.verification_for("shell_run", &call_digest, true);
         let orchestration_evidence =
             tool_orchestration::format_evidence(&recommendation, &cache_evidence);
-        return Ok(format!("{cached}\n{orchestration_evidence}"));
+        return Ok(format!(
+            "{cached}\n{orchestration_evidence}\n{scheduler_evidence}\n{}",
+            tool_scheduler::ExecutionBudget::format_verification(&verification)
+        ));
     }
 
     let started = Instant::now();
@@ -61,14 +74,23 @@ fn run_validated(repo: &Path, program: &str, args: &[String]) -> MedusaResult<St
     let trace_path = tool_telemetry::append_trace(repo, &trace)?;
 
     let mut evidence = adapted.to_string();
+    execution_budget.record_output(&evidence)?;
     if output.status.success() {
         cache_evidence =
             tool_orchestration::cache_store(repo, "shell_run", &input_summary, &evidence)?;
     }
+    let verification =
+        execution_budget.verification_for("shell_run", &call_digest, output.status.success());
     let orchestration_evidence =
         tool_orchestration::format_evidence(&recommendation, &cache_evidence);
     evidence.push('\n');
     evidence.push_str(&orchestration_evidence);
+    evidence.push('\n');
+    evidence.push_str(&scheduler_evidence);
+    evidence.push('\n');
+    evidence.push_str(&tool_scheduler::ExecutionBudget::format_verification(
+        &verification,
+    ));
     evidence.push_str(&format!(
         "\n[tool-telemetry path={}; schema_version={}]",
         trace_path.display(),
@@ -144,5 +166,19 @@ mod tests {
         assert!(evidence.contains("selected=shell_run"));
         assert!(evidence.contains("TargetedTestBeforeBroadSuite"));
         assert!(evidence.contains("prefer targeted test before broad suite"));
+    }
+
+    #[test]
+    fn shipped_shell_path_emits_scheduler_and_verification_evidence() {
+        let mut budget = tool_scheduler::ExecutionBudget::for_turn(2);
+        let schedule = budget.schedule_batch(1, 0).expect("schedule shell");
+        let digest = budget
+            .before_call("shell_run", &json!({"program":"cargo","args":["test"]}))
+            .expect("record call");
+        let verification = budget.verification_for("shell_run", &digest, true);
+        assert!(
+            tool_scheduler::ExecutionBudget::format_schedule(&schedule).contains("parallel=false")
+        );
+        assert_eq!(verification.status, "not_applicable");
     }
 }
