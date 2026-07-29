@@ -1,6 +1,7 @@
 fn main() -> Result<(), Box<dyn Error>> {
     println!("cargo:rerun-if-changed=src/runtime_impl.rs");
     println!("cargo:rerun-if-changed=src/production_orchestrator.rs");
+    println!("cargo:rerun-if-changed=src/tool_policy.inc");
     println!("cargo:rerun-if-changed=src/recovery_tui.inc");
     println!("cargo:rerun-if-changed=src/commands.rs");
     println!("cargo:rerun-if-changed=src/review.inc");
@@ -64,6 +65,11 @@ fn main() -> Result<(), Box<dyn Error>> {
     source.push_str(&recovery_source);
     source.push_str("\n}\n");
 
+    let tool_policy_source = fs::read_to_string("src/tool_policy.inc")?.replace("\r\n", "\n");
+    source.push_str("\nmod tool_policy {\n");
+    source.push_str(&tool_policy_source);
+    source.push_str("\n}\n");
+
     replace_once(
         &mut source,
         "    ConfigureModel(ModelConfiguration),\n    Shutdown,",
@@ -106,7 +112,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     replace_once(
         &mut source,
         "    let engine = AgentEngine::new_with_cancellation(provider, config, Arc::clone(cancel));\n    let selected_skill = state.pending_skill.clone();\n    let skill_context = selected_skill.as_ref().map(SelectedSkill::prompt_context);\n    let content = message_blocks(&draft)?;\n",
-        "    let resuming_pending_question = state\n        .session\n        .as_ref()\n        .is_some_and(|session| session.pending_question.is_some());\n    if !resuming_pending_question {\n        crate::review::capture_review_baseline(&state.repo)\n            .map_err(|error| RuntimeError::agent(error.to_string()))?;\n    }\n    let engine = AgentEngine::new_with_cancellation(provider, config, Arc::clone(cancel));\n    let selected_skill = state.pending_skill.clone();\n    let execution_plan = crate::production_orchestrator::plan(&draft).map_err(RuntimeError::agent)?;\n    for event in crate::production_orchestrator::events(&execution_plan) { let _ = events.send(event); }\n    let orchestration_context = crate::production_orchestrator::runtime_context(&execution_plan);\n    let learning_context = crate::learning_retrieval::select(\n        &state.repo,\n        &draft,\n        state.session.as_ref().map(|session| session.id.as_str()),\n        events,\n    );\n    let mut task_context = vec![orchestration_context];\n    if let Some(learning) = learning_context.prompt_context { task_context.push(learning); }\n    if let Some(skill) = selected_skill.as_ref().map(SelectedSkill::prompt_context) { task_context.push(skill); }\n    let skill_context = task_context.join(\"\\n\\n\");\n    let content = message_blocks(&draft)?;\n",
+        "    let resuming_pending_question = state\n        .session\n        .as_ref()\n        .is_some_and(|session| session.pending_question.is_some());\n    if !resuming_pending_question {\n        crate::review::capture_review_baseline(&state.repo)\n            .map_err(|error| RuntimeError::agent(error.to_string()))?;\n    }\n    let engine = AgentEngine::new_with_cancellation(provider, config, Arc::clone(cancel));\n    let selected_skill = state.pending_skill.clone();\n    let execution_plan = crate::production_orchestrator::plan(&draft).map_err(RuntimeError::agent)?;\n    for event in crate::production_orchestrator::events(&execution_plan) { let _ = events.send(event); }\n    let orchestration_context = crate::production_orchestrator::runtime_context(&execution_plan);\n    let tool_policy_context = crate::tool_policy::runtime_context(&draft).map_err(RuntimeError::agent)?;\n    let learning_context = crate::learning_retrieval::select(\n        &state.repo,\n        &draft,\n        state.session.as_ref().map(|session| session.id.as_str()),\n        events,\n    );\n    let mut task_context = vec![orchestration_context, tool_policy_context];\n    if let Some(learning) = learning_context.prompt_context { task_context.push(learning); }\n    if let Some(skill) = selected_skill.as_ref().map(SelectedSkill::prompt_context) { task_context.push(skill); }\n    let skill_context = task_context.join(\"\\n\\n\");\n    let content = message_blocks(&draft)?;\n",
     )?;
     replace_once(
         &mut source,
