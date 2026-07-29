@@ -30,10 +30,7 @@ impl ClipboardService for UnsupportedClipboard {
 /// and total-payload validation.
 pub fn attach_image_file(draft: &mut PromptDraft, path: &Path) -> Result<(), ClipboardError> {
     let reader = image::ImageReader::open(path).map_err(|error| {
-        ClipboardError::Unavailable(format!(
-            "could not open image {}: {error}",
-            path.display()
-        ))
+        ClipboardError::Unavailable(format!("could not open image {}: {error}", path.display()))
     })?;
     let reader = reader.with_guessed_format().map_err(|error| {
         ClipboardError::Unavailable(format!(
@@ -41,9 +38,16 @@ pub fn attach_image_file(draft: &mut PromptDraft, path: &Path) -> Result<(), Cli
             path.display()
         ))
     })?;
-    let source_format = reader
-        .format()
-        .map(|format| format!("image/{}", format.extensions_str().first().copied().unwrap_or("unknown")));
+    let source_format = reader.format().map(|format| {
+        format!(
+            "image/{}",
+            format
+                .extensions_str()
+                .first()
+                .copied()
+                .unwrap_or("unknown")
+        )
+    });
     let decoded = reader.decode().map_err(|error| {
         ClipboardError::Unavailable(format!(
             "could not decode image {}: {error}",
@@ -89,10 +93,15 @@ pub fn attachment_summary(draft: &PromptDraft) -> String {
     match image_count {
         0 => "no images attached".to_owned(),
         1 => {
-            let dimensions = draft.attachments.iter().find_map(|attachment| match attachment {
-                PromptAttachment::Image(image) => Some(format!("{}×{}", image.width, image.height)),
-                _ => None,
-            });
+            let dimensions = draft
+                .attachments
+                .iter()
+                .find_map(|attachment| match attachment {
+                    PromptAttachment::Image(image) => {
+                        Some(format!("{}×{}", image.width, image.height))
+                    }
+                    _ => None,
+                });
             format!(
                 "1 image · {} · {}",
                 dimensions.unwrap_or_else(|| "unknown dimensions".to_owned()),
