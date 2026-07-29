@@ -1,7 +1,10 @@
-use std::{fs, path::Path};
+use std::{fs, path::Path, time::Instant};
 
 use medusa_core::{ErrorCategory, ErrorCode, MedusaError, MedusaResult};
 use sha2::{Digest, Sha256};
+
+#[path = "../tool_telemetry.rs"]
+mod tool_telemetry;
 
 use crate::{
     output_envelope::{OutputMode, adapt_command},
@@ -19,6 +22,7 @@ pub(crate) fn run_approved(repo: &Path, program: &str, args: &[String]) -> Medus
 }
 
 fn run_validated(repo: &Path, program: &str, args: &[String]) -> MedusaResult<String> {
+    let started = Instant::now();
     let output = sandboxed_command(repo, program, args)?;
     let command = format!("command={} {}", program, args.join(" "));
     let raw = format!(
@@ -34,7 +38,22 @@ fn run_validated(repo: &Path, program: &str, args: &[String]) -> MedusaResult<St
         output.status.success(),
         OutputMode::Compact,
     );
+    let trace = tool_telemetry::ToolExecutionTrace::for_shell(
+        program,
+        args,
+        output.status.success(),
+        started.elapsed(),
+        raw.len(),
+        &adapted,
+    );
+    let trace_path = tool_telemetry::append_trace(repo, &trace)?;
+
     let mut evidence = adapted.to_string();
+    evidence.push_str(&format!(
+        "\n[tool-telemetry path={}; schema_version={}]",
+        trace_path.display(),
+        trace.schema_version
+    ));
     if adapted.expansion_handle.is_some() {
         let path = persist_expansion(repo, &raw)?;
         evidence.push_str(&format!(
