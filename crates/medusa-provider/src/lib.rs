@@ -870,11 +870,13 @@ impl OpenAiProvider {
             } else {
                 Value::String(text)
             };
-            let mut wire = json!({"role": role, "content": content});
-            if !tool_calls.is_empty() {
-                wire["tool_calls"] = Value::Array(tool_calls);
+            if !text.is_empty() || !content_parts.is_empty() || !tool_calls.is_empty() {
+                let mut wire = json!({"role": role, "content": content});
+                if !tool_calls.is_empty() {
+                    wire["tool_calls"] = Value::Array(tool_calls);
+                }
+                messages.push(wire);
             }
-            messages.push(wire);
         }
         let tools: Vec<Value> = request
             .tools
