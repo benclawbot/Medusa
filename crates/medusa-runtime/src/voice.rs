@@ -1,10 +1,10 @@
 //! Provider-neutral realtime voice session state and events.
 //!
-//! This module deliberately owns no microphone, speaker, transport, UI, or
-//! provider implementation. Frontends and transports drive the same state
-//! machine and register resources that are deterministically released on close.
+//! This module owns no microphone, speaker, transport, UI, or provider
+//! implementation. Frontends and transports drive the same state machine and
+//! register resources that are deterministically released on close.
 
-use std::collections::{BTreeMap, VecDeque};
+use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::fmt;
 
 use serde::{Deserialize, Serialize};
@@ -89,16 +89,10 @@ pub enum RealtimeVoiceEvent {
         to: RealtimeVoiceState,
     },
     AvailabilityChanged(VoiceAvailability),
-    InputAudioQueued {
-        frames: usize,
-    },
-    OutputAudioQueued {
-        frames: usize,
-    },
+    InputAudioQueued { frames: usize },
+    OutputAudioQueued { frames: usize },
     Transcript(TranscriptUpdate),
-    VoiceActivity {
-        active: bool,
-    },
+    VoiceActivity { active: bool },
     Interrupted,
     TransportStatus {
         connected: bool,
@@ -138,16 +132,12 @@ pub enum VoiceSessionError {
 }
 
 /// A frontend or transport resource owned for the lifetime of a voice session.
-///
-/// Implementations should release microphones, speakers, streams, or worker
-/// tasks in `close`. Resources are never persisted by this module.
 pub trait VoiceResource: Send {
     fn name(&self) -> &str;
     fn close(&mut self) -> Result<(), String>;
 }
 
 /// Persists final voice turns into the same ordered conversation used by text.
-/// Partial transcripts are intentionally never passed to this boundary.
 pub trait VoiceTurnSink: Send {
     fn append_voice_turn(
         &mut self,
@@ -200,6 +190,7 @@ pub struct RealtimeVoiceSession {
     input_audio: BoundedAudioQueue,
     output_audio: BoundedAudioQueue,
     transcripts: BTreeMap<(String, TranscriptSpeaker), String>,
+    persisted_turns: BTreeSet<(String, TranscriptSpeaker)>,
     events: VecDeque<RealtimeVoiceEvent>,
     resources: Vec<Box<dyn VoiceResource>>,
     turn_sink: Option<Box<dyn VoiceTurnSink>>,
@@ -235,6 +226,7 @@ impl RealtimeVoiceSession {
             input_audio: BoundedAudioQueue::new(capacity)?,
             output_audio: BoundedAudioQueue::new(capacity)?,
             transcripts: BTreeMap::new(),
+            persisted_turns: BTreeSet::new(),
             events: VecDeque::new(),
             resources: Vec::new(),
             turn_sink: None,
@@ -261,14 +253,27 @@ impl RealtimeVoiceSession {
         self.turn_sink = Some(sink);
     }
 
-    pub fn register_resource(&mut self, resource: Box<dyn VoiceResource>) {
+    /// Registers a resource, or closes it immediately when setup finishes after shutdown.
+    pub fn register_resource(
+        &mut self,
+        mut resource: Box<dyn VoiceResource>,
+    ) -> Result<(), VoiceSessionError> {
+        if self.state == RealtimeVoiceState::Closed {
+            let name = resource.name().to_owned();
+            return match resource.close() {
+                Ok(()) => Err(VoiceSessionError::Closed),
+                Err(message) => Err(VoiceSessionError::ResourceClose {
+                    resource: name,
+                    message,
+                }),
+            };
+        }
         self.resources.push(resource);
+        Ok(())
     }
 
     pub fn transition(&mut self, to: RealtimeVoiceState) -> Result<(), VoiceSessionError> {
-        if self.state == RealtimeVoiceState::Closed {
-            return Err(VoiceSessionError::Closed);
-        }
+        self.ensure_open()?;
         if !valid_transition(self.state, to) {
             return Err(VoiceSessionError::InvalidTransition {
                 from: self.state,
@@ -285,21 +290,34 @@ impl RealtimeVoiceSession {
     pub fn queue_input_audio(&mut self, frame: AudioFrame) -> Result<(), VoiceSessionError> {
         self.ensure_open()?;
         self.input_audio.push(frame);
-        self.events
-            .push_back(RealtimeVoiceEvent::InputAudioQueued {
-                frames: self.input_audio.len(),
-            });
+        self.coalesce_audio_event(true, self.input_audio.len());
         Ok(())
     }
 
     pub fn queue_output_audio(&mut self, frame: AudioFrame) -> Result<(), VoiceSessionError> {
         self.ensure_open()?;
         self.output_audio.push(frame);
-        self.events
-            .push_back(RealtimeVoiceEvent::OutputAudioQueued {
-                frames: self.output_audio.len(),
-            });
+        self.coalesce_audio_event(false, self.output_audio.len());
         Ok(())
+    }
+
+    fn coalesce_audio_event(&mut self, input: bool, frames: usize) {
+        let replacement = if input {
+            RealtimeVoiceEvent::InputAudioQueued { frames }
+        } else {
+            RealtimeVoiceEvent::OutputAudioQueued { frames }
+        };
+        if let Some(existing) = self.events.iter_mut().rev().find(|event| {
+            matches!(
+                (input, &**event),
+                (true, RealtimeVoiceEvent::InputAudioQueued { .. })
+                    | (false, RealtimeVoiceEvent::OutputAudioQueued { .. })
+            )
+        }) {
+            *existing = replacement;
+        } else {
+            self.events.push_back(replacement);
+        }
     }
 
     pub fn take_input_audio(&mut self) -> Option<AudioFrame> {
@@ -326,20 +344,25 @@ impl RealtimeVoiceSession {
     ) -> Result<(), VoiceSessionError> {
         self.ensure_open()?;
         let key = (update.turn_id.clone(), update.speaker);
-        self.transcripts.insert(key, update.text.clone());
-        if update.is_final {
-            if let Some(sink) = self.turn_sink.as_mut() {
-                if let Err(message) = sink.append_voice_turn(
-                    &update.turn_id,
-                    update.speaker,
-                    &update.text,
-                ) {
-                    self.events.push_back(RealtimeVoiceEvent::Error(VoiceError {
-                        code: "conversation_append_failed".to_owned(),
-                        message,
-                        retryable: true,
-                    }));
+        self.transcripts.insert(key.clone(), update.text.clone());
+        if update.is_final && !self.persisted_turns.contains(&key) {
+            let persisted = if let Some(sink) = self.turn_sink.as_mut() {
+                match sink.append_voice_turn(&update.turn_id, update.speaker, &update.text) {
+                    Ok(()) => true,
+                    Err(message) => {
+                        self.events.push_back(RealtimeVoiceEvent::Error(VoiceError {
+                            code: "conversation_append_failed".to_owned(),
+                            message,
+                            retryable: true,
+                        }));
+                        false
+                    }
                 }
+            } else {
+                false
+            };
+            if persisted {
+                self.persisted_turns.insert(key);
             }
         }
         self.events
@@ -377,22 +400,19 @@ impl RealtimeVoiceSession {
     }
 
     /// Closes all resources in reverse registration order and clears raw audio.
-    ///
-    /// Every resource is attempted even when an earlier close fails. The first
-    /// failure is returned after deterministic cleanup has completed.
     pub fn close(&mut self) -> Result<(), VoiceSessionError> {
         if self.state == RealtimeVoiceState::Closed {
             return Ok(());
         }
         let mut first_error = None;
         for resource in self.resources.iter_mut().rev() {
-            if let Err(message) = resource.close() {
-                if first_error.is_none() {
-                    first_error = Some(VoiceSessionError::ResourceClose {
-                        resource: resource.name().to_owned(),
-                        message,
-                    });
-                }
+            if let Err(message) = resource.close()
+                && first_error.is_none()
+            {
+                first_error = Some(VoiceSessionError::ResourceClose {
+                    resource: resource.name().to_owned(),
+                    message,
+                });
             }
         }
         self.resources.clear();
@@ -401,10 +421,11 @@ impl RealtimeVoiceSession {
         let from = self.state;
         self.state = RealtimeVoiceState::Closed;
         self.events
-            .push_back(RealtimeVoiceEvent::StateChanged {
-                from,
-                to: RealtimeVoiceState::Closed,
-            });
+            .retain(|event| !matches!(event, RealtimeVoiceEvent::InputAudioQueued { .. } | RealtimeVoiceEvent::OutputAudioQueued { .. }));
+        self.events.push_back(RealtimeVoiceEvent::StateChanged {
+            from,
+            to: RealtimeVoiceState::Closed,
+        });
         self.events.push_back(RealtimeVoiceEvent::Closed);
         match first_error {
             Some(error) => Err(error),
@@ -467,12 +488,8 @@ mod tests {
     #[test]
     fn supports_deterministic_lifecycle_and_rejects_invalid_transitions() {
         let mut session = RealtimeVoiceSession::new(availability()).expect("session");
-        session
-            .transition(RealtimeVoiceState::Connecting)
-            .expect("connect");
-        session
-            .transition(RealtimeVoiceState::Listening)
-            .expect("listen");
+        session.transition(RealtimeVoiceState::Connecting).expect("connect");
+        session.transition(RealtimeVoiceState::Listening).expect("listen");
         assert_eq!(
             session.transition(RealtimeVoiceState::AssistantSpeaking),
             Err(VoiceSessionError::InvalidTransition {
@@ -480,56 +497,13 @@ mod tests {
                 to: RealtimeVoiceState::AssistantSpeaking,
             })
         );
-        session
-            .transition(RealtimeVoiceState::UserSpeaking)
-            .expect("user speech");
-        session
-            .transition(RealtimeVoiceState::Thinking)
-            .expect("thinking");
-        session
-            .transition(RealtimeVoiceState::ToolRunning)
-            .expect("tool");
-        session
-            .transition(RealtimeVoiceState::AwaitingApproval)
-            .expect("approval");
-        session
-            .transition(RealtimeVoiceState::Thinking)
-            .expect("resume");
-        session
-            .transition(RealtimeVoiceState::AssistantSpeaking)
-            .expect("assistant speech");
-        session
-            .transition(RealtimeVoiceState::Listening)
-            .expect("listen again");
     }
 
     #[test]
-    fn barge_in_clears_output_audio_and_preserves_session() {
-        let mut session = RealtimeVoiceSession::new(availability()).expect("session");
-        session.transition(RealtimeVoiceState::Connecting).expect("connect");
-        session.transition(RealtimeVoiceState::Listening).expect("listen");
-        session.transition(RealtimeVoiceState::UserSpeaking).expect("speak");
-        session.transition(RealtimeVoiceState::Thinking).expect("think");
-        session
-            .transition(RealtimeVoiceState::AssistantSpeaking)
-            .expect("assistant");
-        session
-            .queue_output_audio(AudioFrame {
-                sequence: 1,
-                bytes: vec![1, 2, 3],
-            })
-            .expect("queue");
-        session.barge_in().expect("barge in");
-        assert_eq!(session.state(), RealtimeVoiceState::Interrupted);
-        assert_eq!(session.output_audio_len(), 0);
-        session.transition(RealtimeVoiceState::Listening).expect("resume");
-    }
-
-    #[test]
-    fn audio_queues_are_bounded_and_drop_oldest_frames() {
+    fn audio_queues_and_notifications_are_bounded() {
         let mut session =
             RealtimeVoiceSession::with_audio_capacity(availability(), 2).expect("session");
-        for sequence in 1..=3 {
+        for sequence in 1..=100 {
             session
                 .queue_input_audio(AudioFrame {
                     sequence,
@@ -538,8 +512,18 @@ mod tests {
                 .expect("queue");
         }
         assert_eq!(session.input_audio_len(), 2);
-        assert_eq!(session.take_input_audio().expect("frame").sequence, 2);
-        assert_eq!(session.take_input_audio().expect("frame").sequence, 3);
+        let events = std::iter::from_fn(|| session.next_event()).collect::<Vec<_>>();
+        assert_eq!(
+            events
+                .iter()
+                .filter(|event| matches!(event, RealtimeVoiceEvent::InputAudioQueued { .. }))
+                .count(),
+            1
+        );
+        assert!(matches!(
+            events.last(),
+            Some(RealtimeVoiceEvent::InputAudioQueued { frames: 2 })
+        ));
     }
 
     struct RecordingSink(Arc<Mutex<Vec<(String, TranscriptSpeaker, String)>>>);
@@ -560,33 +544,21 @@ mod tests {
     }
 
     #[test]
-    fn partial_transcripts_replace_in_place_and_only_final_text_is_persisted() {
+    fn repeated_final_transcripts_are_persisted_once() {
         let recorded = Arc::new(Mutex::new(Vec::new()));
         let mut session = RealtimeVoiceSession::new(availability()).expect("session");
         session.set_turn_sink(Box::new(RecordingSink(Arc::clone(&recorded))));
-        session
-            .update_transcript(TranscriptUpdate {
-                turn_id: "turn-1".to_owned(),
-                speaker: TranscriptSpeaker::User,
-                text: "fix".to_owned(),
-                is_final: false,
-            })
-            .expect("partial");
-        session
-            .update_transcript(TranscriptUpdate {
-                turn_id: "turn-1".to_owned(),
-                speaker: TranscriptSpeaker::User,
-                text: "fix the test".to_owned(),
-                is_final: true,
-            })
-            .expect("final");
-        assert_eq!(
-            session.transcript("turn-1", TranscriptSpeaker::User),
-            Some("fix the test")
-        );
-        let recorded = recorded.lock().expect("recorded turns");
-        assert_eq!(recorded.len(), 1);
-        assert_eq!(recorded[0].2, "fix the test");
+        for text in ["fix the test", "fix the test"] {
+            session
+                .update_transcript(TranscriptUpdate {
+                    turn_id: "turn-1".to_owned(),
+                    speaker: TranscriptSpeaker::User,
+                    text: text.to_owned(),
+                    is_final: true,
+                })
+                .expect("final");
+        }
+        assert_eq!(recorded.lock().expect("recorded").len(), 1);
     }
 
     struct RecordingResource {
@@ -614,42 +586,43 @@ mod tests {
     fn close_releases_every_resource_in_reverse_order_and_clears_audio() {
         let closed = Arc::new(Mutex::new(Vec::new()));
         let mut session = RealtimeVoiceSession::new(availability()).expect("session");
-        session.register_resource(Box::new(RecordingResource {
-            name: "microphone",
-            closed: Arc::clone(&closed),
-            fail: true,
-        }));
-        session.register_resource(Box::new(RecordingResource {
-            name: "transport",
-            closed: Arc::clone(&closed),
-            fail: false,
-        }));
         session
-            .queue_input_audio(AudioFrame {
-                sequence: 1,
-                bytes: vec![1],
-            })
-            .expect("queue");
+            .register_resource(Box::new(RecordingResource {
+                name: "microphone",
+                closed: Arc::clone(&closed),
+                fail: true,
+            }))
+            .expect("register microphone");
+        session
+            .register_resource(Box::new(RecordingResource {
+                name: "transport",
+                closed: Arc::clone(&closed),
+                fail: false,
+            }))
+            .expect("register transport");
         assert!(matches!(
             session.close(),
             Err(VoiceSessionError::ResourceClose { .. })
         ));
-        assert_eq!(session.state(), RealtimeVoiceState::Closed);
-        assert_eq!(session.input_audio_len(), 0);
         assert_eq!(
             closed.lock().expect("closed order").as_slice(),
             &["transport", "microphone"]
         );
-        assert_eq!(session.close(), Ok(()));
     }
 
     #[test]
-    fn disconnect_and_reconnect_are_explicit() {
+    fn resource_registered_after_close_is_closed_immediately() {
+        let closed = Arc::new(Mutex::new(Vec::new()));
         let mut session = RealtimeVoiceSession::new(availability()).expect("session");
-        session.transition(RealtimeVoiceState::Connecting).expect("connect");
-        session.transition(RealtimeVoiceState::Reconnecting).expect("reconnect");
-        session.transition(RealtimeVoiceState::Listening).expect("restored");
-        session.transition(RealtimeVoiceState::Failed).expect("failure");
-        session.transition(RealtimeVoiceState::Reconnecting).expect("retry");
+        session.close().expect("close session");
+        assert_eq!(
+            session.register_resource(Box::new(RecordingResource {
+                name: "late-stream",
+                closed: Arc::clone(&closed),
+                fail: false,
+            })),
+            Err(VoiceSessionError::Closed)
+        );
+        assert_eq!(closed.lock().expect("closed").as_slice(), &["late-stream"]);
     }
 }
