@@ -1,0 +1,18 @@
+diff --git a/crates/medusa-runtime/src/multi_agent_coordinator.rs b/crates/medusa-runtime/src/multi_agent_coordinator.rs
+--- a/crates/medusa-runtime/src/multi_agent_coordinator.rs
++++ b/crates/medusa-runtime/src/multi_agent_coordinator.rs
+@@ -458,11 +458,9 @@ fn execute_production_worker(
+ ) -> Result<WorkerEvidence, String> {
+     let mut worker_config = config.clone();
+     worker_config.agent.mode = Mode::ReadOnly;
+-    worker_config.agent.max_turns = worker_config
+-        .agent
+-        .max_turns
+-        .min(WORKER_TURN_LIMIT)
+-        .max(1);
++    worker_config.agent.max_turns = worker_config
++        .agent
++        .max_turns
++        .clamp(1, WORKER_TURN_LIMIT);
+     let provider = ConfiguredProvider::manager_from_config(&worker_config, session_api_key)
+         .map_err(|error| error.to_string())?;
