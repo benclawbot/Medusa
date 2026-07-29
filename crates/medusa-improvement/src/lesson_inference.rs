@@ -74,9 +74,15 @@ impl LessonInferenceEngine {
 
             let interpretations = interpretations(signal);
             for interpretation in interpretations {
-                let key = format!("{:?}:{}", interpretation.scope, interpretation.generalized_rule);
+                let key = format!(
+                    "{:?}:{}",
+                    interpretation.scope, interpretation.generalized_rule
+                );
                 let entry = grouped.entry(key).or_insert_with(|| LessonCandidate {
-                    id: format!("lesson-{}", stable_suffix(&signal.id, &interpretation.generalized_rule)),
+                    id: format!(
+                        "lesson-{}",
+                        stable_suffix(&signal.id, &interpretation.generalized_rule)
+                    ),
                     observed_pattern: interpretation.observed_pattern.clone(),
                     root_cause: interpretation.root_cause.clone(),
                     generalized_rule: interpretation.generalized_rule.clone(),
@@ -95,7 +101,9 @@ impl LessonInferenceEngine {
                 push_unique(&mut entry.supporting_signal_ids, signal.id.clone());
                 entry.regression_examples.push(RegressionExample {
                     source_signal_id: signal.id.clone(),
-                    input_summary: concise(signal.user_correction.as_deref().unwrap_or("correction")),
+                    input_summary: concise(
+                        signal.user_correction.as_deref().unwrap_or("correction"),
+                    ),
                     expected_behavior: interpretation.generalized_rule.clone(),
                 });
 
@@ -140,7 +148,10 @@ fn interpretations(signal: &LearningSignal) -> Vec<Interpretation> {
     let lower = correction.to_ascii_lowercase();
 
     if signal.kind == LearningSignalKind::Omission
-        && contains_any(&lower, &["complete", "coverage", "missed", "include", "history"])
+        && contains_any(
+            &lower,
+            &["complete", "coverage", "missed", "include", "history"],
+        )
     {
         return vec![Interpretation {
             observed_pattern: "an output claimed or implied completeness while authoritative inputs were not fully inventoried".to_owned(),
@@ -244,10 +255,22 @@ fn is_temporary_local_fact(signal: &LearningSignal) -> bool {
     if signal.candidate_scope != CandidateScope::Task {
         return false;
     }
-    let text = signal.user_correction.as_deref().unwrap_or_default().to_ascii_lowercase();
+    let text = signal
+        .user_correction
+        .as_deref()
+        .unwrap_or_default()
+        .to_ascii_lowercase();
     contains_any(
         &text,
-        &["branch ", "filename", ".zip", ".patch", "commit ", "today", "this time"],
+        &[
+            "branch ",
+            "filename",
+            ".zip",
+            ".patch",
+            "commit ",
+            "today",
+            "this time",
+        ],
     )
 }
 
@@ -256,7 +279,13 @@ fn contains_any(value: &str, needles: &[&str]) -> bool {
 }
 
 fn concise(value: &str) -> String {
-    value.split_whitespace().collect::<Vec<_>>().join(" ").chars().take(240).collect()
+    value
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+        .chars()
+        .take(240)
+        .collect()
 }
 
 fn stable_suffix(left: &str, right: &str) -> String {
@@ -279,7 +308,12 @@ mod tests {
     use super::*;
     use crate::correction_signals::{EvidenceReference, RedactionStatus};
 
-    fn signal(id: &str, kind: LearningSignalKind, text: &str, scope: CandidateScope) -> LearningSignal {
+    fn signal(
+        id: &str,
+        kind: LearningSignalKind,
+        text: &str,
+        scope: CandidateScope,
+    ) -> LearningSignal {
         LearningSignal {
             id: id.to_owned(),
             kind,
@@ -311,7 +345,11 @@ mod tests {
         let lesson = &batch.candidates[0];
         assert_eq!(lesson.scope, LessonScope::DomainGeneral);
         assert!(lesson.generalized_rule.contains("authoritative sources"));
-        assert!(lesson.regression_examples[0].input_summary.contains("commit history"));
+        assert!(
+            lesson.regression_examples[0]
+                .input_summary
+                .contains("commit history")
+        );
     }
 
     #[test]
