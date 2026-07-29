@@ -189,17 +189,16 @@ impl TeamRuntime {
                 next_sequence: 1,
             })),
         };
-        validate_state(&runtime.lock()?)?;
+        validate_state(&*runtime.lock()?)?;
         runtime.persist()?;
         Ok(runtime)
     }
 
     pub fn load(path: impl Into<PathBuf>) -> Result<Self, String> {
         let path = path.into();
-        let state: DurableTeamState = serde_json::from_slice(
-            &fs::read(&path).map_err(|error| error.to_string())?,
-        )
-        .map_err(|error| error.to_string())?;
+        let state: DurableTeamState =
+            serde_json::from_slice(&fs::read(&path).map_err(|error| error.to_string())?)
+                .map_err(|error| error.to_string())?;
         validate_state(&state)?;
         Ok(Self {
             path,
@@ -411,7 +410,9 @@ impl TeamMemberContext {
         }
         let mut state = self.team.lock().map_err(invalid)?;
         if !state.members.contains_key(recipient) {
-            return Err(invalid(format!("unknown team message recipient: {recipient}")));
+            return Err(invalid(format!(
+                "unknown team message recipient: {recipient}"
+            )));
         }
         let sequence = state.next_sequence;
         state.next_sequence = state.next_sequence.saturating_add(1);

@@ -1,4 +1,4 @@
-//! Persistent single-agent orchestration and built-in tools.
+//! Persistent single-agent execution, role-bound team contexts, and built-in tools.
 
 mod approval;
 mod engine;
@@ -9,6 +9,7 @@ pub mod output_envelope;
 mod policy;
 mod session;
 pub mod session_browser;
+pub mod team;
 pub mod tools;
 mod transaction;
 mod verification;
@@ -30,12 +31,16 @@ pub use session::{
     import_manual_advice, launch_browser_assisted_escalation, load_escalation_journal,
     persist_escalation_journal, render_chatgpt_prompt, session_usage,
 };
+pub use team::{
+    AgentExecutionPolicy, TeamMember, TeamMemberContext, TeamMemberLifecycle, TeamRole, TeamRuntime,
+};
 pub use transaction::{
     FileMutation, TransactionOutcome, TransactionPreview, apply_atomic, preview,
 };
 pub use verification::{VerificationResult, targeted_verification};
 pub use worker_execution::{
-    LeasedAssignment, WorkerCompletion, WorkerExecutionController, WorkerProgressSummary,
+    LeasedAssignment, TeamTaskView, WorkerCompletion, WorkerExecutionController,
+    WorkerProgressSummary,
 };
 
 #[cfg(test)]
@@ -330,6 +335,42 @@ mod tests {
             matches!(
                 update,
                 AgentUpdate::Event(EventPayload::ToolCallDenied { tool, .. }) if tool == "fs_write"
+            )
+        }));
+    }
+
+    #[test]
+    fn reviewer_execution_policy_denies_repository_mutation() {
+        let directory = tempfile::tempdir().expect("temporary directory");
+        let engine = AgentEngine::new(
+            ScriptedProvider::new(vec![response(
+                vec![ResponseBlock::ToolUse {
+                    id: "write-1".into(),
+                    name: "fs_write".into(),
+                    input: json!({"path": "blocked.txt", "content": "nope"}),
+                }],
+                "tool_use",
+            )]),
+            Config::default(),
+        )
+        .with_execution_policy(AgentExecutionPolicy::for_team_role(TeamRole::Reviewer));
+        let mut session = engine
+            .create_session(directory.path(), "review the proposed change".to_owned())
+            .expect("session");
+        let mut updates = Vec::new();
+
+        assert_eq!(
+            engine
+                .step_with_observer(&mut session, |update| updates.push(update.clone()))
+                .expect("reviewer step"),
+            StepOutcome::Continue
+        );
+        assert!(!directory.path().join("blocked.txt").exists());
+        assert!(updates.iter().any(|update| {
+            matches!(
+                update,
+                AgentUpdate::Event(EventPayload::ToolCallDenied { tool, .. })
+                    if tool == "fs_write"
             )
         }));
     }
