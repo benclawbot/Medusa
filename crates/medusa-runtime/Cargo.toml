@@ -36,6 +36,7 @@ medusa-recovery-coordinator = { path = "../medusa-recovery-coordinator" }
 medusa-review-model = { path = "../medusa-review-model" }
 medusa-session-continuity = { path = "../medusa-session-continuity" }
 medusa-time-travel = { path = "../medusa-time-travel" }
+medusa-tool-control = { path = "../medusa-tool-control" }
 medusa-tool-policy = { path = "../medusa-tool-policy" }
 medusa-turn-assembly = { path = "../medusa-turn-assembly" }
 png = "0.17"
