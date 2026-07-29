@@ -70,10 +70,10 @@ license = "MIT"
 repository = "https://github.com/benclawbot/Medusa"
 
 [workspace.metadata.medusa]
-production_execution_model = "single-agent"
-production_entrypoint = "medusa-runtime::RuntimeController -> run_prompt -> medusa-agent::AgentEngine"
-orchestration_planning = "medusa-runtime::orchestration_planning (non-production metadata only)"
-subagent_delegation = "design-only-disabled"
+production_execution_model = "single-agent-execution-with-integrated-orchestration"
+production_entrypoint = "medusa-runtime::RuntimeController -> run_prompt -> production_orchestrator::plan -> medusa-agent::AgentEngine"
+orchestration_planning = "production runtime path; dependency-aware contracts and schedule waves guide the single executing AgentEngine"
+subagent_delegation = "runtime-disabled; scheduler, leases, transactions, consensus, rollback, replay, and recovery are integrated as planning, safety, durability, and verification services without dispatching independent model agents"
 verification_gate = "repository"
 
 [workspace.dependencies]
