@@ -6,6 +6,8 @@ on:
       - 'benchmarks/**'
       - 'scripts/reliability-benchmark.py'
       - 'scripts/test-reliability-benchmark.py'
+      - 'scripts/orchestration-benchmark.py'
+      - 'scripts/test-orchestration-benchmark.py'
       - 'docs/BENCHMARKS.md'
       - '.github/workflows/reliability-benchmarks.yml'
   push:
@@ -25,7 +27,9 @@ jobs:
         with:
           python-version: '3.12'
       - name: Validate deterministic scoring fixtures
-        run: python3 scripts/test-reliability-benchmark.py
+        run: |
+          python3 scripts/test-reliability-benchmark.py
+          python3 scripts/test-orchestration-benchmark.py
 
   deterministic-runtime:
     name: Deterministic runtime benchmark
@@ -40,8 +44,14 @@ jobs:
         env:
           MEDUSA_BENCHMARK_COMMIT: ${{ github.sha }}
         run: python3 scripts/reliability-benchmark.py
+      - name: Run end-to-end orchestration benchmark
+        env:
+          MEDUSA_BENCHMARK_COMMIT: ${{ github.sha }}
+        run: python3 scripts/orchestration-benchmark.py
       - name: Upload benchmark evidence
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: reliability-benchmark-${{ github.sha }}
-          path: target/reliability-benchmark
+          path: |
+            target/reliability-benchmark
+            target/orchestration-benchmark
