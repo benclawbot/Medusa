@@ -1,23 +1,62 @@
-name: Audit Action Pins
+name: Apply Action Pins
 
 on:
-  pull_request:
+  push:
+    paths:
+      - '.github/action-pin-audit-trigger'
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
-  audit:
+  apply:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
-      - name: Enumerate workflow action references
+        with:
+          ref: fix/integrate-shipped-subsystems
+          fetch-depth: 0
+      - name: Pin every external Action and remove bootstrap
         shell: bash
         run: |
           set -euo pipefail
-          echo '=== ACTION REFERENCES ==='
-          grep -RInE '^[[:space:]]*-?[[:space:]]*uses:[[:space:]]*[^./][^[:space:]]*@' .github/workflows --include='*.yml' --include='*.yaml' | sort
-          echo '=== UNPINNED REFERENCES ==='
-          if grep -RInE '^[[:space:]]*-?[[:space:]]*uses:[[:space:]]*[^./][^[:space:]]*@(v[0-9]+([^0-9a-f]|$)|[0-9]+\.[0-9]+\.[0-9]+([^0-9a-f]|$))' .github/workflows --include='*.yml' --include='*.yaml' | sort; then
+          python3 - <<'PY'
+          from pathlib import Path
+
+          replacements = {
+              'actions/checkout@v4': 'actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4',
+              'actions/setup-python@v5': 'actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5',
+              'actions/setup-node@v4': 'actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4',
+              'actions/upload-artifact@v4': 'actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4',
+              'actions/download-artifact@v4': 'actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4',
+              'actions/attest@v4': 'actions/attest@f7c74d28b9d84cb8768d0b8ca14a4bac6ef463e6 # v4',
+              'dtolnay/rust-toolchain@1.88.0': 'dtolnay/rust-toolchain@39b0b3842c7e8bbf6904c0bfc3d9006fdd4dc4e0 # 1.88.0',
+              'taiki-e/install-action@v2': 'taiki-e/install-action@065d6a08a14e61e89fb0a4c10eecdbdef39c7d8e # v2',
+              'sigstore/cosign-installer@v3': 'sigstore/cosign-installer@398d4b0eeef1380460a10c8013a76f728fb906ac # v3',
+          }
+          root = Path('.github/workflows')
+          changed = []
+          for path in sorted(root.glob('*.y*ml')):
+              if path.name == 'audit-action-pins.yml':
+                  continue
+              text = path.read_text()
+              updated = text
+              for old, new in replacements.items():
+                  updated = updated.replace(old, new)
+              if updated != text:
+                  path.write_text(updated)
+                  changed.append(str(path))
+          if not changed:
+              raise SystemExit('no workflow pins changed')
+          print('\n'.join(changed))
+          PY
+          rm -f .github/workflows/audit-action-pins.yml .github/action-pin-audit-trigger
+          if grep -RInE '^[[:space:]]*-?[[:space:]]*uses:[[:space:]]*[^./][^[:space:]]*@(v[0-9]+([^0-9a-f]|$)|[0-9]+\.[0-9]+\.[0-9]+([^0-9a-f]|$))' .github/workflows --include='*.yml' --include='*.yaml'; then
+            echo 'unresolved tag-based Action references remain' >&2
             exit 1
           fi
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add .github/workflows .github/action-pin-audit-trigger
+          git commit -m 'Pin all external GitHub Actions by commit SHA'
+          git push origin HEAD:fix/integrate-shipped-subsystems
