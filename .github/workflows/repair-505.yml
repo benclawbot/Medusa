@@ -1,0 +1,83 @@
+name: Repair solution selection 505
+
+on:
+  push:
+    branches:
+      - agent/issue-505-solution-selection
+
+permissions:
+  contents: write
+
+jobs:
+  repair:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: agent/issue-505-solution-selection
+      - uses: dtolnay/rust-toolchain@1.88.0
+        with:
+          components: rustfmt
+      - name: Correct product-defect ranking
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          p = Path('crates/medusa-improvement/src/solution_selection.rs')
+          s = p.read_text()
+          old = '''    if contains_any(&text, &["defect", "bug", "crash", "incorrect serialization", "product behavior"]) {
+              if solution_type == SolutionType::ProductCodeChange {
+                  value += 100;
+                  reasons.push("the evidence identifies a recurring product defect".to_owned());
+              }
+              if solution_type == SolutionType::RegressionFixture {
+                  value += 80;
+                  reasons.push("a deterministic fixture protects against recurrence".to_owned());
+              }
+          }
+          '''
+          new = '''    if contains_any(
+              &text,
+              &[
+                  "defect",
+                  "bug",
+                  "crash",
+                  "incorrect serialization",
+                  "product behavior",
+              ],
+          ) {
+              if solution_type == SolutionType::ProductCodeChange {
+                  value += 150;
+                  reasons.push(
+                      "the evidence identifies a recurring product defect that requires implementation repair"
+                          .to_owned(),
+                  );
+              }
+              if solution_type == SolutionType::RegressionFixture {
+                  value += 80;
+                  reasons.push("a deterministic fixture protects against recurrence".to_owned());
+              }
+              if solution_type == SolutionType::RepositoryMemory {
+                  value -= 60;
+                  rejected_because.push(
+                      "repository memory cannot repair executable product behavior".to_owned(),
+                  );
+              }
+          }
+          '''
+          if old not in s:
+              raise SystemExit('ranking block not found')
+          p.write_text(s.replace(old, new))
+          PY
+      - name: Format and test
+        run: |
+          cargo fmt --all
+          cargo test -p medusa-improvement solution_selection::tests --lib
+      - name: Commit repair
+        run: |
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add crates/medusa-improvement/src/solution_selection.rs
+          git diff --cached --quiet && exit 0
+          git commit -m "fix: rank product code changes above regression fixtures"
+          git push origin HEAD:agent/issue-505-solution-selection
