@@ -7,6 +7,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     println!("cargo:rerun-if-changed=src/review_tests.inc");
     println!("cargo:rerun-if-changed=src/attachment.rs");
     println!("cargo:rerun-if-changed=src/learning_retrieval.rs");
+    println!("cargo:rerun-if-changed=src/learning_review.rs");
     println!("cargo:rerun-if-changed=src/openai_realtime.rs");
     println!("cargo:rerun-if-changed=src/voice.rs");
     println!("cargo:rerun-if-changed=src/voice_agent_bridge.rs");
@@ -21,7 +22,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     replace_once(
         &mut source,
         "    commands::{Effort, ModelCommand, ModelConfiguration, SlashCommand},",
-        "    commands::{Effort, ModelCommand, ModelConfiguration, ReviewCommand, SlashCommand},",
+        "    commands::{Effort, LearningCommand, ModelCommand, ModelConfiguration, ReviewCommand, SlashCommand},",
     )?;
     replace_once(
         &mut source,
@@ -35,7 +36,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         &mut source,
         "pub mod prompt;\npub mod skill_dependencies;",
         &format!(
-            "pub mod attachment;\nmod learning_retrieval;\npub mod openai_realtime;\npub mod prompt;\n#[path = \"{}\"]\npub mod review;\npub mod voice;\npub mod voice_agent_bridge;\npub mod skill_dependencies;",
+            "pub mod attachment;\nmod learning_retrieval;\npub mod learning_review;\npub mod openai_realtime;\npub mod prompt;\n#[path = \"{}\"]\npub mod review;\npub mod voice;\npub mod voice_agent_bridge;\npub mod skill_dependencies;",
             review.display().to_string().replace('\\', "/")
         ),
     )?;
@@ -44,6 +45,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         ("mod error;", "error.rs"),
         ("pub mod attachment;", "attachment.rs"),
         ("mod learning_retrieval;", "learning_retrieval.rs"),
+        ("pub mod learning_review;", "learning_review.rs"),
         ("pub mod lifecycle;", "lifecycle.rs"),
         ("pub mod openai_realtime;", "openai_realtime.rs"),
         ("pub mod prompt;", "prompt.rs"),
@@ -89,10 +91,11 @@ fn main() -> Result<(), Box<dyn Error>> {
     )?;
 
     let review_arm = runtime_review_arm();
+    let learning_arm = runtime_learning_arm();
     replace_once(
         &mut source,
         "        SlashCommand::Help => {",
-        &format!("{review_arm}        SlashCommand::Help => {{"),
+        &format!("{learning_arm}{review_arm}        SlashCommand::Help => {{"),
     )?;
     replace_once(
         &mut source,
