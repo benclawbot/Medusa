@@ -181,7 +181,7 @@ pub(crate) fn recommend(requested: &str, input_summary: &str) -> RankedRecommend
         format!("risk={:?}", selected.risk),
         format!("latency_weight={}", selected.latency_weight),
         format!("token_weight={}", selected.token_weight),
-        format!("cacheable={}", selected.cacheable),
+        format!("cacheable={}", is_cacheable(requested, input_summary)),
         format!("input={input_summary}"),
     ];
     if requested == "shell_run" && looks_like_broad_test(input_summary) {
@@ -220,28 +220,42 @@ pub(crate) fn looks_like_broad_test(summary: &str) -> bool {
         || normalized.contains("npm test") && !normalized.contains("--")
 }
 
+fn is_cacheable(tool: &str, input: &str) -> bool {
+    if registry().get(tool).is_some_and(|entry| entry.cacheable) {
+        return true;
+    }
+    if tool != "shell_run" {
+        return false;
+    }
+    let normalized = input.trim().to_ascii_lowercase();
+    [
+        "cargo metadata",
+        "cargo locate-project",
+        "git rev-parse",
+        "git status --porcelain",
+        "git ls-files",
+        "rustc --version",
+        "cargo --version",
+        "node --version",
+        "python --version",
+        "python3 --version",
+    ]
+    .iter()
+    .any(|prefix| normalized.starts_with(prefix))
+}
+
 pub(crate) fn cache_lookup(
     repo: &Path,
     tool: &str,
     input: &str,
 ) -> MedusaResult<(Option<String>, CacheEvidence)> {
-    let Some(capability) = registry().get(tool).cloned() else {
+    if !is_cacheable(tool, input) {
         return Ok((
             None,
             CacheEvidence {
                 status: "bypass".into(),
                 key: String::new(),
-                reason: "tool is not registered".into(),
-            },
-        ));
-    };
-    if !capability.cacheable {
-        return Ok((
-            None,
-            CacheEvidence {
-                status: "bypass".into(),
-                key: String::new(),
-                reason: "tool is not cacheable".into(),
+                reason: "tool invocation is not safely cacheable".into(),
             },
         ));
     }
@@ -260,12 +274,13 @@ pub(crate) fn cache_lookup(
     }
     let entry: CacheEntry = serde_json::from_slice(&fs::read(&path)?)?;
     if entry.schema_version != CACHE_SCHEMA_VERSION || entry.repository_fingerprint != fingerprint {
+        let invalidation = invalidate(repo, None)?;
         return Ok((
             None,
             CacheEvidence {
                 status: "miss".into(),
                 key,
-                reason: "repository fingerprint changed".into(),
+                reason: format!("{}; {}", "repository fingerprint changed", invalidation.reason),
             },
         ));
     }
@@ -285,18 +300,11 @@ pub(crate) fn cache_store(
     input: &str,
     output: &str,
 ) -> MedusaResult<CacheEvidence> {
-    let Some(capability) = registry().get(tool).cloned() else {
+    if !is_cacheable(tool, input) {
         return Ok(CacheEvidence {
             status: "bypass".into(),
             key: String::new(),
-            reason: "tool is not registered".into(),
-        });
-    };
-    if !capability.cacheable {
-        return Ok(CacheEvidence {
-            status: "bypass".into(),
-            key: String::new(),
-            reason: "tool is not cacheable".into(),
+            reason: "tool invocation is not safely cacheable".into(),
         });
     }
     let fingerprint = repository_fingerprint(repo)?;
@@ -320,7 +328,7 @@ pub(crate) fn cache_store(
     Ok(CacheEvidence {
         status: "stored".into(),
         key,
-        reason: "successful deterministic read".into(),
+        reason: "successful deterministic discovery command".into(),
     })
 }
 
@@ -415,20 +423,28 @@ mod tests {
     }
 
     #[test]
+    fn safe_discovery_commands_are_cacheable_but_test_runs_are_not() {
+        assert!(is_cacheable("shell_run", "cargo metadata --no-deps"));
+        assert!(is_cacheable("shell_run", "git rev-parse HEAD"));
+        assert!(!is_cacheable("shell_run", "cargo test --workspace"));
+    }
+
+    #[test]
     fn cache_reuses_unchanged_repository_and_invalidates_after_mutation() {
         let repo = tempfile::tempdir().expect("repository");
         fs::write(repo.path().join("Cargo.toml"), "[workspace]\n").expect("fixture");
-        let miss = cache_lookup(repo.path(), "fs_read", "Cargo.toml")
+        let input = "cargo metadata --no-deps";
+        let miss = cache_lookup(repo.path(), "shell_run", input)
             .expect("lookup")
             .1;
         assert_eq!(miss.status, "miss");
-        cache_store(repo.path(), "fs_read", "Cargo.toml", "[workspace]\n").expect("store");
-        let (hit, evidence) = cache_lookup(repo.path(), "fs_read", "Cargo.toml").expect("lookup");
+        cache_store(repo.path(), "shell_run", input, "{\"packages\":[]}").expect("store");
+        let (hit, evidence) = cache_lookup(repo.path(), "shell_run", input).expect("lookup");
         assert_eq!(evidence.status, "hit");
-        assert_eq!(hit.as_deref(), Some("[workspace]\n"));
+        assert_eq!(hit.as_deref(), Some("{\"packages\":[]}"));
         invalidate(repo.path(), Some("Cargo.toml")).expect("invalidate");
         assert_eq!(
-            cache_lookup(repo.path(), "fs_read", "Cargo.toml")
+            cache_lookup(repo.path(), "shell_run", input)
                 .expect("lookup")
                 .1
                 .status,
