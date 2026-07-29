@@ -35,9 +35,11 @@ jobs:
               set -e
               test "${patch_status}" -eq 1
               reject=crates/medusa-runtime/src/multi_agent_coordinator.rs.rej
+              original=crates/medusa-runtime/src/multi_agent_coordinator.rs.orig
               test -f "${reject}"
               grep -F 'lease_epoch: 0' "${reject}"
               rm "${reject}"
+              if [[ -f "${original}" ]]; then rm "${original}"; fi
             elif [[ "${patch_file}" == *preflight-09-test-lease-epoch.patch ]]; then
               python3 -c 'from pathlib import Path; p=Path("crates/medusa-runtime/src/multi_agent_coordinator.rs"); lines=p.read_text().splitlines(keepends=True); matches=[i for i,line in enumerate(lines[:-1]) if "context_fingerprint: request.packet.fingerprint," in line and "session_id: format!(\"session-{sequence}\")" in lines[i+1]]; assert len(matches) == 1, f"expected one worker evidence constructor, got {matches}"; i=matches[0]; indent=lines[i].split("context_fingerprint",1)[0]; lines.insert(i+1, indent+"lease_epoch: 0,\n"); p.write_text("".join(lines))'
             else
