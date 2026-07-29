@@ -82,11 +82,12 @@ impl SolutionSelector {
                 .map(|item| item.solution_type)
                 .unwrap_or(SolutionType::NoPersistence);
             let mut selected = vec![primary];
-            if matches!(primary, SolutionType::ReusableSkill | SolutionType::ProductCodeChange)
-                && scores
-                    .iter()
-                    .any(|item| item.solution_type == SolutionType::RegressionFixture && item.score >= 60)
-            {
+            if matches!(
+                primary,
+                SolutionType::ReusableSkill | SolutionType::ProductCodeChange
+            ) && scores.iter().any(|item| {
+                item.solution_type == SolutionType::RegressionFixture && item.score >= 60
+            }) {
                 selected.push(SolutionType::RegressionFixture);
             }
             selected
@@ -151,13 +152,18 @@ fn score(solution_type: SolutionType, lesson: &LessonCandidate) -> SolutionScore
     match (solution_type, lesson.scope) {
         (SolutionType::UserPreference, LessonScope::User) => {
             value += 100;
-            reasons.push("the lesson is scoped to one user's durable interaction preferences".to_owned());
+            reasons.push(
+                "the lesson is scoped to one user's durable interaction preferences".to_owned(),
+            );
         }
         (SolutionType::RepositoryMemory, LessonScope::Repository) => {
             value += 95;
             reasons.push("the lesson is a repository-local convention".to_owned());
         }
-        (SolutionType::ReusableSkill, LessonScope::ProjectWorkflow | LessonScope::DomainGeneral) => {
+        (
+            SolutionType::ReusableSkill,
+            LessonScope::ProjectWorkflow | LessonScope::DomainGeneral,
+        ) => {
             value += 85;
             reasons.push("the lesson describes a portable repeatable procedure".to_owned());
         }
@@ -189,7 +195,16 @@ fn score(solution_type: SolutionType, lesson: &LessonCandidate) -> SolutionScore
             reasons.push("the lesson requires an enforceable invariant".to_owned());
         }
     }
-    if contains_any(&text, &["defect", "bug", "crash", "incorrect serialization", "product behavior"]) {
+    if contains_any(
+        &text,
+        &[
+            "defect",
+            "bug",
+            "crash",
+            "incorrect serialization",
+            "product behavior",
+        ],
+    ) {
         if solution_type == SolutionType::ProductCodeChange {
             value += 100;
             reasons.push("the evidence identifies a recurring product defect".to_owned());
@@ -199,7 +214,15 @@ fn score(solution_type: SolutionType, lesson: &LessonCandidate) -> SolutionScore
             reasons.push("a deterministic fixture protects against recurrence".to_owned());
         }
     }
-    if contains_any(&text, &["check before", "before claiming", "completion gate", "checklist"]) {
+    if contains_any(
+        &text,
+        &[
+            "check before",
+            "before claiming",
+            "completion gate",
+            "checklist",
+        ],
+    ) {
         if solution_type == SolutionType::WorkflowGate {
             value += 90;
             reasons.push("the lesson requires a completion-time workflow check".to_owned());
@@ -210,10 +233,16 @@ fn score(solution_type: SolutionType, lesson: &LessonCandidate) -> SolutionScore
     }
 
     if lesson.scope == LessonScope::Repository
-        && matches!(solution_type, SolutionType::UserPreference | SolutionType::HarnessPolicy)
+        && matches!(
+            solution_type,
+            SolutionType::UserPreference | SolutionType::HarnessPolicy
+        )
     {
         value -= 100;
-        rejected_because.push("repository-local evidence cannot silently change user-global or harness behavior".to_owned());
+        rejected_because.push(
+            "repository-local evidence cannot silently change user-global or harness behavior"
+                .to_owned(),
+        );
     }
     if lesson.confidence_milli < 600 || lesson.promotion_blocked {
         if solution_type == SolutionType::NoPersistence {
@@ -221,7 +250,8 @@ fn score(solution_type: SolutionType, lesson: &LessonCandidate) -> SolutionScore
             reasons.push("low-confidence or blocked evidence must remain inactive".to_owned());
         } else {
             value -= 150;
-            rejected_because.push("the evidence is not safe to turn into durable behavior".to_owned());
+            rejected_because
+                .push("the evidence is not safe to turn into durable behavior".to_owned());
         }
     }
 
@@ -271,7 +301,10 @@ fn generate(solution_type: SolutionType, lesson: &LessonCandidate) -> Option<Gen
         }),
         SolutionType::RepositoryMemory => Some(GeneratedArtifact {
             path: format!(".medusa/candidates/memory/{}.md", lesson.id),
-            content: format!("# Repository memory candidate\n\n{}\n", lesson.generalized_rule),
+            content: format!(
+                "# Repository memory candidate\n\n{}\n",
+                lesson.generalized_rule
+            ),
         }),
         SolutionType::UserPreference => Some(GeneratedArtifact {
             path: format!(".medusa/candidates/preferences/{}.json", lesson.id),
@@ -282,12 +315,18 @@ fn generate(solution_type: SolutionType, lesson: &LessonCandidate) -> Option<Gen
         }),
         SolutionType::WorkflowGate => Some(GeneratedArtifact {
             path: format!(".medusa/candidates/gates/{}.md", lesson.id),
-            content: format!("# Workflow gate candidate\n\nBefore completion: {}\n", lesson.generalized_rule),
+            content: format!(
+                "# Workflow gate candidate\n\nBefore completion: {}\n",
+                lesson.generalized_rule
+            ),
         }),
         SolutionType::SessionNote
         | SolutionType::DocumentationUpdate
         | SolutionType::ConfigurationChange => Some(GeneratedArtifact {
-            path: format!(".medusa/candidates/notes/{}-{:?}.md", lesson.id, solution_type),
+            path: format!(
+                ".medusa/candidates/notes/{}-{:?}.md",
+                lesson.id, solution_type
+            ),
             content: format!("# Candidate\n\n{}\n", lesson.generalized_rule),
         }),
         SolutionType::NoPersistence => None,
@@ -296,12 +335,12 @@ fn generate(solution_type: SolutionType, lesson: &LessonCandidate) -> Option<Gen
 
 fn review_strength(solution_type: SolutionType) -> ReviewStrength {
     match solution_type {
-        SolutionType::HarnessPolicy | SolutionType::ConfigurationChange | SolutionType::ProductCodeChange => {
-            ReviewStrength::Critical
-        }
-        SolutionType::ReusableSkill | SolutionType::WorkflowGate | SolutionType::RegressionFixture => {
-            ReviewStrength::Elevated
-        }
+        SolutionType::HarnessPolicy
+        | SolutionType::ConfigurationChange
+        | SolutionType::ProductCodeChange => ReviewStrength::Critical,
+        SolutionType::ReusableSkill
+        | SolutionType::WorkflowGate
+        | SolutionType::RegressionFixture => ReviewStrength::Elevated,
         _ => ReviewStrength::Standard,
     }
 }
@@ -325,7 +364,11 @@ mod tests {
     use super::*;
     use crate::lesson_inference::{ImplementationType, LessonCandidate, LessonScope};
 
-    fn lesson(scope: LessonScope, implementation_type: ImplementationType, rule: &str) -> LessonCandidate {
+    fn lesson(
+        scope: LessonScope,
+        implementation_type: ImplementationType,
+        rule: &str,
+    ) -> LessonCandidate {
         LessonCandidate {
             id: "lesson-test".to_owned(),
             observed_pattern: rule.to_owned(),
@@ -349,7 +392,11 @@ mod tests {
         let selector = SolutionSelector;
         assert_eq!(
             selector
-                .propose(&lesson(LessonScope::User, ImplementationType::Memory, "prefer concise updates"))
+                .propose(&lesson(
+                    LessonScope::User,
+                    ImplementationType::Memory,
+                    "prefer concise updates"
+                ))
                 .selected[0],
             SolutionType::UserPreference
         );
@@ -393,9 +440,16 @@ mod tests {
                 .selected[0],
             SolutionType::ProductCodeChange
         );
-        let mut unresolved = lesson(LessonScope::Unresolved, ImplementationType::Unresolved, "unclear");
+        let mut unresolved = lesson(
+            LessonScope::Unresolved,
+            ImplementationType::Unresolved,
+            "unclear",
+        );
         unresolved.confidence_milli = 400;
-        assert_eq!(selector.propose(&unresolved).selected, vec![SolutionType::NoPersistence]);
+        assert_eq!(
+            selector.propose(&unresolved).selected,
+            vec![SolutionType::NoPersistence]
+        );
     }
 
     #[test]
@@ -426,12 +480,21 @@ mod tests {
         assert!(proposal.selected.contains(&SolutionType::RegressionFixture));
         assert_eq!(proposal.review_strength, ReviewStrength::Critical);
         assert!(proposal.isolated);
-        assert!(proposal.artifacts.iter().any(|artifact| artifact.content.contains("No direct main-branch mutation")));
+        assert!(
+            proposal
+                .artifacts
+                .iter()
+                .any(|artifact| artifact.content.contains("No direct main-branch mutation"))
+        );
     }
 
     #[test]
     fn blocked_or_low_confidence_evidence_creates_no_active_behavior() {
-        let mut item = lesson(LessonScope::User, ImplementationType::Memory, "prefer terse replies");
+        let mut item = lesson(
+            LessonScope::User,
+            ImplementationType::Memory,
+            "prefer terse replies",
+        );
         item.promotion_blocked = true;
         item.contradictory_signal_ids.push("signal-2".to_owned());
         let proposal = SolutionSelector.propose(&item);
