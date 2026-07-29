@@ -26,7 +26,7 @@ jobs:
     permissions:
       contents: read
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           fetch-depth: 0
       - name: Validate tag and draft release
@@ -63,7 +63,7 @@ jobs:
       contents: read
       id-token: write
     steps:
-      - uses: sigstore/cosign-installer@v3
+      - uses: sigstore/cosign-installer@398d4b0eeef1380460a10c8013a76f728fb906ac # v3
       - name: Download Linux draft assets
         shell: bash
         env:
@@ -93,7 +93,7 @@ jobs:
               --certificate-oidc-issuer https://token.actions.githubusercontent.com \
               "$asset"
           done
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: signed-linux-${{ needs.validate.outputs.sha }}
           path: signed
@@ -171,7 +171,7 @@ jobs:
           xcrun stapler validate "$app"
           spctl --assess --type execute --verbose=4 "$app"
           ditto -c -k --sequesterRsrc --keepParent "$app" signed/medusa-desktop-macos-app.zip
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: signed-macos-${{ needs.validate.outputs.sha }}
           path: signed
@@ -225,7 +225,7 @@ jobs:
             & $signtool.FullName verify /pa /all /v $target.FullName
             if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           }
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: signed-windows-${{ needs.validate.outputs.sha }}
           path: signed
@@ -239,7 +239,7 @@ jobs:
     permissions:
       contents: write
     steps:
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
           pattern: signed-*-${{ needs.validate.outputs.sha }}
           path: signed
