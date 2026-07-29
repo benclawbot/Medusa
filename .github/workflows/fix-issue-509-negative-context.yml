@@ -1,0 +1,82 @@
+name: Fix issue 509 negative context
+
+on:
+  push:
+    branches:
+      - agent/509-explainable-learning-retrieval
+
+permissions:
+  contents: write
+
+jobs:
+  fix:
+    if: ${{ !contains(github.event.head_commit.message, '[skip-negative-fix-509]') }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: agent/509-explainable-learning-retrieval
+          fetch-depth: 0
+      - uses: dtolnay/rust-toolchain@1.88.0
+        with:
+          components: rustfmt
+      - name: Fix bounded negative-context variants
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          path = Path('crates/medusa-improvement/src/retrieval.rs')
+          text = path.read_text()
+          old = '''fn explicitly_excluded(learning: &ScopedLearning, context: &TaskContext) -> bool {
+              let learning_terms = expanded_terms(&format!(
+                  "{} {} {}",
+                  learning.id, learning.conflict_key, learning.generalized_rule
+              ));
+              !context.explicit_exclusions.is_disjoint(&learning_terms)
+                  || !learning
+                      .applicability
+                      .excluded_contexts
+                      .is_disjoint(&context.scope.context_tags)
+          }
+          '''
+          new = '''fn explicitly_excluded(learning: &ScopedLearning, context: &TaskContext) -> bool {
+              let learning_terms = expanded_terms(&format!(
+                  "{} {} {}",
+                  learning.id, learning.conflict_key, learning.generalized_rule
+              ));
+              context.explicit_exclusions.iter().any(|excluded| {
+                  learning_terms
+                      .iter()
+                      .any(|term| bounded_word_variant(excluded, term))
+              }) || !learning
+                  .applicability
+                  .excluded_contexts
+                  .is_disjoint(&context.scope.context_tags)
+          }
+
+          fn bounded_word_variant(left: &str, right: &str) -> bool {
+              if left == right {
+                  return true;
+              }
+              let (shorter, longer) = if left.len() <= right.len() {
+                  (left, right)
+              } else {
+                  (right, left)
+              };
+              if shorter.len() < 4 {
+                  return false;
+              }
+              longer.strip_prefix(shorter).is_some_and(|suffix| {
+                  matches!(suffix, "s" | "es" | "ed" | "ing")
+              })
+          }
+          '''
+          if old not in text:
+              raise SystemExit('expected exclusion implementation not found')
+          path.write_text(text.replace(old, new))
+          PY
+          cargo fmt --all
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add crates/medusa-improvement/src/retrieval.rs
+          git commit -m 'Match bounded negative-context variants [skip-negative-fix-509]'
+          git push origin HEAD:agent/509-explainable-learning-retrieval
