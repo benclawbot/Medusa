@@ -4,7 +4,7 @@
 //! It records every considered item, blocks ambiguous equal-scope conflicts, respects explicit
 //! negative contexts and per-task suppression, and keeps high-impact behavior review-gated.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeSet;
 
 use serde::{Deserialize, Serialize};
 
