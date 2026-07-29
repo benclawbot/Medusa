@@ -117,11 +117,16 @@ pub(crate) fn built_in_tools(
         ),
         tool(
             "shell_run",
-            "Run an approved read-only executable directly in the repository and capture output. Never invoke bash, sh, cmd, PowerShell, or shell operators; use filesystem tools for writes and directory creation.",
+            "Run an approved read-only executable directly in the repository and capture output. Use output_mode=compact by default, normal for more context, and verbatim only when exact raw output is required. Never invoke bash, sh, cmd, PowerShell, or shell operators; use filesystem tools for writes and directory creation.",
             json!({
                 "type": "object", "properties": {
                     "program": {"type": "string"},
-                    "args": {"type": "array", "items": {"type": "string"}}
+                    "args": {"type": "array", "items": {"type": "string"}},
+                    "output_mode": {
+                        "type": "string",
+                        "enum": ["compact", "normal", "verbatim"],
+                        "default": "compact"
+                    }
                 }, "required": ["program", "args"], "additionalProperties": false
             }),
         ),
@@ -300,7 +305,11 @@ pub(crate) fn execute_tool(repo: &Path, name: &str, input: &Value) -> MedusaResu
                         .ok_or_else(|| invalid_tool("every arg must be a string"))
                 })
                 .collect::<MedusaResult<Vec<_>>>()?;
-            shell::run(repo, program, &args)
+            let output_mode = crate::output_envelope::OutputMode::parse(input_optional_string(
+                input,
+                "output_mode",
+            )?)?;
+            shell::run(repo, program, &args, output_mode)
         }
         "web_search" => web::search(
             input_string(input, "query")?,
@@ -346,7 +355,11 @@ pub(crate) fn execute_approved_tool(
                         .ok_or_else(|| invalid_tool("every arg must be a string"))
                 })
                 .collect::<MedusaResult<Vec<_>>>()?;
-            shell::run_approved(repo, program, &args)
+            let output_mode = crate::output_envelope::OutputMode::parse(input_optional_string(
+                input,
+                "output_mode",
+            )?)?;
+            shell::run_approved(repo, program, &args, output_mode)
         }
         _ => Err(MedusaError::new(
             ErrorCode::PolicyDenied,
@@ -391,6 +404,16 @@ pub(crate) fn input_string<'a>(input: &'a Value, key: &str) -> MedusaResult<&'a 
         .ok_or_else(|| invalid_tool(format!("{key} must be a string")))
 }
 
+fn input_optional_string<'a>(input: &'a Value, key: &str) -> MedusaResult<Option<&'a str>> {
+    match input.get(key) {
+        None => Ok(None),
+        Some(value) => value
+            .as_str()
+            .map(Some)
+            .ok_or_else(|| invalid_tool(format!("{key} must be a string"))),
+    }
+}
+
 pub(crate) fn input_usize(input: &Value, key: &str) -> MedusaResult<usize> {
     input
         .get(key)
@@ -425,4 +448,30 @@ pub(crate) fn invalid_tool(message: impl Into<String>) -> MedusaError {
         ErrorCategory::Validation,
         message,
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn optional_string_rejects_present_non_string_values() {
+        assert_eq!(
+            input_optional_string(&json!({}), "output_mode").expect("absent mode"),
+            None
+        );
+
+        let normal = json!({"output_mode": "normal"});
+        assert_eq!(
+            input_optional_string(&normal, "output_mode").expect("string mode"),
+            Some("normal")
+        );
+
+        for invalid in [Value::Null, json!(42), json!({"mode": "compact"})] {
+            let input = json!({"output_mode": invalid});
+            let error = input_optional_string(&input, "output_mode")
+                .expect_err("present non-string mode must fail");
+            assert!(error.to_string().contains("output_mode must be a string"));
+        }
+    }
 }
