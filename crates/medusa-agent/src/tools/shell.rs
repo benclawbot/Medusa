@@ -105,7 +105,7 @@ fn run_validated(
         &adapted,
     );
     let trace_path = tool_telemetry::append_trace(repo, &trace)?;
-    repository_profile::record(
+    let profile_record_error = repository_profile::record(
         repo,
         "shell_run",
         output.status.success(),
@@ -117,7 +117,8 @@ fn run_validated(
             OutputMode::Verbatim => repository_profile::LearnedOutputMode::Verbatim,
         },
         false,
-    )?;
+    )
+    .err();
 
     let mut evidence = adapted.to_string();
     execution_budget.record_output(&evidence)?;
@@ -133,6 +134,9 @@ fn run_validated(
     evidence.push_str(&orchestration_evidence);
     evidence.push('\n');
     evidence.push_str(&repository_profile::format_decision(&profile_decision));
+    if let Some(error) = profile_record_error {
+        evidence.push_str(&format!("\n[repository-profile record_status=ignored; reason={error}]"));
+    }
     evidence.push('\n');
     evidence.push_str(&scheduler_evidence);
     evidence.push('\n');
