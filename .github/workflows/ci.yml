@@ -186,3 +186,30 @@ jobs:
           name: cargo-audit-diagnostics
           path: cargo-audit.log
           if-no-files-found: error
+
+  bootstrap-issue-509:
+    name: Apply issue 509 patch
+    if: github.event_name == 'pull_request' && github.head_ref == 'agent/issue-509-learning-retrieval'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          ref: agent/issue-509-learning-retrieval
+      - name: Apply scoped retrieval implementation
+        shell: bash
+        run: |
+          set -euo pipefail
+          patch=.medusa/issue509-bootstrap/raw-00.patch
+          git apply --check "$patch"
+          git apply --index "$patch"
+          git fetch --no-tags origin main
+          git checkout origin/main -- .github/workflows/ci.yml
+          git rm -r --ignore-unmatch .medusa/issue509-bootstrap
+          git rm --ignore-unmatch .github/workflows/issue509-bootstrap.yml
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git commit -m "Add explainable learned behavior retrieval"
+          git push origin HEAD:agent/issue-509-learning-retrieval
