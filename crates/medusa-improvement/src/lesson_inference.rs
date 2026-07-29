@@ -393,6 +393,27 @@ mod tests {
     }
 
     #[test]
+    fn ambiguous_evidence_blocks_promotion_and_records_uncertainty() {
+        let mut item = signal(
+            "ambiguous",
+            LearningSignalKind::ExplicitCorrection,
+            "Use a more complete approach.",
+            CandidateScope::Repository,
+        );
+        item.ambiguity
+            .push("the requested scope is not yet clear".to_owned());
+        let lesson = &LessonInferenceEngine.infer(&[item]).candidates[0];
+        assert!(lesson.promotion_blocked);
+        assert!(lesson.confidence_milli < 750);
+        assert!(
+            lesson
+                .uncertainty
+                .iter()
+                .any(|value| value.contains("ambiguous or contradictory"))
+        );
+    }
+
+    #[test]
     fn unjustified_claim_becomes_cross_domain_evidence_rule() {
         let batch = LessonInferenceEngine.infer(&[signal(
             "claim",
