@@ -11,7 +11,7 @@ use crossterm::event::{Event, KeyCode, KeyEventKind, KeyModifiers, MouseEventKin
 use crate::{
     clipboard::{
         ClipboardContent, ClipboardError, ClipboardService, FileAttachment, PromptAttachment,
-        PromptDraft,
+        PromptDraft, attach_image_file, attachment_summary, remove_attachment,
     },
     commands::{
         ModelCommand, SlashCommand, command_suggestions, complete_first_command,
@@ -299,6 +299,53 @@ impl AppState {
             ComposerAction::CommandNext => self.select_command(1),
             ComposerAction::CompleteCommand => self.complete_command(),
             ComposerAction::Submit => {
+                let command_text = self.composer.draft.text.trim().to_owned();
+                if let Some(path) = command_text.strip_prefix("/image ") {
+                    let path = PathBuf::from(path.trim());
+                    attach_image_file(&mut self.composer.draft, &path)?;
+                    self.composer.draft.text.clear();
+                    self.composer.cursor = 0;
+                    self.status = format!(
+                        "{} · compatibility checked by active route before send",
+                        attachment_summary(&self.composer.draft)
+                    );
+                    self.persist_draft()?;
+                    return Ok(AppAction::Redraw);
+                }
+                if command_text == "/images" {
+                    self.status = format!(
+                        "{} · compatibility checked by active route before send",
+                        attachment_summary(&self.composer.draft)
+                    );
+                    self.composer.draft.text.clear();
+                    self.composer.cursor = 0;
+                    self.persist_draft()?;
+                    return Ok(AppAction::Redraw);
+                }
+                if let Some(index) = command_text.strip_prefix("/remove-image ") {
+                    let index = index.trim().parse::<usize>().map_err(|_| {
+                        AppError::Clipboard(ClipboardError::Unavailable(
+                            "usage: /remove-image <1-based index>".to_owned(),
+                        ))
+                    })?;
+                    if index == 0
+                        || remove_attachment(&mut self.composer.draft, index - 1).is_none()
+                    {
+                        self.status = format!(
+                            "image index {index} is out of range; {}",
+                            attachment_summary(&self.composer.draft)
+                        );
+                    } else {
+                        self.status = format!(
+                            "removed image {index}; {}",
+                            attachment_summary(&self.composer.draft)
+                        );
+                    }
+                    self.composer.draft.text.clear();
+                    self.composer.cursor = 0;
+                    self.persist_draft()?;
+                    return Ok(AppAction::Redraw);
+                }
                 let suggestions = command_suggestions(&self.composer.draft.text, &self.repository);
                 let command_text = self.composer.draft.text.trim();
                 let is_exact_command = suggestions
@@ -566,7 +613,9 @@ impl AppState {
                 let width = image.width;
                 let height = image.height;
                 self.composer.draft.add_image(image)?;
-                self.status = format!("attached screenshot {width}×{height}");
+                self.status = format!(
+                    "attached screenshot {width}×{height} · compatibility checked by active route before send"
+                );
             }
             ClipboardContent::Files(paths) => {
                 let mut added = 0_usize;

@@ -15,6 +15,7 @@ arboard = "3.6.1"
 clap = { version = "4.5", features = ["derive"] }
 crossterm = "0.29"
 hex.workspace = true
+image = { version = "0.25", default-features = false, features = ["gif", "jpeg", "png", "webp"] }
 medusa-config = { path = "../medusa-config" }
 medusa-daemon = { path = "../medusa-daemon" }
 medusa-recovery-coordinator = { path = "../medusa-recovery-coordinator" }
