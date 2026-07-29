@@ -40,3 +40,5 @@ jobs:
             .github/workflows/materialize-issue-476.yml
           git commit -m "Desktop: add first-class screenshot attachment UX"
           git push origin HEAD:agent/issue-476-desktop-image-ux
+
+# Trigger after workflow registration.
