@@ -32,6 +32,7 @@ BUILD_SOURCE_RE = re.compile(
     r'(?:read_to_string|read|File::open)\s*\(\s*"(src/[^"]+\.rs)"\s*\)',
     re.S,
 )
+RERUN_SOURCE_RE = re.compile(r'cargo:rerun-if-changed=(src/[^"\\]+\.rs)')
 
 
 def run(command: list[str], cwd: pathlib.Path) -> str:
@@ -98,7 +99,7 @@ def active_modules(crate_root: pathlib.Path, package: dict[str, Any]) -> set[pat
             child = (path.parent / relative).resolve()
             if child.exists():
                 queue.append(child)
-        base = module_base(path)
+        base = path.parent if path in roots else module_base(path)
         for name in MOD_RE.findall(text):
             candidates = (base / f"{name}.rs", base / name / "mod.rs")
             child = next((candidate for candidate in candidates if candidate.exists()), None)
@@ -143,6 +144,10 @@ def active_modules(crate_root: pathlib.Path, package: dict[str, Any]) -> set[pat
             child = (crate_root / relative).resolve()
             if child.exists():
                 queue.append(child)
+        for relative in RERUN_SOURCE_RE.findall(build_text):
+            child = (crate_root / relative).resolve()
+            if child.exists():
+                queue.append(child)
 
     # Process any modules discovered through build generation.
     while queue:
@@ -155,7 +160,7 @@ def active_modules(crate_root: pathlib.Path, package: dict[str, Any]) -> set[pat
             child = (crate_root / relative).resolve()
             if child.exists():
                 queue.append(child)
-        base = module_base(path)
+        base = path.parent if path in roots else module_base(path)
         for name in MOD_RE.findall(text):
             child = next((candidate for candidate in (base / f"{name}.rs", base / name / "mod.rs") if candidate.exists()), None)
             if child is not None:
@@ -254,6 +259,7 @@ def self_test() -> int:
     assert module_base(pathlib.Path("src/lib.rs")) == pathlib.Path("src")
     assert MANIFEST_INCLUDE_RE.findall('include!(concat!(env!("CARGO_MANIFEST_DIR"), "/src/engine.rs"))') == ["src/engine.rs"]
     assert BUILD_SOURCE_RE.findall('fs::read_to_string("src/runtime_impl.rs")?') == ["src/runtime_impl.rs"]
+    assert RERUN_SOURCE_RE.findall('println!("cargo:rerun-if-changed=src/runtime_impl.rs");') == ["src/runtime_impl.rs"]
     print("architecture policy self-test passed")
     return 0
 
