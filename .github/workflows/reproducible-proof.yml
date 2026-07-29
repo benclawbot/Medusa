@@ -17,8 +17,8 @@ jobs:
     if: ${{ github.event_name == 'workflow_dispatch' || github.event.pull_request.draft == false }}
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@1.88.0
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: dtolnay/rust-toolchain@39b0b3842c7e8bbf6904c0bfc3d9006fdd4dc4e0 # 1.88.0
       - name: Refresh dependency lock for the merged PR graph
         run: cargo generate-lockfile
       - name: Install production sandbox backend
@@ -31,7 +31,7 @@ jobs:
           fi
       - name: Run reproducible safety and recovery proof
         run: cargo medusa-proof --output medusa-proof-artifacts
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         if: always()
         with:
           name: medusa-proof-Linux
