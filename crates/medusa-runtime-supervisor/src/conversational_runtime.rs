@@ -28,7 +28,7 @@ pub enum ConversationControl {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum CoordinatorEvent {
-    Supervisor(SupervisorEvent),
+    Supervisor(Box<SupervisorEvent>),
     SpeechStopped,
     ResponseCancelled,
     WorkerProcessTreeTerminated { task_id: String },
@@ -75,7 +75,7 @@ impl<W: WorkerHandle> ConversationalRuntime<W> {
         self.workers.insert(task_id, worker);
         Ok(events
             .into_iter()
-            .map(CoordinatorEvent::Supervisor)
+            .map(|event| CoordinatorEvent::Supervisor(Box::new(event)))
             .collect())
     }
 
@@ -90,7 +90,7 @@ impl<W: WorkerHandle> ConversationalRuntime<W> {
             .supervisor
             .transition(task_id, TaskStatus::Paused)
             .map_err(RuntimeControlError::Supervisor)?;
-        Ok(CoordinatorEvent::Supervisor(event))
+        Ok(CoordinatorEvent::Supervisor(Box::new(event)))
     }
 
     pub fn resume_task(
@@ -104,7 +104,7 @@ impl<W: WorkerHandle> ConversationalRuntime<W> {
             .supervisor
             .transition(task_id, TaskStatus::Active)
             .map_err(RuntimeControlError::Supervisor)?;
-        Ok(CoordinatorEvent::Supervisor(event))
+        Ok(CoordinatorEvent::Supervisor(Box::new(event)))
     }
 
     pub fn conversation_control(
@@ -140,7 +140,7 @@ impl<W: WorkerHandle> ConversationalRuntime<W> {
             CoordinatorEvent::WorkerProcessTreeTerminated {
                 task_id: task_id.to_owned(),
             },
-            CoordinatorEvent::Supervisor(update),
+            CoordinatorEvent::Supervisor(Box::new(update)),
         ])
     }
 
