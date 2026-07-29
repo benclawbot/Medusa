@@ -1,0 +1,31 @@
+name: Temporary format 529
+
+on:
+  push:
+    branches:
+      - agent/529-tool-orchestration-foundation
+
+permissions:
+  contents: write
+
+jobs:
+  format:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: agent/529-tool-orchestration-foundation
+      - uses: dtolnay/rust-toolchain@1.88.0
+        with:
+          components: rustfmt
+      - run: cargo fmt --all
+      - name: Commit formatting
+        run: |
+          if ! git diff --quiet; then
+            git config user.name github-actions[bot]
+            git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+            git add --all
+            git commit -m "Format tool policy foundation"
+            git push origin HEAD:agent/529-tool-orchestration-foundation
+          fi
