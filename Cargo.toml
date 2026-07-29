@@ -47,6 +47,7 @@ members = [
   "crates/medusa-repository-snapshot",
   "crates/medusa-execution-orchestrator",
   "crates/medusa-tool-policy",
+  "crates/medusa-tool-control",
   "crates/medusa-multi-agent-scheduler",
   "crates/medusa-worker-leases",
   "crates/medusa-commit-barrier",
