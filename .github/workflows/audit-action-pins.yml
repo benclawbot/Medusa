@@ -1,9 +1,7 @@
 name: Audit Action Pins
 
 on:
-  push:
-    paths:
-      - '.github/action-pin-audit-trigger'
+  pull_request:
 
 permissions:
   contents: read
