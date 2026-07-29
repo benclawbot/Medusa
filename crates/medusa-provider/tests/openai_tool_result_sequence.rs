@@ -107,7 +107,11 @@ fn tool_results_do_not_emit_an_extra_empty_user_message() {
     let body = server.join().expect("mock provider thread");
     let messages = body["messages"].as_array().expect("messages array");
 
-    assert_eq!(messages.len(), 3, "system, assistant tool call, tool result");
+    assert_eq!(
+        messages.len(),
+        3,
+        "system, assistant tool call, tool result"
+    );
     assert_eq!(messages[0]["role"], "system");
     assert_eq!(messages[1]["role"], "assistant");
     assert_eq!(messages[2]["role"], "tool");
