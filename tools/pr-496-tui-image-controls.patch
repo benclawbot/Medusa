@@ -11,7 +11,7 @@
      },
      commands::{
          ModelCommand, SlashCommand, command_suggestions, complete_first_command,
-@@ -299,6 +299,51 @@
+@@ -299,6 +299,53 @@
              ComposerAction::CommandNext => self.select_command(1),
              ComposerAction::CompleteCommand => self.complete_command(),
              ComposerAction::Submit => {
