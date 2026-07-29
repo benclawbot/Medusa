@@ -39,7 +39,8 @@
     "crates/medusa-runtime/src/prompt.rs",
     "crates/medusa-runtime/src/runtime_impl.rs",
     "crates/medusa-runtime/src/support.rs",
-    "crates/medusa-runtime/src/tests.rs"
+    "crates/medusa-runtime/src/tests.rs",
+    "crates/medusa-runtime/src/voice.rs"
   ],
   "crate_exemptions": {}
 }
