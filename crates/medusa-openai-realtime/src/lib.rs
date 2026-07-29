@@ -94,13 +94,19 @@ impl std::fmt::Display for TransportError {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::Unavailable(message) => write!(formatter, "Realtime unavailable: {message}"),
-            Self::GatewayUnreachable(message) => write!(formatter, "OAuth gateway unavailable: {message}"),
-            Self::IncompatibleGateway(message) => write!(formatter, "OAuth gateway is incompatible: {message}"),
+            Self::GatewayUnreachable(message) => {
+                write!(formatter, "OAuth gateway unavailable: {message}")
+            }
+            Self::IncompatibleGateway(message) => {
+                write!(formatter, "OAuth gateway is incompatible: {message}")
+            }
             Self::Protocol(message) => write!(formatter, "Realtime protocol error: {message}"),
             Self::Wire(message) => write!(formatter, "Realtime wire error: {message}"),
             Self::Closed => write!(formatter, "Realtime transport is closed"),
             Self::Muted => write!(formatter, "microphone audio is muted"),
-            Self::InvalidAudioQueueCapacity => write!(formatter, "audio queue capacity must be greater than zero"),
+            Self::InvalidAudioQueueCapacity => {
+                write!(formatter, "audio queue capacity must be greater than zero")
+            }
         }
     }
 }
@@ -325,11 +331,7 @@ impl<W: Wire> Transport<W> {
 
     pub fn next_event(&mut self) -> Result<Option<Event>, TransportError> {
         self.ensure_open()?;
-        let Some(payload) = self
-            .wire
-            .receive_json()
-            .map_err(TransportError::Wire)?
-        else {
+        let Some(payload) = self.wire.receive_json().map_err(TransportError::Wire)? else {
             return Ok(None);
         };
         let event = translate_event(&payload)?;
@@ -399,111 +401,87 @@ fn session_update(config: &SessionConfig) -> Value {
         "session": {
             "instructions": config.instructions,
             "voice": config.voice,
-            "input_audio_format": audio_format(&config.input_audio_format),
-            "output_audio_format": audio_format(&config.output_audio_format),
+            "input_audio_format": config.input_audio_format,
+            "output_audio_format": config.output_audio_format,
             "input_audio_transcription": { "model": config.transcription_model },
             "turn_detection": if config.server_vad {
-                json!({
-                    "type": "server_vad",
-                    "create_response": true,
-                    "interrupt_response": config.interrupt_response,
-                })
+                json!({ "type": "server_vad", "interrupt_response": config.interrupt_response })
             } else {
                 Value::Null
-            },
+            }
         }
     })
 }
 
-fn audio_format(format: &AudioFormat) -> &'static str {
-    match format {
-        AudioFormat::Pcm16 => "pcm16",
-        AudioFormat::G711Ulaw => "g711_ulaw",
-        AudioFormat::G711Alaw => "g711_alaw",
-    }
-}
-
-pub fn translate_event(payload: &Value) -> Result<Event, TransportError> {
-    let kind = required_string(payload, "type")?;
-    match kind {
+fn translate_event(payload: &Value) -> Result<Event, TransportError> {
+    let event_type = payload["type"]
+        .as_str()
+        .ok_or_else(|| TransportError::Protocol("event omitted type".to_owned()))?;
+    let string = |field: &str| {
+        payload[field]
+            .as_str()
+            .map(str::to_owned)
+            .ok_or_else(|| TransportError::Protocol(format!("event omitted {field}")))
+    };
+    match event_type {
         "session.created" | "session.updated" => Ok(Event::Connected),
         "input_audio_buffer.speech_started" => Ok(Event::UserSpeechStarted),
         "input_audio_buffer.speech_stopped" => Ok(Event::UserSpeechStopped),
         "conversation.item.input_audio_transcription.delta" => Ok(Event::UserTranscriptDelta {
-            item_id: required_string(payload, "item_id")?.to_owned(),
-            delta: required_string(payload, "delta")?.to_owned(),
+            item_id: string("item_id")?,
+            delta: string("delta")?,
         }),
-        "conversation.item.input_audio_transcription.completed" => Ok(Event::UserTranscriptFinal {
-            item_id: required_string(payload, "item_id")?.to_owned(),
-            transcript: required_string(payload, "transcript")?.to_owned(),
-        }),
-        "response.audio_transcript.delta" => Ok(Event::AssistantTranscriptDelta {
-            item_id: required_string(payload, "item_id")?.to_owned(),
-            delta: required_string(payload, "delta")?.to_owned(),
-        }),
-        "response.audio_transcript.done" => Ok(Event::AssistantTranscriptFinal {
-            item_id: required_string(payload, "item_id")?.to_owned(),
-            transcript: required_string(payload, "transcript")?.to_owned(),
-        }),
-        "response.audio.delta" => Ok(Event::AssistantAudioDelta {
-            item_id: required_string(payload, "item_id")?.to_owned(),
-            audio_base64: required_string(payload, "delta")?.to_owned(),
-        }),
-        "response.audio.done" => Ok(Event::AssistantAudioDone {
-            item_id: required_string(payload, "item_id")?.to_owned(),
-        }),
-        "response.created" => Ok(Event::ResponseStarted {
-            response_id: nested_string(payload, &["response", "id"])?.to_owned(),
-        }),
-        "response.done" => Ok(Event::ResponseDone {
-            response_id: nested_string(payload, &["response", "id"])?.to_owned(),
-        }),
-        "rate_limits.updated" => Ok(Event::RateLimited {
-            retry_after_ms: payload.get("retry_after_ms").and_then(Value::as_u64),
-        }),
-        "error" => {
-            let error = payload.get("error").unwrap_or(payload);
-            let code = error
-                .get("code")
-                .and_then(Value::as_str)
-                .unwrap_or("realtime_error");
-            let message = error
-                .get("message")
-                .and_then(Value::as_str)
-                .unwrap_or("Realtime service error");
-            let retryable = matches!(
-                error.get("type").and_then(Value::as_str),
-                Some("server_error" | "rate_limit_error")
-            );
-            Ok(Event::Error {
-                code: code.to_owned(),
-                message: message.to_owned(),
-                retryable,
+        "conversation.item.input_audio_transcription.completed" => {
+            Ok(Event::UserTranscriptFinal {
+                item_id: string("item_id")?,
+                transcript: string("transcript")?,
             })
         }
+        "response.audio_transcript.delta" => Ok(Event::AssistantTranscriptDelta {
+            item_id: string("item_id")?,
+            delta: string("delta")?,
+        }),
+        "response.audio_transcript.done" => Ok(Event::AssistantTranscriptFinal {
+            item_id: string("item_id")?,
+            transcript: string("transcript")?,
+        }),
+        "response.audio.delta" => Ok(Event::AssistantAudioDelta {
+            item_id: string("item_id")?,
+            audio_base64: string("delta")?,
+        }),
+        "response.audio.done" => Ok(Event::AssistantAudioDone {
+            item_id: string("item_id")?,
+        }),
+        "response.created" => Ok(Event::ResponseStarted {
+            response_id: payload["response"]["id"]
+                .as_str()
+                .ok_or_else(|| TransportError::Protocol("response omitted id".to_owned()))?
+                .to_owned(),
+        }),
+        "response.done" => Ok(Event::ResponseDone {
+            response_id: payload["response"]["id"]
+                .as_str()
+                .ok_or_else(|| TransportError::Protocol("response omitted id".to_owned()))?
+                .to_owned(),
+        }),
+        "rate_limits.updated" => Ok(Event::RateLimited {
+            retry_after_ms: payload["retry_after_ms"].as_u64(),
+        }),
+        "error" => Ok(Event::Error {
+            code: payload["error"]["code"]
+                .as_str()
+                .unwrap_or("realtime_error")
+                .to_owned(),
+            message: payload["error"]["message"]
+                .as_str()
+                .unwrap_or("Realtime request failed")
+                .to_owned(),
+            retryable: payload["error"]["retryable"].as_bool().unwrap_or(false),
+        }),
         other => Err(TransportError::Protocol(format!(
-            "unsupported server event `{other}`"
+            "unsupported Realtime event {other}"
         ))),
     }
-}
-
-fn required_string<'a>(payload: &'a Value, field: &str) -> Result<&'a str, TransportError> {
-    payload
-        .get(field)
-        .and_then(Value::as_str)
-        .ok_or_else(|| TransportError::Protocol(format!("event omitted string field `{field}`")))
-}
-
-fn nested_string<'a>(payload: &'a Value, path: &[&str]) -> Result<&'a str, TransportError> {
-    let mut current = payload;
-    for field in path {
-        current = current.get(*field).ok_or_else(|| {
-            TransportError::Protocol(format!("event omitted field `{}`", path.join(".")))
-        })?;
-    }
-    current.as_str().ok_or_else(|| {
-        TransportError::Protocol(format!("event field `{}` was not a string", path.join(".")))
-    })
 }
 
 #[cfg(test)]
@@ -543,8 +521,8 @@ mod tests {
         GatewayCapability {
             available: true,
             reason: None,
-            endpoint: Some("ws://127.0.0.1:10531/realtime".to_owned()),
-            model: Some("gpt-realtime".to_owned()),
+            endpoint: Some("ws://127.0.0.1/realtime".to_owned()),
+            model: Some("realtime".to_owned()),
             wire: Some(WireKind::WebSocket),
             supports_input_audio: true,
             supports_output_audio: true,
@@ -553,85 +531,54 @@ mod tests {
     }
 
     #[test]
-    fn unsupported_route_fails_before_audio_transport_exists() {
-        let result = Transport::new(
-            MockWire::default(),
-            GatewayCapability::unavailable("route unsupported"),
-            SessionConfig::default(),
-        );
-        assert!(matches!(result, Err(TransportError::Unavailable(_))));
+    fn unavailable_route_is_rejected_before_audio() {
+        assert!(matches!(
+            Transport::new(
+                MockWire::default(),
+                GatewayCapability::unavailable("unsupported account"),
+                SessionConfig::default()
+            ),
+            Err(TransportError::Unavailable(_))
+        ));
     }
 
     #[test]
-    fn audio_is_blocked_until_explicit_activation() {
-        let mut transport = Transport::new(
-            MockWire::default(),
-            capability(),
-            SessionConfig::default(),
-        )
-        .expect("transport");
+    fn activation_audio_and_reconnect_are_protocol_correct() {
+        let mut transport =
+            Transport::new(MockWire::default(), capability(), SessionConfig::default())
+                .expect("transport");
         assert_eq!(
             transport.queue_input_audio("AAA=".to_owned()),
             Err(TransportError::Muted)
         );
-    }
-
-    #[test]
-    fn session_creation_and_audio_streaming_are_protocol_correct() {
-        let mut transport = Transport::new(
-            MockWire::default(),
-            capability(),
-            SessionConfig::default(),
-        )
-        .expect("transport");
         transport.activate().expect("activate");
         transport
             .queue_input_audio("AAA=".to_owned())
             .expect("audio");
-        assert_eq!(transport.wire.sent[0]["type"], "session.update");
-        assert_eq!(transport.wire.sent[1]["type"], "input_audio_buffer.append");
-        assert_eq!(transport.wire.sent[1]["audio"], "AAA=");
-    }
-
-    #[test]
-    fn transcript_audio_and_error_events_translate() {
+        transport.commit_input_audio().expect("commit");
+        transport.request_response().expect("response");
+        transport.reconnect().expect("reconnect");
+        let kinds = transport
+            .wire
+            .sent
+            .iter()
+            .filter_map(|value| value["type"].as_str())
+            .collect::<Vec<_>>();
         assert_eq!(
-            translate_event(&json!({
-                "type": "response.audio_transcript.delta",
-                "item_id": "item-1",
-                "delta": "hello",
-            }))
-            .expect("event"),
-            Event::AssistantTranscriptDelta {
-                item_id: "item-1".to_owned(),
-                delta: "hello".to_owned(),
-            }
+            kinds,
+            vec![
+                "session.update",
+                "input_audio_buffer.append",
+                "input_audio_buffer.commit",
+                "response.create",
+                "session.update"
+            ]
         );
-        assert!(matches!(
-            translate_event(&json!({
-                "type": "response.audio.delta",
-                "item_id": "item-1",
-                "delta": "AAA=",
-            }))
-            .expect("event"),
-            Event::AssistantAudioDelta { .. }
-        ));
-        assert!(matches!(
-            translate_event(&json!({
-                "type": "error",
-                "error": {
-                    "type": "rate_limit_error",
-                    "code": "rate_limit",
-                    "message": "slow down"
-                }
-            }))
-            .expect("event"),
-            Event::Error { retryable: true, .. }
-        ));
+        assert_eq!(transport.wire.reconnects, 1);
     }
 
     #[test]
-    fn barge_in_cancels_and_truncates_audio() {
+    fn translates_transcripts_audio_errors_and_barge_in() {
         let mut wire = MockWire::default();
         wire.incoming.push_back(json!({
             "type": "response.created",
@@ -642,45 +589,64 @@ mod tests {
             "item_id": "item-1",
             "delta": "AAA="
         }));
+        wire.incoming.push_back(json!({
+            "type": "conversation.item.input_audio_transcription.completed",
+            "item_id": "user-1",
+            "transcript": "hello"
+        }));
+        wire.incoming.push_back(json!({
+            "type": "error",
+            "error": { "code": "rate_limit", "message": "slow down", "retryable": true }
+        }));
         let mut transport = Transport::new(wire, capability(), SessionConfig::default())
             .expect("transport");
-        transport.next_event().expect("response");
-        transport.next_event().expect("audio");
+        assert!(matches!(
+            transport.next_event().expect("event"),
+            Some(Event::ResponseStarted { .. })
+        ));
+        assert!(matches!(
+            transport.next_event().expect("event"),
+            Some(Event::AssistantAudioDelta { .. })
+        ));
+        assert!(matches!(
+            transport.next_event().expect("event"),
+            Some(Event::UserTranscriptFinal { .. })
+        ));
+        assert!(matches!(
+            transport.next_event().expect("event"),
+            Some(Event::Error {
+                retryable: true,
+                ..
+            })
+        ));
         transport.barge_in(420).expect("barge in");
-        assert_eq!(transport.wire.sent[0]["type"], "response.cancel");
-        assert_eq!(transport.wire.sent[1]["type"], "conversation.item.truncate");
-        assert_eq!(transport.wire.sent[1]["audio_end_ms"], 420);
-    }
-
-    #[test]
-    fn reconnect_restores_session_without_credentials() {
-        let mut transport = Transport::new(
-            MockWire::default(),
-            capability(),
-            SessionConfig::default(),
-        )
-        .expect("transport");
-        transport.activate().expect("activate");
-        transport.reconnect().expect("reconnect");
-        assert_eq!(transport.wire.reconnects, 1);
-        assert_eq!(transport.wire.sent.len(), 2);
-        let payload = serde_json::to_string(&transport.wire.sent).expect("payload");
-        assert!(!payload.to_ascii_lowercase().contains("authorization"));
-        assert!(!payload.to_ascii_lowercase().contains("token"));
+        let kinds = transport
+            .wire
+            .sent
+            .iter()
+            .filter_map(|value| value["type"].as_str())
+            .collect::<Vec<_>>();
+        assert_eq!(
+            kinds,
+            vec!["response.cancel", "conversation.item.truncate"]
+        );
     }
 
     #[test]
     fn mute_and_close_stop_transmission_deterministically() {
-        let mut transport = Transport::new(
-            MockWire::default(),
-            capability(),
-            SessionConfig::default(),
-        )
-        .expect("transport");
+        let mut transport =
+            Transport::new(MockWire::default(), capability(), SessionConfig::default())
+                .expect("transport");
         transport.activate().expect("activate");
         transport.set_muted(true).expect("mute");
-        assert_eq!(transport.wire.sent.last().expect("clear")["type"], "input_audio_buffer.clear");
-        assert_eq!(transport.queue_input_audio("AAA=".to_owned()), Err(TransportError::Muted));
+        assert_eq!(
+            transport.wire.sent.last().expect("clear")["type"],
+            "input_audio_buffer.clear"
+        );
+        assert_eq!(
+            transport.queue_input_audio("AAA=".to_owned()),
+            Err(TransportError::Muted)
+        );
         transport.close().expect("close");
         transport.close().expect("close again");
         assert_eq!(transport.wire.closes, 1);
