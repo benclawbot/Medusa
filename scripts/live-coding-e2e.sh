@@ -133,7 +133,15 @@ HEARTBEAT_PID=$!
 echo "::group::live coding session: multi-language-repair (3 independent validations)"
 set +e
 timeout --signal=TERM --kill-after=30s "${LIVE_E2E_TIMEOUT_SECONDS}s" \
-  "$MEDUSA" --repo "$REPO" run "$OBJECTIVE" 2>&1 | tee "$ARTIFACTS/multi-language-repair.log"
+  "$MEDUSA" --repo "$REPO" \
+    --set model.provider=minimax \
+    --set model.name=MiniMax-M3 \
+    --set model.protocol=anthropic \
+    --set model.base_url=https://api.minimax.io/anthropic \
+    --set model.auth=api-key \
+    --set model.tool_calling=true \
+    --set model.streaming=false \
+    run "$OBJECTIVE" 2>&1 | tee "$ARTIFACTS/multi-language-repair.log"
 MEDUSA_STATUS=${PIPESTATUS[0]}
 set -e
 kill "$HEARTBEAT_PID" 2>/dev/null || true
