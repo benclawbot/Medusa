@@ -11,17 +11,32 @@ use crate::{
     policy::{sandboxed_command, validate_shell_command},
 };
 
-pub(crate) fn run(repo: &Path, program: &str, args: &[String]) -> MedusaResult<String> {
+pub(crate) fn run(
+    repo: &Path,
+    program: &str,
+    args: &[String],
+    output_mode: OutputMode,
+) -> MedusaResult<String> {
     validate_shell_command(program, args)?;
-    run_validated(repo, program, args)
+    run_validated(repo, program, args, output_mode)
 }
 
-pub(crate) fn run_approved(repo: &Path, program: &str, args: &[String]) -> MedusaResult<String> {
+pub(crate) fn run_approved(
+    repo: &Path,
+    program: &str,
+    args: &[String],
+    output_mode: OutputMode,
+) -> MedusaResult<String> {
     validate_shell_command(program, args)?;
-    run_validated(repo, program, args)
+    run_validated(repo, program, args, output_mode)
 }
 
-fn run_validated(repo: &Path, program: &str, args: &[String]) -> MedusaResult<String> {
+fn run_validated(
+    repo: &Path,
+    program: &str,
+    args: &[String],
+    output_mode: OutputMode,
+) -> MedusaResult<String> {
     let started = Instant::now();
     let output = sandboxed_command(repo, program, args)?;
     let command = format!("command={} {}", program, args.join(" "));
@@ -36,7 +51,7 @@ fn run_validated(repo: &Path, program: &str, args: &[String]) -> MedusaResult<St
         &output.stdout,
         &output.stderr,
         output.status.success(),
-        OutputMode::Compact,
+        output_mode,
     );
     let trace = tool_telemetry::ToolExecutionTrace::for_shell(
         program,
