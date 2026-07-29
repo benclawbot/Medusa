@@ -3,6 +3,7 @@ mod implementation;
 #[allow(clippy::obfuscated_if_else)]
 pub mod correction_signals;
 pub mod lesson_inference;
+#[allow(clippy::expect_used)]
 pub mod regression_replay;
 pub mod scoped_memory;
 #[allow(clippy::collapsible_if)]
