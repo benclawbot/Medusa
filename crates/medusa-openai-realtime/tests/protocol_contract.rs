@@ -86,7 +86,10 @@ fn golden_protocol_sequence_covers_setup_audio_response_barge_in_and_reconnect()
         .expect("input audio");
     transport.commit_input_audio().expect("commit audio");
     transport.request_response().expect("request response");
-    assert_eq!(transport.next_event().expect("session event"), Some(Event::Connected));
+    assert_eq!(
+        transport.next_event().expect("session event"),
+        Some(Event::Connected)
+    );
     assert!(matches!(
         transport.next_event().expect("response event"),
         Some(Event::ResponseStarted { response_id }) if response_id == "response-1"
@@ -145,10 +148,19 @@ fn recorded_events_translate_transcripts_activity_completion_rate_limits_and_err
     assert!(matches!(events[5], Event::AssistantTranscriptFinal { .. }));
     assert!(matches!(events[6], Event::AssistantAudioDone { .. }));
     assert!(matches!(events[7], Event::ResponseDone { .. }));
-    assert!(matches!(events[8], Event::RateLimited { retry_after_ms: Some(500) }));
+    assert!(matches!(
+        events[8],
+        Event::RateLimited {
+            retry_after_ms: Some(500)
+        }
+    ));
     assert!(matches!(
         events[9],
-        Event::Error { ref code, retryable: true, .. } if code == "expired_session"
+        Event::Error {
+            ref code,
+            retryable: true,
+            ..
+        } if code == "expired_session"
     ));
 }
 
@@ -184,7 +196,10 @@ fn protocol_errors_do_not_echo_sensitive_payload_fields() {
     let mut transport =
         Transport::new(wire, capability(), SessionConfig::default()).expect("transport");
 
-    let error = transport.next_event().expect_err("unsupported event").to_string();
+    let error = transport
+        .next_event()
+        .expect_err("unsupported event")
+        .to_string();
     assert!(!error.contains("oauth-secret"));
     assert!(!error.contains("raw-sensitive-audio"));
     assert!(!error.contains(secret));
