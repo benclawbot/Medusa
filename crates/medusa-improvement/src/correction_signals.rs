@@ -111,27 +111,28 @@ impl CorrectionSignalDetector {
                         turn_id: turn.id.clone(),
                         excerpt_digest: digest(&normalized),
                     };
-                    let entry = grouped.entry(key.clone()).or_insert_with(|| LearningSignal {
-                        id: format!("signal-{}", &digest(&key)[..16]),
-                        kind: classification.kind,
-                        source_turns: Vec::new(),
-                        task_id: task_id.map(ToOwned::to_owned),
-                        observed_behavior,
-                        user_correction: Some(redaction.text.clone()),
-                        requested_outcome: classification.requested_outcome.clone(),
-                        candidate_scope: classification.scope,
-                        confidence_milli: classification.confidence_milli,
-                        ambiguity: classification.ambiguity.clone(),
-                        evidence: Vec::new(),
-                        redaction_status: redaction.status,
-                        contradicted_by: Vec::new(),
-                    });
+                    let entry = grouped
+                        .entry(key.clone())
+                        .or_insert_with(|| LearningSignal {
+                            id: format!("signal-{}", &digest(&key)[..16]),
+                            kind: classification.kind,
+                            source_turns: Vec::new(),
+                            task_id: task_id.map(ToOwned::to_owned),
+                            observed_behavior,
+                            user_correction: Some(redaction.text.clone()),
+                            requested_outcome: classification.requested_outcome.clone(),
+                            candidate_scope: classification.scope,
+                            confidence_milli: classification.confidence_milli,
+                            ambiguity: classification.ambiguity.clone(),
+                            evidence: Vec::new(),
+                            redaction_status: redaction.status,
+                            contradicted_by: Vec::new(),
+                        });
                     push_unique(&mut entry.source_turns, turn.id.clone());
                     if !entry.evidence.iter().any(|item| item.turn_id == turn.id) {
                         entry.evidence.push(evidence);
                     }
-                    entry.confidence_milli =
-                        entry.confidence_milli.saturating_add(50).min(1_000);
+                    entry.confidence_milli = entry.confidence_milli.saturating_add(50).min(1_000);
                     if redaction.status == RedactionStatus::Redacted {
                         entry.redaction_status = RedactionStatus::Redacted;
                     }
@@ -519,14 +520,8 @@ mod tests {
             )],
             None,
         );
-        assert_eq!(
-            batch.signals[0].kind,
-            LearningSignalKind::Dissatisfaction
-        );
-        assert_eq!(
-            batch.signals[0].candidate_scope,
-            CandidateScope::Unresolved
-        );
+        assert_eq!(batch.signals[0].kind, LearningSignalKind::Dissatisfaction);
+        assert_eq!(batch.signals[0].candidate_scope, CandidateScope::Unresolved);
         assert!(!batch.signals[0].ambiguity.is_empty());
     }
 
