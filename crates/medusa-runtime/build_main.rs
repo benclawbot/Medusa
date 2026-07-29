@@ -5,6 +5,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     println!("cargo:rerun-if-changed=src/commands.rs");
     println!("cargo:rerun-if-changed=src/review.inc");
     println!("cargo:rerun-if-changed=src/review_tests.inc");
+    println!("cargo:rerun-if-changed=src/attachment.rs");
 
     let manifest = env::var("CARGO_MANIFEST_DIR")?;
     let out_dir = PathBuf::from(env::var("OUT_DIR")?);
@@ -30,13 +31,14 @@ fn main() -> Result<(), Box<dyn Error>> {
         &mut source,
         "pub mod prompt;\npub mod skill_dependencies;",
         &format!(
-            "pub mod prompt;\n#[path = \"{}\"]\npub mod review;\npub mod skill_dependencies;",
+            "pub mod attachment;\npub mod prompt;\n#[path = \"{}\"]\npub mod review;\npub mod skill_dependencies;",
             review.display().to_string().replace('\\', "/")
         ),
     )?;
 
     for (declaration, file) in [
         ("mod error;", "error.rs"),
+        ("pub mod attachment;", "attachment.rs"),
         ("pub mod lifecycle;", "lifecycle.rs"),
         ("pub mod prompt;", "prompt.rs"),
         ("pub mod skill_dependencies;", "skill_dependencies.rs"),
@@ -112,9 +114,9 @@ fn main() -> Result<(), Box<dyn Error>> {
     )?;
 
     source = source.replace(
-    "cancel: &AtomicBool",
-    "cancel: &Arc<AtomicBool>",
-);
+        "cancel: &AtomicBool",
+        "cancel: &Arc<AtomicBool>",
+    );
     fs::write(out_dir.join("runtime_generated.rs"), source)?;
     Ok(())
 }
