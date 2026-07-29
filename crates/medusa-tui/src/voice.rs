@@ -233,7 +233,7 @@ impl TuiVoiceController {
             }
             VoiceControl::StopSpeech | VoiceControl::CancelResponse => {
                 if self.enabled && self.session.state() == RealtimeVoiceState::AssistantSpeaking {
-                    self.session.interrupt()?;
+                    self.session.barge_in()?;
                 }
             }
             VoiceControl::CancelTask => {}
@@ -287,7 +287,7 @@ impl TuiVoiceController {
     }
 
     pub fn drain_events(&mut self) -> Vec<RealtimeVoiceEvent> {
-        std::iter::from_fn(|| self.session.pop_event()).collect()
+        std::iter::from_fn(|| self.session.next_event()).collect()
     }
 
     #[must_use]
