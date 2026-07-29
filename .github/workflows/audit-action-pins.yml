@@ -1,0 +1,25 @@
+name: Audit Action Pins
+
+on:
+  push:
+    paths:
+      - '.github/action-pin-audit-trigger'
+
+permissions:
+  contents: read
+
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - name: Enumerate workflow action references
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo '=== ACTION REFERENCES ==='
+          grep -RInE '^[[:space:]]*-?[[:space:]]*uses:[[:space:]]*[^./][^[:space:]]*@' .github/workflows --include='*.yml' --include='*.yaml' | sort
+          echo '=== UNPINNED REFERENCES ==='
+          if grep -RInE '^[[:space:]]*-?[[:space:]]*uses:[[:space:]]*[^./][^[:space:]]*@(v[0-9]+([^0-9a-f]|$)|[0-9]+\.[0-9]+\.[0-9]+([^0-9a-f]|$))' .github/workflows --include='*.yml' --include='*.yaml' | sort; then
+            exit 1
+          fi
