@@ -3,17 +3,20 @@ name: Apply integration payload
 on:
   push:
     branches: [fix/integrate-shipped-subsystems]
+  pull_request:
+    branches: [main]
 
 permissions:
   contents: write
 
 jobs:
   apply:
-    if: github.event.head_commit.message != 'Apply integrated subsystem changes'
+    if: github.event_name != 'push' || github.event.head_commit.message != 'Apply integrated subsystem changes'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
         with:
+          ref: ${{ github.head_ref || github.ref_name }}
           fetch-depth: 0
       - name: Apply exact integration archive
         shell: bash
@@ -28,4 +31,4 @@ jobs:
           git add -A
           git diff --cached --check
           git commit -m 'Apply integrated subsystem changes'
-          git push origin HEAD:${GITHUB_REF_NAME}
+          git push origin HEAD:${{ github.head_ref || github.ref_name }}
