@@ -163,13 +163,18 @@ fn score(solution_type: SolutionType, lesson: &LessonCandidate) -> SolutionScore
     match (solution_type, lesson.scope) {
         (SolutionType::UserPreference, LessonScope::User) => {
             value += 100;
-            reasons.push("the lesson is scoped to one user's durable interaction preferences".to_owned());
+            reasons.push(
+                "the lesson is scoped to one user's durable interaction preferences".to_owned(),
+            );
         }
         (SolutionType::RepositoryMemory, LessonScope::Repository) => {
             value += 95;
             reasons.push("the lesson is a repository-local convention".to_owned());
         }
-        (SolutionType::ReusableSkill, LessonScope::ProjectWorkflow | LessonScope::DomainGeneral) => {
+        (
+            SolutionType::ReusableSkill,
+            LessonScope::ProjectWorkflow | LessonScope::DomainGeneral,
+        ) => {
             value += 85;
             reasons.push("the lesson describes a portable repeatable procedure".to_owned());
         }
@@ -203,7 +208,13 @@ fn score(solution_type: SolutionType, lesson: &LessonCandidate) -> SolutionScore
     }
     if contains_any(
         &text,
-        &["defect", "bug", "crash", "incorrect serialization", "product behavior"],
+        &[
+            "defect",
+            "bug",
+            "crash",
+            "incorrect serialization",
+            "product behavior",
+        ],
     ) {
         if solution_type == SolutionType::ProductCodeChange {
             value += 100;
@@ -216,7 +227,12 @@ fn score(solution_type: SolutionType, lesson: &LessonCandidate) -> SolutionScore
     }
     if contains_any(
         &text,
-        &["check before", "before claiming", "completion gate", "checklist"],
+        &[
+            "check before",
+            "before claiming",
+            "completion gate",
+            "checklist",
+        ],
     ) {
         if solution_type == SolutionType::WorkflowGate {
             value += 90;
@@ -228,7 +244,10 @@ fn score(solution_type: SolutionType, lesson: &LessonCandidate) -> SolutionScore
     }
 
     if lesson.scope == LessonScope::Repository
-        && matches!(solution_type, SolutionType::UserPreference | SolutionType::HarnessPolicy)
+        && matches!(
+            solution_type,
+            SolutionType::UserPreference | SolutionType::HarnessPolicy
+        )
     {
         value -= 100;
         rejected_because.push(
@@ -242,10 +261,14 @@ fn score(solution_type: SolutionType, lesson: &LessonCandidate) -> SolutionScore
     {
         if solution_type == SolutionType::NoPersistence {
             value += 150;
-            reasons.push("low-confidence, blocked, or contradictory evidence must remain inactive".to_owned());
+            reasons.push(
+                "low-confidence, blocked, or contradictory evidence must remain inactive"
+                    .to_owned(),
+            );
         } else {
             value -= 150;
-            rejected_because.push("the evidence is not safe to turn into durable behavior".to_owned());
+            rejected_because
+                .push("the evidence is not safe to turn into durable behavior".to_owned());
         }
     }
 
@@ -295,7 +318,10 @@ fn generate(solution_type: SolutionType, lesson: &LessonCandidate) -> Option<Gen
         },
         SolutionType::RepositoryMemory => GeneratedArtifact {
             path: format!(".medusa/candidates/memory/{}.md", lesson.id),
-            content: format!("# Repository memory candidate\n\n{}\n", lesson.generalized_rule),
+            content: format!(
+                "# Repository memory candidate\n\n{}\n",
+                lesson.generalized_rule
+            ),
         },
         SolutionType::UserPreference => GeneratedArtifact {
             path: format!(".medusa/candidates/preferences/{}.json", lesson.id),
@@ -306,12 +332,18 @@ fn generate(solution_type: SolutionType, lesson: &LessonCandidate) -> Option<Gen
         },
         SolutionType::WorkflowGate => GeneratedArtifact {
             path: format!(".medusa/candidates/gates/{}.md", lesson.id),
-            content: format!("# Workflow gate candidate\n\nBefore completion: {}\n", lesson.generalized_rule),
+            content: format!(
+                "# Workflow gate candidate\n\nBefore completion: {}\n",
+                lesson.generalized_rule
+            ),
         },
         SolutionType::SessionNote
         | SolutionType::DocumentationUpdate
         | SolutionType::ConfigurationChange => GeneratedArtifact {
-            path: format!(".medusa/candidates/notes/{}-{:?}.md", lesson.id, solution_type),
+            path: format!(
+                ".medusa/candidates/notes/{}-{:?}.md",
+                lesson.id, solution_type
+            ),
             content: format!("# Candidate\n\n{}\n", lesson.generalized_rule),
         },
         SolutionType::NoPersistence => return None,
@@ -386,7 +418,11 @@ mod tests {
         let selector = SolutionSelector;
         assert_eq!(
             selector
-                .propose(&lesson(LessonScope::User, ImplementationType::Memory, "prefer concise updates"))
+                .propose(&lesson(
+                    LessonScope::User,
+                    ImplementationType::Memory,
+                    "prefer concise updates"
+                ))
                 .selected[0],
             SolutionType::UserPreference
         );
@@ -475,9 +511,12 @@ mod tests {
         );
         assert_eq!(proposal.review_strength, ReviewStrength::Critical);
         assert!(proposal.isolated);
-        assert!(proposal.artifacts.iter().any(|artifact| {
-            artifact.content.contains("No direct main-branch mutation")
-        }));
+        assert!(
+            proposal
+                .artifacts
+                .iter()
+                .any(|artifact| { artifact.content.contains("No direct main-branch mutation") })
+        );
     }
 
     #[test]
