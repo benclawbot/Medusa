@@ -1,9 +1,4 @@
-use std::{
-    collections::BTreeMap,
-    fs,
-    io::Write,
-    path::PathBuf,
-};
+use std::{collections::BTreeMap, fs, io::Write, path::PathBuf};
 
 use medusa_core::{ErrorCategory, ErrorCode, MedusaError, MedusaResult};
 use serde::{Deserialize, Serialize};
@@ -58,10 +53,7 @@ impl std::fmt::Display for AdaptedOutput {
             write!(
                 f,
                 "\n[output-adapter mode={:?}; original_lines={}; omitted_lines={}; duplicate_lines_removed={}",
-                self.mode,
-                self.original_lines,
-                self.omitted_lines,
-                self.duplicate_lines_removed
+                self.mode, self.original_lines, self.omitted_lines, self.duplicate_lines_removed
             )?;
             if let Some(handle) = &self.expansion_handle {
                 write!(f, "; expansion_handle={handle}")?;
@@ -176,15 +168,22 @@ pub fn adapt_command(
     let mut retained = if program == "git" {
         adapt_git_lines(args, &lines, mode)
     } else if success {
-        retain_failures_and_boundaries(
-            &lines,
-            if mode == OutputMode::Compact { 40 } else { 160 },
-        )
+        retain_failures_and_boundaries(&lines, if mode == OutputMode::Compact { 40 } else { 160 })
     } else {
-        retain_failure_context(&lines, if mode == OutputMode::Compact { 120 } else { 320 })
+        retain_failure_context(
+            &lines,
+            if mode == OutputMode::Compact {
+                120
+            } else {
+                320
+            },
+        )
     };
     retained.insert(0, command);
-    retained.insert(1, format!("status={}", if success { "success" } else { "failure" }));
+    retained.insert(
+        1,
+        format!("status={}", if success { "success" } else { "failure" }),
+    );
     let omitted_lines = original_lines
         .saturating_sub(retained.len())
         .saturating_sub(duplicate_lines_removed);
@@ -325,7 +324,11 @@ fn is_failure_line(line: &str) -> bool {
 fn deduplicate_lines(input: &str) -> (String, usize) {
     let mut counts = BTreeMap::<String, usize>::new();
     let mut order = Vec::new();
-    for line in input.lines().map(str::trim_end).filter(|line| !line.is_empty()) {
+    for line in input
+        .lines()
+        .map(str::trim_end)
+        .filter(|line| !line.is_empty())
+    {
         let entry = counts.entry(line.to_owned()).or_default();
         if *entry == 0 {
             order.push(line.to_owned());
@@ -375,7 +378,10 @@ fn strip_ansi_and_progress(input: &str) -> String {
 
 fn deterministic_handle(tool: &str, body: &str) -> String {
     let digest = Sha256::digest(format!("{tool}\0{body}").as_bytes());
-    format!("{tool}:{}:rerun-with-output_mode=verbatim", hex::encode(&digest[..8]))
+    format!(
+        "{tool}:{}:rerun-with-output_mode=verbatim",
+        hex::encode(&digest[..8])
+    )
 }
 
 fn split_utf8_boundaries(text: &str, head_bytes: usize, tail_bytes: usize) -> (String, String) {
