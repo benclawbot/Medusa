@@ -169,7 +169,9 @@ pub(crate) fn recommend(requested: &str, input_summary: &str) -> RankedRecommend
     let score = utility_score(&selected);
     let mut alternatives = registry
         .values()
-        .filter(|candidate| candidate.capability == selected.capability && candidate.name != selected.name)
+        .filter(|candidate| {
+            candidate.capability == selected.capability && candidate.name != selected.name
+        })
         .map(|candidate| (candidate.name.clone(), utility_score(candidate)))
         .collect::<Vec<_>>();
     alternatives.sort_by(|left, right| right.1.cmp(&left.1).then_with(|| left.0.cmp(&right.0)));
@@ -203,7 +205,8 @@ fn utility_score(capability: &ToolCapability) -> i64 {
         RiskClass::RepositoryMutation => 25,
         RiskClass::External => 40,
     };
-    1_000 - i64::from(capability.latency_weight) * 4
+    1_000
+        - i64::from(capability.latency_weight) * 4
         - i64::from(capability.token_weight) * 3
         - risk_penalty
         + if capability.cacheable { 35 } else { 0 }
@@ -223,30 +226,78 @@ pub(crate) fn cache_lookup(
     input: &str,
 ) -> MedusaResult<(Option<String>, CacheEvidence)> {
     let Some(capability) = registry().get(tool).cloned() else {
-        return Ok((None, CacheEvidence { status: "bypass".into(), key: String::new(), reason: "tool is not registered".into() }));
+        return Ok((
+            None,
+            CacheEvidence {
+                status: "bypass".into(),
+                key: String::new(),
+                reason: "tool is not registered".into(),
+            },
+        ));
     };
     if !capability.cacheable {
-        return Ok((None, CacheEvidence { status: "bypass".into(), key: String::new(), reason: "tool is not cacheable".into() }));
+        return Ok((
+            None,
+            CacheEvidence {
+                status: "bypass".into(),
+                key: String::new(),
+                reason: "tool is not cacheable".into(),
+            },
+        ));
     }
     let fingerprint = repository_fingerprint(repo)?;
     let key = cache_key(tool, input, &fingerprint);
     let path = cache_path(repo, &key);
     if !path.exists() {
-        return Ok((None, CacheEvidence { status: "miss".into(), key, reason: "entry does not exist".into() }));
+        return Ok((
+            None,
+            CacheEvidence {
+                status: "miss".into(),
+                key,
+                reason: "entry does not exist".into(),
+            },
+        ));
     }
     let entry: CacheEntry = serde_json::from_slice(&fs::read(&path)?)?;
     if entry.schema_version != CACHE_SCHEMA_VERSION || entry.repository_fingerprint != fingerprint {
-        return Ok((None, CacheEvidence { status: "miss".into(), key, reason: "repository fingerprint changed".into() }));
+        return Ok((
+            None,
+            CacheEvidence {
+                status: "miss".into(),
+                key,
+                reason: "repository fingerprint changed".into(),
+            },
+        ));
     }
-    Ok((Some(entry.output), CacheEvidence { status: "hit".into(), key, reason: "unchanged repository state".into() }))
+    Ok((
+        Some(entry.output),
+        CacheEvidence {
+            status: "hit".into(),
+            key,
+            reason: "unchanged repository state".into(),
+        },
+    ))
 }
 
-pub(crate) fn cache_store(repo: &Path, tool: &str, input: &str, output: &str) -> MedusaResult<CacheEvidence> {
+pub(crate) fn cache_store(
+    repo: &Path,
+    tool: &str,
+    input: &str,
+    output: &str,
+) -> MedusaResult<CacheEvidence> {
     let Some(capability) = registry().get(tool).cloned() else {
-        return Ok(CacheEvidence { status: "bypass".into(), key: String::new(), reason: "tool is not registered".into() });
+        return Ok(CacheEvidence {
+            status: "bypass".into(),
+            key: String::new(),
+            reason: "tool is not registered".into(),
+        });
     };
     if !capability.cacheable {
-        return Ok(CacheEvidence { status: "bypass".into(), key: String::new(), reason: "tool is not cacheable".into() });
+        return Ok(CacheEvidence {
+            status: "bypass".into(),
+            key: String::new(),
+            reason: "tool is not cacheable".into(),
+        });
     }
     let fingerprint = repository_fingerprint(repo)?;
     let key = cache_key(tool, input, &fingerprint);
@@ -259,11 +310,18 @@ pub(crate) fn cache_store(repo: &Path, tool: &str, input: &str, output: &str) ->
         tool: tool.into(),
         input_digest: short_digest(input.as_bytes()),
         repository_fingerprint: fingerprint,
-        created_unix_ms: SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_millis(),
+        created_unix_ms: SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_millis(),
         output: output.into(),
     };
     fs::write(path, serde_json::to_vec(&entry)?)?;
-    Ok(CacheEvidence { status: "stored".into(), key, reason: "successful deterministic read".into() })
+    Ok(CacheEvidence {
+        status: "stored".into(),
+        key,
+        reason: "successful deterministic read".into(),
+    })
 }
 
 pub(crate) fn invalidate(repo: &Path, relative: Option<&str>) -> MedusaResult<CacheEvidence> {
@@ -278,7 +336,10 @@ pub(crate) fn invalidate(repo: &Path, relative: Option<&str>) -> MedusaResult<Ca
     })
 }
 
-pub(crate) fn format_evidence(recommendation: &RankedRecommendation, cache: &CacheEvidence) -> String {
+pub(crate) fn format_evidence(
+    recommendation: &RankedRecommendation,
+    cache: &CacheEvidence,
+) -> String {
     format!(
         "[tool-orchestration selected={}; score={}; expected_output_bytes={}; escalation={:?}; override={}; cache_status={}; cache_key={}; cache_reason={}; rationale={}]",
         recommendation.selected,
@@ -303,12 +364,23 @@ fn cache_key(tool: &str, input: &str, fingerprint: &str) -> String {
 
 fn repository_fingerprint(repo: &Path) -> MedusaResult<String> {
     let mut hasher = Sha256::new();
-    for name in ["Cargo.toml", "Cargo.lock", "package.json", "pyproject.toml", ".git/HEAD", ".git/index"] {
+    for name in [
+        "Cargo.toml",
+        "Cargo.lock",
+        "package.json",
+        "pyproject.toml",
+        ".git/HEAD",
+        ".git/index",
+    ] {
         let path = repo.join(name);
         if let Ok(metadata) = fs::metadata(&path) {
             hasher.update(name.as_bytes());
             hasher.update(metadata.len().to_le_bytes());
-            if let Ok(modified) = metadata.modified().and_then(|value| value.duration_since(UNIX_EPOCH).map_err(std::io::Error::other)) {
+            if let Ok(modified) = metadata.modified().and_then(|value| {
+                value
+                    .duration_since(UNIX_EPOCH)
+                    .map_err(std::io::Error::other)
+            }) {
                 hasher.update(modified.as_nanos().to_le_bytes());
             }
         }
@@ -337,20 +409,30 @@ mod tests {
     #[test]
     fn broad_test_detection_prefers_narrow_scope() {
         assert!(looks_like_broad_test("cargo test --workspace"));
-        assert!(!looks_like_broad_test("cargo test -p medusa-agent ranking_is_deterministic"));
+        assert!(!looks_like_broad_test(
+            "cargo test -p medusa-agent ranking_is_deterministic"
+        ));
     }
 
     #[test]
     fn cache_reuses_unchanged_repository_and_invalidates_after_mutation() {
         let repo = tempfile::tempdir().expect("repository");
         fs::write(repo.path().join("Cargo.toml"), "[workspace]\n").expect("fixture");
-        let miss = cache_lookup(repo.path(), "fs_read", "Cargo.toml").expect("lookup").1;
+        let miss = cache_lookup(repo.path(), "fs_read", "Cargo.toml")
+            .expect("lookup")
+            .1;
         assert_eq!(miss.status, "miss");
         cache_store(repo.path(), "fs_read", "Cargo.toml", "[workspace]\n").expect("store");
         let (hit, evidence) = cache_lookup(repo.path(), "fs_read", "Cargo.toml").expect("lookup");
         assert_eq!(evidence.status, "hit");
         assert_eq!(hit.as_deref(), Some("[workspace]\n"));
         invalidate(repo.path(), Some("Cargo.toml")).expect("invalidate");
-        assert_eq!(cache_lookup(repo.path(), "fs_read", "Cargo.toml").expect("lookup").1.status, "miss");
+        assert_eq!(
+            cache_lookup(repo.path(), "fs_read", "Cargo.toml")
+                .expect("lookup")
+                .1
+                .status,
+            "miss"
+        );
     }
 }
