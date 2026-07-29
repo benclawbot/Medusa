@@ -196,7 +196,6 @@ pub(crate) fn validate_shell_command_hard_denials(
     Ok(())
 }
 
-
 pub(crate) fn sandboxed_command(
     repo: &Path,
     program: &str,
@@ -337,9 +336,21 @@ mod command_admission_tests {
 
     #[test]
     fn contained_language_toolchains_are_admitted_on_every_platform() {
-        for program in ["python", "python.exe", "node", "node.exe", "npm", "npm.cmd", "pytest", "pytest.exe", "dotnet", "dotnet.exe"] {
-            validate_shell_command(program, &["--version".to_owned()])
-                .unwrap_or_else(|error| panic!("{program} should be admitted to the OS sandbox: {error}"));
+        for program in [
+            "python",
+            "python.exe",
+            "node",
+            "node.exe",
+            "npm",
+            "npm.cmd",
+            "pytest",
+            "pytest.exe",
+            "dotnet",
+            "dotnet.exe",
+        ] {
+            validate_shell_command(program, &["--version".to_owned()]).unwrap_or_else(|error| {
+                panic!("{program} should be admitted to the OS sandbox: {error}")
+            });
         }
     }
 
@@ -353,7 +364,9 @@ mod command_admission_tests {
     #[test]
     fn dangerous_git_mutations_remain_denied() {
         assert!(validate_shell_command("git", &["push".to_owned()]).is_err());
-        assert!(validate_shell_command("git.exe", &["reset".to_owned(), "--hard".to_owned()]).is_err());
+        assert!(
+            validate_shell_command("git.exe", &["reset".to_owned(), "--hard".to_owned()]).is_err()
+        );
     }
 }
 

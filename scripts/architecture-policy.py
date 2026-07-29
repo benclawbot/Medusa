@@ -33,6 +33,7 @@ BUILD_SOURCE_RE = re.compile(
     re.S,
 )
 RERUN_SOURCE_RE = re.compile(r'cargo:rerun-if-changed=(src/[^"\\]+\.rs)')
+BOUND_MODULE_RE = re.compile(r'\(\s*"[^"]+"\s*,\s*"([^"]+\.rs)"\s*\)')
 
 
 def run(command: list[str], cwd: pathlib.Path) -> str:
@@ -148,6 +149,10 @@ def active_modules(crate_root: pathlib.Path, package: dict[str, Any]) -> set[pat
             child = (crate_root / relative).resolve()
             if child.exists():
                 queue.append(child)
+        for relative in BOUND_MODULE_RE.findall(build_text):
+            child = (crate_root / "src" / relative).resolve()
+            if child.exists():
+                queue.append(child)
 
     # Process any modules discovered through build generation.
     while queue:
@@ -260,6 +265,7 @@ def self_test() -> int:
     assert MANIFEST_INCLUDE_RE.findall('include!(concat!(env!("CARGO_MANIFEST_DIR"), "/src/engine.rs"))') == ["src/engine.rs"]
     assert BUILD_SOURCE_RE.findall('fs::read_to_string("src/runtime_impl.rs")?') == ["src/runtime_impl.rs"]
     assert RERUN_SOURCE_RE.findall('println!("cargo:rerun-if-changed=src/runtime_impl.rs");') == ["src/runtime_impl.rs"]
+    assert BOUND_MODULE_RE.findall('("mod error;", "error.rs")') == ["error.rs"]
     print("architecture policy self-test passed")
     return 0
 
