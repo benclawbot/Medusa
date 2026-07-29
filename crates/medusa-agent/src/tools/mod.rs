@@ -117,11 +117,16 @@ pub(crate) fn built_in_tools(
         ),
         tool(
             "shell_run",
-            "Run an approved read-only executable directly in the repository and capture output. Never invoke bash, sh, cmd, PowerShell, or shell operators; use filesystem tools for writes and directory creation.",
+            "Run an approved read-only executable directly in the repository and capture output. Use output_mode=compact by default, normal for more context, and verbatim only when exact raw output is required. Never invoke bash, sh, cmd, PowerShell, or shell operators; use filesystem tools for writes and directory creation.",
             json!({
                 "type": "object", "properties": {
                     "program": {"type": "string"},
-                    "args": {"type": "array", "items": {"type": "string"}}
+                    "args": {"type": "array", "items": {"type": "string"}},
+                    "output_mode": {
+                        "type": "string",
+                        "enum": ["compact", "normal", "verbatim"],
+                        "default": "compact"
+                    }
                 }, "required": ["program", "args"], "additionalProperties": false
             }),
         ),
@@ -300,7 +305,10 @@ pub(crate) fn execute_tool(repo: &Path, name: &str, input: &Value) -> MedusaResu
                         .ok_or_else(|| invalid_tool("every arg must be a string"))
                 })
                 .collect::<MedusaResult<Vec<_>>>()?;
-            shell::run(repo, program, &args)
+            let output_mode = crate::output_envelope::OutputMode::parse(
+                input.get("output_mode").and_then(Value::as_str),
+            )?;
+            shell::run(repo, program, &args, output_mode)
         }
         "web_search" => web::search(
             input_string(input, "query")?,
@@ -346,7 +354,10 @@ pub(crate) fn execute_approved_tool(
                         .ok_or_else(|| invalid_tool("every arg must be a string"))
                 })
                 .collect::<MedusaResult<Vec<_>>>()?;
-            shell::run_approved(repo, program, &args)
+            let output_mode = crate::output_envelope::OutputMode::parse(
+                input.get("output_mode").and_then(Value::as_str),
+            )?;
+            shell::run_approved(repo, program, &args, output_mode)
         }
         _ => Err(MedusaError::new(
             ErrorCode::PolicyDenied,
