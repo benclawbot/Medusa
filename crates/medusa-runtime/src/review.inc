@@ -71,15 +71,23 @@ pub enum ReviewWorkflowError {
 }
 
 pub fn capture_review_baseline(repo: &Path) -> Result<(), ReviewWorkflowError> {
-    let repo = canonical_repo(repo)?;
+    let repo = fs::canonicalize(repo)
+        .map_err(|error| ReviewWorkflowError::InvalidRepository(error.to_string()))?;
     let path = repo.join(REVIEW_DIR).join(BASELINE_FILE);
     if path.exists() {
         return Ok(());
     }
-    let paths = changed_paths(&repo)?.into_iter().collect();
-    let baseline = ReviewBaseline {
-        repository_fingerprint: repository_fingerprint(&repo)?,
-        paths,
+
+    let baseline = if is_git_work_tree(&repo) {
+        ReviewBaseline {
+            repository_fingerprint: repository_fingerprint(&repo)?,
+            paths: changed_paths(&repo)?.into_iter().collect(),
+        }
+    } else {
+        ReviewBaseline {
+            repository_fingerprint: fingerprint(b""),
+            paths: BTreeSet::new(),
+        }
     };
     write_json(&path, &baseline)
 }
@@ -262,17 +270,31 @@ fn revert_file(repo: &Path, path: &str) -> Result<(), ReviewWorkflowError> {
         .map_err(|error| ReviewWorkflowError::Git(error.to_string()))?
         .status
         .success();
-    if tracked {
-        git_status(Command::new("git").args(["checkout", "HEAD", "--", path]).current_dir(repo))
-    } else {
-        let target = repo.join(path);
-        if target.is_dir() {
-            fs::remove_dir_all(target).map_err(|error| ReviewWorkflowError::Git(error.to_string()))?;
-        } else if target.exists() {
-            fs::remove_file(target).map_err(|error| ReviewWorkflowError::Git(error.to_string()))?;
-        }
-        Ok(())
+    if tracked && git_has_head(repo) {
+        return git_status(
+            Command::new("git")
+                .args(["checkout", "HEAD", "--", path])
+                .current_dir(repo),
+        );
     }
+    if tracked {
+        git_status(
+            Command::new("git")
+                .args(["rm", "--cached", "--force", "--ignore-unmatch", "--", path])
+                .current_dir(repo),
+        )?;
+    }
+    remove_worktree_path(repo, path)
+}
+
+fn remove_worktree_path(repo: &Path, path: &str) -> Result<(), ReviewWorkflowError> {
+    let target = repo.join(path);
+    if target.is_dir() {
+        fs::remove_dir_all(target).map_err(|error| ReviewWorkflowError::Git(error.to_string()))?;
+    } else if target.exists() {
+        fs::remove_file(target).map_err(|error| ReviewWorkflowError::Git(error.to_string()))?;
+    }
+    Ok(())
 }
 
 fn reverse_patch(repo: &Path, patch: &str) -> Result<(), ReviewWorkflowError> {
@@ -347,29 +369,117 @@ fn repository_fingerprint(repo: &Path) -> Result<String, ReviewWorkflowError> {
 }
 
 fn changed_paths(repo: &Path) -> Result<Vec<String>, ReviewWorkflowError> {
-    let output = Command::new("git")
-        .args(["diff", "--name-only", "HEAD", "--"])
-        .current_dir(repo)
-        .output()
-        .map_err(|error| ReviewWorkflowError::Git(error.to_string()))?;
-    if !output.status.success() {
-        return Err(ReviewWorkflowError::Git(
-            String::from_utf8_lossy(&output.stderr).trim().to_owned(),
-        ));
-    }
-    let mut paths = String::from_utf8_lossy(&output.stdout)
-        .lines()
-        .map(str::to_owned)
-        .collect::<Vec<_>>();
-    paths.extend(untracked_paths(repo)?);
+    let mut paths = if git_has_head(repo) {
+        let output = Command::new("git")
+            .args(["diff", "--name-only", "HEAD", "--"])
+            .current_dir(repo)
+            .output()
+            .map_err(|error| ReviewWorkflowError::Git(error.to_string()))?;
+        if !output.status.success() {
+            return Err(ReviewWorkflowError::Git(
+                String::from_utf8_lossy(&output.stderr).trim().to_owned(),
+            ));
+        }
+        let mut paths = String::from_utf8_lossy(&output.stdout)
+            .lines()
+            .map(str::to_owned)
+            .collect::<Vec<_>>();
+        paths.extend(untracked_paths(repo)?);
+        paths
+    } else {
+        current_worktree_paths(repo)?
+    };
     paths.sort();
     paths.dedup();
     Ok(paths)
 }
 
 fn git_diff(repo: &Path) -> Result<String, ReviewWorkflowError> {
+    let has_head = git_has_head(repo);
+    let mut source = if has_head {
+        let output = Command::new("git")
+            .args([
+                "diff",
+                "--no-ext-diff",
+                "--binary",
+                "--find-renames",
+                "--unified=3",
+                "HEAD",
+                "--",
+            ])
+            .current_dir(repo)
+            .output()
+            .map_err(|error| ReviewWorkflowError::Git(error.to_string()))?;
+        if !output.status.success() {
+            return Err(ReviewWorkflowError::Git(
+                String::from_utf8_lossy(&output.stderr).trim().to_owned(),
+            ));
+        }
+        String::from_utf8(output.stdout)
+            .map_err(|_| ReviewWorkflowError::Git("git diff output was not UTF-8".to_owned()))?
+    } else {
+        String::new()
+    };
+
+    let added_paths = if has_head {
+        untracked_paths(repo)?
+    } else {
+        current_worktree_paths(repo)?
+    };
+    for path in added_paths {
+        append_added_file_diff(repo, &path, &mut source)?;
+    }
+    Ok(source)
+}
+
+fn append_added_file_diff(
+    repo: &Path,
+    path: &str,
+    source: &mut String,
+) -> Result<(), ReviewWorkflowError> {
     let output = Command::new("git")
-        .args(["diff", "--no-ext-diff", "--binary", "--find-renames", "--unified=3", "HEAD", "--"])
+        .args([
+            "diff",
+            "--no-index",
+            "--binary",
+            "--unified=3",
+            "--",
+            null_device(),
+            path,
+        ])
+        .current_dir(repo)
+        .output()
+        .map_err(|error| ReviewWorkflowError::Git(error.to_string()))?;
+    if !matches!(output.status.code(), Some(0 | 1)) {
+        return Err(ReviewWorkflowError::Git(
+            String::from_utf8_lossy(&output.stderr).trim().to_owned(),
+        ));
+    }
+    let patch = String::from_utf8(output.stdout)
+        .map_err(|_| ReviewWorkflowError::Git("untracked diff was not UTF-8".to_owned()))?;
+    source.push_str(&patch);
+    Ok(())
+}
+
+fn is_git_work_tree(repo: &Path) -> bool {
+    Command::new("git")
+        .args(["rev-parse", "--is-inside-work-tree"])
+        .current_dir(repo)
+        .output()
+        .is_ok_and(|output| output.status.success())
+}
+
+fn git_has_head(repo: &Path) -> bool {
+    Command::new("git")
+        .args(["rev-parse", "--verify", "HEAD"])
+        .current_dir(repo)
+        .output()
+        .is_ok_and(|output| output.status.success())
+}
+
+fn current_worktree_paths(repo: &Path) -> Result<Vec<String>, ReviewWorkflowError> {
+    let output = Command::new("git")
+        .args(["ls-files", "--cached", "--others", "--exclude-standard"])
         .current_dir(repo)
         .output()
         .map_err(|error| ReviewWorkflowError::Git(error.to_string()))?;
@@ -378,25 +488,14 @@ fn git_diff(repo: &Path) -> Result<String, ReviewWorkflowError> {
             String::from_utf8_lossy(&output.stderr).trim().to_owned(),
         ));
     }
-    let mut source = String::from_utf8(output.stdout)
-        .map_err(|_| ReviewWorkflowError::Git("git diff output was not UTF-8".to_owned()))?;
-    for path in untracked_paths(repo)? {
-        let untracked = Command::new("git")
-            .args(["diff", "--no-index", "--binary", "--unified=3", "--", null_device(), &path])
-            .current_dir(repo)
-            .output()
-            .map_err(|error| ReviewWorkflowError::Git(error.to_string()))?;
-        if !matches!(untracked.status.code(), Some(0 | 1)) {
-            return Err(ReviewWorkflowError::Git(
-                String::from_utf8_lossy(&untracked.stderr).trim().to_owned(),
-            ));
-        }
-        let patch = String::from_utf8(untracked.stdout)
-            .map_err(|_| ReviewWorkflowError::Git("untracked diff was not UTF-8".to_owned()))?
-            .replace("a/dev/null", "a/dev/null");
-        source.push_str(&patch);
-    }
-    Ok(source)
+    Ok(String::from_utf8_lossy(&output.stdout)
+        .lines()
+        .filter(|path| !review_metadata_path(path))
+        .filter(|path| {
+            fs::symlink_metadata(repo.join(path)).is_ok_and(|metadata| !metadata.is_dir())
+        })
+        .map(str::to_owned)
+        .collect())
 }
 
 fn untracked_paths(repo: &Path) -> Result<Vec<String>, ReviewWorkflowError> {
@@ -410,7 +509,16 @@ fn untracked_paths(repo: &Path) -> Result<Vec<String>, ReviewWorkflowError> {
             String::from_utf8_lossy(&output.stderr).trim().to_owned(),
         ));
     }
-    Ok(String::from_utf8_lossy(&output.stdout).lines().map(str::to_owned).collect())
+    Ok(String::from_utf8_lossy(&output.stdout)
+        .lines()
+        .filter(|path| !review_metadata_path(path))
+        .map(str::to_owned)
+        .collect())
+}
+
+fn review_metadata_path(path: &str) -> bool {
+    path.strip_prefix(REVIEW_DIR)
+        .is_some_and(|suffix| suffix.is_empty() || suffix.starts_with('/'))
 }
 
 #[cfg(windows)]

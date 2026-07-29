@@ -315,16 +315,20 @@ fn canonical_manifest(bytes: &[u8], path: &Path) -> Result<Vec<u8>, String> {
 
 fn confined_directory(root: &Path, name: &str) -> Result<PathBuf, String> {
     validate_name(name)?;
-    let directory = root.join(name);
+    let canonical_root = fs::canonicalize(root)
+        .map_err(|error| format!("resolve approved skill root {}: {error}", root.display()))?;
+    let directory = canonical_root.join(name);
     let canonical = fs::canonicalize(&directory)
         .map_err(|error| format!("resolve {}: {error}", directory.display()))?;
-    if !canonical.starts_with(root) {
+    if !canonical.starts_with(&canonical_root) {
         return Err(format!("skill `{name}` escapes approved skill root"));
     }
     Ok(canonical)
 }
 
 fn confined_file(root: &Path, path: &Path, name: &str, label: &str) -> Result<PathBuf, String> {
+    let canonical_root = fs::canonicalize(root)
+        .map_err(|error| format!("resolve approved skill root {}: {error}", root.display()))?;
     let metadata = fs::symlink_metadata(path)
         .map_err(|error| format!("inspect {}: {error}", path.display()))?;
     if metadata.file_type().is_symlink() || !metadata.is_file() {
@@ -332,7 +336,7 @@ fn confined_file(root: &Path, path: &Path, name: &str, label: &str) -> Result<Pa
     }
     let canonical =
         fs::canonicalize(path).map_err(|error| format!("resolve {}: {error}", path.display()))?;
-    if !canonical.starts_with(root) {
+    if !canonical.starts_with(&canonical_root) {
         return Err(format!("{label} for `{name}` escapes approved skill root"));
     }
     Ok(canonical)
