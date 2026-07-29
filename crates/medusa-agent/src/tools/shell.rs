@@ -7,32 +7,17 @@ use crate::{
     policy::{sandboxed_command, validate_shell_command},
 };
 
-pub(crate) fn run(
-    repo: &Path,
-    program: &str,
-    args: &[String],
-    mode: OutputMode,
-) -> MedusaResult<String> {
+pub(crate) fn run(repo: &Path, program: &str, args: &[String]) -> MedusaResult<String> {
     validate_shell_command(program, args)?;
-    run_validated(repo, program, args, mode)
+    run_validated(repo, program, args)
 }
 
-pub(crate) fn run_approved(
-    repo: &Path,
-    program: &str,
-    args: &[String],
-    mode: OutputMode,
-) -> MedusaResult<String> {
+pub(crate) fn run_approved(repo: &Path, program: &str, args: &[String]) -> MedusaResult<String> {
     validate_shell_command(program, args)?;
-    run_validated(repo, program, args, mode)
+    run_validated(repo, program, args)
 }
 
-fn run_validated(
-    repo: &Path,
-    program: &str,
-    args: &[String],
-    mode: OutputMode,
-) -> MedusaResult<String> {
+fn run_validated(repo: &Path, program: &str, args: &[String]) -> MedusaResult<String> {
     let output = sandboxed_command(repo, program, args)?;
     let evidence = adapt_command(
         program,
@@ -40,7 +25,7 @@ fn run_validated(
         &output.stdout,
         &output.stderr,
         output.status.success(),
-        mode,
+        OutputMode::Compact,
     )
     .to_string();
     if output.status.success() {
