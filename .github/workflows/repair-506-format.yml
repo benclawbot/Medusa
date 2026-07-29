@@ -1,0 +1,40 @@
+name: Repair issue 506 formatting
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - agent/issue-506-deterministic-regression-replay
+
+permissions:
+  contents: write
+
+jobs:
+  repair:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: agent/issue-506-deterministic-regression-replay
+      - uses: dtolnay/rust-toolchain@1.88.0
+        with:
+          components: rustfmt, clippy
+      - name: Format
+        run: cargo fmt --all
+      - name: Check formatting
+        run: cargo fmt --all --check
+      - name: Clippy
+        run: cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
+      - name: Regression replay tests
+        run: cargo test -p medusa-improvement regression_replay::tests --lib
+      - name: Commit formatted files
+        run: |
+          if git diff --quiet -- crates/medusa-improvement/src/lib.rs crates/medusa-improvement/src/regression_replay.rs; then
+            exit 0
+          fi
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add crates/medusa-improvement/src/lib.rs crates/medusa-improvement/src/regression_replay.rs
+          git commit -m "fix: format deterministic regression replay"
+          git push
