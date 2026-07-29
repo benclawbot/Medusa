@@ -163,6 +163,7 @@ fn baseline_allows_a_plain_non_git_directory() {
     let baseline: ReviewBaseline =
         read_json(&workspace.path().join(REVIEW_DIR).join(BASELINE_FILE)).expect("read baseline");
     assert!(baseline.paths.is_empty());
+    assert_eq!(baseline.repository_fingerprint, fingerprint(b""));
 }
 
 #[test]
