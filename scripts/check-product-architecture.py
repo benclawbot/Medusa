@@ -71,8 +71,10 @@ def validate(root: Path) -> None:
     evidence = read(root, "docs/CAPABILITY-EVIDENCE.md")
     trace = read(root, "docs/PRODUCTION-EXECUTION-TRACE.md")
     planning = read(root, "crates/medusa-runtime/src/production_orchestrator.rs")
+    coordinator = read(root, "crates/medusa-runtime/src/multi_agent_coordinator.rs")
     runtime_root = read(root, "crates/medusa-runtime/src/runtime_root_generated.rs")
-    runtime = read(root, "crates/medusa-runtime/src/lib.rs")
+    runtime = read(root, "crates/medusa-runtime/src/runtime_impl.rs")
+    build_main = read(root, "crates/medusa-runtime/build_main.rs")
     readme = read(root, "README.md")
     cargo_text = read(root, "Cargo.toml")
 
@@ -100,10 +102,10 @@ def validate(root: Path) -> None:
     cargo = tomllib.loads(cargo_text)
     metadata = cargo.get("workspace", {}).get("metadata", {}).get("medusa", {})
     expected = {
-        "production_execution_model": "single-agent",
-        "production_entrypoint": "medusa-runtime::RuntimeController -> run_prompt -> medusa-agent::AgentEngine",
-        "orchestration_planning": "medusa-runtime::orchestration_planning (non-production metadata only)",
-        "subagent_delegation": "design-only-disabled",
+        "production_execution_model": "bounded-read-only-teammates-with-parent-owned-mutation",
+        "production_entrypoint": "medusa-runtime::RuntimeController -> run_prompt -> multi_agent_coordinator::run_preflight -> bounded medusa-agent::AgentEngine teammates -> parent medusa-agent::AgentEngine",
+        "orchestration_planning": "production runtime path; task contracts and schedule waves drive durable read-only teammate dispatch",
+        "subagent_delegation": "production-read-only; mutating teammate dispatch remains disabled until worktree isolation and guarded integration are enabled",
         "verification_gate": "repository",
     }
     if metadata != expected:
@@ -112,56 +114,78 @@ def validate(root: Path) -> None:
             f"expected {expected!r}, got {metadata!r}"
         )
 
-    for document, context in ((architecture, "docs/ARCHITECTURE.md"), (contributor, "docs/CONTRIBUTOR-ARCHITECTURE.md"), (trace, "docs/PRODUCTION-EXECUTION-TRACE.md")):
+    for document, context in (
+        (architecture, "docs/ARCHITECTURE.md"),
+        (contributor, "docs/CONTRIBUTOR-ARCHITECTURE.md"),
+        (trace, "docs/PRODUCTION-EXECUTION-TRACE.md"),
+    ):
         require(document, "RuntimeController", context)
         require(document, "run_prompt", context)
         require(document, "AgentEngine", context)
-        require(document, "single-agent", context)
+        require(document, "read-only", context)
+        require(document, "parent", context)
 
-    require(architecture, "medusa-runtime::orchestration_planning", "docs/ARCHITECTURE.md")
-    require(architecture, "does not call scheduler", "docs/ARCHITECTURE.md")
-    require(architecture, "must not be rendered as proof", "docs/ARCHITECTURE.md")
-    forbid(architecture, "production runtime entrypoint is `medusa-runtime::production_orchestrator`", "docs/ARCHITECTURE.md")
+    require(architecture, "MultiAgentCoordinator", "docs/ARCHITECTURE.md")
+    require(architecture, "sole mutation authority", "docs/ARCHITECTURE.md")
+    require(architecture, "repository verification gate", "docs/ARCHITECTURE.md")
+    forbid(architecture, "run_prompt does not call scheduler", "docs/ARCHITECTURE.md")
 
-    require(contributor, "Design-only and disabled", "docs/CONTRIBUTOR-ARCHITECTURE.md")
-    require(contributor, "not called by production `run_prompt`", "docs/CONTRIBUTOR-ARCHITECTURE.md")
-    forbid(contributor, "| Production orchestration | `medusa-runtime::production_orchestrator`", "docs/CONTRIBUTOR-ARCHITECTURE.md")
+    require(contributor, "Production multi-agent coordinator", "docs/CONTRIBUTOR-ARCHITECTURE.md")
+    require(contributor, "called by production `run_prompt`", "docs/CONTRIBUTOR-ARCHITECTURE.md")
+    require(contributor, "Mutating worker", "docs/CONTRIBUTOR-ARCHITECTURE.md")
 
     require(runtime_root, "mod production_orchestrator;", "runtime root")
     require(runtime_root, "pub mod orchestration_planning", "runtime root")
     forbid(runtime_root, "pub mod production_orchestrator;", "runtime root")
 
-    require(runtime, "let engine = AgentEngine::new(provider, config);", "production run_prompt")
-    require(runtime, ".step_with_observer_and_context(&mut session", "production run_prompt")
-    run_prompt = runtime.split("fn run_prompt(", 1)[1].split("\nfn append_followups", 1)[0]
-    for forbidden_call in (
-        "production_orchestrator::",
-        "orchestration_planning::",
-        "medusa_multi_agent_scheduler",
-        "medusa_workers",
-        "medusa_worker_leases",
-        "medusa_consensus",
-        "validate_subagent_result",
+    require(runtime, "fn run_prompt(", "runtime implementation")
+    require(runtime, "AgentEngine::new_with_cancellation", "runtime implementation")
+    require(runtime, ".step_with_observer_and_context(", "runtime implementation")
+    if runtime.split("fn run_prompt(", 1)[1].split("\nfn append_followups", 1)[0].count(
+        "AgentEngine::new_with_cancellation"
+    ) != 1:
+        raise ArchitectureError("parent run_prompt must construct exactly one parent AgentEngine")
+
+    for needle in (
+        "multi_agent_coordinator::run_preflight",
+        "multi_agent_coordinator::verify_repository",
+        "production_orchestrator::plan",
+        "coordinator_evidence",
     ):
-        forbid(run_prompt, forbidden_call, "production run_prompt")
-    if run_prompt.count("AgentEngine::new(") != 1:
-        raise ArchitectureError("production run_prompt must construct exactly one AgentEngine")
+        require(build_main, needle, "runtime build integration")
 
-    require(planning, "No workers or subagents are dispatched", "orchestration planning")
-    require(planning, "allowed: false", "orchestration planning delegation policy")
-    forbid(planning, "Production multi-agent execution is active", "orchestration planning")
-    forbid(planning, "title: format!(\"Dispatch wave", "orchestration planning events")
+    for needle in (
+        "thread::scope",
+        "WorkerExecutionController",
+        "TeamRuntime",
+        "Mode::ReadOnly",
+        "AgentExecutionPolicy::for_team_role",
+        "repository_fingerprint",
+        "targeted_verification",
+        "accept_persisted_completion",
+        "recover_interrupted",
+    ):
+        require(coordinator, needle, "production multi-agent coordinator")
+    forbid(coordinator, "Mode::Full", "production read-only coordinator")
+    require(coordinator, "parent remains responsible for all mutations", "production multi-agent coordinator")
 
-    require(trace, "not called by `run_prompt`", "production execution trace")
-    require(trace, "does not create worker engines", "production execution trace")
-    require(trace, "must never be rendered as evidence", "production execution trace")
+    require(planning, "Independent read-only teammates are dispatched", "production orchestration planning")
+    require(planning, "AgentRole::Researcher", "production orchestration planning")
+    require(planning, "allowed: matches!", "production orchestration delegation policy")
+    forbid(planning, "No workers or subagents are dispatched", "production orchestration planning")
+
+    require(trace, "multi_agent_coordinator::run_preflight", "production execution trace")
+    require(trace, "repository-content fingerprint", "production execution trace")
+    require(trace, "sole mutation", "production execution trace")
+    require(trace, "Mutating teammate dispatch is not part", "production execution trace")
 
     require(evidence, "## Planned and scaffolding behavior", "docs/CAPABILITY-EVIDENCE.md")
-    require(evidence, "not shipped production capabilities", "docs/CAPABILITY-EVIDENCE.md")
-    shipped_section = evidence.split("## Shipped on `main`", 1)[1].split(
+    require(evidence, "`multi-agent-research` | `production`", "docs/CAPABILITY-EVIDENCE.md")
+    shipped_section = evidence.split("## Production capability evidence", 1)[1].split(
         "## Planned and scaffolding behavior", 1
     )[0]
-    forbid(shipped_section, "parallel workers with isolated worktrees", "docs/CAPABILITY-EVIDENCE.md shipped section")
+    require(shipped_section, "read-only planner and risk-reviewer", "docs/CAPABILITY-EVIDENCE.md production section")
+    forbid(shipped_section, "isolated worktrees", "docs/CAPABILITY-EVIDENCE.md production section")
 
 
 if __name__ == "__main__":

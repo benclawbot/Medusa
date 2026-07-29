@@ -19,6 +19,7 @@ pub enum ExecutionMode {
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub enum AgentRole {
     Planner,
+    Researcher,
     Implementer,
     Reviewer,
     Verifier,
@@ -117,7 +118,7 @@ pub fn runtime_context(plan: &ProductionExecutionPlan) -> String {
         .collect::<Vec<_>>()
         .join("\n");
     format!(
-        "Production execution mode: single-agent orchestrated. The production orchestrator decomposed the objective into task contracts and dependencies for planning context, but the same AgentEngine performs the work. No workers or subagents are dispatched. Do not claim that delegation or parallel execution occurred. Repository verification is the completion gate.\n{contracts}"
+        "Production execution mode: coordinated. Independent read-only teammates are dispatched with durable leases, role-bound runtime policy, isolated sessions, durable mailboxes, and evidence handoff. The parent AgentEngine remains the only mutating authority until worktree-isolated implementers are enabled. Repository verification is the completion gate.\n{contracts}"
     )
 }
 
@@ -209,11 +210,9 @@ pub fn events(plan: &ProductionExecutionPlan) -> Vec<RuntimeEvent> {
                 title: "Execution contracts prepared".to_owned(),
                 details: vec![
                     format!("{} dependency-aware task contracts", plan.tasks.len()),
-                    format!(
-                        "{} schedule waves retained as planning metadata; no workers were dispatched",
-                        schedule.waves.len()
-                    ),
-                    "The same AgentEngine receives the contracts and performs the repository work."
+                    format!("{} dependency-aware schedule waves", schedule.waves.len()),
+                    format!("{} independent tasks are eligible for the first dispatch wave", schedule.waves.first().map_or(0, Vec::len)),
+                    "The parent remains the sole mutation and integration authority in this slice."
                         .to_owned(),
                     "Repository verification remains the completion gate.".to_owned(),
                 ],
@@ -253,6 +252,10 @@ fn contract_for(objective: &str, task: &Task) -> AgentContract {
             AgentRole::Planner,
             vec!["repository evidence".to_owned(), "dependency-aware plan".to_owned()],
         ),
+        "risk-review" => (
+            AgentRole::Researcher,
+            vec!["risk inventory".to_owned(), "failure-mode evidence".to_owned()],
+        ),
         "implement" => (
             AgentRole::Implementer,
             vec!["patch or commit evidence".to_owned(), "focused tests".to_owned()],
@@ -274,7 +277,7 @@ fn contract_for(objective: &str, task: &Task) -> AgentContract {
         allowed_write_paths: task.write_paths.clone(),
         required_evidence,
         delegation: DelegationPolicy {
-            allowed: false,
+            allowed: matches!(role, AgentRole::Planner | AgentRole::Researcher | AgentRole::Reviewer | AgentRole::Verifier),
             max_depth: 0,
             max_parallel_subagents: 0,
             parent_must_review: true,
@@ -309,7 +312,8 @@ fn decompose(text: &str) -> Vec<Task> {
     let scope = infer_scope(text);
     vec![
         Task { id: "analyze".to_owned(), dependencies: vec![], capabilities: vec!["analysis".to_owned()], write_paths: vec![], speculative: false },
-        Task { id: "implement".to_owned(), dependencies: vec!["analyze".to_owned()], capabilities: vec!["coding".to_owned()], write_paths: vec![scope], speculative: false },
+        Task { id: "risk-review".to_owned(), dependencies: vec![], capabilities: vec!["risk-review".to_owned()], write_paths: vec![], speculative: false },
+        Task { id: "implement".to_owned(), dependencies: vec!["analyze".to_owned(), "risk-review".to_owned()], capabilities: vec!["coding".to_owned()], write_paths: vec![scope], speculative: false },
         Task { id: "review".to_owned(), dependencies: vec!["implement".to_owned()], capabilities: vec!["review".to_owned()], write_paths: vec![], speculative: false },
         Task { id: "verify".to_owned(), dependencies: vec!["review".to_owned()], capabilities: vec!["verification".to_owned()], write_paths: vec![], speculative: false },
     ]
@@ -326,7 +330,8 @@ fn infer_scope(text: &str) -> String {
 fn default_workers() -> Vec<Worker> {
     vec![
         Worker { id: "planner".to_owned(), capabilities: vec!["analysis".to_owned()], healthy: true, capacity: 1 },
-        Worker { id: "coder".to_owned(), capabilities: vec!["coding".to_owned()], healthy: true, capacity: 2 },
+        Worker { id: "risk-reviewer".to_owned(), capabilities: vec!["risk-review".to_owned()], healthy: true, capacity: 1 },
+        Worker { id: "coder".to_owned(), capabilities: vec!["coding".to_owned()], healthy: true, capacity: 1 },
         Worker { id: "reviewer".to_owned(), capabilities: vec!["review".to_owned()], healthy: true, capacity: 1 },
         Worker { id: "verifier".to_owned(), capabilities: vec!["verification".to_owned()], healthy: true, capacity: 1 },
     ]
@@ -352,9 +357,10 @@ mod tests {
         let draft = PromptDraft { text: "Implement a repository-wide refactor and run all tests and CI".to_owned(), ..PromptDraft::default() };
         let planned = plan(&draft).unwrap();
         assert_eq!(planned.mode, ExecutionMode::Orchestrated);
-        assert_eq!(planned.tasks.len(), 4);
+        assert_eq!(planned.tasks.len(), 5);
         assert_eq!(planned.schedule.as_ref().unwrap().waves.len(), 4);
-        assert!(planned.contracts.iter().all(|contract| !contract.delegation.allowed));
+        assert_eq!(planned.schedule.as_ref().unwrap().waves[0].len(), 2);
+        assert!(planned.contracts.iter().any(|contract| contract.delegation.allowed));
     }
 
     #[test]
@@ -364,32 +370,35 @@ mod tests {
         let packet = context_for_task(
             &planned,
             "implement",
-            BTreeMap::from([("analyze".to_owned(), "analysis evidence".to_owned())]),
+            BTreeMap::from([
+                ("analyze".to_owned(), "analysis evidence".to_owned()),
+                ("risk-review".to_owned(), "risk evidence".to_owned()),
+            ]),
             vec!["path policy".to_owned()],
             vec!["tests pass".to_owned()],
         ).unwrap();
-        assert_eq!(packet.dependency_outputs.len(), 1);
+        assert_eq!(packet.dependency_outputs.len(), 2);
         assert!(!packet.contract.delegation.allowed);
     }
 
     #[test]
-    fn inactive_delegation_rejects_subagent_results() {
+    fn active_delegation_accepts_bound_evidence() {
         let draft = PromptDraft { text: "Fix repository tests".to_owned(), ..PromptDraft::default() };
         let planned = plan(&draft).unwrap();
         let packet = context_for_task(&planned, "analyze", BTreeMap::new(), vec![], vec![]).unwrap();
-        assert!(validate_subagent_result(&packet, "research-1", &packet.fingerprint, &["evidence".to_owned()]).is_err());
+        assert!(validate_subagent_result(&packet, "analyze", &packet.fingerprint, &["evidence".to_owned()]).is_ok());
+        assert!(validate_subagent_result(&packet, "analyze", "stale", &["evidence".to_owned()]).is_err());
     }
 
     #[test]
-    fn runtime_context_and_events_do_not_claim_dispatch() {
+    fn runtime_context_and_events_describe_real_dispatch() {
         let draft = PromptDraft { text: "Implement a repository-wide refactor".to_owned(), ..PromptDraft::default() };
         let planned = plan(&draft).unwrap();
         let context = runtime_context(&planned);
-        assert!(context.contains("No workers or subagents are dispatched"));
-        assert!(!context.contains("multi-agent execution is active"));
+        assert!(context.contains("Independent read-only teammates are dispatched"));
         let rendered = format!("{:?}", events(&planned));
-        assert!(!rendered.contains("Dispatch wave"));
-        assert!(rendered.contains("no workers were dispatched"));
+        assert!(rendered.contains("independent tasks are eligible"));
+        assert!(!rendered.contains("no workers were dispatched"));
     }
 
     #[test]

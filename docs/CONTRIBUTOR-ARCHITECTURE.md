@@ -6,14 +6,14 @@ This map connects the product architecture in [`ARCHITECTURE.md`](ARCHITECTURE.m
 
 | Surface | Authoritative path | Responsibility |
 |---|---|---|
-| Shared production runtime | `medusa-runtime::RuntimeController -> run_prompt` | Owns the single-agent execution loop, shared runtime events, provider construction, cancellation, follow-ups, and session continuity. |
+| Shared production runtime | `medusa-runtime::RuntimeController -> run_prompt` | Owns shared runtime events, provider construction, cancellation, follow-ups, session continuity, and coordinated-mode selection. |
 | Production agent engine | `medusa-agent::AgentEngine` | Advances one authoritative `AgentSession`; owns plans, approvals, transactions, tool use, verification wiring, and durable records. |
-| Non-production orchestration planning | `medusa-runtime::orchestration_planning` | Produces task-contract and schedule metadata only; it is not called by production `run_prompt` and dispatches no workers or subagents. |
+| Production multi-agent coordinator | `run_prompt -> multi_agent_coordinator::run_preflight` | Owns bounded read-only teammate dispatch, durable leases, team lifecycle, evidence handoff, cancellation, and the coordinated verification gate. |
 | Terminal UI | `crates/medusa-tui` | Renders and drives the shared runtime interactively. |
 | Desktop application | `apps/medusa-desktop` | React/Tauri frontend over the shared runtime and daemon boundary. |
 | Headless CLI | `crates/medusa-cli` | Starts scripted objectives, resume flows, maintenance commands, and explicit approval allowlists. |
 
-The workspace metadata in the root `Cargo.toml` is the machine-readable authority for the production execution model, entrypoint, planning-only orchestration status, delegation status, and verification gate. The complete trace is in [`PRODUCTION-EXECUTION-TRACE.md`](PRODUCTION-EXECUTION-TRACE.md).
+The workspace metadata in the root `Cargo.toml` is the machine-readable authority for the production execution model, entrypoint, read-only delegation boundary, parent mutation authority, and verification gate. The complete trace is in [`PRODUCTION-EXECUTION-TRACE.md`](PRODUCTION-EXECUTION-TRACE.md).
 
 ## Plan
 
@@ -24,15 +24,15 @@ The workspace metadata in the root `Cargo.toml` is the machine-readable authorit
 | Progress and confidence | `crates/medusa-progress`, `crates/medusa-confidence` | `crates/medusa-intelligence` |
 | Plan-bound approval | `crates/medusa-agent/src/approval.rs` | `crates/medusa-agent/src/identity_guard.rs` |
 | Persisted session and plan state | `crates/medusa-agent/src/session.rs` | `crates/medusa-memory` |
-| Optional task-contract planning metadata | `crates/medusa-runtime/src/production_orchestrator.rs` | `crates/medusa-multi-agent-scheduler` |
+| Production task contracts and first-wave scheduling | `crates/medusa-runtime/src/production_orchestrator.rs` | `crates/medusa-multi-agent-scheduler` |
 
 ## Execute Safely
 
 | Responsibility | Production status | Primary ownership | Supporting ownership |
 |---|---|---|---|
-| Single-agent production execution | Shipped | `crates/medusa-runtime/src/lib.rs`, `crates/medusa-agent` | `crates/medusa-provider` |
-| Multi-agent scheduling model | Design-only scaffolding; not called by production `run_prompt` | `crates/medusa-multi-agent-scheduler` | `crates/medusa-workers`, `crates/medusa-worker-leases` |
-| Parent/subagent integration | Design-only and disabled | `crates/medusa-runtime`, `crates/medusa-agent` | `crates/medusa-consensus`, `crates/medusa-conflict-resolution` |
+| Parent production execution | Shipped | `crates/medusa-runtime`, `crates/medusa-agent` | `crates/medusa-provider` |
+| Read-only teammate scheduling | Shipped and called by production `run_prompt` | `crates/medusa-runtime/src/multi_agent_coordinator.rs`, `crates/medusa-multi-agent-scheduler` | `crates/medusa-agent/src/worker_execution.rs`, `crates/medusa-worker-leases` |
+| Parent/teammate evidence integration | Shipped for read-only planner and risk reviewer | `crates/medusa-runtime/src/multi_agent_coordinator.rs`, `crates/medusa-agent/src/team.rs` | `crates/medusa-agent` |
 | Read-set and isolated worker mutation | Design-only supporting paths | `crates/medusa-worker-read-set`, `crates/medusa-worker-transaction` | `crates/medusa-transaction-coordinator` |
 | Commit barrier | Design-only supporting path | `crates/medusa-commit-barrier` | `crates/medusa-repository-snapshot` |
 | Filesystem transaction safety | Shipped | `crates/medusa-agent/src/transaction.rs` | `crates/medusa-repository-rollback` |
@@ -41,7 +41,7 @@ The workspace metadata in the root `Cargo.toml` is the machine-readable authorit
 | Repository verification gate | Shipped | `crates/medusa-agent`, `crates/medusa-runtime` | `crates/medusa-hardening` |
 | Shared runtime events | Shipped | `crates/medusa-protocol`, `crates/medusa-runtime` | `crates/medusa-tui`, `apps/medusa-desktop` |
 
-Current production execution constructs one `AgentEngine` and advances one `AgentSession`. Scheduler, worker, delegation, transaction-coordinator, reviewer-agent, verifier-agent, and consensus APIs are not evidence that those actors are actively dispatched. Planning metadata must not be presented as execution evidence.
+Current coordinated execution constructs separate read-only planner and risk-reviewer `AgentEngine` sessions before the parent session. Durable leases, team records, and validated evidence prove that dispatch occurred. Mutating worker, consensus, commit-barrier, and distributed transaction APIs remain non-production until they are reachable from this coordinator.
 
 ## Recover
 

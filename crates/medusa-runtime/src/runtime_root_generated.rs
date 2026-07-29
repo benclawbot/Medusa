@@ -379,10 +379,10 @@ mod recovery {
 #[rustfmt::skip]
 mod production_orchestrator;
 
-/// Non-production planning metadata retained for future orchestration work.
+/// Production task-contract and schedule definitions used by the runtime coordinator.
 ///
-/// The shipped execution path is `RuntimeController -> run_prompt -> AgentEngine`.
-/// Nothing in this module dispatches workers or subagents.
+/// The shipped coordinated path is `RuntimeController -> run_prompt ->
+/// multi_agent_coordinator::run_preflight -> read-only AgentEngine teammates -> parent AgentEngine`.
 pub mod orchestration_planning {
     pub use super::production_orchestrator::*;
 }

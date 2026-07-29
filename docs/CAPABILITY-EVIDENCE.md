@@ -36,7 +36,7 @@ Every capability-changing pull request must update the manifest and ledger or ex
 | `daemon` | `production` | daemon maintainers | daemon and desktop adapter | Linux, macOS, Windows | none |
 | `release-trust` | `production` | release maintainers | publish-release workflow | Linux, macOS, Windows | GitHub artifact attestations |
 | `self-update` | `production` | CLI maintainers | `medusa update` | Linux, macOS, Windows | GitHub repository access |
-| `multi-agent-research` | `design-only` | agent research maintainers | none | repository scaffolding is cross-platform | none |
+| `multi-agent-research` | `production` | agent runtime maintainers | coordinated `run_prompt` preflight | Linux, macOS, Windows | configured model provider |
 
 The manifest also records production paths, behavioral test paths, canonical gates, observability references, public documentation, promotion evidence, default activation, explicit opt-ins, and capability dependencies.
 
@@ -50,14 +50,13 @@ The manifest also records production paths, behavioral test paths, canonical gat
 - `daemon`: `crates/medusa-daemon`; validated by Daemon, Desktop, and CI.
 - `release-trust`: release evidence scripts and publish workflow; validated by CI, Desktop, Release Gates, and Refactor Guardrails.
 - `self-update`: `crates/medusa-cli`; validated by CI, Desktop, and Release Gates.
+- `multi-agent-research`: `run_prompt` invokes the durable coordinator, which dispatches independent read-only planner and risk-reviewer `AgentEngine` sessions under leases and role-bound policy; validated by CI, Daemon, and Refactor Guardrails.
 
 ## Planned and scaffolding behavior
 
-### Design-only boundary
+### Remaining design-only boundary
 
-`multi-agent-research` covers retained scheduler, worker-lease, isolated-worker transaction, consensus, and commit-barrier concepts. The production runtime uses one `AgentEngine` and does not dispatch workers or subagents. This capability has no production entrypoint, no runtime opt-in, is disabled by definition, and cannot be a dependency of a `production` record.
-
-This boundary preserves the production multi-agent work already integrated into the runtime contracts without claiming that remaining research scaffolding is active worker orchestration.
+The production capability currently covers **read-only** planner and risk-reviewer teammates only. Mutating teammate worktrees, autonomous nested delegation, consensus voting, commit barriers, and distributed transaction coordination remain design-only until a production caller, recovery path, and behavioral proof are merged. Their presence in the workspace must not be presented as active behavior.
 
 ## Canonical gates
 

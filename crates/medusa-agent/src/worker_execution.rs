@@ -258,6 +258,63 @@ impl WorkerExecutionController {
         Ok(expired)
     }
 
+    pub fn recover_interrupted(&mut self) -> Result<Vec<String>, String> {
+        let interrupted = self
+            .state
+            .leases
+            .values()
+            .map(|lease| {
+                (
+                    lease.task_id.clone(),
+                    lease.worker_id.clone(),
+                    lease.lease_epoch,
+                )
+            })
+            .collect::<Vec<_>>();
+        for (task_id, worker_id, _epoch) in &interrupted {
+            self.state
+                .schedule
+                .fail(task_id, worker_id, "runtime interrupted", true)
+                .map_err(str::to_owned)?;
+            self.state
+                .schedule
+                .set_worker_health(worker_id, true)
+                .map_err(str::to_owned)?;
+            self.state.leases.remove(task_id);
+            if let Some(worker) = self.state.workers.get_mut(worker_id) {
+                worker.state = WorkerState::Ready;
+            }
+            self.state.summary.active = self.state.summary.active.saturating_sub(1);
+            self.state.summary.retries = self.state.summary.retries.saturating_add(1);
+            self.push_progress(
+                ProgressKind::Retrying,
+                format!("task {task_id} requeued after runtime interruption"),
+                Some(task_id.clone()),
+            )?;
+        }
+        self.persist()?;
+        Ok(interrupted
+            .into_iter()
+            .map(|(task_id, _, _)| task_id)
+            .collect())
+    }
+
+    pub fn accept_persisted_completion(
+        &mut self,
+        task_id: &str,
+        worker_id: &str,
+        lease_epoch: u64,
+    ) -> Result<WorkerCompletion, String> {
+        self.current_lease(task_id, worker_id, lease_epoch)?;
+        self.accept_completion(task_id, worker_id, lease_epoch)?;
+        Ok(WorkerCompletion {
+            task_id: task_id.to_owned(),
+            worker_id: worker_id.to_owned(),
+            lease_epoch,
+            transaction_proposals: Vec::new(),
+        })
+    }
+
     pub fn complete_without_mutation(
         &mut self,
         task_id: &str,
@@ -564,6 +621,24 @@ mod tests {
         }
     }
 
+    fn controller(path: &std::path::Path) -> WorkerExecutionController {
+        WorkerExecutionController::create(
+            path,
+            "exec-recovery",
+            vec![Task {
+                id: "analyze".into(),
+                dependencies: vec![],
+                capabilities: vec!["rust".into()],
+                write_paths: vec![],
+                speculative: false,
+            }],
+            vec![scheduler_worker("a")],
+            vec![execution_worker("a")],
+            3,
+        )
+        .expect("recovery controller")
+    }
+
     fn proposal(worker: &str, epoch: u64) -> WorkerMutationProposal {
         WorkerMutationProposal {
             worker_id: worker.into(),
@@ -664,6 +739,38 @@ mod tests {
                 )
                 .is_err()
         );
+    }
+
+    #[test]
+    fn interrupted_leases_requeue_with_new_epochs() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("execution.json");
+        let mut controller = controller(&path);
+        let first = controller.dispatch(100, 100).unwrap().remove(0);
+
+        let mut restored = WorkerExecutionController::load(&path).unwrap();
+        assert_eq!(restored.recover_interrupted().unwrap(), vec!["analyze"]);
+        let second = restored.dispatch(200, 100).unwrap().remove(0);
+        assert_eq!(second.task_id, first.task_id);
+        assert!(second.lease_epoch > first.lease_epoch);
+    }
+
+    #[test]
+    fn persisted_completion_is_accepted_after_restart() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("execution.json");
+        let mut controller = controller(&path);
+        let assignment = controller.dispatch(100, 100).unwrap().remove(0);
+
+        let mut restored = WorkerExecutionController::load(&path).unwrap();
+        restored
+            .accept_persisted_completion(
+                &assignment.task_id,
+                &assignment.worker_id,
+                assignment.lease_epoch,
+            )
+            .unwrap();
+        assert!(restored.is_complete());
     }
 
     #[test]

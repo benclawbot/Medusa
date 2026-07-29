@@ -173,21 +173,21 @@
     },
     {
       "id": "multi-agent-research",
-      "maturity": "design-only",
-      "summary": "Scheduler, worker leases, isolated worker transactions, consensus, and commit-barrier components remain research scaffolding and are not dispatched by production entrypoints.",
-      "owner": "agent research maintainers",
-      "production_paths": ["crates/medusa-agent"],
-      "test_paths": ["crates/medusa-agent"],
-      "gates": ["CI", "Refactor Guardrails"],
-      "entrypoints": [],
+      "maturity": "production",
+      "summary": "Coordinated prompts dispatch bounded read-only planner and risk-reviewer AgentEngine teammates with durable leases, team state, evidence handoff, cancellation, and parent-owned verification.",
+      "owner": "agent runtime maintainers",
+      "production_paths": ["crates/medusa-runtime/src/multi_agent_coordinator.rs", "crates/medusa-runtime/src/production_orchestrator.rs", "crates/medusa-runtime/build_main.rs", "crates/medusa-agent/src/team.rs", "crates/medusa-agent/src/worker_execution.rs"],
+      "test_paths": ["crates/medusa-runtime/src/multi_agent_coordinator.rs", "crates/medusa-runtime/src/production_orchestrator.rs", "crates/medusa-agent/src/team.rs"],
+      "gates": ["CI", "Daemon", "Refactor Guardrails"],
+      "entrypoints": ["medusa-runtime::RuntimeController -> run_prompt -> multi_agent_coordinator::run_preflight"],
       "supported_platforms": ["linux", "macos", "windows"],
-      "external_dependencies": [],
-      "observability": ["docs/OBSERVABILITY.md"],
-      "documentation": ["docs/CAPABILITY-EVIDENCE.md", "docs/ARCHITECTURE.md"],
-      "promotion_checklist": [],
-      "default_enabled": false,
+      "external_dependencies": ["configured model provider"],
+      "observability": ["docs/OBSERVABILITY.md", "docs/MULTI_AGENT_EXECUTION.md"],
+      "documentation": ["docs/MULTI_AGENT_EXECUTION.md", "docs/ARCHITECTURE.md", "docs/PRODUCTION-EXECUTION-TRACE.md"],
+      "promotion_checklist": ["owner assigned", "entrypoint identified", "behavioral tests present", "supported platforms declared", "observability documented", "public documentation linked"],
+      "default_enabled": true,
       "opt_in": null,
-      "dependencies": []
+      "dependencies": ["shared-runtime", "durable-sessions-memory", "provider-context-resilience"]
     }
   ]
 }

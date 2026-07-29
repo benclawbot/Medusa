@@ -23,7 +23,7 @@ use medusa_agent::{
     TeamRuntime, WorkerExecutionController, targeted_verification,
 };
 use medusa_config::{Config, Mode};
-use medusa_multi_agent_scheduler::{Task, Worker as ScheduledWorker};
+use medusa_multi_agent_scheduler::{Task, TaskState, Worker as ScheduledWorker};
 use medusa_provider::ConfiguredProvider;
 use medusa_workers::{Worker, WorkerState};
 use serde::{Deserialize, Serialize};
@@ -47,6 +47,8 @@ pub struct WorkerEvidence {
     pub worker_id: String,
     pub role: AgentRole,
     pub context_fingerprint: String,
+    #[serde(default)]
+    pub lease_epoch: u64,
     pub session_id: String,
     pub turns: u32,
     pub summary: String,
@@ -155,6 +157,10 @@ where
     if contracts.len() < 2 {
         return Err("coordinated execution requires at least two independent preflight tasks".into());
     }
+    let contract_by_task = contracts
+        .iter()
+        .map(|contract| (contract.task_id.clone(), contract.clone()))
+        .collect::<BTreeMap<_, _>>();
     fs::create_dir_all(&root).map_err(|error| error.to_string())?;
 
     let team_members = std::iter::once(("lead".to_owned(), TeamRole::Lead))
@@ -218,14 +224,45 @@ where
         )?
     };
 
+    let evidence_directory = root.join("worker-evidence");
+    let mut evidence = load_worker_evidence(&evidence_directory)?;
+    for worker in &evidence {
+        validate_worker_evidence(plan, &contract_by_task, worker)?;
+        let state = controller
+            .task_views()
+            .into_iter()
+            .find(|view| view.task.id == worker.task_id)
+            .map(|view| view.state)
+            .ok_or_else(|| format!("persisted evidence references unknown task {}", worker.task_id))?;
+        match state {
+            TaskState::Running { worker_id, .. } if worker_id == worker.worker_id => {
+                controller.accept_persisted_completion(
+                    &worker.task_id,
+                    &worker.worker_id,
+                    worker.lease_epoch,
+                )?;
+            }
+            TaskState::Succeeded => {}
+            _ => {
+                return Err(format!(
+                    "persisted evidence for {} does not match durable task state",
+                    worker.task_id
+                ));
+            }
+        }
+        team.start_member(&worker.worker_id, &worker.task_id, &worker.session_id)?;
+        team.finish_member(&worker.worker_id, false)?;
+    }
+    controller.recover_interrupted()?;
+
     if cancel.load(Ordering::SeqCst) {
         team.request_shutdown_all()?;
         return Err("coordinated preflight was cancelled".into());
     }
     let now = now_ms()?;
     let assignments = controller.dispatch(now, LEASE_TIMEOUT_MS)?;
-    if assignments.len() != contracts.len() {
-        return Err("preflight scheduler did not dispatch every independent task".into());
+    if assignments.len() + evidence.len() != contracts.len() {
+        return Err("preflight scheduler and durable evidence do not cover every independent task".into());
     }
     let _ = events.send(RuntimeEvent::Activity(RuntimeActivity {
         id: Some(plan.fingerprint.clone()),
@@ -237,10 +274,6 @@ where
             .collect(),
     }));
 
-    let contract_by_task = contracts
-        .iter()
-        .map(|contract| (contract.task_id.clone(), contract.clone()))
-        .collect::<BTreeMap<_, _>>();
     let mut requests = Vec::with_capacity(assignments.len());
     for assignment in &assignments {
         let contract = contract_by_task
@@ -293,14 +326,13 @@ where
             .collect::<Result<Vec<_>, String>>()
     })?;
 
-    let mut evidence = Vec::with_capacity(results.len());
     let mut failures = Vec::new();
     for (task_id, worker_id, result) in results {
         let assignment = assignments
             .iter()
             .find(|assignment| assignment.task_id == task_id)
             .ok_or_else(|| format!("worker result for unknown task {task_id}"))?;
-        let result = match result {
+        let mut result = match result {
             Ok(result) => result,
             Err(error) => {
                 controller.fail(
@@ -308,7 +340,7 @@ where
                     &worker_id,
                     assignment.lease_epoch,
                     &error,
-                    false,
+                    true,
                 )?;
                 team.finish_member(&worker_id, true)?;
                 failures.push(format!("{task_id} ({worker_id}): {error}"));
@@ -316,11 +348,11 @@ where
             }
         };
         let contract = contract_by_task
-            .get(&result.task_id)
-            .ok_or_else(|| format!("missing contract for {}", result.task_id))?;
+            .get(&task_id)
+            .ok_or_else(|| format!("missing contract for {task_id}"))?;
         let packet = context_for_task(
             plan,
-            &result.task_id,
+            &task_id,
             BTreeMap::new(),
             vec![
                 "read-only repository access".to_owned(),
@@ -329,27 +361,59 @@ where
             ],
             contract.required_evidence.clone(),
         )?;
-        validate_subagent_result(
-            &packet,
-            &result.task_id,
-            &result.context_fingerprint,
-            std::slice::from_ref(&result.summary),
+        let validation = if result.task_id != task_id
+            || result.worker_id != worker_id
+            || result.role != contract.role
+            || result.session_id.trim().is_empty()
+        {
+            Err("worker evidence identity did not match its leased assignment".to_owned())
+        } else {
+            validate_subagent_result(
+                &packet,
+                &result.task_id,
+                &result.context_fingerprint,
+                std::slice::from_ref(&result.summary),
+            )
+            .map_err(str::to_owned)
+        };
+        if let Err(error) = validation {
+            controller.fail(
+                &task_id,
+                &worker_id,
+                assignment.lease_epoch,
+                &error,
+                true,
+            )?;
+            team.finish_member(&worker_id, true)?;
+            failures.push(format!("{task_id} ({worker_id}): {error}"));
+            continue;
+        }
+        result.lease_epoch = assignment.lease_epoch;
+        write_atomic(
+            &evidence_directory.join(format!("{}.json", result.task_id)),
+            &result,
         )?;
-        controller.complete_without_mutation(
+        if let Err(error) = controller.accept_persisted_completion(
             &result.task_id,
             &result.worker_id,
-            assignment.lease_epoch,
-            now_ms()?,
-        )?;
-        team.start_member(
-            &result.worker_id,
-            &result.task_id,
-            &result.session_id,
-        )?;
+            result.lease_epoch,
+        ) {
+            controller.fail(
+                &task_id,
+                &worker_id,
+                assignment.lease_epoch,
+                &error,
+                true,
+            )?;
+            team.finish_member(&worker_id, true)?;
+            failures.push(format!("{task_id} ({worker_id}): {error}"));
+            continue;
+        }
+        team.start_member(&result.worker_id, &result.task_id, &result.session_id)?;
         team.finish_member(&result.worker_id, false)?;
         team.member_context(&result.worker_id)?.execute(
             "team_send_message",
-            &json!({"recipient":"lead","body":result.summary}),
+            &json!({"recipient":"lead","body":result.summary.clone()}),
         )
         .map_err(|error| error.to_string())?;
         evidence.push(result);
@@ -397,8 +461,7 @@ fn execute_production_worker(
     worker_config.agent.max_turns = worker_config
         .agent
         .max_turns
-        .min(WORKER_TURN_LIMIT)
-        .max(1);
+        .clamp(1, WORKER_TURN_LIMIT);
     let provider = ConfiguredProvider::manager_from_config(&worker_config, session_api_key)
         .map_err(|error| error.to_string())?;
     let role = team_role_for(request.contract.role);
@@ -469,6 +532,7 @@ fn execute_production_worker(
         worker_id: request.worker_id,
         role: request.contract.role,
         context_fingerprint: request.packet.fingerprint,
+        lease_epoch: 0,
         session_id: session.id.to_string(),
         turns: session.turn,
         summary,
@@ -508,6 +572,61 @@ fn team_role_for(role: AgentRole) -> TeamRole {
         AgentRole::Reviewer => TeamRole::Reviewer,
         AgentRole::Verifier => TeamRole::Verifier,
     }
+}
+
+fn load_worker_evidence(directory: &Path) -> Result<Vec<WorkerEvidence>, String> {
+    if !directory.is_dir() {
+        return Ok(Vec::new());
+    }
+    let mut paths = fs::read_dir(directory)
+        .map_err(|error| error.to_string())?
+        .filter_map(Result::ok)
+        .map(|entry| entry.path())
+        .filter(|path| path.extension().is_some_and(|extension| extension == "json"))
+        .collect::<Vec<_>>();
+    paths.sort();
+    paths
+        .into_iter()
+        .map(|path| {
+            serde_json::from_slice(&fs::read(path).map_err(|error| error.to_string())?)
+                .map_err(|error| error.to_string())
+        })
+        .collect()
+}
+
+fn validate_worker_evidence(
+    plan: &ProductionExecutionPlan,
+    contracts: &BTreeMap<String, AgentContract>,
+    evidence: &WorkerEvidence,
+) -> Result<(), String> {
+    let contract = contracts
+        .get(&evidence.task_id)
+        .ok_or_else(|| format!("evidence references unknown task {}", evidence.task_id))?;
+    let packet = context_for_task(
+        plan,
+        &evidence.task_id,
+        BTreeMap::new(),
+        vec![
+            "read-only repository access".to_owned(),
+            "runtime-enforced role policy".to_owned(),
+            "no user interaction".to_owned(),
+        ],
+        contract.required_evidence.clone(),
+    )?;
+    if evidence.worker_id != worker_id_for(&evidence.task_id)
+        || evidence.role != contract.role
+        || evidence.lease_epoch == 0
+        || evidence.session_id.trim().is_empty()
+    {
+        return Err(format!("evidence identity is invalid for {}", evidence.task_id));
+    }
+    validate_subagent_result(
+        &packet,
+        &evidence.task_id,
+        &evidence.context_fingerprint,
+        std::slice::from_ref(&evidence.summary),
+    )
+    .map_err(str::to_owned)
 }
 
 fn execution_root(
@@ -680,6 +799,16 @@ mod tests {
     use super::*;
     use crate::{production_orchestrator, prompt::PromptDraft};
 
+    fn find_state_file(repo: &Path, file_name: &str) -> PathBuf {
+        let executions = repo.join(".medusa").join("executions");
+        fs::read_dir(executions)
+            .expect("execution directory")
+            .filter_map(Result::ok)
+            .map(|entry| entry.path().join(file_name))
+            .find(|path| path.is_file())
+            .expect("state file")
+    }
+
     #[test]
     fn independent_workers_run_concurrently_and_evidence_survives_restart() {
         let repo = tempfile::tempdir().expect("repository");
@@ -715,6 +844,7 @@ mod tests {
                     worker_id: request.worker_id,
                     role: request.contract.role,
                     context_fingerprint: request.packet.fingerprint,
+                    lease_epoch: 0,
                     session_id: format!("session-{sequence}"),
                     turns: 1,
                     summary: "repository evidence collected".to_owned(),
@@ -731,6 +861,81 @@ mod tests {
         })
         .expect("restored evidence");
         assert_eq!(restored, first);
+    }
+
+    #[test]
+    fn repository_change_invalidates_cached_evidence() {
+        let repo = tempfile::tempdir().expect("repository");
+        let plan = production_orchestrator::plan(&PromptDraft {
+            text: "Implement a repository-wide refactor with tests".to_owned(),
+            ..PromptDraft::default()
+        })
+        .expect("plan");
+        let cancel = Arc::new(AtomicBool::new(false));
+        let (events, _) = mpsc::channel();
+        let calls = Arc::new(AtomicUsize::new(0));
+        let execute = |request: WorkerRequest, calls: &AtomicUsize| {
+            let sequence = calls.fetch_add(1, Ordering::SeqCst) + 1;
+            Ok(WorkerEvidence {
+                task_id: request.contract.task_id,
+                worker_id: request.worker_id,
+                role: request.contract.role,
+                context_fingerprint: request.packet.fingerprint,
+                lease_epoch: 0,
+                session_id: format!("session-{sequence}"),
+                turns: 1,
+                summary: "fresh repository evidence".to_owned(),
+            })
+        };
+
+        coordinate_with_executor(repo.path(), &plan, &cancel, &events, {
+            let calls = Arc::clone(&calls);
+            move |request| execute(request, &calls)
+        })
+        .expect("first execution");
+        assert_eq!(calls.load(Ordering::SeqCst), 2);
+
+        fs::write(repo.path().join("changed.rs"), "pub fn changed() {}\n")
+            .expect("repository change");
+        coordinate_with_executor(repo.path(), &plan, &cancel, &events, {
+            let calls = Arc::clone(&calls);
+            move |request| execute(request, &calls)
+        })
+        .expect("execution after repository change");
+        assert_eq!(calls.load(Ordering::SeqCst), 4);
+    }
+
+    #[test]
+    fn worker_failure_is_recorded_and_fails_closed() {
+        let repo = tempfile::tempdir().expect("repository");
+        let plan = production_orchestrator::plan(&PromptDraft {
+            text: "Implement a repository-wide refactor with tests".to_owned(),
+            ..PromptDraft::default()
+        })
+        .expect("plan");
+        let cancel = Arc::new(AtomicBool::new(false));
+        let (events, _) = mpsc::channel();
+        let error = coordinate_with_executor(repo.path(), &plan, &cancel, &events, |request| {
+            if request.contract.task_id == "analyze" {
+                return Err("planner failed".to_owned());
+            }
+            Ok(WorkerEvidence {
+                task_id: request.contract.task_id,
+                worker_id: request.worker_id,
+                role: request.contract.role,
+                context_fingerprint: request.packet.fingerprint,
+                lease_epoch: 0,
+                session_id: "session-risk".to_owned(),
+                turns: 1,
+                summary: "risk evidence".to_owned(),
+            })
+        })
+        .expect_err("worker failure must fail the coordinated turn");
+        assert!(error.contains("planner failed"));
+
+        let team_state = find_state_file(repo.path(), "team.json");
+        let content = fs::read_to_string(team_state).expect("team state");
+        assert!(content.contains("\"failed\""));
     }
 
     #[test]
