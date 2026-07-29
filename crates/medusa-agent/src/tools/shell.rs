@@ -4,14 +4,14 @@ use medusa_core::{ErrorCategory, ErrorCode, MedusaError, MedusaResult};
 use serde_json::json;
 use sha2::{Digest, Sha256};
 
+#[path = "../repository_profile.rs"]
+mod repository_profile;
 #[path = "../tool_orchestration.rs"]
 mod tool_orchestration;
 #[path = "../tool_scheduler.rs"]
 mod tool_scheduler;
 #[path = "../tool_telemetry.rs"]
 mod tool_telemetry;
-#[path = "../repository_profile.rs"]
-mod repository_profile;
 
 use crate::{
     output_envelope::{OutputMode, adapt_command},
@@ -135,7 +135,9 @@ fn run_validated(
     evidence.push('\n');
     evidence.push_str(&repository_profile::format_decision(&profile_decision));
     if let Some(error) = profile_record_error {
-        evidence.push_str(&format!("\n[repository-profile record_status=ignored; reason={error}]"));
+        evidence.push_str(&format!(
+            "\n[repository-profile record_status=ignored; reason={error}]"
+        ));
     }
     evidence.push('\n');
     evidence.push_str(&scheduler_evidence);
@@ -208,8 +210,7 @@ mod tests {
 
     #[test]
     fn shipped_shell_path_emits_ranking_and_escalation_evidence() {
-        let recommendation =
-            tool_orchestration::recommend("shell_run", "cargo test --workspace");
+        let recommendation = tool_orchestration::recommend("shell_run", "cargo test --workspace");
         let cache = tool_orchestration::CacheEvidence {
             status: "bypass".into(),
             key: String::new(),
