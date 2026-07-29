@@ -36,6 +36,14 @@ export interface ImprovementRecord {
   suspensionReason?: string;
 }
 
+export interface LearningPrivacySettings {
+  captureEnabled: boolean;
+  repositoryPersistence: boolean;
+  crossRepositoryReuse: boolean;
+  telemetryEnabled: boolean;
+  automaticProposals: boolean;
+}
+
 export interface EngineeringDashboardData {
   totalTasks: number;
   successfulTasks: number;
@@ -65,4 +73,24 @@ export function updateImprovement(
   action: "approve" | "reject" | "adopt" | "rollback" | "benchmark" | "suspend" | "supersede",
 ) {
   return invoke<ImprovementRecord>("runtime_update_improvement", { repo, id, action });
+}
+
+export function loadLearningPrivacy(repo: string) {
+  return invoke<LearningPrivacySettings>("runtime_learning_privacy", { repo });
+}
+
+export function updateLearningPrivacy(repo: string, settings: LearningPrivacySettings) {
+  return invoke<LearningPrivacySettings>("runtime_update_learning_privacy", { repo, settings });
+}
+
+export function redactImprovement(repo: string, id: string) {
+  return invoke<void>("runtime_redact_improvement", { repo, id });
+}
+
+export function deleteImprovement(repo: string, id: string) {
+  return invoke<void>("runtime_delete_improvement", { repo, id });
+}
+
+export function exportLearningAudit(repo: string) {
+  return invoke<string>("runtime_export_learning_audit", { repo });
 }
