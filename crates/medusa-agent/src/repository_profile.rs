@@ -119,14 +119,17 @@ pub(crate) fn record(
     if !profile.enabled || profile.schema_version != PROFILE_SCHEMA_VERSION {
         return Ok(());
     }
-    let entry = profile.tools.entry(tool.to_owned()).or_insert(ToolObservation {
-        successes: 0,
-        failures: 0,
-        average_latency_ms: latency_ms,
-        average_output_bytes: output_bytes as u64,
-        recovery_reads: 0,
-        preferred_output_mode: None,
-    });
+    let entry = profile
+        .tools
+        .entry(tool.to_owned())
+        .or_insert(ToolObservation {
+            successes: 0,
+            failures: 0,
+            average_latency_ms: latency_ms,
+            average_output_bytes: output_bytes as u64,
+            recovery_reads: 0,
+            preferred_output_mode: None,
+        });
     let previous = entry.successes.saturating_add(entry.failures);
     if previous >= MAX_OBSERVATIONS_PER_TOOL {
         return Ok(());
@@ -140,7 +143,8 @@ pub(crate) fn record(
         entry.recovery_reads = entry.recovery_reads.saturating_add(1);
     }
     let total = previous.saturating_add(1);
-    entry.average_latency_ms = rolling_average(entry.average_latency_ms, previous, latency_ms, total);
+    entry.average_latency_ms =
+        rolling_average(entry.average_latency_ms, previous, latency_ms, total);
     entry.average_output_bytes = rolling_average(
         entry.average_output_bytes,
         previous,
@@ -210,6 +214,9 @@ fn persist(repo: &Path, profile: &RepositoryProfile) -> MedusaResult<()> {
     }
     let temporary = path.with_extension("json.tmp");
     fs::write(&temporary, serde_json::to_vec_pretty(profile)?)?;
+    if path.exists() {
+        fs::remove_file(&path)?;
+    }
     fs::rename(temporary, path)?;
     Ok(())
 }
