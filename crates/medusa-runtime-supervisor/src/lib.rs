@@ -1,5 +1,7 @@
 //! Durable orchestration state for Medusa's distributed execution runtime.
 
+pub mod conversational;
+
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
@@ -258,37 +260,43 @@ mod tests {
             })
             .unwrap();
         assert_eq!(state.phase, Phase::Completed);
-        assert!(!state.resumable());
         state.validate().unwrap();
     }
 
     #[test]
-    fn interruption_transitions_to_recovery_and_rollback() {
+    fn rejects_invalid_transition() {
         let mut state = SupervisorState::new("exec-2").unwrap();
-        state
-            .apply(Signal::ScheduleReady {
-                fingerprint: digest('a'),
-            })
-            .unwrap();
+        assert_eq!(
+            state.apply(Signal::WorkersStarted),
+            Err("signal is invalid for the current supervisor phase")
+        );
+    }
+
+    #[test]
+    fn recovers_and_rolls_back() {
+        let mut state = SupervisorState::new("exec-3").unwrap();
         state
             .apply(Signal::RecoveryRequired {
-                reason: "worker lease expired".into(),
+                reason: "lease expired".to_owned(),
             })
             .unwrap();
         assert_eq!(state.phase, Phase::Recovering);
         state
             .apply(Signal::RollbackComplete {
-                snapshot: digest('b'),
+                snapshot: digest('a'),
             })
             .unwrap();
         assert_eq!(state.phase, Phase::RolledBack);
+        assert!(!state.resumable());
     }
 
     #[test]
-    fn rejects_out_of_order_and_tampered_state() {
-        let mut state = SupervisorState::new("exec-3").unwrap();
-        assert!(state.apply(Signal::WorkersStarted).is_err());
+    fn rejects_tampered_state() {
+        let mut state = SupervisorState::new("exec-4").unwrap();
         state.sequence = 99;
-        assert!(state.validate().is_err());
+        assert_eq!(
+            state.validate(),
+            Err("supervisor fingerprint does not match state")
+        );
     }
 }
