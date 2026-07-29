@@ -42,8 +42,15 @@ jobs:
         run: cargo clippy -p medusa-runtime --all-targets -- -D warnings
       - name: Commit validated source and remove bootstrap files
         run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          path = Path("crates/medusa-runtime/src/review_tests.inc")
+          path.write_text(path.read_text().rstrip() + "\n")
+          PY
           git rm validation/ship-start-anywhere.patch
           git rm validation/start-anywhere.patch
+          git rm validation/.keep-source-pr
           git rm .github/workflows/start-anywhere-validation.yml
           git rm .github/workflows/apply-start-anywhere-source.yml
           git add crates/medusa-runtime/src/review.inc
