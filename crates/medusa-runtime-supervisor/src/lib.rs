@@ -1,6 +1,7 @@
 //! Durable orchestration state for Medusa's distributed execution runtime.
 
 pub mod conversational;
+pub mod conversational_runtime;
 
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -221,6 +222,7 @@ fn require_reason(value: &str) -> Result<(), &'static str> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
     fn digest(ch: char) -> String {
         std::iter::repeat_n(ch, 64).collect()
     }
