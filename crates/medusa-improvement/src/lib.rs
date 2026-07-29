@@ -4,6 +4,7 @@ mod implementation;
 
 #[allow(clippy::obfuscated_if_else)]
 pub mod correction_signals;
+pub mod learning;
 pub mod learning_review;
 pub mod lesson_inference;
 #[allow(clippy::expect_used)]
