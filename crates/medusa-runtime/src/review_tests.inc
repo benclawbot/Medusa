@@ -152,3 +152,76 @@ fn binary_rename_and_generated_actions_are_blocked_by_model() {
     );
     assert!(workspace.snapshot.file("binary.bin").unwrap().binary);
 }
+
+#[test]
+fn baseline_allows_a_plain_non_git_directory() {
+    let workspace = tempfile::tempdir().expect("workspace");
+    fs::write(workspace.path().join("notes.txt"), "hello\n").expect("write");
+
+    capture_review_baseline(workspace.path()).expect("baseline");
+
+    let baseline: ReviewBaseline =
+        read_json(&workspace.path().join(REVIEW_DIR).join(BASELINE_FILE)).expect("read baseline");
+    assert!(baseline.paths.is_empty());
+}
+
+#[test]
+fn unborn_git_repository_uses_current_worktree_content() {
+    let repo = tempfile::tempdir().expect("repo");
+    git(repo.path(), &["init"]);
+    fs::write(repo.path().join("first.txt"), "staged\n").expect("write staged");
+    git(repo.path(), &["add", "first.txt"]);
+    fs::write(repo.path().join("first.txt"), "worktree\n").expect("write worktree");
+
+    capture_review_baseline(repo.path()).expect("baseline");
+    let workspace = read_review_workspace(repo.path()).expect("workspace");
+    let file = workspace.snapshot.file("first.txt").expect("first file");
+    let diff = workspace
+        .files
+        .iter()
+        .find(|file| file.path == "first.txt")
+        .expect("first diff");
+
+    assert_eq!(file.origin, ChangeOrigin::PreExistingUser);
+    assert_eq!(file.current_fingerprint, fingerprint(diff.patch.as_bytes()));
+    assert!(diff.patch.contains("+worktree"));
+    assert!(!diff.patch.contains("+staged"));
+    assert!(workspace
+        .snapshot
+        .file(".medusa/review/baseline.json")
+        .is_none());
+}
+
+#[test]
+fn unborn_git_repository_reverts_a_staged_medusa_file() {
+    let repo = tempfile::tempdir().expect("repo");
+    git(repo.path(), &["init"]);
+    capture_review_baseline(repo.path()).expect("baseline");
+
+    fs::write(repo.path().join("medusa.txt"), "agent\n").expect("agent file");
+    git(repo.path(), &["add", "medusa.txt"]);
+    let workspace = read_review_workspace(repo.path()).expect("workspace");
+    let file = workspace.snapshot.file("medusa.txt").expect("medusa file");
+
+    apply_review_action(
+        repo.path(),
+        ReviewActionRequest::RevertFile {
+            path: "medusa.txt".into(),
+            expected_snapshot_id: workspace.snapshot.id.clone(),
+            expected_file_fingerprint: file.current_fingerprint.clone(),
+        },
+        "test",
+    )
+    .expect("revert");
+
+    assert!(!repo.path().join("medusa.txt").exists());
+    assert!(
+        !Command::new("git")
+            .args(["ls-files", "--error-unmatch", "--", "medusa.txt"])
+            .current_dir(repo.path())
+            .output()
+            .expect("git ls-files")
+            .status
+            .success()
+    );
+}

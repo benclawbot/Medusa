@@ -270,10 +270,12 @@ fn confined_skill_path(root: &Path, name: &str) -> Result<PathBuf, String> {
 
 fn confined_directory(root: &Path, name: &str) -> Result<PathBuf, String> {
     validate_name(name)?;
-    let directory = root.join(name);
+    let canonical_root = fs::canonicalize(root)
+        .map_err(|error| format!("resolve approved skill root {}: {error}", root.display()))?;
+    let directory = canonical_root.join(name);
     let canonical = fs::canonicalize(&directory)
         .map_err(|error| format!("resolve {}: {error}", directory.display()))?;
-    if !canonical.starts_with(root) {
+    if !canonical.starts_with(&canonical_root) {
         return Err(format!("skill `{name}` escapes approved skill root"));
     }
     Ok(canonical)
