@@ -3,7 +3,7 @@ name: Temporary OpenAI sequencing repair
 on:
   pull_request:
     branches: [main]
-    types: [synchronize]
+    types: [reopened]
 
 permissions:
   contents: write
