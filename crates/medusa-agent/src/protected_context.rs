@@ -51,7 +51,10 @@ pub(crate) struct AuxiliaryRoute {
     pub reason: String,
 }
 
-pub(crate) fn build(stable_prefix: &str, items: impl IntoIterator<Item = ContextItem>) -> ProtectedContext {
+pub(crate) fn build(
+    stable_prefix: &str,
+    items: impl IntoIterator<Item = ContextItem>,
+) -> ProtectedContext {
     let mut retained = Vec::new();
     let mut pruned_references = Vec::new();
     let mut seen = BTreeSet::new();
@@ -62,13 +65,19 @@ pub(crate) fn build(stable_prefix: &str, items: impl IntoIterator<Item = Context
             pruned_references.push(item.reference);
             continue;
         }
-        let cost = normalized.len().saturating_add(item.reference.len()).saturating_add(32);
+        let cost = normalized
+            .len()
+            .saturating_add(item.reference.len())
+            .saturating_add(32);
         if used.saturating_add(cost) > MAX_PROTECTED_BYTES && item.tier >= ContextTier::RecentTurn {
             pruned_references.push(item.reference);
             continue;
         }
         used = used.saturating_add(cost);
-        retained.push(ContextItem { text: normalized, ..item });
+        retained.push(ContextItem {
+            text: normalized,
+            ..item
+        });
     }
     let mut hasher = Sha256::new();
     hasher.update(stable_prefix.as_bytes());
@@ -114,6 +123,17 @@ pub(crate) fn render(context: &ProtectedContext) -> String {
 }
 
 pub(crate) fn route(workload: AuxiliaryWorkload, input_bytes: usize) -> MedusaResult<AuxiliaryRoute> {
+    let provider = std::env::var("MEDUSA_AUXILIARY_PROVIDER").unwrap_or_else(|_| "primary".into());
+    let primary = std::env::var("MEDUSA_PROVIDER").unwrap_or_else(|_| "primary".into());
+    route_for_providers(workload, input_bytes, &provider, &primary)
+}
+
+fn route_for_providers(
+    workload: AuxiliaryWorkload,
+    input_bytes: usize,
+    provider: &str,
+    primary: &str,
+) -> MedusaResult<AuxiliaryRoute> {
     if input_bytes > MAX_AUXILIARY_INPUT_BYTES {
         return Err(MedusaError::new(
             ErrorCode::InvalidConfiguration,
@@ -121,16 +141,13 @@ pub(crate) fn route(workload: AuxiliaryWorkload, input_bytes: usize) -> MedusaRe
             format!("auxiliary workload {workload:?} exceeds its protected context allowance"),
         ));
     }
-    let provider = std::env::var("MEDUSA_AUXILIARY_PROVIDER").unwrap_or_else(|_| "primary".into());
-    let primary = std::env::var("MEDUSA_PROVIDER").unwrap_or_else(|_| "primary".into());
     let cache_compatible = provider == primary;
-    let estimated_cache_break_bytes = if cache_compatible { 0 } else { input_bytes };
     Ok(AuxiliaryRoute {
         workload,
-        provider: provider.clone(),
+        provider: provider.to_owned(),
         cache_compatible,
-        estimated_cache_break_bytes,
-        fallback_provider: (provider != primary).then_some(primary),
+        estimated_cache_break_bytes: if cache_compatible { 0 } else { input_bytes },
+        fallback_provider: (provider != primary).then(|| primary.to_owned()),
         reason: if cache_compatible {
             "selected provider preserves the stable prompt prefix and prompt-cache reuse".into()
         } else {
@@ -160,8 +177,16 @@ mod tests {
         let context = build(
             "stable",
             [
-                ContextItem { tier: ContextTier::UserConstraint, reference: "user:1".into(), text: "Do not modify tests".into() },
-                ContextItem { tier: ContextTier::RecentTurn, reference: "turn:1".into(), text: "   ".into() },
+                ContextItem {
+                    tier: ContextTier::UserConstraint,
+                    reference: "user:1".into(),
+                    text: "Do not modify tests".into(),
+                },
+                ContextItem {
+                    tier: ContextTier::RecentTurn,
+                    reference: "turn:1".into(),
+                    text: "   ".into(),
+                },
             ],
         );
         assert!(render(&context).contains("Do not modify tests"));
@@ -170,12 +195,15 @@ mod tests {
 
     #[test]
     fn provider_switch_costs_cache_break_before_work() {
-        unsafe { std::env::set_var("MEDUSA_AUXILIARY_PROVIDER", "secondary"); }
-        unsafe { std::env::set_var("MEDUSA_PROVIDER", "primary"); }
-        let decision = route(AuxiliaryWorkload::RetrievalReranking, 512).expect("route");
+        let decision = route_for_providers(
+            AuxiliaryWorkload::RetrievalReranking,
+            512,
+            "secondary",
+            "primary",
+        )
+        .expect("route");
         assert!(!decision.cache_compatible);
         assert_eq!(decision.estimated_cache_break_bytes, 512);
-        unsafe { std::env::remove_var("MEDUSA_AUXILIARY_PROVIDER"); }
-        unsafe { std::env::remove_var("MEDUSA_PROVIDER"); }
+        assert_eq!(decision.fallback_provider.as_deref(), Some("primary"));
     }
 }
