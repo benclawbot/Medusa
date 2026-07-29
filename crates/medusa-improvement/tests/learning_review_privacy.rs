@@ -29,7 +29,11 @@ fn private_defaults_survive_restart_and_stale_updates_fail() {
     assert_eq!(reopened.privacy, updated.privacy);
     assert!(
         store
-            .update_privacy(LearningPrivacy::private_by_default(), initial.revision, "stale-tui")
+            .update_privacy(
+                LearningPrivacy::private_by_default(),
+                initial.revision,
+                "stale-tui"
+            )
             .is_err()
     );
 }

@@ -99,10 +99,14 @@ impl LearningReviewItem {
         require_text(&self.generalized_rule, "generalized rule cannot be empty")?;
         require_text(&self.scope, "learning scope cannot be empty")?;
         if self.revision == 0 {
-            return Err(LearningReviewError::Validation("learning revision must be positive"));
+            return Err(LearningReviewError::Validation(
+                "learning revision must be positive",
+            ));
         }
         if self.confidence_milli > 1_000 {
-            return Err(LearningReviewError::Validation("confidence must be between 0 and 1000"));
+            return Err(LearningReviewError::Validation(
+                "confidence must be between 0 and 1000",
+            ));
         }
         reject_sensitive(&self.title)?;
         reject_sensitive(&self.root_cause)?;
@@ -203,10 +207,16 @@ impl LearningReviewStore {
         item.validate()?;
         let mut document = self.load()?;
         ensure_revision(document.revision, expected_revision)?;
-        match document.items.iter_mut().find(|candidate| candidate.id == item.id) {
+        match document
+            .items
+            .iter_mut()
+            .find(|candidate| candidate.id == item.id)
+        {
             Some(existing) => {
                 if item.revision <= existing.revision {
-                    return Err(LearningReviewError::Validation("item revision must increase"));
+                    return Err(LearningReviewError::Validation(
+                        "item revision must increase",
+                    ));
                 }
                 *existing = item.clone();
             }
@@ -315,7 +325,13 @@ impl LearningReviewStore {
         require_text(actor, "audit actor cannot be empty")?;
         document.revision = document.revision.saturating_add(1);
         let sequence = self.read_events()?.len() as u64 + 1;
-        let event = signed_event(sequence, item_id, actor, action, document.audit_head.clone());
+        let event = signed_event(
+            sequence,
+            item_id,
+            actor,
+            action,
+            document.audit_head.clone(),
+        );
         document.audit_head = event.event_hash.clone();
         self.write(&document)?;
         self.append_event(&event)?;
@@ -329,7 +345,9 @@ impl LearningReviewStore {
         }
         let document: StoreDocument = serde_json::from_slice(&fs::read(path)?)?;
         if document.schema_version != SCHEMA_VERSION {
-            return Err(LearningReviewError::UnsupportedSchema(document.schema_version));
+            return Err(LearningReviewError::UnsupportedSchema(
+                document.schema_version,
+            ));
         }
         for item in &document.items {
             item.validate()?;
@@ -395,12 +413,18 @@ fn authorize_transition(
             | (LearningReviewState::Proposed, LearningReviewState::Rejected)
             | (LearningReviewState::Deferred, LearningReviewState::Approved)
             | (LearningReviewState::Deferred, LearningReviewState::Rejected)
-            | (LearningReviewState::Approved, LearningReviewState::Validated)
+            | (
+                LearningReviewState::Approved,
+                LearningReviewState::Validated
+            )
             | (LearningReviewState::Validated, LearningReviewState::Active)
             | (LearningReviewState::Active, LearningReviewState::Suspended)
             | (LearningReviewState::Active, LearningReviewState::RolledBack)
             | (LearningReviewState::Suspended, LearningReviewState::Active)
-            | (LearningReviewState::Suspended, LearningReviewState::RolledBack)
+            | (
+                LearningReviewState::Suspended,
+                LearningReviewState::RolledBack
+            )
             | (_, LearningReviewState::Deleted)
     );
     if allowed {
@@ -449,9 +473,8 @@ fn signed_event(
     previous_hash: String,
 ) -> AuditEvent {
     let recorded_at_unix_ms = now_unix_ms();
-    let payload = format!(
-        "{sequence}\n{item_id}\n{actor}\n{action}\n{recorded_at_unix_ms}\n{previous_hash}"
-    );
+    let payload =
+        format!("{sequence}\n{item_id}\n{actor}\n{action}\n{recorded_at_unix_ms}\n{previous_hash}");
     AuditEvent {
         sequence,
         item_id: item_id.to_owned(),
@@ -555,7 +578,10 @@ pub enum LearningReviewError {
     Io(io::Error),
     Json(serde_json::Error),
     Validation(&'static str),
-    Conflict { expected: u64, actual: u64 },
+    Conflict {
+        expected: u64,
+        actual: u64,
+    },
     NotFound,
     InvalidTransition {
         from: LearningReviewState,
@@ -578,7 +604,10 @@ impl std::fmt::Display for LearningReviewError {
             ),
             Self::NotFound => formatter.write_str("learning review item was not found"),
             Self::InvalidTransition { from, to } => {
-                write!(formatter, "invalid learning lifecycle transition: {from:?} -> {to:?}")
+                write!(
+                    formatter,
+                    "invalid learning lifecycle transition: {from:?} -> {to:?}"
+                )
             }
             Self::SensitiveExportBlocked(fields) => write!(
                 formatter,
@@ -587,7 +616,10 @@ impl std::fmt::Display for LearningReviewError {
             ),
             Self::AuditChainInvalid => formatter.write_str("learning audit chain is invalid"),
             Self::UnsupportedSchema(version) => {
-                write!(formatter, "unsupported learning review schema version {version}")
+                write!(
+                    formatter,
+                    "unsupported learning review schema version {version}"
+                )
             }
         }
     }
@@ -621,7 +653,8 @@ mod tests {
             source_signal_ids: vec!["signal-1".to_owned()],
             evidence_digests: vec!["a".repeat(64)],
             root_cause: "authoritative sources were inventoried too late".to_owned(),
-            generalized_rule: "inventory authoritative sources before claiming completeness".to_owned(),
+            generalized_rule: "inventory authoritative sources before claiming completeness"
+                .to_owned(),
             scope: "repository".to_owned(),
             confidence_milli: 900,
             proposed_solution: "add a completeness workflow gate".to_owned(),
@@ -696,7 +729,11 @@ mod tests {
         let repo = tempfile::tempdir().expect("repo");
         let store = LearningReviewStore::for_repository(repo.path());
         let snapshot = store.upsert(item(), 0, "test").expect("upsert");
-        assert!(store.update_privacy(LearningPrivacy::private_by_default(), 0, "stale").is_err());
+        assert!(
+            store
+                .update_privacy(LearningPrivacy::private_by_default(), 0, "stale")
+                .is_err()
+        );
         assert!(
             store
                 .transition(

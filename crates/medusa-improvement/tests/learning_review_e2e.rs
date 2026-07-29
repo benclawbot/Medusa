@@ -39,19 +39,40 @@ fn approved_activation_survives_restart_and_rolls_back() {
     let store = LearningReviewStore::for_repository(repo.path());
     let mut state = store.upsert(item(), 0, "desktop").expect("proposal");
     state = store
-        .transition("lesson-restart", LearningReviewState::Approved, state.revision, "desktop", 2)
+        .transition(
+            "lesson-restart",
+            LearningReviewState::Approved,
+            state.revision,
+            "desktop",
+            2,
+        )
         .expect("approve");
     state = store
-        .transition("lesson-restart", LearningReviewState::Validated, state.revision, "tui", 3)
+        .transition(
+            "lesson-restart",
+            LearningReviewState::Validated,
+            state.revision,
+            "tui",
+            3,
+        )
         .expect("validate");
     state = store
-        .transition("lesson-restart", LearningReviewState::Active, state.revision, "desktop", 4)
+        .transition(
+            "lesson-restart",
+            LearningReviewState::Active,
+            state.revision,
+            "desktop",
+            4,
+        )
         .expect("activate");
 
     let reopened = LearningReviewStore::for_repository(repo.path());
     let after_restart = reopened.snapshot().expect("restart snapshot");
     assert_eq!(after_restart.items[0].state, LearningReviewState::Active);
-    assert_eq!(after_restart.items[0].active_version, state.items[0].active_version);
+    assert_eq!(
+        after_restart.items[0].active_version,
+        state.items[0].active_version
+    );
 
     let rolled_back = reopened
         .transition(

@@ -36,14 +36,32 @@ fn conflicting_learning_cannot_activate_silently() {
     };
     let mut state = store.upsert(item, 0, "desktop").expect("proposal");
     state = store
-        .transition("conflict-a", LearningReviewState::Approved, state.revision, "desktop", 2)
+        .transition(
+            "conflict-a",
+            LearningReviewState::Approved,
+            state.revision,
+            "desktop",
+            2,
+        )
         .expect("approve");
     state = store
-        .transition("conflict-a", LearningReviewState::Validated, state.revision, "tui", 3)
+        .transition(
+            "conflict-a",
+            LearningReviewState::Validated,
+            state.revision,
+            "tui",
+            3,
+        )
         .expect("validate");
     assert!(
         store
-            .transition("conflict-a", LearningReviewState::Active, state.revision, "desktop", 4)
+            .transition(
+                "conflict-a",
+                LearningReviewState::Active,
+                state.revision,
+                "desktop",
+                4
+            )
             .is_err()
     );
     assert_ne!(
