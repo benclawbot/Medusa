@@ -330,6 +330,10 @@ fn sandbox_unavailable(message: impl Into<String>) -> MedusaError {
     error
 }
 
+fn policy_denied(message: impl Into<String>) -> MedusaError {
+    MedusaError::new(ErrorCode::PolicyDenied, ErrorCategory::Policy, message)
+}
+
 #[cfg(test)]
 mod command_admission_tests {
     use super::*;
@@ -368,10 +372,6 @@ mod command_admission_tests {
             validate_shell_command("git.exe", &["reset".to_owned(), "--hard".to_owned()]).is_err()
         );
     }
-}
-
-fn policy_denied(message: impl Into<String>) -> MedusaError {
-    MedusaError::new(ErrorCode::PolicyDenied, ErrorCategory::Policy, message)
 }
 
 #[cfg(all(test, not(any(target_os = "linux", target_os = "macos", windows))))]
