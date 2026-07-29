@@ -1,0 +1,44 @@
+{
+  "schema_version": 1,
+  "suite_id": "medusa-end-to-end-tool-orchestration",
+  "source_contract": "cargo product-acceptance",
+  "runs": 2,
+  "scenarios": [
+    {"id":"unfamiliar-navigation","acceptance_ids":["production-orchestration","headless-entrypoint"]},
+    {"id":"repeated-repository-work","acceptance_ids":["production-orchestration","checkpoint-restore"]},
+    {"id":"localized-fix","acceptance_ids":["production-orchestration","verification-rollback"]},
+    {"id":"cross-package-fix","acceptance_ids":["production-orchestration","architecture-policy"]},
+    {"id":"dependency-update","acceptance_ids":["upgrade-rollback-evidence"]},
+    {"id":"failing-test-diagnosis","acceptance_ids":["verification-rollback"]},
+    {"id":"large-output","acceptance_ids":["production-orchestration"]},
+    {"id":"transient-failure-recovery","acceptance_ids":["interruption-replay","checkpoint-restore"]},
+    {"id":"context-heavy-work","acceptance_ids":["production-orchestration","interruption-resume"]},
+    {"id":"safe-parallelism","acceptance_ids":["production-orchestration"]},
+    {"id":"compression-recovery-read","acceptance_ids":["production-orchestration"]}
+  ],
+  "release_invariants": {
+    "task_success_rate": 1.0,
+    "safety_regressions": 0,
+    "verification_coverage": 1.0
+  },
+  "reported_tradeoffs": [
+    "first_pass_success_rate",
+    "median_duration_ms",
+    "p95_duration_ms",
+    "critical_path_latency_ms",
+    "total_tool_calls",
+    "redundant_tool_calls",
+    "input_tokens",
+    "output_tokens",
+    "cached_input_tokens",
+    "uncached_input_tokens",
+    "peak_retained_context_tokens",
+    "billed_cost_microunits",
+    "cache_hits",
+    "cache_misses",
+    "fallback_recoveries",
+    "speculation_waste_calls",
+    "compression_recovery_reads",
+    "user_corrections"
+  ]
+}

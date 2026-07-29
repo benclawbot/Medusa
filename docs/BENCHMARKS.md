@@ -53,3 +53,23 @@ Live-provider evaluation is separate and never substitutes for deterministic run
 ## Performance measurements
 
 For refactor performance comparisons, measure the same machine, toolchain, build profile, fixture, and warm/cold state. Compare medians across at least five timed runs after one warm-up. A median regression greater than 5% requires raw measurements, a noise analysis, and explicit approval. Performance gains never permit weakening correctness, adversarial, coverage, migration, or recovery gates.
+
+## End-to-end tool-orchestration benchmark
+
+`benchmarks/orchestration-suite.json` and `scripts/orchestration-benchmark.py` score complete trajectories produced by the shipped `cargo product-acceptance` entry point. The scenarios cover unfamiliar navigation, repeated repository work, localized and cross-package fixes, dependency updates, failing-test diagnosis, large outputs, transient recovery, context-heavy work, safe parallelism, and compression recovery reads.
+
+The report retains task success, first-pass success, median and p95 duration, critical-path latency, tool-call and redundancy counts, token classes, retained context, billed cost, cache behavior, fallback recovery, verification coverage, speculation waste, compression recovery reads, and user corrections. Only task success, verification coverage, and safety are release invariants; performance and cost results are reported as measured tradeoffs rather than compared with arbitrary preselected percentages.
+
+Repository-specific orchestration learning is stored in `.medusa/orchestration-profile.json`. It is versioned, resettable, confidence-scored, time-decayed, and capped to a small recommendation-score adjustment. Explicit policy, requested output mode, permissions, containment, mutation serialization, verification requirements, and budget ceilings always take precedence. Missing, disabled, stale, corrupt, adversarial, or low-confidence profiles fail closed and contribute no learned adjustment.
+
+Run the scoring contract without Rust:
+
+```bash
+python3 scripts/test-orchestration-benchmark.py
+```
+
+Run the complete benchmark through the shipped runtime acceptance entry point:
+
+```bash
+python3 scripts/orchestration-benchmark.py
+```

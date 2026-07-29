@@ -4,6 +4,8 @@ use medusa_core::{ErrorCategory, ErrorCode, MedusaError, MedusaResult};
 use serde_json::json;
 use sha2::{Digest, Sha256};
 
+#[path = "../repository_profile.rs"]
+mod repository_profile;
 #[path = "../tool_orchestration.rs"]
 mod tool_orchestration;
 #[path = "../tool_scheduler.rs"]
@@ -53,7 +55,11 @@ fn run_validated(
     let mode = output_mode_label(output_mode);
     let command_summary = format!("{} {}", program, args.join(" "));
     let input_summary = format!("{command_summary}\0output_mode={mode}");
-    let recommendation = tool_orchestration::recommend("shell_run", &command_summary);
+    let mut recommendation = tool_orchestration::recommend("shell_run", &command_summary);
+    let profile_decision = repository_profile::decision(repo, "shell_run");
+    recommendation.score = recommendation
+        .score
+        .saturating_add(profile_decision.score_adjustment);
     let mut execution_budget = tool_scheduler::ExecutionBudget::for_turn(1);
     let schedule = execution_budget.schedule_batch(1, 0)?;
     let scheduler_evidence = tool_scheduler::ExecutionBudget::format_schedule(&schedule);
@@ -67,7 +73,8 @@ fn run_validated(
         let orchestration_evidence =
             tool_orchestration::format_evidence(&recommendation, &cache_evidence);
         return Ok(format!(
-            "{cached}\n{orchestration_evidence}\n{scheduler_evidence}\n{}",
+            "{cached}\n{orchestration_evidence}\n{}\n{scheduler_evidence}\n{}",
+            repository_profile::format_decision(&profile_decision),
             tool_scheduler::ExecutionBudget::format_verification(&verification)
         ));
     }
@@ -88,15 +95,30 @@ fn run_validated(
         output.status.success(),
         output_mode,
     );
+    let elapsed = started.elapsed();
     let trace = tool_telemetry::ToolExecutionTrace::for_shell(
         program,
         args,
         output.status.success(),
-        started.elapsed(),
+        elapsed,
         raw.len(),
         &adapted,
     );
     let trace_path = tool_telemetry::append_trace(repo, &trace)?;
+    let profile_record_error = repository_profile::record(
+        repo,
+        "shell_run",
+        output.status.success(),
+        elapsed.as_millis().min(u128::from(u64::MAX)) as u64,
+        adapted.to_string().len(),
+        match output_mode {
+            OutputMode::Compact => repository_profile::LearnedOutputMode::Compact,
+            OutputMode::Normal => repository_profile::LearnedOutputMode::Normal,
+            OutputMode::Verbatim => repository_profile::LearnedOutputMode::Verbatim,
+        },
+        false,
+    )
+    .err();
 
     let mut evidence = adapted.to_string();
     execution_budget.record_output(&evidence)?;
@@ -110,6 +132,13 @@ fn run_validated(
         tool_orchestration::format_evidence(&recommendation, &cache_evidence);
     evidence.push('\n');
     evidence.push_str(&orchestration_evidence);
+    evidence.push('\n');
+    evidence.push_str(&repository_profile::format_decision(&profile_decision));
+    if let Some(error) = profile_record_error {
+        evidence.push_str(&format!(
+            "\n[repository-profile record_status=ignored; reason={error}]"
+        ));
+    }
     evidence.push('\n');
     evidence.push_str(&scheduler_evidence);
     evidence.push('\n');
