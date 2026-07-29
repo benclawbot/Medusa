@@ -20,8 +20,12 @@ fn repo() -> PathBuf {
     path
 }
 
-fn collect(controller: &RuntimeController, minimum: usize) -> Vec<RuntimeEvent> {
-    let deadline = Instant::now() + Duration::from_secs(5);
+fn collect_until(
+    controller: &RuntimeController,
+    timeout: Duration,
+    complete: impl Fn(&[RuntimeEvent]) -> bool,
+) -> Vec<RuntimeEvent> {
+    let deadline = Instant::now() + timeout;
     let mut events = Vec::new();
     while Instant::now() < deadline {
         match controller.try_event() {
@@ -29,11 +33,17 @@ fn collect(controller: &RuntimeController, minimum: usize) -> Vec<RuntimeEvent> 
             Ok(None) => thread::sleep(Duration::from_millis(10)),
             Err(error) => panic!("runtime stopped: {error}"),
         }
-        if events.len() >= minimum {
+        if complete(&events) {
             break;
         }
     }
     events
+}
+
+fn collect(controller: &RuntimeController, minimum: usize) -> Vec<RuntimeEvent> {
+    collect_until(controller, Duration::from_secs(15), |events| {
+        events.len() >= minimum
+    })
 }
 
 fn run(controller: &RuntimeController, command: SlashCommand, minimum: usize) -> Vec<RuntimeEvent> {
@@ -45,7 +55,20 @@ fn run(controller: &RuntimeController, command: SlashCommand, minimum: usize) ->
 fn controller_exercises_non_agent_command_lifecycle() {
     let repo = repo();
     let controller = RuntimeController::start(repo.clone());
-    let initial = collect(&controller, 2);
+    let initial = collect_until(&controller, Duration::from_secs(15), |events| {
+        let has_settings = events
+            .iter()
+            .any(|event| matches!(event, RuntimeEvent::Settings { .. }));
+        let has_capabilities = events.iter().any(|event| {
+            matches!(
+                event,
+                RuntimeEvent::Notice { title, details }
+                    if title == "Runtime capabilities"
+                        && details.iter().any(|line| line.starts_with("Filesystem"))
+            )
+        });
+        has_settings && has_capabilities
+    });
     assert!(
         initial
             .iter()
