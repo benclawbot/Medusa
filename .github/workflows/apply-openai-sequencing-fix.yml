@@ -1,0 +1,54 @@
+name: Apply OpenAI sequencing fix
+
+on:
+  push:
+    branches: [fix/openai-tool-result-message-sequencing]
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    if: ${{ github.actor != 'github-actions[bot]' }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: fix/openai-tool-result-message-sequencing
+      - uses: dtolnay/rust-toolchain@1.88.0
+      - name: Patch serializer and verify regression
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          path = Path('crates/medusa-provider/src/lib.rs')
+          text = path.read_text()
+          old = '''            let mut wire = json!({"role": role, "content": content});
+            if !tool_calls.is_empty() {
+                wire["tool_calls"] = Value::Array(tool_calls);
+            }
+            messages.push(wire);
+'''
+          new = '''            if !text.is_empty() || !content_parts.is_empty() || !tool_calls.is_empty() {
+                let mut wire = json!({"role": role, "content": content});
+                if !tool_calls.is_empty() {
+                    wire["tool_calls"] = Value::Array(tool_calls);
+                }
+                messages.push(wire);
+            }
+'''
+          if old not in text:
+              raise SystemExit('serializer block not found')
+          path.write_text(text.replace(old, new, 1))
+          PY
+          cargo test -p medusa-provider --test openai_tool_result_sequence --locked
+          cargo test -p medusa-provider --lib --locked
+      - name: Commit production fix and remove helper workflow
+        shell: bash
+        run: |
+          rm .github/workflows/apply-openai-sequencing-fix.yml
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add crates/medusa-provider/src/lib.rs .github/workflows/apply-openai-sequencing-fix.yml
+          git commit -m 'Provider: preserve OpenAI tool-result sequencing'
+          git push origin HEAD:fix/openai-tool-result-message-sequencing
