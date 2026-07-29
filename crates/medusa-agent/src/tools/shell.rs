@@ -16,23 +16,40 @@ use crate::{
     policy::{sandboxed_command, validate_shell_command},
 };
 
-pub(crate) fn run(repo: &Path, program: &str, args: &[String]) -> MedusaResult<String> {
+pub(crate) fn run(
+    repo: &Path,
+    program: &str,
+    args: &[String],
+    output_mode: OutputMode,
+) -> MedusaResult<String> {
     validate_shell_command(program, args)?;
-    run_validated(repo, program, args)
+    run_validated(repo, program, args, output_mode)
 }
 
-pub(crate) fn run_approved(repo: &Path, program: &str, args: &[String]) -> MedusaResult<String> {
+pub(crate) fn run_approved(
+    repo: &Path,
+    program: &str,
+    args: &[String],
+    output_mode: OutputMode,
+) -> MedusaResult<String> {
     validate_shell_command(program, args)?;
-    run_validated(repo, program, args)
+    run_validated(repo, program, args, output_mode)
 }
 
-fn run_validated(repo: &Path, program: &str, args: &[String]) -> MedusaResult<String> {
-    let input_summary = format!("{} {}", program, args.join(" "));
-    let recommendation = tool_orchestration::recommend("shell_run", &input_summary);
+fn run_validated(
+    repo: &Path,
+    program: &str,
+    args: &[String],
+    output_mode: OutputMode,
+) -> MedusaResult<String> {
+    let mode = output_mode.as_str();
+    let command_summary = format!("{} {}", program, args.join(" "));
+    let input_summary = format!("{command_summary}\0output_mode={mode}");
+    let recommendation = tool_orchestration::recommend("shell_run", &command_summary);
     let mut execution_budget = tool_scheduler::ExecutionBudget::for_turn(1);
     let schedule = execution_budget.schedule_batch(1, 0)?;
     let scheduler_evidence = tool_scheduler::ExecutionBudget::format_schedule(&schedule);
-    let input = json!({"program": program, "args": args});
+    let input = json!({"program": program, "args": args, "output_mode": mode});
     let call_digest = execution_budget.before_call("shell_run", &input)?;
     let (cached, mut cache_evidence) =
         tool_orchestration::cache_lookup(repo, "shell_run", &input_summary)?;
@@ -61,7 +78,7 @@ fn run_validated(repo: &Path, program: &str, args: &[String]) -> MedusaResult<St
         &output.stdout,
         &output.stderr,
         output.status.success(),
-        OutputMode::Compact,
+        output_mode,
     );
     let trace = tool_telemetry::ToolExecutionTrace::for_shell(
         program,
@@ -173,12 +190,26 @@ mod tests {
         let mut budget = tool_scheduler::ExecutionBudget::for_turn(2);
         let schedule = budget.schedule_batch(1, 0).expect("schedule shell");
         let digest = budget
-            .before_call("shell_run", &json!({"program":"cargo","args":["test"]}))
+            .before_call(
+                "shell_run",
+                &json!({"program":"cargo","args":["test"],"output_mode":"compact"}),
+            )
             .expect("record call");
         let verification = budget.verification_for("shell_run", &digest, true);
         assert!(
             tool_scheduler::ExecutionBudget::format_schedule(&schedule).contains("parallel=false")
         );
         assert_eq!(verification.status, "not_applicable");
+    }
+
+    #[test]
+    fn output_mode_is_part_of_cache_and_loop_identity() {
+        let compact = format!("cargo test\0output_mode={}", OutputMode::Compact.as_str());
+        let verbatim = format!("cargo test\0output_mode={}", OutputMode::Verbatim.as_str());
+        assert_ne!(compact, verbatim);
+        assert_ne!(
+            json!({"program":"cargo","args":["test"],"output_mode":"compact"}),
+            json!({"program":"cargo","args":["test"],"output_mode":"verbatim"})
+        );
     }
 }
