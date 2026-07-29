@@ -1,5 +1,5 @@
 diff --git a/crates/medusa-agent/src/engine.rs b/crates/medusa-agent/src/engine.rs
-index 4834f54..b13e940 100644
+index 4834f54..108797e 100644
 --- a/crates/medusa-agent/src/engine.rs
 +++ b/crates/medusa-agent/src/engine.rs
 @@ -50,6 +50,7 @@ use crate::{
@@ -80,22 +80,32 @@ index 4834f54..b13e940 100644
                  })
                  .count();
              let batch_len = parallel_count.max(1);
-@@ -687,7 +716,13 @@ impl<P: ModelProvider> AgentEngine<P> {
+@@ -687,7 +716,23 @@ impl<P: ModelProvider> AgentEngine<P> {
                          "tool batch was unexpectedly empty",
                      )
                  })?;
 -                let result = if name == "update_plan" {
 +                let result = if !self.execution_policy.allows(&name) {
++                    let reason =
++                        format!("tool `{name}` is denied by the role-bound execution policy");
++                    append_observed(
++                        session,
++                        EventPayload::ToolCallDenied {
++                            tool: audited_tool_name(&name, &input),
++                            reason: reason.clone(),
++                        },
++                        &mut observer,
++                    )?;
 +                    Err(MedusaError::new(
 +                        ErrorCode::PolicyDenied,
 +                        ErrorCategory::Policy,
-+                        format!("tool `{name}` is denied by the role-bound execution policy"),
++                        reason,
 +                    ))
 +                } else if name == "update_plan" {
                      let plan = plan_from_input(&input);
                      if plan.is_empty() {
                          Ok("Visible task plan update ignored because it was empty.".to_owned())
-@@ -715,6 +750,21 @@ impl<P: ModelProvider> AgentEngine<P> {
+@@ -715,6 +760,21 @@ impl<P: ModelProvider> AgentEngine<P> {
                          }
                          Err(error) => Err(error),
                      }
