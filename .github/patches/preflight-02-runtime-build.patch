@@ -1,0 +1,38 @@
+diff --git a/crates/medusa-runtime/build_main.rs b/crates/medusa-runtime/build_main.rs
+index 927506c..1acb63e 100644
+--- a/crates/medusa-runtime/build_main.rs
++++ b/crates/medusa-runtime/build_main.rs
+@@ -3,6 +3,7 @@ fn main() -> Result<(), Box<dyn Error>> {
+     println!("cargo:rerun-if-changed=src/generated_lib.rs");
+     println!("cargo:rerun-if-changed=src/lib.rs");
+     println!("cargo:rerun-if-changed=src/production_orchestrator.rs");
++    println!("cargo:rerun-if-changed=src/multi_agent_coordinator.rs");
+     println!("cargo:rerun-if-changed=src/tool_policy.inc");
+     println!("cargo:rerun-if-changed=src/recovery_tui.inc");
+     println!("cargo:rerun-if-changed=src/commands.rs");
+@@ -51,6 +52,7 @@ fn main() -> Result<(), Box<dyn Error>> {
+ 
+     for (declaration, file) in [
+         ("mod error;", "error.rs"),
++        ("mod multi_agent_coordinator;", "multi_agent_coordinator.rs"),
+         ("pub mod attachment;", "attachment.rs"),
+         ("mod learning_retrieval;", "learning_retrieval.rs"),
+         ("pub mod learning_review;", "learning_review.rs"),
+@@ -119,7 +121,7 @@ fn main() -> Result<(), Box<dyn Error>> {
+     replace_once(
+         &mut source,
+         "    let engine = AgentEngine::new_with_cancellation(provider, config, Arc::clone(cancel));\n    let selected_skill = state.pending_skill.clone();\n    let skill_context = selected_skill.as_ref().map(SelectedSkill::prompt_context);\n    let content = message_blocks(&draft)?;\n",
+-        "    let resuming_pending_question = state\n        .session\n        .as_ref()\n        .is_some_and(|session| session.pending_question.is_some());\n    if !resuming_pending_question {\n        crate::review::capture_review_baseline(&state.repo)\n            .map_err(|error| RuntimeError::agent(error.to_string()))?;\n    }\n    let engine = AgentEngine::new_with_cancellation(provider, config, Arc::clone(cancel));\n    let selected_skill = state.pending_skill.clone();\n    let execution_plan = crate::production_orchestrator::plan(&draft).map_err(RuntimeError::agent)?;\n    for event in crate::production_orchestrator::events(&execution_plan) { let _ = events.send(event); }\n    let orchestration_context = crate::production_orchestrator::runtime_context(&execution_plan);\n    let tool_policy_context = crate::tool_policy::runtime_context(&draft).map_err(RuntimeError::agent)?;\n    let verification_plan = medusa_tool_control::verification_plan(&draft.text);\n    let verification_context = format!(\"Progressive verification requirements: {:?}. Rationale: {:?}. Complete the narrowest checks first and escalate only when required by risk or failure.\", verification_plan.requirements, verification_plan.rationale);\n    let learning_context = crate::learning_retrieval::select(\n        &state.repo,\n        &draft,\n        state.session.as_ref().map(|session| session.id.as_str()),\n        events,\n    );\n    let mut task_context = vec![orchestration_context, tool_policy_context, verification_context];\n    if let Some(learning) = learning_context.prompt_context { task_context.push(learning); }\n    if let Some(skill) = selected_skill.as_ref().map(SelectedSkill::prompt_context) { task_context.push(skill); }\n    let skill_context = task_context.join(\"\\n\\n\");\n    let content = message_blocks(&draft)?;\n",
++        "    let resuming_pending_question = state\n        .session\n        .as_ref()\n        .is_some_and(|session| session.pending_question.is_some());\n    if !resuming_pending_question {\n        crate::review::capture_review_baseline(&state.repo)\n            .map_err(|error| RuntimeError::agent(error.to_string()))?;\n    }\n    let engine = AgentEngine::new_with_cancellation(provider, config.clone(), Arc::clone(cancel));\n    let selected_skill = state.pending_skill.clone();\n    let execution_plan = crate::production_orchestrator::plan(&draft).map_err(RuntimeError::agent)?;\n    for event in crate::production_orchestrator::events(&execution_plan) { let _ = events.send(event); }\n    let coordinator_evidence = if !resuming_pending_question\n        && execution_plan.mode == crate::production_orchestrator::ExecutionMode::Orchestrated\n    {\n        Some(\n            crate::multi_agent_coordinator::run_preflight(\n                &state.repo,\n                &config,\n                state.session_api_key.clone(),\n                &execution_plan,\n                cancel,\n                events,\n            )\n            .map_err(RuntimeError::agent)?,\n        )\n    } else {\n        None\n    };\n    let orchestration_context = crate::production_orchestrator::runtime_context(&execution_plan);\n    let tool_policy_context = crate::tool_policy::runtime_context(&draft).map_err(RuntimeError::agent)?;\n    let verification_plan = medusa_tool_control::verification_plan(&draft.text);\n    let verification_context = format!(\"Progressive verification requirements: {:?}. Rationale: {:?}. Complete the narrowest checks first and escalate only when required by risk or failure.\", verification_plan.requirements, verification_plan.rationale);\n    let learning_context = crate::learning_retrieval::select(\n        &state.repo,\n        &draft,\n        state.session.as_ref().map(|session| session.id.as_str()),\n        events,\n    );\n    let mut task_context = vec![orchestration_context, tool_policy_context, verification_context];\n    if let Some(evidence) = coordinator_evidence.as_ref() { task_context.push(evidence.parent_context()); }\n    if let Some(learning) = learning_context.prompt_context { task_context.push(learning); }\n    if let Some(skill) = selected_skill.as_ref().map(SelectedSkill::prompt_context) { task_context.push(skill); }\n    let skill_context = task_context.join(\"\\n\\n\");\n    let content = message_blocks(&draft)?;\n",
+     )?;
+     replace_once(
+         &mut source,
+@@ -134,7 +136,7 @@ fn main() -> Result<(), Box<dyn Error>> {
+     replace_once(
+         &mut source,
+         "    state.session = Some(session);\n    result\n}\n\nfn append_followups",
+-        "    let verified = matches!(&result, Ok(RuntimeEvent::Completed { .. }));\n    let failed = result.is_err();\n    if let Err(error) = crate::production_orchestrator::persist_outcome(&state.repo, &draft, &execution_plan, verified, failed) {\n        let _ = events.send(RuntimeEvent::Notice { title: \"Runtime learning record unavailable\".to_owned(), details: vec![error.to_string()] });\n    }\n    state.session = Some(session);\n    result\n}\n\nfn append_followups",
++        "    let mut result = result;\n    let mut verified = matches!(&result, Ok(RuntimeEvent::Completed { .. }));\n    if execution_plan.mode == crate::production_orchestrator::ExecutionMode::Orchestrated\n        && matches!(&result, Ok(RuntimeEvent::Completed { .. }))\n    {\n        match crate::multi_agent_coordinator::verify_repository(&state.repo, &execution_plan, events) {\n            Ok(_) => verified = true,\n            Err(error) => result = Err(RuntimeError::agent(error)),\n        }\n    }\n    let failed = result.is_err();\n    if let Err(error) = crate::production_orchestrator::persist_outcome(&state.repo, &draft, &execution_plan, verified, failed) {\n        let _ = events.send(RuntimeEvent::Notice { title: \"Runtime learning record unavailable\".to_owned(), details: vec![error.to_string()] });\n    }\n    state.session = Some(session);\n    result\n}\n\nfn append_followups",
+     )?;
+ 
+     source = source.replace("cancel: &AtomicBool", "cancel: &Arc<AtomicBool>");
