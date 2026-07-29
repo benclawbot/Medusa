@@ -27,6 +27,13 @@ export interface ImprovementRecord {
   benchmarkBefore?: number;
   benchmarkAfter?: number;
   rollbackNote: string;
+  revision: number;
+  approval?: { reviewer: string; approvedAt: string; proposalRevision: number };
+  activeVersion?: string;
+  previousVersion?: string;
+  conflictsWith: string[];
+  observations: Array<{ observedAt: string; triggerCount: number; correctionCount: number; regressionCount: number; latencyMs?: number }>;
+  suspensionReason?: string;
 }
 
 export interface EngineeringDashboardData {
@@ -55,7 +62,7 @@ export function generateImprovement(repo: string) {
 export function updateImprovement(
   repo: string,
   id: string,
-  action: "approve" | "reject" | "adopt" | "rollback" | "benchmark",
+  action: "approve" | "reject" | "adopt" | "rollback" | "benchmark" | "suspend" | "supersede",
 ) {
   return invoke<ImprovementRecord>("runtime_update_improvement", { repo, id, action });
 }
