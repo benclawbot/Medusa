@@ -1,9 +1,11 @@
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
-import { describe, expect, it, vi } from "vitest";
+import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { VoiceControls, type VoiceTransport } from "./VoiceControls";
 
 function transport(): VoiceTransport { return { connect: vi.fn().mockResolvedValue(undefined), disconnect: vi.fn().mockResolvedValue(undefined), setMuted: vi.fn().mockResolvedValue(undefined), setSpeakerEnabled: vi.fn().mockResolvedValue(undefined), interruptPlayback: vi.fn().mockResolvedValue(undefined) }; }
 function media() { const stop = vi.fn(); Object.defineProperty(navigator,"mediaDevices",{configurable:true,value:{getUserMedia:vi.fn().mockResolvedValue({getTracks:()=>[{stop}]}),enumerateDevices:vi.fn().mockResolvedValue([{kind:"audioinput",deviceId:"mic",label:"Desk mic"},{kind:"audiooutput",deviceId:"speaker",label:"Desk speaker"}]),addEventListener:vi.fn(),removeEventListener:vi.fn()}}); return stop; }
+
+afterEach(() => cleanup());
 
 describe("VoiceControls",()=>{
   it("does not request microphone permission when capability is unavailable",async()=>{ media(); render(<VoiceControls capability={{available:false,reason:"OAuth route has no Realtime endpoint"}}/>); fireEvent.click(screen.getByRole("button",{name:"Start voice mode"})); expect(await screen.findByText(/OAuth route/)).toBeInTheDocument(); expect(navigator.mediaDevices.getUserMedia).not.toHaveBeenCalled(); });
