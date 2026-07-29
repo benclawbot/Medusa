@@ -13,18 +13,33 @@ use crate::{
     policy::{sandboxed_command, validate_shell_command},
 };
 
-pub(crate) fn run(repo: &Path, program: &str, args: &[String]) -> MedusaResult<String> {
+pub(crate) fn run(
+    repo: &Path,
+    program: &str,
+    args: &[String],
+    output_mode: OutputMode,
+) -> MedusaResult<String> {
     validate_shell_command(program, args)?;
-    run_validated(repo, program, args)
+    run_validated(repo, program, args, output_mode)
 }
 
-pub(crate) fn run_approved(repo: &Path, program: &str, args: &[String]) -> MedusaResult<String> {
+pub(crate) fn run_approved(
+    repo: &Path,
+    program: &str,
+    args: &[String],
+    output_mode: OutputMode,
+) -> MedusaResult<String> {
     validate_shell_command(program, args)?;
-    run_validated(repo, program, args)
+    run_validated(repo, program, args, output_mode)
 }
 
-fn run_validated(repo: &Path, program: &str, args: &[String]) -> MedusaResult<String> {
-    let input_summary = format!("{} {}", program, args.join(" "));
+fn run_validated(
+    repo: &Path,
+    program: &str,
+    args: &[String],
+    output_mode: OutputMode,
+) -> MedusaResult<String> {
+    let input_summary = format!("{} {} output_mode={output_mode:?}", program, args.join(" "));
     let recommendation = tool_orchestration::recommend("shell_run", &input_summary);
     let (cached, mut cache_evidence) =
         tool_orchestration::cache_lookup(repo, "shell_run", &input_summary)?;
@@ -48,7 +63,7 @@ fn run_validated(repo: &Path, program: &str, args: &[String]) -> MedusaResult<St
         &output.stdout,
         &output.stderr,
         output.status.success(),
-        OutputMode::Compact,
+        output_mode,
     );
     let trace = tool_telemetry::ToolExecutionTrace::for_shell(
         program,
