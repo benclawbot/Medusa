@@ -75,10 +75,16 @@ mod tests {
     #[test]
     fn expansion_path_is_deterministic_and_readable() {
         let directory = tempfile::tempdir().expect("temporary repository");
-        let first = persist_expansion(directory.path(), "command=cargo test\nstdout:\nok\nstderr:\n")
-            .expect("persist expansion");
-        let second = persist_expansion(directory.path(), "command=cargo test\nstdout:\nok\nstderr:\n")
-            .expect("persist expansion again");
+        let first = persist_expansion(
+            directory.path(),
+            "command=cargo test\nstdout:\nok\nstderr:\n",
+        )
+        .expect("persist expansion");
+        let second = persist_expansion(
+            directory.path(),
+            "command=cargo test\nstdout:\nok\nstderr:\n",
+        )
+        .expect("persist expansion again");
         assert_eq!(first, second);
         assert!(first.starts_with(".medusa/output-expansions"));
         assert_eq!(
