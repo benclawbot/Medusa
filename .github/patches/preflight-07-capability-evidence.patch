@@ -1,0 +1,70 @@
+diff --git a/docs/CAPABILITY-CLAIMS.json b/docs/CAPABILITY-CLAIMS.json
+index bc1c4b0..b9ef6ee 100644
+--- a/docs/CAPABILITY-CLAIMS.json
++++ b/docs/CAPABILITY-CLAIMS.json
+@@ -173,21 +173,21 @@
+     },
+     {
+       "id": "multi-agent-research",
+-      "maturity": "design-only",
+-      "summary": "Scheduler, worker leases, isolated worker transactions, consensus, and commit-barrier components remain research scaffolding and are not dispatched by production entrypoints.",
+-      "owner": "agent research maintainers",
+-      "production_paths": ["crates/medusa-agent"],
+-      "test_paths": ["crates/medusa-agent"],
+-      "gates": ["CI", "Refactor Guardrails"],
+-      "entrypoints": [],
++      "maturity": "production",
++      "summary": "Coordinated prompts dispatch bounded read-only planner and risk-reviewer AgentEngine teammates with durable leases, team state, evidence handoff, cancellation, and parent-owned verification.",
++      "owner": "agent runtime maintainers",
++      "production_paths": ["crates/medusa-runtime/src/multi_agent_coordinator.rs", "crates/medusa-runtime/src/production_orchestrator.rs", "crates/medusa-runtime/build_main.rs", "crates/medusa-agent/src/team.rs", "crates/medusa-agent/src/worker_execution.rs"],
++      "test_paths": ["crates/medusa-runtime/src/multi_agent_coordinator.rs", "crates/medusa-runtime/src/production_orchestrator.rs", "crates/medusa-agent/src/team.rs"],
++      "gates": ["CI", "Daemon", "Refactor Guardrails"],
++      "entrypoints": ["medusa-runtime::RuntimeController -> run_prompt -> multi_agent_coordinator::run_preflight"],
+       "supported_platforms": ["linux", "macos", "windows"],
+-      "external_dependencies": [],
+-      "observability": ["docs/OBSERVABILITY.md"],
+-      "documentation": ["docs/CAPABILITY-EVIDENCE.md", "docs/ARCHITECTURE.md"],
+-      "promotion_checklist": [],
+-      "default_enabled": false,
++      "external_dependencies": ["configured model provider"],
++      "observability": ["docs/OBSERVABILITY.md", "docs/MULTI_AGENT_EXECUTION.md"],
++      "documentation": ["docs/MULTI_AGENT_EXECUTION.md", "docs/ARCHITECTURE.md", "docs/PRODUCTION-EXECUTION-TRACE.md"],
++      "promotion_checklist": ["owner assigned", "entrypoint identified", "behavioral tests present", "supported platforms declared", "observability documented", "public documentation linked"],
++      "default_enabled": true,
+       "opt_in": null,
+-      "dependencies": []
++      "dependencies": ["shared-runtime", "durable-sessions-memory", "provider-context-resilience"]
+     }
+   ]
+ }
+diff --git a/docs/CAPABILITY-EVIDENCE.md b/docs/CAPABILITY-EVIDENCE.md
+index f546cc2..1c5cd84 100644
+--- a/docs/CAPABILITY-EVIDENCE.md
++++ b/docs/CAPABILITY-EVIDENCE.md
+@@ -36,7 +36,7 @@ Every capability-changing pull request must update the manifest and ledger or ex
+ | `daemon` | `production` | daemon maintainers | daemon and desktop adapter | Linux, macOS, Windows | none |
+ | `release-trust` | `production` | release maintainers | publish-release workflow | Linux, macOS, Windows | GitHub artifact attestations |
+ | `self-update` | `production` | CLI maintainers | `medusa update` | Linux, macOS, Windows | GitHub repository access |
+-| `multi-agent-research` | `design-only` | agent research maintainers | none | repository scaffolding is cross-platform | none |
++| `multi-agent-research` | `production` | agent runtime maintainers | coordinated `run_prompt` preflight | Linux, macOS, Windows | configured model provider |
+ 
+ The manifest also records production paths, behavioral test paths, canonical gates, observability references, public documentation, promotion evidence, default activation, explicit opt-ins, and capability dependencies.
+ 
+@@ -50,14 +50,13 @@ The manifest also records production paths, behavioral test paths, canonical gat
+ - `daemon`: `crates/medusa-daemon`; validated by Daemon, Desktop, and CI.
+ - `release-trust`: release evidence scripts and publish workflow; validated by CI, Desktop, Release Gates, and Refactor Guardrails.
+ - `self-update`: `crates/medusa-cli`; validated by CI, Desktop, and Release Gates.
++- `multi-agent-research`: `run_prompt` invokes the durable coordinator, which dispatches independent read-only planner and risk-reviewer `AgentEngine` sessions under leases and role-bound policy; validated by CI, Daemon, and Refactor Guardrails.
+ 
+ ## Planned and scaffolding behavior
+ 
+-### Design-only boundary
++### Remaining design-only boundary
+ 
+-`multi-agent-research` covers retained scheduler, worker-lease, isolated-worker transaction, consensus, and commit-barrier concepts. The production runtime uses one `AgentEngine` and does not dispatch workers or subagents. This capability has no production entrypoint, no runtime opt-in, is disabled by definition, and cannot be a dependency of a `production` record.
+-
+-This boundary preserves the production multi-agent work already integrated into the runtime contracts without claiming that remaining research scaffolding is active worker orchestration.
++The production capability currently covers **read-only** planner and risk-reviewer teammates only. Mutating teammate worktrees, autonomous nested delegation, consensus voting, commit barriers, and distributed transaction coordination remain design-only until a production caller, recovery path, and behavioral proof are merged. Their presence in the workspace must not be presented as active behavior.
+ 
+ ## Canonical gates
+ 
