@@ -22,12 +22,12 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          cat .github/integration-code/chunk-* > /tmp/integration-code.b64
-          base64 --decode /tmp/integration-code.b64 > /tmp/integration-code.tar.gz
-          tar -xzf /tmp/integration-code.tar.gz
+          base64 --decode .github/integration-payload/product-integration.tar.gz.b64 > /tmp/product-integration.tar.gz
+          tar -xzf /tmp/product-integration.tar.gz
+          rm -rf .github/integration-code .github/integration-payload
           git config user.name github-actions[bot]
           git config user.email 41898282+github-actions[bot]@users.noreply.github.com
-          git add .github/architecture-policy.json crates/medusa-agent/src/policy.rs crates/medusa-improvement/src/lib.rs crates/medusa-intelligence/src/lib.rs scripts/architecture-policy.py
+          git add .github/architecture-policy.json crates/medusa-agent/src/policy.rs crates/medusa-improvement/src/lib.rs crates/medusa-intelligence/src/lib.rs scripts/architecture-policy.py .github/integration-code .github/integration-payload
           git diff --cached --check
           git commit -m 'Apply integrated subsystem code changes'
           git push origin HEAD:${{ github.head_ref || github.ref_name }}
