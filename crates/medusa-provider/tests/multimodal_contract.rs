@@ -113,11 +113,9 @@ fn spawn_recording_server() -> (String, mpsc::Receiver<Value>) {
 #[test]
 fn mixed_text_and_image_reach_the_recording_provider() {
     let (base_url, recorded) = spawn_recording_server();
-    let provider = OpenAiProvider::from_config_with_api_key(
-        &provider_config("openai", base_url),
-        None,
-    )
-    .expect("openai provider");
+    let provider =
+        OpenAiProvider::from_config_with_api_key(&provider_config("openai", base_url), None)
+            .expect("openai provider");
 
     provider
         .complete(&request(vec![
@@ -134,7 +132,10 @@ fn mixed_text_and_image_reach_the_recording_provider() {
     let content = payload["messages"][1]["content"]
         .as_array()
         .expect("multimodal content array");
-    assert_eq!(content[0], json!({"type": "text", "text": "What is shown?"}));
+    assert_eq!(
+        content[0],
+        json!({"type": "text", "text": "What is shown?"})
+    );
     assert_eq!(content[1]["type"], "image_url");
     assert_eq!(
         content[1]["image_url"]["url"],
@@ -145,11 +146,9 @@ fn mixed_text_and_image_reach_the_recording_provider() {
 #[test]
 fn image_only_prompt_reaches_the_recording_provider() {
     let (base_url, recorded) = spawn_recording_server();
-    let provider = OpenAiProvider::from_config_with_api_key(
-        &provider_config("openai", base_url),
-        None,
-    )
-    .expect("openai provider");
+    let provider =
+        OpenAiProvider::from_config_with_api_key(&provider_config("openai", base_url), None)
+            .expect("openai provider");
 
     provider
         .complete(&request(vec![image_block()]))
