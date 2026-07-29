@@ -317,7 +317,7 @@ fn replace_path(temporary: &Path, path: &Path) -> std::io::Result<()> {
 fn replace_path(temporary: &Path, path: &Path) -> std::io::Result<()> {
     match fs::rename(temporary, path) {
         Ok(()) => Ok(()),
-        Err(error) if path.exists() => {
+        Err(_) if path.exists() => {
             fs::remove_file(path)?;
             fs::rename(temporary, path)
         }
