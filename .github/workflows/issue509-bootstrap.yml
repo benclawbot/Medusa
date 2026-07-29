@@ -1,17 +1,17 @@
 name: Apply issue 509 patch
 
 on:
-  push:
+  pull_request:
     branches:
-      - agent/issue-509-learning-retrieval
-    paths:
-      - .github/workflows/issue509-bootstrap.yml
+      - main
+    types: [opened, synchronize, reopened]
 
 permissions:
   contents: write
 
 jobs:
   apply:
+    if: github.head_ref == 'agent/issue-509-learning-retrieval'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -31,4 +31,3 @@ jobs:
           git config user.email 41898282+github-actions[bot]@users.noreply.github.com
           git commit -m "Add explainable learned behavior retrieval"
           git push origin HEAD:agent/issue-509-learning-retrieval
-# retry bootstrap
