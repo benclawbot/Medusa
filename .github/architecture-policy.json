@@ -33,6 +33,7 @@
     "crates/medusa-runtime/src/commands.rs",
     "crates/medusa-runtime/src/error.rs",
     "crates/medusa-runtime/src/generated_lib.rs",
+    "crates/medusa-runtime/src/learning_retrieval.rs",
     "crates/medusa-runtime/src/lib.rs",
     "crates/medusa-runtime/src/lifecycle.rs",
     "crates/medusa-runtime/src/production_orchestrator.rs",
