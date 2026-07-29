@@ -177,8 +177,7 @@ mod tests {
             .expect("record call");
         let verification = budget.verification_for("shell_run", &digest, true);
         assert!(
-            tool_scheduler::ExecutionBudget::format_schedule(&schedule)
-                .contains("parallel=false")
+            tool_scheduler::ExecutionBudget::format_schedule(&schedule).contains("parallel=false")
         );
         assert_eq!(verification.status, "not_applicable");
     }
