@@ -1,5 +1,5 @@
 use std::{
-    collections::BTreeMap,
+    collections::{BTreeMap, BTreeSet},
     fs,
     path::{Path, PathBuf},
 };
@@ -26,6 +26,24 @@ pub struct FrictionItem {
     pub sessions: Vec<String>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct ImprovementApproval {
+    pub reviewer: String,
+    pub approved_at: String,
+    pub proposal_revision: u64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ImprovementObservation {
+    pub observed_at: String,
+    pub trigger_count: u32,
+    pub correction_count: u32,
+    pub regression_count: u32,
+    pub latency_ms: Option<u64>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ImprovementRecord {
@@ -42,6 +60,24 @@ pub struct ImprovementRecord {
     pub benchmark_before: Option<f64>,
     pub benchmark_after: Option<f64>,
     pub rollback_note: String,
+    #[serde(default = "default_revision")]
+    pub revision: u64,
+    #[serde(default)]
+    pub approval: Option<ImprovementApproval>,
+    #[serde(default)]
+    pub active_version: Option<String>,
+    #[serde(default)]
+    pub previous_version: Option<String>,
+    #[serde(default)]
+    pub conflicts_with: BTreeSet<String>,
+    #[serde(default)]
+    pub observations: Vec<ImprovementObservation>,
+    #[serde(default)]
+    pub suspension_reason: Option<String>,
+}
+
+const fn default_revision() -> u64 {
+    1
 }
 
 #[derive(Debug, Serialize)]
@@ -229,6 +265,13 @@ pub fn runtime_generate_improvement(repo: String) -> Result<ImprovementRecord, S
         benchmark_before: Some(dashboard.success_rate),
         benchmark_after: None,
         rollback_note: "Restore the previous configuration and re-run the frozen benchmark.".into(),
+        revision: 1,
+        approval: None,
+        active_version: None,
+        previous_version: None,
+        conflicts_with: BTreeSet::new(),
+        observations: Vec::new(),
+        suspension_reason: None,
     };
     let repo = canonical_repo(&repo)?;
     let mut records = read_improvements(&repo)?;
@@ -253,28 +296,96 @@ pub fn runtime_update_improvement(
         None
     };
     let mut records = read_improvements(&repo)?;
-    let item = records
-        .iter_mut()
-        .find(|item| item.id == id)
+    let position = records
+        .iter()
+        .position(|item| item.id == id)
         .ok_or("improvement not found")?;
-    item.status = match action.as_str() {
-        "approve" => "approved",
-        "reject" => "rejected",
-        "adopt" => "adopted",
-        "rollback" => "rolledBack",
+    let now = OffsetDateTime::now_utc()
+        .format(&Rfc3339)
+        .map_err(|error| error.to_string())?;
+
+    let conflicts = records
+        .iter()
+        .filter(|other| other.id != id && other.status == "active")
+        .filter(|other| {
+            other.title == records[position].title
+                || other.source_sessions.iter().any(|session| {
+                    records[position].source_sessions.iter().any(|value| value == session)
+                })
+        })
+        .map(|other| other.id.clone())
+        .collect::<BTreeSet<_>>();
+
+    let item = &mut records[position];
+    match action.as_str() {
+        "approve" => {
+            require_status(item, &["pending", "validated"])?;
+            item.approval = Some(ImprovementApproval {
+                reviewer: "local-user".into(),
+                approved_at: now.clone(),
+                proposal_revision: item.revision,
+            });
+            item.status = "approved".into();
+        }
+        "reject" => {
+            require_status(item, &["pending", "validated", "approved"])?;
+            item.status = "rejected".into();
+            item.approval = None;
+        }
         "benchmark" => {
+            require_status(item, &["pending", "approved", "validated"])?;
             item.benchmark_after = benchmark_after;
-            "benchmarked"
+            item.status = "validated".into();
+        }
+        "adopt" => {
+            require_status(item, &["approved", "validated"])?;
+            let approval = item.approval.as_ref().ok_or(
+                "explicit approval is required before activation",
+            )?;
+            if approval.proposal_revision != item.revision {
+                return Err("approval is stale because the proposal changed".into());
+            }
+            if !conflicts.is_empty() {
+                item.conflicts_with = conflicts;
+                return Err("activation blocked by a conflicting active improvement".into());
+            }
+            item.previous_version = item.active_version.take();
+            item.active_version = Some(format!("{}-r{}", item.id, item.revision));
+            item.status = "active".into();
+            item.suspension_reason = None;
+        }
+        "suspend" => {
+            require_status(item, &["active"])?;
+            item.status = "suspended".into();
+            item.suspension_reason = Some("manual suspension".into());
+        }
+        "rollback" => {
+            require_status(item, &["active", "suspended"])?;
+            item.active_version = item.previous_version.take();
+            item.status = "rolledBack".into();
+            item.suspension_reason = None;
+        }
+        "supersede" => {
+            require_status(item, &["active", "suspended", "approved", "validated"])?;
+            item.status = "superseded".into();
         }
         _ => return Err("unsupported improvement action".into()),
     }
-    .into();
-    item.updated_at = OffsetDateTime::now_utc()
-        .format(&Rfc3339)
-        .unwrap_or_default();
+    item.updated_at = now;
     let result = item.clone();
     write_improvements(&repo, &records)?;
     Ok(result)
+}
+
+fn require_status(item: &ImprovementRecord, allowed: &[&str]) -> Result<(), String> {
+    if allowed.iter().any(|status| *status == item.status) {
+        Ok(())
+    } else {
+        Err(format!(
+            "cannot transition improvement {} from {}",
+            item.id, item.status
+        ))
+    }
 }
 
 fn add_friction(
@@ -328,11 +439,10 @@ fn write_improvements(repo: &Path, records: &[ImprovementRecord]) -> Result<(), 
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent).map_err(|error| error.to_string())?;
     }
-    fs::write(
-        path,
-        serde_json::to_vec_pretty(records).map_err(|error| error.to_string())?,
-    )
-    .map_err(|error| error.to_string())
+    let bytes = serde_json::to_vec_pretty(records).map_err(|error| error.to_string())?;
+    let temporary = path.with_extension("json.tmp");
+    fs::write(&temporary, bytes).map_err(|error| error.to_string())?;
+    fs::rename(&temporary, &path).map_err(|error| error.to_string())
 }
 
 fn session_values(repo: &Path) -> Result<Vec<Value>, String> {
