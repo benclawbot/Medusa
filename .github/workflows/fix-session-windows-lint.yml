@@ -1,0 +1,41 @@
+name: Fix session Windows lint
+
+on:
+  push:
+    branches:
+      - agent/509-explainable-learning-retrieval
+
+permissions:
+  contents: write
+
+jobs:
+  fix:
+    if: ${{ !contains(github.event.head_commit.message, '[skip-session-windows-lint]') }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: agent/509-explainable-learning-retrieval
+          fetch-depth: 0
+      - uses: dtolnay/rust-toolchain@1.88.0
+        with:
+          components: rustfmt
+      - name: Fix and verify
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          path = Path('crates/medusa-agent/src/session.rs')
+          text = path.read_text().replace(
+              '        Err(error) if path.exists() => {',
+              '        Err(_) if path.exists() => {',
+              1,
+          )
+          path.write_text(text)
+          PY
+          cargo fmt --all
+          cargo test -p medusa-agent persistence_tests::concurrent_session_writes_leave_valid_json_without_temporary_files
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add crates/medusa-agent/src/session.rs
+          git commit -m 'Fix Windows session replacement lint [skip-session-windows-lint]'
+          git push origin HEAD:agent/509-explainable-learning-retrieval
