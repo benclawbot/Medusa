@@ -25,7 +25,7 @@ jobs:
         run: |
           set -euo pipefail
           mapfile -t patches < <(find .github/patches -maxdepth 1 -name 'preflight-*.patch' -print | sort)
-          test "${#patches[@]}" -eq 9
+          test "${#patches[@]}" -eq 10
           for patch_file in "${patches[@]}"; do
             echo "Checking ${patch_file}"
             if [[ "${patch_file}" == *preflight-04-coordinator-recovery.patch ]]; then
