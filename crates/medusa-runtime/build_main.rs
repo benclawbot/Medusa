@@ -8,6 +8,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     println!("cargo:rerun-if-changed=src/attachment.rs");
     println!("cargo:rerun-if-changed=src/openai_realtime.rs");
     println!("cargo:rerun-if-changed=src/voice.rs");
+    println!("cargo:rerun-if-changed=src/voice_agent_bridge.rs");
 
     let manifest = env::var("CARGO_MANIFEST_DIR")?;
     let out_dir = PathBuf::from(env::var("OUT_DIR")?);
@@ -33,7 +34,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         &mut source,
         "pub mod prompt;\npub mod skill_dependencies;",
         &format!(
-            "pub mod attachment;\npub mod openai_realtime;\npub mod prompt;\n#[path = \"{}\"]\npub mod review;\npub mod voice;\npub mod skill_dependencies;",
+            "pub mod attachment;\npub mod openai_realtime;\npub mod prompt;\n#[path = \"{}\"]\npub mod review;\npub mod voice;\npub mod voice_agent_bridge;\npub mod skill_dependencies;",
             review.display().to_string().replace('\\', "/")
         ),
     )?;
@@ -45,6 +46,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         ("pub mod openai_realtime;", "openai_realtime.rs"),
         ("pub mod prompt;", "prompt.rs"),
         ("pub mod voice;", "voice.rs"),
+        ("pub mod voice_agent_bridge;", "voice_agent_bridge.rs"),
         ("pub mod skill_dependencies;", "skill_dependencies.rs"),
         ("pub mod skill_dependency_locks;", "skill_dependency_locks.rs"),
         ("mod support;", "support.rs"),
