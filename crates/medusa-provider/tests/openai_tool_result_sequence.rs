@@ -118,6 +118,9 @@ fn tool_results_do_not_emit_an_extra_empty_user_message() {
     assert!(
         messages.iter().all(|message| {
             message["role"] == "tool"
+                || message["tool_calls"]
+                    .as_array()
+                    .is_some_and(|tool_calls| !tool_calls.is_empty())
                 || message["content"]
                     .as_str()
                     .is_none_or(|content| !content.is_empty())
