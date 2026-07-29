@@ -1,6 +1,18 @@
 /// Always-on minimal implementation policy inspired by Ponytail's decision ladder.
 use medusa_config::Mode;
 
+mod protected_context {
+    include!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/src/protected_context.rs"
+    ));
+}
+
+use protected_context::{
+    AuxiliaryWorkload, ContextItem, ContextTier, build as build_protected_context,
+    format_route, render as render_protected_context, route,
+};
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum CodingPolicyLevel {
     Off,
@@ -39,12 +51,42 @@ fn active_level() -> CodingPolicyLevel {
 
 pub(crate) fn apply(mut prompt: String, mode: Mode) -> String {
     append_fragment(&mut prompt, medusa_clearops::runtime_prompt_fragment());
-    if mode == Mode::ReadOnly {
-        return prompt;
+    if mode != Mode::ReadOnly {
+        let level = active_level();
+        append_fragment(&mut prompt, &prompt_fragment_for(level));
     }
-    let level = active_level();
-    append_fragment(&mut prompt, &prompt_fragment_for(level));
-    prompt
+
+    let discovery_route = route(
+        AuxiliaryWorkload::RepositoryDiscoverySummary,
+        prompt.len().min(64 * 1024),
+    )
+    .expect("bounded repository prompt routing must be valid");
+    let skill_route = route(
+        AuxiliaryWorkload::SkillCatalogExtraction,
+        prompt.len().min(64 * 1024),
+    )
+    .expect("bounded skill prompt routing must be valid");
+    let protected = build_protected_context(
+        "PROTECTED CONTEXT PIPELINE — ACTIVE\nCritical constraints and action evidence below survive deterministic pruning and provider fallback.",
+        [
+            ContextItem {
+                tier: ContextTier::UserConstraint,
+                reference: "system:authoritative-policy".into(),
+                text: prompt,
+            },
+            ContextItem {
+                tier: ContextTier::RepositoryDiscovery,
+                reference: "route:repository-discovery".into(),
+                text: format_route(&discovery_route),
+            },
+            ContextItem {
+                tier: ContextTier::Decision,
+                reference: "route:skill-catalog".into(),
+                text: format_route(&skill_route),
+            },
+        ],
+    );
+    render_protected_context(&protected)
 }
 
 fn append_fragment(prompt: &mut String, fragment: &str) {
@@ -100,14 +142,16 @@ mod tests {
     }
 
     #[test]
-    fn runtime_prompt_always_contains_clearops() {
+    fn runtime_prompt_always_contains_clearops_and_protected_context() {
         let read_only = apply("base".to_owned(), Mode::ReadOnly);
         assert!(read_only.contains("CLEAROPS COMMUNICATION POLICY — ACTIVE"));
-        assert!(read_only.contains("production execution path"));
+        assert!(read_only.contains("PROTECTED CONTEXT PIPELINE — ACTIVE"));
+        assert!(read_only.contains("route:repository-discovery"));
 
         let full = apply("base".to_owned(), Mode::Yolo);
         assert!(full.contains("CLEAROPS COMMUNICATION POLICY — ACTIVE"));
         assert!(full.contains("MINIMAL CODING POLICY — ACTIVE"));
+        assert!(full.contains("route:skill-catalog"));
     }
 
     #[test]
