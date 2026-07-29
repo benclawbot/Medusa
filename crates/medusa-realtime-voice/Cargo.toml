@@ -1,0 +1,18 @@
+[package]
+name = "medusa-realtime-voice"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[lib]
+path = "src/root.rs"
+
+[dependencies]
+medusa-core.workspace = true
+serde.workspace = true
+thiserror.workspace = true
+
+[lints]
+workspace = true
