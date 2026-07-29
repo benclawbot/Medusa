@@ -36,6 +36,7 @@
     "crates/medusa-runtime/src/lib.rs",
     "crates/medusa-runtime/src/lifecycle.rs",
     "crates/medusa-runtime/src/production_orchestrator.rs",
+    "crates/medusa-runtime/src/openai_realtime.rs",
     "crates/medusa-runtime/src/prompt.rs",
     "crates/medusa-runtime/src/runtime_impl.rs",
     "crates/medusa-runtime/src/support.rs",
