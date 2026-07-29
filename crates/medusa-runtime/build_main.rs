@@ -1,7 +1,7 @@
 fn main() -> Result<(), Box<dyn Error>> {
     println!("cargo:rerun-if-changed=src/runtime_impl.rs");
     println!("cargo:rerun-if-changed=src/production_orchestrator.rs");
-    println!("cargo:rerun-if-changed=src/tool_policy.rs");
+    println!("cargo:rerun-if-changed=src/tool_policy.inc");
     println!("cargo:rerun-if-changed=src/recovery_tui.inc");
     println!("cargo:rerun-if-changed=src/commands.rs");
     println!("cargo:rerun-if-changed=src/review.inc");
@@ -37,7 +37,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         &mut source,
         "pub mod prompt;\npub mod skill_dependencies;",
         &format!(
-            "pub mod attachment;\nmod learning_retrieval;\npub mod learning_review;\npub mod openai_realtime;\npub mod prompt;\n#[path = \"{}\"]\npub mod review;\nmod tool_policy;\npub mod voice;\npub mod voice_agent_bridge;\npub mod skill_dependencies;",
+            "pub mod attachment;\nmod learning_retrieval;\npub mod learning_review;\npub mod openai_realtime;\npub mod prompt;\n#[path = \"{}\"]\npub mod review;\npub mod voice;\npub mod voice_agent_bridge;\npub mod skill_dependencies;",
             review.display().to_string().replace('\\', "/")
         ),
     )?;
@@ -50,7 +50,6 @@ fn main() -> Result<(), Box<dyn Error>> {
         ("pub mod lifecycle;", "lifecycle.rs"),
         ("pub mod openai_realtime;", "openai_realtime.rs"),
         ("pub mod prompt;", "prompt.rs"),
-        ("mod tool_policy;", "tool_policy.rs"),
         ("pub mod voice;", "voice.rs"),
         ("pub mod voice_agent_bridge;", "voice_agent_bridge.rs"),
         ("pub mod skill_dependencies;", "skill_dependencies.rs"),
@@ -64,6 +63,11 @@ fn main() -> Result<(), Box<dyn Error>> {
     let recovery_source = fs::read_to_string("src/recovery_tui.inc")?.replace("\r\n", "\n");
     source.push_str("\nmod recovery_tui {\n");
     source.push_str(&recovery_source);
+    source.push_str("\n}\n");
+
+    let tool_policy_source = fs::read_to_string("src/tool_policy.inc")?.replace("\r\n", "\n");
+    source.push_str("\nmod tool_policy {\n");
+    source.push_str(&tool_policy_source);
     source.push_str("\n}\n");
 
     replace_once(
