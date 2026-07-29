@@ -5,8 +5,8 @@ use std::sync::{
 use std::time::{Duration, Instant};
 
 use medusa_runtime::voice::{
-    AudioFrame, RealtimeVoiceEvent, RealtimeVoiceSession, RealtimeVoiceState,
-    TranscriptSpeaker, TranscriptUpdate, VoiceAvailability, VoiceResource,
+    AudioFrame, RealtimeVoiceEvent, RealtimeVoiceSession, RealtimeVoiceState, TranscriptSpeaker,
+    TranscriptUpdate, VoiceAvailability, VoiceResource,
 };
 
 const BARGE_IN_BUDGET: Duration = Duration::from_millis(20);
@@ -32,7 +32,9 @@ fn speaking_session(capacity: usize) -> RealtimeVoiceSession {
         RealtimeVoiceState::Thinking,
         RealtimeVoiceState::AssistantSpeaking,
     ] {
-        session.transition(state).expect("valid lifecycle transition");
+        session
+            .transition(state)
+            .expect("valid lifecycle transition");
     }
     session
 }
@@ -174,8 +176,8 @@ fn rapid_connect_disconnect_cycles_release_every_handle_and_buffer() {
     let closed = Arc::new(AtomicUsize::new(0));
 
     for cycle in 0..LIFECYCLE_CYCLES {
-        let mut session = RealtimeVoiceSession::with_audio_capacity(available(), 4)
-            .expect("voice session");
+        let mut session =
+            RealtimeVoiceSession::with_audio_capacity(available(), 4).expect("voice session");
         session
             .register_resource(Box::new(CountedResource(Arc::clone(&closed))))
             .expect("register resource");
