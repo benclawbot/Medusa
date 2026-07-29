@@ -1,16 +1,15 @@
 name: Temporary OpenAI sequencing repair
 
 on:
-  pull_request:
+  push:
     branches: [main]
-    types: [reopened]
 
 permissions:
   contents: write
 
 jobs:
   repair:
-    if: ${{ github.head_ref == 'fix/openai-tool-result-message-sequencing' && github.actor != 'github-actions[bot]' }}
+    if: ${{ github.actor != 'github-actions[bot]' }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
