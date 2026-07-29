@@ -1,3 +1,4 @@
+mod hex;
 mod implementation;
 
 #[allow(clippy::obfuscated_if_else)]
