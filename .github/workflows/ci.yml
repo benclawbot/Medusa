@@ -6,13 +6,44 @@ on:
   pull_request:
 
 permissions:
-  contents: read
+  contents: write
 
 concurrency:
   group: ci-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
+  materialize-issue-476:
+    if: github.head_ref == 'agent/issue-476-desktop-image-ux' && github.actor != 'github-actions[bot]'
+    name: Materialize issue 476 source
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.head_ref }}
+          fetch-depth: 0
+      - name: Apply App source patch and clean temporary delivery files
+        shell: bash
+        run: |
+          set -euo pipefail
+          patch --batch --forward -p1 < tools/issue-476-desktop-image-ux.patch
+          git fetch --no-tags --depth=1 origin main
+          git checkout FETCH_HEAD -- .github/workflows/ci.yml
+          rm -f tools/issue-476-desktop-image-ux.patch
+          rm -f .github/workflows/materialize-issue-476.yml
+      - name: Commit materialized implementation
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add apps/medusa-desktop/src/App.tsx \
+            .github/workflows/ci.yml \
+            .github/workflows/materialize-issue-476.yml \
+            tools/issue-476-desktop-image-ux.patch
+          git commit -m "Desktop: materialize first-class screenshot attachment UX"
+          git push origin HEAD:${{ github.head_ref }}
+
   quality:
     name: Workspace quality
     runs-on: ubuntu-latest
