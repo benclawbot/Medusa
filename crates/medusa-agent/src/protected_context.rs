@@ -124,11 +124,12 @@ pub(crate) fn route(workload: AuxiliaryWorkload, input_bytes: usize) -> MedusaRe
     let provider = std::env::var("MEDUSA_AUXILIARY_PROVIDER").unwrap_or_else(|_| "primary".into());
     let primary = std::env::var("MEDUSA_PROVIDER").unwrap_or_else(|_| "primary".into());
     let cache_compatible = provider == primary;
+    let estimated_cache_break_bytes = if cache_compatible { 0 } else { input_bytes };
     Ok(AuxiliaryRoute {
         workload,
         provider: provider.clone(),
         cache_compatible,
-        estimated_cache_break_bytes: (!cache_compatible).then_some(input_bytes).unwrap_or(0),
+        estimated_cache_break_bytes,
         fallback_provider: (provider != primary).then_some(primary),
         reason: if cache_compatible {
             "selected provider preserves the stable prompt prefix and prompt-cache reuse".into()
