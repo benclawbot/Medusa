@@ -1,0 +1,51 @@
+name: Apply start-anywhere source
+
+on:
+  push:
+    branches:
+      - fix/ship-start-anywhere-runtime
+    paths:
+      - validation/ship-start-anywhere.patch
+      - .github/workflows/apply-start-anywhere-source.yml
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    name: Apply, validate, and commit source
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: fix/ship-start-anywhere-runtime
+          fetch-depth: 0
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+      - name: Apply source patch
+        run: |
+          git apply --check validation/ship-start-anywhere.patch
+          git apply validation/ship-start-anywhere.patch
+      - name: Format
+        run: cargo fmt --all
+      - name: Runtime tests
+        run: cargo test -p medusa-runtime
+      - name: Runtime clippy
+        run: cargo clippy -p medusa-runtime --all-targets -- -D warnings
+      - name: Commit validated source and remove bootstrap files
+        run: |
+          git rm validation/ship-start-anywhere.patch
+          git rm validation/start-anywhere.patch
+          git rm .github/workflows/start-anywhere-validation.yml
+          git rm .github/workflows/apply-start-anywhere-source.yml
+          git add crates/medusa-runtime/src/review.inc
+          git add crates/medusa-runtime/src/review_tests.inc
+          git add crates/medusa-runtime/src/skill_dependencies.rs
+          git add crates/medusa-runtime/src/skill_dependency_locks.rs
+          git diff --cached --check
+          git config user.name "benclawbot"
+          git config user.email "259942410+benclawbot@users.noreply.github.com"
+          git commit -m "Ship start-anywhere runtime source"
+          git push origin HEAD:fix/ship-start-anywhere-runtime
