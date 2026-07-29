@@ -1,7 +1,9 @@
 use std::{
     collections::BTreeMap,
     fs,
+    io::Write,
     path::{Path, PathBuf},
+    sync::Mutex,
 };
 
 use medusa_core::{ErrorCategory, ErrorCode, MedusaError, MedusaResult, SessionId};
@@ -10,6 +12,7 @@ use medusa_provider::Message;
 use medusa_world_model::WorldModelRef;
 use serde::{Deserialize, Serialize};
 use time::OffsetDateTime;
+use ulid::Ulid;
 
 use crate::{
     approval::{ApprovalGrant, ApprovalReceipt, RollbackReceipt},
@@ -55,6 +58,7 @@ pub struct NonFatalDiagnostic {
 }
 
 const MAX_DIAGNOSTICS: usize = 128;
+static SESSION_PERSIST_LOCK: Mutex<()> = Mutex::new(());
 
 /// A durable model-authored task plan step.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -272,13 +276,53 @@ pub(crate) fn persist(session: &AgentSession) -> MedusaResult<()> {
 }
 
 fn persist_at(path: &Path, session: &AgentSession) -> MedusaResult<()> {
+    atomic_replace(path, &serde_json::to_vec_pretty(session)?)?;
+    Ok(())
+}
+
+fn atomic_replace(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
+    let _guard = SESSION_PERSIST_LOCK
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent)?;
     }
-    let temporary = path.with_extension("json.tmp");
-    fs::write(&temporary, serde_json::to_vec_pretty(session)?)?;
-    fs::rename(temporary, path)?;
-    Ok(())
+    let file_name = path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or("session.json");
+    let temporary = path.with_file_name(format!(".{file_name}.{}.tmp", Ulid::new()));
+    let result = (|| {
+        let mut file = fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&temporary)?;
+        file.write_all(bytes)?;
+        file.sync_all()?;
+        drop(file);
+        replace_path(&temporary, path)
+    })();
+    if result.is_err() {
+        let _ = fs::remove_file(&temporary);
+    }
+    result
+}
+
+#[cfg(not(windows))]
+fn replace_path(temporary: &Path, path: &Path) -> std::io::Result<()> {
+    fs::rename(temporary, path)
+}
+
+#[cfg(windows)]
+fn replace_path(temporary: &Path, path: &Path) -> std::io::Result<()> {
+    match fs::rename(temporary, path) {
+        Ok(()) => Ok(()),
+        Err(error) if path.exists() => {
+            fs::remove_file(path)?;
+            fs::rename(temporary, path)
+        }
+        Err(error) => Err(error),
+    }
 }
 
 fn session_path(repo: &Path, id: &SessionId) -> PathBuf {
@@ -382,4 +426,52 @@ fn redact_error(error: &str) -> String {
         })
         .collect::<Vec<_>>()
         .join(" ")
+}
+
+#[cfg(test)]
+mod persistence_tests {
+    use super::*;
+    use std::sync::{Arc, Barrier};
+
+    #[test]
+    fn concurrent_session_writes_leave_valid_json_without_temporary_files() {
+        const WRITERS: usize = 16;
+        let directory = tempfile::tempdir().expect("temporary directory");
+        let path = directory.path().join("session.json");
+        let barrier = Arc::new(Barrier::new(WRITERS));
+        let handles = (0..WRITERS)
+            .map(|writer| {
+                let path = path.clone();
+                let barrier = Arc::clone(&barrier);
+                std::thread::spawn(move || {
+                    barrier.wait();
+                    atomic_replace(&path, format!(r#"{{"writer":{writer}}}"#).as_bytes())
+                        .expect("atomic session write");
+                })
+            })
+            .collect::<Vec<_>>();
+        for handle in handles {
+            handle.join().expect("writer thread");
+        }
+
+        let value: serde_json::Value =
+            serde_json::from_slice(&fs::read(&path).expect("persisted session JSON"))
+                .expect("valid session JSON");
+        assert!(
+            value["writer"]
+                .as_u64()
+                .is_some_and(|writer| writer < WRITERS as u64)
+        );
+
+        let temporary_files = fs::read_dir(directory.path())
+            .expect("session directory")
+            .filter_map(Result::ok)
+            .filter(|entry| {
+                let name = entry.file_name();
+                let name = name.to_string_lossy();
+                name.starts_with(".session.json.") && name.ends_with(".tmp")
+            })
+            .count();
+        assert_eq!(temporary_files, 0);
+    }
 }
