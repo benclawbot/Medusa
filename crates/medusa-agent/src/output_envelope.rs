@@ -165,7 +165,7 @@ pub fn adapt_command(
     let original_lines = raw.lines().count();
     let (deduplicated, duplicate_lines_removed) = deduplicate_lines(&cleaned);
     let lines = deduplicated.lines().collect::<Vec<_>>();
-    let mut retained = if program == "git" {
+    let mut retained = (if program == "git" {
         adapt_git_lines(args, &lines, mode)
     } else if success {
         retain_failures_and_boundaries(&lines, if mode == OutputMode::Compact { 40 } else { 160 })
@@ -178,7 +178,10 @@ pub fn adapt_command(
                 320
             },
         )
-    };
+    })
+    .into_iter()
+    .map(str::to_owned)
+    .collect::<Vec<_>>();
     retained.insert(0, command);
     retained.insert(
         1,
