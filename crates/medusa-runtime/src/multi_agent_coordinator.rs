@@ -1,0 +1,753 @@
+//! Production coordination for bounded, durable read-only teammate execution.
+//!
+//! Mutating workers are intentionally not dispatched here. They require the isolated
+//! worktree integration path. This coordinator establishes the production team lifecycle,
+//! leases, parallel agent sessions, durable evidence handoff, and final verification gate.
+
+use std::{
+    collections::BTreeMap,
+    fs,
+    path::{Path, PathBuf},
+    process::Command,
+    sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+        mpsc::Sender,
+    },
+    thread,
+    time::{SystemTime, UNIX_EPOCH},
+};
+
+use medusa_agent::{
+    AgentEngine, AgentExecutionPolicy, AgentUpdate, StepOutcome, TeamMemberContext, TeamRole,
+    TeamRuntime, WorkerExecutionController, targeted_verification,
+};
+use medusa_config::{Config, Mode};
+use medusa_multi_agent_scheduler::{Task, Worker as ScheduledWorker};
+use medusa_provider::ConfiguredProvider;
+use medusa_workers::{Worker, WorkerState};
+use serde::{Deserialize, Serialize};
+use serde_json::json;
+use sha2::{Digest, Sha256};
+
+use crate::{
+    RuntimeActivity, RuntimeActivityKind, RuntimeEvent,
+    production_orchestrator::{
+        AgentContract, AgentRole, ContextPacket, ProductionExecutionPlan, context_for_task,
+        validate_subagent_result,
+    },
+};
+
+const LEASE_TIMEOUT_MS: u64 = 5 * 60 * 1_000;
+const WORKER_TURN_LIMIT: u32 = 6;
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct WorkerEvidence {
+    pub task_id: String,
+    pub worker_id: String,
+    pub role: AgentRole,
+    pub context_fingerprint: String,
+    pub session_id: String,
+    pub turns: u32,
+    pub summary: String,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct CoordinatorEvidence {
+    pub plan_fingerprint: String,
+    pub repository_fingerprint: String,
+    pub workers: Vec<WorkerEvidence>,
+    pub state_path: PathBuf,
+}
+
+impl CoordinatorEvidence {
+    #[must_use]
+    pub fn parent_context(&self) -> String {
+        let rendered = self
+            .workers
+            .iter()
+            .map(|worker| {
+                format!(
+                    "## {} ({:?}, session {})\n{}",
+                    worker.task_id, worker.role, worker.session_id, worker.summary
+                )
+            })
+            .collect::<Vec<_>>()
+            .join("\n\n");
+        format!(
+            "Authoritative read-only teammate evidence for plan {} and repository snapshot {}. The parent remains responsible for all mutations, integration, and verification.\n\n{}",
+            self.plan_fingerprint, self.repository_fingerprint, rendered
+        )
+    }
+}
+
+#[derive(Clone)]
+struct WorkerRequest {
+    contract: AgentContract,
+    packet: ContextPacket,
+    worker_id: String,
+    team_context: TeamMemberContext,
+}
+
+pub fn run_preflight(
+    repo: &Path,
+    config: &Config,
+    session_api_key: Option<String>,
+    plan: &ProductionExecutionPlan,
+    cancel: &Arc<AtomicBool>,
+    events: &Sender<RuntimeEvent>,
+) -> Result<CoordinatorEvidence, String> {
+    coordinate_with_executor(repo, plan, cancel, events, |request| {
+        execute_production_worker(repo, config, session_api_key.clone(), cancel, request)
+    })
+}
+
+pub fn verify_repository(
+    repo: &Path,
+    plan: &ProductionExecutionPlan,
+    events: &Sender<RuntimeEvent>,
+) -> Result<Vec<String>, String> {
+    let _ = events.send(RuntimeEvent::Activity(RuntimeActivity {
+        id: Some(plan.fingerprint.clone()),
+        kind: RuntimeActivityKind::Verification,
+        title: "Coordinated repository verification started".to_owned(),
+        details: vec!["The parent cannot report success before this gate passes.".to_owned()],
+    }));
+    let result = targeted_verification(repo).map_err(|error| error.to_string())?;
+    if !result.passed {
+        return Err(format!(
+            "coordinated repository verification failed: {}",
+            result.evidence.join(" | ")
+        ));
+    }
+    let _ = events.send(RuntimeEvent::Activity(RuntimeActivity {
+        id: Some(plan.fingerprint.clone()),
+        kind: RuntimeActivityKind::Done,
+        title: "Coordinated repository verification passed".to_owned(),
+        details: result.evidence.clone(),
+    }));
+    Ok(result.evidence)
+}
+
+fn coordinate_with_executor<F>(
+    repo: &Path,
+    plan: &ProductionExecutionPlan,
+    cancel: &Arc<AtomicBool>,
+    events: &Sender<RuntimeEvent>,
+    executor: F,
+) -> Result<CoordinatorEvidence, String>
+where
+    F: Fn(WorkerRequest) -> Result<WorkerEvidence, String> + Sync,
+{
+    let repository_fingerprint = repository_fingerprint(repo)?;
+    let root = execution_root(repo, &plan.fingerprint, &repository_fingerprint);
+    let evidence_path = root.join("preflight-evidence.json");
+    if evidence_path.is_file() {
+        let restored: CoordinatorEvidence = serde_json::from_slice(
+            &fs::read(&evidence_path).map_err(|error| error.to_string())?,
+        )
+        .map_err(|error| error.to_string())?;
+        validate_evidence(plan, &repository_fingerprint, &evidence_path, &restored)?;
+        return Ok(restored);
+    }
+
+    let contracts = preflight_contracts(plan);
+    if contracts.len() < 2 {
+        return Err("coordinated execution requires at least two independent preflight tasks".into());
+    }
+    fs::create_dir_all(&root).map_err(|error| error.to_string())?;
+
+    let team_members = std::iter::once(("lead".to_owned(), TeamRole::Lead))
+        .chain(contracts.iter().map(|contract| {
+            (
+                worker_id_for(&contract.task_id),
+                team_role_for(contract.role),
+            )
+        }))
+        .collect::<Vec<_>>();
+    let team_path = root.join("team.json");
+    let execution_id = execution_id(&plan.fingerprint, &repository_fingerprint);
+    let team = if team_path.is_file() {
+        TeamRuntime::load(&team_path)?
+    } else {
+        TeamRuntime::create(&team_path, &execution_id, team_members)?
+    };
+
+    let tasks = contracts
+        .iter()
+        .map(|contract| {
+            plan.tasks
+                .iter()
+                .find(|task| task.id == contract.task_id)
+                .cloned()
+                .ok_or_else(|| format!("task {} is missing from the plan", contract.task_id))
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    let scheduled_workers = contracts
+        .iter()
+        .map(|contract| ScheduledWorker {
+            id: worker_id_for(&contract.task_id),
+            capabilities: task_capabilities(&tasks, &contract.task_id),
+            healthy: true,
+            capacity: 1,
+        })
+        .collect::<Vec<_>>();
+    let worker_records = scheduled_workers
+        .iter()
+        .map(|worker| Worker {
+            id: worker.id.clone(),
+            branch: "read-only".to_owned(),
+            worktree: repo.to_path_buf(),
+            state: WorkerState::Ready,
+            commit: None,
+            stdout: String::new(),
+            stderr: String::new(),
+        })
+        .collect::<Vec<_>>();
+    let controller_path = root.join("worker-execution.json");
+    let mut controller = if controller_path.is_file() {
+        WorkerExecutionController::load(&controller_path)?
+    } else {
+        WorkerExecutionController::create(
+            &controller_path,
+            &execution_id,
+            tasks,
+            scheduled_workers,
+            worker_records,
+            2,
+        )?
+    };
+
+    if cancel.load(Ordering::SeqCst) {
+        team.request_shutdown_all()?;
+        return Err("coordinated preflight was cancelled".into());
+    }
+    let now = now_ms()?;
+    let assignments = controller.dispatch(now, LEASE_TIMEOUT_MS)?;
+    if assignments.len() != contracts.len() {
+        return Err("preflight scheduler did not dispatch every independent task".into());
+    }
+    let _ = events.send(RuntimeEvent::Activity(RuntimeActivity {
+        id: Some(plan.fingerprint.clone()),
+        kind: RuntimeActivityKind::Progress,
+        title: "Read-only teammates dispatched".to_owned(),
+        details: assignments
+            .iter()
+            .map(|assignment| format!("{} -> {}", assignment.task_id, assignment.worker_id))
+            .collect(),
+    }));
+
+    let contract_by_task = contracts
+        .iter()
+        .map(|contract| (contract.task_id.clone(), contract.clone()))
+        .collect::<BTreeMap<_, _>>();
+    let mut requests = Vec::with_capacity(assignments.len());
+    for assignment in &assignments {
+        let contract = contract_by_task
+            .get(&assignment.task_id)
+            .cloned()
+            .ok_or_else(|| format!("missing contract for {}", assignment.task_id))?;
+        let packet = context_for_task(
+            plan,
+            &assignment.task_id,
+            BTreeMap::new(),
+            vec![
+                "read-only repository access".to_owned(),
+                "runtime-enforced role policy".to_owned(),
+                "no user interaction".to_owned(),
+            ],
+            contract.required_evidence.clone(),
+        )?;
+        let team_context = team.member_context(&assignment.worker_id)?;
+        team.start_member(&assignment.worker_id, &assignment.task_id, "starting")?;
+        requests.push(WorkerRequest {
+            contract,
+            packet,
+            worker_id: assignment.worker_id.clone(),
+            team_context,
+        });
+    }
+
+    let results = thread::scope(|scope| {
+        let handles = requests
+            .into_iter()
+            .map(|request| {
+                let task_id = request.contract.task_id.clone();
+                let worker_id = request.worker_id.clone();
+                let executor = &executor;
+                (
+                    task_id,
+                    worker_id,
+                    scope.spawn(move || executor(request)),
+                )
+            })
+            .collect::<Vec<_>>();
+        handles
+            .into_iter()
+            .map(|(task_id, worker_id, handle)| {
+                let result = handle
+                    .join()
+                    .map_err(|_| "read-only teammate thread panicked".to_owned())?;
+                Ok((task_id, worker_id, result))
+            })
+            .collect::<Result<Vec<_>, String>>()
+    })?;
+
+    let mut evidence = Vec::with_capacity(results.len());
+    let mut failures = Vec::new();
+    for (task_id, worker_id, result) in results {
+        let assignment = assignments
+            .iter()
+            .find(|assignment| assignment.task_id == task_id)
+            .ok_or_else(|| format!("worker result for unknown task {task_id}"))?;
+        let result = match result {
+            Ok(result) => result,
+            Err(error) => {
+                controller.fail(
+                    &task_id,
+                    &worker_id,
+                    assignment.lease_epoch,
+                    &error,
+                    false,
+                )?;
+                team.finish_member(&worker_id, true)?;
+                failures.push(format!("{task_id} ({worker_id}): {error}"));
+                continue;
+            }
+        };
+        let contract = contract_by_task
+            .get(&result.task_id)
+            .ok_or_else(|| format!("missing contract for {}", result.task_id))?;
+        let packet = context_for_task(
+            plan,
+            &result.task_id,
+            BTreeMap::new(),
+            vec![
+                "read-only repository access".to_owned(),
+                "runtime-enforced role policy".to_owned(),
+                "no user interaction".to_owned(),
+            ],
+            contract.required_evidence.clone(),
+        )?;
+        validate_subagent_result(
+            &packet,
+            &result.task_id,
+            &result.context_fingerprint,
+            std::slice::from_ref(&result.summary),
+        )?;
+        controller.complete_without_mutation(
+            &result.task_id,
+            &result.worker_id,
+            assignment.lease_epoch,
+            now_ms()?,
+        )?;
+        team.start_member(
+            &result.worker_id,
+            &result.task_id,
+            &result.session_id,
+        )?;
+        team.finish_member(&result.worker_id, false)?;
+        team.member_context(&result.worker_id)?.execute(
+            "team_send_message",
+            &json!({"recipient":"lead","body":result.summary}),
+        )
+        .map_err(|error| error.to_string())?;
+        evidence.push(result);
+    }
+    if !failures.is_empty() {
+        team.request_shutdown_all()?;
+        return Err(format!(
+            "read-only teammate execution failed: {}",
+            failures.join(" | ")
+        ));
+    }
+    evidence.sort_by(|left, right| left.task_id.cmp(&right.task_id));
+    if !controller.is_complete() || controller.has_terminal_failure() {
+        return Err("preflight worker execution did not reach successful completion".into());
+    }
+    let persisted = CoordinatorEvidence {
+        plan_fingerprint: plan.fingerprint.clone(),
+        repository_fingerprint,
+        workers: evidence,
+        state_path: evidence_path.clone(),
+    };
+    write_atomic(&evidence_path, &persisted)?;
+    let _ = events.send(RuntimeEvent::Activity(RuntimeActivity {
+        id: Some(plan.fingerprint.clone()),
+        kind: RuntimeActivityKind::Done,
+        title: "Read-only teammate evidence integrated".to_owned(),
+        details: persisted
+            .workers
+            .iter()
+            .map(|worker| format!("{}: {} turns", worker.task_id, worker.turns))
+            .collect(),
+    }));
+    Ok(persisted)
+}
+
+fn execute_production_worker(
+    repo: &Path,
+    config: &Config,
+    session_api_key: Option<String>,
+    cancel: &Arc<AtomicBool>,
+    request: WorkerRequest,
+) -> Result<WorkerEvidence, String> {
+    let mut worker_config = config.clone();
+    worker_config.agent.mode = Mode::ReadOnly;
+    worker_config.agent.max_turns = worker_config
+        .agent
+        .max_turns
+        .min(WORKER_TURN_LIMIT)
+        .max(1);
+    let provider = ConfiguredProvider::manager_from_config(&worker_config, session_api_key)
+        .map_err(|error| error.to_string())?;
+    let role = team_role_for(request.contract.role);
+    let engine = AgentEngine::new_with_cancellation(provider, worker_config.clone(), Arc::clone(cancel))
+        .with_execution_policy(AgentExecutionPolicy::for_team_role(role))
+        .with_team_context(request.team_context.clone());
+    let objective = format!(
+        "Complete delegated read-only task `{}`. Objective: {}. Return a concise evidence-backed report; do not ask the user questions and do not modify repository state.",
+        request.contract.task_id, request.contract.objective
+    );
+    let mut session = engine
+        .create_session(repo, objective)
+        .map_err(|error| error.to_string())?;
+    request
+        .team_context
+        .clone()
+        .execute(
+            "team_send_message",
+            &json!({"recipient":"lead","body":format!("{} started", request.contract.task_id)}),
+        )
+        .map_err(|error| error.to_string())?;
+    let system_context = format!(
+        "Delegation context fingerprint: {}\nContract: {}",
+        request.packet.fingerprint,
+        serde_json::to_string_pretty(&request.packet).map_err(|error| error.to_string())?
+    );
+    let mut summaries = Vec::new();
+    let mut completed = false;
+    for _ in 0..worker_config.agent.max_turns {
+        if cancel.load(Ordering::SeqCst) {
+            return Err(format!("worker {} was cancelled", request.worker_id));
+        }
+        let outcome = engine
+            .step_with_observer_and_context(&mut session, Some(&system_context), |update| {
+                if let AgentUpdate::AssistantText(text) = update
+                    && !text.trim().is_empty()
+                {
+                    summaries.push(text.clone());
+                }
+            })
+            .map_err(|error| error.to_string())?;
+        match outcome {
+            StepOutcome::Continue => {}
+            StepOutcome::TurnComplete | StepOutcome::Completed => {
+                completed = true;
+                break;
+            }
+            StepOutcome::WaitingForUser => {
+                return Err(format!(
+                    "worker {} attempted to request user input",
+                    request.worker_id
+                ));
+            }
+        }
+    }
+    if !completed {
+        return Err(format!(
+            "worker {} exceeded its bounded turn budget",
+            request.worker_id
+        ));
+    }
+    let summary = summaries.join("\n").trim().to_owned();
+    if summary.is_empty() {
+        return Err(format!("worker {} returned no evidence", request.worker_id));
+    }
+    Ok(WorkerEvidence {
+        task_id: request.contract.task_id,
+        worker_id: request.worker_id,
+        role: request.contract.role,
+        context_fingerprint: request.packet.fingerprint,
+        session_id: session.id.to_string(),
+        turns: session.turn,
+        summary,
+    })
+}
+
+fn preflight_contracts(plan: &ProductionExecutionPlan) -> Vec<AgentContract> {
+    let mut contracts = plan
+        .contracts
+        .iter()
+        .filter(|contract| {
+            contract.dependencies.is_empty()
+                && !matches!(contract.role, AgentRole::Implementer | AgentRole::Verifier)
+        })
+        .cloned()
+        .collect::<Vec<_>>();
+    contracts.sort_by(|left, right| left.task_id.cmp(&right.task_id));
+    contracts
+}
+
+fn task_capabilities(tasks: &[Task], task_id: &str) -> Vec<String> {
+    tasks
+        .iter()
+        .find(|task| task.id == task_id)
+        .map_or_else(Vec::new, |task| task.capabilities.clone())
+}
+
+fn worker_id_for(task_id: &str) -> String {
+    format!("worker-{task_id}")
+}
+
+fn team_role_for(role: AgentRole) -> TeamRole {
+    match role {
+        AgentRole::Planner => TeamRole::Planner,
+        AgentRole::Researcher => TeamRole::Researcher,
+        AgentRole::Implementer => TeamRole::Implementer,
+        AgentRole::Reviewer => TeamRole::Reviewer,
+        AgentRole::Verifier => TeamRole::Verifier,
+    }
+}
+
+fn execution_root(
+    repo: &Path,
+    plan_fingerprint: &str,
+    repository_fingerprint: &str,
+) -> PathBuf {
+    repo.join(".medusa")
+        .join("executions")
+        .join(execution_id(plan_fingerprint, repository_fingerprint))
+}
+
+fn execution_id(plan_fingerprint: &str, repository_fingerprint: &str) -> String {
+    let mut digest = Sha256::new();
+    digest.update(plan_fingerprint.as_bytes());
+    digest.update([0]);
+    digest.update(repository_fingerprint.as_bytes());
+    format!("{:x}", digest.finalize())
+}
+
+fn validate_evidence(
+    plan: &ProductionExecutionPlan,
+    repository_fingerprint: &str,
+    evidence_path: &Path,
+    evidence: &CoordinatorEvidence,
+) -> Result<(), String> {
+    if evidence.plan_fingerprint != plan.fingerprint
+        || evidence.repository_fingerprint != repository_fingerprint
+        || evidence.state_path != evidence_path
+        || evidence.workers.len() < 2
+    {
+        return Err("persisted coordinator evidence does not match the execution plan".into());
+    }
+    if evidence.workers.iter().any(|worker| {
+        worker.summary.trim().is_empty()
+            || worker.context_fingerprint.trim().is_empty()
+            || worker.session_id.trim().is_empty()
+    }) {
+        return Err("persisted coordinator evidence is incomplete".into());
+    }
+    Ok(())
+}
+
+fn repository_fingerprint(repo: &Path) -> Result<String, String> {
+    let paths = git_repository_paths(repo).or_else(|_| walk_repository_paths(repo))?;
+    let mut digest = Sha256::new();
+    for relative in paths {
+        let normalized = relative.to_string_lossy().replace('\\', "/");
+        if excluded_path(&normalized) {
+            continue;
+        }
+        let path = repo.join(&relative);
+        let metadata = fs::symlink_metadata(&path).map_err(|error| {
+            format!("failed to inspect repository path {normalized}: {error}")
+        })?;
+        digest.update(normalized.as_bytes());
+        digest.update([0]);
+        if metadata.file_type().is_symlink() {
+            digest.update(b"symlink");
+            digest.update(
+                fs::read_link(&path)
+                    .map_err(|error| error.to_string())?
+                    .to_string_lossy()
+                    .as_bytes(),
+            );
+        } else if metadata.is_file() {
+            digest.update(b"file");
+            digest.update(fs::read(&path).map_err(|error| {
+                format!("failed to read repository path {normalized}: {error}")
+            })?);
+        }
+        digest.update([0xff]);
+    }
+    Ok(format!("{:x}", digest.finalize()))
+}
+
+fn git_repository_paths(repo: &Path) -> Result<Vec<PathBuf>, String> {
+    let output = Command::new("git")
+        .args(["ls-files", "-z", "--cached", "--others", "--exclude-standard"])
+        .current_dir(repo)
+        .output()
+        .map_err(|error| error.to_string())?;
+    if !output.status.success() {
+        return Err(String::from_utf8_lossy(&output.stderr).into_owned());
+    }
+    let mut paths = output
+        .stdout
+        .split(|byte| *byte == 0)
+        .filter(|path| !path.is_empty())
+        .map(|path| PathBuf::from(String::from_utf8_lossy(path).into_owned()))
+        .collect::<Vec<_>>();
+    paths.sort();
+    paths.dedup();
+    Ok(paths)
+}
+
+fn walk_repository_paths(repo: &Path) -> Result<Vec<PathBuf>, String> {
+    fn visit(root: &Path, directory: &Path, paths: &mut Vec<PathBuf>) -> Result<(), String> {
+        for entry in fs::read_dir(directory).map_err(|error| error.to_string())? {
+            let entry = entry.map_err(|error| error.to_string())?;
+            let path = entry.path();
+            let relative = path
+                .strip_prefix(root)
+                .map_err(|error| error.to_string())?
+                .to_path_buf();
+            let normalized = relative.to_string_lossy().replace('\\', "/");
+            if excluded_path(&normalized) {
+                continue;
+            }
+            let metadata = fs::symlink_metadata(&path).map_err(|error| error.to_string())?;
+            if metadata.is_dir() && !metadata.file_type().is_symlink() {
+                visit(root, &path, paths)?;
+            } else {
+                paths.push(relative);
+            }
+        }
+        Ok(())
+    }
+
+    let mut paths = Vec::new();
+    visit(repo, repo, &mut paths)?;
+    paths.sort();
+    paths.dedup();
+    Ok(paths)
+}
+
+fn excluded_path(path: &str) -> bool {
+    matches!(
+        path.split('/').next(),
+        Some(".git" | ".medusa" | "target" | "node_modules")
+    )
+}
+
+fn write_atomic(path: &Path, value: &impl Serialize) -> Result<(), String> {
+    let parent = path
+        .parent()
+        .ok_or_else(|| "coordinator state path has no parent".to_owned())?;
+    fs::create_dir_all(parent).map_err(|error| error.to_string())?;
+    let temporary = path.with_extension("json.tmp");
+    fs::write(
+        &temporary,
+        serde_json::to_vec_pretty(value).map_err(|error| error.to_string())?,
+    )
+    .map_err(|error| error.to_string())?;
+    #[cfg(windows)]
+    if path.exists() {
+        fs::remove_file(path).map_err(|error| error.to_string())?;
+    }
+    fs::rename(temporary, path).map_err(|error| error.to_string())
+}
+
+fn now_ms() -> Result<u64, String> {
+    u64::try_from(
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map_err(|error| error.to_string())?
+            .as_millis(),
+    )
+    .map_err(|_| "system clock does not fit in milliseconds".to_owned())
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::{
+        Barrier, Mutex,
+        atomic::{AtomicUsize, Ordering},
+        mpsc,
+    };
+
+    use super::*;
+    use crate::{production_orchestrator, prompt::PromptDraft};
+
+    #[test]
+    fn independent_workers_run_concurrently_and_evidence_survives_restart() {
+        let repo = tempfile::tempdir().expect("repository");
+        let plan = production_orchestrator::plan(&PromptDraft {
+            text: "Implement a repository-wide refactor with tests".to_owned(),
+            ..PromptDraft::default()
+        })
+        .expect("plan");
+        let cancel = Arc::new(AtomicBool::new(false));
+        let (events, _) = mpsc::channel();
+        let barrier = Arc::new(Barrier::new(2));
+        let active = Arc::new(AtomicUsize::new(0));
+        let peak = Arc::new(AtomicUsize::new(0));
+        let calls = Arc::new(AtomicUsize::new(0));
+        let sessions = Arc::new(Mutex::new(0_u32));
+
+        let first = coordinate_with_executor(repo.path(), &plan, &cancel, &events, {
+            let barrier = Arc::clone(&barrier);
+            let active = Arc::clone(&active);
+            let peak = Arc::clone(&peak);
+            let calls = Arc::clone(&calls);
+            let sessions = Arc::clone(&sessions);
+            move |request| {
+                calls.fetch_add(1, Ordering::SeqCst);
+                let current = active.fetch_add(1, Ordering::SeqCst) + 1;
+                peak.fetch_max(current, Ordering::SeqCst);
+                barrier.wait();
+                active.fetch_sub(1, Ordering::SeqCst);
+                let mut sequence = sessions.lock().map_err(|_| "session lock".to_owned())?;
+                *sequence += 1;
+                Ok(WorkerEvidence {
+                    task_id: request.contract.task_id,
+                    worker_id: request.worker_id,
+                    role: request.contract.role,
+                    context_fingerprint: request.packet.fingerprint,
+                    session_id: format!("session-{sequence}"),
+                    turns: 1,
+                    summary: "repository evidence collected".to_owned(),
+                })
+            }
+        })
+        .expect("first execution");
+        assert_eq!(first.workers.len(), 2);
+        assert_eq!(peak.load(Ordering::SeqCst), 2);
+        assert_eq!(calls.load(Ordering::SeqCst), 2);
+
+        let restored = coordinate_with_executor(repo.path(), &plan, &cancel, &events, |_| {
+            Err("cached evidence should avoid worker execution".to_owned())
+        })
+        .expect("restored evidence");
+        assert_eq!(restored, first);
+    }
+
+    #[test]
+    fn cancellation_fails_before_worker_dispatch() {
+        let repo = tempfile::tempdir().expect("repository");
+        let plan = production_orchestrator::plan(&PromptDraft {
+            text: "Implement a repository-wide refactor with tests".to_owned(),
+            ..PromptDraft::default()
+        })
+        .expect("plan");
+        let cancel = Arc::new(AtomicBool::new(true));
+        let (events, _) = mpsc::channel();
+        assert!(
+            coordinate_with_executor(repo.path(), &plan, &cancel, &events, |_| {
+                Err("worker must not start".to_owned())
+            })
+            .is_err()
+        );
+    }
+}
