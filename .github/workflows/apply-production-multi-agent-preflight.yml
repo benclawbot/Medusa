@@ -39,26 +39,7 @@ jobs:
               grep -F 'lease_epoch: 0' "${reject}"
               rm "${reject}"
             elif [[ "${patch_file}" == *preflight-09-test-lease-epoch.patch ]]; then
-              python3 - <<'PY'
-          from pathlib import Path
-
-          path = Path("crates/medusa-runtime/src/multi_agent_coordinator.rs")
-          source = path.read_text()
-          needle = """                    context_fingerprint: request.packet.fingerprint,
-                              session_id: format!(\"session-{sequence}\"),
-"""
-          if source.count(needle) != 1:
-              needle = """                    context_fingerprint: request.packet.fingerprint,
-                    session_id: format!(\"session-{sequence}\"),
-"""
-          if source.count(needle) != 1:
-              raise SystemExit("expected exactly one coordinator test constructor without lease_epoch")
-          replacement = needle.replace(
-              "                    session_id:",
-              "                    lease_epoch: 0,\n                    session_id:",
-          )
-          path.write_text(source.replace(needle, replacement, 1))
-          PY
+              python3 -c 'from pathlib import Path; p=Path("crates/medusa-runtime/src/multi_agent_coordinator.rs"); s=p.read_text(); old="                    context_fingerprint: request.packet.fingerprint,\n                    session_id: format!(\"session-{sequence}\"),\n"; assert s.count(old) == 1, "expected exactly one coordinator test constructor without lease_epoch"; p.write_text(s.replace(old, old.replace("                    session_id:", "                    lease_epoch: 0,\n                    session_id:"), 1))'
             else
               git apply --check "${patch_file}"
               git apply "${patch_file}"
