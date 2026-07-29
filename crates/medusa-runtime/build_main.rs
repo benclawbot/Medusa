@@ -6,6 +6,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     println!("cargo:rerun-if-changed=src/review.inc");
     println!("cargo:rerun-if-changed=src/review_tests.inc");
     println!("cargo:rerun-if-changed=src/attachment.rs");
+    println!("cargo:rerun-if-changed=src/openai_realtime.rs");
     println!("cargo:rerun-if-changed=src/voice.rs");
 
     let manifest = env::var("CARGO_MANIFEST_DIR")?;
@@ -32,7 +33,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         &mut source,
         "pub mod prompt;\npub mod skill_dependencies;",
         &format!(
-            "pub mod attachment;\npub mod prompt;\n#[path = \"{}\"]\npub mod review;\npub mod voice;\npub mod skill_dependencies;",
+            "pub mod attachment;\npub mod openai_realtime;\npub mod prompt;\n#[path = \"{}\"]\npub mod review;\npub mod voice;\npub mod skill_dependencies;",
             review.display().to_string().replace('\\', "/")
         ),
     )?;
@@ -41,6 +42,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         ("mod error;", "error.rs"),
         ("pub mod attachment;", "attachment.rs"),
         ("pub mod lifecycle;", "lifecycle.rs"),
+        ("pub mod openai_realtime;", "openai_realtime.rs"),
         ("pub mod prompt;", "prompt.rs"),
         ("pub mod voice;", "voice.rs"),
         ("pub mod skill_dependencies;", "skill_dependencies.rs"),
@@ -115,10 +117,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         "    let verified = matches!(&result, Ok(RuntimeEvent::Completed { .. }));\n    let failed = result.is_err();\n    if let Err(error) = crate::production_orchestrator::persist_outcome(&state.repo, &draft, &execution_plan, verified, failed) {\n        let _ = events.send(RuntimeEvent::Notice { title: \"Runtime learning record unavailable\".to_owned(), details: vec![error.to_string()] });\n    }\n    state.session = Some(session);\n    result\n}\n\nfn append_followups",
     )?;
 
-    source = source.replace(
-        "cancel: &AtomicBool",
-        "cancel: &Arc<AtomicBool>",
-    );
+    source = source.replace("cancel: &AtomicBool", "cancel: &Arc<AtomicBool>");
     fs::write(out_dir.join("runtime_generated.rs"), source)?;
     Ok(())
 }
