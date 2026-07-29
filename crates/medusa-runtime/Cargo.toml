@@ -28,6 +28,7 @@ medusa-memory = { path = "../medusa-memory" }
 medusa-memory-consolidation = { path = "../medusa-memory-consolidation" }
 medusa-memory-writeback = { path = "../medusa-memory-writeback" }
 medusa-multi-agent-scheduler = { path = "../medusa-multi-agent-scheduler" }
+medusa-openai-realtime = { path = "../medusa-openai-realtime" }
 medusa-protocol = { path = "../medusa-protocol" }
 medusa-provider = { path = "../medusa-provider" }
 medusa-recovery-coordinator = { path = "../medusa-recovery-coordinator" }
