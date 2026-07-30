@@ -1,4 +1,8 @@
-use std::{fs, io::Write, path::{Path, PathBuf}};
+use std::{
+    fs,
+    io::Write,
+    path::{Path, PathBuf},
+};
 
 use medusa_core::{ErrorCategory, ErrorCode, MedusaError, MedusaResult};
 use serde::{Deserialize, Serialize};
@@ -260,9 +264,9 @@ impl ProviderProfile {
             "auth" => self.auth = non_empty(key, value)?.to_owned(),
             "base_url" => self.base_url = Some(non_empty(key, value)?.to_owned()),
             "configured" => {
-                self.configured = value.parse::<bool>().map_err(|_| {
-                    config_error("configured must be `true` or `false`")
-                })?;
+                self.configured = value
+                    .parse::<bool>()
+                    .map_err(|_| config_error("configured must be `true` or `false`"))?;
             }
             _ => return Err(unknown_key(key)),
         }
@@ -299,13 +303,9 @@ fn validate_named_profile(name: &str) -> MedusaResult<()> {
 fn validate_profile_name(name: &str) -> MedusaResult<()> {
     let valid = !name.is_empty()
         && name.len() <= 64
-        && name
-            .bytes()
-            .enumerate()
-            .all(|(index, byte)| {
-                byte.is_ascii_alphanumeric()
-                    || (index > 0 && matches!(byte, b'-' | b'_'))
-            });
+        && name.bytes().enumerate().all(|(index, byte)| {
+            byte.is_ascii_alphanumeric() || (index > 0 && matches!(byte, b'-' | b'_'))
+        });
     if valid {
         Ok(())
     } else {
@@ -317,7 +317,9 @@ fn validate_profile_name(name: &str) -> MedusaResult<()> {
 
 fn non_empty<'a>(key: &str, value: &'a str) -> MedusaResult<&'a str> {
     if value.is_empty() {
-        Err(config_error(format!("configuration key `{key}` cannot be empty")))
+        Err(config_error(format!(
+            "configuration key `{key}` cannot be empty"
+        )))
     } else {
         Ok(value)
     }
@@ -424,12 +426,27 @@ mod tests {
         assert!(selected.active);
         assert_eq!(catalog.active_name().expect("active"), "work");
 
-        let mut work = catalog.active_store().expect("work store").load().expect("load");
+        let mut work = catalog
+            .active_store()
+            .expect("work store")
+            .load()
+            .expect("load");
         work.set_value("model", "work-model").expect("set model");
-        catalog.active_store().expect("work store").save(&work).expect("save");
+        catalog
+            .active_store()
+            .expect("work store")
+            .save(&work)
+            .expect("save");
 
         catalog.use_profile("default").expect("select default");
-        assert_eq!(catalog.active_store().expect("default").load().expect("load"), default);
+        assert_eq!(
+            catalog
+                .active_store()
+                .expect("default")
+                .load()
+                .expect("load"),
+            default
+        );
         assert!(catalog.delete("work").is_ok());
     }
 

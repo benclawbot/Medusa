@@ -1,4 +1,5 @@
 mod config_command;
+mod config_profiles;
 mod headless_approval;
 
 use std::{
@@ -13,6 +14,11 @@ use clap::{Parser, Subcommand};
 use config_command::{
     configure_interactive, ensure_first_run, ensure_selected_runtime, get as get_config,
     reset as reset_config, show as show_config, validate as validate_config,
+};
+use config_profiles::{
+    create as create_config_profile, delete as delete_config_profile,
+    list as list_config_profiles, set as set_config, unset as unset_config,
+    use_profile as use_config_profile,
 };
 use medusa_agent::bootstrap;
 use medusa_config::Config;
@@ -116,14 +122,39 @@ enum ConfigAction {
         #[arg(long)]
         json: bool,
     },
+    /// Set one known non-secret provider-profile key.
+    Set { key: String, value: String },
+    /// Reset one known provider-profile key to its default.
+    Unset { key: String },
+    /// Manage named provider profiles.
+    Profiles {
+        #[command(subcommand)]
+        action: ConfigProfileAction,
+    },
     /// Validate the shared provider profile without billable provider work.
     Validate {
         /// Emit stable machine-readable JSON.
         #[arg(long)]
         json: bool,
     },
-    /// Remove the provider profile so setup runs again.
+    /// Remove the active provider profile so setup runs again.
     Reset,
+}
+
+#[derive(Subcommand, Debug)]
+enum ConfigProfileAction {
+    /// List named profiles and the built-in default profile.
+    List {
+        /// Emit stable machine-readable JSON.
+        #[arg(long)]
+        json: bool,
+    },
+    /// Create a named profile from the current active configuration.
+    Create { name: String },
+    /// Select a named profile or the built-in `default` profile.
+    Use { name: String },
+    /// Delete an inactive named profile.
+    Delete { name: String },
 }
 
 #[derive(Debug, Serialize)]
@@ -188,6 +219,14 @@ fn run() -> MedusaResult<()> {
             None | Some(ConfigAction::Init) => configure_interactive(),
             Some(ConfigAction::Show { json }) => show_config(json),
             Some(ConfigAction::Get { key, json }) => get_config(&key, json),
+            Some(ConfigAction::Set { key, value }) => set_config(&key, &value),
+            Some(ConfigAction::Unset { key }) => unset_config(&key),
+            Some(ConfigAction::Profiles { action }) => match action {
+                ConfigProfileAction::List { json } => list_config_profiles(json),
+                ConfigProfileAction::Create { name } => create_config_profile(&name),
+                ConfigProfileAction::Use { name } => use_config_profile(&name),
+                ConfigProfileAction::Delete { name } => delete_config_profile(&name),
+            },
             Some(ConfigAction::Validate { json }) => validate_config(json),
             Some(ConfigAction::Reset) => reset_config(),
         };
@@ -664,6 +703,34 @@ mod tests {
             Some(CommandKind::Config {
                 action: Some(ConfigAction::Show { json: false })
             })
+        ));
+    }
+
+    #[test]
+    fn config_set_is_available() {
+        let cli = Cli::try_parse_from(["medusa", "config", "set", "model", "gpt-5"])
+            .expect("parse config set");
+        assert!(matches!(
+            cli.command,
+            Some(CommandKind::Config {
+                action: Some(ConfigAction::Set { key, value })
+            }) if key == "model" && value == "gpt-5"
+        ));
+    }
+
+    #[test]
+    fn config_profiles_use_is_available() {
+        let cli = Cli::try_parse_from([
+            "medusa", "config", "profiles", "use", "work"
+        ])
+        .expect("parse profile selection");
+        assert!(matches!(
+            cli.command,
+            Some(CommandKind::Config {
+                action: Some(ConfigAction::Profiles {
+                    action: ConfigProfileAction::Use { name }
+                })
+            }) if name == "work"
         ));
     }
 
