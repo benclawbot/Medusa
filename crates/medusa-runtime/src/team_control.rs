@@ -25,7 +25,7 @@ pub enum TeamWorkerLifecycle {
 impl TeamWorkerLifecycle {
     #[must_use]
     pub const fn is_terminal(self) -> bool {
-        matches!(Self::Completed | Self::Failed | Self::Integrated, self)
+        matches!(self, Self::Completed | Self::Failed | Self::Integrated)
     }
 }
 
