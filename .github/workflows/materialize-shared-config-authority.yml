@@ -1,0 +1,163 @@
+name: Materialize shared configuration authority
+
+on:
+  pull_request:
+    branches:
+      - main
+    types: [opened, synchronize, reopened]
+    paths:
+      - .github/workflows/materialize-shared-config-authority.yml
+
+permissions:
+  contents: write
+
+jobs:
+  materialize:
+    if: github.head_ref == 'agent/shared-config-authority'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          ref: agent/shared-config-authority
+          fetch-depth: 0
+      - uses: dtolnay/rust-toolchain@39b0b3842c7e8bbf6904c0bfc3d9006fdd4dc4e0
+        with:
+          toolchain: 1.88.0
+          components: rustfmt,clippy
+      - name: Wire and validate shared configuration authority
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY_LIB'
+          from pathlib import Path
+
+          path = Path('crates/medusa-config/src/lib.rs')
+          text = path.read_text()
+          anchor = 'use serde::{Deserialize, Serialize};\n'
+          insert = '''use serde::{Deserialize, Serialize};
+
+          mod provider_profile;
+
+          pub use provider_profile::{
+              PROVIDER_PROFILE_KEYS, ProviderProfile, ProviderProfileStore, ProviderProfileValue,
+          };
+          '''
+          if anchor not in text:
+              raise SystemExit('medusa-config import anchor missing')
+          text = text.replace(anchor, insert, 1)
+
+          start_marker = '''#[derive(Debug, Default, Deserialize)]
+          #[serde(default, deny_unknown_fields)]
+          struct ProviderProfile'''
+          start = text.index(start_marker)
+          end = text.index('\nfn merge_file(', start)
+          replacement = '''fn merge_provider_profile(base: &mut toml::Value) -> MedusaResult<()> {
+              let profile = ProviderProfileStore::user()?.load()?;
+              if !profile.configured {
+                  return Ok(());
+              }
+              let protocol = profile.protocol().to_owned();
+              let ProviderProfile {
+                  provider,
+                  model: model_name,
+                  auth,
+                  base_url,
+                  ..
+              } = profile;
+              let mut model = toml::map::Map::new();
+              model.insert("provider".to_owned(), toml::Value::String(provider));
+              model.insert("name".to_owned(), toml::Value::String(model_name));
+              model.insert("protocol".to_owned(), toml::Value::String(protocol));
+              model.insert("auth".to_owned(), toml::Value::String(auth));
+              let mut root = toml::map::Map::new();
+              root.insert("model".to_owned(), toml::Value::Table(model));
+              merge(base, toml::Value::Table(root));
+              if let Some(url) = base_url {
+                  set_path(base, "model.base_url", toml::Value::String(url))?;
+              }
+              Ok(())
+          }
+          '''
+          text = text[:start] + replacement + text[end:]
+          path.write_text(text)
+          PY_LIB
+          python3 - <<'PY_MAIN'
+          from pathlib import Path
+
+          path = Path('crates/medusa-cli/src/main.rs')
+          text = path.read_text()
+          old_import = '''use config_command::{
+              configure_interactive, ensure_first_run, ensure_selected_runtime, reset as reset_config,
+              show as show_config,
+          };'''
+          new_import = '''use config_command::{
+              configure_interactive, ensure_first_run, ensure_selected_runtime, get as get_config,
+              reset as reset_config, show as show_config, validate as validate_config,
+          };'''
+          if old_import not in text:
+              raise SystemExit('config_command import block missing')
+          text = text.replace(old_import, new_import, 1)
+
+          old_enum = '''#[derive(Subcommand, Debug)]
+          enum ConfigAction {
+              /// Print the non-secret provider profile.
+              Show,
+              /// Remove the provider profile so setup runs again.
+              Reset,
+          }'''
+          new_enum = '''#[derive(Subcommand, Debug)]
+          enum ConfigAction {
+              /// Run the interactive first-run provider setup.
+              Init,
+              /// Print the non-secret provider profile.
+              Show {
+                  /// Emit stable machine-readable JSON.
+                  #[arg(long)]
+                  json: bool,
+              },
+              /// Print one non-secret provider-profile key.
+              Get {
+                  key: String,
+                  /// Emit the value as JSON.
+                  #[arg(long)]
+                  json: bool,
+              },
+              /// Validate the shared provider profile without billable provider work.
+              Validate {
+                  /// Emit stable machine-readable JSON.
+                  #[arg(long)]
+                  json: bool,
+              },
+              /// Remove the provider profile so setup runs again.
+              Reset,
+          }'''
+          if old_enum not in text:
+              raise SystemExit('ConfigAction block missing')
+          text = text.replace(old_enum, new_enum, 1)
+
+          old_handler = '''        return match action {
+                      None => configure_interactive(),
+                      Some(ConfigAction::Show) => show_config(),
+                      Some(ConfigAction::Reset) => reset_config(),
+                  };'''
+          new_handler = '''        return match action {
+                      None | Some(ConfigAction::Init) => configure_interactive(),
+                      Some(ConfigAction::Show { json }) => show_config(json),
+                      Some(ConfigAction::Get { key, json }) => get_config(&key, json),
+                      Some(ConfigAction::Validate { json }) => validate_config(json),
+                      Some(ConfigAction::Reset) => reset_config(),
+                  };'''
+          if old_handler not in text:
+              raise SystemExit('ConfigAction handler missing')
+          text = text.replace(old_handler, new_handler, 1)
+          path.write_text(text)
+          PY_MAIN
+          cargo fmt --all
+          cargo test -p medusa-config -p medusa-cli
+          cargo clippy -p medusa-config -p medusa-cli --all-targets -- -D warnings
+          rm .github/workflows/materialize-shared-config-authority.yml
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add -A
+          git commit -m 'Wire shared provider configuration authority'
+          git push origin HEAD:agent/shared-config-authority
