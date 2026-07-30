@@ -414,7 +414,7 @@
         "crates/medusa-runtime/src/multi_agent_coordinator.rs",
         "crates/medusa-runtime/src/mutating_worker_coordinator.rs",
         "crates/medusa-runtime/src/production_orchestrator.rs",
-        "crates/medusa-runtime/build_main.rs",
+        "crates/medusa-runtime/src/lib.rs",
         "crates/medusa-agent/src/team.rs",
         "crates/medusa-agent/src/worker_execution.rs",
         "crates/medusa-workers"
