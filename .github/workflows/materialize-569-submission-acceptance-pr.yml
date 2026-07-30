@@ -6,6 +6,7 @@ on:
       - main
     paths:
       - validation/materialize_569_submission_acceptance.py
+      - validation/materialize_569_error_worker.py
       - .github/workflows/materialize-569-submission-acceptance-pr.yml
 
 permissions:
@@ -26,7 +27,9 @@ jobs:
           token: ${{ secrets.GITHUB_TOKEN }}
       - uses: dtolnay/rust-toolchain@39b0b3842c7e8bbf6904c0bfc3d9006fdd4dc4e0 # stable
       - name: Materialize reviewed changes
-        run: python3 validation/materialize_569_submission_acceptance.py
+        run: |
+          python3 validation/materialize_569_submission_acceptance.py
+          python3 validation/materialize_569_error_worker.py
       - name: Format and validate runtime
         run: |
           cargo fmt --all
@@ -38,8 +41,9 @@ jobs:
           git rm .github/workflows/materialize-569-submission-acceptance.yml
           git rm .github/workflows/materialize-569-submission-acceptance-pr.yml
           git rm validation/materialize_569_submission_acceptance.py
+          git rm validation/materialize_569_error_worker.py
           git config user.name github-actions[bot]
           git config user.email 41898282+github-actions[bot]@users.noreply.github.com
-          git add crates/medusa-runtime/src/lib.rs crates/medusa-runtime/src/tests.rs
+          git add crates/medusa-runtime/src/lib.rs crates/medusa-runtime/src/error.rs crates/medusa-runtime/src/tests.rs
           git commit -m "Close durable submission acceptance gap"
           git push origin HEAD:${{ github.head_ref }}
