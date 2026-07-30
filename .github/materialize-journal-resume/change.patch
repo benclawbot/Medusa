@@ -1,0 +1,131 @@
+diff --git a/crates/medusa-agent/src/lib.rs b/crates/medusa-agent/src/lib.rs
+index fb297b8..0000000 100644
+--- a/crates/medusa-agent/src/lib.rs
++++ b/crates/medusa-agent/src/lib.rs
+@@ -44,6 +44,11 @@ pub use worker_execution::{
+     WorkerProgressSummary,
+ };
+ 
++/// Persists a complete session through the crash-durable journal and compatibility snapshot.
++pub fn persist_session(session: &AgentSession) -> medusa_core::MedusaResult<()> {
++    session::persist(session)
++}
++
+ #[cfg(test)]
+ mod tests {
+     use std::{
+diff --git a/crates/medusa-agent/src/session_browser.rs b/crates/medusa-agent/src/session_browser.rs
+index 9e218fe..0000000 100644
+--- a/crates/medusa-agent/src/session_browser.rs
++++ b/crates/medusa-agent/src/session_browser.rs
+@@ -14,7 +14,7 @@ use medusa_protocol::EventEnvelope;
+ use serde::{Deserialize, Serialize};
+ use time::OffsetDateTime;
+ 
+-use crate::session::{journal, load};
++use crate::session::{AgentSession, journal, load};
+ 
+ /// Lightweight durable-session metadata suitable for frontend discovery lists.
+ #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+@@ -76,6 +76,11 @@ pub fn replay_events(repo: &Path, session: &str, cursor: u64) -> MedusaResult<Vec
+     journal::replay_from_cursor(repo, &id, cursor)
+ }
+ 
++/// Loads the latest committed journal-backed session snapshot.
++pub fn load_session(repo: &Path, session: &str) -> MedusaResult<AgentSession> {
++    load(repo, session)
++}
++
+ fn collect_session_ids(root: &Path, ids: &mut BTreeSet<SessionId>) -> MedusaResult<()> {
+     let entries = match fs::read_dir(root) {
+         Ok(entries) => entries,
+diff --git a/crates/medusa-runtime/src/error.rs b/crates/medusa-runtime/src/error.rs
+index a0d8c5c..0000000 100644
+--- a/crates/medusa-runtime/src/error.rs
++++ b/crates/medusa-runtime/src/error.rs
+@@ -11,11 +11,10 @@ use std::{
+ };
+ 
+ use medusa_agent::{
+-    AgentEngine, AgentPlanStepStatus, AgentSession, session_browser::list_sessions,
++    AgentPlanStepStatus, AgentSession, persist_session,
++    session_browser::{list_sessions, load_session},
+ };
+ use medusa_capabilities::CapabilityRegistry;
+-use medusa_provider::ConfiguredProvider;
+ 
+ use super::{
+     RuntimeCommand, RuntimeController, RuntimeEvent, RuntimeState, SubmissionState,
+@@ -106,13 +105,8 @@ impl RuntimeController {
+         session_id: &str,
+         mut state: RuntimeState,
+     ) -> Result<Self, RuntimeError> {
+-        let provider =
+-            ConfiguredProvider::manager_from_config(&state.config, state.session_api_key.clone())
+-                .map_err(RuntimeError::agent)?;
+-        let engine = AgentEngine::new(provider, state.config.clone());
+-        let mut session = engine
+-            .load_session(&repo, session_id)
+-            .map_err(RuntimeError::agent)?;
++        let mut session = load_session(&repo, session_id).map_err(RuntimeError::agent)?;
+         validate_resumed_session(&repo, &session)?;
+         let interrupted_steps = recover_interrupted_session(&repo, &mut session)?;
+         state.session = Some(session);
+@@ -178,20 +172,8 @@ fn recover_interrupted_session(
+         return Ok(interrupted);
+     }
+     session.updated_at = time::OffsetDateTime::now_utc();
+-    let path = repo
+-        .join(".medusa/sessions")
+-        .join(format!("{}.json", session.id));
+-    if let Some(parent) = path.parent() {
+-        std::fs::create_dir_all(parent)?;
+-    }
+-    let temporary = path.with_extension("json.tmp");
+-    std::fs::write(
+-        &temporary,
+-        serde_json::to_vec_pretty(session).map_err(RuntimeError::agent)?,
+-    )?;
+-    std::fs::rename(temporary, path)?;
++    persist_session(session).map_err(RuntimeError::agent)?;
+     Ok(interrupted)
+ }
+ 
+@@ -374,18 +356,24 @@ mod interruption_tests {
+         };
+         let interrupted = recover_interrupted_session(repo, &mut session).expect("recover");
+         assert_eq!(interrupted, ["provider request"]);
+         assert_eq!(session.plan[0].status, AgentPlanStepStatus::Failed);
+-        let bytes = std::fs::read(
+-            repo.join(".medusa/sessions")
+-                .join(format!("{}.json", session.id)),
+-        )
+-        .expect("durable session");
+-        let restored: AgentSession = serde_json::from_slice(&bytes).expect("session json");
++        let compatibility_snapshot = repo
++            .join(".medusa/sessions")
++            .join(format!("{}.json", session.id));
++        let journal = repo
++            .join(".medusa/journals")
++            .join(format!("{}.events", session.id));
++        assert!(compatibility_snapshot.is_file());
++        assert!(journal.is_file());
++        std::fs::remove_file(&compatibility_snapshot).expect("remove compatibility snapshot");
++        let session_id = session.id.to_string();
++        let restored = load_session(repo, &session_id).expect("restore from journal");
+         assert_eq!(restored.plan[0].status, AgentPlanStepStatus::Failed);
++        assert!(compatibility_snapshot.is_file());
+         assert!(
+             recover_interrupted_session(repo, &mut restored.clone())
+                 .expect("idempotent")
+diff --git a/docs/architecture/durable-session-journal.md b/docs/architecture/durable-session-journal.md
+index 8fe5c0d..0000000 100644
+--- a/docs/architecture/durable-session-journal.md
++++ b/docs/architecture/durable-session-journal.md
+@@ -17,6 +17,8 @@ A normal persistence boundary is:
+ 3. append a full snapshot commit record bound to the complete event prefix, then flush it;
+ 4. atomically rewrite the compatibility session JSON.
+ 
++Runtime restart recovery uses this same boundary when interrupted plan steps are marked failed; it never updates only the compatibility JSON.
++
+ The journal snapshot is authoritative over the compatibility JSON because it is committed first. State-only mutations are also committed as snapshot records, so recovery is not limited to fields represented by event payloads.
