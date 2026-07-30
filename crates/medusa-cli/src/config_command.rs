@@ -1,70 +1,20 @@
 use std::{
-    env, fs,
     io::{self, IsTerminal, Write},
     net::{SocketAddr, TcpStream},
-    path::PathBuf,
     process::Command,
     time::Duration,
 };
 
+use medusa_config::{PROVIDER_PROFILE_KEYS, ProviderProfile, ProviderProfileStore};
 use medusa_core::{ErrorCategory, ErrorCode, MedusaError, MedusaResult};
-use serde::{Deserialize, Serialize};
+use serde::Serialize;
 
-#[derive(Clone, Debug, Deserialize, Serialize)]
-#[serde(default, deny_unknown_fields)]
-pub(crate) struct ProviderProfile {
-    pub connection: String,
-    pub provider: String,
-    pub model: String,
-    pub speed: String,
-    pub reasoning: String,
-    pub auth: String,
-    pub base_url: Option<String>,
-    pub configured: bool,
-}
-
-impl Default for ProviderProfile {
-    fn default() -> Self {
-        Self {
-            connection: "direct".into(),
-            provider: "minimax".into(),
-            model: "MiniMax-M3".into(),
-            speed: "balanced".into(),
-            reasoning: "medium".into(),
-            auth: "api-key".into(),
-            base_url: None,
-            configured: false,
-        }
-    }
-}
-
-pub(crate) fn config_path() -> MedusaResult<PathBuf> {
-    let base = if cfg!(windows) {
-        env::var_os("APPDATA").map(PathBuf::from)
-    } else if let Some(path) = env::var_os("XDG_CONFIG_HOME") {
-        Some(PathBuf::from(path))
-    } else {
-        env::var_os("HOME").map(|home| PathBuf::from(home).join(".config"))
-    }
-    .ok_or_else(|| {
-        MedusaError::new(
-            ErrorCode::InvalidConfiguration,
-            ErrorCategory::Environment,
-            "could not resolve the user configuration directory",
-        )
-    })?;
-    Ok(base.join("medusa").join("provider.toml"))
+pub(crate) fn config_path() -> MedusaResult<std::path::PathBuf> {
+    Ok(ProviderProfileStore::user()?.path().to_path_buf())
 }
 
 pub(crate) fn load_profile() -> MedusaResult<ProviderProfile> {
-    let path = config_path()?;
-    if !path.exists() {
-        return Ok(ProviderProfile::default());
-    }
-    let text = fs::read_to_string(&path)
-        .map_err(|error| config_error(format!("read {}: {error}", path.display())))?;
-    toml::from_str(&text)
-        .map_err(|error| config_error(format!("parse {}: {error}", path.display())))
+    ProviderProfileStore::user()?.load()
 }
 
 pub(crate) fn ensure_first_run() -> MedusaResult<()> {
@@ -76,7 +26,8 @@ pub(crate) fn ensure_first_run() -> MedusaResult<()> {
 }
 
 pub(crate) fn configure_interactive() -> MedusaResult<()> {
-    let mut profile = load_profile()?;
+    let store = ProviderProfileStore::user()?;
+    let mut profile = store.load()?;
     profile.connection = choose(
         "Connection type",
         &[
@@ -161,46 +112,103 @@ pub(crate) fn configure_interactive() -> MedusaResult<()> {
         )?;
     }
     profile.configured = true;
-    save_profile(&profile)?;
+    store.save(&profile)?;
     ensure_runtime_for_profile(&profile)?;
 
-    println!("\nConfiguration saved to {}", config_path()?.display());
+    println!("\nConfiguration saved to {}", store.path().display());
     print_auth_guidance(&profile);
     Ok(())
 }
 
-pub(crate) fn show() -> MedusaResult<()> {
+pub(crate) fn show(json: bool) -> MedusaResult<()> {
     let profile = load_profile()?;
-    println!(
-        "{}",
-        toml::to_string_pretty(&profile).map_err(|error| config_error(error.to_string()))?
-    );
+    if json {
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&profile)
+                .map_err(|error| config_error(error.to_string()))?
+        );
+    } else {
+        println!(
+            "{}",
+            toml::to_string_pretty(&profile).map_err(|error| config_error(error.to_string()))?
+        );
+    }
+    Ok(())
+}
+
+pub(crate) fn get(key: &str, json: bool) -> MedusaResult<()> {
+    let profile = load_profile()?;
+    let value = profile.value(key).ok_or_else(|| {
+        config_error(format!(
+            "unknown configuration key `{key}`; available keys: {}",
+            PROVIDER_PROFILE_KEYS.join(", ")
+        ))
+    })?;
+    if json {
+        println!(
+            "{}",
+            serde_json::to_string(&value).map_err(|error| config_error(error.to_string()))?
+        );
+    } else {
+        println!("{value}");
+    }
+    Ok(())
+}
+
+#[derive(Debug, Serialize)]
+struct ValidationOutput {
+    valid: bool,
+    configured: bool,
+    path: String,
+    provider: String,
+    model: String,
+    auth: String,
+    protocol: String,
+    openai_oauth: bool,
+}
+
+pub(crate) fn validate(json: bool) -> MedusaResult<()> {
+    let store = ProviderProfileStore::user()?;
+    let profile = store.load()?;
+    profile.validate()?;
+    let output = ValidationOutput {
+        valid: true,
+        configured: profile.configured,
+        path: store.path().display().to_string(),
+        provider: profile.provider.clone(),
+        model: profile.model.clone(),
+        auth: profile.auth.clone(),
+        protocol: profile.protocol().to_owned(),
+        openai_oauth: profile.uses_openai_oauth(),
+    };
+    if json {
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&output)
+                .map_err(|error| config_error(error.to_string()))?
+        );
+    } else {
+        println!("Configuration is valid.");
+        println!("Path: {}", output.path);
+        println!("Configured: {}", output.configured);
+        println!(
+            "Route: {} / {} ({}, auth: {})",
+            output.provider, output.model, output.protocol, output.auth
+        );
+        println!("OpenAI OAuth route: {}", output.openai_oauth);
+    }
     Ok(())
 }
 
 pub(crate) fn reset() -> MedusaResult<()> {
-    let path = config_path()?;
-    if path.exists() {
-        fs::remove_file(&path)
-            .map_err(|error| config_error(format!("remove {}: {error}", path.display())))?;
+    let store = ProviderProfileStore::user()?;
+    let removed = store.reset()?;
+    if removed {
+        println!("Medusa provider configuration reset.");
+    } else {
+        println!("Medusa provider configuration was already empty.");
     }
-    println!("Medusa provider configuration reset.");
-    Ok(())
-}
-
-fn save_profile(profile: &ProviderProfile) -> MedusaResult<()> {
-    let path = config_path()?;
-    let parent = path
-        .parent()
-        .ok_or_else(|| config_error("configuration path has no parent"))?;
-    fs::create_dir_all(parent)
-        .map_err(|error| config_error(format!("create {}: {error}", parent.display())))?;
-    let text = toml::to_string_pretty(profile).map_err(|error| config_error(error.to_string()))?;
-    let temporary = path.with_extension("toml.tmp");
-    fs::write(&temporary, text)
-        .map_err(|error| config_error(format!("write {}: {error}", temporary.display())))?;
-    fs::rename(&temporary, &path)
-        .map_err(|error| config_error(format!("replace {}: {error}", path.display())))?;
     Ok(())
 }
 
@@ -275,7 +283,7 @@ pub(crate) fn ensure_selected_runtime() -> MedusaResult<()> {
 }
 
 fn ensure_runtime_for_profile(profile: &ProviderProfile) -> MedusaResult<()> {
-    if profile.connection == "chatgpt-oauth" {
+    if profile.uses_openai_oauth() {
         ensure_chatgpt_oauth_gateway()?;
     }
     Ok(())
@@ -312,7 +320,7 @@ fn ensure_chatgpt_oauth_gateway() -> MedusaResult<()> {
 }
 
 fn print_auth_guidance(profile: &ProviderProfile) {
-    if profile.connection == "chatgpt-oauth" {
+    if profile.uses_openai_oauth() {
         println!(
             "ChatGPT OAuth is managed by the loopback gateway at http://127.0.0.1:10531/v1; Medusa never reads the OAuth credential file."
         );
@@ -364,9 +372,22 @@ mod tests {
             base_url: Some("http://127.0.0.1:20128/v1".into()),
             ..ProviderProfile::default()
         };
+        profile.validate().expect("profile");
         let encoded = toml::to_string(&profile).expect("serialize");
         assert!(!encoded.to_ascii_lowercase().contains("api_key"));
         let decoded: ProviderProfile = toml::from_str(&encoded).expect("deserialize");
-        assert_eq!(decoded.connection, "omniroute");
+        assert_eq!(decoded, profile);
+    }
+
+    #[test]
+    fn keyed_values_are_stable_and_redacted() {
+        let profile = ProviderProfile::default();
+        assert_eq!(
+            profile.value("provider"),
+            Some(medusa_config::ProviderProfileValue::String(
+                "minimax".into()
+            ))
+        );
+        assert!(profile.value("token").is_none());
     }
 }
