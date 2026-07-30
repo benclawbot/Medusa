@@ -1,5 +1,5 @@
 use medusa_config::{ProviderProfileCatalog, ProviderProfileSummary};
-use medusa_core::MedusaResult;
+use medusa_core::{ErrorCategory, ErrorCode, MedusaError, MedusaResult};
 
 pub(crate) fn set(key: &str, value: &str) -> MedusaResult<()> {
     let catalog = ProviderProfileCatalog::user()?;
@@ -33,7 +33,7 @@ pub(crate) fn list(json: bool) -> MedusaResult<()> {
         println!(
             "{}",
             serde_json::to_string_pretty(&profiles)
-                .map_err(|error| medusa_core::MedusaError::from(error.to_string()))?
+                .map_err(|error| cli_error(error.to_string()))?
         );
         return Ok(());
     }
@@ -78,4 +78,12 @@ fn print_created(profile: &ProviderProfileSummary) {
         "Created provider profile `{}` from the current active configuration — {} / {}.",
         profile.name, profile.provider, profile.model
     );
+}
+
+fn cli_error(message: impl Into<String>) -> MedusaError {
+    MedusaError::new(
+        ErrorCode::InvalidConfiguration,
+        ErrorCategory::Validation,
+        message,
+    )
 }
