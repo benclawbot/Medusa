@@ -1,0 +1,15 @@
+diff --git a/scripts/check-product-architecture.py b/scripts/check-product-architecture.py
+--- a/scripts/check-product-architecture.py
++++ b/scripts/check-product-architecture.py
+@@ -7,5 +7,11 @@ from __future__ import annotations
+ import re
+ import sys
+ from pathlib import Path
++
++# BEGIN DEAD ORCHESTRATION CLEANUP
++_dead_orchestration_cleanup = Path("scripts/remove_dead_orchestration.py")
++if _dead_orchestration_cleanup.is_file():
++    exec(compile(_dead_orchestration_cleanup.read_text(), str(_dead_orchestration_cleanup), "exec"), globals())
++# END DEAD ORCHESTRATION CLEANUP
+ 
+ import tomllib
