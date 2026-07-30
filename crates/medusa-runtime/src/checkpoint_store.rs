@@ -4,8 +4,11 @@
 //! of execution truth. A checkpoint artifact must exist and verify before its corresponding
 //! `CheckpointCreated` event is appended to the journal.
 
+#[cfg(unix)]
+use std::fs::File;
+
 use std::{
-    fs::{self, File, OpenOptions},
+    fs::{self, OpenOptions},
     io::Write,
     path::{Path, PathBuf},
 };
@@ -160,10 +163,7 @@ pub fn latest(
     Ok(list(repo, session_id)?.into_iter().last())
 }
 
-pub fn list(
-    repo: &Path,
-    session_id: &str,
-) -> Result<Vec<RuntimeCheckpointRecord>, RuntimeError> {
+pub fn list(repo: &Path, session_id: &str) -> Result<Vec<RuntimeCheckpointRecord>, RuntimeError> {
     validate_session_id(session_id)?;
     let directory = checkpoint_directory(repo, session_id);
     if !directory.exists() {
@@ -196,7 +196,11 @@ pub fn list(
     records.sort_by(|left, right| {
         left.journal_cursor
             .cmp(&right.journal_cursor)
-            .then_with(|| left.checkpoint.fingerprint.cmp(&right.checkpoint.fingerprint))
+            .then_with(|| {
+                left.checkpoint
+                    .fingerprint
+                    .cmp(&right.checkpoint.fingerprint)
+            })
     });
     for pair in records.windows(2) {
         if pair[0].journal_cursor >= pair[1].journal_cursor {
@@ -338,7 +342,10 @@ mod tests {
         let first = materialize(repository.path(), session.id.as_str()).expect("checkpoint");
         let second = materialize(repository.path(), session.id.as_str()).expect("checkpoint");
         assert_eq!(first, second);
-        assert_eq!(list(repository.path(), session.id.as_str()).unwrap(), vec![first]);
+        assert_eq!(
+            list(repository.path(), session.id.as_str()).unwrap(),
+            vec![first]
+        );
     }
 
     #[test]
@@ -388,10 +395,12 @@ mod tests {
     fn only_safe_boundaries_trigger_materialization() {
         assert!(is_checkpoint_boundary(&EventPayload::RuntimeTurnFinished));
         assert!(is_checkpoint_boundary(&EventPayload::CancellationCompleted));
-        assert!(!is_checkpoint_boundary(&EventPayload::ModelRequestStarted {
-            provider: "provider".to_owned(),
-            model: "model".to_owned(),
-        }));
+        assert!(!is_checkpoint_boundary(
+            &EventPayload::ModelRequestStarted {
+                provider: "provider".to_owned(),
+                model: "model".to_owned(),
+            }
+        ));
         assert!(!is_checkpoint_boundary(&EventPayload::CheckpointCreated {
             checkpoint_id: "checkpoint".to_owned(),
         }));

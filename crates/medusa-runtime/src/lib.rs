@@ -27,6 +27,7 @@ use crate::{
 };
 
 pub mod attachment;
+pub mod checkpoint_store;
 pub mod commands;
 mod config_command;
 mod error;
@@ -47,6 +48,7 @@ mod tests;
 pub mod voice;
 pub mod voice_agent_bridge;
 
+pub use checkpoint_store::RuntimeCheckpointRecord;
 pub use error::RuntimeError;
 pub use execution_history::{
     RuntimeContinuityHealth, RuntimeExecutionHealth, RuntimeHistoricalState,
@@ -599,9 +601,34 @@ fn record_controller_event(
     actor: Actor,
     payload: EventPayload,
 ) -> Result<(), RuntimeError> {
+    let checkpoint_boundary = crate::checkpoint_store::is_checkpoint_boundary(&payload);
     let mut session = medusa_agent::session_browser::load_session(repo, session_id)
         .map_err(RuntimeError::agent)?;
-    medusa_agent::record_session_event(&mut session, actor, payload).map_err(RuntimeError::agent)
+    medusa_agent::record_session_event(&mut session, actor, payload)
+        .map_err(RuntimeError::agent)?;
+    if checkpoint_boundary {
+        let checkpoint = crate::checkpoint_store::materialize(repo, session_id)?;
+        let checkpoint_id = checkpoint.checkpoint.fingerprint;
+        let mut session = medusa_agent::session_browser::load_session(repo, session_id)
+            .map_err(RuntimeError::agent)?;
+        let already_recorded = session.events.last().is_some_and(|event| {
+            matches!(
+                &event.payload,
+                EventPayload::CheckpointCreated {
+                    checkpoint_id: existing,
+                } if existing == &checkpoint_id
+            )
+        });
+        if !already_recorded {
+            medusa_agent::record_session_event(
+                &mut session,
+                Actor::Coordinator,
+                EventPayload::CheckpointCreated { checkpoint_id },
+            )
+            .map_err(RuntimeError::agent)?;
+        }
+    }
+    Ok(())
 }
 
 fn lock_submission(
