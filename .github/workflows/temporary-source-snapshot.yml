@@ -4,6 +4,9 @@ on:
   push:
     branches:
       - agent/telegram-gateway-foundation
+  pull_request:
+    branches:
+      - main
 
 permissions:
   contents: read
