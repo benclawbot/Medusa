@@ -1,0 +1,52 @@
+name: Fix Telegram transport Clippy
+
+on:
+  pull_request:
+    branches:
+      - main
+
+permissions:
+  contents: write
+
+jobs:
+  fix:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: agent/telegram-bot-api-transport
+      - name: Apply Clippy fixes and commit
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+
+          mod = Path('crates/medusa-daemon/src/telegram/bot_api/mod.rs')
+          text = mod.read_text()
+          text = text.replace(
+              '    TelegramSendMessage, TelegramTransportUpdate, TelegramUpdate,\n',
+              '    TelegramSendMessage, TelegramTransportUpdate, TelegramUpdate, TelegramUpdateCursor,\n',
+          )
+          text = text.replace(
+              'Ok(message) => Ok(TelegramEditMessageOutcome::Updated(message)),',
+              'Ok(message) => Ok(TelegramEditMessageOutcome::Updated(Box::new(message))),',
+          )
+          mod.write_text(text)
+
+          types = Path('crates/medusa-daemon/src/telegram/bot_api/types.rs')
+          text = types.read_text().replace(
+              '    Updated(TelegramBotMessage),',
+              '    Updated(Box<TelegramBotMessage>),',
+          )
+          types.write_text(text)
+          PY
+          cargo fmt --all
+          rm .github/workflows/fix-telegram-clippy.yml
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add -A
+          git diff --cached --check
+          git commit -m "Fix Telegram transport Clippy diagnostics"
+          git push origin HEAD:agent/telegram-bot-api-transport
