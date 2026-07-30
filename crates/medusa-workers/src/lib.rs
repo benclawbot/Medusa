@@ -849,7 +849,10 @@ mod tests {
             assert!(is_runtime_residue(path), "{path} must be runtime residue");
         }
         for path in ["src/slugify.py", "src/cache.rs", "docs/pytest_cache.md"] {
-            assert!(!is_runtime_residue(path), "{path} must remain product content");
+            assert!(
+                !is_runtime_residue(path),
+                "{path} must remain product content"
+            );
         }
     }
 
