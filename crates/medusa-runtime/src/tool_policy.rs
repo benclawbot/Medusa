@@ -51,11 +51,46 @@ fn classify_intent(text: &str) -> &'static str {
 
 fn default_tools() -> Vec<ToolMetadata> {
     vec![
-        metadata("focused-inspection", ["inspect"], ToolEffect::ReadOnly, 40, 120, VerificationLevel::None),
-        metadata("repository-search", ["inspect", "modify"], ToolEffect::ReadOnly, 80, 220, VerificationLevel::None),
-        metadata("scoped-edit", ["modify"], ToolEffect::Mutating, 120, 180, VerificationLevel::Focused),
-        metadata("focused-verification", ["verify", "modify"], ToolEffect::ReadOnly, 300, 300, VerificationLevel::Focused),
-        metadata("workspace-verification", ["verify"], ToolEffect::ReadOnly, 1_500, 600, VerificationLevel::Workspace),
+        metadata(
+            "focused-inspection",
+            ["inspect"],
+            ToolEffect::ReadOnly,
+            40,
+            120,
+            VerificationLevel::None,
+        ),
+        metadata(
+            "repository-search",
+            ["inspect", "modify"],
+            ToolEffect::ReadOnly,
+            80,
+            220,
+            VerificationLevel::None,
+        ),
+        metadata(
+            "scoped-edit",
+            ["modify"],
+            ToolEffect::Mutating,
+            120,
+            180,
+            VerificationLevel::Focused,
+        ),
+        metadata(
+            "focused-verification",
+            ["verify", "modify"],
+            ToolEffect::ReadOnly,
+            300,
+            300,
+            VerificationLevel::Focused,
+        ),
+        metadata(
+            "workspace-verification",
+            ["verify"],
+            ToolEffect::ReadOnly,
+            1_500,
+            600,
+            VerificationLevel::Workspace,
+        ),
     ]
 }
 

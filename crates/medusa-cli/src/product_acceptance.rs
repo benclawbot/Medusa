@@ -103,7 +103,7 @@ fn scenarios_for_platform() -> Vec<Scenario> {
         Scenario {
             id: "production-orchestration",
             guarantee: "The production orchestration layer passes its authoritative integration suite.",
-            package: "medusa-execution-orchestrator",
+            package: "medusa-runtime",
             filter: None,
             required_marker: None,
         },
@@ -124,7 +124,7 @@ fn scenarios_for_platform() -> Vec<Scenario> {
         Scenario {
             id: "verification-rollback",
             guarantee: "Repository changes can be rolled back after failed or rejected integration.",
-            package: "medusa-repository-rollback",
+            package: "medusa-workers",
             filter: None,
             required_marker: None,
         },

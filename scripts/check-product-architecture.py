@@ -73,9 +73,7 @@ def validate(root: Path) -> None:
     read_only_coordinator = read(root, "crates/medusa-runtime/src/multi_agent_coordinator.rs")
     mutating_coordinator = read(root, "crates/medusa-runtime/src/mutating_worker_coordinator.rs")
     workers = read(root, "crates/medusa-workers/src/lib.rs")
-    runtime_root = read(root, "crates/medusa-runtime/src/runtime_root_generated.rs")
-    runtime = read(root, "crates/medusa-runtime/src/runtime_impl.rs")
-    build_main = read(root, "crates/medusa-runtime/build_main.rs")
+    runtime = read(root, "crates/medusa-runtime/src/lib.rs")
     readme = read(root, "README.md")
     cargo_text = read(root, "Cargo.toml")
 
@@ -124,9 +122,9 @@ def validate(root: Path) -> None:
     require(contributor, "Production mutating worker coordinator", "docs/CONTRIBUTOR-ARCHITECTURE.md")
     require(contributor, "called by production `run_prompt`", "docs/CONTRIBUTOR-ARCHITECTURE.md")
 
-    require(runtime_root, "mod production_orchestrator;", "runtime root")
-    require(runtime_root, "pub mod orchestration_planning", "runtime root")
-    forbid(runtime_root, "pub mod production_orchestrator;", "runtime root")
+    require(runtime, "mod production_orchestrator;", "runtime root")
+    require(runtime, "pub mod orchestration_planning", "runtime root")
+    forbid(runtime, "pub mod production_orchestrator;", "runtime root")
     require(runtime, "fn run_prompt(", "runtime implementation")
     require(runtime, "AgentEngine::new_with_cancellation", "runtime implementation")
     require(runtime, ".step_with_observer_and_context(", "runtime implementation")
@@ -139,7 +137,7 @@ def validate(root: Path) -> None:
         "TeamRole::Reviewer",
         "implementation_evidence",
     ):
-        require(build_main, needle, "runtime build integration")
+        require(runtime, needle, "runtime integration")
 
     for needle in (
         "thread::scope",

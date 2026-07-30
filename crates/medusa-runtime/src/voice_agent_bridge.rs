@@ -228,15 +228,11 @@ impl VoiceAgentBridge {
             VoiceAgentControl::Approve {
                 request_id,
                 response,
-            } => {
-                self.resolve_approval(request_id, response, true)
-            }
+            } => self.resolve_approval(request_id, response, true),
             VoiceAgentControl::Reject {
                 request_id,
                 response,
-            } => {
-                self.resolve_approval(request_id, response, false)
-            }
+            } => self.resolve_approval(request_id, response, false),
         }
     }
 

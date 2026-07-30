@@ -74,8 +74,10 @@ pub fn capture_review_baseline(repo: &Path) -> Result<(), ReviewWorkflowError> {
     let repo = fs::canonicalize(repo)
         .map_err(|error| ReviewWorkflowError::InvalidRepository(error.to_string()))?;
     let path = repo.join(REVIEW_DIR).join(BASELINE_FILE);
+    // Rotate the baseline before every new task so only changes present before that task
+    // are classified as pre-existing user work. Pending-question resumes skip this call.
     if path.exists() {
-        return Ok(());
+        fs::remove_file(&path).map_err(|error| ReviewWorkflowError::State(error.to_string()))?;
     }
 
     let baseline = if is_git_work_tree(&repo) {
@@ -107,7 +109,12 @@ pub fn read_review_workspace(repo: &Path) -> Result<ReviewWorkspace, ReviewWorkf
                 .snapshot
                 .files
                 .iter()
-                .map(|file| (file.path.clone(), file.review_state))
+                .map(|file| {
+                    (
+                        file.path.clone(),
+                        (file.current_fingerprint.clone(), file.review_state),
+                    )
+                })
                 .collect::<BTreeMap<_, _>>()
         })
         .unwrap_or_default();
@@ -137,7 +144,10 @@ pub fn read_review_workspace(repo: &Path) -> Result<ReviewWorkspace, ReviewWorkf
                 base_fingerprint: hunk.id.clone(),
                 current_fingerprint: hunk.id.clone(),
                 ambiguous: false,
-                overlaps_later_edits: false,
+                // Without per-write provenance, a tracked-file hunk can contain edits made
+                // by the user while the task was running. Fail closed instead of allowing a
+                // destructive selective revert. Newly added files remain safely revertible.
+                overlaps_later_edits: file.kind != ChangeKind::Added,
                 review_state: ReviewState::Unreviewed,
                 provenance: ReviewProvenance {
                     task_step_id: None,
@@ -157,7 +167,8 @@ pub fn read_review_workspace(repo: &Path) -> Result<ReviewWorkspace, ReviewWorkf
             verification: VerificationState::Unverified,
             review_state: prior_states
                 .get(&path)
-                .copied()
+                .filter(|(fingerprint, _)| fingerprint == &current_fingerprint)
+                .map(|(_, state)| *state)
                 .unwrap_or(ReviewState::Unreviewed),
             snapshot_fingerprint: current_fingerprint.clone(),
             current_fingerprint,
@@ -211,10 +222,40 @@ pub fn apply_review_action(
     if fingerprint(current.as_bytes()) != state.snapshot.repository_fingerprint {
         return Err(ReviewWorkflowError::StaleState);
     }
+    if let ReviewActionRequest::RevertFile { path, .. } = &request {
+        let file = state.snapshot.file(path).ok_or_else(|| {
+            ReviewWorkflowError::Rejected(
+                "changed file is not present in the review snapshot".to_owned(),
+            )
+        })?;
+        if file
+            .hunks
+            .iter()
+            .any(|hunk| hunk.ambiguous || hunk.overlaps_later_edits)
+        {
+            return Err(ReviewWorkflowError::Rejected(
+                "whole-file revert is unsafe because tracked-file write provenance is ambiguous"
+                    .to_owned(),
+            ));
+        }
+    }
     let authorized = state
         .snapshot
         .authorize(request.clone())
         .map_err(|error| ReviewWorkflowError::Rejected(error.to_string()))?;
+
+    // Validate the state transition on a clone before touching the worktree.
+    // This prevents an error such as Accepted -> Reverted from being reported only
+    // after a destructive mutation has already happened.
+    let mut validation_snapshot = state.snapshot.clone();
+    record_authorized_action(
+        &mut validation_snapshot,
+        authorized.clone(),
+        actor,
+        now_unix_ms(),
+        state.snapshot.repository_fingerprint.clone(),
+    )
+    .map_err(|error| ReviewWorkflowError::Rejected(error.to_string()))?;
 
     match &request {
         ReviewActionRequest::RevertFile { path, .. } => revert_file(&repo, path)?,
@@ -234,7 +275,7 @@ pub fn apply_review_action(
     let after = git_diff(&repo)?;
     let event = record_authorized_action(
         &mut state.snapshot,
-        &authorized,
+        authorized.clone(),
         actor,
         now_unix_ms(),
         fingerprint(after.as_bytes()),
@@ -250,7 +291,13 @@ pub fn export_review_audit(
     generated_at_unix_ms: i64,
 ) -> Result<ReviewAuditExport, ReviewWorkflowError> {
     let state = read_state(&canonical_repo(repo)?)?;
-    state.history.export(generated_at_unix_ms).map_err(Into::into)
+    let mut export = state.history.export(generated_at_unix_ms)?;
+    export.resulting_repository_fingerprint = state
+        .history
+        .events
+        .last()
+        .map(|event| event.repository_fingerprint_after.clone());
+    Ok(export)
 }
 
 pub fn filtered_paths(workspace: &ReviewWorkspace, filter: &ReviewFilter) -> Vec<String> {
@@ -299,7 +346,13 @@ fn remove_worktree_path(repo: &Path, path: &str) -> Result<(), ReviewWorkflowErr
 
 fn reverse_patch(repo: &Path, patch: &str) -> Result<(), ReviewWorkflowError> {
     let mut child = Command::new("git")
-        .args(["apply", "--reverse", "--recount", "--whitespace=nowarn", "-"])
+        .args([
+            "apply",
+            "--reverse",
+            "--recount",
+            "--whitespace=nowarn",
+            "-",
+        ])
         .current_dir(repo)
         .stdin(Stdio::piped())
         .stderr(Stdio::piped())
@@ -355,7 +408,8 @@ fn read_json<T: for<'de> Deserialize<'de>>(path: &Path) -> Result<T, ReviewWorkf
 
 fn write_json<T: Serialize>(path: &Path, value: &T) -> Result<(), ReviewWorkflowError> {
     if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent).map_err(|error| ReviewWorkflowError::State(error.to_string()))?;
+        fs::create_dir_all(parent)
+            .map_err(|error| ReviewWorkflowError::State(error.to_string()))?;
     }
     let bytes = serde_json::to_vec_pretty(value)
         .map_err(|error| ReviewWorkflowError::State(error.to_string()))?;
@@ -522,10 +576,14 @@ fn review_metadata_path(path: &str) -> bool {
 }
 
 #[cfg(windows)]
-fn null_device() -> &'static str { "NUL" }
+fn null_device() -> &'static str {
+    "NUL"
+}
 
 #[cfg(not(windows))]
-fn null_device() -> &'static str { "/dev/null" }
+fn null_device() -> &'static str {
+    "/dev/null"
+}
 
 fn git_status(command: &mut Command) -> Result<(), ReviewWorkflowError> {
     let output = command
@@ -552,7 +610,9 @@ struct ParsedFile {
 
 fn parse_diff(source: &str) -> Result<Vec<ParsedFile>, ReviewWorkflowError> {
     let mut files = Vec::new();
-    let mut chunks = source.split("diff --git ").filter(|chunk| !chunk.trim().is_empty());
+    let mut chunks = source
+        .split("diff --git ")
+        .filter(|chunk| !chunk.trim().is_empty());
     for chunk in chunks.by_ref() {
         let patch = format!("diff --git {chunk}");
         let header = patch.lines().next().unwrap_or_default();
@@ -579,10 +639,21 @@ fn parse_diff(source: &str) -> Result<Vec<ParsedFile>, ReviewWorkflowError> {
                 binary = true;
             }
         }
-        let path = if kind == ChangeKind::Deleted { old_path.clone() } else { new_path.clone() };
+        let path = if kind == ChangeKind::Deleted {
+            old_path.clone()
+        } else {
+            new_path.clone()
+        };
         let previous_path = (kind == ChangeKind::Renamed).then_some(old_path);
         let hunks = parse_hunks(&patch, &path);
-        files.push(ParsedFile { path, previous_path, kind, binary, patch, hunks });
+        files.push(ParsedFile {
+            path,
+            previous_path,
+            kind,
+            binary,
+            patch,
+            hunks,
+        });
     }
     Ok(files)
 }
@@ -625,9 +696,16 @@ fn push_hunk(hunks: &mut Vec<ReviewDiffHunk>, path: &str, prefix: &str, lines: &
 }
 
 fn generated_path(path: &str) -> bool {
-    ["target/", "dist/", "build/", "node_modules/", ".generated/", "generated/"]
-        .iter()
-        .any(|prefix| path.starts_with(prefix))
+    [
+        "target/",
+        "dist/",
+        "build/",
+        "node_modules/",
+        ".generated/",
+        "generated/",
+    ]
+    .iter()
+    .any(|prefix| path.starts_with(prefix))
         || path.ends_with(".lock")
         || path.contains("generated")
 }

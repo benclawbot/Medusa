@@ -94,19 +94,23 @@ impl PromptDraft {
                 limit: MAX_TOTAL_ATTACHMENT_BYTES,
             });
         }
-        self.attachments.push(PromptAttachment::Image(ImageAttachment {
-            display_name: format!("screenshot-{}.png", image_count + 1),
-            width: image.width,
-            height: image.height,
-            rgba: image.rgba,
-            source_format: image.source_format,
-        }));
+        self.attachments
+            .push(PromptAttachment::Image(ImageAttachment {
+                display_name: format!("screenshot-{}.png", image_count + 1),
+                width: image.width,
+                height: image.height,
+                rgba: image.rgba,
+                source_format: image.source_format,
+            }));
         self.revision = self.revision.saturating_add(1);
         Ok(())
     }
 
     pub fn total_attachment_bytes(&self) -> usize {
-        self.attachments.iter().map(PromptAttachment::byte_len).sum()
+        self.attachments
+            .iter()
+            .map(PromptAttachment::byte_len)
+            .sum()
     }
 }
 
@@ -170,13 +174,19 @@ impl fmt::Display for ClipboardError {
             Self::NulByte => formatter.write_str("clipboard text contains a NUL byte"),
             Self::InvalidCursor(cursor) => write!(formatter, "invalid paste cursor {cursor}"),
             Self::TextByteLimit { bytes, limit } => {
-                write!(formatter, "clipboard text is {bytes} bytes; limit is {limit}")
+                write!(
+                    formatter,
+                    "clipboard text is {bytes} bytes; limit is {limit}"
+                )
             }
             Self::InvalidImageDimensions => {
                 formatter.write_str("clipboard image has zero dimensions")
             }
             Self::ImagePixelLimit { pixels, limit } => {
-                write!(formatter, "clipboard image has {pixels} pixels; limit is {limit}")
+                write!(
+                    formatter,
+                    "clipboard image has {pixels} pixels; limit is {limit}"
+                )
             }
             Self::ImageByteCountOverflow => {
                 formatter.write_str("clipboard image byte count overflowed")
@@ -186,7 +196,10 @@ impl fmt::Display for ClipboardError {
                 "clipboard image RGBA length is {actual}; expected {expected}"
             ),
             Self::ImageByteLimit { bytes, limit } => {
-                write!(formatter, "clipboard image is {bytes} bytes; limit is {limit}")
+                write!(
+                    formatter,
+                    "clipboard image is {bytes} bytes; limit is {limit}"
+                )
             }
             Self::ImageCountLimit(limit) => {
                 write!(formatter, "prompt allows at most {limit} images")

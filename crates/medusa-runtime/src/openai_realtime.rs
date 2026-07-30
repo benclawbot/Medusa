@@ -18,8 +18,7 @@ use crate::voice::{
 };
 
 pub const OPENAI_OAUTH_PROVIDER: &str = "openai-oauth";
-pub const OPENAI_OAUTH_REALTIME_REASON: &str =
-    "ChatGPT/Codex OAuth voice is unavailable because the configured local openai-oauth gateway does not expose an authenticated Realtime endpoint. Keep using text input; Medusa will not request an API key or start microphone streaming.";
+pub const OPENAI_OAUTH_REALTIME_REASON: &str = "ChatGPT/Codex OAuth voice is unavailable because the configured local openai-oauth gateway does not expose an authenticated Realtime endpoint. Keep using text input; Medusa will not request an API key or start microphone streaming.";
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum OpenAiRealtimeRoute {
@@ -38,11 +37,9 @@ impl OpenAiRealtimeRoute {
             Self::OAuthGatewayUnsupported { .. } => {
                 VoiceAvailability::unavailable(OPENAI_OAUTH_REALTIME_REASON)
             }
-            Self::ExistingRouteUnsupported { provider } => VoiceAvailability::unavailable(
-                format!(
-                    "Realtime voice is unavailable for configured provider `{provider}`. Voice requires a supported ChatGPT/Codex OAuth route; Medusa will not ask for a separate API key."
-                ),
-            ),
+            Self::ExistingRouteUnsupported { provider } => VoiceAvailability::unavailable(format!(
+                "Realtime voice is unavailable for configured provider `{provider}`. Voice requires a supported ChatGPT/Codex OAuth route; Medusa will not ask for a separate API key."
+            )),
         }
     }
 
@@ -81,7 +78,9 @@ pub fn resolve_openai_realtime_route(config: &Config) -> OpenAiRealtimeRoute {
 #[serde(tag = "type")]
 pub enum OpenAiRealtimeClientEvent {
     #[serde(rename = "session.update")]
-    SessionUpdate { session: OpenAiRealtimeSessionConfig },
+    SessionUpdate {
+        session: OpenAiRealtimeSessionConfig,
+    },
     #[serde(rename = "input_audio_buffer.append")]
     InputAudioAppend { audio: String },
     #[serde(rename = "input_audio_buffer.commit")]
@@ -170,42 +169,42 @@ pub fn map_server_event(
         "input_audio_buffer.speech_stopped" => {
             vec![RealtimeVoiceEvent::VoiceActivity { active: false }]
         }
-        "conversation.item.input_audio_transcription.delta" => vec![
-            RealtimeVoiceEvent::Transcript(TranscriptUpdate {
+        "conversation.item.input_audio_transcription.delta" => {
+            vec![RealtimeVoiceEvent::Transcript(TranscriptUpdate {
                 turn_id: event.item_id.unwrap_or_else(|| "user-audio".to_owned()),
                 speaker: TranscriptSpeaker::User,
                 text: event.delta.unwrap_or_default(),
                 is_final: false,
-            }),
-        ],
-        "conversation.item.input_audio_transcription.completed" => vec![
-            RealtimeVoiceEvent::Transcript(TranscriptUpdate {
+            })]
+        }
+        "conversation.item.input_audio_transcription.completed" => {
+            vec![RealtimeVoiceEvent::Transcript(TranscriptUpdate {
                 turn_id: event.item_id.unwrap_or_else(|| "user-audio".to_owned()),
                 speaker: TranscriptSpeaker::User,
                 text: event.transcript.unwrap_or_default(),
                 is_final: true,
-            }),
-        ],
-        "response.audio_transcript.delta" => vec![RealtimeVoiceEvent::Transcript(
-            TranscriptUpdate {
+            })]
+        }
+        "response.audio_transcript.delta" => {
+            vec![RealtimeVoiceEvent::Transcript(TranscriptUpdate {
                 turn_id: event
                     .response_id
                     .unwrap_or_else(|| "assistant-audio".to_owned()),
                 speaker: TranscriptSpeaker::Assistant,
                 text: event.delta.unwrap_or_default(),
                 is_final: false,
-            },
-        )],
-        "response.audio_transcript.done" => vec![RealtimeVoiceEvent::Transcript(
-            TranscriptUpdate {
+            })]
+        }
+        "response.audio_transcript.done" => {
+            vec![RealtimeVoiceEvent::Transcript(TranscriptUpdate {
                 turn_id: event
                     .response_id
                     .unwrap_or_else(|| "assistant-audio".to_owned()),
                 speaker: TranscriptSpeaker::Assistant,
                 text: event.transcript.unwrap_or_default(),
                 is_final: true,
-            },
-        )],
+            })]
+        }
         "response.audio.delta" => {
             let encoded = event
                 .delta
@@ -292,10 +291,16 @@ mod tests {
 
         let route = resolve_openai_realtime_route(&config);
         assert!(!route.permits_microphone_streaming());
-        assert!(route.availability().reason.as_deref().is_some_and(|reason| {
-            reason.contains("supported ChatGPT/Codex OAuth route")
-                && reason.contains("will not ask for a separate API key")
-        }));
+        assert!(
+            route
+                .availability()
+                .reason
+                .as_deref()
+                .is_some_and(|reason| {
+                    reason.contains("supported ChatGPT/Codex OAuth route")
+                        && reason.contains("will not ask for a separate API key")
+                })
+        );
     }
 
     #[test]

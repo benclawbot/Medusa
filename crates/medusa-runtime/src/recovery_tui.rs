@@ -97,10 +97,7 @@ impl RecoveryActionExecutor for RuntimeRecoveryExecutor {
                             "checkpoint metadata is unavailable".to_owned(),
                         )
                     })?;
-                RecoveryExecutionOutcome::succeeded(
-                    fingerprint,
-                    VerificationState::Incomplete,
-                )
+                RecoveryExecutionOutcome::succeeded(fingerprint, VerificationState::Incomplete)
             }
         };
         Ok(outcome)
@@ -159,9 +156,11 @@ pub(crate) fn execute_command(
     };
     let confirmed = parts.any(|part| part == "--confirm");
     let view = discover(repo)?;
-    let selected = checkpoint_id
-        .as_deref()
-        .and_then(|id| view.checkpoints.iter().find(|checkpoint| checkpoint.id == id));
+    let selected = checkpoint_id.as_deref().and_then(|id| {
+        view.checkpoints
+            .iter()
+            .find(|checkpoint| checkpoint.id == id)
+    });
     let preview = view.selected_preview.as_ref().filter(|preview| {
         checkpoint_id
             .as_deref()
@@ -188,7 +187,8 @@ pub(crate) fn execute_command(
     };
     let preflight = RecoveryPreflightEvidence {
         repository_fingerprint_before: view.current_repository_fingerprint.clone(),
-        checkpoint_integrity_verified: selected.is_none_or(|checkpoint| checkpoint.integrity_verified),
+        checkpoint_integrity_verified: selected
+            .is_none_or(|checkpoint| checkpoint.integrity_verified),
         repository_preconditions_verified: preview.is_none_or(|preview| {
             preview.repository_matches_checkpoint_base
                 && conflicting_uncommitted_paths.is_empty()
@@ -206,7 +206,10 @@ fn discover(repo: &Path) -> Result<RecoveryView, String> {
         .map_err(|_| "no recoverable session is available".to_owned())?
         .filter_map(Result::ok)
         .map(|entry| entry.path())
-        .filter(|path| path.extension().is_some_and(|extension| extension == "json"))
+        .filter(|path| {
+            path.extension()
+                .is_some_and(|extension| extension == "json")
+        })
         .collect::<Vec<_>>();
     paths.sort();
     let path = paths
@@ -245,8 +248,7 @@ fn restore_checkpoint(
     if !payload_path.is_file() {
         return Err(RuntimeRecoveryError::MissingPayload(payload_path));
     }
-    let payload: PersistedCheckpointPayload =
-        serde_json::from_slice(&fs::read(&payload_path)?)?;
+    let payload: PersistedCheckpointPayload = serde_json::from_slice(&fs::read(&payload_path)?)?;
     if payload.checkpoint_id != checkpoint_id {
         return Err(RuntimeRecoveryError::InvalidPayload(
             "payload checkpoint id does not match the selected checkpoint".to_owned(),
@@ -341,8 +343,7 @@ mod tests {
         )
         .expect("write payload");
 
-        restore_checkpoint(repo.path(), "session-1", "checkpoint-1")
-            .expect("restore checkpoint");
+        restore_checkpoint(repo.path(), "session-1", "checkpoint-1").expect("restore checkpoint");
         assert_eq!(
             fs::read_to_string(repo.path().join("src/lib.rs")).expect("read restored"),
             "restored"

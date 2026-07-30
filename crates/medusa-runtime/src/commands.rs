@@ -50,6 +50,12 @@ impl std::fmt::Debug for ModelConfiguration {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum SlashCommand {
     Help,
+    Learning {
+        action: LearningCommand,
+    },
+    Review {
+        action: ReviewCommand,
+    },
     New,
     Compact {
         focus: Option<String>,
@@ -75,9 +81,39 @@ pub enum SlashCommand {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum TeamCommand {
     Show,
-    Steer { worker_id: String, instruction: String },
-    StopWorker { worker_id: String },
+    Steer {
+        worker_id: String,
+        instruction: String,
+    },
+    StopWorker {
+        worker_id: String,
+    },
     StopTeam,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum LearningCommand {
+    Show { filter: Option<String> },
+    Approve { id: String },
+    Reject { id: String },
+    Defer { id: String },
+    Validate { id: String },
+    Activate { id: String },
+    Suspend { id: String },
+    Rollback { id: String },
+    Delete { id: String },
+    Privacy,
+    Export,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum ReviewCommand {
+    Show { filter: Option<String> },
+    AcceptFile { path: String },
+    AcceptTask,
+    RevertFile { path: String },
+    RevertHunk { path: String, hunk_id: String },
+    Export,
 }
 
 #[derive(Clone, Eq, PartialEq)]
@@ -190,6 +226,16 @@ pub const COMMAND_SPECS: &[CommandSpec] = &[
         description: "request graceful coordinated-team shutdown",
     },
     CommandSpec {
+        name: "learning",
+        usage: "/learning [show [filter]|approve|reject|defer|validate|activate|suspend|rollback|delete <id>|privacy|export]",
+        description: "review and control the authoritative learning lifecycle",
+    },
+    CommandSpec {
+        name: "review",
+        usage: "/review [show [filter]|accept <path>|accept-all|revert <path>|revert-hunk <path> <hunk-id>|export]",
+        description: "inspect, filter, accept, revert, or export repository review state",
+    },
+    CommandSpec {
         name: "help",
         usage: "/help",
         description: "show available commands",
@@ -291,6 +337,81 @@ pub fn parse_slash_command(input: &str) -> Result<Option<SlashCommand>, String> 
                 }))
             }
         }
+        "learning" => {
+            let mut parts = remainder.split_whitespace();
+            let required_id = |value: Option<&str>, action: &str| {
+                value
+                    .map(str::to_owned)
+                    .ok_or_else(|| format!("/learning {action} expects an item id"))
+            };
+            let action = match parts.next() {
+                None | Some("show") => LearningCommand::Show {
+                    filter: parts.next().map(str::to_owned),
+                },
+                Some("approve") => LearningCommand::Approve {
+                    id: required_id(parts.next(), "approve")?,
+                },
+                Some("reject") => LearningCommand::Reject {
+                    id: required_id(parts.next(), "reject")?,
+                },
+                Some("defer") => LearningCommand::Defer {
+                    id: required_id(parts.next(), "defer")?,
+                },
+                Some("validate") => LearningCommand::Validate {
+                    id: required_id(parts.next(), "validate")?,
+                },
+                Some("activate") => LearningCommand::Activate {
+                    id: required_id(parts.next(), "activate")?,
+                },
+                Some("suspend") => LearningCommand::Suspend {
+                    id: required_id(parts.next(), "suspend")?,
+                },
+                Some("rollback") => LearningCommand::Rollback {
+                    id: required_id(parts.next(), "rollback")?,
+                },
+                Some("delete") => LearningCommand::Delete {
+                    id: required_id(parts.next(), "delete")?,
+                },
+                Some("privacy") => LearningCommand::Privacy,
+                Some("export") => LearningCommand::Export,
+                Some(other) => return Err(format!("unknown /learning action: {other}")),
+            };
+            Ok(Some(SlashCommand::Learning { action }))
+        }
+        "review" => {
+            let mut parts = remainder.split_whitespace();
+            let action = match parts.next() {
+                None | Some("show") => ReviewCommand::Show {
+                    filter: parts.next().map(str::to_owned),
+                },
+                Some("accept") => ReviewCommand::AcceptFile {
+                    path: parts
+                        .next()
+                        .ok_or_else(|| "/review accept expects a path".to_owned())?
+                        .to_owned(),
+                },
+                Some("accept-all") => ReviewCommand::AcceptTask,
+                Some("revert") => ReviewCommand::RevertFile {
+                    path: parts
+                        .next()
+                        .ok_or_else(|| "/review revert expects a path".to_owned())?
+                        .to_owned(),
+                },
+                Some("revert-hunk") => ReviewCommand::RevertHunk {
+                    path: parts
+                        .next()
+                        .ok_or_else(|| "/review revert-hunk expects a path".to_owned())?
+                        .to_owned(),
+                    hunk_id: parts
+                        .next()
+                        .ok_or_else(|| "/review revert-hunk expects a hunk id".to_owned())?
+                        .to_owned(),
+                },
+                Some("export") => ReviewCommand::Export,
+                Some(other) => return Err(format!("unknown /review action: {other}")),
+            };
+            Ok(Some(SlashCommand::Review { action }))
+        }
         "plan" => Ok(Some(SlashCommand::Plan {
             task: (!remainder.is_empty()).then(|| remainder.to_owned()),
         })),
@@ -299,12 +420,11 @@ pub fn parse_slash_command(input: &str) -> Result<Option<SlashCommand>, String> 
             Ok(Some(SlashCommand::Team(TeamCommand::Show)))
         }
         "steer" => {
-            let (worker_id, instruction) =
-                remainder
-                    .split_once(char::is_whitespace)
-                    .map_or((remainder, ""), |(worker, instruction)| {
-                        (worker, instruction.trim())
-                    });
+            let (worker_id, instruction) = remainder
+                .split_once(char::is_whitespace)
+                .map_or((remainder, ""), |(worker, instruction)| {
+                    (worker, instruction.trim())
+                });
             if worker_id.is_empty() || instruction.is_empty() {
                 return Err("/steer expects <worker> <instruction>".to_owned());
             }

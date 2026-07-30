@@ -274,7 +274,10 @@ fn infer_artifact_kind(draft: &PromptDraft, objective: &str) -> &'static str {
     let lower = objective.to_ascii_lowercase();
     if !draft.attachments.is_empty() {
         "multimodal_prompt"
-    } else if contains_any(&lower, &["documentation", "docs", "readme", "memo", "report"]) {
+    } else if contains_any(
+        &lower,
+        &["documentation", "docs", "readme", "memo", "report"],
+    ) {
         "document"
     } else if contains_any(&lower, &["test", "fixture", "benchmark"]) {
         "test"

@@ -1,6 +1,3 @@
-#[allow(dead_code)]
-#[path = "autonomous_execution.rs"]
-mod autonomous_execution;
 mod context_budget {
     include!(concat!(
         env!("CARGO_MANIFEST_DIR"),
@@ -1056,8 +1053,3 @@ fn interactively_approvable(name: &str, input: &serde_json::Value) -> bool {
         _ => false,
     }
 }
-
-include!(concat!(
-    env!("CARGO_MANIFEST_DIR"),
-    "/src/autonomous_engine.rs"
-));

@@ -22,11 +22,7 @@ fn repository() -> tempfile::TempDir {
     git(temp.path(), &["init"]);
     git(temp.path(), &["config", "user.email", "test@example.com"]);
     git(temp.path(), &["config", "user.name", "Test"]);
-    fs::write(
-        temp.path().join("tracked.txt"),
-        "one\ntwo\nthree\nfour\n",
-    )
-    .expect("write");
+    fs::write(temp.path().join("tracked.txt"), "one\ntwo\nthree\nfour\n").expect("write");
     git(temp.path(), &["add", "."]);
     git(temp.path(), &["commit", "-m", "initial"]);
     temp
@@ -97,11 +93,7 @@ fn file_revert_removes_medusa_file_without_touching_preexisting_change() {
 fn hunk_revert_and_drift_detection_fail_closed() {
     let repo = repository();
     capture_review_baseline(repo.path()).expect("baseline");
-    fs::write(
-        repo.path().join("tracked.txt"),
-        "ONE\ntwo\nthree\nFOUR\n",
-    )
-    .expect("changes");
+    fs::write(repo.path().join("tracked.txt"), "ONE\ntwo\nthree\nFOUR\n").expect("changes");
     let workspace = read_review_workspace(repo.path()).expect("workspace");
     let file = workspace.snapshot.file("tracked.txt").expect("file");
     let hunk = file.hunks.first().expect("hunk");
@@ -116,7 +108,7 @@ fn hunk_revert_and_drift_detection_fail_closed() {
         },
         "test",
     )
-    .expect("hunk revert");
+    .expect_err("tracked hunk revert must fail closed");
 
     fs::write(repo.path().join("tracked.txt"), "later edit\n").expect("drift");
     let stale = apply_review_action(
@@ -187,10 +179,12 @@ fn unborn_git_repository_uses_current_worktree_content() {
     assert_eq!(file.current_fingerprint, fingerprint(diff.patch.as_bytes()));
     assert!(diff.patch.contains("+worktree"));
     assert!(!diff.patch.contains("+staged"));
-    assert!(workspace
-        .snapshot
-        .file(".medusa/review/baseline.json")
-        .is_none());
+    assert!(
+        workspace
+            .snapshot
+            .file(".medusa/review/baseline.json")
+            .is_none()
+    );
 }
 
 #[test]
@@ -224,5 +218,86 @@ fn unborn_git_repository_reverts_a_staged_medusa_file() {
             .expect("git ls-files")
             .status
             .success()
+    );
+}
+
+#[test]
+fn refresh_resets_acceptance_after_file_content_changes() {
+    let repo = repository();
+    capture_review_baseline(repo.path()).expect("baseline");
+    std::fs::write(repo.path().join("tracked.txt"), "changed once\n").expect("edit");
+    let first = read_review_workspace(repo.path()).expect("first review");
+    let file = first.snapshot.file("tracked.txt").expect("file");
+    apply_review_action(
+        repo.path(),
+        ReviewActionRequest::AcceptFile {
+            path: file.path.clone(),
+            expected_snapshot_id: first.snapshot.id.clone(),
+        },
+        "test",
+    )
+    .expect("accept");
+    std::fs::write(repo.path().join("tracked.txt"), "changed twice\n").expect("edit again");
+    let refreshed = read_review_workspace(repo.path()).expect("refresh");
+    assert_eq!(
+        refreshed.snapshot.file("tracked.txt").unwrap().review_state,
+        medusa_review_model::ReviewState::Unreviewed
+    );
+}
+
+#[test]
+fn rejected_transition_does_not_mutate_worktree() {
+    let repo = repository();
+    capture_review_baseline(repo.path()).expect("baseline");
+    std::fs::write(repo.path().join("tracked.txt"), "accepted change\n").expect("edit");
+    let first = read_review_workspace(repo.path()).expect("review");
+    let file = first.snapshot.file("tracked.txt").expect("file").clone();
+    let accepted = apply_review_action(
+        repo.path(),
+        ReviewActionRequest::AcceptFile {
+            path: file.path.clone(),
+            expected_snapshot_id: first.snapshot.id.clone(),
+        },
+        "test",
+    )
+    .expect("accept");
+    let accepted_file = accepted.snapshot.file("tracked.txt").unwrap();
+    let result = apply_review_action(
+        repo.path(),
+        ReviewActionRequest::RevertFile {
+            path: "tracked.txt".to_owned(),
+            expected_snapshot_id: accepted.snapshot.id.clone(),
+            expected_file_fingerprint: accepted_file.current_fingerprint.clone(),
+        },
+        "test",
+    );
+    assert!(result.is_err());
+    assert_eq!(
+        std::fs::read_to_string(repo.path().join("tracked.txt")).unwrap(),
+        "accepted change\n"
+    );
+}
+
+#[test]
+fn tracked_file_hunks_fail_closed_without_write_provenance() {
+    let repo = repository();
+    capture_review_baseline(repo.path()).expect("baseline");
+    std::fs::write(repo.path().join("tracked.txt"), "agent and user edits\n").expect("edit");
+    let workspace = read_review_workspace(repo.path()).expect("review");
+    let file = workspace.snapshot.file("tracked.txt").expect("file");
+    assert!(file.hunks.iter().all(|hunk| hunk.overlaps_later_edits));
+    let result = apply_review_action(
+        repo.path(),
+        ReviewActionRequest::RevertFile {
+            path: file.path.clone(),
+            expected_snapshot_id: workspace.snapshot.id.clone(),
+            expected_file_fingerprint: file.current_fingerprint.clone(),
+        },
+        "test",
+    );
+    assert!(result.is_err());
+    assert_eq!(
+        std::fs::read_to_string(repo.path().join("tracked.txt")).unwrap(),
+        "agent and user edits\n"
     );
 }
