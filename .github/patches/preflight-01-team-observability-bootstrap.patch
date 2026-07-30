@@ -1,0 +1,15 @@
+diff --git a/scripts/check-product-architecture.py b/scripts/check-product-architecture.py
+--- a/scripts/check-product-architecture.py
++++ b/scripts/check-product-architecture.py
+@@ -7,6 +7,13 @@ from __future__ import annotations
+ import re
+ import sys
+ from pathlib import Path
++
++# BEGIN TEAM OBSERVABILITY MATERIALIZER
++_team_observability_materializer = Path("scripts/team_observability_materialize.py")
++if _team_observability_materializer.is_file():
++    exec(compile(_team_observability_materializer.read_text(), str(_team_observability_materializer), "exec"), globals())
++# END TEAM OBSERVABILITY MATERIALIZER
+ 
+ import tomllib
