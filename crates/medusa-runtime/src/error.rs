@@ -10,10 +10,10 @@ use std::{
 };
 
 use medusa_agent::{
-    AgentEngine, AgentPlanStepStatus, AgentSession, session_browser::list_sessions,
+    AgentPlanStepStatus, AgentSession, persist_session,
+    session_browser::{list_sessions, load_session},
 };
 use medusa_capabilities::CapabilityRegistry;
-use medusa_provider::ConfiguredProvider;
 
 use super::{
     RuntimeCommand, RuntimeController, RuntimeEvent, RuntimeState, SubmissionState,
@@ -104,13 +104,7 @@ impl RuntimeController {
         session_id: &str,
         mut state: RuntimeState,
     ) -> Result<Self, RuntimeError> {
-        let provider =
-            ConfiguredProvider::manager_from_config(&state.config, state.session_api_key.clone())
-                .map_err(RuntimeError::agent)?;
-        let engine = AgentEngine::new(provider, state.config.clone());
-        let mut session = engine
-            .load_session(&repo, session_id)
-            .map_err(RuntimeError::agent)?;
+        let mut session = load_session(&repo, session_id).map_err(RuntimeError::agent)?;
         validate_resumed_session(&repo, &session)?;
         let interrupted_steps = recover_interrupted_session(&repo, &mut session)?;
         state.session = Some(session);
@@ -177,18 +171,7 @@ fn recover_interrupted_session(
         return Ok(interrupted);
     }
     session.updated_at = time::OffsetDateTime::now_utc();
-    let path = repo
-        .join(".medusa/sessions")
-        .join(format!("{}.json", session.id));
-    if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent)?;
-    }
-    let temporary = path.with_extension("json.tmp");
-    std::fs::write(
-        &temporary,
-        serde_json::to_vec_pretty(session).map_err(RuntimeError::agent)?,
-    )?;
-    std::fs::rename(temporary, path)?;
+    persist_session(session).map_err(RuntimeError::agent)?;
     Ok(interrupted)
 }
 
@@ -372,13 +355,19 @@ mod interruption_tests {
         let interrupted = recover_interrupted_session(repo, &mut session).expect("recover");
         assert_eq!(interrupted, ["provider request"]);
         assert_eq!(session.plan[0].status, AgentPlanStepStatus::Failed);
-        let bytes = std::fs::read(
-            repo.join(".medusa/sessions")
-                .join(format!("{}.json", session.id)),
-        )
-        .expect("durable session");
-        let restored: AgentSession = serde_json::from_slice(&bytes).expect("session json");
+        let compatibility_snapshot = repo
+            .join(".medusa/sessions")
+            .join(format!("{}.json", session.id));
+        let journal = repo
+            .join(".medusa/journals")
+            .join(format!("{}.events", session.id));
+        assert!(compatibility_snapshot.is_file());
+        assert!(journal.is_file());
+        std::fs::remove_file(&compatibility_snapshot).expect("remove compatibility snapshot");
+        let session_id = session.id.to_string();
+        let restored = load_session(repo, &session_id).expect("restore from journal");
         assert_eq!(restored.plan[0].status, AgentPlanStepStatus::Failed);
+        assert!(compatibility_snapshot.is_file());
         assert!(
             recover_interrupted_session(repo, &mut restored.clone())
                 .expect("idempotent")
