@@ -16,7 +16,7 @@ A normal persistence boundary is:
 3. append a full snapshot commit record bound to the complete event prefix, then flush it;
 4. atomically rewrite and flush the compatibility session JSON.
 
-The journal snapshot is authoritative over the compatibility JSON because it is committed first. State-only mutations are also committed as snapshot records, so recovery is not limited to fields represented by event payloads.
+The journal snapshot is authoritative over the compatibility JSON because it is committed first. State-only mutations are also committed as snapshot records, so recovery is not limited to fields represented by event payloads. Event records are boxed inside the record enum to keep the parser's stack footprint bounded without changing serialization.
 
 ## Crash behavior
 
