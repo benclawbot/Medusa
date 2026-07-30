@@ -4,7 +4,7 @@ use std::{
     path::PathBuf,
     sync::{
         Arc, Mutex,
-        atomic::{AtomicBool, Ordering},
+        atomic::{AtomicBool, AtomicU64, Ordering},
         mpsc::{self, Receiver, Sender, TryRecvError},
     },
     thread,
@@ -16,6 +16,7 @@ use medusa_agent::{
 };
 use medusa_capabilities::CapabilityRegistry;
 use medusa_config::{Config, Mode};
+use medusa_protocol::{Actor, EventPayload};
 use medusa_provider::{ConfiguredProvider, ModelProvider};
 
 use crate::{
@@ -123,6 +124,69 @@ pub enum RuntimeEvent {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum RuntimeEventDurability {
+    CanonicalJournal(&'static str),
+    SessionBoundCanonical {
+        journal_source: &'static str,
+        pre_session_classification: &'static str,
+    },
+    DurableProjection(&'static str),
+    PresentationOnly(&'static str),
+}
+
+impl RuntimeEvent {
+    #[must_use]
+    pub fn durability(&self) -> RuntimeEventDurability {
+        match self {
+            Self::RecoveryAvailable(_) => {
+                RuntimeEventDurability::DurableProjection("recovery coordinator record")
+            }
+            Self::RecoveryCompleted(_) => {
+                RuntimeEventDurability::CanonicalJournal("recovery_action_completed")
+            }
+            Self::Started => RuntimeEventDurability::PresentationOnly("frontend busy indicator"),
+            Self::AssistantText(_) => {
+                RuntimeEventDurability::CanonicalJournal("assistant_message_recorded")
+            }
+            Self::Activity(_) => RuntimeEventDurability::PresentationOnly(
+                "projection of model, tool, verification, or worker events",
+            ),
+            Self::Team(_) => RuntimeEventDurability::CanonicalJournal("team_state_changed"),
+            Self::Plan(_) => RuntimeEventDurability::CanonicalJournal("plan_updated"),
+            Self::Question(_) => RuntimeEventDurability::CanonicalJournal("question_requested"),
+            Self::Usage { .. } => {
+                RuntimeEventDurability::CanonicalJournal("model_response_received")
+            }
+            Self::Progress { .. } => {
+                RuntimeEventDurability::DurableProjection("materialized session turn")
+            }
+            Self::Settings { .. } => {
+                RuntimeEventDurability::PresentationOnly("process-local frontend settings")
+            }
+            Self::Notice { .. } => {
+                RuntimeEventDurability::PresentationOnly("human-readable presentation notice")
+            }
+            Self::NewSession => RuntimeEventDurability::PresentationOnly(
+                "frontend transcript reset after controller state mutation",
+            ),
+            Self::Compacted { .. } => {
+                RuntimeEventDurability::CanonicalJournal("conversation_compacted")
+            }
+            Self::Completed { .. } => RuntimeEventDurability::CanonicalJournal("session_completed"),
+            Self::TurnFinished => RuntimeEventDurability::CanonicalJournal("runtime_turn_finished"),
+            Self::Cancelled => RuntimeEventDurability::SessionBoundCanonical {
+                journal_source: "cancellation_completed",
+                pre_session_classification: "cancelled before a session identity existed",
+            },
+            Self::Failed(_) => RuntimeEventDurability::SessionBoundCanonical {
+                journal_source: "runtime_failed",
+                pre_session_classification: "startup failure before a session identity existed",
+            },
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum RuntimeActivityKind {
     Assistant,
     Done,
@@ -146,11 +210,51 @@ pub enum SubmitDisposition {
     Queued,
 }
 
+#[derive(Clone, Debug)]
+struct QueuedFollowup {
+    command_id: String,
+    draft: PromptDraft,
+    durably_recorded: bool,
+}
+
 #[derive(Default)]
 struct SubmissionState {
     busy: bool,
-    followups: VecDeque<PromptDraft>,
+    followups: VecDeque<QueuedFollowup>,
+    active_session_id: Option<String>,
 }
+
+fn restore_queued_followups(
+    session: &AgentSession,
+) -> Result<VecDeque<QueuedFollowup>, RuntimeError> {
+    let mut followups = VecDeque::new();
+    for event in &session.events {
+        match &event.payload {
+            EventPayload::UserFollowupQueued { command_id, prompt } => {
+                let draft = serde_json::from_value::<PromptDraft>(prompt.clone())
+                    .map_err(RuntimeError::agent)?;
+                followups
+                    .retain(|queued: &QueuedFollowup| queued.command_id != command_id.as_str());
+                followups.push_back(QueuedFollowup {
+                    command_id: command_id.clone(),
+                    draft,
+                    durably_recorded: true,
+                });
+            }
+            EventPayload::UserFollowupDequeued { command_id, .. } => {
+                followups.retain(|queued| queued.command_id != command_id.as_str());
+            }
+            EventPayload::CancellationCompleted
+            | EventPayload::RuntimeFailed { .. }
+            | EventPayload::SessionReset { .. }
+            | EventPayload::SessionCompleted { .. } => followups.clear(),
+            _ => {}
+        }
+    }
+    Ok(followups)
+}
+
+static FOLLOWUP_COMMAND_SEQUENCE: AtomicU64 = AtomicU64::new(1);
 
 pub struct RuntimeController {
     commands: Sender<RuntimeCommand>,
@@ -159,6 +263,7 @@ pub struct RuntimeController {
     submission: Arc<Mutex<SubmissionState>>,
     event_sender: Sender<RuntimeEvent>,
     team_control: TeamControlPlane,
+    repo: PathBuf,
 }
 
 impl RuntimeController {
@@ -176,12 +281,32 @@ impl RuntimeController {
     fn start_with_state(state: RuntimeState) -> Self {
         let (command_tx, command_rx) = mpsc::channel();
         let (event_tx, event_rx) = mpsc::channel();
+        let (runtime_event_tx, runtime_event_rx) = mpsc::channel();
         let cancel = Arc::new(AtomicBool::new(false));
         let submission = Arc::new(Mutex::new(SubmissionState::default()));
         let worker_cancel = Arc::clone(&cancel);
         let worker_submission = Arc::clone(&submission);
-        let worker_events = event_tx.clone();
+        let worker_events = runtime_event_tx.clone();
         let team_control = state.team_control.clone();
+        let state_repo = state.repo.clone();
+        let dispatch_repo = state_repo.clone();
+        let dispatch_submission = Arc::clone(&submission);
+        let dispatch_events = event_tx.clone();
+        if let Err(error) = thread::Builder::new()
+            .name("medusa-runtime-events".to_owned())
+            .spawn(move || {
+                dispatch_runtime_events(
+                    &dispatch_repo,
+                    &dispatch_submission,
+                    runtime_event_rx,
+                    &dispatch_events,
+                );
+            })
+        {
+            let _ = event_tx.send(RuntimeEvent::Failed(format!(
+                "failed to spawn durable runtime event dispatcher: {error}"
+            )));
+        }
         if let Err(error) = thread::Builder::new()
             .name("medusa-runtime".to_owned())
             .spawn(move || {
@@ -203,8 +328,9 @@ impl RuntimeController {
             events: event_rx,
             cancel,
             submission,
-            event_sender: event_tx,
+            event_sender: runtime_event_tx,
             team_control,
+            repo: state_repo,
         }
     }
 
@@ -219,13 +345,32 @@ impl RuntimeController {
             submission: Arc::new(Mutex::new(SubmissionState::default())),
             event_sender: event_tx,
             team_control: TeamControlPlane::default(),
+            repo: PathBuf::new(),
         }
     }
 
     pub fn submit(&self, draft: PromptDraft) -> Result<SubmitDisposition, RuntimeError> {
         let mut submission = lock_submission(&self.submission);
         if submission.busy {
-            submission.followups.push_back(draft);
+            let command_id = next_followup_command_id();
+            let mut queued = QueuedFollowup {
+                command_id: command_id.clone(),
+                draft,
+                durably_recorded: false,
+            };
+            if let Some(session_id) = submission.active_session_id.as_deref() {
+                record_controller_event(
+                    &self.repo,
+                    session_id,
+                    Actor::User,
+                    EventPayload::UserFollowupQueued {
+                        command_id,
+                        prompt: serde_json::to_value(&queued.draft).map_err(RuntimeError::agent)?,
+                    },
+                )?;
+                queued.durably_recorded = true;
+            }
+            submission.followups.push_back(queued);
             return Ok(SubmitDisposition::Queued);
         }
         submission.busy = true;
@@ -302,12 +447,27 @@ impl RuntimeController {
     }
 
     pub fn cancel(&self) -> bool {
-        if lock_submission(&self.submission).busy {
-            self.cancel.store(true, Ordering::SeqCst);
-            true
-        } else {
-            false
+        let submission = lock_submission(&self.submission);
+        if !submission.busy {
+            return false;
         }
+        if let Some(session_id) = submission.active_session_id.as_deref() {
+            if let Err(error) = record_controller_event(
+                &self.repo,
+                session_id,
+                Actor::User,
+                EventPayload::CancellationRequested {
+                    source: "frontend".to_owned(),
+                },
+            ) {
+                let _ = self.event_sender.send(RuntimeEvent::Failed(format!(
+                    "cancellation was not requested because its durable record failed: {error}"
+                )));
+                return false;
+            }
+        }
+        self.cancel.store(true, Ordering::SeqCst);
+        true
     }
 
     #[must_use]
@@ -322,6 +482,103 @@ impl RuntimeController {
             Err(TryRecvError::Disconnected) => Err(RuntimeError::WorkerStopped),
         }
     }
+}
+
+fn dispatch_runtime_events(
+    repo: &std::path::Path,
+    submission: &Arc<Mutex<SubmissionState>>,
+    runtime_events: Receiver<RuntimeEvent>,
+    frontend_events: &Sender<RuntimeEvent>,
+) {
+    while let Ok(event) = runtime_events.recv() {
+        let payload = match controller_event_payload(&event) {
+            Ok(payload) => payload,
+            Err(error) => {
+                let _ = frontend_events.send(RuntimeEvent::Failed(format!(
+                    "runtime event was not published because durable serialization failed: {error}"
+                )));
+                continue;
+            }
+        };
+        if let Some(payload) = payload {
+            let session_id = match &event {
+                RuntimeEvent::RecoveryCompleted(receipt) => Some(receipt.record.session_id.clone()),
+                _ => lock_submission(submission).active_session_id.clone(),
+            };
+            if let Some(session_id) = session_id {
+                if let Err(error) =
+                    record_controller_event(repo, &session_id, Actor::Coordinator, payload)
+                {
+                    let _ = frontend_events.send(RuntimeEvent::Failed(format!(
+                        "runtime event was not published because its durable record failed: {error}"
+                    )));
+                    continue;
+                }
+            } else if !matches!(
+                event.durability(),
+                RuntimeEventDurability::SessionBoundCanonical { .. }
+            ) {
+                let _ = frontend_events.send(RuntimeEvent::Failed(
+                    "runtime event was not published because no durable session identity was available"
+                        .to_owned(),
+                ));
+                continue;
+            }
+        }
+        let _ = frontend_events.send(event);
+    }
+}
+
+fn controller_event_payload(event: &RuntimeEvent) -> Result<Option<EventPayload>, RuntimeError> {
+    let payload = match event {
+        RuntimeEvent::RecoveryCompleted(receipt) => Some(EventPayload::RecoveryActionCompleted {
+            receipt: serde_json::json!({
+                "record": &receipt.record,
+                "audit_path": receipt.audit_path.display().to_string(),
+            }),
+        }),
+        RuntimeEvent::Team(snapshot) => Some(EventPayload::TeamStateChanged {
+            snapshot: serde_json::to_value(snapshot).map_err(RuntimeError::agent)?,
+        }),
+        RuntimeEvent::TurnFinished => Some(EventPayload::RuntimeTurnFinished),
+        RuntimeEvent::Cancelled => Some(EventPayload::CancellationCompleted),
+        RuntimeEvent::Failed(message) => Some(EventPayload::RuntimeFailed {
+            message: message.clone(),
+        }),
+        RuntimeEvent::RecoveryAvailable(_)
+        | RuntimeEvent::Started
+        | RuntimeEvent::AssistantText(_)
+        | RuntimeEvent::Activity(_)
+        | RuntimeEvent::Plan(_)
+        | RuntimeEvent::Question(_)
+        | RuntimeEvent::Usage { .. }
+        | RuntimeEvent::Progress { .. }
+        | RuntimeEvent::Settings { .. }
+        | RuntimeEvent::Notice { .. }
+        | RuntimeEvent::NewSession
+        | RuntimeEvent::Compacted { .. }
+        | RuntimeEvent::Completed { .. } => None,
+    };
+    Ok(payload)
+}
+
+fn next_followup_command_id() -> String {
+    let sequence = FOLLOWUP_COMMAND_SEQUENCE.fetch_add(1, Ordering::Relaxed);
+    format!(
+        "followup-{}-{sequence}",
+        time::OffsetDateTime::now_utc().unix_timestamp_nanos()
+    )
+}
+
+fn record_controller_event(
+    repo: &std::path::Path,
+    session_id: &str,
+    actor: Actor,
+    payload: EventPayload,
+) -> Result<(), RuntimeError> {
+    let mut session = medusa_agent::session_browser::load_session(repo, session_id)
+        .map_err(RuntimeError::agent)?;
+    medusa_agent::record_session_event(&mut session, actor, payload).map_err(RuntimeError::agent)
 }
 
 fn lock_submission(
@@ -500,11 +757,11 @@ fn mark_idle(submission: &Arc<Mutex<SubmissionState>>, clear_followups: bool) {
     }
 }
 
-fn take_followups(submission: &Arc<Mutex<SubmissionState>>) -> Vec<PromptDraft> {
+fn take_followups(submission: &Arc<Mutex<SubmissionState>>) -> Vec<QueuedFollowup> {
     lock_submission(submission).followups.drain(..).collect()
 }
 
-fn finish_or_take_followups(submission: &Arc<Mutex<SubmissionState>>) -> Vec<PromptDraft> {
+fn finish_or_take_followups(submission: &Arc<Mutex<SubmissionState>>) -> Vec<QueuedFollowup> {
     let mut state = lock_submission(submission);
     if state.followups.is_empty() {
         state.busy = false;
@@ -591,54 +848,8 @@ fn run_prompt(
     let selected_skill = state.pending_skill.clone();
     let execution_plan =
         crate::production_orchestrator::plan(&draft).map_err(RuntimeError::agent)?;
-    if execution_plan.mode == crate::production_orchestrator::ExecutionMode::Direct {
-        let _ = events.send(RuntimeEvent::Team(state.team_control.clear()));
-    } else {
-        state.team_control.clear();
-    }
-    for event in crate::production_orchestrator::events(&execution_plan) {
-        let _ = events.send(event);
-    }
-    let coordinator_evidence = if !resuming_pending_question
-        && execution_plan.mode == crate::production_orchestrator::ExecutionMode::Orchestrated
-    {
-        Some(
-            crate::multi_agent_coordinator::run_preflight(
-                &state.repo,
-                &config,
-                state.session_api_key.clone(),
-                &execution_plan,
-                cancel,
-                &state.team_control,
-                events,
-            )
-            .map_err(RuntimeError::agent)?,
-        )
-    } else {
-        None
-    };
     let coordinated =
         execution_plan.mode == crate::production_orchestrator::ExecutionMode::Orchestrated;
-    let implementation_evidence =
-        if crate::production_orchestrator::requires_mutation(&execution_plan) {
-            let preflight = coordinator_evidence.as_ref().ok_or_else(|| {
-                RuntimeError::agent("mutating execution requires coordinator preflight evidence")
-            })?;
-            Some(
-                crate::mutating_worker_coordinator::run_implementation(
-                    &state.repo,
-                    &config,
-                    state.session_api_key.clone(),
-                    &execution_plan,
-                    preflight,
-                    cancel,
-                    (&state.team_control, events),
-                )
-                .map_err(RuntimeError::agent)?,
-            )
-        } else {
-            None
-        };
     let engine = AgentEngine::new_with_cancellation(provider, config.clone(), Arc::clone(cancel));
     let engine = if coordinated {
         engine.with_execution_policy(medusa_agent::AgentExecutionPolicy::for_team_role(
@@ -647,40 +858,8 @@ fn run_prompt(
     } else {
         engine
     };
-    let orchestration_context = crate::production_orchestrator::runtime_context(&execution_plan);
-    let tool_policy_context =
-        crate::tool_policy::runtime_context(&draft).map_err(RuntimeError::agent)?;
-    let verification_plan = medusa_tool_control::verification_plan(&draft.text);
-    let verification_context = format!(
-        "Progressive verification requirements: {:?}. Rationale: {:?}. Complete the narrowest checks first and escalate only when required by risk or failure.",
-        verification_plan.requirements, verification_plan.rationale
-    );
-    let learning_context = crate::learning_retrieval::select(
-        &state.repo,
-        &draft,
-        state.session.as_ref().map(|session| session.id.as_str()),
-        events,
-    );
-    let mut task_context = vec![
-        orchestration_context,
-        tool_policy_context,
-        verification_context,
-    ];
-    if let Some(evidence) = coordinator_evidence.as_ref() {
-        task_context.push(evidence.parent_context());
-    }
-    if let Some(evidence) = implementation_evidence.as_ref() {
-        task_context.push(evidence.parent_context());
-    }
-    if let Some(learning) = learning_context.prompt_context {
-        task_context.push(learning);
-    }
-    if let Some(skill) = selected_skill.as_ref().map(SelectedSkill::prompt_context) {
-        task_context.push(skill);
-    }
-    let skill_context = task_context.join("\n\n");
     let content = message_blocks(&draft)?;
-    let mut session = match state.session.take() {
+    let session = match state.session.take() {
         Some(mut session) => {
             let update = if session.pending_question.is_some() {
                 engine.answer_pending_question(&mut session, content)
@@ -703,6 +882,123 @@ fn run_prompt(
                 .map_err(RuntimeError::agent)?
         }
     };
+    lock_submission(submission).active_session_id = Some(session.id.to_string());
+    state.session = Some(session);
+    let session = state.session.as_mut().ok_or_else(|| {
+        RuntimeError::agent("runtime session disappeared before execution plan recording")
+    })?;
+    medusa_agent::record_session_event(
+        session,
+        Actor::Coordinator,
+        EventPayload::PlanCreated {
+            plan: serde_json::to_value(&execution_plan).map_err(RuntimeError::agent)?,
+        },
+    )
+    .map_err(RuntimeError::agent)?;
+
+    if execution_plan.mode == crate::production_orchestrator::ExecutionMode::Direct {
+        let _ = events.send(RuntimeEvent::Team(state.team_control.clear()));
+    } else {
+        state.team_control.clear();
+    }
+    for event in crate::production_orchestrator::events(&execution_plan) {
+        let _ = events.send(event);
+    }
+    let coordinator_evidence = if !resuming_pending_question && coordinated {
+        Some(
+            crate::multi_agent_coordinator::run_preflight(
+                &state.repo,
+                &config,
+                state.session_api_key.clone(),
+                &execution_plan,
+                cancel,
+                &state.team_control,
+                events,
+            )
+            .map_err(RuntimeError::agent)?,
+        )
+    } else {
+        None
+    };
+    if let Some(evidence) = coordinator_evidence.as_ref() {
+        let session = state.session.as_mut().ok_or_else(|| {
+            RuntimeError::agent("runtime session disappeared before worker evidence recording")
+        })?;
+        medusa_agent::record_session_event(
+            session,
+            Actor::Coordinator,
+            EventPayload::WorkerEvidenceRecorded {
+                evidence: serde_json::to_value(evidence).map_err(RuntimeError::agent)?,
+            },
+        )
+        .map_err(RuntimeError::agent)?;
+    }
+    let implementation_evidence =
+        if crate::production_orchestrator::requires_mutation(&execution_plan) {
+            let preflight = coordinator_evidence.as_ref().ok_or_else(|| {
+                RuntimeError::agent("mutating execution requires coordinator preflight evidence")
+            })?;
+            Some(
+                crate::mutating_worker_coordinator::run_implementation(
+                    &state.repo,
+                    &config,
+                    state.session_api_key.clone(),
+                    &execution_plan,
+                    preflight,
+                    cancel,
+                    (&state.team_control, events),
+                )
+                .map_err(RuntimeError::agent)?,
+            )
+        } else {
+            None
+        };
+    if let Some(evidence) = implementation_evidence.as_ref() {
+        let session = state.session.as_mut().ok_or_else(|| {
+            RuntimeError::agent("runtime session disappeared before integration receipt recording")
+        })?;
+        medusa_agent::record_session_event(
+            session,
+            Actor::Coordinator,
+            EventPayload::IntegrationReceiptRecorded {
+                receipt: serde_json::to_value(evidence).map_err(RuntimeError::agent)?,
+            },
+        )
+        .map_err(RuntimeError::agent)?;
+    }
+    let orchestration_context = crate::production_orchestrator::runtime_context(&execution_plan);
+    let tool_policy_context =
+        crate::tool_policy::runtime_context(&draft).map_err(RuntimeError::agent)?;
+    let verification_plan = medusa_tool_control::verification_plan(&draft.text);
+    let verification_context = format!(
+        "Progressive verification requirements: {:?}. Rationale: {:?}. Complete the narrowest checks first and escalate only when required by risk or failure.",
+        verification_plan.requirements, verification_plan.rationale
+    );
+    let session_id = state.session.as_ref().map(|session| session.id.as_str());
+    let learning_context =
+        crate::learning_retrieval::select(&state.repo, &draft, session_id, events);
+    let mut task_context = vec![
+        orchestration_context,
+        tool_policy_context,
+        verification_context,
+    ];
+    if let Some(evidence) = coordinator_evidence.as_ref() {
+        task_context.push(evidence.parent_context());
+    }
+    if let Some(evidence) = implementation_evidence.as_ref() {
+        task_context.push(evidence.parent_context());
+    }
+    if let Some(learning) = learning_context.prompt_context {
+        task_context.push(learning);
+    }
+    if let Some(skill) = selected_skill.as_ref().map(SelectedSkill::prompt_context) {
+        task_context.push(skill);
+    }
+    let skill_context = task_context.join("\n\n");
+    let mut session = state
+        .session
+        .take()
+        .ok_or_else(|| RuntimeError::agent("runtime session disappeared before execution"))?;
     let mut updates = UpdateState::new();
     if !session.plan.is_empty() {
         let _ = events.send(RuntimeEvent::Plan(session.plan.clone()));
@@ -903,11 +1199,26 @@ fn run_prompt(
 fn append_followups<P: ModelProvider>(
     engine: &AgentEngine<P>,
     session: &mut AgentSession,
-    drafts: Vec<PromptDraft>,
+    followups: Vec<QueuedFollowup>,
 ) -> Result<(), RuntimeError> {
-    for draft in drafts {
+    for followup in followups {
+        if !followup.durably_recorded {
+            medusa_agent::record_session_event(
+                session,
+                Actor::User,
+                EventPayload::UserFollowupQueued {
+                    command_id: followup.command_id.clone(),
+                    prompt: serde_json::to_value(&followup.draft).map_err(RuntimeError::agent)?,
+                },
+            )
+            .map_err(RuntimeError::agent)?;
+        }
         engine
-            .append_user_message(session, message_blocks(&draft)?)
+            .append_queued_user_message(
+                session,
+                followup.command_id,
+                message_blocks(&followup.draft)?,
+            )
             .map_err(RuntimeError::agent)?;
     }
     Ok(())
@@ -922,7 +1233,7 @@ fn execute_slash_command(
 ) -> Result<Option<RuntimeEvent>, RuntimeError> {
     let submission = Arc::new(Mutex::new(SubmissionState {
         busy: true,
-        followups: VecDeque::new(),
+        ..SubmissionState::default()
     }));
     execute_slash_command_with_submission(state, command, events, cancel, &submission)
 }
@@ -1230,7 +1541,18 @@ fn execute_slash_command_with_submission(
             });
         }
         SlashCommand::New => {
+            if let Some(session) = state.session.as_mut() {
+                medusa_agent::record_session_event(
+                    session,
+                    Actor::Coordinator,
+                    EventPayload::SessionReset {
+                        reason: "user requested a new session".to_owned(),
+                    },
+                )
+                .map_err(RuntimeError::agent)?;
+            }
             state.session = None;
+            lock_submission(submission).active_session_id = None;
             state.pending_goal = None;
             state.pending_skill = None;
             state.config.agent.mode = state.base_config.agent.mode;

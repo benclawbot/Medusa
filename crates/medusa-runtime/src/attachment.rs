@@ -9,13 +9,15 @@ pub mod session;
 
 use std::{fmt, path::PathBuf};
 
+use serde::{Deserialize, Serialize};
+
 pub const MAX_CLIPBOARD_TEXT_BYTES: usize = 4 * 1024 * 1024;
 pub const MAX_IMAGE_BYTES: usize = 20 * 1024 * 1024;
 pub const MAX_IMAGE_PIXELS: u64 = 40_000_000;
 pub const MAX_IMAGES_PER_PROMPT: usize = 10;
 pub const MAX_TOTAL_ATTACHMENT_BYTES: usize = 50 * 1024 * 1024;
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub enum AttachmentOrigin {
     Clipboard,
     FilePicker,
@@ -25,7 +27,7 @@ pub enum AttachmentOrigin {
     Unknown,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub enum ClipboardContent {
     Empty,
     Text(String),
@@ -33,7 +35,7 @@ pub enum ClipboardContent {
     Files(Vec<PathBuf>),
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct ClipboardImage {
     pub width: u32,
     pub height: u32,
@@ -47,7 +49,7 @@ impl ClipboardImage {
     }
 }
 
-#[derive(Clone, Debug, Default, Eq, PartialEq)]
+#[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
 pub struct PromptDraft {
     pub text: String,
     pub attachments: Vec<PromptAttachment>,
@@ -117,7 +119,7 @@ impl PromptDraft {
     }
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub enum PromptAttachment {
     PastedText(TextAttachment),
     Image(ImageAttachment),
@@ -134,13 +136,13 @@ impl PromptAttachment {
     }
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct TextAttachment {
     pub display_name: String,
     pub text: String,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct ImageAttachment {
     pub display_name: String,
     pub width: u32,
@@ -149,7 +151,7 @@ pub struct ImageAttachment {
     pub source_format: Option<String>,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct FileAttachment {
     pub path: PathBuf,
     pub byte_len: usize,

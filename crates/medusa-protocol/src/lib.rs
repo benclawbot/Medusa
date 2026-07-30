@@ -9,7 +9,7 @@ use sha2::{Digest, Sha256};
 use time::OffsetDateTime;
 
 /// Current wire protocol version.
-pub const CURRENT_PROTOCOL_VERSION: ProtocolVersion = ProtocolVersion { major: 1, minor: 0 };
+pub const CURRENT_PROTOCOL_VERSION: ProtocolVersion = ProtocolVersion { major: 1, minor: 1 };
 
 /// Independently versioned wire protocol.
 #[derive(Clone, Copy, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize)]
@@ -88,6 +88,14 @@ pub enum EventPayload {
     UserPromptReceived {
         text: String,
     },
+    UserFollowupQueued {
+        command_id: String,
+        prompt: Value,
+    },
+    UserFollowupDequeued {
+        command_id: String,
+        text: String,
+    },
     GoalUpdated {
         objective: String,
     },
@@ -110,6 +118,41 @@ pub enum EventPayload {
     },
     PlanUpdated {
         update: Value,
+    },
+    QuestionRequested {
+        question: Value,
+    },
+    ApprovalRequested {
+        request: Value,
+    },
+    ApprovalDecisionRecorded {
+        decision: Value,
+    },
+    AssistantMessageRecorded {
+        message: Value,
+    },
+    TeamStateChanged {
+        snapshot: Value,
+    },
+    WorkerEvidenceRecorded {
+        evidence: Value,
+    },
+    IntegrationReceiptRecorded {
+        receipt: Value,
+    },
+    RecoveryActionCompleted {
+        receipt: Value,
+    },
+    CancellationRequested {
+        source: String,
+    },
+    CancellationCompleted,
+    RuntimeTurnFinished,
+    RuntimeFailed {
+        message: String,
+    },
+    SessionReset {
+        reason: String,
     },
     ModelRequestStarted {
         provider: String,

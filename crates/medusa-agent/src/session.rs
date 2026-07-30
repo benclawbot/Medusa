@@ -3,6 +3,8 @@ use std::{
     fs,
     io::Write,
     path::{Path, PathBuf},
+    process,
+    sync::atomic::{AtomicU64, Ordering},
 };
 
 use medusa_core::{ErrorCategory, ErrorCode, MedusaError, MedusaResult, SessionId};
@@ -58,6 +60,7 @@ pub struct NonFatalDiagnostic {
 }
 
 const MAX_DIAGNOSTICS: usize = 128;
+static SNAPSHOT_TEMP_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 
 /// A durable model-authored task plan step.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -225,15 +228,14 @@ pub(crate) fn load(repo: &Path, session: &str) -> MedusaResult<AgentSession> {
 }
 
 pub(crate) fn persist(session: &AgentSession) -> MedusaResult<()> {
-    journal::commit_snapshot(session)?;
-    persist_compatibility_snapshot(session)?;
-    if session.events.last().is_some_and(|event| {
+    let committed = journal::commit_snapshot_with(session, persist_compatibility_snapshot)?;
+    if committed.events.last().is_some_and(|event| {
         matches!(
             &event.payload,
             medusa_protocol::EventPayload::ModelRequestStarted { .. }
         )
     }) {
-        if let Err(error) = record_loaded_skills(session) {
+        if let Err(error) = record_loaded_skills(&committed) {
             record_nonfatal(
                 &session.repo,
                 Some(&session.id),
@@ -243,7 +245,7 @@ pub(crate) fn persist(session: &AgentSession) -> MedusaResult<()> {
             );
         }
     }
-    if let Err(error) = recall::persist_completed_session(session) {
+    if let Err(error) = recall::persist_completed_session(&committed) {
         record_nonfatal(
             &session.repo,
             Some(&session.id),
@@ -252,7 +254,7 @@ pub(crate) fn persist(session: &AgentSession) -> MedusaResult<()> {
             &error.to_string(),
         );
     }
-    if let Err(error) = completed_learning::process(session) {
+    if let Err(error) = completed_learning::process(&committed) {
         record_nonfatal(
             &session.repo,
             Some(&session.id),
@@ -276,13 +278,30 @@ fn persist_at(path: &Path, session: &AgentSession) -> MedusaResult<()> {
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent)?;
     }
-    let temporary = path.with_extension("json.tmp");
-    let mut file = fs::File::create(&temporary)?;
-    file.write_all(&serde_json::to_vec_pretty(session)?)?;
-    file.sync_all()?;
-    fs::rename(temporary, path)?;
-    sync_parent(path);
-    Ok(())
+    let temporary = unique_snapshot_temporary(path);
+    let result = (|| {
+        let mut file = fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&temporary)?;
+        file.write_all(&serde_json::to_vec_pretty(session)?)?;
+        file.sync_all()?;
+        fs::rename(&temporary, path)?;
+        sync_parent(path);
+        Ok(())
+    })();
+    if result.is_err() {
+        let _ = fs::remove_file(&temporary);
+    }
+    result
+}
+
+fn unique_snapshot_temporary(path: &Path) -> PathBuf {
+    let sequence = SNAPSHOT_TEMP_SEQUENCE.fetch_add(1, Ordering::Relaxed);
+    let file_name = path
+        .file_name()
+        .map_or_else(|| "session.json".into(), |name| name.to_string_lossy());
+    path.with_file_name(format!(".{file_name}.tmp.{}.{}", process::id(), sequence))
 }
 
 fn sync_parent(path: &Path) {
@@ -408,6 +427,80 @@ fn redact_error(error: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn concurrent_test_session(repo: &Path) -> AgentSession {
+        AgentSession {
+            id: SessionId::new(),
+            objective: "concurrent persistence test".to_owned(),
+            repo: repo.to_path_buf(),
+            created_at: OffsetDateTime::UNIX_EPOCH,
+            updated_at: OffsetDateTime::UNIX_EPOCH,
+            completed: false,
+            turn: 0,
+            plan: Vec::new(),
+            pending_question: None,
+            messages: Vec::new(),
+            events: Vec::new(),
+            evidence: Vec::new(),
+            tool_artifacts: Vec::new(),
+            world_model: None,
+            approval_grants: Vec::new(),
+            approval_receipts: Vec::new(),
+            rollback_receipts: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn concurrent_full_persists_share_one_atomic_publication_boundary() {
+        use std::{
+            sync::{Arc, Barrier},
+            thread,
+        };
+
+        use medusa_protocol::{Actor, EventPayload};
+
+        let repository = tempfile::tempdir().expect("repository");
+        bootstrap(repository.path()).expect("bootstrap");
+        let mut session = concurrent_test_session(repository.path());
+        let objective = session.objective.clone();
+        journal::append_payload_committed(
+            &mut session,
+            Actor::Coordinator,
+            EventPayload::SessionCreated { objective },
+        )
+        .expect("initial durable event");
+        persist(&session).expect("initial full persist");
+
+        let workers = 8;
+        let iterations = 24;
+        let barrier = Arc::new(Barrier::new(workers));
+        let session = Arc::new(session);
+        let handles = (0..workers)
+            .map(|_| {
+                let barrier = Arc::clone(&barrier);
+                let session = Arc::clone(&session);
+                thread::spawn(move || {
+                    for _ in 0..iterations {
+                        barrier.wait();
+                        persist(&session).expect("concurrent full persist");
+                    }
+                })
+            })
+            .collect::<Vec<_>>();
+        for handle in handles {
+            handle.join().expect("persistence worker");
+        }
+
+        let loaded =
+            load(repository.path(), &session.id.to_string()).expect("load committed session");
+        assert_eq!(loaded.events, session.events);
+        let temporary_files = fs::read_dir(repository.path().join(".medusa/sessions"))
+            .expect("session directory")
+            .filter_map(Result::ok)
+            .filter(|entry| entry.file_name().to_string_lossy().contains(".tmp."))
+            .count();
+        assert_eq!(temporary_files, 0);
+    }
 
     #[test]
     fn bootstrap_keeps_runtime_state_under_medusa_directory() {
