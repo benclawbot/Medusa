@@ -8,6 +8,7 @@ on:
       - crates/medusa-runtime/src/checkpoint_payload.rs
       - crates/medusa-runtime/src/recovery_projection.rs
       - validation/materialize_569_restore_lineage.py
+      - validation/fix_569_checkpoint_payload_tests.py
       - .github/workflows/materialize-569-restore-lineage.yml
 
 permissions:
@@ -28,7 +29,9 @@ jobs:
           token: ${{ secrets.GITHUB_TOKEN }}
       - uses: dtolnay/rust-toolchain@39b0b3842c7e8bbf6904c0bfc3d9006fdd4dc4e0 # stable
       - name: Materialize reviewed restore wiring
-        run: python3 validation/materialize_569_restore_lineage.py
+        run: |
+          python3 validation/materialize_569_restore_lineage.py
+          python3 validation/fix_569_checkpoint_payload_tests.py
       - name: Format and validate restore lineage
         run: |
           cargo fmt --all
@@ -40,6 +43,7 @@ jobs:
         run: |
           git rm .github/workflows/materialize-569-restore-lineage.yml
           git rm validation/materialize_569_restore_lineage.py
+          git rm validation/fix_569_checkpoint_payload_tests.py
           git config user.name github-actions[bot]
           git config user.email 41898282+github-actions[bot]@users.noreply.github.com
           git add crates/medusa-protocol/src/lib.rs
