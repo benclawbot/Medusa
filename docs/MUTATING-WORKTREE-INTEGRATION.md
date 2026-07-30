@@ -16,6 +16,10 @@ Coordinated implementation must not edit the user's primary working tree directl
 - The user-facing parent session is read-only during coordinated execution. It reviews integrated evidence and cannot bypass worktree isolation with direct file writes.
 - Final repository verification remains the only coordinated completion gate.
 
+## Production status
+
+Mutating execution is enabled only for objectives classified as repository modifications. Read-only coordinated analysis remains on the planner and researcher path and does not create an implementation worktree. Direct single-agent turns preserve their existing working-tree behavior.
+
 ## Acceptance proof
 
 The implementation must prove:
