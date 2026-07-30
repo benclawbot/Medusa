@@ -629,7 +629,9 @@ mod tests {
         )
         .expect("record controller event");
 
-        let restored = load_committed(directory.path(), &current.id).expect("committed session");
+        let restored = load_or_migrate(directory.path(), &current.id, None)
+            .expect("committed session")
+            .session;
         assert_eq!(restored.events, current.events);
         assert!(matches!(
             restored.events.last().map(|event| &event.payload),
