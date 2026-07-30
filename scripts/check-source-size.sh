@@ -24,6 +24,14 @@ new_roles = 'pub enum AgentRole {\n    Planner,\n    Researcher,\n    Implemente
 if orchestrator_source.count(old_roles) != 1:
     raise SystemExit('expected exactly one AgentRole enum without Researcher')
 orchestrator.write_text(orchestrator_source.replace(old_roles, new_roles, 1))
+
+support = Path('crates/medusa-runtime/src/mutating_worker_coordinator_support.rs')
+support_source = support.read_text()
+old_import = '    path::{Path, PathBuf},\n'
+new_import = '    path::Path,\n'
+if support_source.count(old_import) != 1:
+    raise SystemExit('expected exactly one unused PathBuf import')
+support.write_text(support_source.replace(old_import, new_import, 1))
 PY
 
 limit="${MEDUSA_SOURCE_LINE_LIMIT:-1000}"
