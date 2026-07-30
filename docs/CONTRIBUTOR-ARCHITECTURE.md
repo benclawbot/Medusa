@@ -22,7 +22,7 @@ The workspace metadata in the root `Cargo.toml` is the machine-readable authorit
 |---|---|---|
 | Objective and goal state | `crates/medusa-goal`, `crates/medusa-world-model` | `crates/medusa-context`, `crates/medusa-context-retrieval` |
 | Turn and prompt assembly | `crates/medusa-turn-assembly`, `crates/medusa-agent` | `crates/medusa-prompt-cache`, `crates/medusa-provider` |
-| Persisted session and plan state | `crates/medusa-agent/src/session.rs` | `crates/medusa-memory` |
+| Persisted session and plan state | `crates/medusa-agent/src/session.rs`, `crates/medusa-agent/src/journal.rs` | `crates/medusa-memory` |
 | Production task contracts and mutation classification | `crates/medusa-runtime/src/production_orchestrator.rs` | `crates/medusa-multi-agent-scheduler` |
 
 ## Execute Safely
@@ -48,7 +48,8 @@ Current coordinated execution constructs separate planner and risk-reviewer sess
 |---|---|---|
 | Worker leases and restart epochs | `crates/medusa-agent/src/worker_execution.rs` | `crates/medusa-worker-leases` |
 | Worktree crash recovery and cleanup | `crates/medusa-runtime/src/mutating_worker_coordinator.rs` | `crates/medusa-workers` |
-| Checkpoints and replay | `crates/medusa-execution-checkpoint`, `crates/medusa-execution-replay` | `crates/medusa-time-travel` |
+| Committed session journal and cursor replay | `crates/medusa-agent/src/journal.rs`, `crates/medusa-agent/src/session_browser.rs` | `crates/medusa-protocol` |
+| Checkpoints and diagnostic replay | `crates/medusa-execution-checkpoint`, `crates/medusa-execution-replay` | `crates/medusa-time-travel` |
 | Runtime supervision | `crates/medusa-runtime-supervisor` | `crates/medusa-daemon` |
 | Recovery coordination | `crates/medusa-recovery-coordinator` | `crates/medusa-repository-rollback` |
 | Durable memory and learning | `crates/medusa-memory`, `crates/medusa-markdown-memory` | `crates/medusa-memory-writeback`, `crates/medusa-memory-consolidation`, `crates/medusa-improvement` |
@@ -57,6 +58,7 @@ Current coordinated execution constructs separate planner and risk-reviewer sess
 
 | Concern | Owning paths | What downstream consumers may do |
 |---|---|---|
+| Session history | `crates/medusa-agent/src/journal.rs`, `crates/medusa-agent/src/session.rs` | Replay only committed cursors, repair stale compatibility snapshots, and fail closed on divergent history. |
 | Plans | `crates/medusa-agent/src/session.rs`, `crates/medusa-runtime/src/production_orchestrator.rs` | Render, resume, and bind execution; never infer a replacement plan from UI state. |
 | Execution | `crates/medusa-agent`, `crates/medusa-runtime`, `crates/medusa-workers` | Summarize actual session, worktree, commit, and integration evidence. |
 | Verification | `crates/medusa-agent`, `crates/medusa-runtime`, browser crates | Decide completion from recorded required checks and overrides. |

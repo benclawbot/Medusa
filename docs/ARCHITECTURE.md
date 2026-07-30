@@ -152,6 +152,7 @@ Repository-local durable state lives under `.medusa`. Exact filenames and schema
 | Concern | Authoritative record | Authority rule |
 |---|---|---|
 | Plans | Persisted session plan, task contracts, and current plan fingerprint | Execution must bind to the active plan. |
+| Session history | Framed event journal plus committed full-session snapshots and replay cursors | Only committed journal snapshots are restart authority; stale compatibility JSON is repaired from the journal. |
 | Execution | Runtime event log, team state, leases, worktree state, changed paths, commits, transactions, and process records | Proposed text is not execution evidence. |
 | Verification | Worktree checks, primary repository checks, browser evidence, overrides, and completion status | Required verification decides coding completion. |
 | Reports | Final session report derived from teammate, integration, and verification evidence | Reports summarize records; they do not override them. |

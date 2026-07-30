@@ -32,7 +32,7 @@ The manifest also records production paths, behavioral test paths, canonical gat
 ## Production capability evidence
 
 - `shared-runtime`: `crates/medusa-runtime`, `crates/medusa-tui`, and `apps/medusa-desktop`; validated by CI, Desktop, and Refactor Guardrails.
-- `durable-sessions-memory`: session persistence and `crates/medusa-memory`; validated by CI and Release Gates.
+- `durable-sessions-memory`: write-ahead `EventEnvelope` frames, committed full-session journal snapshots, torn-tail recovery, committed cursor replay, compatibility-JSON repair, and `crates/medusa-memory`; validated by CI and Release Gates.
 - `github-service`: `crates/medusa-github`; validated by CI and Release Gates.
 - `provider-context-resilience`: provider, runtime, and agent layers; validated by CI and Release Gates.
 - `identity-approval-transactions`: identity guard, approval, transaction, and engine wiring with named safety tests; validated by CI, Release Gates, and Refactor Guardrails.

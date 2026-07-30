@@ -79,14 +79,18 @@
     {
       "id": "durable-sessions-memory",
       "maturity": "production",
-      "summary": "Sessions, prompts, memory, provenance, lifecycle state, and recall are durable.",
+      "summary": "Sessions, prompts, provenance, lifecycle state, recall, and committed event replay are crash-durable.",
       "owner": "agent runtime maintainers",
       "production_paths": [
+        "crates/medusa-agent/src/journal.rs",
         "crates/medusa-agent/src/session.rs",
+        "crates/medusa-agent/src/session_browser.rs",
         "crates/medusa-memory"
       ],
       "test_paths": [
+        "crates/medusa-agent/src/journal.rs",
         "crates/medusa-agent/src/session",
+        "crates/medusa-agent/src/session_browser.rs",
         "crates/medusa-memory"
       ],
       "gates": [
@@ -108,7 +112,8 @@
       ],
       "documentation": [
         "README.md",
-        "docs/CAPABILITY-EVIDENCE.md"
+        "docs/CAPABILITY-EVIDENCE.md",
+        "docs/architecture/durable-session-journal.md"
       ],
       "promotion_checklist": [
         "owner assigned",
