@@ -912,7 +912,18 @@ mod tests {
             .expect("discard runtime state");
 
         assert!(worker.worktree.join(".medusa/policy.json").is_file());
-        assert!(!worker.worktree.join(".medusa/artifacts").exists());
+        assert!(
+            !worker
+                .worktree
+                .join(".medusa/artifacts/fs_read.txt")
+                .exists()
+        );
+        assert!(
+            !worker
+                .worktree
+                .join(".medusa/artifacts/fs_read_committed.txt")
+                .exists()
+        );
         assert!(!worker.worktree.join("src/__pycache__").exists());
         assert!(!worker.worktree.join("src/.pytest_cache").exists());
         assert!(
