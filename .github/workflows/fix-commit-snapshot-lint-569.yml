@@ -1,4 +1,5 @@
 name: Retain issue 569 snapshot API
+# Triggered through the connected GitHub client.
 
 on:
   push:
