@@ -292,6 +292,8 @@ fn sync_parent(path: &Path) {
             let _ = directory.sync_all();
         }
     }
+    #[cfg(not(unix))]
+    let _ = path;
 }
 
 fn session_path(repo: &Path, id: &SessionId) -> PathBuf {
