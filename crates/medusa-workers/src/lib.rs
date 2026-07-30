@@ -518,15 +518,22 @@ fn changed_paths_for_commit(repo: &Path, commit: &str) -> MedusaResult<Vec<Strin
 
 fn ensure_clean(repo: &Path) -> MedusaResult<()> {
     let status = git_stdout(repo, &["status", "--porcelain", "--untracked-files=all"])?;
-    let dirty = status.lines().any(|line| {
-        let path = line.get(3..).unwrap_or_default().trim_matches('"');
-        !(line.starts_with("?? ") && (path == ".medusa" || path.starts_with(".medusa/")))
-    });
-    if dirty {
+    let dirty = status
+        .lines()
+        .filter(|line| {
+            let path = line.get(3..).unwrap_or_default().trim_matches('"');
+            !(line.starts_with("?? ") && (path == ".medusa" || path.starts_with(".medusa/")))
+        })
+        .map(str::to_owned)
+        .collect::<Vec<_>>();
+    if !dirty.is_empty() {
         Err(MedusaError::new(
             ErrorCode::PolicyDenied,
             ErrorCategory::Policy,
-            "merge coordinator requires a clean repository outside Medusa runtime state",
+            format!(
+                "merge coordinator requires a clean repository outside Medusa runtime state: {}",
+                dirty.join(", ")
+            ),
         ))
     } else {
         Ok(())
@@ -660,6 +667,21 @@ mod tests {
         git(&repo, &["add", "-A"]);
         git(&repo, &["commit", "-m", "base"]);
         (directory, repo, worktrees)
+    }
+
+    #[test]
+    fn clean_repository_error_reports_exact_dirty_paths() {
+        let (_directory, repo, worktrees) = repository();
+        fs::create_dir_all(repo.join(".medusa/sessions")).expect("runtime state");
+        fs::write(repo.join(".medusa/sessions/session.json"), "{}\n").expect("runtime record");
+        fs::write(repo.join("unexpected.txt"), "dirty\n").expect("dirty path");
+
+        let error = WorkerManager::new(&repo, worktrees)
+            .expect("manager")
+            .require_clean()
+            .expect_err("dirty repository must fail");
+        assert!(error.to_string().contains("?? unexpected.txt"));
+        assert!(!error.to_string().contains("session.json"));
     }
 
     #[test]
