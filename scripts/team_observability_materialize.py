@@ -28,6 +28,15 @@ def edit_once(path: str, old: str, new: str) -> None:
     file.write_text(source.replace(old, new, 1))
 
 
+def remove_exact(source: str, snippet: str, expected: int) -> str:
+    count = source.count(snippet)
+    if count != expected:
+        raise SystemExit(
+            f"embedded materializer: expected {expected} occurrences, found {count}: {snippet[:100]!r}"
+        )
+    return source.replace(snippet, "")
+
+
 Path("crates/medusa-runtime/src/team_control.rs").write_text(
     download("crates/medusa-runtime/src/team_control.rs")
 )
@@ -48,7 +57,76 @@ build_block_end = source.index(
     build_block_start,
 )
 source = source[:build_block_start] + source[build_block_end + 2 :]
+source = remove_exact(
+    source,
+    "    ('fn coordinate_with_executor<F>(\\n', 'fn coordinate_with_control<F>(\\n'),\n",
+    1,
+)
+source = remove_exact(
+    source,
+    "    ('    cancel: &Arc<AtomicBool>,\\n    events: &Sender<RuntimeEvent>,\\n    executor: F,\\n', '    cancel: &Arc<AtomicBool>,\\n    control: &TeamControlPlane,\\n    events: &Sender<RuntimeEvent>,\\n    executor: F,\\n'),\n",
+    2,
+)
 exec(compile(source, "team-observability-materializer.py", "exec"), {})
+
+edit_once(
+    "crates/medusa-runtime/src/multi_agent_coordinator.rs",
+    """fn coordinate_with_executor<F>(
+    repo: &Path,
+    plan: &ProductionExecutionPlan,
+    cancel: &Arc<AtomicBool>,
+    events: &Sender<RuntimeEvent>,
+    executor: F,
+) -> Result<CoordinatorEvidence, String>
+where
+    F: Fn(WorkerRequest) -> Result<WorkerEvidence, String> + Sync,
+{
+    let repository_fingerprint = repository_fingerprint(repo)?;
+""",
+    """fn coordinate_with_control<F>(
+    repo: &Path,
+    plan: &ProductionExecutionPlan,
+    cancel: &Arc<AtomicBool>,
+    control: &TeamControlPlane,
+    events: &Sender<RuntimeEvent>,
+    executor: F,
+) -> Result<CoordinatorEvidence, String>
+where
+    F: Fn(WorkerRequest) -> Result<WorkerEvidence, String> + Sync,
+{
+    let repository_fingerprint = repository_fingerprint(repo)?;
+""",
+)
+edit_once(
+    "crates/medusa-runtime/src/mutating_worker_coordinator.rs",
+    """fn coordinate_with_control<F>(
+    repo: &Path,
+    plan: &ProductionExecutionPlan,
+    preflight: &CoordinatorEvidence,
+    cancel: &Arc<AtomicBool>,
+    events: &Sender<RuntimeEvent>,
+    executor: F,
+) -> Result<ImplementationEvidence, String>
+where
+    F: Fn(ImplementationRequest) -> Result<WorkerRun, String>,
+{
+    validate_preflight(plan, preflight)?;
+""",
+    """fn coordinate_with_control<F>(
+    repo: &Path,
+    plan: &ProductionExecutionPlan,
+    preflight: &CoordinatorEvidence,
+    cancel: &Arc<AtomicBool>,
+    control: &TeamControlPlane,
+    events: &Sender<RuntimeEvent>,
+    executor: F,
+) -> Result<ImplementationEvidence, String>
+where
+    F: Fn(ImplementationRequest) -> Result<WorkerRun, String>,
+{
+    validate_preflight(plan, preflight)?;
+""",
+)
 
 edit_once(
     "crates/medusa-runtime/build_main.rs",
