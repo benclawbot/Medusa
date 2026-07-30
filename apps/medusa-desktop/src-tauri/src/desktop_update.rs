@@ -261,6 +261,10 @@ mod tests {
     fn npm_detection_includes_cmd_and_standard_node_locations() {
         let candidates = command_candidates("npm");
         assert!(candidates.iter().any(|path| path == Path::new("npm.cmd")));
-        assert!(candidates.iter().any(|path| path.ends_with(r"nodejs\npm.cmd")));
+        assert!(
+            candidates
+                .iter()
+                .any(|path| path.ends_with(r"nodejs\npm.cmd"))
+        );
     }
 }
