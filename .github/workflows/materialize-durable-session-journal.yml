@@ -25,7 +25,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          cat .github/materialize-durable-journal/patch.* | base64 --decode > /tmp/durable-journal.patch
+          cat .github/materialize-durable-journal/patch.??? | base64 --decode > /tmp/durable-journal.patch
           echo "2b1f40226d443a2d2d82461159e61abb22293ce1ef31fea896a0cb8f3de66674  /tmp/durable-journal.patch" | sha256sum --check -
           git apply --index /tmp/durable-journal.patch
           rm -rf .github/materialize-durable-journal
