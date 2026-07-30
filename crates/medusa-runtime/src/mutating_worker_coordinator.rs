@@ -484,7 +484,7 @@ where
             }
         };
 
-        if let Err(error) = manager.discard_untracked_runtime_state(&worker) {
+        if let Err(error) = manager.discard_untracked_runtime_state(&worker, &base_head) {
             let retryable = attempt < MAX_ATTEMPTS;
             let recorded = record_attempt_failure(
                 &mut controller,
@@ -619,7 +619,7 @@ where
             }
             return Err(recorded);
         }
-        if let Err(error) = manager.discard_untracked_runtime_state(&worker) {
+        if let Err(error) = manager.discard_untracked_runtime_state(&worker, &base_head) {
             let retryable = attempt < MAX_ATTEMPTS;
             let recorded = record_attempt_failure(
                 &mut controller,
