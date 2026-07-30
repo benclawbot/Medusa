@@ -27,6 +27,7 @@ use crate::{
 
 pub mod attachment;
 pub mod commands;
+mod config_command;
 mod error;
 mod learning_retrieval;
 pub mod learning_review;
@@ -934,6 +935,9 @@ fn execute_slash_command_with_submission(
     submission: &Arc<Mutex<SubmissionState>>,
 ) -> Result<Option<RuntimeEvent>, RuntimeError> {
     match command {
+        SlashCommand::Config(command) => {
+            crate::config_command::execute(state, command, events)?;
+        }
         SlashCommand::Team(_) => {
             return Err(RuntimeError::InvalidCommand(
                 "team commands must execute through the live control plane".to_owned(),

@@ -2,10 +2,7 @@ use std::{collections::BTreeMap, sync::mpsc::Sender};
 
 use medusa_config::{Config, ProviderProfile, ProviderProfileCatalog};
 
-use crate::{
-    RuntimeError, RuntimeEvent, RuntimeState,
-    commands::ConfigCommand,
-};
+use crate::{RuntimeError, RuntimeEvent, RuntimeState, commands::ConfigCommand};
 
 pub(super) fn execute(
     state: &mut RuntimeState,
@@ -25,10 +22,17 @@ fn execute_with_catalog(
     match command {
         ConfigCommand::Show => {
             let name = catalog.active_name().map_err(RuntimeError::agent)?;
-            let profile = catalog.active_store().map_err(RuntimeError::agent)?.load()
+            let profile = catalog
+                .active_store()
+                .map_err(RuntimeError::agent)?
+                .load()
                 .map_err(RuntimeError::agent)?;
             let effective = effective_config(state, &profile)?;
-            send_notice(events, "Configuration", status_details(catalog, &name, &profile, &effective));
+            send_notice(
+                events,
+                "Configuration",
+                status_details(catalog, &name, &profile, &effective),
+            );
         }
         ConfigCommand::Profiles => {
             let profiles = catalog.list().map_err(RuntimeError::agent)?;
@@ -71,7 +75,9 @@ fn execute_with_catalog(
         ConfigCommand::Set { key, value } => {
             let store = catalog.active_store().map_err(RuntimeError::agent)?;
             let mut candidate = store.load().map_err(RuntimeError::agent)?;
-            candidate.set_value(&key, &value).map_err(RuntimeError::agent)?;
+            candidate
+                .set_value(&key, &value)
+                .map_err(RuntimeError::agent)?;
             let effective = effective_config(state, &candidate)?;
             store.save(&candidate).map_err(RuntimeError::agent)?;
             apply_effective_model(state, effective);
@@ -80,7 +86,10 @@ fn execute_with_catalog(
                 events,
                 "Configuration updated",
                 vec![
-                    format!("Profile: {}", catalog.active_name().map_err(RuntimeError::agent)?),
+                    format!(
+                        "Profile: {}",
+                        catalog.active_name().map_err(RuntimeError::agent)?
+                    ),
                     format!("Updated key: {key}"),
                     format!(
                         "Effective route: {} / {}",
@@ -101,7 +110,10 @@ fn execute_with_catalog(
                 events,
                 "Configuration reset",
                 vec![
-                    format!("Profile: {}", catalog.active_name().map_err(RuntimeError::agent)?),
+                    format!(
+                        "Profile: {}",
+                        catalog.active_name().map_err(RuntimeError::agent)?
+                    ),
                     format!("Reset key: {key}"),
                     format!(
                         "Effective route: {} / {}",
@@ -112,7 +124,10 @@ fn execute_with_catalog(
         }
         ConfigCommand::Validate => {
             let name = catalog.active_name().map_err(RuntimeError::agent)?;
-            let profile = catalog.active_store().map_err(RuntimeError::agent)?.load()
+            let profile = catalog
+                .active_store()
+                .map_err(RuntimeError::agent)?
+                .load()
                 .map_err(RuntimeError::agent)?;
             let effective = effective_config(state, &profile)?;
             send_notice(
@@ -269,9 +284,17 @@ mod tests {
             .expect("save default");
         catalog.create("work").expect("create work");
         catalog.use_profile("work").expect("select work");
-        let mut work = catalog.active_store().expect("work store").load().expect("load");
+        let mut work = catalog
+            .active_store()
+            .expect("work store")
+            .load()
+            .expect("load");
         work.set_value("model", "work-model").expect("set model");
-        catalog.active_store().expect("work store").save(&work).expect("save");
+        catalog
+            .active_store()
+            .expect("work store")
+            .save(&work)
+            .expect("save");
         catalog.use_profile("default").expect("select default");
 
         let mut runtime = state(directory.path(), &default);
@@ -295,7 +318,10 @@ mod tests {
         assert_eq!(runtime.effort, Effort::High);
         assert!(runtime.plan_mode);
         assert_eq!(runtime.config.agent.mode, Mode::ReadOnly);
-        assert_eq!(runtime.session_api_key.as_deref(), Some("process-only-secret"));
+        assert_eq!(
+            runtime.session_api_key.as_deref(),
+            Some("process-only-secret")
+        );
     }
 
     #[test]
@@ -310,7 +336,11 @@ mod tests {
         .expect("project config");
         let catalog = ProviderProfileCatalog::at(directory.path().join("profile-config"));
         let profile = configured_profile("profile-model");
-        catalog.active_store().expect("store").save(&profile).expect("save");
+        catalog
+            .active_store()
+            .expect("store")
+            .save(&profile)
+            .expect("save");
         let mut runtime = state(directory.path(), &profile);
         let (events, _) = mpsc::channel();
 
@@ -342,7 +372,11 @@ mod tests {
         let directory = tempfile::tempdir().expect("tempdir");
         let catalog = ProviderProfileCatalog::at(directory.path().join("config"));
         let profile = configured_profile("MiniMax-M3");
-        catalog.active_store().expect("store").save(&profile).expect("save");
+        catalog
+            .active_store()
+            .expect("store")
+            .save(&profile)
+            .expect("save");
         let mut runtime = state(directory.path(), &profile);
         runtime.session_api_key = Some("never-print-this".to_owned());
         let (events, receiver) = mpsc::channel();

@@ -205,9 +205,25 @@ impl Config {
         environment: &BTreeMap<String, String>,
         cli: &BTreeMap<String, String>,
     ) -> MedusaResult<Self> {
+        let profile = ProviderProfileCatalog::user()?.active_store()?.load()?;
+        Self::load_layers_with_provider_profile(&profile, user, project, environment, cli)
+    }
+
+    /// Resolves and validates all layers against an explicit provider-profile candidate.
+    ///
+    /// Frontends use this before persisting a profile mutation or selection so an invalid
+    /// effective configuration never replaces the prior valid state.
+    pub fn load_layers_with_provider_profile(
+        profile: &ProviderProfile,
+        user: Option<&Path>,
+        project: Option<&Path>,
+        environment: &BTreeMap<String, String>,
+        cli: &BTreeMap<String, String>,
+    ) -> MedusaResult<Self> {
+        profile.validate()?;
         let mut value =
             toml::Value::try_from(Self::default()).map_err(|error| invalid(error.to_string()))?;
-        merge_provider_profile(&mut value)?;
+        merge_provider_profile(&mut value, profile)?;
         if let Some(path) = user {
             merge_file(&mut value, path)?;
         }
@@ -324,8 +340,7 @@ fn invalid(message: impl Into<String>) -> MedusaError {
     )
 }
 
-fn merge_provider_profile(base: &mut toml::Value) -> MedusaResult<()> {
-    let profile = ProviderProfileCatalog::user()?.active_store()?.load()?;
+fn merge_provider_profile(base: &mut toml::Value, profile: &ProviderProfile) -> MedusaResult<()> {
     if !profile.configured {
         return Ok(());
     }
@@ -336,7 +351,7 @@ fn merge_provider_profile(base: &mut toml::Value) -> MedusaResult<()> {
         auth,
         base_url,
         ..
-    } = profile;
+    } = profile.clone();
     let mut model = toml::map::Map::new();
     model.insert("provider".to_owned(), toml::Value::String(provider));
     model.insert("name".to_owned(), toml::Value::String(model_name));

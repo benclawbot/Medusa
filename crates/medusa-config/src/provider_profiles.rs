@@ -88,6 +88,18 @@ impl ProviderProfileCatalog {
         Ok(self.store_for_name(&name))
     }
 
+    /// Loads one existing named profile without changing the active selection.
+    pub fn load_profile(&self, name: &str) -> MedusaResult<ProviderProfile> {
+        validate_profile_name(name)?;
+        let store = self.store_for_name(name);
+        if name != DEFAULT_PROFILE_NAME && !store.path().is_file() {
+            return Err(config_error(format!(
+                "provider profile `{name}` does not exist"
+            )));
+        }
+        store.load()
+    }
+
     pub fn list(&self) -> MedusaResult<Vec<ProviderProfileSummary>> {
         let active = self.active_name()?;
         let mut names = vec![DEFAULT_PROFILE_NAME.to_owned()];

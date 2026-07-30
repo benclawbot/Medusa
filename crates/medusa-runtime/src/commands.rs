@@ -56,6 +56,7 @@ pub enum SlashCommand {
     Review {
         action: ReviewCommand,
     },
+    Config(ConfigCommand),
     New,
     Compact {
         focus: Option<String>,
@@ -76,6 +77,16 @@ pub enum SlashCommand {
         task: Option<String>,
     },
     Team(TeamCommand),
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum ConfigCommand {
+    Show,
+    Profiles,
+    UseProfile { name: String },
+    Set { key: String, value: String },
+    Unset { key: String },
+    Validate,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -186,6 +197,11 @@ pub const COMMAND_SPECS: &[CommandSpec] = &[
         description: "show or set the session goal",
     },
     CommandSpec {
+        name: "config",
+        usage: "/config [show|profiles|use <name>|set <key> <value>|unset <key>|validate]",
+        description: "inspect or update shared redacted configuration",
+    },
+    CommandSpec {
         name: "model",
         usage: "/model [name|provider|key]",
         description: "configure provider, model, and session key",
@@ -242,6 +258,66 @@ pub const COMMAND_SPECS: &[CommandSpec] = &[
     },
 ];
 
+fn parse_config_command(input: &str) -> Result<SlashCommand, String> {
+    let (action, arguments) = input
+        .split_once(char::is_whitespace)
+        .map_or((input, ""), |(action, arguments)| {
+            (action, arguments.trim())
+        });
+    let no_arguments = |usage: &str| {
+        if arguments.is_empty() {
+            Ok(())
+        } else {
+            Err(format!("usage: {usage}"))
+        }
+    };
+    match action.to_ascii_lowercase().as_str() {
+        "" | "show" => {
+            no_arguments("/config [show]")?;
+            Ok(SlashCommand::Config(ConfigCommand::Show))
+        }
+        "profiles" => {
+            no_arguments("/config profiles")?;
+            Ok(SlashCommand::Config(ConfigCommand::Profiles))
+        }
+        "validate" => {
+            no_arguments("/config validate")?;
+            Ok(SlashCommand::Config(ConfigCommand::Validate))
+        }
+        "use" => {
+            if arguments.is_empty() || arguments.contains(char::is_whitespace) {
+                return Err("usage: /config use <profile>".to_owned());
+            }
+            Ok(SlashCommand::Config(ConfigCommand::UseProfile {
+                name: arguments.to_owned(),
+            }))
+        }
+        "unset" => {
+            if arguments.is_empty() || arguments.contains(char::is_whitespace) {
+                return Err("usage: /config unset <key>".to_owned());
+            }
+            Ok(SlashCommand::Config(ConfigCommand::Unset {
+                key: arguments.to_owned(),
+            }))
+        }
+        "set" => {
+            let (key, value) = arguments
+                .split_once(char::is_whitespace)
+                .map_or((arguments, ""), |(key, value)| (key, value.trim()));
+            if key.is_empty() || value.is_empty() {
+                return Err("usage: /config set <key> <value>".to_owned());
+            }
+            Ok(SlashCommand::Config(ConfigCommand::Set {
+                key: key.to_owned(),
+                value: value.to_owned(),
+            }))
+        }
+        other => Err(format!(
+            "unknown /config action `{other}`; use show, profiles, use, set, unset, or validate"
+        )),
+    }
+}
+
 pub fn parse_slash_command(input: &str) -> Result<Option<SlashCommand>, String> {
     let trimmed = input.trim();
     if !trimmed.starts_with('/') {
@@ -281,6 +357,7 @@ pub fn parse_slash_command(input: &str) -> Result<Option<SlashCommand>, String> 
         "goal" => Ok(Some(SlashCommand::Goal {
             objective: (!remainder.is_empty()).then(|| remainder.to_owned()),
         })),
+        "config" => Ok(Some(parse_config_command(remainder)?)),
         "model" => {
             let model_command = if remainder.is_empty() {
                 ModelCommand::Show
@@ -724,6 +801,49 @@ mod tests {
             .find(|suggestion| suggestion.name == "release")
             .expect("project skill is selectable");
         assert!(release.description.contains("Prepare a release"));
+    }
+
+    #[test]
+    fn config_commands_parse_and_are_discoverable() {
+        assert_eq!(
+            parse_slash_command("/config"),
+            Ok(Some(SlashCommand::Config(ConfigCommand::Show)))
+        );
+        assert_eq!(
+            parse_slash_command("/config profiles"),
+            Ok(Some(SlashCommand::Config(ConfigCommand::Profiles)))
+        );
+        assert_eq!(
+            parse_slash_command("/config use work"),
+            Ok(Some(SlashCommand::Config(ConfigCommand::UseProfile {
+                name: "work".to_owned()
+            })))
+        );
+        assert_eq!(
+            parse_slash_command("/config set model gpt-5"),
+            Ok(Some(SlashCommand::Config(ConfigCommand::Set {
+                key: "model".to_owned(),
+                value: "gpt-5".to_owned()
+            })))
+        );
+        assert_eq!(
+            parse_slash_command("/config unset base_url"),
+            Ok(Some(SlashCommand::Config(ConfigCommand::Unset {
+                key: "base_url".to_owned()
+            })))
+        );
+        assert_eq!(
+            parse_slash_command("/config validate"),
+            Ok(Some(SlashCommand::Config(ConfigCommand::Validate)))
+        );
+        assert!(parse_slash_command("/config use").is_err());
+        assert!(parse_slash_command("/config set model").is_err());
+        let directory = tempfile::tempdir().expect("temporary directory");
+        assert_eq!(
+            command_suggestions("/con", directory.path())[0].name,
+            "config"
+        );
+        assert!(!SlashCommand::Config(ConfigCommand::Show).runs_agent());
     }
 
     #[test]
