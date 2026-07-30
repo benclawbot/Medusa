@@ -48,6 +48,11 @@
       "icons/icon.icns",
       "icons/icon.ico"
     ],
+    "windows": {
+      "nsis": {
+        "installerHooks": "./windows/installer-hooks.nsh"
+      }
+    },
     "shortDescription": "Desktop interface for the Medusa coding agent",
     "longDescription": "Medusa Desktop is a Zeus-derived Tauri interface connected directly to Medusa's shared Rust runtime."
   }

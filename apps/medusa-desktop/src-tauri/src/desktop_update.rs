@@ -92,11 +92,48 @@ fn missing_dependencies() -> Vec<String> {
 }
 
 fn command_available(program: &str) -> bool {
+    command_candidates(program)
+        .into_iter()
+        .any(|candidate| command_succeeds(&candidate))
+}
+
+fn command_succeeds(program: &Path) -> bool {
     Command::new(program)
         .arg("--version")
         .output()
         .map(|output| output.status.success())
         .unwrap_or(false)
+}
+
+#[cfg(not(windows))]
+fn command_candidates(program: &str) -> Vec<PathBuf> {
+    vec![PathBuf::from(program)]
+}
+
+#[cfg(windows)]
+fn command_candidates(program: &str) -> Vec<PathBuf> {
+    let mut candidates = Vec::new();
+    if program.eq_ignore_ascii_case("npm") {
+        candidates.push(PathBuf::from("npm.cmd"));
+        for root in [env::var_os("ProgramFiles"), env::var_os("ProgramW6432")]
+            .into_iter()
+            .flatten()
+        {
+            candidates.push(PathBuf::from(root).join("nodejs").join("npm.cmd"));
+        }
+        if let Some(local_app_data) = env::var_os("LOCALAPPDATA") {
+            candidates.push(
+                PathBuf::from(local_app_data)
+                    .join("Programs")
+                    .join("nodejs")
+                    .join("npm.cmd"),
+            );
+        }
+    } else {
+        candidates.push(PathBuf::from(program));
+        candidates.push(PathBuf::from(format!("{program}.exe")));
+    }
+    candidates
 }
 
 fn update_helper_path() -> MedusaResult<PathBuf> {
@@ -132,17 +169,31 @@ exec {executable}
     )
 }
 
-#[cfg(windows)]
+#[cfg(any(windows, test))]
 fn windows_update_script(parent_pid: u32, executable: &Path) -> String {
     let executable = powershell_quote(executable);
     format!(
         r#"$ErrorActionPreference = 'Stop'
+$machinePath = [Environment]::GetEnvironmentVariable('Path', 'Machine')
+$userPath = [Environment]::GetEnvironmentVariable('Path', 'User')
+$env:Path = @($machinePath, $userPath, $env:Path) -join ';'
+$npm = Get-Command npm.cmd -ErrorAction SilentlyContinue
+if (-not $npm) {{
+    $npmCandidates = @(
+        (Join-Path $env:ProgramFiles 'nodejs\npm.cmd'),
+        (Join-Path $env:LOCALAPPDATA 'Programs\nodejs\npm.cmd')
+    )
+    $npmPath = $npmCandidates | Where-Object {{ Test-Path -LiteralPath $_ }} | Select-Object -First 1
+    if (-not $npmPath) {{ throw 'npm.cmd was not found after refreshing PATH' }}
+}} else {{
+    $npmPath = $npm.Source
+}}
 $work = Join-Path $env:TEMP 'medusa-desktop-main-{parent_pid}'
 Remove-Item -LiteralPath $work -Recurse -Force -ErrorAction SilentlyContinue
 git clone --depth 1 --branch {BRANCH} '{REPOSITORY_URL}' $work
 Set-Location (Join-Path $work 'apps/medusa-desktop')
-npm.cmd ci
-npm.cmd run build
+& $npmPath ci
+& $npmPath run build
 cargo build --release --manifest-path src-tauri/Cargo.toml
 $built = Join-Path $work 'apps/medusa-desktop/src-tauri/target/release/medusa-desktop.exe'
 while (Get-Process -Id {parent_pid} -ErrorAction SilentlyContinue) {{ Start-Sleep -Milliseconds 250 }}
@@ -158,7 +209,7 @@ fn shell_quote(path: &Path) -> String {
     format!("'{}'", path.display().to_string().replace('\'', "'\\''"))
 }
 
-#[cfg(windows)]
+#[cfg(any(windows, test))]
 fn powershell_quote(path: &Path) -> String {
     format!("'{}'", path.display().to_string().replace('\'', "''"))
 }
@@ -187,18 +238,33 @@ mod tests {
         assert!(script.contains("exec '/opt/Medusa/medusa-desktop'"));
     }
 
-    #[cfg(windows)]
     #[test]
-    fn windows_helper_builds_main_then_replaces_and_restarts() {
+    fn windows_helper_refreshes_path_and_uses_npm_cmd() {
         let script = windows_update_script(
             4242,
             Path::new(r"C:\Program Files\Medusa\medusa-desktop.exe"),
         );
+        assert!(script.contains("GetEnvironmentVariable('Path', 'Machine')"));
+        assert!(script.contains("Get-Command npm.cmd"));
+        assert!(script.contains(r"nodejs\npm.cmd"));
+        assert!(script.contains("& $npmPath ci"));
+        assert!(script.contains("& $npmPath run build"));
         assert!(script.contains("git clone --depth 1 --branch main"));
-        assert!(script.contains("npm.cmd ci"));
         assert!(script.contains("cargo build --release"));
         assert!(script.contains("Get-Process -Id 4242"));
         assert!(script.contains("Copy-Item"));
         assert!(script.contains("Start-Process"));
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn npm_detection_includes_cmd_and_standard_node_locations() {
+        let candidates = command_candidates("npm");
+        assert!(candidates.iter().any(|path| path == Path::new("npm.cmd")));
+        assert!(
+            candidates
+                .iter()
+                .any(|path| path.ends_with(r"nodejs\npm.cmd"))
+        );
     }
 }
