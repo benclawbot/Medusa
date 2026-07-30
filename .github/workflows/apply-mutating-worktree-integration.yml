@@ -26,12 +26,28 @@ jobs:
           set -euo pipefail
           mapfile -t parts < <(find .github/patches -maxdepth 1 -name 'mutating-worktree-bundle.part*' -print | sort)
           test "${#parts[@]}" -eq 6
-          cat "${parts[@]}" | base64 --decode > /tmp/mutating-worktree-bundle.tar.gz
-          test "$(wc -c < /tmp/mutating-worktree-bundle.tar.gz)" -eq 37832
+          wc -c "${parts[@]}"
           python3 - <<'PY'
+          import base64
+          import hashlib
           import tarfile
-          from pathlib import PurePosixPath
+          from pathlib import Path, PurePosixPath
 
+          parts = sorted(Path('.github/patches').glob('mutating-worktree-bundle.part*'))
+          encoded = b''.join(path.read_bytes() for path in parts)
+          clean = b''.join(encoded.split())
+          print(f'encoded bytes={len(encoded)} clean bytes={len(clean)} clean sha256={hashlib.sha256(clean).hexdigest()}')
+          if len(clean) != 50444:
+              raise SystemExit('unexpected clean base64 length')
+          if hashlib.sha256(clean).hexdigest() != 'b27e43b45dd725366801932982a04b37236f5c082cb90172e0712acae1dc6d4f':
+              raise SystemExit('base64 transport hash mismatch')
+          payload = base64.b64decode(clean, validate=True)
+          if len(payload) != 37832:
+              raise SystemExit('unexpected gzip byte count')
+          if hashlib.sha256(payload).hexdigest() != '23130bf8f52001e8e55592fcdf23781d418a115cc1f0f293f09037cdd1e3e0b7':
+              raise SystemExit('gzip transport hash mismatch')
+          bundle = Path('/tmp/mutating-worktree-bundle.tar.gz')
+          bundle.write_bytes(payload)
           expected = {
               'Cargo.toml',
               'crates/medusa-workers/src/lib.rs',
@@ -50,7 +66,7 @@ jobs:
               'docs/MUTATING-WORKTREE-INTEGRATION.md',
               'scripts/check-product-architecture.py',
           }
-          with tarfile.open('/tmp/mutating-worktree-bundle.tar.gz', 'r:gz') as archive:
+          with tarfile.open(bundle, 'r:gz') as archive:
               names = {member.name for member in archive.getmembers() if member.isfile()}
               if names != expected:
                   raise SystemExit(f'unexpected bundle entries: {sorted(names ^ expected)}')
