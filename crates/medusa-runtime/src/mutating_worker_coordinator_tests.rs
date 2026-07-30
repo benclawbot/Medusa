@@ -155,3 +155,34 @@
         assert!(error.contains("cancelled"));
         assert!(!repo.join(".medusa/executions/test/worktrees").exists());
     }
+
+    #[test]
+    fn implementer_turn_budget_is_continuous_and_bounded() {
+        assert_eq!(bounded_implementer_turns(500), IMPLEMENTER_TURN_LIMIT);
+        assert_eq!(bounded_implementer_turns(8), 8);
+        assert_eq!(bounded_implementer_turns(0), 1);
+    }
+
+    #[test]
+    fn turn_budget_exhaustion_is_not_retried() {
+        let (_directory, repo, plan, preflight) = repository("src/");
+        let cancel = Arc::new(AtomicBool::new(false));
+        let (events, _) = mpsc::channel();
+        let calls = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let observed = std::sync::Arc::clone(&calls);
+        let error = coordinate_with_executor(
+            &repo,
+            &plan,
+            &preflight,
+            &cancel,
+            &events,
+            move |_| {
+                observed.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                Err(format!("worker {IMPLEMENTER_ID} {TURN_BUDGET_EXHAUSTED}"))
+            },
+        )
+        .expect_err("turn ceiling must remain terminal");
+        assert!(error.ends_with(TURN_BUDGET_EXHAUSTED));
+        assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 1);
+    }
+

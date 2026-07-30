@@ -169,7 +169,7 @@ pub struct AgentSession {
     pub rollback_receipts: Vec<RollbackReceipt>,
 }
 
-/// Creates the on-disk Medusa layout and repository map.
+/// Creates the on-disk Medusa layout and runtime-owned repository map.
 pub fn bootstrap(repo: &Path) -> MedusaResult<()> {
     if fs::create_dir_all(repo.join(".medusa/sessions")).is_err() {
         fs::create_dir_all(fallback_session_root(repo))?;
@@ -190,7 +190,7 @@ pub fn bootstrap(repo: &Path) -> MedusaResult<()> {
             record_nonfatal(repo, None, stage, operation, &error.to_string());
         }
     }
-    let map = repo.join("REPOSITORY_MAP.md");
+    let map = repo.join(".medusa/REPOSITORY_MAP.md");
     if !map.exists() {
         if let Err(error) = fs::write(
             &map,
@@ -382,4 +382,26 @@ fn redact_error(error: &str) -> String {
         })
         .collect::<Vec<_>>()
         .join(" ")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn bootstrap_keeps_generated_repository_map_in_runtime_state() {
+        let directory = tempfile::tempdir().expect("tempdir");
+        let repo = directory.path();
+
+        bootstrap(repo).expect("bootstrap");
+        assert!(repo.join(".medusa/REPOSITORY_MAP.md").is_file());
+        assert!(!repo.join("REPOSITORY_MAP.md").exists());
+
+        fs::write(repo.join("REPOSITORY_MAP.md"), "# User-owned map\n").expect("user map");
+        bootstrap(repo).expect("second bootstrap");
+        assert_eq!(
+            fs::read_to_string(repo.join("REPOSITORY_MAP.md")).expect("read user map"),
+            "# User-owned map\n"
+        );
+    }
 }
