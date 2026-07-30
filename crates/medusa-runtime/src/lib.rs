@@ -64,7 +64,10 @@ use support::{
 
 #[derive(Debug)]
 pub enum RuntimeCommand {
-    Submit(PromptDraft),
+    Submit {
+        draft: PromptDraft,
+        accepted: Sender<()>,
+    },
     Slash(SlashCommand),
     ConfigureModel(ModelConfiguration),
     Recovery {
@@ -352,32 +355,48 @@ impl RuntimeController {
     pub fn submit(&self, draft: PromptDraft) -> Result<SubmitDisposition, RuntimeError> {
         let mut submission = lock_submission(&self.submission);
         if submission.busy {
+            let session_id = submission
+                .active_session_id
+                .clone()
+                .ok_or(RuntimeError::Busy)?;
             let command_id = next_followup_command_id();
-            let mut queued = QueuedFollowup {
+            let queued = QueuedFollowup {
                 command_id: command_id.clone(),
                 draft,
-                durably_recorded: false,
+                durably_recorded: true,
             };
-            if let Some(session_id) = submission.active_session_id.as_deref() {
-                record_controller_event(
-                    &self.repo,
-                    session_id,
-                    Actor::User,
-                    EventPayload::UserFollowupQueued {
-                        command_id,
-                        prompt: serde_json::to_value(&queued.draft).map_err(RuntimeError::agent)?,
-                    },
-                )?;
-                queued.durably_recorded = true;
-            }
+            record_controller_event(
+                &self.repo,
+                &session_id,
+                Actor::User,
+                EventPayload::UserFollowupQueued {
+                    command_id,
+                    prompt: serde_json::to_value(&queued.draft).map_err(RuntimeError::agent)?,
+                },
+            )?;
             submission.followups.push_back(queued);
             return Ok(SubmitDisposition::Queued);
         }
         submission.busy = true;
+        drop(submission);
         self.cancel.store(false, Ordering::SeqCst);
-        if self.commands.send(RuntimeCommand::Submit(draft)).is_err() {
-            submission.busy = false;
+        let (accepted_tx, accepted_rx) = mpsc::channel();
+        if self
+            .commands
+            .send(RuntimeCommand::Submit {
+                draft,
+                accepted: accepted_tx,
+            })
+            .is_err()
+        {
+            mark_idle(&self.submission, true);
             return Err(RuntimeError::WorkerStopped);
+        }
+        if accepted_rx.recv().is_err() {
+            mark_idle(&self.submission, true);
+            return Err(RuntimeError::agent(
+                "runtime prompt ended before a durable session accepted the submission",
+            ));
         }
         Ok(SubmitDisposition::Started)
     }
@@ -643,9 +662,16 @@ fn worker_loop_with_discovery<F>(
     }
     while let Ok(command) = commands.recv() {
         match command {
-            RuntimeCommand::Submit(draft) => {
+            RuntimeCommand::Submit { draft, accepted } => {
                 let _ = events.send(RuntimeEvent::Started);
-                let outcome = run_prompt(&mut state, draft, &events, &cancel, &submission);
+                let outcome = run_prompt(
+                    &mut state,
+                    draft,
+                    &events,
+                    &cancel,
+                    &submission,
+                    Some(accepted),
+                );
                 let event = match outcome {
                     Ok(completed) => completed,
                     Err(error) => {
@@ -832,6 +858,7 @@ fn run_prompt(
     events: &Sender<RuntimeEvent>,
     cancel: &Arc<AtomicBool>,
     submission: &Arc<Mutex<SubmissionState>>,
+    accepted: Option<Sender<()>>,
 ) -> Result<RuntimeEvent, RuntimeError> {
     let config = state.config.clone();
     let max_turns = config.agent.max_turns;
@@ -884,6 +911,9 @@ fn run_prompt(
     };
     lock_submission(submission).active_session_id = Some(session.id.to_string());
     state.session = Some(session);
+    if let Some(accepted) = accepted {
+        let _ = accepted.send(());
+    }
     let session = state.session.as_mut().ok_or_else(|| {
         RuntimeError::agent("runtime session disappeared before execution plan recording")
     })?;
@@ -1723,6 +1753,7 @@ fn execute_slash_command_with_submission(
                     events,
                     cancel,
                     submission,
+                    None,
                 )
                 .map(Some);
                 if result.is_err() {
@@ -1765,6 +1796,7 @@ fn execute_slash_command_with_submission(
                         events,
                         cancel,
                         submission,
+                        None,
                     )
                     .map(Some);
                 }
