@@ -725,10 +725,17 @@ mod tests {
         let policy = AgentExecutionPolicy::for_team_role(TeamRole::Implementer)
             .with_allowed_write_paths(vec!["src/".to_owned()]);
 
-        assert!(policy.denial_reason("fs_read", &json!({"path":"README.md"})).is_none());
         assert!(
             policy
-                .denial_reason("fs_write", &json!({"path":"src/nested/file.rs","content":""}))
+                .denial_reason("fs_read", &json!({"path":"README.md"}))
+                .is_none()
+        );
+        assert!(
+            policy
+                .denial_reason(
+                    "fs_write",
+                    &json!({"path":"src/nested/file.rs","content":""})
+                )
                 .is_none()
         );
         assert!(
