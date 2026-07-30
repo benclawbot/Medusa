@@ -3,6 +3,9 @@
 //! Frontends should ingest clipboard, picker, drag-and-drop, or screenshot data into these
 //! types before handing a prompt to the runtime. Keeping validation and limits here prevents
 //! desktop and terminal clients from developing incompatible attachment behavior.
+//! Durable session ownership and journal replay live in [`session`].
+
+pub mod session;
 
 use std::{fmt, path::PathBuf};
 
