@@ -803,10 +803,7 @@ impl<P: ModelProvider> AgentEngine<P> {
                 if let Err(error) = &result
                     && error.code == ErrorCode::PolicyDenied
                     && self.config.agent.mode != Mode::ReadOnly
-                    && self
-                        .execution_policy
-                        .denial_reason(&name, &input)
-                        .is_none()
+                    && self.execution_policy.denial_reason(&name, &input).is_none()
                     && interactively_approvable(&name, &input)
                 {
                     let action = approval_action_label(&name, &input);
