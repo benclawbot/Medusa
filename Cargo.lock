@@ -1231,6 +1231,7 @@ dependencies = [
  "medusa-runtime-supervisor",
  "medusa-testkit",
  "medusa-wakeup",
+ "reqwest",
  "serde",
  "serde_json",
  "sha2",

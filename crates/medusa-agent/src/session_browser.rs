@@ -12,7 +12,7 @@ use medusa_protocol::EventEnvelope;
 use serde::{Deserialize, Serialize};
 use time::OffsetDateTime;
 
-use crate::session::{journal, load};
+use crate::session::{AgentSession, journal, load};
 
 /// Lightweight durable-session metadata suitable for frontend discovery lists.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -72,6 +72,11 @@ pub fn replay_events(repo: &Path, session: &str, cursor: u64) -> MedusaResult<Ve
         )
     })?;
     journal::replay_from_cursor(repo, &id, cursor)
+}
+
+/// Loads the latest committed journal-backed session snapshot.
+pub fn load_session(repo: &Path, session: &str) -> MedusaResult<AgentSession> {
+    load(repo, session)
 }
 
 fn collect_session_ids(root: &Path, ids: &mut BTreeSet<SessionId>) -> MedusaResult<()> {

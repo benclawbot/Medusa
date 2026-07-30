@@ -43,6 +43,11 @@ pub use worker_execution::{
     WorkerProgressSummary,
 };
 
+/// Persists a complete session through the crash-durable journal and compatibility snapshot.
+pub fn persist_session(session: &AgentSession) -> medusa_core::MedusaResult<()> {
+    session::persist(session)
+}
+
 #[cfg(test)]
 mod tests {
     use std::{
