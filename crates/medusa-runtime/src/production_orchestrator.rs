@@ -77,8 +77,9 @@ pub struct PersistedOutcome {
 pub fn plan(draft: &PromptDraft) -> Result<ProductionExecutionPlan, &'static str> {
     let text = draft.text.trim();
     let mode = classify(text, draft.attachments.len());
+    let mutating = mode == ExecutionMode::Orchestrated && objective_requires_mutation(text);
     let tasks = if mode == ExecutionMode::Orchestrated {
-        decompose(text)
+        decompose(text, mutating)
     } else {
         Vec::new()
     };
@@ -96,6 +97,13 @@ pub fn plan(draft: &PromptDraft) -> Result<ProductionExecutionPlan, &'static str
         contracts,
         fingerprint,
     })
+}
+
+#[must_use]
+pub fn requires_mutation(plan: &ProductionExecutionPlan) -> bool {
+    plan.contracts
+        .iter()
+        .any(|contract| contract.role == AgentRole::Implementer)
 }
 
 pub fn runtime_context(plan: &ProductionExecutionPlan) -> String {
@@ -117,8 +125,13 @@ pub fn runtime_context(plan: &ProductionExecutionPlan) -> String {
         })
         .collect::<Vec<_>>()
         .join("\n");
+    let execution = if requires_mutation(plan) {
+        "A mutating implementer runs in an isolated Git worktree, is scope-checked and verified there, and is integrated by the coordinator. The parent AgentEngine is a read-only lead and reviewer."
+    } else {
+        "The objective is read-only; no mutating implementer or worktree is created. The parent AgentEngine is a read-only lead and reviewer."
+    };
     format!(
-        "Production execution mode: coordinated. Independent read-only teammates are dispatched with durable leases, role-bound runtime policy, isolated sessions, durable mailboxes, and evidence handoff. The parent AgentEngine remains the only mutating authority until worktree-isolated implementers are enabled. Repository verification is the completion gate.\n{contracts}"
+        "Production execution mode: coordinated. Independent read-only teammates are dispatched with durable leases, role-bound runtime policy, isolated sessions, durable mailboxes, and evidence handoff. {execution} Repository verification is the completion gate.\n{contracts}"
     )
 }
 
@@ -211,9 +224,15 @@ pub fn events(plan: &ProductionExecutionPlan) -> Vec<RuntimeEvent> {
                 details: vec![
                     format!("{} dependency-aware task contracts", plan.tasks.len()),
                     format!("{} dependency-aware schedule waves", schedule.waves.len()),
-                    format!("{} independent tasks are eligible for the first dispatch wave", schedule.waves.first().map_or(0, Vec::len)),
-                    "The parent remains the sole mutation and integration authority in this slice."
-                        .to_owned(),
+                    format!(
+                        "{} independent tasks are eligible for the first dispatch wave",
+                        schedule.waves.first().map_or(0, Vec::len)
+                    ),
+                    if requires_mutation(plan) {
+                        "Mutating implementation will run in an isolated worktree; the parent remains the sole review and integration authority.".to_owned()
+                    } else {
+                        "This coordinated objective is read-only; no mutating worktree will be created.".to_owned()
+                    },
                     "Repository verification remains the completion gate.".to_owned(),
                 ],
             })]
@@ -269,6 +288,7 @@ fn contract_for(objective: &str, task: &Task) -> AgentContract {
             vec!["acceptance criteria".to_owned(), "repository verification".to_owned()],
         ),
     };
+    let delegation_allowed = matches!(role, AgentRole::Planner | AgentRole::Researcher);
     AgentContract {
         task_id: task.id.clone(),
         role,
@@ -277,9 +297,9 @@ fn contract_for(objective: &str, task: &Task) -> AgentContract {
         allowed_write_paths: task.write_paths.clone(),
         required_evidence,
         delegation: DelegationPolicy {
-            allowed: matches!(role, AgentRole::Planner | AgentRole::Researcher | AgentRole::Reviewer | AgentRole::Verifier),
-            max_depth: 0,
-            max_parallel_subagents: 0,
+            allowed: delegation_allowed,
+            max_depth: u8::from(delegation_allowed),
+            max_parallel_subagents: if delegation_allowed { 2 } else { 0 },
             parent_must_review: true,
             parent_must_integrate: true,
         },
@@ -308,15 +328,48 @@ fn classify(text: &str, attachments: usize) -> ExecutionMode {
     }
 }
 
-fn decompose(text: &str) -> Vec<Task> {
-    let scope = infer_scope(text);
-    vec![
+fn decompose(text: &str, mutating: bool) -> Vec<Task> {
+    let mut tasks = vec![
         Task { id: "analyze".to_owned(), dependencies: vec![], capabilities: vec!["analysis".to_owned()], write_paths: vec![], speculative: false },
         Task { id: "risk-review".to_owned(), dependencies: vec![], capabilities: vec!["risk-review".to_owned()], write_paths: vec![], speculative: false },
-        Task { id: "implement".to_owned(), dependencies: vec!["analyze".to_owned(), "risk-review".to_owned()], capabilities: vec!["coding".to_owned()], write_paths: vec![scope], speculative: false },
-        Task { id: "review".to_owned(), dependencies: vec!["implement".to_owned()], capabilities: vec!["review".to_owned()], write_paths: vec![], speculative: false },
-        Task { id: "verify".to_owned(), dependencies: vec!["review".to_owned()], capabilities: vec!["verification".to_owned()], write_paths: vec![], speculative: false },
-    ]
+    ];
+    if mutating {
+        let scope = infer_scope(text);
+        tasks.extend([
+            Task { id: "implement".to_owned(), dependencies: vec!["analyze".to_owned(), "risk-review".to_owned()], capabilities: vec!["coding".to_owned()], write_paths: vec![scope], speculative: false },
+            Task { id: "review".to_owned(), dependencies: vec!["implement".to_owned()], capabilities: vec!["review".to_owned()], write_paths: vec![], speculative: false },
+            Task { id: "verify".to_owned(), dependencies: vec!["review".to_owned()], capabilities: vec!["verification".to_owned()], write_paths: vec![], speculative: false },
+        ]);
+    }
+    tasks
+}
+
+fn objective_requires_mutation(text: &str) -> bool {
+    text.split(|character: char| !character.is_ascii_alphanumeric())
+        .filter(|token| !token.is_empty())
+        .any(|token| {
+            matches!(
+                token.to_ascii_lowercase().as_str(),
+                "add"
+                    | "build"
+                    | "change"
+                    | "create"
+                    | "delete"
+                    | "fix"
+                    | "implement"
+                    | "make"
+                    | "migrate"
+                    | "modify"
+                    | "patch"
+                    | "refactor"
+                    | "remove"
+                    | "rename"
+                    | "repair"
+                    | "update"
+                    | "upgrade"
+                    | "write"
+            )
+        })
 }
 
 fn infer_scope(text: &str) -> String {
@@ -395,10 +448,23 @@ mod tests {
         let draft = PromptDraft { text: "Implement a repository-wide refactor".to_owned(), ..PromptDraft::default() };
         let planned = plan(&draft).unwrap();
         let context = runtime_context(&planned);
-        assert!(context.contains("Independent read-only teammates are dispatched"));
+        assert!(context.contains("isolated Git worktree"));
         let rendered = format!("{:?}", events(&planned));
         assert!(rendered.contains("independent tasks are eligible"));
         assert!(!rendered.contains("no workers were dispatched"));
+    }
+
+    #[test]
+    fn coordinated_analysis_does_not_create_an_implementer_contract() {
+        let draft = PromptDraft {
+            text: "Analyze repository architecture, failure modes, ownership boundaries, and current CI evidence without changing files".to_owned(),
+            ..PromptDraft::default()
+        };
+        let planned = plan(&draft).unwrap();
+        assert_eq!(planned.mode, ExecutionMode::Orchestrated);
+        assert!(!requires_mutation(&planned));
+        assert_eq!(planned.tasks.len(), 2);
+        assert!(runtime_context(&planned).contains("no mutating implementer"));
     }
 
     #[test]

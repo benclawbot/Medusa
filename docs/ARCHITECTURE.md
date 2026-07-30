@@ -6,11 +6,11 @@ Medusa's product model is **Plan, Execute Safely, Recover**. The Rust crate grap
 
 | Product concept | User-visible responsibility | Completion evidence |
 |---|---|---|
-| **Plan** | Turn an objective and repository context into an explicit, reviewable plan. | Persisted plan state and plan-bound approvals. |
-| **Execute Safely** | Apply guarded changes and run commands inside the platform containment boundary. | Runtime events, transactions, command evidence, and repository verification. |
-| **Recover** | Preserve enough authoritative state to resume, retry, roll back, or explain failure without inventing success. | Checkpoints, journals, failure history, replay data, and recovery decisions. |
+| **Plan** | Turn an objective and repository context into explicit task contracts and a reviewable plan. | Persisted plan state, task contracts, and plan-bound approvals. |
+| **Execute Safely** | Run read-only teammates, isolate mutating implementation, integrate accepted commits, and execute guarded commands inside containment. | Durable leases, worktree receipts, transactions, command evidence, and repository verification. |
+| **Recover** | Preserve enough authoritative state to resume, retry, roll back, or explain failure without inventing success. | Checkpoints, worker state, integration receipts, failure history, replay data, and recovery decisions. |
 
-The coordinated production path is `medusa-runtime::RuntimeController -> run_prompt -> multi_agent_coordinator::run_preflight -> read-only AgentEngine teammates -> parent AgentEngine`. Terminal, desktop, daemon, and headless interfaces use that shared runtime. The repository verification gate is authoritative for coding completion. The recovery coordinator and persisted `.medusa` state provide the continuation path after interruption or failure. See [`PRODUCTION-EXECUTION-TRACE.md`](PRODUCTION-EXECUTION-TRACE.md) for the source-to-entrypoint proof.
+The coordinated production path is `medusa-runtime::RuntimeController -> run_prompt -> multi_agent_coordinator::run_preflight -> mutating_worker_coordinator::run_implementation when mutation is required -> read-only parent AgentEngine`. The implementer runs in an isolated Git worktree; the parent is a read-only lead and reviewer. Terminal, desktop, daemon, and headless interfaces use the shared runtime. The repository verification gate is authoritative for coding completion. See [`PRODUCTION-EXECUTION-TRACE.md`](PRODUCTION-EXECUTION-TRACE.md) for source-to-entrypoint proof.
 
 ## Runtime event flow
 
@@ -19,23 +19,24 @@ flowchart LR
     UI[Terminal / Desktop / Headless CLI] --> C[RuntimeController]
     C --> O[MultiAgentCoordinator]
     O --> W[Read-only planner + risk reviewer]
-    W --> A[Parent AgentEngine]
-    A --> P[Plan]
-    P --> E[Execute Safely]
-    E --> V{Repository verification gate}
+    W --> M{Mutation required?}
+    M -->|yes| I[MutatingWorktreeCoordinator]
+    I --> WT[Implementer AgentEngine in Git worktree]
+    WT --> G[Scope check + worktree verification + guarded integration]
+    M -->|no| P[Read-only parent AgentEngine]
+    G --> P
+    P --> V{Repository verification gate}
     V -->|verified| R[Completion report]
     V -->|failed or interrupted| X[Recover]
-    X --> A
+    X --> C
     C --> S[(Authoritative .medusa records)]
-    A --> S
-    P --> S
-    E --> S
+    O --> S
+    I --> S
     V --> S
-    X --> S
     C -. runtime events .-> UI
 ```
 
-Runtime events are the shared frontend contract. Frontends render plans, questions, approvals, tool activity, failures, verification, and completion; they do not independently redefine provider capabilities, execution policy, or completion.
+Runtime events are the shared frontend contract. Frontends render plans, teammate activity, worktree state, failures, verification, and completion; they do not independently redefine provider capabilities, execution policy, integration authority, or completion.
 
 ## Containment trust boundary
 
@@ -45,6 +46,7 @@ flowchart TB
       A[Plan-bound approval]
       T[Transactional repository tools]
       C[Command policy]
+      O[Worktree integration coordinator]
       V[Verification]
     end
     subgraph Boundary[Platform containment boundary]
@@ -52,22 +54,25 @@ flowchart TB
       M[macOS: Seatbelt]
       W[Windows 11 composable sandbox]
     end
-    Repo[(Repository workspace)]
+    Repo[(Primary repository)]
+    WT[(Isolated Git worktree)]
     External[(External paths, credentials, network)]
     A --> T
     A --> C
-    T --> Repo
+    T --> WT
     C --> L
     C --> M
     C --> W
-    L --> Repo
-    M --> Repo
-    W --> Repo
+    L --> WT
+    M --> WT
+    W --> WT
+    WT --> O
+    O --> Repo
     Boundary -. deny by default .-> External
     Repo --> V
 ```
 
-Repository writes are path-checked, symlink-aware, and transactional. Shell execution fails closed when the required containment backend is unavailable. External paths and dangerous operations remain denied unless an exact, policy-valid action is permitted; approval does not disable containment.
+Repository writes are path-checked, symlink-aware, and transactional. Coordinated implementers receive mutating tools only inside their isolated worktree. Their changed paths are checked against the task contract, verification must pass inside the worktree, overlapping worker paths are rejected, and integration rollback restores the pre-batch HEAD on conflict. Shell execution fails closed when the required containment backend is unavailable.
 
 Platform note: Windows command containment requires Windows 11 with `Experimental_CreateProcessInSandbox`. Browser verification requires Node.js, the Playwright sidecar, and a reachable route. These are shipped but platform- or prerequisite-limited behaviors, not universal fallbacks.
 
@@ -80,55 +85,65 @@ flowchart TD
     O --> L[Durable leases and team state]
     L --> A[Planner AgentEngine - read-only]
     L --> R[Risk reviewer AgentEngine - read-only]
-    A --> E[Validated evidence]
+    A --> E[Validated dependency evidence]
     R --> E
-    E --> Parent[Parent AgentEngine - sole mutation authority]
+    E --> Q{Implementer contract present?}
+    Q -->|yes| W[MutatingWorktreeCoordinator]
+    W --> I[Implementer AgentEngine - isolated worktree]
+    I --> S[Scope check + targeted verification]
+    S --> X[Deterministic guarded integration]
+    Q -->|no| Parent[Parent AgentEngine - read-only lead]
+    X --> Parent
     Parent --> G{Repository verification gate}
     G -->|pass| Done[Verified result]
-    G -->|fail| Fix[Revise, retry, or recover]
-    Fix --> Parent
+    G -->|fail| Fix[Retry or recover]
 ```
 
-**Current shipped behavior:** complex prompts dispatch two independent read-only teammates from `run_prompt`. Each has a separate durable session, role-bound runtime policy, a leased task, team mailbox access, and a repository-snapshot-bound context packet. Validated teammate evidence becomes protected parent context. The parent remains the only mutating authority and owns completion.
+**Current shipped behavior:** coordinated prompts dispatch independent read-only planner and risk-reviewer sessions. Explicitly mutating objectives then dispatch one implementer session in an execution-specific Git worktree. The coordinator persists lease epochs and worker evidence, removes untracked runtime state, rejects out-of-scope paths, verifies the worktree, creates a deterministic commit, and integrates it with rollback on conflict. The parent is a read-only lead and reviewer and owns the final response and repository verification gate.
 
-**Current boundary:** implementer worktrees, nested delegation, consensus voting, commit barriers, and distributed mutation coordination are not active production behavior. Those components require an explicit coordinator call path and behavioral proof before promotion.
+**Current boundary:** the shipped path supports the current single implementer contract. Autonomous nested delegation, model-driven dynamic team expansion, consensus voting, and distributed multi-worker transaction coordination remain outside the production entrypoint until separately promoted with behavioral and recovery proof.
 
 ## Verification gate
 
 ```mermaid
 flowchart LR
-    M[Repository mutation] --> I[Impact analysis]
-    I --> T[Targeted checks]
+    M[Isolated repository mutation] --> I[Changed-path scope validation]
+    I --> T[Targeted worktree checks]
     T --> F{Evidence sufficient?}
-    F -->|yes| B[Browser verification when effective UI changed]
-    F -->|no or unsafe| W[Broader repository checks]
-    W --> B
+    F -->|yes| C[Guarded commit integration]
+    F -->|no| R[Reject / retry / recover]
+    C --> W[Broader primary repository checks]
+    W --> B[Browser verification when effective UI changed]
     B --> G{Required checks satisfied?}
-    G -->|yes| C[Verified completion]
-    G -->|no| R[Failure evidence and recovery state]
+    G -->|yes| V[Verified completion]
+    G -->|no| R
 ```
 
-Successful model output is not successful repository work. A coding session is complete only after the configured repository verification requirements are satisfied. Missing prerequisites produce explicit failure evidence rather than a false pass.
+Successful model output, a worktree commit, or a cherry-pick is not successful repository work. A coordinated coding session is complete only after worktree verification, guarded integration, and the configured primary repository verification requirements are satisfied. Missing prerequisites produce explicit failure evidence rather than a false pass.
 
 ## Recovery-state lifecycle
 
 ```mermaid
 stateDiagram-v2
-    [*] --> Active
-    Active --> Checkpointed: durable progress
-    Checkpointed --> Active: continue
-    Active --> Interrupted: cancellation / crash / unavailable dependency
-    Active --> Failed: command, transaction, or verification failure
-    Interrupted --> Recovering
+    [*] --> Preflight
+    Preflight --> WorktreeRunning: mutating contract
+    Preflight --> ParentReview: read-only objective
+    WorktreeRunning --> Retrying: worker failure / invalid scope / failed verification
+    Retrying --> WorktreeRunning
+    WorktreeRunning --> Prepared: verified commit persisted
+    Prepared --> Integrated: guarded integration
+    Prepared --> Failed: conflict / changed primary HEAD
+    Integrated --> ParentReview
+    ParentReview --> Verified: repository gate passes
+    ParentReview --> Failed: repository gate fails
+    WorktreeRunning --> Interrupted: cancellation / crash
+    Interrupted --> Retrying: durable lease recovery
     Failed --> Recovering
-    Recovering --> Active: resume / retry
-    Recovering --> RolledBack: transaction or repository rollback
-    RolledBack --> Active: revised plan
-    Active --> Verified: repository gate passes
+    Recovering --> Preflight: revised execution
     Verified --> [*]
 ```
 
-Recovery is evidence-preserving. Failed sessions retain failure history and negative outcomes; they are not promoted into successful learning. Checkpoints, transaction journals, repository snapshots, replay records, and recovery decisions support continuation and rollback.
+Recovery is evidence-preserving. A prepared commit can be recognized after a crash by ancestry or exact tree identity, interrupted leases receive a new epoch, and rejected integration rolls the primary repository back to its pre-batch HEAD. Temporary worktrees and branches are cleaned after acceptance or rejection while durable receipts remain under `.medusa`.
 
 ## Authoritative persisted records
 
@@ -136,17 +151,17 @@ Repository-local durable state lives under `.medusa`. Exact filenames and schema
 
 | Concern | Authoritative record | Authority rule |
 |---|---|---|
-| Plans | Persisted session plan and current plan fingerprint | Approvals and execution must bind to the active plan. |
-| Execution | Runtime event log, tool activity, transactions, changed paths, process records | Proposed text and planning metadata are not execution evidence. |
-| Verification | Verification commands, results, browser evidence, overrides, and completion status | Required verification decides coding completion. |
-| Reports | Final session report derived from runtime and verification evidence | Reports summarize records; they do not override them. |
+| Plans | Persisted session plan, task contracts, and current plan fingerprint | Execution must bind to the active plan. |
+| Execution | Runtime event log, team state, leases, worktree state, changed paths, commits, transactions, and process records | Proposed text is not execution evidence. |
+| Verification | Worktree checks, primary repository checks, browser evidence, overrides, and completion status | Required verification decides coding completion. |
+| Reports | Final session report derived from teammate, integration, and verification evidence | Reports summarize records; they do not override them. |
 | Learning | Provenance-bearing Markdown lessons, recall records, and skill outcomes | Only verified outcomes can become accepted positive learning. |
-| Recovery | Checkpoints, failure history, transaction journals, snapshots, replay and recovery decisions | Recovery preserves failed and interrupted states rather than rewriting them as success. |
+| Recovery | Checkpoints, worker epochs, integration receipts, failure history, snapshots, replay and recovery decisions | Recovery preserves failed and interrupted states rather than rewriting them as success. |
 
-Persisted schedule, contract, role, or wave labels must not be rendered as proof that workers or subagents were dispatched. Production sessions represent one `AgentEngine` and one authoritative `AgentSession` until a future versioned execution schema proves otherwise.
+Persisted schedule or role labels alone must not be rendered as proof of dispatch. Production evidence is the combination of leased independent sessions, worktree state where applicable, accepted integration receipts, and the final repository verification gate.
 
 ## Capability evidence and drift control
 
-Every production capability presented here must map to shipped production paths, executable tests, and canonical repository gates in [`CAPABILITY-CLAIMS.json`](CAPABILITY-CLAIMS.json) and [`CAPABILITY-EVIDENCE.md`](CAPABILITY-EVIDENCE.md). Run both `python3 scripts/check-product-architecture.py` and `python3 scripts/check-capability-evidence.py` after changing architecture or capability claims. The first validates the coordinated entrypoint trace, workspace metadata, production call path, contributor map, persisted-team wording, and README links; the second validates required documents, evidence paths, gates, and ledger synchronization. Experimental, design-only, or prerequisite-limited behavior must be labelled where it appears.
+Every production capability presented here must map to shipped production paths, executable tests, and canonical repository gates in [`CAPABILITY-CLAIMS.json`](CAPABILITY-CLAIMS.json) and [`CAPABILITY-EVIDENCE.md`](CAPABILITY-EVIDENCE.md). Run both `python3 scripts/check-product-architecture.py` and `python3 scripts/check-capability-evidence.py` after changing architecture or capability claims. Experimental, design-only, or prerequisite-limited behavior must be labelled where it appears.
 
 For crate-level ownership and entrypoints, see [Contributor architecture map](CONTRIBUTOR-ARCHITECTURE.md).

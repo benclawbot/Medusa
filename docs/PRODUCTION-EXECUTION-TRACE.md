@@ -4,7 +4,7 @@ This document is the source-to-entrypoint authority for Medusa's shipped executi
 
 ## Authoritative model
 
-Medusa production execution uses **bounded read-only teammates with parent-owned mutation and completion**.
+Medusa production execution uses **bounded teammates, worktree-isolated mutation, a read-only parent lead, and repository-gated completion**.
 
 ```text
 CLI / TUI / desktop / daemon consumer
@@ -12,38 +12,53 @@ CLI / TUI / desktop / daemon consumer
   -> worker_loop_with_state
   -> run_prompt
   -> production_orchestrator::plan
+       -> classifies whether repository mutation is required
   -> multi_agent_coordinator::run_preflight
        -> durable task leases and team state
        -> planner AgentEngine (read-only)
        -> risk-reviewer AgentEngine (read-only)
-       -> validated durable evidence
-  -> parent AgentEngine::step_with_observer_and_context
+       -> validated dependency evidence
+  -> mutating_worker_coordinator::run_implementation [mutating objectives only]
+       -> execution-specific Git branch and worktree
+       -> implementer AgentEngine (runtime-enforced implementer policy)
+       -> changed-path scope validation
+       -> targeted verification inside the worktree
+       -> deterministic commit preparation
+       -> guarded cherry-pick with overlap rejection and rollback
+       -> durable integration receipt and cleanup
+  -> parent AgentEngine (read-only reviewer)
   -> multi_agent_coordinator::verify_repository
   -> persisted outcome and AgentSession state
 ```
 
-`RuntimeController` remains the shared frontend-neutral lifecycle boundary. The coordinator owns bounded teammate dispatch, durable leases, team state, evidence validation, cancellation, and the final repository gate. Each `AgentEngine` still executes exactly one agent session. The parent remains the sole mutation and integration authority in this production slice.
+`RuntimeController` remains the shared frontend-neutral lifecycle boundary. Each `AgentEngine` executes exactly one session. The read-only coordinator owns dependency evidence; the mutating coordinator owns worktree mutation and integration; the parent owns review, user-facing reporting, and the final repository gate.
 
 ## Dispatch boundary
 
-Coordinated prompts create two independent first-wave tasks: repository analysis and risk review. They run concurrently in separate read-only sessions with runtime-enforced tool policy. Their evidence is bound to both the execution plan and a deterministic repository-content fingerprint, so stale evidence cannot be reused after repository changes.
+Coordinated prompts create independent first-wave repository-analysis and risk-review tasks. Explicit mutation language adds the implementer/review/verify task chain. Long analytical objectives retain coordinated read-only research but do not create a mutating worktree.
 
-Mutating teammate dispatch is not part of this slice. Worktree isolation, guarded commit integration, overlap handling, and rollback must be promoted separately before implementer agents may write.
+The current production mutation slice dispatches exactly one implementer contract. Its branch name is execution-specific and its worker identity and lease epoch are durable. Dynamic multi-implementer decomposition remains a later promotion boundary, although the underlying `WorkerManager` already rejects overlapping paths and rolls back a failed integration batch.
+
+## Worktree isolation and integration
+
+The implementer receives a role-bound mutating policy only inside its dedicated Git worktree. Per-session `.medusa` files are removed from the candidate patch, tracked changes are compared with the contract's allowed write scope, and verification must not mutate the candidate path set. The coordinator then squashes the work onto one deterministic commit and integrates it into a clean primary repository.
+
+A conflict aborts the cherry-pick and resets the repository to the exact pre-integration HEAD. Successful cleanup removes the worktree and temporary branch while retaining the durable receipt.
 
 ## Durable state and restart semantics
 
-Coordinator state is stored under `.medusa/executions/<execution-id>`. The execution identifier combines the plan fingerprint and repository fingerprint. Durable records include team membership, lifecycle, mailboxes, task leases and epochs, worker completion state, session identifiers, context fingerprints, and validated evidence. Completed evidence can be reused only when both plan and repository fingerprints match.
+Coordinator state is stored under `.medusa/executions/<execution-id>`. Durable records include team membership, mailboxes, task leases and epochs, repository and context fingerprints, worker session identifiers, changed paths, verification evidence, prepared commits, and integration receipts.
 
-Cancellation is shared with the parent runtime and checked before dispatch and during each worker turn. Worker failures are recorded through the lease controller and team lifecycle before the coordinated turn fails closed.
+A crash before the first state write may reopen an existing worktree only when its branch and base still exactly match the primary HEAD. A crash after integration but before receipt persistence is detected through commit ancestry or exact tree identity. Interrupted leases are requeued with a higher epoch. Stale or mismatched state fails closed.
 
 ## Client entrypoints
 
-The TUI, desktop bridge, CLI, and daemon all call the same `RuntimeController`. They render shared runtime events and do not maintain an independent scheduler or completion model.
+The TUI, desktop bridge, CLI, and daemon all call the same `RuntimeController`. They render shared runtime events and do not maintain an independent scheduler, worktree manager, or completion model.
 
 ## Completion authority
 
-Teammate output is evidence, not completion. The parent reviews and uses that evidence, performs any mutation, and remains accountable for the resulting repository. A coordinated objective may report completed only after the repository verification gate succeeds. Ordinary turn boundaries are not treated as verified completion.
+Teammate output and an integrated commit are evidence, not completion. The parent is read-only during coordinated execution and cannot bypass worktree isolation with direct writes. A coordinated objective may report completed only after the primary repository verification gate succeeds. Ordinary turn boundaries are not treated as verified completion.
 
 ## Remaining promotion boundary
 
-Mutating teammates, nested delegation, worktree commit integration, conflict resolution, and autonomous team steering require separate production evidence. Workspace crates implementing those concepts remain non-production until explicitly reachable from the coordinator and represented in the capability ledger.
+Autonomous nested delegation, model-driven team expansion, consensus voting, commit barriers, and distributed multi-worker transaction coordination require separate production evidence. Their workspace crates are not the current integration authority.

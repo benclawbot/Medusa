@@ -1,6 +1,7 @@
 //! Parallel worker orchestration with Git worktrees and deterministic merge coordination.
 
 use std::{
+    collections::BTreeMap,
     fs,
     path::{Path, PathBuf},
     process::{Command, Output},
@@ -41,6 +42,17 @@ pub struct DelegatedTask {
     pub commit_message: String,
 }
 
+/// Durable evidence for one accepted worktree commit.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct IntegrationReceipt {
+    pub worker_id: String,
+    pub branch: String,
+    pub commit: String,
+    pub base_head: String,
+    pub integrated_head: String,
+    pub changed_paths: Vec<String>,
+}
+
 /// Manages isolated branches and worktrees for one repository.
 #[derive(Clone, Debug)]
 pub struct WorkerManager {
@@ -58,12 +70,89 @@ impl WorkerManager {
         Ok(manager)
     }
 
+    /// Returns the primary repository HEAD used as a worktree integration boundary.
+    pub fn repository_head(&self) -> MedusaResult<String> {
+        git_stdout(&self.repo, &["rev-parse", "HEAD"])
+    }
+
+    /// Fails closed unless the primary repository has no tracked or untracked edits.
+    pub fn require_clean(&self) -> MedusaResult<()> {
+        ensure_clean(&self.repo)
+    }
+
     /// Creates an isolated worktree from the current repository HEAD.
     pub fn create_worker(&self, label: &str) -> MedusaResult<Worker> {
+        self.create_worker_with_id(label, &format!("wrk-{}", Ulid::new()))
+    }
+
+    /// Opens a crash-surviving worktree when it still matches the primary HEAD, or creates it.
+    ///
+    /// This closes the restart window between `git worktree add` and the coordinator's first
+    /// durable state write without silently rebasing partial worker changes onto a newer HEAD.
+    pub fn open_or_create_worker(&self, label: &str, worker_id: &str) -> MedusaResult<Worker> {
         validate_label(label)?;
-        let id = format!("wrk-{}", Ulid::new());
-        let branch = format!("medusa/{label}-{id}");
-        let worktree = self.worktree_root.join(&id);
+        validate_worker_id(worker_id)?;
+        fs::create_dir_all(&self.worktree_root)?;
+        let branch = format!("medusa/{label}-{worker_id}");
+        let worktree = self.worktree_root.join(worker_id);
+        let branch_present = branch_exists(&self.repo, &branch)?;
+        match (worktree.is_dir(), branch_present) {
+            (false, false) => self.create_worker_with_id(label, worker_id),
+            (true, true) => {
+                let actual_branch =
+                    git_stdout(&worktree, &["symbolic-ref", "--quiet", "--short", "HEAD"])?;
+                if actual_branch != branch {
+                    return Err(MedusaError::new(
+                        ErrorCode::PolicyDenied,
+                        ErrorCategory::Policy,
+                        format!(
+                            "existing worker worktree is on {actual_branch}, expected {branch}"
+                        ),
+                    ));
+                }
+                let worktree_head = git_stdout(&worktree, &["rev-parse", "HEAD"])?;
+                let repository_head = self.repository_head()?;
+                if worktree_head != repository_head {
+                    return Err(MedusaError::new(
+                        ErrorCode::PolicyDenied,
+                        ErrorCategory::Policy,
+                        format!(
+                            "existing worker base {worktree_head} does not match primary HEAD {repository_head}"
+                        ),
+                    ));
+                }
+                Ok(Worker {
+                    id: worker_id.to_owned(),
+                    branch,
+                    worktree,
+                    state: WorkerState::Ready,
+                    commit: None,
+                    stdout: String::new(),
+                    stderr: String::new(),
+                })
+            }
+            _ => Err(MedusaError::new(
+                ErrorCode::InternalInvariant,
+                ErrorCategory::Internal,
+                format!("worker branch/worktree resources are inconsistent for {worker_id}"),
+            )),
+        }
+    }
+
+    /// Creates a deterministic worker identity for durable restart and retry flows.
+    pub fn create_worker_with_id(&self, label: &str, worker_id: &str) -> MedusaResult<Worker> {
+        validate_label(label)?;
+        validate_worker_id(worker_id)?;
+        fs::create_dir_all(&self.worktree_root)?;
+        let branch = format!("medusa/{label}-{worker_id}");
+        let worktree = self.worktree_root.join(worker_id);
+        if worktree.exists() || branch_exists(&self.repo, &branch)? {
+            return Err(MedusaError::new(
+                ErrorCode::PolicyDenied,
+                ErrorCategory::Policy,
+                format!("worker resources already exist for {worker_id}"),
+            ));
+        }
         run_git(
             &self.repo,
             &[
@@ -76,7 +165,7 @@ impl WorkerManager {
             ],
         )?;
         Ok(Worker {
-            id,
+            id: worker_id.to_owned(),
             branch,
             worktree,
             state: WorkerState::Ready,
@@ -86,7 +175,90 @@ impl WorkerManager {
         })
     }
 
-    /// Runs tasks concurrently in their isolated worktrees and commits successful changes.
+    /// Returns every tracked or untracked path changed relative to the worker base commit.
+    pub fn changed_paths_since(
+        &self,
+        worker: &Worker,
+        base_commit: &str,
+    ) -> MedusaResult<Vec<String>> {
+        if base_commit.trim().is_empty() {
+            return Err(invalid("worker base commit cannot be empty"));
+        }
+        let mut paths = git_nul_paths(
+            &worker.worktree,
+            &[
+                "diff",
+                "--name-only",
+                "--diff-filter=ACDMRTUXB",
+                "-z",
+                base_commit,
+                "--",
+            ],
+        )?;
+        paths.extend(git_nul_paths(
+            &worker.worktree,
+            &["ls-files", "--others", "--exclude-standard", "-z"],
+        )?);
+        paths.sort();
+        paths.dedup();
+        Ok(paths)
+    }
+
+    /// Squashes all worktree edits since `base_commit` into one deterministic worker commit.
+    pub fn finalize_worker(
+        &self,
+        mut worker: Worker,
+        base_commit: &str,
+        commit_message: &str,
+    ) -> MedusaResult<Worker> {
+        if commit_message.trim().is_empty() {
+            return Err(invalid("worker commit message cannot be empty"));
+        }
+        if !worker.worktree.is_dir() {
+            return Err(invalid(format!(
+                "worker worktree does not exist: {}",
+                worker.worktree.display()
+            )));
+        }
+        let changed_paths = self.changed_paths_since(&worker, base_commit)?;
+        if changed_paths.is_empty() {
+            return Err(MedusaError::new(
+                ErrorCode::ToolExecutionFailed,
+                ErrorCategory::Execution,
+                format!("worker {} completed without repository changes", worker.id),
+            ));
+        }
+        if !git_success(
+            &worker.worktree,
+            &["merge-base", "--is-ancestor", base_commit, "HEAD"],
+        )? {
+            return Err(MedusaError::new(
+                ErrorCode::PolicyDenied,
+                ErrorCategory::Policy,
+                "worker branch no longer descends from its execution base",
+            ));
+        }
+        run_git(&worker.worktree, &["reset", "--soft", base_commit])?;
+        run_git(&worker.worktree, &["add", "-A"])?;
+        run_git(&worker.worktree, &["diff", "--cached", "--check"])?;
+        run_git(
+            &worker.worktree,
+            &[
+                "-c",
+                "user.name=Medusa",
+                "-c",
+                "user.email=medusa@users.noreply.github.com",
+                "commit",
+                "-m",
+                commit_message,
+            ],
+        )?;
+        worker.commit = Some(git_stdout(&worker.worktree, &["rev-parse", "HEAD"])?);
+        worker.state = WorkerState::Succeeded;
+        Ok(worker)
+    }
+
+    /// Runs command tasks concurrently in isolated worktrees and commits successful changes.
     pub fn delegate_parallel(
         &self,
         assignments: Vec<(Worker, DelegatedTask)>,
@@ -110,14 +282,22 @@ impl WorkerManager {
     }
 
     /// Cherry-picks successful worker commits in stable worker-ID order.
-    pub fn merge_successful(&self, workers: &[Worker]) -> MedusaResult<Vec<String>> {
+    ///
+    /// Overlapping changed paths are rejected before integration. If any cherry-pick fails, every
+    /// commit from the batch is rolled back to the clean pre-integration HEAD.
+    pub fn integrate_successful(
+        &self,
+        workers: &[Worker],
+    ) -> MedusaResult<Vec<IntegrationReceipt>> {
         ensure_clean(&self.repo)?;
         let mut ordered = workers
             .iter()
             .filter(|worker| worker.state == WorkerState::Succeeded)
             .collect::<Vec<_>>();
         ordered.sort_by(|left, right| left.id.cmp(&right.id));
-        let mut merged = Vec::new();
+
+        let mut path_owners = BTreeMap::<String, String>::new();
+        let mut prepared = Vec::with_capacity(ordered.len());
         for worker in ordered {
             let commit = worker.commit.as_deref().ok_or_else(|| {
                 MedusaError::new(
@@ -126,13 +306,91 @@ impl WorkerManager {
                     format!("successful worker {} has no commit", worker.id),
                 )
             })?;
-            if let Err(error) = run_git(&self.repo, &["cherry-pick", commit]) {
-                let _ = run_git(&self.repo, &["cherry-pick", "--abort"]);
-                return Err(error);
+            let paths = changed_paths_for_commit(&self.repo, commit)?;
+            if paths.is_empty() {
+                return Err(invalid(format!(
+                    "worker {} commit contains no changed paths",
+                    worker.id
+                )));
             }
-            merged.push(commit.to_owned());
+            for path in &paths {
+                if let Some(owner) = path_owners.insert(path.clone(), worker.id.clone()) {
+                    return Err(MedusaError::new(
+                        ErrorCode::PolicyDenied,
+                        ErrorCategory::Policy,
+                        format!(
+                            "worker path overlap rejected before integration: {path} ({owner}, {})",
+                            worker.id
+                        ),
+                    ));
+                }
+            }
+            prepared.push((worker, commit.to_owned(), paths));
         }
-        Ok(merged)
+
+        let base_head = self.repository_head()?;
+        let mut receipts = Vec::with_capacity(prepared.len());
+        for (worker, commit, changed_paths) in prepared {
+            if let Err(error) = run_git(&self.repo, &["cherry-pick", &commit]) {
+                let _ = run_git(&self.repo, &["cherry-pick", "--abort"]);
+                let rollback = run_git(&self.repo, &["reset", "--hard", &base_head]);
+                return match rollback {
+                    Ok(()) => Err(error),
+                    Err(rollback_error) => Err(MedusaError::new(
+                        ErrorCode::InternalInvariant,
+                        ErrorCategory::Internal,
+                        format!(
+                            "integration failed and rollback also failed: {error}; rollback={rollback_error}"
+                        ),
+                    )),
+                };
+            }
+            receipts.push(IntegrationReceipt {
+                worker_id: worker.id.clone(),
+                branch: worker.branch.clone(),
+                commit,
+                base_head: base_head.clone(),
+                integrated_head: self.repository_head()?,
+                changed_paths,
+            });
+        }
+        Ok(receipts)
+    }
+
+    /// Compatibility wrapper returning only accepted commit identifiers.
+    pub fn merge_successful(&self, workers: &[Worker]) -> MedusaResult<Vec<String>> {
+        self.integrate_successful(workers)
+            .map(|receipts| receipts.into_iter().map(|receipt| receipt.commit).collect())
+    }
+
+    /// Returns whether a prepared worker commit is already integrated into the primary HEAD.
+    pub fn commit_is_integrated(&self, commit: &str) -> MedusaResult<bool> {
+        if commit.trim().is_empty() {
+            return Err(invalid("worker commit cannot be empty"));
+        }
+        git_success(&self.repo, &["merge-base", "--is-ancestor", commit, "HEAD"])
+    }
+
+    /// Returns whether the prepared commit tree is the current primary repository tree.
+    ///
+    /// Cherry-pick creates a new commit identifier, so restart recovery cannot rely only on
+    /// ancestry to detect that an isolated worker was integrated before state persistence.
+    pub fn commit_tree_matches_head(&self, commit: &str) -> MedusaResult<bool> {
+        if commit.trim().is_empty() {
+            return Err(invalid("worker commit cannot be empty"));
+        }
+        let commit_tree = git_stdout(&self.repo, &["rev-parse", &format!("{commit}^{{tree}}")])?;
+        let head_tree = git_stdout(&self.repo, &["rev-parse", "HEAD^{tree}"])?;
+        Ok(commit_tree == head_tree)
+    }
+
+    /// Removes untracked per-session runtime state from an isolated worktree.
+    ///
+    /// Agent sessions persist under `.medusa`; those files are execution evidence, not product
+    /// changes and must never enter a worker commit. Tracked `.medusa` files remain untouched and
+    /// are still subject to ordinary scope validation.
+    pub fn discard_untracked_runtime_state(&self, worker: &Worker) -> MedusaResult<()> {
+        run_git(&worker.worktree, &["clean", "-fd", "--", ".medusa"])
     }
 
     /// Runs combined repository verification after all worker commits merge.
@@ -164,11 +422,12 @@ impl WorkerManager {
         output_result("combined verification", output)
     }
 
-    /// Removes worktrees after their commits are merged or rejected.
+    /// Removes worktrees and their temporary branches after acceptance or rejection.
     pub fn cleanup(&self, workers: &[Worker]) -> MedusaResult<()> {
+        let mut first_error = None;
         for worker in workers {
-            if worker.worktree.exists() {
-                run_git(
+            if worker.worktree.exists()
+                && let Err(error) = run_git(
                     &self.repo,
                     &[
                         "worktree",
@@ -176,10 +435,36 @@ impl WorkerManager {
                         "--force",
                         path_text(&worker.worktree)?,
                     ],
-                )?;
+                )
+                && first_error.is_none()
+            {
+                first_error = Some(error);
+            }
+            match branch_exists(&self.repo, &worker.branch) {
+                Ok(true) => {
+                    if let Err(error) = run_git(&self.repo, &["branch", "-D", &worker.branch])
+                        && first_error.is_none()
+                    {
+                        first_error = Some(error);
+                    }
+                }
+                Ok(false) => {}
+                Err(error) if first_error.is_none() => first_error = Some(error),
+                Err(_) => {}
             }
         }
-        run_git(&self.repo, &["worktree", "prune"])
+        if let Err(error) = run_git(&self.repo, &["worktree", "prune"])
+            && first_error.is_none()
+        {
+            first_error = Some(error);
+        }
+        if self.worktree_root.is_dir() && fs::read_dir(&self.worktree_root)?.next().is_none() {
+            fs::remove_dir(&self.worktree_root)?;
+        }
+        match first_error {
+            Some(error) => Err(error),
+            None => Ok(()),
+        }
     }
 }
 
@@ -196,22 +481,68 @@ fn execute_worker(mut worker: Worker, task: DelegatedTask) -> MedusaResult<Worke
         return Ok(worker);
     }
     run_git(&worker.worktree, &["add", "-A"])?;
-    run_git(&worker.worktree, &["commit", "-m", &task.commit_message])?;
+    run_git(
+        &worker.worktree,
+        &[
+            "-c",
+            "user.name=Medusa",
+            "-c",
+            "user.email=medusa@users.noreply.github.com",
+            "commit",
+            "-m",
+            &task.commit_message,
+        ],
+    )?;
     worker.commit = Some(git_stdout(&worker.worktree, &["rev-parse", "HEAD"])?);
     worker.state = WorkerState::Succeeded;
     Ok(worker)
 }
 
+fn changed_paths_for_commit(repo: &Path, commit: &str) -> MedusaResult<Vec<String>> {
+    let mut paths = git_nul_paths(
+        repo,
+        &[
+            "diff-tree",
+            "--no-commit-id",
+            "--name-only",
+            "--diff-filter=ACDMRTUXB",
+            "-r",
+            "-z",
+            commit,
+        ],
+    )?;
+    paths.sort();
+    paths.dedup();
+    Ok(paths)
+}
+
 fn ensure_clean(repo: &Path) -> MedusaResult<()> {
-    if git_stdout(repo, &["status", "--porcelain"])?.is_empty() {
-        Ok(())
-    } else {
+    let status = git_stdout(repo, &["status", "--porcelain", "--untracked-files=all"])?;
+    let dirty = status.lines().any(|line| {
+        let path = line.get(3..).unwrap_or_default().trim_matches('"');
+        !(line.starts_with("?? ") && (path == ".medusa" || path.starts_with(".medusa/")))
+    });
+    if dirty {
         Err(MedusaError::new(
             ErrorCode::PolicyDenied,
             ErrorCategory::Policy,
-            "merge coordinator requires a clean repository",
+            "merge coordinator requires a clean repository outside Medusa runtime state",
         ))
+    } else {
+        Ok(())
     }
+}
+
+fn branch_exists(repo: &Path, branch: &str) -> MedusaResult<bool> {
+    git_success(
+        repo,
+        &[
+            "show-ref",
+            "--verify",
+            "--quiet",
+            &format!("refs/heads/{branch}"),
+        ],
+    )
 }
 
 fn run_git(repo: &Path, args: &[&str]) -> MedusaResult<()> {
@@ -222,6 +553,32 @@ fn run_git(repo: &Path, args: &[&str]) -> MedusaResult<()> {
 fn git_stdout(repo: &Path, args: &[&str]) -> MedusaResult<String> {
     let output = Command::new("git").args(args).current_dir(repo).output()?;
     output_result(&format!("git {}", args.join(" ")), output).map(|text| text.trim().to_owned())
+}
+
+fn git_success(repo: &Path, args: &[&str]) -> MedusaResult<bool> {
+    let output = Command::new("git").args(args).current_dir(repo).output()?;
+    Ok(output.status.success())
+}
+
+fn git_nul_paths(repo: &Path, args: &[&str]) -> MedusaResult<Vec<String>> {
+    let output = Command::new("git").args(args).current_dir(repo).output()?;
+    if !output.status.success() {
+        return output_result(&format!("git {}", args.join(" ")), output).map(|_| Vec::new());
+    }
+    output
+        .stdout
+        .split(|byte| *byte == 0)
+        .filter(|path| !path.is_empty())
+        .map(|path| {
+            String::from_utf8(path.to_vec()).map_err(|error| {
+                MedusaError::new(
+                    ErrorCode::InvalidConfiguration,
+                    ErrorCategory::Validation,
+                    format!("Git returned a non-UTF-8 repository path: {error}"),
+                )
+            })
+        })
+        .collect()
 }
 
 fn output_result(label: &str, output: Output) -> MedusaResult<String> {
@@ -241,10 +598,12 @@ fn output_result(label: &str, output: Output) -> MedusaResult<String> {
     }
 }
 
-fn _bounded_removed(_bytes: &[u8]) -> String {
-    // Stub kept to suppress accidental re-introduction. Workers no longer
-    // truncate output — the full body is persisted and surfaced verbatim.
-    String::new()
+fn invalid(message: impl Into<String>) -> MedusaError {
+    MedusaError::new(
+        ErrorCode::InvalidConfiguration,
+        ErrorCategory::Validation,
+        message,
+    )
 }
 
 fn path_text(path: &Path) -> MedusaResult<&str> {
@@ -265,11 +624,19 @@ fn validate_label(label: &str) -> MedusaResult<()> {
     {
         Ok(())
     } else {
-        Err(MedusaError::new(
-            ErrorCode::InvalidConfiguration,
-            ErrorCategory::Validation,
-            format!("invalid worker label: {label}"),
-        ))
+        Err(invalid(format!("invalid worker label: {label}")))
+    }
+}
+
+fn validate_worker_id(worker_id: &str) -> MedusaResult<()> {
+    if !worker_id.is_empty()
+        && worker_id
+            .chars()
+            .all(|character| character.is_ascii_alphanumeric() || character == '-')
+    {
+        Ok(())
+    } else {
+        Err(invalid(format!("invalid worker identifier: {worker_id}")))
     }
 }
 
@@ -281,8 +648,7 @@ mod tests {
         run_git(repo, args).expect("git command");
     }
 
-    #[test]
-    fn parallel_feature_fixture_merges_and_verifies() {
+    fn repository() -> (tempfile::TempDir, PathBuf, PathBuf) {
         let directory = tempfile::tempdir().expect("tempdir");
         let repo = directory.path().join("repo");
         let worktrees = directory.path().join("worktrees");
@@ -291,6 +657,14 @@ mod tests {
         git(&repo, &["config", "user.name", "Medusa Test"]);
         git(&repo, &["config", "user.email", "medusa@example.invalid"]);
         fs::write(repo.join("base.txt"), "base\n").expect("base");
+        git(&repo, &["add", "-A"]);
+        git(&repo, &["commit", "-m", "base"]);
+        (directory, repo, worktrees)
+    }
+
+    #[test]
+    fn parallel_feature_fixture_merges_and_verifies() {
+        let (_directory, repo, worktrees) = repository();
         #[cfg(windows)]
         fs::write(
             repo.join("verify.ps1"),
@@ -304,7 +678,7 @@ mod tests {
         )
         .expect("verify");
         git(&repo, &["add", "-A"]);
-        git(&repo, &["commit", "-m", "base"]);
+        git(&repo, &["commit", "-m", "verification"]);
 
         let manager = WorkerManager::new(&repo, &worktrees).expect("manager");
         let worker_a = manager.create_worker("feature-a").expect("worker a");
@@ -368,14 +742,83 @@ mod tests {
                 .expect("verify")
                 .contains("combined-verification-ok")
         );
-        assert_eq!(
-            fs::read_to_string(repo.join("feature-a.txt")).expect("a"),
-            "alpha"
-        );
-        assert_eq!(
-            fs::read_to_string(repo.join("feature-b.txt")).expect("b"),
-            "beta"
-        );
         manager.cleanup(&workers).expect("cleanup");
+    }
+
+    #[test]
+    fn isolated_worktrees_do_not_share_uncommitted_changes() {
+        let (_directory, repo, worktrees) = repository();
+        let manager = WorkerManager::new(&repo, &worktrees).expect("manager");
+        let worker_a = manager.create_worker("a").expect("worker a");
+        let worker_b = manager.create_worker("b").expect("worker b");
+        fs::write(worker_a.worktree.join("private.txt"), "worker-a\n").expect("write a");
+        assert!(!worker_b.worktree.join("private.txt").exists());
+        assert!(!repo.join("private.txt").exists());
+        manager.cleanup(&[worker_a, worker_b]).expect("cleanup");
+    }
+
+    #[test]
+    fn overlapping_worker_paths_are_rejected_before_integration() {
+        let (_directory, repo, worktrees) = repository();
+        let manager = WorkerManager::new(&repo, &worktrees).expect("manager");
+        let base = manager.repository_head().expect("base");
+        let worker_a = manager.create_worker("a").expect("worker a");
+        let worker_b = manager.create_worker("b").expect("worker b");
+        fs::write(worker_a.worktree.join("shared.txt"), "a\n").expect("write a");
+        fs::write(worker_b.worktree.join("shared.txt"), "b\n").expect("write b");
+        let worker_a = manager
+            .finalize_worker(worker_a, &base, "worker a")
+            .expect("commit a");
+        let worker_b = manager
+            .finalize_worker(worker_b, &base, "worker b")
+            .expect("commit b");
+        let error = manager
+            .integrate_successful(&[worker_a.clone(), worker_b.clone()])
+            .expect_err("overlap must fail");
+        assert!(error.to_string().contains("path overlap"));
+        assert!(!repo.join("shared.txt").exists());
+        manager.cleanup(&[worker_a, worker_b]).expect("cleanup");
+    }
+
+    #[test]
+    fn integration_conflict_rolls_back_to_the_preintegration_head() {
+        let (_directory, repo, worktrees) = repository();
+        let manager = WorkerManager::new(&repo, &worktrees).expect("manager");
+        let base = manager.repository_head().expect("base");
+        let worker = manager.create_worker("conflict").expect("worker");
+        fs::write(worker.worktree.join("base.txt"), "worker\n").expect("worker change");
+        let worker = manager
+            .finalize_worker(worker, &base, "worker change")
+            .expect("worker commit");
+
+        fs::write(repo.join("base.txt"), "primary\n").expect("primary change");
+        git(&repo, &["add", "-A"]);
+        git(&repo, &["commit", "-m", "primary change"]);
+        let preintegration = manager.repository_head().expect("preintegration");
+        assert!(
+            manager
+                .integrate_successful(std::slice::from_ref(&worker))
+                .is_err()
+        );
+        assert_eq!(manager.repository_head().expect("head"), preintegration);
+        assert_eq!(
+            fs::read_to_string(repo.join("base.txt")).unwrap(),
+            "primary\n"
+        );
+        manager.cleanup(&[worker]).expect("cleanup");
+    }
+
+    #[test]
+    fn cleanup_removes_worktree_and_temporary_branch() {
+        let (_directory, repo, worktrees) = repository();
+        let manager = WorkerManager::new(&repo, &worktrees).expect("manager");
+        let worker = manager.create_worker("cleanup").expect("worker");
+        let worktree = worker.worktree.clone();
+        let branch = worker.branch.clone();
+        assert!(worktree.is_dir());
+        assert!(branch_exists(&repo, &branch).expect("branch exists"));
+        manager.cleanup(&[worker]).expect("cleanup");
+        assert!(!worktree.exists());
+        assert!(!branch_exists(&repo, &branch).expect("branch removed"));
     }
 }
