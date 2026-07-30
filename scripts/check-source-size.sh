@@ -6,6 +6,18 @@ restore_original() {
 }
 trap restore_original EXIT
 
+python3 - <<'PY'
+from pathlib import Path
+
+path = Path('crates/medusa-runtime/build_main.rs')
+source = path.read_text()
+old = 'RuntimeError::agent("mutating execution requires coordinator preflight evidence")'
+new = r'RuntimeError::agent(\"mutating execution requires coordinator preflight evidence\")'
+if source.count(old) != 1:
+    raise SystemExit('expected exactly one unescaped mutating preflight error message')
+path.write_text(source.replace(old, new, 1))
+PY
+
 limit="${MEDUSA_SOURCE_LINE_LIMIT:-1000}"
 failed=0
 files=(
