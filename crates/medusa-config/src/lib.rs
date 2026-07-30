@@ -6,10 +6,12 @@ use medusa_core::{ErrorCategory, ErrorCode, MedusaError, MedusaResult};
 use serde::{Deserialize, Serialize};
 
 mod provider_profile;
+mod provider_profiles;
 
 pub use provider_profile::{
     PROVIDER_PROFILE_KEYS, ProviderProfile, ProviderProfileStore, ProviderProfileValue,
 };
+pub use provider_profiles::{ProviderProfileCatalog, ProviderProfileSummary};
 
 /// Current configuration schema version.
 pub const CONFIG_VERSION: u16 = 1;
@@ -323,7 +325,7 @@ fn invalid(message: impl Into<String>) -> MedusaError {
 }
 
 fn merge_provider_profile(base: &mut toml::Value) -> MedusaResult<()> {
-    let profile = ProviderProfileStore::user()?.load()?;
+    let profile = ProviderProfileCatalog::user()?.active_store()?.load()?;
     if !profile.configured {
         return Ok(());
     }

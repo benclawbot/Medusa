@@ -5,16 +5,16 @@ use std::{
     time::Duration,
 };
 
-use medusa_config::{PROVIDER_PROFILE_KEYS, ProviderProfile, ProviderProfileStore};
+use medusa_config::{PROVIDER_PROFILE_KEYS, ProviderProfile, ProviderProfileCatalog};
 use medusa_core::{ErrorCategory, ErrorCode, MedusaError, MedusaResult};
 use serde::Serialize;
 
 pub(crate) fn config_path() -> MedusaResult<std::path::PathBuf> {
-    Ok(ProviderProfileStore::user()?.path().to_path_buf())
+    Ok(ProviderProfileCatalog::user()?.active_store()?.path().to_path_buf())
 }
 
 pub(crate) fn load_profile() -> MedusaResult<ProviderProfile> {
-    ProviderProfileStore::user()?.load()
+    ProviderProfileCatalog::user()?.active_store()?.load()
 }
 
 pub(crate) fn ensure_first_run() -> MedusaResult<()> {
@@ -26,7 +26,7 @@ pub(crate) fn ensure_first_run() -> MedusaResult<()> {
 }
 
 pub(crate) fn configure_interactive() -> MedusaResult<()> {
-    let store = ProviderProfileStore::user()?;
+    let store = ProviderProfileCatalog::user()?.active_store()?;
     let mut profile = store.load()?;
     profile.connection = choose(
         "Connection type",
@@ -169,7 +169,7 @@ struct ValidationOutput {
 }
 
 pub(crate) fn validate(json: bool) -> MedusaResult<()> {
-    let store = ProviderProfileStore::user()?;
+    let store = ProviderProfileCatalog::user()?.active_store()?;
     let profile = store.load()?;
     profile.validate()?;
     let output = ValidationOutput {
@@ -202,7 +202,7 @@ pub(crate) fn validate(json: bool) -> MedusaResult<()> {
 }
 
 pub(crate) fn reset() -> MedusaResult<()> {
-    let store = ProviderProfileStore::user()?;
+    let store = ProviderProfileCatalog::user()?.active_store()?;
     let removed = store.reset()?;
     if removed {
         println!("Medusa provider configuration reset.");
