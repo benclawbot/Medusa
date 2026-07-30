@@ -374,7 +374,7 @@ fn objective_requires_mutation(text: &str) -> bool {
 
 fn infer_scopes(text: &str) -> Vec<String> {
     let mut scopes = BTreeSet::new();
-    for sentence in text.split(['.', '\n']) {
+    for sentence in text.split('\n').flat_map(|line| line.split(". ")) {
         let lower = sentence.to_ascii_lowercase();
         let forbids_mutation = [
             "without modifying",
