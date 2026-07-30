@@ -14,4 +14,4 @@ This slice exposes the production multi-agent coordinator through one typed runt
 - Direct single-agent mode has no team overhead.
 - TUI and desktop adapters preserve typed status and render useful worker progress.
 
-This document is the implementation contract for issue #550 and will be updated to shipped behavior before merge.
+The shipped runtime now uses this control plane for planner, researcher, and isolated implementer workers. Commands remain responsive during coordinated execution because they update shared state directly; workers consume steering and cancellation between bounded model turns.

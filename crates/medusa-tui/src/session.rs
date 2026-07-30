@@ -424,6 +424,44 @@ pub(super) fn drain_runtime_events(
                     details: activity.details,
                 });
             }
+            RuntimeEvent::Team(snapshot) => {
+                let has_workers = !snapshot.workers.is_empty();
+                for worker in snapshot.workers {
+                    app.record_activity(TranscriptActivity {
+                        id: Some(format!("team:{}", worker.worker_id)),
+                        kind: match worker.lifecycle {
+                            medusa_runtime::TeamWorkerLifecycle::Completed
+                            | medusa_runtime::TeamWorkerLifecycle::Integrated => {
+                                TranscriptActivityKind::Done
+                            }
+                            medusa_runtime::TeamWorkerLifecycle::Failed => {
+                                TranscriptActivityKind::Error
+                            }
+                            _ => TranscriptActivityKind::Progress,
+                        },
+                        title: format!(
+                            "{} · {} · {:?}",
+                            worker.worker_id, worker.task_id, worker.lifecycle
+                        ),
+                        details: vec![
+                            format!("role {}", worker.role),
+                            format!("turn {}", worker.turn),
+                            format!(
+                                "session {}",
+                                worker.session_id.as_deref().unwrap_or("pending")
+                            ),
+                            worker.last_update,
+                        ],
+                    });
+                }
+                if has_workers {
+                    app.status = if snapshot.active {
+                        "team active".to_owned()
+                    } else {
+                        "team complete".to_owned()
+                    };
+                }
+            }
             RuntimeEvent::Plan(plan) => {
                 app.set_plan(plan);
             }

@@ -63,6 +63,62 @@ describe("runtime timeline store", () => {
     expect(getTimelineSnapshot().busy).toBe(false);
   });
 
+  it("projects typed team snapshots into stable worker activities and removes stale workers", async () => {
+    mockedInvoke
+      .mockResolvedValueOnce({ runtimeId: "runtime-team", repo: "/repo" })
+      .mockResolvedValueOnce([
+        { type: "started" },
+        {
+          type: "team",
+          snapshot: {
+            executionId: "execution-1",
+            active: true,
+            shutdownRequested: false,
+            sequence: 1,
+            workers: [
+              {
+                workerId: "reviewer-1",
+                role: "reviewer",
+                taskId: "review",
+                lifecycle: "running",
+                sessionId: "session-1",
+                turn: 2,
+                lastUpdate: "checking tests",
+                queuedInstructions: 0,
+              },
+            ],
+          },
+        },
+      ] satisfies RuntimeEvent[])
+      .mockResolvedValueOnce([
+        {
+          type: "team",
+          snapshot: {
+            active: false,
+            shutdownRequested: false,
+            sequence: 0,
+            workers: [],
+          },
+        },
+      ] satisfies RuntimeEvent[]);
+
+    await startRuntime("/repo");
+    await pollRuntime("runtime-team");
+
+    expect(getTimelineSnapshot().activities).toEqual([
+      {
+        id: "team:reviewer-1",
+        kind: "progress",
+        title: "reviewer-1 · review · running",
+        details: ["role reviewer", "turn 2", "session session-1", "checking tests"],
+      },
+    ]);
+
+    await pollRuntime("runtime-team");
+    expect(getTimelineSnapshot().activities).toEqual([]);
+    expect(getTimelineSnapshot().team?.workers).toEqual([]);
+  });
+
   it("notifies subscribers and resets when a new runtime starts", async () => {
     const listener = vi.fn();
     const unsubscribe = subscribeTimeline(listener);

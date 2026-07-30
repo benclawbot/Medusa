@@ -1,16 +1,20 @@
 //! Durable failure recording and cleanup for mutating worker attempts.
 
+use std::{path::Path, sync::mpsc::Sender};
+
 use medusa_agent::{LeasedAssignment, TeamRuntime, WorkerExecutionController};
 use medusa_workers::{Worker, WorkerManager, WorkerState};
 
-use super::{DurableImplementationState, ImplementationStatus, WorkerRun};
 use super::support::write_atomic;
-use std::path::Path;
+use super::{DurableImplementationState, ImplementationStatus, WorkerRun};
+use crate::{RuntimeEvent, team_control::TeamControlPlane};
 
 #[allow(clippy::too_many_arguments)]
 pub(super) fn record_attempt_failure(
     controller: &mut WorkerExecutionController,
     team: &TeamRuntime,
+    events: &Sender<RuntimeEvent>,
+    control: &TeamControlPlane,
     manager: &WorkerManager,
     state_path: &Path,
     assignment: &LeasedAssignment,
@@ -68,6 +72,14 @@ pub(super) fn record_attempt_failure(
     };
     state.last_error = Some(recorded.clone());
     write_atomic(state_path, &state)?;
+    let snapshot = if state.status == ImplementationStatus::Retrying {
+        control.retrying(&assignment.worker_id, recorded.clone())
+    } else {
+        control.fail(&assignment.worker_id, recorded.clone())
+    };
+    if let Ok(snapshot) = snapshot {
+        let _ = events.send(RuntimeEvent::Team(snapshot));
+    }
     if secondary.is_empty() {
         Ok(recorded)
     } else {

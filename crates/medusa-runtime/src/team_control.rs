@@ -37,6 +37,7 @@ pub struct TeamWorkerRegistration {
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct TeamWorkerSnapshot {
     pub worker_id: String,
     pub role: String,
@@ -49,6 +50,7 @@ pub struct TeamWorkerSnapshot {
 }
 
 #[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct TeamSnapshot {
     pub execution_id: Option<String>,
     pub active: bool,
@@ -99,7 +101,6 @@ impl TeamControlPlane {
             };
         } else {
             state.active = true;
-            state.shutdown_requested = false;
         }
         for registration in registrations {
             state.workers.entry(registration.worker_id).or_insert(WorkerState {
@@ -134,11 +135,13 @@ impl TeamControlPlane {
         message: impl Into<String>,
     ) -> Result<TeamSnapshot, String> {
         self.update(worker_id, |worker| {
-            worker.lifecycle = TeamWorkerLifecycle::Running;
             if let Some(session_id) = session_id {
                 worker.session_id = Some(session_id.to_owned());
             }
-            worker.last_update = message.into();
+            if worker.lifecycle != TeamWorkerLifecycle::CancellationRequested {
+                worker.lifecycle = TeamWorkerLifecycle::Running;
+                worker.last_update = message.into();
+            }
         })
     }
 
@@ -150,12 +153,14 @@ impl TeamControlPlane {
         message: impl Into<String>,
     ) -> Result<TeamSnapshot, String> {
         self.update(worker_id, |worker| {
-            worker.lifecycle = TeamWorkerLifecycle::Running;
             if let Some(session_id) = session_id {
                 worker.session_id = Some(session_id.to_owned());
             }
             worker.turn = turn;
-            worker.last_update = message.into();
+            if worker.lifecycle != TeamWorkerLifecycle::CancellationRequested {
+                worker.lifecycle = TeamWorkerLifecycle::Running;
+                worker.last_update = message.into();
+            }
         })
     }
 
@@ -165,8 +170,10 @@ impl TeamControlPlane {
         message: impl Into<String>,
     ) -> Result<TeamSnapshot, String> {
         self.update(worker_id, |worker| {
-            worker.lifecycle = TeamWorkerLifecycle::Retrying;
-            worker.last_update = message.into();
+            if worker.lifecycle != TeamWorkerLifecycle::CancellationRequested {
+                worker.lifecycle = TeamWorkerLifecycle::Retrying;
+                worker.last_update = message.into();
+            }
         })
     }
 
@@ -220,13 +227,23 @@ impl TeamControlPlane {
                 "steering instruction exceeds the {MAX_INSTRUCTION_BYTES}-byte limit"
             ));
         }
-        self.update(worker_id, |worker| {
-            if worker.instructions.len() >= MAX_QUEUED_INSTRUCTIONS {
-                worker.instructions.pop_front();
-            }
-            worker.instructions.push_back(instruction.to_owned());
-            worker.last_update = "steering instruction queued".to_owned();
-        })
+        let mut state = self.lock();
+        let worker = state
+            .workers
+            .get_mut(worker_id)
+            .ok_or_else(|| format!("unknown team worker `{worker_id}`"))?;
+        if worker.lifecycle.is_terminal() {
+            return Err(format!("worker `{worker_id}` is already terminal"));
+        }
+        if worker.instructions.len() >= MAX_QUEUED_INSTRUCTIONS {
+            return Err(format!(
+                "worker `{worker_id}` already has {MAX_QUEUED_INSTRUCTIONS} queued instructions"
+            ));
+        }
+        worker.instructions.push_back(instruction.to_owned());
+        worker.last_update = "steering instruction queued".to_owned();
+        bump(&mut state);
+        Ok(snapshot(&state))
     }
 
     pub fn stop_worker(&self, worker_id: &str) -> Result<TeamSnapshot, String> {
@@ -251,13 +268,15 @@ impl TeamControlPlane {
             return Err("no coordinated team is active".to_owned());
         }
         state.shutdown_requested = true;
+        let mut cancelled = Vec::new();
         for (worker_id, worker) in &mut state.workers {
             if !worker.lifecycle.is_terminal() {
                 worker.lifecycle = TeamWorkerLifecycle::CancellationRequested;
                 worker.last_update = "team shutdown requested".to_owned();
-                state.cancelled_workers.insert(worker_id.clone());
+                cancelled.push(worker_id.clone());
             }
         }
+        state.cancelled_workers.extend(cancelled);
         bump(&mut state);
         Ok(snapshot(&state))
     }
@@ -387,6 +406,21 @@ mod tests {
     }
 
     #[test]
+    fn steering_rejects_terminal_workers_and_full_queues() {
+        let control = control();
+        for index in 0..MAX_QUEUED_INSTRUCTIONS {
+            control
+                .steer("worker-a", &format!("instruction {index}"))
+                .unwrap();
+        }
+        assert!(control.steer("worker-a", "one too many").is_err());
+
+        let terminal = control();
+        terminal.complete("worker-a", "done").unwrap();
+        assert!(terminal.steer("worker-a", "too late").is_err());
+    }
+
+    #[test]
     fn worker_and_team_cancellation_are_distinct() {
         let control = control();
         control.stop_worker("worker-a").unwrap();
@@ -405,6 +439,25 @@ mod tests {
         other.stop_team().unwrap();
         assert!(other.is_cancelled("worker-b"));
         assert!(other.snapshot().shutdown_requested);
+    }
+
+    #[test]
+    fn progress_cannot_overwrite_a_cancellation_request() {
+        let control = control();
+        control.start("worker-a", Some("session-a"), "running").unwrap();
+        control.stop_worker("worker-a").unwrap();
+        control
+            .progress("worker-a", Some("session-a"), 2, "late progress")
+            .unwrap();
+        control.retrying("worker-a", "late retry").unwrap();
+
+        let worker = &control.snapshot().workers[0];
+        assert_eq!(
+            worker.lifecycle,
+            TeamWorkerLifecycle::CancellationRequested
+        );
+        assert_eq!(worker.last_update, "worker cancellation requested");
+        assert_eq!(worker.turn, 2);
     }
 
     #[test]

@@ -4,6 +4,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     println!("cargo:rerun-if-changed=src/lib.rs");
     println!("cargo:rerun-if-changed=src/production_orchestrator.rs");
     println!("cargo:rerun-if-changed=src/multi_agent_coordinator.rs");
+    println!("cargo:rerun-if-changed=src/team_control.rs");
     println!("cargo:rerun-if-changed=src/mutating_worker_coordinator.rs");
     println!("cargo:rerun-if-changed=src/mutating_worker_coordinator_support.rs");
     println!("cargo:rerun-if-changed=src/mutating_worker_failure.rs");
@@ -62,6 +63,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     for (declaration, file) in [
         ("mod error;", "error.rs"),
         ("mod multi_agent_coordinator;", "multi_agent_coordinator.rs"),
+        ("mod team_control;", "team_control.rs"),
         (
             "mod mutating_worker_coordinator;",
             "mutating_worker_coordinator.rs",
@@ -150,6 +152,27 @@ fn main() -> Result<(), Box<dyn Error>> {
         &mut source,
         "    state.session = Some(session);\n    result\n}\n\nfn append_followups",
         "    let mut result = result;\n    let mut verified = matches!(&result, Ok(RuntimeEvent::Completed { .. }));\n    if execution_plan.mode == crate::production_orchestrator::ExecutionMode::Orchestrated\n        && matches!(&result, Ok(RuntimeEvent::Completed { .. }))\n    {\n        match crate::multi_agent_coordinator::verify_repository(&state.repo, &execution_plan, events) {\n            Ok(_) => verified = true,\n            Err(error) => result = Err(RuntimeError::agent(error)),\n        }\n    }\n    let failed = result.is_err();\n    if let Err(error) = crate::production_orchestrator::persist_outcome(&state.repo, &draft, &execution_plan, verified, failed) {\n        let _ = events.send(RuntimeEvent::Notice { title: \"Runtime learning record unavailable\".to_owned(), details: vec![error.to_string()] });\n    }\n    state.session = Some(session);\n    result\n}\n\nfn append_followups",
+    )?;
+
+    replace_once(
+        &mut source,
+        "    let execution_plan = crate::production_orchestrator::plan(&draft).map_err(RuntimeError::agent)?;\n    for event",
+        "    let execution_plan = crate::production_orchestrator::plan(&draft).map_err(RuntimeError::agent)?;\n    if execution_plan.mode == crate::production_orchestrator::ExecutionMode::Direct {\n        let _ = events.send(RuntimeEvent::Team(state.team_control.clear()));\n    } else {\n        state.team_control.clear();\n    }\n    for event",
+    )?;
+    replace_once(
+        &mut source,
+        "            crate::multi_agent_coordinator::run_preflight(\n                &state.repo,\n                &config,\n                state.session_api_key.clone(),\n                &execution_plan,\n                cancel,\n                events,\n            )",
+        "            crate::multi_agent_coordinator::run_preflight(\n                &state.repo,\n                &config,\n                state.session_api_key.clone(),\n                &execution_plan,\n                cancel,\n                &state.team_control,\n                events,\n            )",
+    )?;
+    replace_once(
+        &mut source,
+        "            crate::mutating_worker_coordinator::run_implementation(\n                &state.repo,\n                &config,\n                state.session_api_key.clone(),\n                &execution_plan,\n                preflight,\n                cancel,\n                events,\n            )",
+        "            crate::mutating_worker_coordinator::run_implementation(\n                &state.repo,\n                &config,\n                state.session_api_key.clone(),\n                &execution_plan,\n                preflight,\n                cancel,\n                &state.team_control,\n                events,\n            )",
+    )?;
+    replace_once(
+        &mut source,
+        "    state.session = Some(session);\n    result\n}\n\nfn append_followups",
+        "    if coordinated {\n        let _ = events.send(RuntimeEvent::Team(state.team_control.finish()));\n    }\n    state.session = Some(session);\n    result\n}\n\nfn append_followups",
     )?;
 
     source = source.replace("cancel: &AtomicBool", "cancel: &Arc<AtomicBool>");

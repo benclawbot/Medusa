@@ -26,6 +26,7 @@ use crate::{
 pub mod commands;
 mod error;
 mod multi_agent_coordinator;
+mod team_control;
 pub mod lifecycle;
 pub mod prompt;
 pub mod skill_dependencies;
@@ -35,6 +36,10 @@ mod support;
 mod tests;
 
 pub use error::RuntimeError;
+pub use team_control::{
+    TeamControlPlane, TeamSnapshot, TeamWorkerLifecycle, TeamWorkerRegistration,
+    TeamWorkerSnapshot,
+};
 pub use medusa_agent::{
     AgentPlanStep as RuntimePlanStep, AgentPlanStepStatus, AgentQuestionItem, AgentQuestionOption,
     UsageProvenance,
@@ -60,6 +65,7 @@ pub enum RuntimeEvent {
     Started,
     AssistantText(String),
     Activity(RuntimeActivity),
+    Team(TeamSnapshot),
     Plan(Vec<AgentPlanStep>),
     Question(AgentQuestion),
     Usage {
@@ -135,6 +141,8 @@ pub struct RuntimeController {
     events: Receiver<RuntimeEvent>,
     cancel: Arc<AtomicBool>,
     submission: Arc<Mutex<SubmissionState>>,
+    event_sender: Sender<RuntimeEvent>,
+    team_control: TeamControlPlane,
 }
 
 impl RuntimeController {
@@ -157,6 +165,7 @@ impl RuntimeController {
         let worker_cancel = Arc::clone(&cancel);
         let worker_submission = Arc::clone(&submission);
         let worker_events = event_tx.clone();
+        let team_control = state.team_control.clone();
         if let Err(error) = thread::Builder::new()
             .name("medusa-runtime".to_owned())
             .spawn(move || {
@@ -178,6 +187,8 @@ impl RuntimeController {
             events: event_rx,
             cancel,
             submission,
+            event_sender: event_tx,
+            team_control,
         }
     }
 
@@ -190,6 +201,8 @@ impl RuntimeController {
             events: event_rx,
             cancel: Arc::new(AtomicBool::new(false)),
             submission: Arc::new(Mutex::new(SubmissionState::default())),
+            event_sender: event_tx,
+            team_control: TeamControlPlane::default(),
         }
     }
 
@@ -209,6 +222,28 @@ impl RuntimeController {
     }
 
     pub fn run_command(&self, command: SlashCommand) -> Result<(), RuntimeError> {
+        if let SlashCommand::Team(command) = &command {
+            let snapshot = match command {
+                crate::commands::TeamCommand::Show => self.team_control.snapshot(),
+                crate::commands::TeamCommand::Steer {
+                    worker_id,
+                    instruction,
+                } => self
+                    .team_control
+                    .steer(worker_id, instruction)
+                    .map_err(RuntimeError::agent)?,
+                crate::commands::TeamCommand::StopWorker { worker_id } => self
+                    .team_control
+                    .stop_worker(worker_id)
+                    .map_err(RuntimeError::agent)?,
+                crate::commands::TeamCommand::StopTeam => self
+                    .team_control
+                    .stop_team()
+                    .map_err(RuntimeError::agent)?,
+            };
+            let _ = self.event_sender.send(RuntimeEvent::Team(snapshot));
+            return Ok(());
+        }
         let mut submission = lock_submission(&self.submission);
         if submission.busy {
             return Err(RuntimeError::Busy);
@@ -438,6 +473,7 @@ struct RuntimeState {
     session_api_key: Option<String>,
     effort: Effort,
     plan_mode: bool,
+    team_control: TeamControlPlane,
 }
 
 impl RuntimeState {
@@ -461,6 +497,7 @@ impl RuntimeState {
             pending_goal: None,
             pending_skill: None,
             session_api_key: None,
+            team_control: TeamControlPlane::default(),
         }
     }
 
@@ -647,6 +684,11 @@ fn execute_slash_command_with_submission(
     submission: &Arc<Mutex<SubmissionState>>,
 ) -> Result<Option<RuntimeEvent>, RuntimeError> {
     match command {
+        SlashCommand::Team(_) => {
+            return Err(RuntimeError::InvalidCommand(
+                "team commands must execute through the live control plane".to_owned(),
+            ));
+        }
         SlashCommand::Help => {
             let _ = events.send(RuntimeEvent::Notice {
                 title: "Slash commands".to_owned(),
