@@ -2,7 +2,7 @@ use medusa_core::{CorrelationId, ErrorCategory, ErrorCode, MedusaError, MedusaRe
 use medusa_protocol::{Actor, EventEnvelope, EventPayload};
 use time::OffsetDateTime;
 
-use crate::session::AgentSession;
+use crate::session::{AgentSession, journal};
 
 pub(crate) fn append_event(
     session: &mut AgentSession,
@@ -19,7 +19,10 @@ pub(crate) fn append_event(
         previous_hash,
         OffsetDateTime::now_utc(),
     )?;
-    session.events.push(event);
+    match journal::append_event(session, &event)? {
+        journal::AppendDisposition::Appended => session.events.push(event),
+        journal::AppendDisposition::Replayed => {},
+    }
     Ok(())
 }
 
