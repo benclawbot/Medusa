@@ -390,7 +390,7 @@ impl WorkerManager {
     /// changes and must never enter a worker commit. Tracked `.medusa` files remain untouched and
     /// are still subject to ordinary scope validation.
     pub fn discard_untracked_runtime_state(&self, worker: &Worker) -> MedusaResult<()> {
-        run_git(&worker.worktree, &["clean", "-fd", "--", ".medusa"])
+        run_git(&worker.worktree, &["clean", "-fdx", "--", ".medusa"])
     }
 
     /// Runs combined repository verification after all worker commits merge.
@@ -785,6 +785,41 @@ mod tests {
         let message = error.to_string();
         assert!(message.contains("base.txt"));
         assert!(message.contains("unexpected.txt"));
+    }
+
+    #[test]
+    fn worker_cleanup_discards_ignored_runtime_state_and_preserves_tracked_state() {
+        let (_directory, repo, worktrees) = repository();
+        fs::write(repo.join(".gitignore"), ".medusa/\n").expect("gitignore");
+        fs::create_dir(repo.join(".medusa")).expect("runtime directory");
+        fs::write(repo.join(".medusa/policy.json"), "{}\n").expect("tracked state");
+        git(&repo, &["add", ".gitignore"]);
+        git(&repo, &["add", "-f", ".medusa/policy.json"]);
+        git(&repo, &["commit", "-m", "track runtime policy"]);
+
+        let manager = WorkerManager::new(&repo, &worktrees).expect("manager");
+        let base = manager.repository_head().expect("base");
+        let worker = manager.create_worker("runtime-cleanup").expect("worker");
+        fs::create_dir_all(worker.worktree.join(".medusa/artifacts")).expect("artifacts");
+        fs::write(
+            worker.worktree.join(".medusa/artifacts/fs_read.txt"),
+            "runtime output\n",
+        )
+        .expect("runtime artifact");
+
+        manager
+            .discard_untracked_runtime_state(&worker)
+            .expect("discard runtime state");
+
+        assert!(worker.worktree.join(".medusa/policy.json").is_file());
+        assert!(!worker.worktree.join(".medusa/artifacts").exists());
+        assert!(
+            manager
+                .changed_paths_since(&worker, &base)
+                .expect("changed paths")
+                .is_empty()
+        );
+        manager.cleanup(&[worker]).expect("cleanup");
     }
 
     #[test]
