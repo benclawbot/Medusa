@@ -17,7 +17,8 @@ use medusa_capabilities::CapabilityRegistry;
 
 use super::{
     RuntimeCommand, RuntimeController, RuntimeEvent, RuntimeState, SubmissionState,
-    configure_model, execute_slash_command_with_submission, mark_idle, run_prompt,
+    configure_model, dispatch_runtime_events, execute_slash_command_with_submission, mark_idle,
+    restore_queued_followups, run_prompt,
 };
 
 #[derive(Debug)]
@@ -107,16 +108,37 @@ impl RuntimeController {
         let mut session = load_session(&repo, session_id).map_err(RuntimeError::agent)?;
         validate_resumed_session(&repo, &session)?;
         let interrupted_steps = recover_interrupted_session(&repo, &mut session)?;
+        let restored_followups = restore_queued_followups(&session)?;
+        let active_session_id = Some(session.id.to_string());
         state.session = Some(session);
 
         let (command_tx, command_rx) = mpsc::channel();
         let (event_tx, event_rx) = mpsc::channel();
+        let (runtime_event_tx, runtime_event_rx) = mpsc::channel();
         let cancel = Arc::new(AtomicBool::new(false));
-        let submission = Arc::new(Mutex::new(SubmissionState::default()));
+        let submission = Arc::new(Mutex::new(SubmissionState {
+            followups: restored_followups,
+            active_session_id,
+            ..SubmissionState::default()
+        }));
         let worker_cancel = Arc::clone(&cancel);
         let worker_submission = Arc::clone(&submission);
-        let worker_events = event_tx.clone();
+        let worker_events = runtime_event_tx.clone();
         let team_control = state.team_control.clone();
+        let dispatch_repo = repo.clone();
+        let dispatch_submission = Arc::clone(&submission);
+        let dispatch_events = event_tx.clone();
+        thread::Builder::new()
+            .name("medusa-runtime-resumed-events".to_owned())
+            .spawn(move || {
+                dispatch_runtime_events(
+                    &dispatch_repo,
+                    &dispatch_submission,
+                    runtime_event_rx,
+                    &dispatch_events,
+                );
+            })
+            .map_err(RuntimeError::Io)?;
         thread::Builder::new()
             .name("medusa-runtime-resumed".to_owned())
             .spawn(move || {
@@ -136,8 +158,9 @@ impl RuntimeController {
             events: event_rx,
             cancel,
             submission,
-            event_sender: event_tx,
+            event_sender: runtime_event_tx,
             team_control,
+            repo,
         })
     }
 }

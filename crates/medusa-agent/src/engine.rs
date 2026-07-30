@@ -329,6 +329,36 @@ impl<P: ModelProvider> AgentEngine<P> {
         persist(session)
     }
 
+    /// Applies one previously accepted queued follow-up exactly once.
+    pub fn append_queued_user_message(
+        &self,
+        session: &mut AgentSession,
+        command_id: String,
+        mut content: Vec<MessageBlock>,
+    ) -> MedusaResult<()> {
+        content.insert(
+            0,
+            MessageBlock::Text {
+                text: format!("Current session goal: {}", session.objective),
+            },
+        );
+        validate_user_content(&content, &self.provider.capabilities())?;
+        let text = compact_message_text(&content);
+        session.completed = false;
+        session.turn = 0;
+        session.messages.push(Message {
+            role: Role::User,
+            content,
+        });
+        append_event(
+            session,
+            Actor::User,
+            EventPayload::UserFollowupDequeued { command_id, text },
+        )?;
+        session.updated_at = OffsetDateTime::now_utc();
+        persist(session)
+    }
+
     /// Resolves a blocking question with a single user response and resumes the same session.
     pub fn answer_pending_question(
         &self,
@@ -365,7 +395,7 @@ impl<P: ModelProvider> AgentEngine<P> {
             } else {
                 ApprovalDecision::Denied
             };
-            session.approval_receipts.push(ApprovalReceipt {
+            let receipt = ApprovalReceipt {
                 decision: decision.clone(),
                 scope: approval.grant.scope.clone(),
                 recorded_at: now,
@@ -374,10 +404,48 @@ impl<P: ModelProvider> AgentEngine<P> {
                 } else {
                     format!("user denied action: {answer}")
                 },
-            });
+            };
+            session.approval_receipts.push(receipt.clone());
+            if decision == ApprovalDecision::Approved {
+                session.approval_grants.push(approval.grant.clone());
+            }
+            append_event(
+                session,
+                Actor::User,
+                EventPayload::ApprovalDecisionRecorded {
+                    decision: serde_json::json!({
+                        "receipt": receipt,
+                        "tool_use_id": &approval.tool_use_id,
+                        "tool": &approval.tool,
+                    }),
+                },
+            )?;
+            session.updated_at = now;
+            persist(session)?;
+
             let (content, is_error) = if decision == ApprovalDecision::Approved {
-                session.approval_grants.push(approval.grant);
-                match execute_approved_tool(&session.repo, &approval.tool, &approval.input) {
+                let event_tool = audited_tool_name(&approval.tool, &approval.input);
+                append_event(
+                    session,
+                    Actor::Coordinator,
+                    EventPayload::ToolExecutionStarted {
+                        tool: event_tool.clone(),
+                    },
+                )?;
+                session.updated_at = OffsetDateTime::now_utc();
+                persist(session)?;
+                let result = execute_approved_tool(&session.repo, &approval.tool, &approval.input);
+                append_event(
+                    session,
+                    Actor::Coordinator,
+                    EventPayload::ToolExecutionCompleted {
+                        tool: event_tool,
+                        exit_code: Some(if result.is_ok() { 0 } else { 1 }),
+                    },
+                )?;
+                session.updated_at = OffsetDateTime::now_utc();
+                persist(session)?;
+                match result {
                     Ok(output) => (format!("User approved this exact action.\n{output}"), false),
                     Err(error) => (format!("Approved action failed: {error}"), true),
                 }
@@ -658,10 +726,18 @@ impl<P: ModelProvider> AgentEngine<P> {
             }
         }
         if !assistant_blocks.is_empty() {
-            session.messages.push(Message {
+            let message = Message {
                 role: Role::Assistant,
                 content: assistant_blocks,
-            });
+            };
+            session.messages.push(message.clone());
+            append_observed(
+                session,
+                EventPayload::AssistantMessageRecorded {
+                    message: serde_json::to_value(&message).map_err(json_error)?,
+                },
+                &mut observer,
+            )?;
         }
         let fallback_question = calls
             .is_empty()
@@ -700,6 +776,15 @@ impl<P: ModelProvider> AgentEngine<P> {
             }
 
             let executed = if parallel_count > 1 {
+                for (_, name, input) in &batch {
+                    append_observed(
+                        session,
+                        EventPayload::ToolExecutionStarted {
+                            tool: audited_tool_name(name, input),
+                        },
+                        &mut observer,
+                    )?;
+                }
                 let repo = session.repo.as_path();
                 map_parallel_ordered(batch, |(id, name, input)| {
                     let result = execute_tool(repo, &name, &input);
@@ -730,6 +815,13 @@ impl<P: ModelProvider> AgentEngine<P> {
                         reason,
                     ))
                 } else if name == "update_plan" {
+                    append_observed(
+                        session,
+                        EventPayload::ToolExecutionStarted {
+                            tool: audited_tool_name(&name, &input),
+                        },
+                        &mut observer,
+                    )?;
                     let plan = plan_from_input(&input);
                     if plan.is_empty() {
                         Ok("Visible task plan update ignored because it was empty.".to_owned())
@@ -746,12 +838,34 @@ impl<P: ModelProvider> AgentEngine<P> {
                             }
                         }
                         session.plan = plan.clone();
+                        append_observed(
+                            session,
+                            EventPayload::PlanUpdated {
+                                update: serde_json::to_value(&plan).map_err(json_error)?,
+                            },
+                            &mut observer,
+                        )?;
                         observer(&AgentUpdate::Plan(plan));
                         Ok("Visible task plan updated.".to_owned())
                     }
                 } else if name == "ask_user_question" {
+                    append_observed(
+                        session,
+                        EventPayload::ToolExecutionStarted {
+                            tool: audited_tool_name(&name, &input),
+                        },
+                        &mut observer,
+                    )?;
                     match question_from_input(id.clone(), &input) {
                         Ok(question) => {
+                            append_observed(
+                                session,
+                                EventPayload::ToolExecutionCompleted {
+                                    tool: audited_tool_name(&name, &input),
+                                    exit_code: Some(0),
+                                },
+                                &mut observer,
+                            )?;
                             pause_for_question(session, question, &mut observer)?;
                             return Ok(StepOutcome::WaitingForUser);
                         }
@@ -762,6 +876,13 @@ impl<P: ModelProvider> AgentEngine<P> {
                     .as_ref()
                     .is_some_and(|team| team.handles(&name))
                 {
+                    append_observed(
+                        session,
+                        EventPayload::ToolExecutionStarted {
+                            tool: audited_tool_name(&name, &input),
+                        },
+                        &mut observer,
+                    )?;
                     self.team_context
                         .as_ref()
                         .ok_or_else(|| {
@@ -774,8 +895,22 @@ impl<P: ModelProvider> AgentEngine<P> {
                         .execute(&name, &input)
                 } else if name == "desktop_commander" && tool_allowed(self.config.agent.mode, &name)
                 {
+                    append_observed(
+                        session,
+                        EventPayload::ToolExecutionStarted {
+                            tool: audited_tool_name(&name, &input),
+                        },
+                        &mut observer,
+                    )?;
                     self.execute_desktop_commander(&session.repo, &input)
                 } else if tool_allowed(self.config.agent.mode, &name) {
+                    append_observed(
+                        session,
+                        EventPayload::ToolExecutionStarted {
+                            tool: audited_tool_name(&name, &input),
+                        },
+                        &mut observer,
+                    )?;
                     execute_tool(&session.repo, &name, &input)
                 } else {
                     let reason = "tool is unavailable in read-only planning mode".to_owned();
@@ -803,6 +938,14 @@ impl<P: ModelProvider> AgentEngine<P> {
                     && self.execution_policy.denial_reason(&name, &input).is_none()
                     && interactively_approvable(&name, &input)
                 {
+                    append_observed(
+                        session,
+                        EventPayload::ToolCallDenied {
+                            tool: audited_tool_name(&name, &input),
+                            reason: "tool requires explicit user approval".to_owned(),
+                        },
+                        &mut observer,
+                    )?;
                     let action = approval_action_label(&name, &input);
                     pause_for_question(
                         session,

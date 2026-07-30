@@ -43,20 +43,19 @@ pub use worker_execution::{
     WorkerProgressSummary,
 };
 
-/// Persists a complete session through the crash-durable journal and compatibility snapshot.
-pub fn persist_session(session: &AgentSession) -> medusa_core::MedusaResult<()> {
-    session::persist(session)
-}
-
-/// Appends a controller-owned authoritative event and commits the resulting session snapshot.
-///
-/// Runtime integrations must call this before publishing the corresponding live event.
+/// Appends one canonical session event and commits the resulting snapshot before returning.
 pub fn record_session_event(
     session: &mut AgentSession,
     actor: medusa_protocol::Actor,
     payload: medusa_protocol::EventPayload,
 ) -> medusa_core::MedusaResult<()> {
     evidence::append_event(session, actor, payload)?;
+    session.updated_at = time::OffsetDateTime::now_utc();
+    session::persist(session)
+}
+
+/// Persists a complete session through the crash-durable journal and compatibility snapshot.
+pub fn persist_session(session: &AgentSession) -> medusa_core::MedusaResult<()> {
     session::persist(session)
 }
 

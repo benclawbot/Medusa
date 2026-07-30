@@ -270,6 +270,22 @@ where
     session.pending_question = Some(question.clone());
     append_observed(
         session,
+        EventPayload::QuestionRequested {
+            question: serde_json::to_value(&question).map_err(json_error)?,
+        },
+        observer,
+    )?;
+    if let Some(approval) = question.approval.as_ref() {
+        append_observed(
+            session,
+            EventPayload::ApprovalRequested {
+                request: serde_json::to_value(approval).map_err(json_error)?,
+            },
+            observer,
+        )?;
+    }
+    append_observed(
+        session,
         EventPayload::SessionPaused {
             reason: "waiting for a user response".to_owned(),
         },
@@ -657,6 +673,8 @@ where
     F: FnMut(&AgentUpdate),
 {
     append_event(session, Actor::Coordinator, payload.clone())?;
+    session.updated_at = OffsetDateTime::now_utc();
+    persist(session)?;
     observer(&AgentUpdate::Event(payload));
     Ok(())
 }

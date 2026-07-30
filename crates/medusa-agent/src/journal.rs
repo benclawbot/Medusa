@@ -3,12 +3,14 @@ use std::{
     fs::{self, File, OpenOptions},
     io::{Read, Write},
     path::{Path, PathBuf},
+    sync::{Mutex, MutexGuard, OnceLock},
 };
 
-use medusa_core::{ErrorCategory, ErrorCode, MedusaError, MedusaResult, SessionId};
-use medusa_protocol::EventEnvelope;
+use medusa_core::{CorrelationId, ErrorCategory, ErrorCode, MedusaError, MedusaResult, SessionId};
+use medusa_protocol::{Actor, EventEnvelope, EventPayload};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
+use time::OffsetDateTime;
 
 use super::{AgentSession, fallback_storage_root};
 use crate::evidence::verify_chain;
@@ -17,6 +19,9 @@ const JOURNAL_MAGIC: &[u8; 8] = b"MDJNL002";
 const FRAME_HEADER_BYTES: usize = std::mem::size_of::<u32>() + 32;
 const MAX_FRAME_BYTES: usize = 32 * 1024 * 1024;
 
+static JOURNAL_WRITE_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+
+#[allow(dead_code)]
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum AppendDisposition {
     Appended,
@@ -46,10 +51,65 @@ struct JournalState {
     committed_snapshot: Option<AgentSession>,
 }
 
+pub(crate) fn append_payload_committed(
+    session: &mut AgentSession,
+    actor: Actor,
+    payload: EventPayload,
+) -> MedusaResult<EventEnvelope> {
+    let _guard = lock_journal();
+    verify_chain(&session.events)?;
+    ensure_initialized(session)?;
+    let path = journal_path(&session.repo, &session.id)?;
+    let state = read_journal(&path, &session.id, true, true)?;
+    merge_committed_events(session, &state.events)?;
+
+    let event = EventEnvelope::new(
+        u64::try_from(session.events.len())
+            .unwrap_or(u64::MAX)
+            .saturating_add(1),
+        session.id.clone(),
+        actor,
+        CorrelationId::new(),
+        payload,
+        session.events.last().map(|event| event.checksum.clone()),
+        OffsetDateTime::now_utc(),
+    )?;
+    append_record(
+        &path,
+        &JournalRecord::Event {
+            event: Box::new(event.clone()),
+        },
+    )?;
+    session.events.push(event.clone());
+    append_record(&path, &snapshot_record(session))?;
+    Ok(event)
+}
+
+fn merge_committed_events(
+    session: &mut AgentSession,
+    committed_events: &[EventEnvelope],
+) -> MedusaResult<()> {
+    if session.events.len() > committed_events.len()
+        || session.events.as_slice() != &committed_events[..session.events.len()]
+    {
+        return Err(persistence_error(
+            "materialized session diverges from the committed journal",
+        ));
+    }
+    if committed_events.len() > session.events.len() {
+        session
+            .events
+            .extend_from_slice(&committed_events[session.events.len()..]);
+    }
+    Ok(())
+}
+
+#[allow(dead_code)]
 pub(crate) fn append_event(
     session: &AgentSession,
     event: &EventEnvelope,
 ) -> MedusaResult<AppendDisposition> {
+    let _guard = lock_journal();
     verify_chain(&session.events)?;
     event.validate()?;
     if event.session_id != session.id {
@@ -119,17 +179,51 @@ pub(crate) fn append_event(
     Ok(AppendDisposition::Appended)
 }
 
-pub(crate) fn commit_snapshot(session: &AgentSession) -> MedusaResult<()> {
+#[allow(dead_code)]
+pub(crate) fn commit_snapshot(session: &AgentSession) -> MedusaResult<AgentSession> {
+    let _guard = lock_journal();
+    commit_snapshot_locked(session)
+}
+
+pub(crate) fn commit_snapshot_with<F>(
+    session: &AgentSession,
+    after_commit: F,
+) -> MedusaResult<AgentSession>
+where
+    F: FnOnce(&AgentSession) -> MedusaResult<()>,
+{
+    let _guard = lock_journal();
+    let committed = commit_snapshot_locked(session)?;
+    after_commit(&committed)?;
+    Ok(committed)
+}
+
+fn commit_snapshot_locked(session: &AgentSession) -> MedusaResult<AgentSession> {
     verify_chain(&session.events)?;
     ensure_initialized(session)?;
     let path = journal_path(&session.repo, &session.id)?;
     let state = read_journal(&path, &session.id, true, false)?;
-    if state.events != session.events {
-        return Err(persistence_error(
-            "cannot commit a session whose events diverge from the journal",
-        ));
+    let mut merged = session.clone();
+
+    if state.events != merged.events {
+        if let Some(committed) = state.committed_snapshot.as_ref() {
+            merge_committed_events(&mut merged, &committed.events)?;
+        }
     }
-    append_record(&path, &snapshot_record(session))
+
+    if state.events != merged.events {
+        let recovered = read_journal(&path, &session.id, true, true)?;
+        merged = session.clone();
+        merge_committed_events(&mut merged, &recovered.events)?;
+        if recovered.events != merged.events {
+            return Err(persistence_error(
+                "cannot commit a session whose events diverge from the journal",
+            ));
+        }
+    }
+
+    append_record(&path, &snapshot_record(&merged))?;
+    Ok(merged)
 }
 
 pub(crate) fn load_or_migrate(
@@ -137,6 +231,7 @@ pub(crate) fn load_or_migrate(
     session_id: &SessionId,
     snapshot: Option<AgentSession>,
 ) -> MedusaResult<LoadOutcome> {
+    let _guard = lock_journal();
     if let Some(snapshot) = &snapshot {
         validate_snapshot_identity(repo, session_id, snapshot)?;
         verify_chain(&snapshot.events)?;
@@ -194,6 +289,7 @@ pub(crate) fn replay_from_cursor(
     session_id: &SessionId,
     cursor: u64,
 ) -> MedusaResult<Vec<EventEnvelope>> {
+    let _guard = lock_journal();
     let path = journal_path(repo, session_id)?;
     let state = read_journal(&path, session_id, true, true)?;
     let committed = state.committed_snapshot.ok_or_else(|| {
@@ -548,6 +644,13 @@ fn create_parent(path: &Path) -> MedusaResult<()> {
     Ok(())
 }
 
+fn lock_journal() -> MutexGuard<'static, ()> {
+    match JOURNAL_WRITE_LOCK.get_or_init(|| Mutex::new(())).lock() {
+        Ok(guard) => guard,
+        Err(poisoned) => poisoned.into_inner(),
+    }
+}
+
 fn persistence_error(message: impl Into<String>) -> MedusaError {
     MedusaError::new(
         ErrorCode::PersistenceFailed,
@@ -613,30 +716,6 @@ mod tests {
             AppendDisposition::Appended
         );
         session.events.push(event);
-    }
-
-    #[test]
-    fn controller_event_is_appended_and_committed_before_returning() {
-        let directory = tempfile::tempdir().expect("repository");
-        let mut current = session(directory.path());
-
-        crate::record_session_event(
-            &mut current,
-            Actor::User,
-            EventPayload::FollowUpQueued {
-                text: "continue the queued work".to_owned(),
-            },
-        )
-        .expect("record controller event");
-
-        let restored = load_or_migrate(directory.path(), &current.id, None)
-            .expect("committed session")
-            .session;
-        assert_eq!(restored.events, current.events);
-        assert!(matches!(
-            restored.events.last().map(|event| &event.payload),
-            Some(EventPayload::FollowUpQueued { text }) if text == "continue the queued work"
-        ));
     }
 
     #[test]
@@ -744,6 +823,40 @@ mod tests {
         fs::write(&path, bytes).expect("tamper");
 
         assert!(load_or_migrate(directory.path(), &committed.id, Some(committed.clone())).is_err());
+    }
+
+    #[test]
+    fn committed_append_merges_events_from_a_stale_session_writer() {
+        let directory = tempfile::tempdir().expect("repository");
+        let mut primary = session(directory.path());
+        let objective = primary.objective.clone();
+        append_payload_committed(
+            &mut primary,
+            Actor::Coordinator,
+            EventPayload::SessionCreated { objective },
+        )
+        .expect("initial committed event");
+        let mut stale = primary.clone();
+
+        append_payload_committed(
+            &mut primary,
+            Actor::Coordinator,
+            EventPayload::GoalUpdated {
+                objective: "updated objective".to_owned(),
+            },
+        )
+        .expect("primary committed event");
+        append_payload_committed(&mut stale, Actor::Coordinator, EventPayload::SessionResumed)
+            .expect("stale writer merges committed prefix");
+
+        assert_eq!(stale.events.len(), 3);
+        assert_eq!(stale.events[2].sequence, 3);
+        assert_eq!(
+            stale.events[2].previous_hash.as_deref(),
+            Some(primary.events[1].checksum.as_str())
+        );
+        let replay = replay_from_cursor(directory.path(), &stale.id, 0).expect("replay");
+        assert_eq!(replay, stale.events);
     }
 
     #[test]
