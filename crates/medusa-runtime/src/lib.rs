@@ -12,8 +12,9 @@ use std::{
 
 use medusa_agent::{
     AgentEngine, AgentPlanStep, AgentQuestion, AgentSession, StepOutcome, TurnUsage,
-    compact_session, update_session_objective,
+    compact_session, record_session_event, update_session_objective,
 };
+use medusa_protocol::{Actor, EventPayload};
 use medusa_capabilities::CapabilityRegistry;
 use medusa_config::{Config, Mode};
 use medusa_provider::{ConfiguredProvider, ModelProvider};
@@ -710,6 +711,7 @@ fn run_prompt(
     let result = (|| {
         loop {
             if cancel_requested(cancel, submission) {
+                record_cancellation(&mut session)?;
                 return Ok(RuntimeEvent::Cancelled);
             }
             append_followups(&engine, &mut session, take_followups(submission))?;
@@ -775,6 +777,7 @@ fn run_prompt(
                         break outcome;
                     }
                     Err(_) if cancel_requested(cancel, submission) => {
+                        record_cancellation(&mut session)?;
                         return Ok(RuntimeEvent::Cancelled);
                     }
                     Err(error) => {
@@ -824,6 +827,7 @@ fn run_prompt(
             }
 
             if cancel_requested(cancel, submission) {
+                record_cancellation(&mut session)?;
                 return Ok(RuntimeEvent::Cancelled);
             }
 
@@ -899,12 +903,39 @@ fn run_prompt(
     result
 }
 
+fn record_cancellation(session: &mut AgentSession) -> Result<(), RuntimeError> {
+    record_session_event(
+        session,
+        Actor::User,
+        EventPayload::CancellationRequested {
+            reason: "user requested cancellation".to_owned(),
+        },
+    )
+    .map_err(RuntimeError::agent)?;
+    record_session_event(
+        session,
+        Actor::Coordinator,
+        EventPayload::SessionCancelled {
+            reason: "runtime stopped at a cancellation boundary".to_owned(),
+        },
+    )
+    .map_err(RuntimeError::agent)
+}
+
 fn append_followups<P: ModelProvider>(
     engine: &AgentEngine<P>,
     session: &mut AgentSession,
     drafts: Vec<PromptDraft>,
 ) -> Result<(), RuntimeError> {
     for draft in drafts {
+        record_session_event(
+            session,
+            Actor::User,
+            EventPayload::FollowUpQueued {
+                text: draft.text.clone(),
+            },
+        )
+        .map_err(RuntimeError::agent)?;
         engine
             .append_user_message(session, message_blocks(&draft)?)
             .map_err(RuntimeError::agent)?;

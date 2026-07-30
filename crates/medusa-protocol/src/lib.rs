@@ -88,6 +88,15 @@ pub enum EventPayload {
     UserPromptReceived {
         text: String,
     },
+    FollowUpQueued {
+        text: String,
+    },
+    CancellationRequested {
+        reason: String,
+    },
+    SessionCancelled {
+        reason: String,
+    },
     GoalUpdated {
         objective: String,
     },
