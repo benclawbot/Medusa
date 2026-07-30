@@ -518,18 +518,25 @@ fn changed_paths_for_commit(repo: &Path, commit: &str) -> MedusaResult<Vec<Strin
 
 fn ensure_clean(repo: &Path) -> MedusaResult<()> {
     let status = git_stdout(repo, &["status", "--porcelain", "--untracked-files=all"])?;
-    let dirty = status.lines().any(|line| {
-        let path = line.get(3..).unwrap_or_default().trim_matches('"');
-        !(line.starts_with("?? ") && (path == ".medusa" || path.starts_with(".medusa/")))
-    });
-    if dirty {
+    let dirty = status
+        .lines()
+        .filter(|line| {
+            let path = line.get(3..).unwrap_or_default().trim_matches('"');
+            !(line.starts_with("?? ") && (path == ".medusa" || path.starts_with(".medusa/")))
+        })
+        .map(str::to_owned)
+        .collect::<Vec<_>>();
+    if dirty.is_empty() {
+        Ok(())
+    } else {
         Err(MedusaError::new(
             ErrorCode::PolicyDenied,
             ErrorCategory::Policy,
-            "merge coordinator requires a clean repository outside Medusa runtime state",
+            format!(
+                "merge coordinator requires a clean repository outside Medusa runtime state; dirty entries: {}",
+                dirty.join(" | ")
+            ),
         ))
-    } else {
-        Ok(())
     }
 }
 

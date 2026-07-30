@@ -21,6 +21,10 @@ log_phase() {
 write_failure_summary() {
   local exit_code=$?
   mkdir -p "${ARTIFACTS:-live-e2e-artifacts}"
+  if [[ -n "${REPO:-}" && -d "$REPO/.git" ]]; then
+    git -C "$REPO" status --porcelain --untracked-files=all > "${ARTIFACTS:-live-e2e-artifacts}/repository-status.txt" || true
+    git -C "$REPO" diff --binary > "${ARTIFACTS:-live-e2e-artifacts}/repository-diff.patch" || true
+  fi
   printf '{"passed":0,"total":3,"sessions":1,"provider":"minimax","credential_persisted":false,"verification_contract_unchanged":false,"result":"failed","phase":"%s","exit_code":%d,"elapsed_seconds":%d}\n' \
     "$CURRENT_PHASE" "$exit_code" "$(( $(date +%s) - STARTED_AT ))" \
     > "${ARTIFACTS:-live-e2e-artifacts}/summary.json"
