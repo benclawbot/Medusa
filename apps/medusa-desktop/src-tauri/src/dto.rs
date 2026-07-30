@@ -360,7 +360,10 @@ mod tests {
         assert_eq!(team["snapshot"]["workers"][0]["workerId"], "reviewer-1");
         assert_eq!(team["snapshot"]["workers"][0]["taskId"], "review");
         assert_eq!(team["snapshot"]["workers"][0]["sessionId"], "session-1");
-        assert_eq!(team["snapshot"]["workers"][0]["lastUpdate"], "checking tests");
+        assert_eq!(
+            team["snapshot"]["workers"][0]["lastUpdate"],
+            "checking tests"
+        );
         assert_eq!(team["snapshot"]["workers"][0]["queuedInstructions"], 1);
         assert!(team["snapshot"].get("execution_id").is_none());
 

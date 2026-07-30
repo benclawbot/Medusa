@@ -518,15 +518,21 @@ fn changed_paths_for_commit(repo: &Path, commit: &str) -> MedusaResult<Vec<Strin
 
 fn ensure_clean(repo: &Path) -> MedusaResult<()> {
     let status = git_stdout(repo, &["status", "--porcelain", "--untracked-files=all"])?;
-    let dirty = status.lines().any(|line| {
-        let path = line.get(3..).unwrap_or_default().trim_matches('"');
-        !(line.starts_with("?? ") && (path == ".medusa" || path.starts_with(".medusa/")))
-    });
-    if dirty {
+    let dirty = status
+        .lines()
+        .filter(|line| {
+            let path = line.get(3..).unwrap_or_default().trim_matches('"');
+            !(line.starts_with("?? ") && (path == ".medusa" || path.starts_with(".medusa/")))
+        })
+        .collect::<Vec<_>>();
+    if !dirty.is_empty() {
         Err(MedusaError::new(
             ErrorCode::PolicyDenied,
             ErrorCategory::Policy,
-            "merge coordinator requires a clean repository outside Medusa runtime state",
+            format!(
+                "merge coordinator requires a clean repository outside Medusa runtime state; dirty entries: {}",
+                dirty.join(", ")
+            ),
         ))
     } else {
         Ok(())
@@ -755,6 +761,30 @@ mod tests {
         assert!(!worker_b.worktree.join("private.txt").exists());
         assert!(!repo.join("private.txt").exists());
         manager.cleanup(&[worker_a, worker_b]).expect("cleanup");
+    }
+
+    #[test]
+    fn clean_check_allows_only_untracked_medusa_runtime_state() {
+        let (_directory, repo, worktrees) = repository();
+        let manager = WorkerManager::new(&repo, &worktrees).expect("manager");
+        fs::create_dir_all(repo.join(".medusa/sessions/session-1")).expect("runtime directory");
+        fs::write(repo.join(".medusa/sessions/session-1/session.json"), "{}\n")
+            .expect("runtime state");
+
+        manager.require_clean().expect("runtime state is allowed");
+    }
+
+    #[test]
+    fn clean_check_reports_every_dirty_entry() {
+        let (_directory, repo, worktrees) = repository();
+        let manager = WorkerManager::new(&repo, &worktrees).expect("manager");
+        fs::write(repo.join("base.txt"), "changed\n").expect("tracked change");
+        fs::write(repo.join("unexpected.txt"), "untracked\n").expect("untracked change");
+
+        let error = manager.require_clean().expect_err("dirty repository");
+        let message = error.to_string();
+        assert!(message.contains("base.txt"));
+        assert!(message.contains("unexpected.txt"));
     }
 
     #[test]
