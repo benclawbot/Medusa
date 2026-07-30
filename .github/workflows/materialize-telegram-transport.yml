@@ -1,0 +1,35 @@
+name: Materialize Telegram transport
+
+on:
+  push:
+    branches:
+      - agent/telegram-bot-api-transport
+
+permissions:
+  contents: write
+
+jobs:
+  materialize:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: agent/telegram-bot-api-transport
+      - name: Extract prepared transport sources
+        shell: bash
+        run: |
+          set -euo pipefail
+          base64 --decode .github/telegram-transport-chunks/00 | tar -xz -C .
+          rm -rf .github/telegram-transport-chunks
+          rm .github/workflows/materialize-telegram-transport.yml
+      - name: Commit materialized sources
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add -A
+          git diff --cached --check
+          git commit -m "Complete Telegram Bot API transport sources"
+          git push origin HEAD:agent/telegram-bot-api-transport
