@@ -51,6 +51,12 @@ source = "\n".join(
     line[10:] if line.startswith("          ") else line for line in workflow[start:end]
 ) + "\n"
 
+commands_block_start = source.index("edit('crates/medusa-runtime/src/commands.rs', [")
+commands_block_end = source.index(
+    "\n\nedit('crates/medusa-runtime/build_main.rs',",
+    commands_block_start,
+)
+source = source[:commands_block_start] + source[commands_block_end + 2 :]
 build_block_start = source.index("edit('crates/medusa-runtime/build_main.rs', [")
 build_block_end = source.index(
     "\n\nedit('crates/medusa-runtime/src/multi_agent_coordinator.rs',",
@@ -169,6 +175,28 @@ edit_once(
     control: &TeamControlPlane,
 ) -> Result<ImplementationEvidence, String> {
 """,
+)
+
+team_command_generation = r'''    replace_once(
+        &mut source,
+        "    Plan {\n        task: Option<String>,\n    },\n}",
+        "    Plan {\n        task: Option<String>,\n    },\n    Team(TeamCommand),\n}\n\n#[derive(Clone, Debug, Eq, PartialEq)]\npub enum TeamCommand {\n    Show,\n    Steer { worker_id: String, instruction: String },\n    StopWorker { worker_id: String },\n    StopTeam,\n}",
+    )?;
+    replace_once(
+        &mut source,
+        "    CommandSpec {\n        name: \"help\",",
+        "    CommandSpec {\n        name: \"team\",\n        usage: \"/team\",\n        description: \"show coordinated worker status\",\n    },\n    CommandSpec {\n        name: \"steer\",\n        usage: \"/steer <worker> <instruction>\",\n        description: \"redirect a running worker between turns\",\n    },\n    CommandSpec {\n        name: \"stop-worker\",\n        usage: \"/stop-worker <worker>\",\n        description: \"cancel one coordinated worker\",\n    },\n    CommandSpec {\n        name: \"stop-team\",\n        usage: \"/stop-team\",\n        description: \"request graceful coordinated-team shutdown\",\n    },\n    CommandSpec {\n        name: \"help\",",
+    )?;
+    replace_once(
+        &mut source,
+        "        \"plan\" => Ok(Some(SlashCommand::Plan {\n            task: (!remainder.is_empty()).then(|| remainder.to_owned()),\n        })),",
+        "        \"plan\" => Ok(Some(SlashCommand::Plan {\n            task: (!remainder.is_empty()).then(|| remainder.to_owned()),\n        })),\n        \"team\" => {\n            require_empty(\"team\")?;\n            Ok(Some(SlashCommand::Team(TeamCommand::Show)))\n        }\n        \"steer\" => {\n            let (worker_id, instruction) = remainder\n                .split_once(char::is_whitespace)\n                .map_or((remainder, \"\"), |(worker, instruction)| (worker, instruction.trim()));\n            if worker_id.is_empty() || instruction.is_empty() {\n                return Err(\"/steer expects <worker> <instruction>\".to_owned());\n            }\n            Ok(Some(SlashCommand::Team(TeamCommand::Steer {\n                worker_id: worker_id.to_owned(),\n                instruction: instruction.to_owned(),\n            })))\n        }\n        \"stop-worker\" => {\n            if remainder.is_empty() || remainder.contains(char::is_whitespace) {\n                return Err(\"/stop-worker expects exactly one worker ID\".to_owned());\n            }\n            Ok(Some(SlashCommand::Team(TeamCommand::StopWorker {\n                worker_id: remainder.to_owned(),\n            })))\n        }\n        \"stop-team\" => {\n            require_empty(\"stop-team\")?;\n            Ok(Some(SlashCommand::Team(TeamCommand::StopTeam)))\n        }",
+    )?;
+'''
+edit_once(
+    "crates/medusa-runtime/build_support.rs",
+    "    let output = out_dir.join(\"commands_generated.rs\");\n",
+    team_command_generation + "    let output = out_dir.join(\"commands_generated.rs\");\n",
 )
 
 edit_once(
