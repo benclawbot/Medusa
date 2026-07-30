@@ -185,9 +185,7 @@ impl AgentExecutionPolicy {
 
 fn requested_write_paths<'a>(tool: &str, input: &'a Value) -> Option<Vec<&'a str>> {
     match tool {
-        "fs_write" | "fs_create_dir" => {
-            Some(vec![input.get("path")?.as_str()?])
-        }
+        "fs_write" | "fs_create_dir" => Some(vec![input.get("path")?.as_str()?]),
         "patch_apply" => input
             .get("edits")?
             .as_array()?
