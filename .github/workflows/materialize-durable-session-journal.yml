@@ -1,16 +1,20 @@
 name: Materialize durable session journal
 
 on:
-  push:
+  pull_request:
     branches:
-      - agent/durable-session-journal-v3
+      - main
+    types:
+      - opened
+      - synchronize
+      - reopened
 
 permissions:
   contents: write
 
 jobs:
   materialize:
-    if: github.actor != 'github-actions[bot]'
+    if: github.head_ref == 'agent/durable-session-journal-v3' && github.actor != 'github-actions[bot]'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
