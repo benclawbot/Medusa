@@ -19,3 +19,7 @@ The unused autonomous agent state machine, proposal/consensus/barrier transactio
 ## Source layout
 
 `medusa-runtime` now compiles from ordinary Rust modules. Generated roots, build-time source rewriting, `OUT_DIR` module bindings, and `.inc` assembly are no longer part of the build.
+
+## Validation contract
+
+The consolidated workspace must remain formatted, compile with all targets and features, pass strict Clippy without warnings, and preserve the production runtime, agent, and worktree-worker test suites. Repository architecture, product-acceptance, safety-proof, desktop, daemon, provider, multimodal, quickstart, and release workflows remain the merge authority.
