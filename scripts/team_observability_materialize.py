@@ -49,6 +49,34 @@ for anchor in ("pub fn run_implementation(", "fn integrate_prepared("):
     source = source.replace(anchor, f"#[allow(clippy::too_many_arguments)]\n{anchor}", 1)
 mutating.write_text(source)
 
+team_control = Path("crates/medusa-runtime/src/team_control.rs")
+source = team_control.read_text()
+old = """    fn steering_rejects_terminal_workers_and_full_queues() {
+        let control = control();
+        for index in 0..MAX_QUEUED_INSTRUCTIONS {
+            control
+                .steer("worker-a", &format!("instruction {index}"))
+                .unwrap();
+        }
+        assert!(control.steer("worker-a", "one too many").is_err());
+
+        let terminal = control();
+"""
+new = """    fn steering_rejects_terminal_workers_and_full_queues() {
+        let active = control();
+        for index in 0..MAX_QUEUED_INSTRUCTIONS {
+            active
+                .steer("worker-a", &format!("instruction {index}"))
+                .unwrap();
+        }
+        assert!(active.steer("worker-a", "one too many").is_err());
+
+        let terminal = control();
+"""
+if source.count(old) != 1:
+    raise SystemExit("expected one steering queue test block")
+team_control.write_text(source.replace(old, new, 1))
+
 checker = CHECKER.read_text()
 start = checker.index(HOOK_START)
 end = checker.index(HOOK_END, start) + len(HOOK_END)
