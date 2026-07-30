@@ -43,9 +43,13 @@ use support::{
 };
 
 const LEASE_TIMEOUT_MS: u64 = 10 * 60 * 1_000;
-const IMPLEMENTER_TURN_LIMIT: u32 = 12;
+const IMPLEMENTER_TURN_LIMIT: u32 = 24;
 const MAX_ATTEMPTS: u32 = 2;
 const IMPLEMENTER_ID: &str = "worker-implement";
+
+fn bounded_implementer_turns(configured: u32) -> u32 {
+    configured.clamp(1, IMPLEMENTER_TURN_LIMIT)
+}
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
@@ -892,17 +896,14 @@ fn execute_production_implementer(
 ) -> Result<WorkerRun, String> {
     let mut worker_config = config.clone();
     worker_config.agent.mode = Mode::Yolo;
-    worker_config.agent.max_turns = worker_config
-        .agent
-        .max_turns
-        .clamp(1, IMPLEMENTER_TURN_LIMIT);
+    worker_config.agent.max_turns = bounded_implementer_turns(worker_config.agent.max_turns);
     let provider = ConfiguredProvider::manager_from_config(&worker_config, session_api_key)
         .map_err(|error| error.to_string())?;
     let engine = AgentEngine::new_with_cancellation(provider, worker_config.clone(), Arc::clone(cancel))
         .with_execution_policy(AgentExecutionPolicy::for_team_role(TeamRole::Implementer))
         .with_team_context(request.team_context.clone());
     let objective = format!(
-        "Implement delegated task `{}` inside this isolated Git worktree. Objective: {}. Stay within allowed write paths {:?}. Inspect existing code, make the smallest correct product change, run focused verification, and return a concise evidence-backed summary. Do not ask the user questions and do not modify tests or fixtures merely to make failures disappear.",
+        "Implement delegated task `{}` inside this isolated Git worktree. Objective: {}. Stay within allowed write paths {:?}. Use the bounded turn budget efficiently: batch independent reads, make every required product edit, run focused verification, and then return a concise evidence-backed summary. Do not ask the user questions and do not modify tests or fixtures merely to make failures disappear.",
         request.contract.task_id,
         request.contract.objective,
         request.contract.allowed_write_paths,
