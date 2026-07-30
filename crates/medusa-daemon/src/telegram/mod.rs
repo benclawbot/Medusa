@@ -20,9 +20,7 @@ pub use config::{
     TelegramChatKind, TelegramConfig, TelegramDisplayConfig, TelegramIdentity, TelegramTransport,
     TelegramVoiceConfig, TelegramVoiceMode, ToolProgressMode,
 };
-pub use format::{
-    normalize_markdown_tables, split_telegram_text, telegram_markdown_v2, utf16_len,
-};
+pub use format::{normalize_markdown_tables, split_telegram_text, telegram_markdown_v2, utf16_len};
 pub use render::{
     TelegramAction, TelegramButtonIntent, TelegramMessageSlot, TelegramParseMode, TelegramReaction,
     TelegramRenderButton, TelegramRenderer,
@@ -71,14 +69,8 @@ impl TelegramGateway {
         now: OffsetDateTime,
     ) -> Result<Vec<TelegramInlineButton>, TelegramGatewayError> {
         self.config.authorize(identity)?;
-        self.callbacks.issue_approval(
-            identity,
-            session_id,
-            turn_id,
-            approval_id,
-            expires_at,
-            now,
-        )
+        self.callbacks
+            .issue_approval(identity, session_id, turn_id, approval_id, expires_at, now)
     }
 
     pub fn resolve_callback(

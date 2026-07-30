@@ -171,9 +171,7 @@ impl TelegramRenderer {
                     actions.extend(self.flush_preview(true, now)?);
                 }
             }
-            FrontendEvent::AssistantInterim { text }
-                if self.config.interim_assistant_messages =>
-            {
+            FrontendEvent::AssistantInterim { text } if self.config.interim_assistant_messages => {
                 actions.push(self.text_action(
                     TelegramMessageSlot::Interim(envelope.event_id.clone()),
                     telegram_markdown_v2(text),
@@ -311,9 +309,7 @@ impl TelegramRenderer {
                     buttons,
                 ));
             }
-            FrontendEvent::Progress { turn, phase }
-                if self.config.long_running_notifications =>
-            {
+            FrontendEvent::Progress { turn, phase } if self.config.long_running_notifications => {
                 let suffix = phase
                     .as_ref()
                     .map(|phase| format!(" — {phase}"))
