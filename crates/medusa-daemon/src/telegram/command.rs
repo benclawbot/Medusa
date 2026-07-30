@@ -145,12 +145,8 @@ fn split_command(input: &str) -> (Option<&str>, &str) {
     if !input.starts_with('/') {
         return (None, input);
     }
-    let (command, arguments) = input
-        .split_once(char::is_whitespace)
-        .unwrap_or((input, ""));
-    let command = command
-        .split_once('@')
-        .map_or(command, |(name, _)| name);
+    let (command, arguments) = input.split_once(char::is_whitespace).unwrap_or((input, ""));
+    let command = command.split_once('@').map_or(command, |(name, _)| name);
     (Some(command), arguments.trim())
 }
 
@@ -158,17 +154,11 @@ fn non_empty(value: &str) -> Option<&str> {
     (!value.trim().is_empty()).then_some(value.trim())
 }
 
-fn required<'a>(
-    value: &'a str,
-    usage: &'static str,
-) -> Result<&'a str, TelegramGatewayError> {
+fn required<'a>(value: &'a str, usage: &'static str) -> Result<&'a str, TelegramGatewayError> {
     non_empty(value).ok_or(TelegramGatewayError::MissingArgument(usage))
 }
 
-fn parse_on_off(
-    value: &str,
-    usage: &'static str,
-) -> Result<bool, TelegramGatewayError> {
+fn parse_on_off(value: &str, usage: &'static str) -> Result<bool, TelegramGatewayError> {
     match value.trim().to_ascii_lowercase().as_str() {
         "on" => Ok(true),
         "off" => Ok(false),
