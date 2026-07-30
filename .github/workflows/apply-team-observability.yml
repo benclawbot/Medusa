@@ -1,0 +1,333 @@
+name: Apply team observability and steering
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    if: github.event.pull_request.head.ref == 'agent/team-observability-steering'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: agent/team-observability-steering
+          fetch-depth: 0
+      - name: Apply source changes
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+
+          def edit(path, edits):
+              p = Path(path)
+              s = p.read_text()
+              for old, new in edits:
+                  count = s.count(old)
+                  if count != 1:
+                      raise SystemExit(f"{path}: expected one anchor, found {count}: {old[:100]!r}")
+                  s = s.replace(old, new, 1)
+              p.write_text(s)
+
+          edit('crates/medusa-runtime/src/runtime_impl.rs', [
+              ('mod multi_agent_coordinator;\n', 'mod multi_agent_coordinator;\nmod team_control;\n'),
+              ('pub use error::RuntimeError;\n', 'pub use error::RuntimeError;\npub use team_control::{TeamControlPlane, TeamSnapshot, TeamWorkerLifecycle, TeamWorkerRegistration, TeamWorkerSnapshot};\n'),
+              ('    Activity(RuntimeActivity),\n', '    Activity(RuntimeActivity),\n    Team(TeamSnapshot),\n'),
+              ('    submission: Arc<Mutex<SubmissionState>>,\n}', '    submission: Arc<Mutex<SubmissionState>>,\n    event_sender: Sender<RuntimeEvent>,\n    team_control: TeamControlPlane,\n}'),
+              ('        let worker_events = event_tx.clone();\n', '        let worker_events = event_tx.clone();\n        let team_control = state.team_control.clone();\n'),
+              ('            submission,\n        }\n    }\n\n    fn failed_start', '            submission,\n            event_sender: event_tx,\n            team_control,\n        }\n    }\n\n    fn failed_start'),
+              ('            submission: Arc::new(Mutex::new(SubmissionState::default())),\n        }\n    }\n\n    pub fn submit', '            submission: Arc::new(Mutex::new(SubmissionState::default())),\n            event_sender: event_tx,\n            team_control: TeamControlPlane::default(),\n        }\n    }\n\n    pub fn submit'),
+              ('    pub fn run_command(&self, command: SlashCommand) -> Result<(), RuntimeError> {\n        let mut submission = lock_submission(&self.submission);', '''    pub fn run_command(&self, command: SlashCommand) -> Result<(), RuntimeError> {
+        if let SlashCommand::Team(command) = &command {
+            let snapshot = match command {
+                crate::commands::TeamCommand::Show => self.team_control.snapshot(),
+                crate::commands::TeamCommand::Steer { worker_id, instruction } => self
+                    .team_control
+                    .steer(worker_id, instruction)
+                    .map_err(RuntimeError::agent)?,
+                crate::commands::TeamCommand::StopWorker { worker_id } => self
+                    .team_control
+                    .stop_worker(worker_id)
+                    .map_err(RuntimeError::agent)?,
+                crate::commands::TeamCommand::StopTeam => self
+                    .team_control
+                    .stop_team()
+                    .map_err(RuntimeError::agent)?,
+            };
+            let _ = self.event_sender.send(RuntimeEvent::Team(snapshot));
+            return Ok(());
+        }
+        let mut submission = lock_submission(&self.submission);'''),
+              ('    plan_mode: bool,\n}', '    plan_mode: bool,\n    team_control: TeamControlPlane,\n}'),
+              ('            session_api_key: None,\n        }', '            session_api_key: None,\n            team_control: TeamControlPlane::default(),\n        }'),
+          ])
+
+          edit('crates/medusa-runtime/src/commands.rs', [
+              ('    Plan {\n        task: Option<String>,\n    },\n}', '    Plan {\n        task: Option<String>,\n    },\n    Team(TeamCommand),\n}\n\n#[derive(Clone, Debug, Eq, PartialEq)]\npub enum TeamCommand {\n    Show,\n    Steer { worker_id: String, instruction: String },\n    StopWorker { worker_id: String },\n    StopTeam,\n}'),
+              ('    CommandSpec {\n        name: "help",', '    CommandSpec {\n        name: "team",\n        usage: "/team",\n        description: "show coordinated worker status",\n    },\n    CommandSpec {\n        name: "steer",\n        usage: "/steer <worker> <instruction>",\n        description: "redirect a running worker between turns",\n    },\n    CommandSpec {\n        name: "stop-worker",\n        usage: "/stop-worker <worker>",\n        description: "cancel one coordinated worker",\n    },\n    CommandSpec {\n        name: "stop-team",\n        usage: "/stop-team",\n        description: "request graceful coordinated-team shutdown",\n    },\n    CommandSpec {\n        name: "help",'),
+              ('        "plan" => Ok(Some(SlashCommand::Plan {\n            task: (!remainder.is_empty()).then(|| remainder.to_owned()),\n        })),\n', '''        "plan" => Ok(Some(SlashCommand::Plan {
+            task: (!remainder.is_empty()).then(|| remainder.to_owned()),
+        })),
+        "team" => {
+            require_empty("team")?;
+            Ok(Some(SlashCommand::Team(TeamCommand::Show)))
+        }
+        "steer" => {
+            let (worker_id, instruction) = remainder
+                .split_once(char::is_whitespace)
+                .map_or((remainder, ""), |(worker, instruction)| (worker, instruction.trim()));
+            if worker_id.is_empty() || instruction.is_empty() {
+                return Err("/steer expects <worker> <instruction>".to_owned());
+            }
+            Ok(Some(SlashCommand::Team(TeamCommand::Steer {
+                worker_id: worker_id.to_owned(),
+                instruction: instruction.to_owned(),
+            })))
+        }
+        "stop-worker" => {
+            if remainder.is_empty() || remainder.contains(char::is_whitespace) {
+                return Err("/stop-worker expects exactly one worker ID".to_owned());
+            }
+            Ok(Some(SlashCommand::Team(TeamCommand::StopWorker {
+                worker_id: remainder.to_owned(),
+            })))
+        }
+        "stop-team" => {
+            require_empty("stop-team")?;
+            Ok(Some(SlashCommand::Team(TeamCommand::StopTeam)))
+        }
+'''),
+          ])
+
+          edit('crates/medusa-runtime/build_main.rs', [
+              ('    println!("cargo:rerun-if-changed=src/multi_agent_coordinator.rs");\n', '    println!("cargo:rerun-if-changed=src/multi_agent_coordinator.rs");\n    println!("cargo:rerun-if-changed=src/team_control.rs");\n'),
+              ('        ("mod multi_agent_coordinator;", "multi_agent_coordinator.rs"),\n', '        ("mod multi_agent_coordinator;", "multi_agent_coordinator.rs"),\n        ("mod team_control;", "team_control.rs"),\n'),
+              ('    let execution_plan = crate::production_orchestrator::plan(&draft).map_err(RuntimeError::agent)?;\n    for event', '    let execution_plan = crate::production_orchestrator::plan(&draft).map_err(RuntimeError::agent)?;\n    if execution_plan.mode == crate::production_orchestrator::ExecutionMode::Direct { let _ = events.send(RuntimeEvent::Team(state.team_control.clear())); }\n    for event'),
+              ('                cancel,\n                events,\n            )\n            .map_err(RuntimeError::agent)?,\n        )\n    } else {\n        None\n    };\n    let coordinated', '                cancel,\n                &state.team_control,\n                events,\n            )\n            .map_err(RuntimeError::agent)?,\n        )\n    } else {\n        None\n    };\n    let coordinated'),
+              ('                preflight,\n                cancel,\n                events,\n            )', '                preflight,\n                cancel,\n                &state.team_control,\n                events,\n            )'),
+              ('    state.session = Some(session);\n    result\n}\n\nfn append_followups', '    if coordinated { let _ = events.send(RuntimeEvent::Team(state.team_control.finish())); }\n    state.session = Some(session);\n    result\n}\n\nfn append_followups'),
+          ])
+
+          edit('crates/medusa-runtime/src/multi_agent_coordinator.rs', [
+              ('    RuntimeActivity, RuntimeActivityKind, RuntimeEvent,\n', '    RuntimeActivity, RuntimeActivityKind, RuntimeEvent,\n    team_control::{TeamControlPlane, TeamWorkerRegistration},\n'),
+              ('    team_context: TeamMemberContext,\n}', '    team_context: TeamMemberContext,\n    control: TeamControlPlane,\n    events: Sender<RuntimeEvent>,\n}'),
+              ('    cancel: &Arc<AtomicBool>,\n    events: &Sender<RuntimeEvent>,\n) -> Result<CoordinatorEvidence, String> {\n    coordinate_with_executor(repo, plan, cancel, events, |request| {\n        execute_production_worker(repo, config, session_api_key.clone(), cancel, request)\n    })\n}', '''    cancel: &Arc<AtomicBool>,
+    control: &TeamControlPlane,
+    events: &Sender<RuntimeEvent>,
+) -> Result<CoordinatorEvidence, String> {
+    coordinate_with_control(repo, plan, cancel, control, events, |request| {
+        execute_production_worker(repo, config, session_api_key.clone(), cancel, request)
+    })
+}
+
+#[cfg(test)]
+fn coordinate_with_executor<F>(
+    repo: &Path,
+    plan: &ProductionExecutionPlan,
+    cancel: &Arc<AtomicBool>,
+    events: &Sender<RuntimeEvent>,
+    executor: F,
+) -> Result<CoordinatorEvidence, String>
+where
+    F: Fn(WorkerRequest) -> Result<WorkerEvidence, String> + Sync,
+{
+    coordinate_with_control(
+        repo,
+        plan,
+        cancel,
+        &TeamControlPlane::default(),
+        events,
+        executor,
+    )
+}'''),
+              ('fn coordinate_with_executor<F>(\n', 'fn coordinate_with_control<F>(\n'),
+              ('    cancel: &Arc<AtomicBool>,\n    events: &Sender<RuntimeEvent>,\n    executor: F,\n', '    cancel: &Arc<AtomicBool>,\n    control: &TeamControlPlane,\n    events: &Sender<RuntimeEvent>,\n    executor: F,\n'),
+              ('    let evidence_path = root.join("preflight-evidence.json");\n', '    let evidence_path = root.join("preflight-evidence.json");\n    let execution_key = execution_id(&plan.fingerprint, &repository_fingerprint);\n'),
+              ('        validate_evidence(plan, &repository_fingerprint, &evidence_path, &restored)?;\n        return Ok(restored);', '''        validate_evidence(plan, &repository_fingerprint, &evidence_path, &restored)?;
+        let _ = events.send(RuntimeEvent::Team(control.begin(
+            execution_key,
+            restored.workers.iter().map(|worker| TeamWorkerRegistration {
+                worker_id: worker.worker_id.clone(),
+                role: format!("{:?}", worker.role).to_ascii_lowercase(),
+                task_id: worker.task_id.clone(),
+            }),
+        )));
+        for worker in &restored.workers {
+            if let Ok(snapshot) = control.complete(&worker.worker_id, "durable evidence restored") {
+                let _ = events.send(RuntimeEvent::Team(snapshot));
+            }
+        }
+        if !crate::production_orchestrator::requires_mutation(plan) {
+            let _ = events.send(RuntimeEvent::Team(control.finish()));
+        }
+        return Ok(restored);'''),
+              ('    let contract_by_task = contracts\n', '    let _ = events.send(RuntimeEvent::Team(control.begin(\n        execution_key.clone(),\n        contracts.iter().map(|contract| TeamWorkerRegistration {\n            worker_id: worker_id_for(&contract.task_id),\n            role: format!("{:?}", contract.role).to_ascii_lowercase(),\n            task_id: contract.task_id.clone(),\n        }),\n    )));\n    let contract_by_task = contracts\n'),
+              ('    let execution_id = execution_id(&plan.fingerprint, &repository_fingerprint);\n', '    let execution_id = execution_key;\n'),
+              ('        team.start_member(&assignment.worker_id, &assignment.task_id, "starting")?;\n        requests.push(WorkerRequest {', '        team.start_member(&assignment.worker_id, &assignment.task_id, "starting")?;\n        if let Ok(snapshot) = control.start(&assignment.worker_id, None, "worker dispatched") { let _ = events.send(RuntimeEvent::Team(snapshot)); }\n        requests.push(WorkerRequest {'),
+              ('            team_context,\n        });', '            team_context,\n            control: control.clone(),\n            events: events.clone(),\n        });'),
+              ('                team.finish_member(&worker_id, true)?;\n                failures.push', '                team.finish_member(&worker_id, true)?;\n                if let Ok(snapshot) = control.fail(&worker_id, error.clone()) { let _ = events.send(RuntimeEvent::Team(snapshot)); }\n                failures.push'),
+              ('        team.finish_member(&result.worker_id, false)?;\n', '        team.finish_member(&result.worker_id, false)?;\n        if let Ok(snapshot) = control.complete(&result.worker_id, "evidence accepted") { let _ = events.send(RuntimeEvent::Team(snapshot)); }\n'),
+              ('    write_atomic(&evidence_path, &persisted)?;\n', '    write_atomic(&evidence_path, &persisted)?;\n    if !crate::production_orchestrator::requires_mutation(plan) { let _ = events.send(RuntimeEvent::Team(control.finish())); }\n'),
+              ('    let mut completed = false;\n    for _ in 0..worker_config.agent.max_turns {\n        if cancel.load(Ordering::SeqCst) {', '    let mut completed = false;\n    if let Ok(snapshot) = request.control.start(&request.worker_id, Some(session.id.as_str()), "model session started") { let _ = request.events.send(RuntimeEvent::Team(snapshot)); }\n    for _ in 0..worker_config.agent.max_turns {\n        if cancel.load(Ordering::SeqCst) || request.control.is_cancelled(&request.worker_id) {'),
+              ('        let outcome = engine\n            .step_with_observer_and_context(&mut session, Some(&system_context), |update| {', '        let mut turn_context = system_context.clone();\n        if let Some(instruction) = request.control.take_instruction(&request.worker_id)? { turn_context.push_str("\\n\\nLive steering instruction from the lead: "); turn_context.push_str(&instruction); }\n        if let Ok(snapshot) = request.control.progress(&request.worker_id, Some(session.id.as_str()), session.turn, "running model turn") { let _ = request.events.send(RuntimeEvent::Team(snapshot)); }\n        let outcome = engine\n            .step_with_observer_and_context(&mut session, Some(&turn_context), |update| {'),
+              ('            .map_err(|error| error.to_string())?;\n        match outcome {', '            .map_err(|error| error.to_string())?;\n        if let Ok(snapshot) = request.control.progress(&request.worker_id, Some(session.id.as_str()), session.turn, "model turn completed") { let _ = request.events.send(RuntimeEvent::Team(snapshot)); }\n        match outcome {'),
+          ])
+
+          edit('crates/medusa-runtime/src/mutating_worker_coordinator.rs', [
+              ('    RuntimeActivity, RuntimeActivityKind, RuntimeEvent,\n', '    RuntimeActivity, RuntimeActivityKind, RuntimeEvent,\n    team_control::{TeamControlPlane, TeamWorkerRegistration},\n'),
+              ('    team_context: TeamMemberContext,\n}', '    team_context: TeamMemberContext,\n    control: TeamControlPlane,\n    events: Sender<RuntimeEvent>,\n}'),
+              ('    cancel: &Arc<AtomicBool>,\n    events: &Sender<RuntimeEvent>,\n) -> Result<ImplementationEvidence, String> {\n    coordinate_with_executor(repo, plan, preflight, cancel, events, |request| {', '    cancel: &Arc<AtomicBool>,\n    control: &TeamControlPlane,\n    events: &Sender<RuntimeEvent>,\n) -> Result<ImplementationEvidence, String> {\n    coordinate_with_control(repo, plan, preflight, cancel, control, events, |request| {'),
+              ('fn coordinate_with_executor<F>(\n', '#[cfg(test)]\nfn coordinate_with_executor<F>(\n    repo: &Path,\n    plan: &ProductionExecutionPlan,\n    preflight: &CoordinatorEvidence,\n    cancel: &Arc<AtomicBool>,\n    events: &Sender<RuntimeEvent>,\n    executor: F,\n) -> Result<ImplementationEvidence, String>\nwhere\n    F: Fn(ImplementationRequest) -> Result<WorkerRun, String>,\n{\n    coordinate_with_control(repo, plan, preflight, cancel, &TeamControlPlane::default(), events, executor)\n}\n\nfn coordinate_with_control<F>(\n'),
+              ('    cancel: &Arc<AtomicBool>,\n    events: &Sender<RuntimeEvent>,\n    executor: F,\n', '    cancel: &Arc<AtomicBool>,\n    control: &TeamControlPlane,\n    events: &Sender<RuntimeEvent>,\n    executor: F,\n'),
+              ('    let task = implementation_task(plan, &contract)?;\n', '    let task = implementation_task(plan, &contract)?;\n    let execution_id = control.snapshot().execution_id.unwrap_or_else(|| plan.fingerprint.clone());\n    let _ = events.send(RuntimeEvent::Team(control.begin(execution_id, [TeamWorkerRegistration { worker_id: IMPLEMENTER_ID.to_owned(), role: "implementer".to_owned(), task_id: contract.task_id.clone() }])));\n'),
+              ('                    events,\n                    &executor,', '                    events,\n                    control,\n                    &executor,'),
+              ('        events,\n        &executor,', '        events,\n        control,\n        &executor,'),
+              ('    events: &Sender<RuntimeEvent>,\n    executor: &F,', '    events: &Sender<RuntimeEvent>,\n    control: &TeamControlPlane,\n    executor: &F,'),
+              ('        if cancel.load(Ordering::SeqCst) {', '        if cancel.load(Ordering::SeqCst) || control.is_cancelled(IMPLEMENTER_ID) {'),
+              ('        team.start_member(&assignment.worker_id, &assignment.task_id, "starting")?;\n', '        team.start_member(&assignment.worker_id, &assignment.task_id, "starting")?;\n        if let Ok(snapshot) = control.start(&assignment.worker_id, None, format!("implementation attempt {attempt} dispatched")) { let _ = events.send(RuntimeEvent::Team(snapshot)); }\n'),
+              ('            team_context,\n        };', '            team_context,\n            control: control.clone(),\n            events: events.clone(),\n        };'),
+              ('            events,\n        );', '            events,\n            control,\n        );'),
+              ('    events: &Sender<RuntimeEvent>,\n) -> Result<ImplementationEvidence, String> {', '    events: &Sender<RuntimeEvent>,\n    control: &TeamControlPlane,\n) -> Result<ImplementationEvidence, String> {'),
+              ('    manager\n        .cleanup(std::slice::from_ref(&state.worker))', '    if let Ok(snapshot) = control.integrated(&state.worker.id, format!("integrated commit {}", integration.commit)) { let _ = events.send(RuntimeEvent::Team(snapshot)); }\n    let _ = events.send(RuntimeEvent::Team(control.finish()));\n    manager\n        .cleanup(std::slice::from_ref(&state.worker))'),
+              ('    let mut completed = false;\n    for _ in 0..worker_config.agent.max_turns {\n        if cancel.load(Ordering::SeqCst) {', '    let mut completed = false;\n    if let Ok(snapshot) = request.control.start(&request.worker.id, Some(session.id.as_str()), "implementer model session started") { let _ = request.events.send(RuntimeEvent::Team(snapshot)); }\n    for _ in 0..worker_config.agent.max_turns {\n        if cancel.load(Ordering::SeqCst) || request.control.is_cancelled(&request.worker.id) {'),
+              ('        let outcome = engine\n            .step_with_observer_and_context(&mut session, Some(&system_context), |update| {', '        let mut turn_context = system_context.clone();\n        if let Some(instruction) = request.control.take_instruction(&request.worker.id)? { turn_context.push_str("\\n\\nLive steering instruction from the lead: "); turn_context.push_str(&instruction); }\n        if let Ok(snapshot) = request.control.progress(&request.worker.id, Some(session.id.as_str()), session.turn, "running implementation turn") { let _ = request.events.send(RuntimeEvent::Team(snapshot)); }\n        let outcome = engine\n            .step_with_observer_and_context(&mut session, Some(&turn_context), |update| {'),
+              ('            .map_err(|error| error.to_string())?;\n        match outcome {', '            .map_err(|error| error.to_string())?;\n        if let Ok(snapshot) = request.control.progress(&request.worker.id, Some(session.id.as_str()), session.turn, "implementation turn completed") { let _ = request.events.send(RuntimeEvent::Team(snapshot)); }\n        match outcome {'),
+          ])
+
+          edit('crates/medusa-runtime/src/mutating_worker_failure.rs', [
+              ('use super::{DurableImplementationState, ImplementationStatus, WorkerRun};\n', 'use super::{DurableImplementationState, ImplementationStatus, WorkerRun};\nuse crate::{RuntimeEvent, team_control::TeamControlPlane};\nuse std::sync::mpsc::Sender;\n'),
+              ('    team: &TeamRuntime,\n    manager: &WorkerManager,', '    team: &TeamRuntime,\n    events: &Sender<RuntimeEvent>,\n    control: &TeamControlPlane,\n    manager: &WorkerManager,'),
+              ('    write_atomic(state_path, &state)?;\n', '    write_atomic(state_path, &state)?;\n    let snapshot = if state.status == ImplementationStatus::Retrying { control.retrying(&assignment.worker_id, recorded.clone()) } else { control.fail(&assignment.worker_id, recorded.clone()) };\n    if let Ok(snapshot) = snapshot { let _ = events.send(RuntimeEvent::Team(snapshot)); }\n'),
+          ])
+
+          p = Path('crates/medusa-runtime/src/mutating_worker_coordinator.rs')
+          s = p.read_text()
+          old = '                    &mut controller,\n                    team,\n                    manager,'
+          s = s.replace(old, '                    &mut controller,\n                    team,\n                    events,\n                    control,\n                    manager,')
+          if old in s:
+              raise SystemExit('not all nested failure calls were replaced')
+          old = '                &mut controller,\n                team,\n                manager,'
+          s = s.replace(old, '                &mut controller,\n                team,\n                events,\n                control,\n                manager,')
+          if old in s:
+              raise SystemExit('not all failure calls were replaced')
+          p.write_text(s)
+
+          edit('crates/medusa-tui/src/runtime.rs', [
+              ('    RuntimeActivity, RuntimeActivityKind, RuntimeError, SubmitDisposition,\n', '    RuntimeActivity, RuntimeActivityKind, RuntimeError, SubmitDisposition, TeamSnapshot,\n'),
+              ('    Activity(RuntimeActivity),\n', '    Activity(RuntimeActivity),\n    Team(TeamSnapshot),\n'),
+              ('        medusa_runtime::RuntimeEvent::Activity(activity) => {\n            RuntimeEvent::Activity(presentation_activity(activity))\n        }\n', '        medusa_runtime::RuntimeEvent::Activity(activity) => {\n            RuntimeEvent::Activity(presentation_activity(activity))\n        }\n        medusa_runtime::RuntimeEvent::Team(snapshot) => RuntimeEvent::Team(snapshot),\n'),
+          ])
+
+          edit('crates/medusa-tui/src/session.rs', [
+              ('            RuntimeEvent::Plan(plan) => {', '''            RuntimeEvent::Team(snapshot) => {
+                for worker in snapshot.workers {
+                    app.record_activity(TranscriptActivity {
+                        id: Some(format!("team:{}", worker.worker_id)),
+                        kind: match worker.lifecycle {
+                            medusa_runtime::TeamWorkerLifecycle::Completed | medusa_runtime::TeamWorkerLifecycle::Integrated => TranscriptActivityKind::Done,
+                            medusa_runtime::TeamWorkerLifecycle::Failed => TranscriptActivityKind::Error,
+                            _ => TranscriptActivityKind::Progress,
+                        },
+                        title: format!("{} · {} · {:?}", worker.worker_id, worker.task_id, worker.lifecycle),
+                        details: vec![
+                            format!("role {}", worker.role),
+                            format!("turn {}", worker.turn),
+                            format!("session {}", worker.session_id.as_deref().unwrap_or("pending")),
+                            worker.last_update,
+                        ],
+                    });
+                }
+                app.status = if snapshot.active { "team active".to_owned() } else { "team complete".to_owned() };
+            }
+            RuntimeEvent::Plan(plan) => {'''),
+          ])
+
+          edit('apps/medusa-desktop/src-tauri/src/dto.rs', [
+              ('    Activity {\n        activity: DesktopActivity,\n    },\n', '    Activity {\n        activity: DesktopActivity,\n    },\n    Team {\n        snapshot: medusa_runtime::TeamSnapshot,\n    },\n'),
+              ('            RuntimeEvent::Activity(activity) => Self::Activity {', '            RuntimeEvent::Team(snapshot) => Self::Team { snapshot },\n            RuntimeEvent::Activity(activity) => Self::Activity {'),
+          ])
+
+          edit('apps/medusa-desktop/src/runtime.ts', [
+              ('export interface TimelineSnapshot {\n  runtimeId?: string;\n  plan: PlanStep[];\n  activities: RuntimeActivity[];\n  busy: boolean;\n}', '''export interface TeamWorkerSnapshot {
+  workerId: string;
+  role: string;
+  taskId: string;
+  lifecycle: "pending" | "running" | "retrying" | "cancellation_requested" | "completed" | "failed" | "integrated";
+  sessionId?: string;
+  turn: number;
+  lastUpdate: string;
+  queuedInstructions: number;
+}
+
+export interface TeamSnapshot {
+  executionId?: string;
+  active: boolean;
+  shutdownRequested: boolean;
+  sequence: number;
+  workers: TeamWorkerSnapshot[];
+}
+
+export interface TimelineSnapshot {
+  runtimeId?: string;
+  plan: PlanStep[];
+  activities: RuntimeActivity[];
+  team?: TeamSnapshot;
+  busy: boolean;
+}'''),
+              ('  | { type: "activity"; activity: RuntimeActivity }\n', '  | { type: "activity"; activity: RuntimeActivity }\n  | { type: "team"; snapshot: TeamSnapshot }\n'),
+              ('      case "plan":\n', '''      case "team": {
+        const activities = [...next.activities];
+        for (const worker of event.snapshot.workers) {
+          const activity: RuntimeActivity = {
+            id: `team:${worker.workerId}`,
+            kind: worker.lifecycle === "failed"
+              ? "error"
+              : worker.lifecycle === "completed" || worker.lifecycle === "integrated"
+                ? "done"
+                : "progress",
+            title: `${worker.workerId} · ${worker.taskId} · ${worker.lifecycle}`,
+            details: [
+              `role ${worker.role}`,
+              `turn ${worker.turn}`,
+              `session ${worker.sessionId ?? "pending"}`,
+              worker.lastUpdate,
+            ],
+          };
+          const index = activities.findIndex((item) => item.id === activity.id);
+          if (index >= 0) activities[index] = activity;
+          else activities.push(activity);
+        }
+        next = { ...next, team: event.snapshot, activities };
+        break;
+      }
+      case "plan":
+'''),
+          ])
+
+          doc = Path('docs/TEAM-OBSERVABILITY-STEERING.md')
+          doc.write_text(doc.read_text().replace(
+              'This document is the implementation contract for issue #550 and will be updated to shipped behavior before merge.',
+              'The shipped runtime now uses this control plane for planner, researcher, and isolated implementer workers. Commands remain responsive during coordinated execution because they update shared state directly; workers consume steering and cancellation between bounded model turns.'
+          ))
+          PY
+      - name: Format and validate
+        run: |
+          cargo fmt --all
+          python3 scripts/check-product-architecture.py
+          python3 scripts/check-capability-evidence.py
+          git diff --check
+          cargo check --workspace --all-targets
+          cargo clippy --workspace --all-targets -- -D warnings
+          cargo test -p medusa-runtime -p medusa-tui -p medusa-desktop-adapter
+          npm --prefix apps/medusa-desktop test -- --run
+      - name: Commit validated source and remove materializer
+        run: |
+          rm .github/workflows/apply-team-observability.yml
+          git add -A
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git commit -m 'Expose coordinated worker status and steering'
+          git push origin HEAD:agent/team-observability-steering
