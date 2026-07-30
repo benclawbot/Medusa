@@ -84,6 +84,25 @@ jobs:
           python3 - <<'PY_MAIN'
           from pathlib import Path
 
+          command_path = Path('crates/medusa-cli/src/config_command.rs')
+          command_text = command_path.read_text()
+          command_anchor = '''pub(crate) fn load_profile() -> MedusaResult<ProviderProfile> {
+              ProviderProfileStore::user()?.load()
+          }
+          '''
+          command_insert = '''pub(crate) fn config_path() -> MedusaResult<std::path::PathBuf> {
+              Ok(ProviderProfileStore::user()?.path().to_path_buf())
+          }
+
+          pub(crate) fn load_profile() -> MedusaResult<ProviderProfile> {
+              ProviderProfileStore::user()?.load()
+          }
+          '''
+          if command_anchor not in command_text:
+              raise SystemExit('config_path compatibility anchor missing')
+          command_text = command_text.replace(command_anchor, command_insert, 1)
+          command_path.write_text(command_text)
+
           path = Path('crates/medusa-cli/src/main.rs')
           text = path.read_text()
           old_import = '''use config_command::{
@@ -150,6 +169,16 @@ jobs:
           if old_handler not in text:
               raise SystemExit('ConfigAction handler missing')
           text = text.replace(old_handler, new_handler, 1)
+
+          old_test = '''            Some(CommandKind::Config {
+                          action: Some(ConfigAction::Show)
+                      })'''
+          new_test = '''            Some(CommandKind::Config {
+                          action: Some(ConfigAction::Show { json: false })
+                      })'''
+          if old_test not in text:
+              raise SystemExit('config show parser test missing')
+          text = text.replace(old_test, new_test, 1)
           path.write_text(text)
           PY_MAIN
           cargo fmt --all
