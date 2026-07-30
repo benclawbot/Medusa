@@ -1,0 +1,33 @@
+name: Format issue 569 durable event coverage
+
+on:
+  push:
+    branches:
+      - agent/569-runtime-durable-event-coverage
+    paths:
+      - .github/workflows/format-569.yml
+
+permissions:
+  contents: write
+
+jobs:
+  format:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
+      - name: Format and commit
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo fmt --all
+          rm .github/workflows/format-569.yml
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add --all
+          git commit -m "Format durable runtime event coverage"
+          git push
