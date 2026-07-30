@@ -122,6 +122,7 @@ impl RuntimeController {
         let worker_cancel = Arc::clone(&cancel);
         let worker_submission = Arc::clone(&submission);
         let worker_events = event_tx.clone();
+        let team_control = state.team_control.clone();
         thread::Builder::new()
             .name("medusa-runtime-resumed".to_owned())
             .spawn(move || {
@@ -141,6 +142,8 @@ impl RuntimeController {
             events: event_rx,
             cancel,
             submission,
+            event_sender: event_tx,
+            team_control,
         })
     }
 }

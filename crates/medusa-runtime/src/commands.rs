@@ -69,6 +69,15 @@ pub enum SlashCommand {
     Plan {
         task: Option<String>,
     },
+    Team(TeamCommand),
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum TeamCommand {
+    Show,
+    Steer { worker_id: String, instruction: String },
+    StopWorker { worker_id: String },
+    StopTeam,
 }
 
 #[derive(Clone, Eq, PartialEq)]
@@ -159,6 +168,26 @@ pub const COMMAND_SPECS: &[CommandSpec] = &[
         name: "plan",
         usage: "/plan [task|off]",
         description: "enter read-only planning mode",
+    },
+    CommandSpec {
+        name: "team",
+        usage: "/team",
+        description: "show coordinated worker status",
+    },
+    CommandSpec {
+        name: "steer",
+        usage: "/steer <worker> <instruction>",
+        description: "redirect a running worker between turns",
+    },
+    CommandSpec {
+        name: "stop-worker",
+        usage: "/stop-worker <worker>",
+        description: "cancel one coordinated worker",
+    },
+    CommandSpec {
+        name: "stop-team",
+        usage: "/stop-team",
+        description: "request graceful coordinated-team shutdown",
     },
     CommandSpec {
         name: "help",
@@ -265,6 +294,37 @@ pub fn parse_slash_command(input: &str) -> Result<Option<SlashCommand>, String> 
         "plan" => Ok(Some(SlashCommand::Plan {
             task: (!remainder.is_empty()).then(|| remainder.to_owned()),
         })),
+        "team" => {
+            require_empty("team")?;
+            Ok(Some(SlashCommand::Team(TeamCommand::Show)))
+        }
+        "steer" => {
+            let (worker_id, instruction) =
+                remainder
+                    .split_once(char::is_whitespace)
+                    .map_or((remainder, ""), |(worker, instruction)| {
+                        (worker, instruction.trim())
+                    });
+            if worker_id.is_empty() || instruction.is_empty() {
+                return Err("/steer expects <worker> <instruction>".to_owned());
+            }
+            Ok(Some(SlashCommand::Team(TeamCommand::Steer {
+                worker_id: worker_id.to_owned(),
+                instruction: instruction.to_owned(),
+            })))
+        }
+        "stop-worker" => {
+            if remainder.is_empty() || remainder.contains(char::is_whitespace) {
+                return Err("/stop-worker expects exactly one worker ID".to_owned());
+            }
+            Ok(Some(SlashCommand::Team(TeamCommand::StopWorker {
+                worker_id: remainder.to_owned(),
+            })))
+        }
+        "stop-team" => {
+            require_empty("stop-team")?;
+            Ok(Some(SlashCommand::Team(TeamCommand::StopTeam)))
+        }
         _ => Ok(Some(SlashCommand::Skill {
             selector: name.to_owned(),
             task: (!remainder.is_empty()).then(|| remainder.to_owned()),
@@ -464,6 +524,40 @@ mod tests {
         );
         let command = parse_slash_command("/model key secret-value").expect("parse key");
         assert!(!format!("{command:?}").contains("secret-value"));
+    }
+
+    #[test]
+    fn parses_team_status_steering_and_cancellation_commands() {
+        assert_eq!(
+            parse_slash_command("/team"),
+            Ok(Some(SlashCommand::Team(TeamCommand::Show)))
+        );
+        assert_eq!(
+            parse_slash_command("/steer reviewer-1 inspect the failed assertion"),
+            Ok(Some(SlashCommand::Team(TeamCommand::Steer {
+                worker_id: "reviewer-1".to_owned(),
+                instruction: "inspect the failed assertion".to_owned(),
+            })))
+        );
+        assert_eq!(
+            parse_slash_command("/stop-worker reviewer-1"),
+            Ok(Some(SlashCommand::Team(TeamCommand::StopWorker {
+                worker_id: "reviewer-1".to_owned(),
+            })))
+        );
+        assert_eq!(
+            parse_slash_command("/stop-team"),
+            Ok(Some(SlashCommand::Team(TeamCommand::StopTeam)))
+        );
+        for input in [
+            "/team extra",
+            "/steer reviewer-1",
+            "/stop-worker",
+            "/stop-worker reviewer-1 extra",
+            "/stop-team extra",
+        ] {
+            assert!(parse_slash_command(input).is_err(), "{input}");
+        }
     }
 
     #[test]

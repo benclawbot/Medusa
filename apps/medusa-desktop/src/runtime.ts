@@ -116,7 +116,7 @@ export interface DesktopPromptDraft {
 
 export interface RuntimeActivity {
   id?: string;
-  kind: "assistant" | "done" | "error" | "tool" | "verification";
+  kind: "assistant" | "done" | "error" | "tool" | "progress" | "verification";
   title: string;
   details: string[];
 }
@@ -126,10 +126,30 @@ export interface PlanStep {
   status: "pending" | "inProgress" | "completed" | "failed";
 }
 
+export interface TeamWorkerSnapshot {
+  workerId: string;
+  role: string;
+  taskId: string;
+  lifecycle: "pending" | "running" | "retrying" | "cancellation_requested" | "completed" | "failed" | "integrated";
+  sessionId?: string;
+  turn: number;
+  lastUpdate: string;
+  queuedInstructions: number;
+}
+
+export interface TeamSnapshot {
+  executionId?: string;
+  active: boolean;
+  shutdownRequested: boolean;
+  sequence: number;
+  workers: TeamWorkerSnapshot[];
+}
+
 export interface TimelineSnapshot {
   runtimeId?: string;
   plan: PlanStep[];
   activities: RuntimeActivity[];
+  team?: TeamSnapshot;
   busy: boolean;
 }
 
@@ -151,6 +171,7 @@ export type RuntimeEvent =
   | { type: "started" }
   | { type: "assistantText"; text: string }
   | { type: "activity"; activity: RuntimeActivity }
+  | { type: "team"; snapshot: TeamSnapshot }
   | { type: "plan"; steps: PlanStep[] }
   | { type: "question"; prompts: QuestionPrompt[] }
   | {
@@ -244,6 +265,42 @@ function reduceTimeline(runtimeId: string, events: RuntimeEvent[]): void {
         if (index >= 0) activities[index] = event.activity;
         else activities.push(event.activity);
         next = { ...next, activities };
+        break;
+      }
+      case "team": {
+        const activeWorkerIds = new Set(
+          event.snapshot.workers.map((worker) => `team:${worker.workerId}`),
+        );
+        const activities = next.activities.filter(
+          (activity) =>
+            !activity.id?.startsWith("team:") ||
+            activeWorkerIds.has(activity.id),
+        );
+        for (const worker of event.snapshot.workers) {
+          const activity: RuntimeActivity = {
+            id: `team:${worker.workerId}`,
+            kind:
+              worker.lifecycle === "failed"
+                ? "error"
+                : worker.lifecycle === "completed" ||
+                    worker.lifecycle === "integrated"
+                  ? "done"
+                  : "progress",
+            title: `${worker.workerId} · ${worker.taskId} · ${worker.lifecycle}`,
+            details: [
+              `role ${worker.role}`,
+              `turn ${worker.turn}`,
+              `session ${worker.sessionId ?? "pending"}`,
+              worker.lastUpdate,
+            ],
+          };
+          const index = activities.findIndex(
+            (item) => item.id === activity.id,
+          );
+          if (index >= 0) activities[index] = activity;
+          else activities.push(activity);
+        }
+        next = { ...next, team: event.snapshot, activities };
         break;
       }
       case "plan":
