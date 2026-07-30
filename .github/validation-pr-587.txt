@@ -1,0 +1,1 @@
+Trigger the full PR validation matrix for the optional continuity resume and lint inheritance fix.
