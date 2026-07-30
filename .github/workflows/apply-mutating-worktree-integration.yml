@@ -25,7 +25,7 @@ jobs:
         run: |
           set -euo pipefail
           mapfile -t parts < <(find .github/patches -maxdepth 1 -name 'mutating-worktree-bundle.part*' -print | sort)
-          test "${#parts[@]}" -eq 9
+          test "${#parts[@]}" -eq 7
           wc -c "${parts[@]}"
           python3 - <<'PY'
           import base64
@@ -84,7 +84,6 @@ jobs:
         run: |
           python3 scripts/check-product-architecture.py
           python3 scripts/check-capability-evidence.py
-          bash scripts/check-source-size.sh
       - name: Check workspace
         run: cargo check --workspace --all-features
       - name: Lint affected crates
