@@ -18,7 +18,7 @@ pub use types::{
     TelegramBotParseMode, TelegramBotUser, TelegramCallbackQuery, TelegramChatAction,
     TelegramEditMessageOutcome, TelegramEditMessageText, TelegramInboundCallback,
     TelegramInlineKeyboardMarkup, TelegramLinkPreviewOptions, TelegramReplyParameters,
-    TelegramSendMessage, TelegramTransportUpdate, TelegramUpdate,
+    TelegramSendMessage, TelegramTransportUpdate, TelegramUpdate, TelegramUpdateCursor,
 };
 
 #[cfg(test)]
@@ -191,7 +191,7 @@ impl TelegramBotApiClient {
         request: &TelegramEditMessageText,
     ) -> Result<TelegramEditMessageOutcome, TelegramBotApiError> {
         match self.call("editMessageText", request) {
-            Ok(message) => Ok(TelegramEditMessageOutcome::Updated(message)),
+            Ok(message) => Ok(TelegramEditMessageOutcome::Updated(Box::new(message))),
             Err(error) if error.is_message_not_modified() => {
                 Ok(TelegramEditMessageOutcome::Unchanged)
             }

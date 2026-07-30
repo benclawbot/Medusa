@@ -240,7 +240,7 @@ pub struct TelegramEditMessageText {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum TelegramEditMessageOutcome {
-    Updated(TelegramBotMessage),
+    Updated(Box<TelegramBotMessage>),
     Unchanged,
 }
 
