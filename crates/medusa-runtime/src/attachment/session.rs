@@ -147,10 +147,7 @@ fn continuity_store(repo: &Path, session_id: &str) -> ContinuityStore {
     )
 }
 
-fn initialize_continuity(
-    store: &ContinuityStore,
-    session_id: &str,
-) -> Result<(), RuntimeError> {
+fn initialize_continuity(store: &ContinuityStore, session_id: &str) -> Result<(), RuntimeError> {
     match store.load() {
         Ok(session) => validate_continuity_identity(&session, session_id),
         Err(ContinuityError::Io(error)) if error.kind() == io::ErrorKind::NotFound => {
@@ -243,7 +240,10 @@ mod tests {
         assert_eq!(attached.session.objective, session.objective);
         assert_eq!(attached.replay, session.events);
         assert_eq!(attached.mode(), AttachmentMode::Owner);
-        assert_eq!(attached.continuity.owner_client_id.as_deref(), Some("tui-1"));
+        assert_eq!(
+            attached.continuity.owner_client_id.as_deref(),
+            Some("tui-1")
+        );
         assert!(snapshot.is_file());
         let controller = attached
             .into_controller_with_config(Config::default())
