@@ -10,7 +10,7 @@ assert source.count(old_doc) == 1
 assert source.count(old_path) == 1
 source = source.replace(old_doc, new_doc).replace(old_path, new_path)
 assert "bootstrap_keeps_generated_repository_map_in_runtime_state" not in source
-source += '''
+source = source.rstrip() + '''
 
 #[cfg(test)]
 mod tests {
@@ -25,8 +25,7 @@ mod tests {
         assert!(repo.join(".medusa/REPOSITORY_MAP.md").is_file());
         assert!(!repo.join("REPOSITORY_MAP.md").exists());
 
-        fs::write(repo.join("REPOSITORY_MAP.md"), "# User-owned map\\n")
-            .expect("user map");
+        fs::write(repo.join("REPOSITORY_MAP.md"), "# User-owned map\\n").expect("user map");
         bootstrap(repo).expect("second bootstrap");
         assert_eq!(
             fs::read_to_string(repo.join("REPOSITORY_MAP.md")).expect("read user map"),
