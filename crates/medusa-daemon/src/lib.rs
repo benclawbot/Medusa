@@ -1,4 +1,4 @@
-//! Persistent local daemon, cross-platform IPC, process ownership, crash recovery, and lifecycle supervision.
+//! Persistent local daemon, cross-platform IPC, process ownership, crash recovery, lifecycle supervision, and remote frontend gateways.
 
 mod cancellation;
 mod control_plane;
@@ -8,6 +8,7 @@ mod process;
 mod protocol;
 mod scheduler;
 mod server;
+pub mod telegram;
 mod transport;
 
 pub use control_plane::{
