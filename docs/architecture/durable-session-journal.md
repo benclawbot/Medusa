@@ -37,3 +37,5 @@ Replay uses zero-based committed cursors. A cursor can return only events includ
 ## Retained components
 
 This foundation does not restore the removed lifecycle facade and does not remove any retained component. `medusa-execution-checkpoint`, `medusa-execution-replay`, `medusa-time-travel`, `medusa-session-continuity`, and all compatibility paths remain present. Later #569 slices will connect them to the committed journal and `RuntimeController`; any proposed deletion requires explicit approval before implementation.
+
+The repository CI matrix is authoritative for formatting, compilation, linting, tests, documentation, and cross-platform behavior of this foundation.
