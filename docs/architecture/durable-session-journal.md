@@ -98,6 +98,6 @@ The central runtime dispatcher persists controller-owned canonical events before
 
 The low-level `append_event` and `AppendDisposition` path remains retained for compatibility and explicit idempotency/conflict handling; production event creation now uses the committed append transaction. Snapshot commits accept an exact existing write-ahead tail, merge newer committed controller events into a stale session, and discard only an unrelated crash tail before failing closed on genuine divergence.
 
-Concurrent full-session persistence holds the same journal lock through compatibility-snapshot publication and uses collision-free temporary files. The regression suite exercises repeated multi-threaded persistence and verifies that no temporary files remain after publication.
+Concurrent full-session persistence now holds the same journal lock through compatibility-snapshot publication and uses collision-free temporary files, preventing competing writers from renaming the same temporary path. The regression suite exercises repeated multi-threaded persistence and verifies that no temporary files remain after publication.
 
 This slice remains additive. It does not remove or consolidate `medusa-execution-checkpoint`, `medusa-execution-replay`, `medusa-time-travel`, `medusa-session-continuity`, or any compatibility path. Production checkpoint materialization and deterministic state replay remain the next dependent phases after this authoritative stream is validated.
