@@ -69,7 +69,9 @@ pub(crate) fn refresh(repo: &Path, session_id: &str) -> Result<(), RuntimeError>
                 usize::try_from(record.journal_cursor.saturating_sub(1))
                     .map_err(RuntimeError::agent)?,
             )
-            .and_then(|event| i64::try_from(event.timestamp.unix_timestamp_nanos() / 1_000_000).ok())
+            .and_then(|event| {
+                i64::try_from(event.timestamp.unix_timestamp_nanos() / 1_000_000).ok()
+            })
             .unwrap_or_default();
         presentations.push(CheckpointPresentation {
             id: record.checkpoint.fingerprint.clone(),
@@ -79,10 +81,7 @@ pub(crate) fn refresh(repo: &Path, session_id: &str) -> Result<(), RuntimeError>
             reason: format!("durable {task_step} boundary"),
             repository_fingerprint: record.checkpoint.repository_snapshot_fingerprint.clone(),
             verification,
-            provenance: format!(
-                "runtime-checkpoint/v1:{}",
-                record.record_fingerprint
-            ),
+            provenance: format!("runtime-checkpoint/v1:{}", record.record_fingerprint),
             integrity_verified: true,
         });
         latest_step = task_step;
@@ -100,19 +99,13 @@ pub(crate) fn refresh(repo: &Path, session_id: &str) -> Result<(), RuntimeError>
     let latest = checkpoints
         .last()
         .ok_or_else(|| RuntimeError::agent("verified checkpoint list became empty"))?;
-    let interrupted_operation = matches!(
-        latest_step.as_str(),
-        "runtime_failed" | "session_failed"
-    )
-    .then(|| latest_step.replace('_', " "));
+    let interrupted_operation = matches!(latest_step.as_str(), "runtime_failed" | "session_failed")
+        .then(|| latest_step.replace('_', " "));
     let record = PersistedRecoveryRecord {
         session_id: session_id.to_owned(),
         last_durable_step: latest_step,
         interrupted_operation,
-        current_repository_fingerprint: latest
-            .checkpoint
-            .repository_snapshot_fingerprint
-            .clone(),
+        current_repository_fingerprint: latest.checkpoint.repository_snapshot_fingerprint.clone(),
         verification: latest_verification,
         approvals_must_be_reestablished: true,
         containment_must_be_reestablished: true,
@@ -132,7 +125,8 @@ fn verification_state(values: &std::collections::BTreeMap<String, String>) -> Ve
 }
 
 fn recovery_path(repo: &Path, session_id: &str) -> PathBuf {
-    repo.join(RECOVERY_DIRECTORY).join(format!("{session_id}.json"))
+    repo.join(RECOVERY_DIRECTORY)
+        .join(format!("{session_id}.json"))
 }
 
 fn persist_projection(
@@ -290,10 +284,9 @@ mod tests {
             .join(".medusa/checkpoints")
             .join(session.id.as_str())
             .join(format!("{}.json", checkpoint.checkpoint.fingerprint));
-        let mut value: serde_json::Value = serde_json::from_slice(
-            &fs::read(&checkpoint_path).expect("checkpoint artifact"),
-        )
-        .expect("checkpoint json");
+        let mut value: serde_json::Value =
+            serde_json::from_slice(&fs::read(&checkpoint_path).expect("checkpoint artifact"))
+                .expect("checkpoint json");
         value["journal_cursor"] = serde_json::json!(99);
         fs::write(
             checkpoint_path,
