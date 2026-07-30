@@ -25,7 +25,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          echo "596eb9c66bb663e4ad7ad5cc235c5c9581125891e0bc530598583724f482a040  .github/materialize-journal-resume/change.patch" | sha256sum --check -
+          test "$(git hash-object .github/materialize-journal-resume/change.patch)" = "de276637c6f00d8ff3d0d28702b077ed12162fbd"
           git apply --index .github/materialize-journal-resume/change.patch
           rm -rf .github/materialize-journal-resume
           rm -f .github/workflows/materialize-journal-backed-resume.yml
