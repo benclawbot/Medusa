@@ -8,10 +8,7 @@ if "mod recovery_projection;" not in source:
     if source.count(old) != 1:
         raise SystemExit("recovery projection module insertion target changed")
     source = source.replace(old, new, 1)
-runtime_path.write_text(source)
 
-checkpoint_path = Path("crates/medusa-runtime/src/checkpoint_store.rs")
-checkpoint = checkpoint_path.read_text()
 old = '''        let checkpoint = crate::checkpoint_store::materialize(repo, session_id)?;
         let checkpoint_id = checkpoint.checkpoint.fingerprint;
         let mut session = medusa_agent::session_browser::load_session(repo, session_id)
@@ -21,8 +18,9 @@ new = '''        let checkpoint = crate::checkpoint_store::materialize(repo, ses
         crate::recovery_projection::refresh(repo, session_id)?;
         let mut session = medusa_agent::session_browser::load_session(repo, session_id)
 '''
-if new not in checkpoint:
-    if checkpoint.count(old) != 1:
+if new not in source:
+    if source.count(old) != 1:
         raise SystemExit("checkpoint recovery projection target changed")
-    checkpoint = checkpoint.replace(old, new, 1)
-checkpoint_path.write_text(checkpoint)
+    source = source.replace(old, new, 1)
+
+runtime_path.write_text(source)
