@@ -190,7 +190,7 @@ pub fn bootstrap(repo: &Path) -> MedusaResult<()> {
             record_nonfatal(repo, None, stage, operation, &error.to_string());
         }
     }
-    let map = repo.join("REPOSITORY_MAP.md");
+    let map = repo.join(".medusa/REPOSITORY_MAP.md");
     if !map.exists() {
         if let Err(error) = fs::write(
             &map,

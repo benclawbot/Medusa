@@ -6,46 +6,13 @@ on:
   pull_request:
 
 permissions:
-  contents: write
+  contents: read
 
 concurrency:
   group: architecture-policy-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
-  apply-internal-repository-map:
-    if: github.event_name == 'pull_request' && github.event.pull_request.head.ref == 'agent/fix-live-preflight-dirty-state'
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
-        with:
-          ref: ${{ github.event.pull_request.head.ref }}
-          fetch-depth: 0
-      - uses: dtolnay/rust-toolchain@39b0b3842c7e8bbf6904c0bfc3d9006fdd4dc4e0
-        with:
-          components: rustfmt, clippy
-      - name: Apply internal repository map fix
-        run: |
-          git apply --check .github/agent-patches/internal-repository-map.patch
-          git apply .github/agent-patches/internal-repository-map.patch
-      - name: Validate source
-        run: |
-          cargo fmt --all
-          cargo check --workspace --all-targets
-          cargo clippy --workspace --all-targets --all-features -- -D warnings
-          cargo test -p medusa-agent --test session_bootstrap
-          cargo test -p medusa-workers -p medusa-runtime
-      - name: Commit validated source and restore workflow
-        shell: bash
-        run: |
-          git show origin/main:.github/workflows/architecture-policy.yml > .github/workflows/architecture-policy.yml
-          rm -f .github/agent-patches/internal-repository-map.patch
-          git config user.name 'github-actions[bot]'
-          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git add -A
-          git commit -m 'Keep generated repository maps inside Medusa state'
-          git push origin HEAD:${{ github.event.pull_request.head.ref }}
-
   architecture-policy:
     name: Shipped crate reachability
     runs-on: ubuntu-latest
