@@ -3,6 +3,7 @@ use time::OffsetDateTime;
 
 use crate::{CURRENT_PROTOCOL_VERSION, ProtocolVersion};
 
+#[cfg(test)]
 use super::FRONTEND_PROTOCOL_VERSION;
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
