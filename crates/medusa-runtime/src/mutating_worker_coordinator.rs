@@ -899,11 +899,13 @@ fn execute_production_implementer(
     worker_config.agent.max_turns = bounded_implementer_turns(worker_config.agent.max_turns);
     let provider = ConfiguredProvider::manager_from_config(&worker_config, session_api_key)
         .map_err(|error| error.to_string())?;
+    let policy = AgentExecutionPolicy::for_team_role(TeamRole::Implementer)
+        .with_allowed_write_paths(request.contract.allowed_write_paths.clone());
     let engine = AgentEngine::new_with_cancellation(provider, worker_config.clone(), Arc::clone(cancel))
-        .with_execution_policy(AgentExecutionPolicy::for_team_role(TeamRole::Implementer))
+        .with_execution_policy(policy)
         .with_team_context(request.team_context.clone());
     let objective = format!(
-        "Implement delegated task `{}` inside this isolated Git worktree. Objective: {}. Stay within allowed write paths {:?}. Use the bounded turn budget efficiently: batch independent reads, make every required product edit, run focused verification, and then return a concise evidence-backed summary. Do not ask the user questions and do not modify tests or fixtures merely to make failures disappear.",
+        "Implement delegated task `{}` inside this isolated Git worktree. Objective: {}. Stay within allowed write paths {:?}. These paths are exact contract boundaries: do not create sibling files, package metadata, or convenience files outside them; report any genuinely required out-of-scope change instead. Use the bounded turn budget efficiently: batch independent reads, make every required product edit, run focused verification, and then return a concise evidence-backed summary. Do not ask the user questions and do not modify tests or fixtures merely to make failures disappear.",
         request.contract.task_id,
         request.contract.objective,
         request.contract.allowed_write_paths,
