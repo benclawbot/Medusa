@@ -16,7 +16,8 @@ agent, transcript, approval policy, or runtime session.
 Long polling accepts only message and callback-query updates. `TelegramUpdateCursor` advances to
 `update_id + 1` only after the caller acknowledges an update, and rejects cursor regression. This
 keeps replay and retry decisions with the daemon-owned gateway service rather than the Bot API DTO
-layer.
+layer. The cursor is exported as part of the transport API so daemon-owned polling code can retain
+and advance acknowledgement state explicitly.
 
 Flood-control responses are represented as `RetryAfter`; timeouts, connection failures, read
 failures, and server failures are explicitly classified as transient. A Telegram
