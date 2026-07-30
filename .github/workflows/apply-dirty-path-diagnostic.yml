@@ -1,0 +1,43 @@
+name: Apply dirty path diagnostic
+
+on:
+  pull_request:
+    types: [synchronize, reopened]
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    if: github.event.pull_request.head.ref == 'fix/read-only-worker-turn-budget-clean'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          ref: ${{ github.event.pull_request.head.ref }}
+          fetch-depth: 0
+      - uses: dtolnay/rust-toolchain@39b0b3842c7e8bbf6904c0bfc3d9006fdd4dc4e0
+        with:
+          components: rustfmt, clippy
+      - name: Apply diagnostic patch
+        run: git apply .medusa-patches/dirty-path-diagnostic.patch
+      - name: Format
+        run: cargo fmt --all -- --check
+      - name: Compile workers
+        run: cargo check -p medusa-workers --all-targets
+      - name: Strict workers lint
+        run: cargo clippy -p medusa-workers --all-targets -- -D warnings
+      - name: Workers tests
+        run: cargo test -p medusa-workers
+      - name: Commit validated source only
+        env:
+          HEAD_REF: ${{ github.event.pull_request.head.ref }}
+        run: |
+          rm .medusa-patches/dirty-path-diagnostic.patch
+          rm .github/workflows/apply-dirty-path-diagnostic.yml
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add crates/medusa-workers/src/lib.rs
+          git add -u .medusa-patches .github/workflows
+          git commit -m "fix(workers): report dirty repository paths"
+          git push origin HEAD:"${HEAD_REF}"
