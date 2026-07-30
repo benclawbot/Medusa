@@ -1,0 +1,728 @@
+use std::{
+    collections::BTreeSet,
+    fs::{self, File, OpenOptions},
+    io::{Read, Write},
+    path::{Path, PathBuf},
+};
+
+use medusa_core::{ErrorCategory, ErrorCode, MedusaError, MedusaResult, SessionId};
+use medusa_protocol::EventEnvelope;
+use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
+
+use super::{AgentSession, fallback_storage_root};
+use crate::evidence::verify_chain;
+
+const JOURNAL_MAGIC: &[u8; 8] = b"MDJNL002";
+const FRAME_HEADER_BYTES: usize = std::mem::size_of::<u32>() + 32;
+const MAX_FRAME_BYTES: usize = 32 * 1024 * 1024;
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum AppendDisposition {
+    Appended,
+    Replayed,
+}
+
+pub(crate) struct LoadOutcome {
+    pub session: AgentSession,
+    pub repair_snapshot: bool,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(tag = "record", rename_all = "snake_case")]
+enum JournalRecord {
+    Event { event: EventEnvelope },
+    Snapshot {
+        cursor: u64,
+        final_event_checksum: Option<String>,
+        session: Box<AgentSession>,
+    },
+}
+
+struct JournalState {
+    events: Vec<EventEnvelope>,
+    committed_snapshot: Option<AgentSession>,
+}
+
+pub(crate) fn append_event(
+    session: &AgentSession,
+    event: &EventEnvelope,
+) -> MedusaResult<AppendDisposition> {
+    verify_chain(&session.events)?;
+    event.validate()?;
+    if event.session_id != session.id {
+        return Err(persistence_error("journal event belongs to another session"));
+    }
+
+    if let Some(existing) = session
+        .events
+        .iter()
+        .find(|existing| existing.event_id == event.event_id)
+    {
+        if existing != event {
+            return Err(persistence_error(format!(
+                "event id {} was reused with conflicting content",
+                event.event_id
+            )));
+        }
+        ensure_initialized(session)?;
+        let path = journal_path(&session.repo, &session.id)?;
+        let state = read_journal(&path, &session.id, true, false)?;
+        let index = usize::try_from(event.sequence.saturating_sub(1))
+            .map_err(|_| persistence_error("event sequence is unsupported on this platform"))?;
+        if state.events.get(index) == Some(event) {
+            return Ok(AppendDisposition::Replayed);
+        }
+        return Err(persistence_error(
+            "materialized session contains an event missing from its journal",
+        ));
+    }
+
+    let expected_sequence = u64::try_from(session.events.len())
+        .unwrap_or(u64::MAX)
+        .saturating_add(1);
+    if event.sequence != expected_sequence {
+        return Err(persistence_error(format!(
+            "event sequence {} does not follow materialized cursor {}",
+            event.sequence,
+            session.events.len()
+        )));
+    }
+    let expected_previous = session.events.last().map(|previous| previous.checksum.as_str());
+    if event.previous_hash.as_deref() != expected_previous {
+        return Err(persistence_error(
+            "event previous hash does not match the materialized session",
+        ));
+    }
+
+    ensure_initialized(session)?;
+    let path = journal_path(&session.repo, &session.id)?;
+    let state = read_journal(&path, &session.id, true, false)?;
+    if state.events != session.events {
+        return Err(persistence_error(
+            "journal event prefix does not match the materialized session",
+        ));
+    }
+    append_record(&path, &JournalRecord::Event { event: event.clone() })?;
+    Ok(AppendDisposition::Appended)
+}
+
+pub(crate) fn commit_snapshot(session: &AgentSession) -> MedusaResult<()> {
+    verify_chain(&session.events)?;
+    ensure_initialized(session)?;
+    let path = journal_path(&session.repo, &session.id)?;
+    let state = read_journal(&path, &session.id, true, false)?;
+    if state.events != session.events {
+        return Err(persistence_error(
+            "cannot commit a session whose events diverge from the journal",
+        ));
+    }
+    append_record(&path, &snapshot_record(session))
+}
+
+pub(crate) fn load_or_migrate(
+    repo: &Path,
+    session_id: &SessionId,
+    snapshot: Option<AgentSession>,
+) -> MedusaResult<LoadOutcome> {
+    if let Some(snapshot) = &snapshot {
+        validate_snapshot_identity(repo, session_id, snapshot)?;
+        verify_chain(&snapshot.events)?;
+    }
+
+    let Some(path) = existing_journal_path(repo, session_id) else {
+        let snapshot = snapshot.ok_or_else(|| {
+            persistence_error(format!(
+                "session {session_id} has neither a materialized snapshot nor a journal"
+            ))
+        })?;
+        initialize_journal(&snapshot)?;
+        return Ok(LoadOutcome {
+            session: snapshot,
+            repair_snapshot: false,
+        });
+    };
+
+    let state = read_journal(&path, session_id, true, true)?;
+    let Some(committed) = state.committed_snapshot else {
+        let snapshot = snapshot.ok_or_else(|| {
+            persistence_error(format!(
+                "session {session_id} journal has no committed snapshot"
+            ))
+        })?;
+        rewrite_journal(&path, &snapshot)?;
+        return Ok(LoadOutcome {
+            session: snapshot,
+            repair_snapshot: false,
+        });
+    };
+    validate_snapshot_identity(repo, session_id, &committed)?;
+
+    let repair_snapshot = match snapshot {
+        Some(snapshot) => {
+            if snapshot.events.len() > committed.events.len()
+                || snapshot.events.as_slice() != &committed.events[..snapshot.events.len()]
+            {
+                return Err(persistence_error(
+                    "materialized snapshot diverges from the committed journal",
+                ));
+            }
+            serde_json::to_vec(&snapshot)? != serde_json::to_vec(&committed)?
+        }
+        None => true,
+    };
+    Ok(LoadOutcome {
+        session: committed,
+        repair_snapshot,
+    })
+}
+
+pub(crate) fn replay_from_cursor(
+    repo: &Path,
+    session_id: &SessionId,
+    cursor: u64,
+) -> MedusaResult<Vec<EventEnvelope>> {
+    let path = journal_path(repo, session_id)?;
+    let state = read_journal(&path, session_id, true, true)?;
+    let committed = state.committed_snapshot.ok_or_else(|| {
+        persistence_error(format!(
+            "session {session_id} journal has no committed snapshot"
+        ))
+    })?;
+    let cursor = usize::try_from(cursor)
+        .map_err(|_| persistence_error("replay cursor is unsupported on this platform"))?;
+    if cursor > committed.events.len() {
+        return Err(persistence_error(format!(
+            "replay cursor {cursor} exceeds committed event count {}",
+            committed.events.len()
+        )));
+    }
+    Ok(committed.events[cursor..].to_vec())
+}
+
+pub(crate) fn discover_session_ids(repo: &Path) -> MedusaResult<Vec<SessionId>> {
+    let mut ids = BTreeSet::new();
+    collect_journal_ids(&primary_journal_root(repo), &mut ids)?;
+    collect_journal_ids(&fallback_journal_root(repo), &mut ids)?;
+    Ok(ids.into_iter().collect())
+}
+
+fn ensure_initialized(session: &AgentSession) -> MedusaResult<()> {
+    if existing_journal_path(&session.repo, &session.id).is_some() {
+        return Ok(());
+    }
+    initialize_journal(session)
+}
+
+fn initialize_journal(session: &AgentSession) -> MedusaResult<()> {
+    verify_chain(&session.events)?;
+    let primary = primary_journal_path(&session.repo, &session.id);
+    match write_journal(&primary, session) {
+        Ok(()) => Ok(()),
+        Err(_) => {
+            let _ = fs::remove_file(&primary);
+            write_journal(&fallback_journal_path(&session.repo, &session.id), session)
+        }
+    }
+}
+
+fn rewrite_journal(path: &Path, session: &AgentSession) -> MedusaResult<()> {
+    verify_chain(&session.events)?;
+    write_journal(path, session)
+}
+
+fn write_journal(path: &Path, session: &AgentSession) -> MedusaResult<()> {
+    create_parent(path)?;
+    let temporary = path.with_extension("events.tmp");
+    let mut file = File::create(&temporary)?;
+    file.write_all(JOURNAL_MAGIC)?;
+    for event in &session.events {
+        write_record(&mut file, &JournalRecord::Event { event: event.clone() })?;
+    }
+    write_record(&mut file, &snapshot_record(session))?;
+    file.sync_all()?;
+    fs::rename(temporary, path)?;
+    Ok(())
+}
+
+fn snapshot_record(session: &AgentSession) -> JournalRecord {
+    JournalRecord::Snapshot {
+        cursor: u64::try_from(session.events.len()).unwrap_or(u64::MAX),
+        final_event_checksum: session.events.last().map(|event| event.checksum.clone()),
+        session: Box::new(session.clone()),
+    }
+}
+
+fn append_record(path: &Path, record: &JournalRecord) -> MedusaResult<()> {
+    create_parent(path)?;
+    let mut file = OpenOptions::new().append(true).open(path)?;
+    write_record(&mut file, record)?;
+    file.sync_data()?;
+    Ok(())
+}
+
+fn write_record(file: &mut File, record: &JournalRecord) -> MedusaResult<()> {
+    let payload = serde_json::to_vec(record)?;
+    if payload.is_empty() || payload.len() > MAX_FRAME_BYTES {
+        return Err(persistence_error("journal frame exceeds the supported size"));
+    }
+    let length = u32::try_from(payload.len())
+        .map_err(|_| persistence_error("journal frame length is unsupported"))?;
+    let checksum = Sha256::digest(&payload);
+    file.write_all(&length.to_be_bytes())?;
+    file.write_all(&checksum)?;
+    file.write_all(&payload)?;
+    Ok(())
+}
+
+fn read_journal(
+    path: &Path,
+    session_id: &SessionId,
+    recover_torn_tail: bool,
+    discard_uncommitted_tail: bool,
+) -> MedusaResult<JournalState> {
+    let mut bytes = Vec::new();
+    File::open(path)?.read_to_end(&mut bytes)?;
+    if bytes.len() < JOURNAL_MAGIC.len() || &bytes[..JOURNAL_MAGIC.len()] != JOURNAL_MAGIC {
+        return Err(persistence_error("journal header is missing or unsupported"));
+    }
+
+    let mut offset = JOURNAL_MAGIC.len();
+    let mut valid_end = offset;
+    let mut events = Vec::new();
+    let mut event_ids = BTreeSet::new();
+    let mut committed_snapshot = None;
+    let mut last_snapshot_end = JOURNAL_MAGIC.len();
+    let mut torn_tail = false;
+
+    while offset < bytes.len() {
+        if bytes.len() - offset < FRAME_HEADER_BYTES {
+            torn_tail = true;
+            break;
+        }
+        let length = usize::try_from(u32::from_be_bytes(
+            bytes[offset..offset + 4]
+                .try_into()
+                .map_err(|_| persistence_error("journal frame header is invalid"))?,
+        ))
+        .map_err(|_| persistence_error("journal frame length is unsupported"))?;
+        if length == 0 || length > MAX_FRAME_BYTES {
+            return Err(persistence_error("journal frame length is invalid"));
+        }
+        let checksum_start = offset + 4;
+        let payload_start = checksum_start + 32;
+        let payload_end = payload_start
+            .checked_add(length)
+            .ok_or_else(|| persistence_error("journal frame length overflowed"))?;
+        if payload_end > bytes.len() {
+            torn_tail = true;
+            break;
+        }
+        let expected_checksum = &bytes[checksum_start..payload_start];
+        let payload = &bytes[payload_start..payload_end];
+        let actual_checksum = Sha256::digest(payload);
+        if &actual_checksum[..] != expected_checksum {
+            return Err(persistence_error("journal frame checksum mismatch"));
+        }
+        let record: JournalRecord = serde_json::from_slice(payload)?;
+        match record {
+            JournalRecord::Event { event } => {
+                validate_event(session_id, &events, &event, &mut event_ids)?;
+                events.push(event);
+            }
+            JournalRecord::Snapshot {
+                cursor,
+                final_event_checksum,
+                session,
+            } => {
+                validate_committed_snapshot(
+                    session_id,
+                    &events,
+                    cursor,
+                    final_event_checksum.as_deref(),
+                    &session,
+                )?;
+                committed_snapshot = Some(*session);
+                last_snapshot_end = payload_end;
+            }
+        }
+        offset = payload_end;
+        valid_end = offset;
+    }
+
+    if torn_tail {
+        if !recover_torn_tail {
+            return Err(persistence_error("journal has a torn final frame"));
+        }
+        truncate(path, valid_end)?;
+    }
+    if discard_uncommitted_tail && committed_snapshot.is_some() && valid_end > last_snapshot_end {
+        truncate(path, last_snapshot_end)?;
+        events.truncate(
+            committed_snapshot
+                .as_ref()
+                .map_or(0, |session| session.events.len()),
+        );
+    }
+
+    Ok(JournalState {
+        events,
+        committed_snapshot,
+    })
+}
+
+fn validate_event(
+    session_id: &SessionId,
+    prior_events: &[EventEnvelope],
+    event: &EventEnvelope,
+    event_ids: &mut BTreeSet<String>,
+) -> MedusaResult<()> {
+    event.validate()?;
+    if &event.session_id != session_id {
+        return Err(persistence_error("journal contains an event for another session"));
+    }
+    let expected_sequence = u64::try_from(prior_events.len())
+        .unwrap_or(u64::MAX)
+        .saturating_add(1);
+    if event.sequence != expected_sequence {
+        return Err(persistence_error(format!(
+            "journal event sequence {} is not {expected_sequence}",
+            event.sequence
+        )));
+    }
+    let expected_previous = prior_events.last().map(|event| event.checksum.as_str());
+    if event.previous_hash.as_deref() != expected_previous {
+        return Err(persistence_error("journal event previous hash chain is invalid"));
+    }
+    if !event_ids.insert(event.event_id.to_string()) {
+        return Err(persistence_error(format!(
+            "journal event id {} appears more than once",
+            event.event_id
+        )));
+    }
+    Ok(())
+}
+
+fn validate_committed_snapshot(
+    session_id: &SessionId,
+    events: &[EventEnvelope],
+    cursor: u64,
+    final_event_checksum: Option<&str>,
+    session: &AgentSession,
+) -> MedusaResult<()> {
+    validate_snapshot_identity(&session.repo, session_id, session)?;
+    verify_chain(&session.events)?;
+    let expected_cursor = u64::try_from(events.len()).unwrap_or(u64::MAX);
+    if cursor != expected_cursor || session.events.len() != events.len() {
+        return Err(persistence_error(
+            "journal snapshot cursor does not match its event prefix",
+        ));
+    }
+    if session.events != events {
+        return Err(persistence_error(
+            "journal snapshot events do not match preceding event records",
+        ));
+    }
+    let expected_checksum = events.last().map(|event| event.checksum.as_str());
+    if final_event_checksum != expected_checksum {
+        return Err(persistence_error(
+            "journal snapshot checksum does not match its event prefix",
+        ));
+    }
+    Ok(())
+}
+
+fn validate_snapshot_identity(
+    repo: &Path,
+    session_id: &SessionId,
+    session: &AgentSession,
+) -> MedusaResult<()> {
+    if &session.id != session_id {
+        return Err(persistence_error("journal snapshot belongs to another session"));
+    }
+    if session.repo != repo {
+        return Err(persistence_error(format!(
+            "journal snapshot repository {} does not match {}",
+            session.repo.display(),
+            repo.display()
+        )));
+    }
+    Ok(())
+}
+
+fn truncate(path: &Path, length: usize) -> MedusaResult<()> {
+    let length = u64::try_from(length)
+        .map_err(|_| persistence_error("journal length is unsupported"))?;
+    let file = OpenOptions::new().write(true).open(path)?;
+    file.set_len(length)?;
+    file.sync_data()?;
+    Ok(())
+}
+
+fn collect_journal_ids(root: &Path, ids: &mut BTreeSet<SessionId>) -> MedusaResult<()> {
+    let entries = match fs::read_dir(root) {
+        Ok(entries) => entries,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(error) => return Err(error.into()),
+    };
+    for entry in entries {
+        let entry = entry?;
+        if !entry.file_type()?.is_file() {
+            continue;
+        }
+        let path = entry.path();
+        if path.extension().and_then(|extension| extension.to_str()) != Some("events") {
+            continue;
+        }
+        let Some(stem) = path.file_stem().and_then(|stem| stem.to_str()) else {
+            continue;
+        };
+        if let Ok(id) = SessionId::parse(stem) {
+            ids.insert(id);
+        }
+    }
+    Ok(())
+}
+
+fn journal_path(repo: &Path, session_id: &SessionId) -> MedusaResult<PathBuf> {
+    existing_journal_path(repo, session_id).ok_or_else(|| {
+        persistence_error(format!("session {session_id} journal does not exist"))
+    })
+}
+
+fn existing_journal_path(repo: &Path, session_id: &SessionId) -> Option<PathBuf> {
+    let primary = primary_journal_path(repo, session_id);
+    if primary.is_file() {
+        return Some(primary);
+    }
+    let fallback = fallback_journal_path(repo, session_id);
+    fallback.is_file().then_some(fallback)
+}
+
+fn primary_journal_root(repo: &Path) -> PathBuf {
+    repo.join(".medusa/journals")
+}
+
+fn fallback_journal_root(repo: &Path) -> PathBuf {
+    fallback_storage_root(repo, "journals")
+}
+
+fn primary_journal_path(repo: &Path, session_id: &SessionId) -> PathBuf {
+    primary_journal_root(repo).join(format!("{session_id}.events"))
+}
+
+fn fallback_journal_path(repo: &Path, session_id: &SessionId) -> PathBuf {
+    fallback_journal_root(repo).join(format!("{session_id}.events"))
+}
+
+fn create_parent(path: &Path) -> MedusaResult<()> {
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent)?;
+    }
+    Ok(())
+}
+
+fn persistence_error(message: impl Into<String>) -> MedusaError {
+    MedusaError::new(
+        ErrorCode::PersistenceFailed,
+        ErrorCategory::Persistence,
+        message,
+    )
+}
+
+#[cfg(test)]
+mod tests {
+    use medusa_core::CorrelationId;
+    use medusa_protocol::{Actor, EventPayload};
+    use medusa_provider::{Message, MessageBlock, Role};
+    use time::OffsetDateTime;
+
+    use super::*;
+
+    fn session(repo: &Path) -> AgentSession {
+        AgentSession {
+            id: SessionId::new(),
+            objective: "journal test".to_owned(),
+            repo: repo.to_path_buf(),
+            created_at: OffsetDateTime::UNIX_EPOCH,
+            updated_at: OffsetDateTime::UNIX_EPOCH,
+            completed: false,
+            turn: 0,
+            plan: Vec::new(),
+            pending_question: None,
+            messages: vec![Message {
+                role: Role::User,
+                content: vec![MessageBlock::Text {
+                    text: "journal test".to_owned(),
+                }],
+            }],
+            events: Vec::new(),
+            evidence: Vec::new(),
+            tool_artifacts: Vec::new(),
+            world_model: None,
+            approval_grants: Vec::new(),
+            approval_receipts: Vec::new(),
+            rollback_receipts: Vec::new(),
+        }
+    }
+
+    fn next_event(session: &AgentSession, payload: EventPayload) -> EventEnvelope {
+        EventEnvelope::new(
+            u64::try_from(session.events.len())
+                .unwrap_or(u64::MAX)
+                .saturating_add(1),
+            session.id.clone(),
+            Actor::Coordinator,
+            CorrelationId::new(),
+            payload,
+            session.events.last().map(|event| event.checksum.clone()),
+            OffsetDateTime::UNIX_EPOCH,
+        )
+        .expect("event")
+    }
+
+    fn append_and_materialize(session: &mut AgentSession, event: EventEnvelope) {
+        assert_eq!(
+            append_event(session, &event).expect("append"),
+            AppendDisposition::Appended
+        );
+        session.events.push(event);
+    }
+
+    #[test]
+    fn committed_snapshot_repairs_stale_json_state() {
+        let directory = tempfile::tempdir().expect("repository");
+        let mut current = session(directory.path());
+        let created = next_event(
+            &current,
+            EventPayload::SessionCreated {
+                objective: current.objective.clone(),
+            },
+        );
+        append_and_materialize(&mut current, created);
+        commit_snapshot(&current).expect("first commit");
+        let stale = current.clone();
+
+        current.turn = 2;
+        current.objective = "updated objective".to_owned();
+        let updated = next_event(
+            &current,
+            EventPayload::GoalUpdated {
+                objective: current.objective.clone(),
+            },
+        );
+        append_and_materialize(&mut current, updated);
+        commit_snapshot(&current).expect("second commit");
+
+        let outcome = load_or_migrate(directory.path(), &current.id, Some(stale))
+            .expect("authoritative load");
+        assert!(outcome.repair_snapshot);
+        assert_eq!(outcome.session.turn, 2);
+        assert_eq!(outcome.session.objective, "updated objective");
+        assert_eq!(outcome.session.events.len(), 2);
+    }
+
+    #[test]
+    fn complete_but_uncommitted_event_tail_is_discarded() {
+        let directory = tempfile::tempdir().expect("repository");
+        let mut committed = session(directory.path());
+        let created = next_event(
+            &committed,
+            EventPayload::SessionCreated {
+                objective: committed.objective.clone(),
+            },
+        );
+        append_and_materialize(&mut committed, created);
+        commit_snapshot(&committed).expect("commit");
+
+        let pending = next_event(&committed, EventPayload::SessionResumed);
+        assert_eq!(
+            append_event(&committed, &pending).expect("write-ahead event"),
+            AppendDisposition::Appended
+        );
+
+        let outcome = load_or_migrate(
+            directory.path(),
+            &committed.id,
+            Some(committed.clone()),
+        )
+        .expect("recover");
+        assert_eq!(outcome.session.events, committed.events);
+        assert!(
+            replay_from_cursor(directory.path(), &committed.id, 1)
+                .expect("replay")
+                .is_empty()
+        );
+        assert_eq!(
+            append_event(&committed, &pending).expect("append after recovery"),
+            AppendDisposition::Appended
+        );
+    }
+
+    #[test]
+    fn torn_final_frame_is_truncated_to_the_last_commit() {
+        let directory = tempfile::tempdir().expect("repository");
+        let mut committed = session(directory.path());
+        let created = next_event(
+            &committed,
+            EventPayload::SessionCreated {
+                objective: committed.objective.clone(),
+            },
+        );
+        append_and_materialize(&mut committed, created);
+        commit_snapshot(&committed).expect("commit");
+        let path = journal_path(directory.path(), &committed.id).expect("journal path");
+        let valid_length = fs::metadata(&path).expect("metadata").len();
+        OpenOptions::new()
+            .append(true)
+            .open(&path)
+            .expect("journal")
+            .write_all(&12_u32.to_be_bytes())
+            .expect("partial frame");
+
+        let outcome = load_or_migrate(
+            directory.path(),
+            &committed.id,
+            Some(committed.clone()),
+        )
+        .expect("recover");
+        assert_eq!(outcome.session.events, committed.events);
+        assert_eq!(fs::metadata(path).expect("metadata").len(), valid_length);
+    }
+
+    #[test]
+    fn checksum_corruption_fails_closed() {
+        let directory = tempfile::tempdir().expect("repository");
+        let committed = session(directory.path());
+        initialize_journal(&committed).expect("journal");
+        let path = journal_path(directory.path(), &committed.id).expect("journal path");
+        let mut bytes = fs::read(&path).expect("journal");
+        let final_byte = bytes.last_mut().expect("payload byte");
+        *final_byte ^= 1;
+        fs::write(&path, bytes).expect("tamper");
+
+        assert!(
+            load_or_migrate(directory.path(), &committed.id, Some(committed)).is_err()
+        );
+    }
+
+    #[test]
+    fn replay_cursor_returns_only_committed_events() {
+        let directory = tempfile::tempdir().expect("repository");
+        let mut committed = session(directory.path());
+        for payload in [
+            EventPayload::SessionCreated {
+                objective: committed.objective.clone(),
+            },
+            EventPayload::SessionResumed,
+        ] {
+            let event = next_event(&committed, payload);
+            append_and_materialize(&mut committed, event);
+        }
+        commit_snapshot(&committed).expect("commit");
+
+        let replay = replay_from_cursor(directory.path(), &committed.id, 1).expect("replay");
+        assert_eq!(replay, vec![committed.events[1].clone()]);
+        assert!(replay_from_cursor(directory.path(), &committed.id, 3).is_err());
+    }
+}
