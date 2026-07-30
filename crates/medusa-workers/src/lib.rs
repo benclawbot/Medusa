@@ -387,9 +387,34 @@ impl WorkerManager {
     /// Removes untracked per-session runtime state from an isolated worktree.
     ///
     /// Agent sessions persist under `.medusa`; those files are execution evidence, not product
-    /// changes and must never enter a worker commit. Tracked `.medusa` files remain untouched and
-    /// are still subject to ordinary scope validation.
-    pub fn discard_untracked_runtime_state(&self, worker: &Worker) -> MedusaResult<()> {
+    /// changes and must never enter a worker commit. Base-tracked `.medusa` files remain untouched
+    /// and are still subject to ordinary scope validation.
+    pub fn discard_untracked_runtime_state(
+        &self,
+        worker: &Worker,
+        base_commit: &str,
+    ) -> MedusaResult<()> {
+        if base_commit.trim().is_empty() {
+            return Err(invalid("worker base commit cannot be empty"));
+        }
+        let added_runtime_paths = git_nul_paths(
+            &worker.worktree,
+            &[
+                "diff",
+                "--name-only",
+                "--diff-filter=A",
+                "-z",
+                base_commit,
+                "--",
+                ".medusa",
+            ],
+        )?;
+        for path in added_runtime_paths {
+            run_git(
+                &worker.worktree,
+                &["rm", "-f", "--ignore-unmatch", "--", &path],
+            )?;
+        }
         run_git(&worker.worktree, &["clean", "-fdx", "--", ".medusa"])
     }
 
@@ -806,9 +831,21 @@ mod tests {
             "runtime output\n",
         )
         .expect("runtime artifact");
+        fs::write(
+            worker
+                .worktree
+                .join(".medusa/artifacts/fs_read_committed.txt"),
+            "committed runtime output\n",
+        )
+        .expect("committed runtime artifact");
+        git(
+            &worker.worktree,
+            &["add", "-f", ".medusa/artifacts/fs_read_committed.txt"],
+        );
+        git(&worker.worktree, &["commit", "-m", "worker checkpoint"]);
 
         manager
-            .discard_untracked_runtime_state(&worker)
+            .discard_untracked_runtime_state(&worker, &base)
             .expect("discard runtime state");
 
         assert!(worker.worktree.join(".medusa/policy.json").is_file());
