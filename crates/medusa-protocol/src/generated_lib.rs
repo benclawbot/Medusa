@@ -2,6 +2,7 @@
 mod original;
 
 pub use original::*;
+pub mod frontend;
 
 pub mod supervision {
     use serde::{Deserialize, Serialize};
