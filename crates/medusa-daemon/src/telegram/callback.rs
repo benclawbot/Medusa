@@ -107,7 +107,7 @@ impl CallbackStore {
         }
         let record = self
             .records
-            .get_mut(nonce)
+            .get(nonce)
             .ok_or(TelegramGatewayError::InvalidCallback)?;
         if record.user_id != identity.user_id
             || record.chat_id != identity.chat_id
@@ -118,10 +118,9 @@ impl CallbackStore {
         if record.consumed_at.is_some() {
             return Err(TelegramGatewayError::CallbackAlreadyResolved);
         }
-        if record.expires_at < now {
+        if record.expires_at <= now {
             return Err(TelegramGatewayError::CallbackExpired);
         }
-        record.consumed_at = Some(now);
         let resolved = ResolvedCallback {
             nonce: record.nonce.clone(),
             session_id: record.session_id.clone(),
@@ -135,17 +134,28 @@ impl CallbackStore {
             idempotency_key: format!("telegram-callback:{}", resolved.nonce),
             frontend: FrontendKind::Telegram,
             client_id: client_id(identity),
-            session_id: Some(resolved.session_id),
-            turn_id: resolved.turn_id,
+            session_id: Some(resolved.session_id.clone()),
+            turn_id: resolved.turn_id.clone(),
             timestamp: now,
             command: FrontendCommand::ResolveApproval {
-                approval_id: resolved.approval_id,
+                approval_id: resolved.approval_id.clone(),
                 decision: resolved.decision,
             },
         };
         envelope
             .validate()
             .map_err(|error| TelegramGatewayError::Protocol(error.to_owned()))?;
+        for record in self.records.values_mut() {
+            if record.user_id == identity.user_id
+                && record.chat_id == identity.chat_id
+                && record.topic_id == identity.topic_id
+                && record.session_id == resolved.session_id
+                && record.turn_id == resolved.turn_id
+                && record.approval_id == resolved.approval_id
+            {
+                record.consumed_at = Some(now);
+            }
+        }
         Ok(envelope)
     }
 
@@ -247,6 +257,10 @@ mod tests {
         ));
         assert!(matches!(
             store.resolve(&identity(), &buttons[0].callback_data, now),
+            Err(TelegramGatewayError::CallbackAlreadyResolved)
+        ));
+        assert!(matches!(
+            store.resolve(&identity(), &buttons[1].callback_data, now),
             Err(TelegramGatewayError::CallbackAlreadyResolved)
         ));
     }

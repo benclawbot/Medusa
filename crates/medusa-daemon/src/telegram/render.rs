@@ -5,6 +5,7 @@ use medusa_protocol::frontend::{
     PresentationLifecycle,
 };
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 use time::{Duration, OffsetDateTime};
 
 use super::{
@@ -93,6 +94,12 @@ pub enum TelegramAction {
     },
 }
 
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+struct RenderedEvent {
+    event_id: String,
+    fingerprint: String,
+}
+
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct TelegramRenderer {
     config: TelegramDisplayConfig,
@@ -101,7 +108,7 @@ pub struct TelegramRenderer {
     preview_chunk_count: usize,
     last_edit_at: Option<OffsetDateTime>,
     last_flushed_chars: usize,
-    cursor_events: BTreeMap<u64, String>,
+    cursor_events: BTreeMap<u64, RenderedEvent>,
     active: bool,
 }
 
@@ -141,7 +148,8 @@ impl TelegramRenderer {
         envelope
             .validate()
             .map_err(|error| TelegramGatewayError::Protocol(error.to_owned()))?;
-        if self.already_rendered(envelope)? {
+        let fingerprint = event_fingerprint(envelope)?;
+        if self.already_rendered(envelope, &fingerprint)? {
             return Ok(Vec::new());
         }
 
@@ -166,9 +174,16 @@ impl TelegramRenderer {
                 ));
             }
             FrontendEvent::AssistantTextDelta { text } => {
+                let previous_len = self.preview.len();
                 self.preview.push_str(text);
                 if self.should_flush(now) {
-                    actions.extend(self.flush_preview(true, now)?);
+                    match self.flush_preview(true, now) {
+                        Ok(flushed) => actions.extend(flushed),
+                        Err(error) => {
+                            self.preview.truncate(previous_len);
+                            return Err(error);
+                        }
+                    }
                 }
             }
             FrontendEvent::AssistantInterim { text } if self.config.interim_assistant_messages => {
@@ -427,15 +442,17 @@ impl TelegramRenderer {
             | FrontendEvent::AssistantInterim { .. }
             | FrontendEvent::Progress { .. } => {}
         }
+        self.record_rendered(envelope, fingerprint);
         Ok(actions)
     }
 
     fn already_rendered(
-        &mut self,
+        &self,
         envelope: &FrontendEventEnvelope,
+        fingerprint: &str,
     ) -> Result<bool, TelegramGatewayError> {
         if let Some(existing) = self.cursor_events.get(&envelope.cursor) {
-            if existing == &envelope.event_id {
+            if existing.event_id == envelope.event_id && existing.fingerprint == fingerprint {
                 return Ok(true);
             }
             return Err(TelegramGatewayError::CursorConflict(envelope.cursor));
@@ -447,8 +464,17 @@ impl TelegramRenderer {
         {
             return Err(TelegramGatewayError::StaleCursor(envelope.cursor));
         }
-        self.cursor_events
-            .insert(envelope.cursor, envelope.event_id.clone());
+        Ok(false)
+    }
+
+    fn record_rendered(&mut self, envelope: &FrontendEventEnvelope, fingerprint: String) {
+        self.cursor_events.insert(
+            envelope.cursor,
+            RenderedEvent {
+                event_id: envelope.event_id.clone(),
+                fingerprint,
+            },
+        );
         while self.cursor_events.len() > MAX_REPLAY_RECORDS {
             let Some(first) = self
                 .cursor_events
@@ -459,7 +485,6 @@ impl TelegramRenderer {
             };
             self.cursor_events.remove(&first);
         }
-        Ok(false)
     }
 
     fn should_flush(&self, now: OffsetDateTime) -> bool {
@@ -532,6 +557,12 @@ impl TelegramRenderer {
             disable_link_preview: self.config.disable_link_previews,
         }
     }
+}
+
+fn event_fingerprint(envelope: &FrontendEventEnvelope) -> Result<String, TelegramGatewayError> {
+    let encoded = serde_json::to_vec(envelope)
+        .map_err(|error| TelegramGatewayError::Protocol(error.to_string()))?;
+    Ok(hex::encode(Sha256::digest(encoded)))
 }
 
 fn preview_slot(index: usize) -> Result<TelegramMessageSlot, TelegramGatewayError> {
@@ -641,6 +672,13 @@ mod tests {
         conflict.event_id = "other-event".to_owned();
         assert!(matches!(
             renderer.render(&conflict, conflict.timestamp),
+            Err(TelegramGatewayError::CursorConflict(1))
+        ));
+
+        let mut altered = started.clone();
+        altered.event = FrontendEvent::SubmissionAccepted;
+        assert!(matches!(
+            renderer.render(&altered, altered.timestamp),
             Err(TelegramGatewayError::CursorConflict(1))
         ));
     }
