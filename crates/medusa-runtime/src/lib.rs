@@ -14,9 +14,9 @@ use medusa_agent::{
     AgentEngine, AgentPlanStep, AgentQuestion, AgentSession, StepOutcome, TurnUsage,
     compact_session, record_session_event, update_session_objective,
 };
-use medusa_protocol::{Actor, EventPayload};
 use medusa_capabilities::CapabilityRegistry;
 use medusa_config::{Config, Mode};
+use medusa_protocol::{Actor, EventPayload};
 use medusa_provider::{ConfiguredProvider, ModelProvider};
 
 use crate::{
