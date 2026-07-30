@@ -25,9 +25,42 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          cat > /tmp/durable-journal-chunks.sha256 <<'EOF'
+          4a373043311755882f0860cf578bfa8e2dd647ec9a1e5811562a28b2d00d3941  .github/materialize-durable-journal/patch.000
+          8669b45864ad33dc51dc6067e43e64a671b2e51c69ae98fd7cf887423ec4ba37  .github/materialize-durable-journal/patch.001
+          aef5d4f797815b31e58f64c3e0589162d450b4822a9419251c55154c561ce930  .github/materialize-durable-journal/patch.002
+          5102218ce0997661925da5bfd4d54fa3ccf4861f21a1fadc49a1d505c57c5ae2  .github/materialize-durable-journal/patch.003
+          43a941184ef0e32779ab52fe1d8ed16e674a8e98c144425fa2766ba723151418  .github/materialize-durable-journal/patch.004
+          cfedc7275dc1997c3abfb48839136af74060264c0b742be14317445ee3a2f3cc  .github/materialize-durable-journal/patch.005
+          61a1de1abd1ddff5b9637f21af593dee5571abd55dce5fc4fd0047269d2eea51  .github/materialize-durable-journal/patch.006
+          bfddbc718f2c7c54e8738b3dbf681985f0843e0bcaab52cd1cd9286251b9ebdf  .github/materialize-durable-journal/patch.007
+          462bc7d5a5ae91a36941588d58bda56cf596d01a80c3a0a9d86bd8f8e4ab909d  .github/materialize-durable-journal/patch.008
+          35bcc3168a0bacd6acb0bd2c911c028b2b1801d2fa926aa32b15214cacea6b39  .github/materialize-durable-journal/patch.009
+          263e0384cbcd39a482b790db31b614db5c4756f7105b1544a87e53708cc9e7d2  .github/materialize-durable-journal/patch.010
+          01588e69b1177eefd9c32bd56031a82596d81aa7b01d6c4d2a7a03c999721aa4  .github/materialize-durable-journal/patch.011
+          1e143f82397593738b1ffccaf677ffc1b6892bec1a90cd4694c5a848ac741c20  .github/materialize-durable-journal/patch.012
+          4642baf40189573ca9209ef45d283cec9eeaf77215801b09a37303fe2b8e14e2  .github/materialize-durable-journal/patch.013
+          d7c7fcfef3439c3603c53db9bc26510328be0e4162f317467b349de5c03f5d1a  .github/materialize-durable-journal/patch.014
+          e1822fc72af741097b47ec606904cf7c1a9000a8b2bae5fc6c3443d2daf8006e  .github/materialize-durable-journal/patch.015
+          1655dcd7a59b477a7494727a28cbc554e343d2afcbb1b81a325c2d6d9b5811a1  .github/materialize-durable-journal/patch.016
+          99a8e470334df82d9f7d3a4ecc6557000008251cec9aae1f82d37b18fee86b22  .github/materialize-durable-journal/patch.017
+          ebe28642931d88980b947dce69ec6efd7ed11d450660c5df4d4641e6b96728cc  .github/materialize-durable-journal/patch.018
+          6f47fee16c747da1dbc12a782c35951c9e02a03711339c1c2a6d6eb690dad73b  .github/materialize-durable-journal/patch.019
+          8472dbf15d7072cf8656c3bb4cadbefa9394a3f470c9d36a594818b0da73b242  .github/materialize-durable-journal/patch.020
+          a94ec82f7242a37002c056b20d0f1c4d9fed93c4c1a571f8765d5613e6074387  .github/materialize-durable-journal/patch.021
+          5d22280a98a21b1ed6d927fbde6549807d21450e6f23356159bd92302a1b3ec0  .github/materialize-durable-journal/patch.022
+          63389eac7638b4e715e0396f085bce6e3cff8ab1cd966bf354935ad24772b30c  .github/materialize-durable-journal/patch.023
+          37f545060e7fc0346ffbca21397ee71414c32e4c9292f4897bae4f46178b8788  .github/materialize-durable-journal/patch.024
+          b8309972f314745d4c24b69a5f6fcc18bceb03ad300b972f10e65f4e60adf722  .github/materialize-durable-journal/patch.025
+          13e0d5701d76bd3f9aef03a906715d763c04a4256f8ebc313cf7c4eb807298e3  .github/materialize-durable-journal/patch.026
+          44adc4b7d0f03d58f4c28639af5a6cba6ad347d90432a448bb2e4aadcaaf9785  .github/materialize-durable-journal/patch.027
+          f7d08af9b9ec0cdde80aeeec01f0d900defad145a1c9ff1a8e64f17662b6764b  .github/materialize-durable-journal/patch.028
+          179b09a373eb8f5c9c4e0eac215a7ab719880ad85e8ac49aa0c6e7fa6e69cd96  .github/materialize-durable-journal/patch.029
+          93481a716a82850071cff27401fe4ab46e11cda41474d5ac05c73340e1c1e588  .github/materialize-durable-journal/patch.030
+          EOF
+          sha256sum --check /tmp/durable-journal-chunks.sha256
           : > /tmp/durable-journal.patch
           for chunk in .github/materialize-durable-journal/patch.???; do
-            echo "Decoding ${chunk}"
             base64 --decode "${chunk}" >> /tmp/durable-journal.patch
           done
           echo "2b1f40226d443a2d2d82461159e61abb22293ce1ef31fea896a0cb8f3de66674  /tmp/durable-journal.patch" | sha256sum --check -
