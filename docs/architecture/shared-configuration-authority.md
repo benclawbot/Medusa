@@ -52,6 +52,8 @@ Running `medusa config` remains equivalent to the interactive initialization flo
 
 The validation output identifies whether the profile is configured, the resolved provider/model protocol, and whether the existing OpenAI OAuth route is selected. Validation does not perform billable model work and does not reveal credential material.
 
+The focused implementation gate formats the workspace and runs tests and Clippy for both `medusa-config` and `medusa-cli` before the source commit is published. Repository-wide CI remains the authoritative cross-platform acceptance gate.
+
 ## Follow-up surfaces
 
 Profiles, generic `set`/`unset`, secret storage, TUI `/config`, desktop Settings, Telegram `/config`, doctor integration, configuration revisions, and cross-frontend change events remain follow-up slices. They must build on this shared store rather than reintroducing frontend-owned configuration state.
