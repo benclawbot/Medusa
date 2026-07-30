@@ -26,7 +26,24 @@ jobs:
         run: |
           set -euo pipefail
           test "$(git hash-object .github/materialize-journal-resume/change.patch)" = "4df29a7cae48ba39369f4830374609ae3fc8f69b"
-          git apply --index .github/materialize-journal-resume/change.patch
+          git apply --index --exclude=docs/architecture/durable-session-journal.md .github/materialize-journal-resume/change.patch
+          python3 - <<'PY'
+          from pathlib import Path
+
+          path = Path("docs/architecture/durable-session-journal.md")
+          text = path.read_text()
+          needle = "4. atomically rewrite and flush the compatibility session JSON.\n"
+          addition = (
+              needle
+              + "\nRuntime restart recovery uses this same boundary when interrupted plan steps "
+              + "are marked failed; it never updates only the compatibility JSON.\n"
+          )
+          if needle not in text:
+              raise SystemExit("durable journal persistence boundary not found")
+          if "Runtime restart recovery uses this same boundary" not in text:
+              text = text.replace(needle, addition, 1)
+          path.write_text(text)
+          PY
           rm -rf .github/materialize-journal-resume
           rm -f .github/workflows/materialize-journal-backed-resume.yml
           cargo fmt --all
