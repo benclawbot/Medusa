@@ -719,7 +719,7 @@ mod tests {
         *final_byte ^= 1;
         fs::write(&path, bytes).expect("tamper");
 
-        assert!(load_or_migrate(directory.path(), &committed.id, Some(committed)).is_err());
+        assert!(load_or_migrate(directory.path(), &committed.id, Some(committed.clone())).is_err());
     }
 
     #[test]
