@@ -30,6 +30,7 @@ pub mod attachment;
 pub mod commands;
 mod config_command;
 mod error;
+pub mod execution_history;
 mod learning_retrieval;
 pub mod learning_review;
 mod multi_agent_coordinator;
@@ -47,6 +48,9 @@ pub mod voice;
 pub mod voice_agent_bridge;
 
 pub use error::RuntimeError;
+pub use execution_history::{
+    RuntimeContinuityHealth, RuntimeExecutionHealth, RuntimeHistoricalState,
+};
 pub use medusa_agent::{
     AgentPlanStep as RuntimePlanStep, AgentPlanStepStatus, AgentQuestionItem, AgentQuestionOption,
     UsageProvenance,

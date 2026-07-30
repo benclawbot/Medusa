@@ -106,6 +106,7 @@ impl RuntimeController {
         mut state: RuntimeState,
     ) -> Result<Self, RuntimeError> {
         let mut session = load_session(&repo, session_id).map_err(RuntimeError::agent)?;
+        crate::execution_history::verify_resumed_session(&repo, &session)?;
         validate_resumed_session(&repo, &session)?;
         let interrupted_steps = recover_interrupted_session(&repo, &mut session)?;
         let restored_followups = restore_queued_followups(&session)?;
