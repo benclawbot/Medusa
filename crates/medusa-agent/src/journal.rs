@@ -179,6 +179,7 @@ pub(crate) fn append_event(
     Ok(AppendDisposition::Appended)
 }
 
+#[allow(dead_code)]
 pub(crate) fn commit_snapshot(session: &AgentSession) -> MedusaResult<AgentSession> {
     let _guard = lock_journal();
     commit_snapshot_locked(session)
