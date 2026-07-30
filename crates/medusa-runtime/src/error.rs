@@ -157,7 +157,7 @@ fn latest_session_id(repo: &Path) -> Result<String, RuntimeError> {
 }
 
 fn recover_interrupted_session(
-    repo: &Path,
+    _repo: &Path,
     session: &mut AgentSession,
 ) -> Result<Vec<String>, RuntimeError> {
     let mut interrupted = Vec::new();
