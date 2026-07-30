@@ -96,4 +96,6 @@ Every shipped `RuntimeEvent` has an explicit durability classification:
 
 The central runtime dispatcher persists controller-owned canonical events before forwarding them. If serialization or journal persistence fails, the authoritative event is not published as though it succeeded. The failed authoritative event is suppressed; only an explicit persistence failure notification is forwarded. Agent-owned events use the same append-and-commit boundary before observers can derive frontend updates.
 
+The low-level `append_event` and `AppendDisposition` path remains retained for compatibility and explicit idempotency/conflict handling; production event creation now uses the committed append transaction.
+
 This slice remains additive. It does not remove or consolidate `medusa-execution-checkpoint`, `medusa-execution-replay`, `medusa-time-travel`, `medusa-session-continuity`, or any compatibility path. Production checkpoint materialization and deterministic state replay remain the next dependent phases after this authoritative stream is validated.
