@@ -22,6 +22,9 @@ Flood-control responses are represented as `RetryAfter`; timeouts, connection fa
 failures, and server failures are explicitly classified as transient. A Telegram
 `message is not modified` response is treated as a successful no-op edit.
 
+Outbound Bot API request models support round-trip deserialization in tests while preserving the
+exact Telegram wire spellings used for parse modes and update payloads.
+
 ## Runtime ownership
 
 Decoded updates must be mapped through the existing Telegram authorization and frontend-command
