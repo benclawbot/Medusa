@@ -225,15 +225,15 @@ pub(crate) fn load(repo: &Path, session: &str) -> MedusaResult<AgentSession> {
 }
 
 pub(crate) fn persist(session: &AgentSession) -> MedusaResult<()> {
-    journal::commit_snapshot(session)?;
-    persist_compatibility_snapshot(session)?;
-    if session.events.last().is_some_and(|event| {
+    let committed = journal::commit_snapshot(session)?;
+    persist_compatibility_snapshot(&committed)?;
+    if committed.events.last().is_some_and(|event| {
         matches!(
             &event.payload,
             medusa_protocol::EventPayload::ModelRequestStarted { .. }
         )
     }) {
-        if let Err(error) = record_loaded_skills(session) {
+        if let Err(error) = record_loaded_skills(&committed) {
             record_nonfatal(
                 &session.repo,
                 Some(&session.id),
@@ -243,7 +243,7 @@ pub(crate) fn persist(session: &AgentSession) -> MedusaResult<()> {
             );
         }
     }
-    if let Err(error) = recall::persist_completed_session(session) {
+    if let Err(error) = recall::persist_completed_session(&committed) {
         record_nonfatal(
             &session.repo,
             Some(&session.id),
@@ -252,7 +252,7 @@ pub(crate) fn persist(session: &AgentSession) -> MedusaResult<()> {
             &error.to_string(),
         );
     }
-    if let Err(error) = completed_learning::process(session) {
+    if let Err(error) = completed_learning::process(&committed) {
         record_nonfatal(
             &session.repo,
             Some(&session.id),

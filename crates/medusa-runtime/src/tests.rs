@@ -1,10 +1,12 @@
-use std::{fs, sync::mpsc};
+use std::{fs, path::Path, sync::mpsc, thread};
 
 use medusa_agent::{AgentPlanStep, AgentPlanStepStatus, AgentUpdate};
-use medusa_protocol::EventPayload;
-use medusa_provider::{ImageSource, MessageBlock};
+use medusa_core::{CorrelationId, SessionId};
+use medusa_protocol::{Actor, EventEnvelope, EventPayload};
+use medusa_provider::{ImageSource, Message, MessageBlock, Role};
 use serde_json::json;
 use tempfile::tempdir;
+use time::OffsetDateTime;
 
 use crate::prompt::{FileAttachment, ImageAttachment, PromptAttachment};
 
@@ -470,18 +472,22 @@ fn internal_plan_transport_is_hidden_and_assistant_text_is_forwarded_verbatim() 
 fn busy_submission_is_queued_as_a_follow_up_without_rejection() {
     let submission = Arc::new(Mutex::new(SubmissionState {
         busy: true,
-        followups: VecDeque::new(),
+        ..SubmissionState::default()
     }));
     {
         let mut state = submission.lock().expect("submission state");
-        state.followups.push_back(PromptDraft {
-            text: "also update the documentation".to_owned(),
-            ..PromptDraft::default()
+        state.followups.push_back(QueuedFollowup {
+            command_id: "followup-1".to_owned(),
+            draft: PromptDraft {
+                text: "also update the documentation".to_owned(),
+                ..PromptDraft::default()
+            },
+            durably_recorded: true,
         });
     }
     let queued = take_followups(&submission);
     assert_eq!(queued.len(), 1);
-    assert_eq!(queued[0].text, "also update the documentation");
+    assert_eq!(queued[0].draft.text, "also update the documentation");
     assert!(submission.lock().expect("submission state").busy);
 }
 
@@ -489,8 +495,182 @@ fn busy_submission_is_queued_as_a_follow_up_without_rejection() {
 fn runtime_atomically_reopens_input_only_when_followups_are_empty() {
     let submission = Arc::new(Mutex::new(SubmissionState {
         busy: true,
-        followups: VecDeque::new(),
+        ..SubmissionState::default()
     }));
     assert!(finish_or_take_followups(&submission).is_empty());
     assert!(!submission.lock().expect("submission state").busy);
+}
+
+
+fn durable_runtime_session(repo: &Path) -> medusa_agent::AgentSession {
+    medusa_agent::AgentSession {
+        id: SessionId::new(),
+        objective: "runtime event coverage".to_owned(),
+        repo: repo.to_path_buf(),
+        created_at: OffsetDateTime::UNIX_EPOCH,
+        updated_at: OffsetDateTime::UNIX_EPOCH,
+        completed: false,
+        turn: 0,
+        plan: Vec::new(),
+        pending_question: None,
+        messages: vec![Message {
+            role: Role::User,
+            content: vec![MessageBlock::Text {
+                text: "runtime event coverage".to_owned(),
+            }],
+        }],
+        events: Vec::new(),
+        evidence: Vec::new(),
+        tool_artifacts: Vec::new(),
+        world_model: None,
+        approval_grants: Vec::new(),
+        approval_receipts: Vec::new(),
+        rollback_receipts: Vec::new(),
+    }
+}
+
+fn push_runtime_event(session: &mut medusa_agent::AgentSession, payload: EventPayload) {
+    let event = EventEnvelope::new(
+        u64::try_from(session.events.len())
+            .unwrap_or(u64::MAX)
+            .saturating_add(1),
+        session.id.clone(),
+        Actor::Coordinator,
+        CorrelationId::new(),
+        payload,
+        session.events.last().map(|event| event.checksum.clone()),
+        OffsetDateTime::UNIX_EPOCH,
+    )
+    .expect("event");
+    session.events.push(event);
+}
+
+#[test]
+fn queued_followups_are_rebuilt_from_canonical_events() {
+    let directory = tempdir().expect("temporary directory");
+    let mut session = durable_runtime_session(directory.path());
+    let draft = PromptDraft {
+        text: "also update the documentation".to_owned(),
+        ..PromptDraft::default()
+    };
+    push_runtime_event(
+        &mut session,
+        EventPayload::UserFollowupQueued {
+            command_id: "followup-1".to_owned(),
+            prompt: serde_json::to_value(&draft).expect("serialize prompt"),
+        },
+    );
+
+    let restored = restore_queued_followups(&session).expect("restore queued follow-up");
+    assert_eq!(restored.len(), 1);
+    assert_eq!(restored[0].command_id, "followup-1");
+    assert_eq!(restored[0].draft, draft);
+    assert!(restored[0].durably_recorded);
+
+    push_runtime_event(
+        &mut session,
+        EventPayload::UserFollowupDequeued {
+            command_id: "followup-1".to_owned(),
+            text: "also update the documentation".to_owned(),
+        },
+    );
+    assert!(
+        restore_queued_followups(&session)
+            .expect("restore after dequeue")
+            .is_empty()
+    );
+}
+
+#[test]
+fn terminal_controller_events_clear_recovered_followups() {
+    let directory = tempdir().expect("temporary directory");
+    let mut session = durable_runtime_session(directory.path());
+    push_runtime_event(
+        &mut session,
+        EventPayload::UserFollowupQueued {
+            command_id: "followup-1".to_owned(),
+            prompt: serde_json::to_value(PromptDraft {
+                text: "queued".to_owned(),
+                ..PromptDraft::default()
+            })
+            .expect("serialize prompt"),
+        },
+    );
+    push_runtime_event(
+        &mut session,
+        EventPayload::RuntimeFailed {
+            message: "terminal failure".to_owned(),
+        },
+    );
+    assert!(
+        restore_queued_followups(&session)
+            .expect("restore after failure")
+            .is_empty()
+    );
+}
+
+#[test]
+fn controller_event_dispatch_commits_before_frontend_publication() {
+    let directory = tempdir().expect("temporary directory");
+    let mut session = durable_runtime_session(directory.path());
+    let objective = session.objective.clone();
+    medusa_agent::record_session_event(
+        &mut session,
+        Actor::Coordinator,
+        EventPayload::SessionCreated { objective },
+    )
+    .expect("persist session");
+    let session_id = session.id.to_string();
+    let submission = Arc::new(Mutex::new(SubmissionState {
+        active_session_id: Some(session_id.clone()),
+        ..SubmissionState::default()
+    }));
+    let (runtime_tx, runtime_rx) = mpsc::channel();
+    let (frontend_tx, frontend_rx) = mpsc::channel();
+    let repo = directory.path().to_path_buf();
+    let dispatch_submission = Arc::clone(&submission);
+    let dispatcher = thread::spawn(move || {
+        dispatch_runtime_events(&repo, &dispatch_submission, runtime_rx, &frontend_tx);
+    });
+
+    runtime_tx
+        .send(RuntimeEvent::Team(TeamSnapshot::default()))
+        .expect("send runtime event");
+    assert!(matches!(
+        frontend_rx.recv().expect("frontend event"),
+        RuntimeEvent::Team(_)
+    ));
+    let persisted = medusa_agent::session_browser::load_session(directory.path(), &session_id)
+        .expect("load committed session");
+    assert!(matches!(
+        persisted.events.last().map(|event| &event.payload),
+        Some(EventPayload::TeamStateChanged { .. })
+    ));
+
+    drop(runtime_tx);
+    dispatcher.join().expect("dispatcher joins");
+}
+
+#[test]
+fn runtime_event_durability_classification_is_explicit() {
+    assert!(matches!(
+        RuntimeEvent::Started.durability(),
+        RuntimeEventDurability::PresentationOnly(_)
+    ));
+    assert!(matches!(
+        RuntimeEvent::AssistantText("answer".to_owned()).durability(),
+        RuntimeEventDurability::CanonicalJournal("assistant_message_recorded")
+    ));
+    assert!(matches!(
+        RuntimeEvent::TurnFinished.durability(),
+        RuntimeEventDurability::CanonicalJournal("runtime_turn_finished")
+    ));
+    assert!(matches!(
+        RuntimeEvent::Cancelled.durability(),
+        RuntimeEventDurability::SessionBoundCanonical { .. }
+    ));
+    assert!(matches!(
+        RuntimeEvent::Failed("startup".to_owned()).durability(),
+        RuntimeEventDurability::SessionBoundCanonical { .. }
+    ));
 }
