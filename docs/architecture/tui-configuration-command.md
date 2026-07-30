@@ -38,6 +38,8 @@ Configuration changes preserve process-only state such as the current effort set
 
 `/config validate` performs no provider request and therefore cannot incur model usage. It validates the same layered configuration that the runtime would use for the next turn.
 
+Focused regression coverage proves that invalid effective mutations do not replace the prior profile, profile selection refreshes the live model while preserving process-only state, project model overrides retain higher precedence, and status output excludes process-scoped credentials. Repository-wide CI remains the authoritative cross-platform acceptance gate.
+
 ## Follow-up boundary
 
 This slice does not add desktop settings, Telegram callbacks, secret-store login/logout, configuration revision conflicts, or cross-frontend change subscriptions. Those surfaces must consume the same shared catalog and effective-config validation APIs.
