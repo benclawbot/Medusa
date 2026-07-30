@@ -94,5 +94,5 @@ addition = '''
         assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 1);
     }
 '''
-test_source = test_source[:-1] + addition + "}\n"
+test_source += addition + "\n"
 tests.write_text(test_source)
