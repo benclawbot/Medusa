@@ -4,6 +4,9 @@ on:
   push:
     branches:
       - agent/fix-continuity-resume-lints
+  pull_request:
+    branches:
+      - main
 
 permissions:
   contents: write
@@ -93,6 +96,7 @@ jobs:
           Path('.github/workflows/agent-fix-continuity-resume-lints.yml').unlink()
       - name: Format and validate focused changes
         run: |
+          cargo fmt --all
           cargo fmt --all -- --check
           cargo test --locked -p medusa-runtime execution_history
           cargo clippy --locked -p medusa-browser-client -p medusa-browserd --all-targets -- -D warnings
