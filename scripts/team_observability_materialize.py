@@ -67,6 +67,11 @@ source = remove_exact(
     "    ('    cancel: &Arc<AtomicBool>,\\n    events: &Sender<RuntimeEvent>,\\n    executor: F,\\n', '    cancel: &Arc<AtomicBool>,\\n    control: &TeamControlPlane,\\n    events: &Sender<RuntimeEvent>,\\n    executor: F,\\n'),\n",
     2,
 )
+source = remove_exact(
+    source,
+    "    ('        if cancel.load(Ordering::SeqCst) {', '        if cancel.load(Ordering::SeqCst) || control.is_cancelled(IMPLEMENTER_ID) {'),\n",
+    1,
+)
 exec(compile(source, "team-observability-materializer.py", "exec"), {})
 
 edit_once(
@@ -125,6 +130,15 @@ where
     F: Fn(ImplementationRequest) -> Result<WorkerRun, String>,
 {
     validate_preflight(plan, preflight)?;
+""",
+)
+edit_once(
+    "crates/medusa-runtime/src/mutating_worker_coordinator.rs",
+    """    for attempt in 1..=MAX_ATTEMPTS {
+        if cancel.load(Ordering::SeqCst) {
+""",
+    """    for attempt in 1..=MAX_ATTEMPTS {
+        if cancel.load(Ordering::SeqCst) || control.is_cancelled(IMPLEMENTER_ID) {
 """,
 )
 
