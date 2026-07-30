@@ -11,8 +11,8 @@ use std::{
 };
 
 use medusa_agent::{
-    AgentEngine, AgentExecutionPolicy, AgentUpdate, StepOutcome,
-    TeamMemberContext, TeamRole, TeamRuntime, WorkerExecutionController, targeted_verification,
+    AgentEngine, AgentExecutionPolicy, AgentUpdate, StepOutcome, TeamMemberContext, TeamRole,
+    TeamRuntime, WorkerExecutionController, targeted_verification,
 };
 use medusa_config::{Config, Mode};
 use medusa_multi_agent_scheduler::{Task, TaskState, Worker as ScheduledWorker};
@@ -23,17 +23,17 @@ use serde_json::json;
 
 use crate::{
     RuntimeActivity, RuntimeActivityKind, RuntimeEvent,
-    team_control::{TeamControlPlane, TeamWorkerRegistration},
     multi_agent_coordinator::CoordinatorEvidence,
     production_orchestrator::{
         AgentContract, ContextPacket, ProductionExecutionPlan, context_for_task,
     },
+    team_control::{TeamControlPlane, TeamWorkerRegistration},
 };
 
-#[path = "mutating_worker_coordinator_support.rs"]
-mod support;
 #[path = "mutating_worker_failure.rs"]
 mod failure;
+#[path = "mutating_worker_coordinator_support.rs"]
+mod support;
 
 use failure::record_attempt_failure;
 use support::{
@@ -139,17 +139,9 @@ pub fn run_implementation(
     reporting: (&TeamControlPlane, &Sender<RuntimeEvent>),
 ) -> Result<ImplementationEvidence, String> {
     let (control, events) = reporting;
-    coordinate_with_control(
-        repo,
-        plan,
-        preflight,
-        cancel,
-        control,
-        events,
-        |request| {
-            execute_production_implementer(config, session_api_key.clone(), cancel, request)
-        },
-    )
+    coordinate_with_control(repo, plan, preflight, cancel, control, events, |request| {
+        execute_production_implementer(config, session_api_key.clone(), cancel, request)
+    })
 }
 
 #[cfg(test)]
@@ -308,7 +300,9 @@ where
         return Err("mutating worker execution was cancelled before resource creation".to_owned());
     }
     manager.require_clean().map_err(|error| error.to_string())?;
-    let base_head = manager.repository_head().map_err(|error| error.to_string())?;
+    let base_head = manager
+        .repository_head()
+        .map_err(|error| error.to_string())?;
     let worker_label = implementation_worker_label(plan, &contract);
     let worker = manager
         .open_or_create_worker(&worker_label, IMPLEMENTER_ID)
@@ -375,7 +369,11 @@ fn execute_attempts<F>(
 where
     F: Fn(ImplementationRequest) -> Result<WorkerRun, String>,
 {
-    if manager.repository_head().map_err(|error| error.to_string())? != base_head {
+    if manager
+        .repository_head()
+        .map_err(|error| error.to_string())?
+        != base_head
+    {
         if let Some(worker) = initial_worker.as_ref() {
             let _ = manager.cleanup(std::slice::from_ref(worker));
         }
@@ -763,7 +761,6 @@ where
     Err(last_error.unwrap_or_else(|| "mutating worker execution exhausted attempts".to_owned()))
 }
 
-
 #[allow(clippy::too_many_arguments)]
 fn integrate_prepared(
     manager: &WorkerManager,
@@ -810,10 +807,16 @@ fn integrate_prepared(
             branch: state.worker.branch.clone(),
             commit: commit.to_owned(),
             base_head: state.base_head.clone(),
-            integrated_head: manager.repository_head().map_err(|error| error.to_string())?,
+            integrated_head: manager
+                .repository_head()
+                .map_err(|error| error.to_string())?,
             changed_paths: state.changed_paths.clone(),
         })
-    } else if manager.repository_head().map_err(|error| error.to_string())? != state.base_head {
+    } else if manager
+        .repository_head()
+        .map_err(|error| error.to_string())?
+        != state.base_head
+    {
         Err("primary repository changed before prepared worker integration".to_owned())
     } else {
         manager
@@ -827,13 +830,8 @@ fn integrate_prepared(
         Ok(integration) => integration,
         Err(error) => {
             if needs_completion {
-                let _ = controller.fail(
-                    task_id,
-                    &state.worker.id,
-                    state.lease_epoch,
-                    &error,
-                    false,
-                );
+                let _ =
+                    controller.fail(task_id, &state.worker.id, state.lease_epoch, &error, false);
             }
             let _ = team.finish_member(&state.worker.id, true);
             let cleanup = manager.cleanup(std::slice::from_ref(&state.worker));
@@ -854,17 +852,18 @@ fn integrate_prepared(
     state.integration = Some(integration.clone());
     write_atomic(state_path, &state)?;
     team.finish_member(&state.worker.id, false)?;
-    team.member_context(&state.worker.id)?.execute(
-        "team_send_message",
-        &json!({
-            "recipient":"lead",
-            "body":format!(
-                "{} integrated commit {} with paths {:?}",
-                task_id, integration.commit, integration.changed_paths
-            )
-        }),
-    )
-    .map_err(|error| error.to_string())?;
+    team.member_context(&state.worker.id)?
+        .execute(
+            "team_send_message",
+            &json!({
+                "recipient":"lead",
+                "body":format!(
+                    "{} integrated commit {} with paths {:?}",
+                    task_id, integration.commit, integration.changed_paths
+                )
+            }),
+        )
+        .map_err(|error| error.to_string())?;
     if let Ok(snapshot) = control.integrated(
         &state.worker.id,
         format!("integrated commit {}", integration.commit),
@@ -901,14 +900,13 @@ fn execute_production_implementer(
         .map_err(|error| error.to_string())?;
     let policy = AgentExecutionPolicy::for_team_role(TeamRole::Implementer)
         .with_allowed_write_paths(request.contract.allowed_write_paths.clone());
-    let engine = AgentEngine::new_with_cancellation(provider, worker_config.clone(), Arc::clone(cancel))
-        .with_execution_policy(policy)
-        .with_team_context(request.team_context.clone());
+    let engine =
+        AgentEngine::new_with_cancellation(provider, worker_config.clone(), Arc::clone(cancel))
+            .with_execution_policy(policy)
+            .with_team_context(request.team_context.clone());
     let objective = format!(
         "Implement delegated task `{}` inside this isolated Git worktree. Objective: {}. Stay within allowed write paths {:?}. These paths are exact contract boundaries: do not create sibling files, package metadata, or convenience files outside them; report any genuinely required out-of-scope change instead. Use the bounded turn budget efficiently: batch independent reads, make every required product edit, run focused verification, and then return a concise evidence-backed summary. Do not ask the user questions and do not modify tests or fixtures merely to make failures disappear.",
-        request.contract.task_id,
-        request.contract.objective,
-        request.contract.allowed_write_paths,
+        request.contract.task_id, request.contract.objective, request.contract.allowed_write_paths,
     );
     let mut session = engine
         .create_session(&request.worker.worktree, objective)
@@ -988,7 +986,10 @@ fn execute_production_implementer(
     }
     let summary = summaries.join("\n").trim().to_owned();
     if summary.is_empty() {
-        return Err(format!("worker {} returned no implementation evidence", request.worker.id));
+        return Err(format!(
+            "worker {} returned no implementation evidence",
+            request.worker.id
+        ));
     }
     Ok(WorkerRun {
         session_id: session.id.to_string(),
@@ -996,7 +997,6 @@ fn execute_production_implementer(
         summary,
     })
 }
-
 
 #[cfg(test)]
 #[path = "mutating_worker_coordinator_tests.rs"]

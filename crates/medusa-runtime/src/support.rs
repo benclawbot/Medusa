@@ -51,9 +51,10 @@ pub(super) fn configure_model(
     events: &Sender<RuntimeEvent>,
 ) -> Result<(), RuntimeError> {
     if !is_supported_provider(&configuration.provider) {
-        return Err(RuntimeError::InvalidCommand(
-            format!("supported providers are {}", SUPPORTED_PROVIDERS.join(", ")),
-        ));
+        return Err(RuntimeError::InvalidCommand(format!(
+            "supported providers are {}",
+            SUPPORTED_PROVIDERS.join(", ")
+        )));
     }
     state.config.model.protocol = protocol_for_provider(&configuration.provider).to_owned();
     state.config.model.provider = configuration.provider;
@@ -148,7 +149,10 @@ pub(super) fn model_configuration_details(state: &RuntimeState) -> Vec<String> {
         format!("provider: {}", state.config.model.provider),
         format!("model: {}", state.config.model.name),
         credential.to_owned(),
-        format!("set provider: /model provider <{}>", SUPPORTED_PROVIDERS.join("|")),
+        format!(
+            "set provider: /model provider <{}>",
+            SUPPORTED_PROVIDERS.join("|")
+        ),
         "set model: /model <model-name>".to_owned(),
         "set session key: /model key <api-key>".to_owned(),
     ]
@@ -687,7 +691,10 @@ mod tests {
             Some("MEDUSA_API_KEY")
         );
         assert_eq!(credential_environment("openai"), Some("OPENAI_API_KEY"));
-        assert_eq!(credential_environment("openai-compatible"), Some("MEDUSA_API_KEY"));
+        assert_eq!(
+            credential_environment("openai-compatible"),
+            Some("MEDUSA_API_KEY")
+        );
         assert_eq!(credential_environment("openai-oauth"), None);
         assert_eq!(credential_environment("omniroute"), None);
         assert_eq!(credential_environment("local"), None);

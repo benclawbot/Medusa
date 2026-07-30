@@ -32,21 +32,16 @@ fn command_processing_does_not_wait_for_capability_discovery() {
     let (release_tx, release_rx) = mpsc::channel();
 
     let worker = thread::spawn(move || {
-        worker_loop_with_discovery(
-            state,
-            command_rx,
-            event_tx,
-            cancel,
-            submission,
-            move |_| {
-                discovery_started_tx.send(()).expect("signal discovery start");
-                release_rx.recv().expect("release discovery");
-                RuntimeEvent::Notice {
-                    title: "Runtime capabilities".to_owned(),
-                    details: vec!["ready".to_owned()],
-                }
-            },
-        );
+        worker_loop_with_discovery(state, command_rx, event_tx, cancel, submission, move |_| {
+            discovery_started_tx
+                .send(())
+                .expect("signal discovery start");
+            release_rx.recv().expect("release discovery");
+            RuntimeEvent::Notice {
+                title: "Runtime capabilities".to_owned(),
+                details: vec!["ready".to_owned()],
+            }
+        });
     });
 
     assert!(matches!(

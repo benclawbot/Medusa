@@ -32,11 +32,11 @@ use sha2::{Digest, Sha256};
 
 use crate::{
     RuntimeActivity, RuntimeActivityKind, RuntimeEvent,
-    team_control::{TeamControlPlane, TeamWorkerRegistration},
     production_orchestrator::{
         AgentContract, AgentRole, ContextPacket, ProductionExecutionPlan, context_for_task,
         validate_subagent_result,
     },
+    team_control::{TeamControlPlane, TeamWorkerRegistration},
 };
 
 const LEASE_TIMEOUT_MS: u64 = 5 * 60 * 1_000;
@@ -172,26 +172,25 @@ where
     let evidence_path = root.join("preflight-evidence.json");
     let execution_key = execution_id(&plan.fingerprint, &repository_fingerprint);
     if evidence_path.is_file() {
-        let restored: CoordinatorEvidence = serde_json::from_slice(
-            &fs::read(&evidence_path).map_err(|error| error.to_string())?,
-        )
-        .map_err(|error| error.to_string())?;
+        let restored: CoordinatorEvidence =
+            serde_json::from_slice(&fs::read(&evidence_path).map_err(|error| error.to_string())?)
+                .map_err(|error| error.to_string())?;
         validate_evidence(plan, &repository_fingerprint, &evidence_path, &restored)?;
-        let _ = events.send(RuntimeEvent::Team(control.begin(
-            execution_key,
-            restored
-                .workers
-                .iter()
-                .map(|worker| TeamWorkerRegistration {
-                    worker_id: worker.worker_id.clone(),
-                    role: format!("{:?}", worker.role).to_ascii_lowercase(),
-                    task_id: worker.task_id.clone(),
-                }),
-        )));
+        let _ = events.send(RuntimeEvent::Team(
+            control.begin(
+                execution_key,
+                restored
+                    .workers
+                    .iter()
+                    .map(|worker| TeamWorkerRegistration {
+                        worker_id: worker.worker_id.clone(),
+                        role: format!("{:?}", worker.role).to_ascii_lowercase(),
+                        task_id: worker.task_id.clone(),
+                    }),
+            ),
+        ));
         for worker in &restored.workers {
-            if let Ok(snapshot) =
-                control.complete(&worker.worker_id, "durable evidence restored")
-            {
+            if let Ok(snapshot) = control.complete(&worker.worker_id, "durable evidence restored") {
                 let _ = events.send(RuntimeEvent::Team(snapshot));
             }
         }
@@ -203,7 +202,9 @@ where
 
     let contracts = preflight_contracts(plan);
     if contracts.len() < 2 {
-        return Err("coordinated execution requires at least two independent preflight tasks".into());
+        return Err(
+            "coordinated execution requires at least two independent preflight tasks".into(),
+        );
     }
     let _ = events.send(RuntimeEvent::Team(control.begin(
         execution_key.clone(),
@@ -289,7 +290,12 @@ where
             .into_iter()
             .find(|view| view.task.id == worker.task_id)
             .map(|view| view.state)
-            .ok_or_else(|| format!("persisted evidence references unknown task {}", worker.task_id))?;
+            .ok_or_else(|| {
+                format!(
+                    "persisted evidence references unknown task {}",
+                    worker.task_id
+                )
+            })?;
         match state {
             TaskState::Running { worker_id, .. } if worker_id == worker.worker_id => {
                 controller.accept_persisted_completion(
@@ -318,7 +324,9 @@ where
     let now = now_ms()?;
     let assignments = controller.dispatch(now, LEASE_TIMEOUT_MS)?;
     if assignments.len() + evidence.len() != contracts.len() {
-        return Err("preflight scheduler and durable evidence do not cover every independent task".into());
+        return Err(
+            "preflight scheduler and durable evidence do not cover every independent task".into(),
+        );
     }
     let _ = events.send(RuntimeEvent::Activity(RuntimeActivity {
         id: Some(plan.fingerprint.clone()),
@@ -369,11 +377,7 @@ where
                 let task_id = request.contract.task_id.clone();
                 let worker_id = request.worker_id.clone();
                 let executor = &executor;
-                (
-                    task_id,
-                    worker_id,
-                    scope.spawn(move || executor(request)),
-                )
+                (task_id, worker_id, scope.spawn(move || executor(request)))
             })
             .collect::<Vec<_>>();
         handles
@@ -396,13 +400,7 @@ where
         let mut result = match result {
             Ok(result) => result,
             Err(error) => {
-                controller.fail(
-                    &task_id,
-                    &worker_id,
-                    assignment.lease_epoch,
-                    &error,
-                    true,
-                )?;
+                controller.fail(&task_id, &worker_id, assignment.lease_epoch, &error, true)?;
                 team.finish_member(&worker_id, true)?;
                 if let Ok(snapshot) = control.fail(&worker_id, error.clone()) {
                     let _ = events.send(RuntimeEvent::Team(snapshot));
@@ -441,13 +439,7 @@ where
             .map_err(str::to_owned)
         };
         if let Err(error) = validation {
-            controller.fail(
-                &task_id,
-                &worker_id,
-                assignment.lease_epoch,
-                &error,
-                true,
-            )?;
+            controller.fail(&task_id, &worker_id, assignment.lease_epoch, &error, true)?;
             team.finish_member(&worker_id, true)?;
             if let Ok(snapshot) = control.fail(&worker_id, error.clone()) {
                 let _ = events.send(RuntimeEvent::Team(snapshot));
@@ -465,13 +457,7 @@ where
             &result.worker_id,
             result.lease_epoch,
         ) {
-            controller.fail(
-                &task_id,
-                &worker_id,
-                assignment.lease_epoch,
-                &error,
-                true,
-            )?;
+            controller.fail(&task_id, &worker_id, assignment.lease_epoch, &error, true)?;
             team.finish_member(&worker_id, true)?;
             if let Ok(snapshot) = control.fail(&worker_id, error.clone()) {
                 let _ = events.send(RuntimeEvent::Team(snapshot));
@@ -484,11 +470,12 @@ where
         if let Ok(snapshot) = control.complete(&result.worker_id, "evidence accepted") {
             let _ = events.send(RuntimeEvent::Team(snapshot));
         }
-        team.member_context(&result.worker_id)?.execute(
-            "team_send_message",
-            &json!({"recipient":"lead","body":result.summary.clone()}),
-        )
-        .map_err(|error| error.to_string())?;
+        team.member_context(&result.worker_id)?
+            .execute(
+                "team_send_message",
+                &json!({"recipient":"lead","body":result.summary.clone()}),
+            )
+            .map_err(|error| error.to_string())?;
         evidence.push(result);
     }
     if !failures.is_empty() {
@@ -534,16 +521,14 @@ fn execute_production_worker(
 ) -> Result<WorkerEvidence, String> {
     let mut worker_config = config.clone();
     worker_config.agent.mode = Mode::ReadOnly;
-    worker_config.agent.max_turns = worker_config
-        .agent
-        .max_turns
-        .clamp(1, WORKER_TURN_LIMIT);
+    worker_config.agent.max_turns = worker_config.agent.max_turns.clamp(1, WORKER_TURN_LIMIT);
     let provider = ConfiguredProvider::manager_from_config(&worker_config, session_api_key)
         .map_err(|error| error.to_string())?;
     let role = team_role_for(request.contract.role);
-    let engine = AgentEngine::new_with_cancellation(provider, worker_config.clone(), Arc::clone(cancel))
-        .with_execution_policy(AgentExecutionPolicy::for_team_role(role))
-        .with_team_context(request.team_context.clone());
+    let engine =
+        AgentEngine::new_with_cancellation(provider, worker_config.clone(), Arc::clone(cancel))
+            .with_execution_policy(AgentExecutionPolicy::for_team_role(role))
+            .with_team_context(request.team_context.clone());
     let objective = format!(
         "Complete delegated read-only task `{}`. Objective: {}. Return a concise evidence-backed report; do not ask the user questions and do not modify repository state.",
         request.contract.task_id, request.contract.objective
@@ -686,7 +671,10 @@ fn load_worker_evidence(directory: &Path) -> Result<Vec<WorkerEvidence>, String>
         .map_err(|error| error.to_string())?
         .filter_map(Result::ok)
         .map(|entry| entry.path())
-        .filter(|path| path.extension().is_some_and(|extension| extension == "json"))
+        .filter(|path| {
+            path.extension()
+                .is_some_and(|extension| extension == "json")
+        })
         .collect::<Vec<_>>();
     paths.sort();
     paths
@@ -722,7 +710,10 @@ fn validate_worker_evidence(
         || evidence.lease_epoch == 0
         || evidence.session_id.trim().is_empty()
     {
-        return Err(format!("evidence identity is invalid for {}", evidence.task_id));
+        return Err(format!(
+            "evidence identity is invalid for {}",
+            evidence.task_id
+        ));
     }
     validate_subagent_result(
         &packet,
@@ -733,11 +724,7 @@ fn validate_worker_evidence(
     .map_err(str::to_owned)
 }
 
-fn execution_root(
-    repo: &Path,
-    plan_fingerprint: &str,
-    repository_fingerprint: &str,
-) -> PathBuf {
+fn execution_root(repo: &Path, plan_fingerprint: &str, repository_fingerprint: &str) -> PathBuf {
     repo.join(".medusa")
         .join("executions")
         .join(execution_id(plan_fingerprint, repository_fingerprint))
@@ -783,9 +770,8 @@ fn repository_fingerprint(repo: &Path) -> Result<String, String> {
             continue;
         }
         let path = repo.join(&relative);
-        let metadata = fs::symlink_metadata(&path).map_err(|error| {
-            format!("failed to inspect repository path {normalized}: {error}")
-        })?;
+        let metadata = fs::symlink_metadata(&path)
+            .map_err(|error| format!("failed to inspect repository path {normalized}: {error}"))?;
         digest.update(normalized.as_bytes());
         digest.update([0]);
         if metadata.file_type().is_symlink() {
@@ -809,7 +795,13 @@ fn repository_fingerprint(repo: &Path) -> Result<String, String> {
 
 fn git_repository_paths(repo: &Path) -> Result<Vec<PathBuf>, String> {
     let output = Command::new("git")
-        .args(["ls-files", "-z", "--cached", "--others", "--exclude-standard"])
+        .args([
+            "ls-files",
+            "-z",
+            "--cached",
+            "--others",
+            "--exclude-standard",
+        ])
         .current_dir(repo)
         .output()
         .map_err(|error| error.to_string())?;

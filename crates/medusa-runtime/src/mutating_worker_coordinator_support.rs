@@ -19,7 +19,9 @@ use super::{
     DurableImplementationState, IMPLEMENTER_ID, ImplementationEvidence, ImplementationStatus,
 };
 
-pub(super) fn implementation_contract(plan: &ProductionExecutionPlan) -> Result<AgentContract, String> {
+pub(super) fn implementation_contract(
+    plan: &ProductionExecutionPlan,
+) -> Result<AgentContract, String> {
     let mut contracts = plan
         .contracts
         .iter()
@@ -73,7 +75,10 @@ pub(super) fn dependency_outputs(
     Ok(outputs)
 }
 
-pub(super) fn validate_changed_paths(contract: &AgentContract, paths: &[String]) -> Result<(), String> {
+pub(super) fn validate_changed_paths(
+    contract: &AgentContract,
+    paths: &[String],
+) -> Result<(), String> {
     if paths.is_empty() {
         return Err("mutating worker completed without repository changes".to_owned());
     }
@@ -119,7 +124,9 @@ pub(super) fn validate_preflight(
         || preflight.repository_fingerprint.trim().is_empty()
         || preflight.workers.len() < 2
     {
-        return Err("implementation preflight evidence does not match the execution plan".to_owned());
+        return Err(
+            "implementation preflight evidence does not match the execution plan".to_owned(),
+        );
     }
     Ok(())
 }

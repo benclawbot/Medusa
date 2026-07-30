@@ -103,15 +103,18 @@ impl TeamControlPlane {
             state.active = true;
         }
         for registration in registrations {
-            state.workers.entry(registration.worker_id).or_insert(WorkerState {
-                role: registration.role,
-                task_id: registration.task_id,
-                lifecycle: TeamWorkerLifecycle::Pending,
-                session_id: None,
-                turn: 0,
-                last_update: "waiting for dispatch".to_owned(),
-                instructions: VecDeque::new(),
-            });
+            state
+                .workers
+                .entry(registration.worker_id)
+                .or_insert(WorkerState {
+                    role: registration.role,
+                    task_id: registration.task_id,
+                    lifecycle: TeamWorkerLifecycle::Pending,
+                    session_id: None,
+                    turn: 0,
+                    last_update: "waiting for dispatch".to_owned(),
+                    instructions: VecDeque::new(),
+                });
         }
         bump(&mut state);
         snapshot(&state)
@@ -396,8 +399,12 @@ mod tests {
     #[test]
     fn steering_is_bounded_and_consumed_once() {
         let control = control();
-        control.start("worker-a", Some("session-a"), "running").unwrap();
-        control.steer("worker-a", "inspect the failing test").unwrap();
+        control
+            .start("worker-a", Some("session-a"), "running")
+            .unwrap();
+        control
+            .steer("worker-a", "inspect the failing test")
+            .unwrap();
         assert_eq!(
             control.take_instruction("worker-a").unwrap().as_deref(),
             Some("inspect the failing test")
@@ -444,7 +451,9 @@ mod tests {
     #[test]
     fn progress_cannot_overwrite_a_cancellation_request() {
         let control = control();
-        control.start("worker-a", Some("session-a"), "running").unwrap();
+        control
+            .start("worker-a", Some("session-a"), "running")
+            .unwrap();
         control.stop_worker("worker-a").unwrap();
         control
             .progress("worker-a", Some("session-a"), 2, "late progress")
@@ -452,10 +461,7 @@ mod tests {
         control.retrying("worker-a", "late retry").unwrap();
 
         let worker = &control.snapshot().workers[0];
-        assert_eq!(
-            worker.lifecycle,
-            TeamWorkerLifecycle::CancellationRequested
-        );
+        assert_eq!(worker.lifecycle, TeamWorkerLifecycle::CancellationRequested);
         assert_eq!(worker.last_update, "worker cancellation requested");
         assert_eq!(worker.turn, 2);
     }

@@ -44,10 +44,14 @@ pub(super) fn record_attempt_failure(
         )
     };
     if let Err(controller_error) = controller_result {
-        secondary.push(format!("durable task failure recording failed: {controller_error}"));
+        secondary.push(format!(
+            "durable task failure recording failed: {controller_error}"
+        ));
     }
     if let Err(team_error) = team.finish_member(&assignment.worker_id, true) {
-        secondary.push(format!("team lifecycle failure recording failed: {team_error}"));
+        secondary.push(format!(
+            "team lifecycle failure recording failed: {team_error}"
+        ));
     }
     if let Err(cleanup_error) = manager.cleanup(std::slice::from_ref(worker)) {
         secondary.push(format!("isolated resource cleanup failed: {cleanup_error}"));

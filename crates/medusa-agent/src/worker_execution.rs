@@ -2,7 +2,7 @@
 //!
 //! The static/dynamic scheduler remains responsible for deterministic task ordering,
 //! while this controller owns worker identities, lease epochs, progress, cancellation,
-//! restart persistence, and handoff into the transaction pipeline.
+//! restart persistence, and durable completion evidence.
 
 use std::{
     collections::{BTreeMap, BTreeSet},

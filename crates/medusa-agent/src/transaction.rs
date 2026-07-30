@@ -16,6 +16,17 @@ pub use mutation_provenance::{MutationContext, MutationKind, ScopeValidation};
 use mutation_provenance::{build_record, load as load_provenance, persist as persist_provenance};
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct WorkerMutationProposal {
+    pub worker_id: String,
+    pub task_id: String,
+    pub lease_epoch: u64,
+    pub path: String,
+    pub expected_fingerprint: String,
+    pub content: String,
+    pub priority: u32,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct FileMutation {
     pub path: String,
     pub content: String,
@@ -608,11 +619,3 @@ mod tests {
         );
     }
 }
-
-#[allow(dead_code)]
-#[path = "transaction_pipeline.rs"]
-mod safety_pipeline;
-#[allow(unused_imports)]
-pub use safety_pipeline::{
-    SafeTransactionOutcome, TransactionEvidence, WorkerMutationProposal, execute_safe_transaction,
-};

@@ -89,10 +89,16 @@ pub enum RealtimeVoiceEvent {
         to: RealtimeVoiceState,
     },
     AvailabilityChanged(VoiceAvailability),
-    InputAudioQueued { frames: usize },
-    OutputAudioQueued { frames: usize },
+    InputAudioQueued {
+        frames: usize,
+    },
+    OutputAudioQueued {
+        frames: usize,
+    },
     Transcript(TranscriptUpdate),
-    VoiceActivity { active: bool },
+    VoiceActivity {
+        active: bool,
+    },
     Interrupted,
     TransportStatus {
         connected: bool,
@@ -338,10 +344,7 @@ impl RealtimeVoiceSession {
         self.output_audio.len()
     }
 
-    pub fn update_transcript(
-        &mut self,
-        update: TranscriptUpdate,
-    ) -> Result<(), VoiceSessionError> {
+    pub fn update_transcript(&mut self, update: TranscriptUpdate) -> Result<(), VoiceSessionError> {
         self.ensure_open()?;
         let key = (update.turn_id.clone(), update.speaker);
         self.transcripts.insert(key.clone(), update.text.clone());
@@ -371,11 +374,7 @@ impl RealtimeVoiceSession {
     }
 
     #[must_use]
-    pub fn transcript(
-        &self,
-        turn_id: &str,
-        speaker: TranscriptSpeaker,
-    ) -> Option<&str> {
+    pub fn transcript(&self, turn_id: &str, speaker: TranscriptSpeaker) -> Option<&str> {
         self.transcripts
             .get(&(turn_id.to_owned(), speaker))
             .map(String::as_str)
@@ -420,8 +419,13 @@ impl RealtimeVoiceSession {
         self.output_audio.clear();
         let from = self.state;
         self.state = RealtimeVoiceState::Closed;
-        self.events
-            .retain(|event| !matches!(event, RealtimeVoiceEvent::InputAudioQueued { .. } | RealtimeVoiceEvent::OutputAudioQueued { .. }));
+        self.events.retain(|event| {
+            !matches!(
+                event,
+                RealtimeVoiceEvent::InputAudioQueued { .. }
+                    | RealtimeVoiceEvent::OutputAudioQueued { .. }
+            )
+        });
         self.events.push_back(RealtimeVoiceEvent::StateChanged {
             from,
             to: RealtimeVoiceState::Closed,
@@ -456,14 +460,46 @@ fn valid_transition(from: RealtimeVoiceState, to: RealtimeVoiceState) -> bool {
     matches!(
         (from, to),
         (State::Idle, State::Connecting)
-            | (State::Connecting, State::Listening | State::Reconnecting | State::Failed)
-            | (State::Listening, State::UserSpeaking | State::Reconnecting | State::Failed)
-            | (State::UserSpeaking, State::Thinking | State::Interrupted | State::Failed)
-            | (State::Thinking, State::ToolRunning | State::AwaitingApproval | State::AssistantSpeaking | State::Interrupted | State::Failed)
-            | (State::ToolRunning, State::Thinking | State::AwaitingApproval | State::AssistantSpeaking | State::Interrupted | State::Failed)
-            | (State::AwaitingApproval, State::Thinking | State::ToolRunning | State::Interrupted | State::Failed)
-            | (State::AssistantSpeaking, State::Listening | State::Interrupted | State::Failed)
-            | (State::Interrupted, State::Listening | State::Thinking | State::Reconnecting | State::Failed)
+            | (
+                State::Connecting,
+                State::Listening | State::Reconnecting | State::Failed
+            )
+            | (
+                State::Listening,
+                State::UserSpeaking | State::Reconnecting | State::Failed
+            )
+            | (
+                State::UserSpeaking,
+                State::Thinking | State::Interrupted | State::Failed
+            )
+            | (
+                State::Thinking,
+                State::ToolRunning
+                    | State::AwaitingApproval
+                    | State::AssistantSpeaking
+                    | State::Interrupted
+                    | State::Failed
+            )
+            | (
+                State::ToolRunning,
+                State::Thinking
+                    | State::AwaitingApproval
+                    | State::AssistantSpeaking
+                    | State::Interrupted
+                    | State::Failed
+            )
+            | (
+                State::AwaitingApproval,
+                State::Thinking | State::ToolRunning | State::Interrupted | State::Failed
+            )
+            | (
+                State::AssistantSpeaking,
+                State::Listening | State::Interrupted | State::Failed
+            )
+            | (
+                State::Interrupted,
+                State::Listening | State::Thinking | State::Reconnecting | State::Failed
+            )
             | (State::Reconnecting, State::Listening | State::Failed)
             | (State::Failed, State::Reconnecting | State::Idle)
     )
@@ -488,8 +524,12 @@ mod tests {
     #[test]
     fn supports_deterministic_lifecycle_and_rejects_invalid_transitions() {
         let mut session = RealtimeVoiceSession::new(availability()).expect("session");
-        session.transition(RealtimeVoiceState::Connecting).expect("connect");
-        session.transition(RealtimeVoiceState::Listening).expect("listen");
+        session
+            .transition(RealtimeVoiceState::Connecting)
+            .expect("connect");
+        session
+            .transition(RealtimeVoiceState::Listening)
+            .expect("listen");
         assert_eq!(
             session.transition(RealtimeVoiceState::AssistantSpeaking),
             Err(VoiceSessionError::InvalidTransition {
@@ -535,10 +575,11 @@ mod tests {
             speaker: TranscriptSpeaker,
             text: &str,
         ) -> Result<(), String> {
-            self.0
-                .lock()
-                .expect("recording sink")
-                .push((turn_id.to_owned(), speaker, text.to_owned()));
+            self.0.lock().expect("recording sink").push((
+                turn_id.to_owned(),
+                speaker,
+                text.to_owned(),
+            ));
             Ok(())
         }
     }
@@ -573,7 +614,10 @@ mod tests {
         }
 
         fn close(&mut self) -> Result<(), String> {
-            self.closed.lock().expect("closed resources").push(self.name);
+            self.closed
+                .lock()
+                .expect("closed resources")
+                .push(self.name);
             if self.fail {
                 Err("close failed".to_owned())
             } else {

@@ -6,10 +6,9 @@ edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
-build = "build.rs"
 
 [lib]
-path = "src/runtime_root_generated.rs"
+path = "src/lib.rs"
 
 [dependencies]
 base64 = "0.22"
@@ -20,7 +19,6 @@ medusa-config = { path = "../medusa-config" }
 medusa-context = { path = "../medusa-context" }
 medusa-continuation = { path = "../medusa-continuation" }
 medusa-execution-checkpoint = { path = "../medusa-execution-checkpoint" }
-medusa-execution-orchestrator = { path = "../medusa-execution-orchestrator" }
 medusa-execution-replay = { path = "../medusa-execution-replay" }
 medusa-improvement = { path = "../medusa-improvement" }
 medusa-markdown-memory = { path = "../medusa-markdown-memory" }

@@ -10,7 +10,7 @@ use std::{
 };
 
 use medusa_agent::{
-    session_browser::list_sessions, AgentEngine, AgentPlanStepStatus, AgentSession,
+    AgentEngine, AgentPlanStepStatus, AgentSession, session_browser::list_sessions,
 };
 use medusa_capabilities::CapabilityRegistry;
 use medusa_provider::ConfiguredProvider;

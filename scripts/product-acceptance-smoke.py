@@ -21,7 +21,7 @@ SCENARIOS: tuple[dict[str, Any], ...] = (
     {
         "id": "production-orchestration",
         "guarantee": "Production orchestration passes its authoritative integration suite.",
-        "args": ["test", "-p", "medusa-execution-orchestrator", "--locked"],
+        "args": ["test", "-p", "medusa-runtime", "--locked"],
         "marker": None,
     },
     {
@@ -47,7 +47,7 @@ SCENARIOS: tuple[dict[str, Any], ...] = (
     {
         "id": "verification-rollback",
         "guarantee": "Failed or rejected integration can roll repository changes back.",
-        "args": ["test", "-p", "medusa-repository-rollback", "--locked"],
+        "args": ["test", "-p", "medusa-workers", "--locked"],
         "marker": None,
     },
     {
