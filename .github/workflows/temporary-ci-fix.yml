@@ -20,8 +20,9 @@ jobs:
         with:
           components: rustfmt
       - name: Scope test-only protocol constants
-        shell: python
+        shell: bash
         run: |
+          python - <<'PY'
           from pathlib import Path
 
           for name in ("command.rs", "event.rs"):
@@ -33,6 +34,7 @@ jobs:
                   if old not in text:
                       raise SystemExit(f"expected import not found in {path}")
                   path.write_text(text.replace(old, new, 1))
+          PY
       - name: Apply canonical formatting
         shell: bash
         run: cargo fmt --all
