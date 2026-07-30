@@ -166,7 +166,7 @@ pub enum TelegramChatAction {
     UploadVoice,
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq)]
 pub enum TelegramBotParseMode {
     MarkdownV2,
 }
@@ -245,6 +245,7 @@ pub enum TelegramEditMessageOutcome {
 }
 
 #[derive(Debug, Deserialize)]
+#[serde(bound(deserialize = "T: Deserialize<'de>"))]
 pub(crate) struct TelegramApiEnvelope<T> {
     pub ok: bool,
     #[serde(default)]
