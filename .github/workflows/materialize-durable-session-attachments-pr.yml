@@ -36,6 +36,12 @@ jobs:
               line[10:] if line.startswith('          ') else line
               for line in script.splitlines()
           ) + '\n'
+          script = '\n'.join(
+              line
+              for line in script.splitlines()
+              if not line.startswith('decode crates/medusa-runtime/src/session_broker.rs ')
+              and not line.startswith('decode docs/architecture/durable-session-attachments.md ')
+          ) + '\n'
           script = script.replace(
               f'rm {source}',
               f'rm {source} {launcher}',
