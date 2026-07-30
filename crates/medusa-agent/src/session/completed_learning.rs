@@ -159,6 +159,8 @@ mod tests {
             pending_question: None,
             messages: Vec::new(),
             events: Vec::new(),
+            applied_journal_cursor: 0,
+            applied_journal_checksum: None,
             evidence: vec![
                 "cargo test --workspace passed".to_owned(),
                 "release smoke passed".to_owned(),
