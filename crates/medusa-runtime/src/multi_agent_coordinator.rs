@@ -39,7 +39,7 @@ use crate::{
 };
 
 const LEASE_TIMEOUT_MS: u64 = 5 * 60 * 1_000;
-const WORKER_TURN_LIMIT: u32 = 6;
+const WORKER_TURN_LIMIT: u32 = 12;
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct WorkerEvidence {
