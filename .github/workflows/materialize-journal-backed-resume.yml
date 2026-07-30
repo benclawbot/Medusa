@@ -25,7 +25,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          test "$(git hash-object .github/materialize-journal-resume/change.patch)" = "de276637c6f00d8ff3d0d28702b077ed12162fbd"
+          test "$(git hash-object .github/materialize-journal-resume/change.patch)" = "4df29a7cae48ba39369f4830374609ae3fc8f69b"
           git apply --index .github/materialize-journal-resume/change.patch
           rm -rf .github/materialize-journal-resume
           rm -f .github/workflows/materialize-journal-backed-resume.yml
