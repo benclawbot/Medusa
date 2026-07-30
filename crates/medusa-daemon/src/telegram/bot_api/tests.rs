@@ -1,5 +1,5 @@
-use super::{TelegramBotApiError, TelegramBotToken, TelegramTransportFailure};
 use super::types::{TelegramTransportUpdate, TelegramUpdate, TelegramUpdateCursor};
+use super::{TelegramBotApiError, TelegramBotToken, TelegramTransportFailure};
 
 #[test]
 fn token_debug_never_exposes_secret() {
@@ -12,7 +12,10 @@ fn token_debug_never_exposes_secret() {
 #[test]
 fn token_validation_rejects_whitespace_and_malformed_values() {
     for token in [" 123:abc", "123:abc ", "abc:def", "123:", "123:a/b"] {
-        assert_eq!(TelegramBotToken::new(token), Err(TelegramBotApiError::InvalidToken));
+        assert_eq!(
+            TelegramBotToken::new(token),
+            Err(TelegramBotApiError::InvalidToken)
+        );
     }
 }
 
@@ -23,12 +26,19 @@ fn cursor_advances_monotonically_and_rejects_regression() {
     assert_eq!(cursor.next_offset(), Some(8));
     cursor.acknowledge(8).expect("acknowledge");
     assert_eq!(cursor.next_offset(), Some(9));
-    assert_eq!(cursor.acknowledge(6), Err(TelegramBotApiError::InvalidUpdate));
+    assert_eq!(
+        cursor.acknowledge(6),
+        Err(TelegramBotApiError::InvalidUpdate)
+    );
 }
 
 #[test]
 fn unsupported_updates_remain_acknowledgeable() {
-    let update = TelegramUpdate { update_id: 11, message: None, callback_query: None };
+    let update = TelegramUpdate {
+        update_id: 11,
+        message: None,
+        callback_query: None,
+    };
     assert_eq!(
         TelegramTransportUpdate::try_from(update).expect("typed update"),
         TelegramTransportUpdate::Unsupported { update_id: 11 }
@@ -38,10 +48,12 @@ fn unsupported_updates_remain_acknowledgeable() {
 #[test]
 fn transient_classification_is_explicit() {
     assert!(TelegramBotApiError::RetryAfter { seconds: 3 }.is_transient());
-    assert!(TelegramBotApiError::Transport {
-        kind: TelegramTransportFailure::Timeout,
-        status: None,
-    }
-    .is_transient());
+    assert!(
+        TelegramBotApiError::Transport {
+            kind: TelegramTransportFailure::Timeout,
+            status: None,
+        }
+        .is_transient()
+    );
     assert!(!TelegramBotApiError::InvalidToken.is_transient());
 }

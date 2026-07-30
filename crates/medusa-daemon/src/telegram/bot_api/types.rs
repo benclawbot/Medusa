@@ -80,9 +80,17 @@ pub struct TelegramInboundCallback {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum TelegramTransportUpdate {
-    Message { update_id: i64, message: TelegramBotMessage },
-    Callback { update_id: i64, callback: TelegramInboundCallback },
-    Unsupported { update_id: i64 },
+    Message {
+        update_id: i64,
+        message: TelegramBotMessage,
+    },
+    Callback {
+        update_id: i64,
+        callback: TelegramInboundCallback,
+    },
+    Unsupported {
+        update_id: i64,
+    },
 }
 
 impl TryFrom<TelegramUpdate> for TelegramTransportUpdate {
@@ -96,7 +104,10 @@ impl TryFrom<TelegramUpdate> for TelegramTransportUpdate {
             if message.date < 0 {
                 return Err(TelegramBotApiError::InvalidTimestamp);
             }
-            return Ok(Self::Message { update_id: update.update_id, message });
+            return Ok(Self::Message {
+                update_id: update.update_id,
+                message,
+            });
         }
         if let Some(query) = update.callback_query {
             let message = query.message.ok_or(TelegramBotApiError::InvalidUpdate)?;
@@ -113,7 +124,9 @@ impl TryFrom<TelegramUpdate> for TelegramTransportUpdate {
                 },
             });
         }
-        Ok(Self::Unsupported { update_id: update.update_id })
+        Ok(Self::Unsupported {
+            update_id: update.update_id,
+        })
     }
 }
 
@@ -124,13 +137,21 @@ pub struct TelegramUpdateCursor {
 
 impl TelegramUpdateCursor {
     #[must_use]
-    pub const fn next_offset(&self) -> Option<i64> { self.next_offset }
+    pub const fn next_offset(&self) -> Option<i64> {
+        self.next_offset
+    }
 
     pub fn acknowledge(&mut self, update_id: i64) -> Result<(), TelegramBotApiError> {
-        if update_id < 0 || self.next_offset.is_some_and(|offset| update_id + 1 < offset) {
+        if update_id < 0
+            || self
+                .next_offset
+                .is_some_and(|offset| update_id + 1 < offset)
+        {
             return Err(TelegramBotApiError::InvalidUpdate);
         }
-        let next = update_id.checked_add(1).ok_or(TelegramBotApiError::InvalidUpdate)?;
+        let next = update_id
+            .checked_add(1)
+            .ok_or(TelegramBotApiError::InvalidUpdate)?;
         self.next_offset = Some(self.next_offset.map_or(next, |current| current.max(next)));
         Ok(())
     }
@@ -138,14 +159,23 @@ impl TelegramUpdateCursor {
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
-pub enum TelegramChatAction { Typing, UploadDocument, RecordVoice, UploadVoice }
+pub enum TelegramChatAction {
+    Typing,
+    UploadDocument,
+    RecordVoice,
+    UploadVoice,
+}
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum TelegramBotParseMode { MarkdownV2 }
+pub enum TelegramBotParseMode {
+    MarkdownV2,
+}
 
 impl Serialize for TelegramBotParseMode {
     fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
-    where S: serde::Serializer {
+    where
+        S: serde::Serializer,
+    {
         serializer.serialize_str("MarkdownV2")
     }
 }
@@ -160,16 +190,24 @@ pub struct TelegramBotInlineButton {
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-pub struct TelegramWebAppInfo { pub url: String }
+pub struct TelegramWebAppInfo {
+    pub url: String,
+}
 
 #[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
-pub struct TelegramInlineKeyboardMarkup { pub inline_keyboard: Vec<Vec<TelegramBotInlineButton>> }
+pub struct TelegramInlineKeyboardMarkup {
+    pub inline_keyboard: Vec<Vec<TelegramBotInlineButton>>,
+}
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-pub struct TelegramReplyParameters { pub message_id: i64 }
+pub struct TelegramReplyParameters {
+    pub message_id: i64,
+}
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-pub struct TelegramLinkPreviewOptions { pub is_disabled: bool }
+pub struct TelegramLinkPreviewOptions {
+    pub is_disabled: bool,
+}
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct TelegramSendMessage {
@@ -201,7 +239,10 @@ pub struct TelegramEditMessageText {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub enum TelegramEditMessageOutcome { Updated(TelegramBotMessage), Unchanged }
+pub enum TelegramEditMessageOutcome {
+    Updated(TelegramBotMessage),
+    Unchanged,
+}
 
 #[derive(Debug, Deserialize)]
 pub(crate) struct TelegramApiEnvelope<T> {
@@ -218,33 +259,65 @@ pub(crate) struct TelegramApiEnvelope<T> {
 
 impl<T> TelegramApiEnvelope<T> {
     pub(crate) fn retry_after(&self) -> Option<u64> {
-        self.parameters.as_ref().and_then(|parameters| parameters.retry_after)
+        self.parameters
+            .as_ref()
+            .and_then(|parameters| parameters.retry_after)
     }
 }
 
 #[derive(Debug, Deserialize)]
-pub(crate) struct TelegramResponseParameters { #[serde(default)] pub retry_after: Option<u64> }
+pub(crate) struct TelegramResponseParameters {
+    #[serde(default)]
+    pub retry_after: Option<u64>,
+}
 
 #[derive(Serialize)]
 pub(crate) struct EmptyRequest {}
 #[derive(Serialize)]
-pub(crate) struct GetUpdatesRequest<'a> { pub offset: Option<i64>, pub timeout: u16, pub limit: u8, pub allowed_updates: [&'a str; 2] }
+pub(crate) struct GetUpdatesRequest<'a> {
+    pub offset: Option<i64>,
+    pub timeout: u16,
+    pub limit: u8,
+    pub allowed_updates: [&'a str; 2],
+}
 #[derive(Serialize)]
-pub(crate) struct SendChatActionRequest { pub chat_id: i64, pub message_thread_id: Option<i64>, pub action: TelegramChatAction }
+pub(crate) struct SendChatActionRequest {
+    pub chat_id: i64,
+    pub message_thread_id: Option<i64>,
+    pub action: TelegramChatAction,
+}
 #[derive(Serialize)]
-pub(crate) struct DeleteMessageRequest { pub chat_id: i64, pub message_id: i64 }
+pub(crate) struct DeleteMessageRequest {
+    pub chat_id: i64,
+    pub message_id: i64,
+}
 #[derive(Serialize)]
-pub(crate) struct AnswerCallbackQueryRequest<'a> { pub callback_query_id: &'a str, pub text: Option<&'a str>, pub show_alert: bool }
+pub(crate) struct AnswerCallbackQueryRequest<'a> {
+    pub callback_query_id: &'a str,
+    pub text: Option<&'a str>,
+    pub show_alert: bool,
+}
 #[derive(Serialize)]
-pub(crate) struct SetMessageReactionRequest { pub chat_id: i64, pub message_id: i64, pub reaction: Vec<TelegramReactionType>, pub is_big: bool }
+pub(crate) struct SetMessageReactionRequest {
+    pub chat_id: i64,
+    pub message_id: i64,
+    pub reaction: Vec<TelegramReactionType>,
+    pub is_big: bool,
+}
 
 #[derive(Serialize)]
 #[serde(tag = "type", rename_all = "lowercase")]
-pub(crate) enum TelegramReactionType { Emoji { emoji: &'static str } }
+pub(crate) enum TelegramReactionType {
+    Emoji { emoji: &'static str },
+}
 
 impl From<TelegramReaction> for TelegramReactionType {
     fn from(value: TelegramReaction) -> Self {
-        let emoji = match value { TelegramReaction::Processing => "👀", TelegramReaction::Success => "👍", TelegramReaction::Failure => "👎" };
+        let emoji = match value {
+            TelegramReaction::Processing => "👀",
+            TelegramReaction::Success => "👍",
+            TelegramReaction::Failure => "👎",
+        };
         Self::Emoji { emoji }
     }
 }

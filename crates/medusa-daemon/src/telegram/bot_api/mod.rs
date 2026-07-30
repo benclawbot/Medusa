@@ -9,17 +9,16 @@ use serde::{Serialize, de::DeserializeOwned};
 
 mod types;
 
+use types::{
+    AnswerCallbackQueryRequest, DeleteMessageRequest, EmptyRequest, GetUpdatesRequest,
+    SendChatActionRequest, SetMessageReactionRequest, TelegramApiEnvelope, TelegramReactionType,
+};
 pub use types::{
     TelegramBotChat, TelegramBotChatKind, TelegramBotInlineButton, TelegramBotMessage,
     TelegramBotParseMode, TelegramBotUser, TelegramCallbackQuery, TelegramChatAction,
     TelegramEditMessageOutcome, TelegramEditMessageText, TelegramInboundCallback,
     TelegramInlineKeyboardMarkup, TelegramLinkPreviewOptions, TelegramReplyParameters,
     TelegramSendMessage, TelegramTransportUpdate, TelegramUpdate,
-};
-use types::{
-    AnswerCallbackQueryRequest, DeleteMessageRequest, EmptyRequest, GetUpdatesRequest,
-    SendChatActionRequest, SetMessageReactionRequest, TelegramApiEnvelope,
-    TelegramReactionType,
 };
 
 #[cfg(test)]
@@ -97,7 +96,11 @@ impl TelegramBotApiClient {
         let client = Client::builder()
             .connect_timeout(DEFAULT_CONNECT_TIMEOUT)
             .timeout(DEFAULT_REQUEST_TIMEOUT)
-            .user_agent(concat!("medusa/", env!("CARGO_PKG_VERSION"), " telegram-gateway"))
+            .user_agent(concat!(
+                "medusa/",
+                env!("CARGO_PKG_VERSION"),
+                " telegram-gateway"
+            ))
             .build()
             .map_err(|_| TelegramBotApiError::Transport {
                 kind: TelegramTransportFailure::ClientSetup,
@@ -404,8 +407,5 @@ fn retry_after_header(response: &Response) -> Option<u64> {
 
 fn sanitize_description(description: &str, token: &str) -> String {
     let redacted = description.replace(token, "[REDACTED]");
-    redacted
-        .chars()
-        .take(MAX_ERROR_DESCRIPTION_CHARS)
-        .collect()
+    redacted.chars().take(MAX_ERROR_DESCRIPTION_CHARS).collect()
 }
