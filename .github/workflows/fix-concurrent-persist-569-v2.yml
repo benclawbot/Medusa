@@ -1,0 +1,224 @@
+name: Materialize issue 569 concurrent persistence fix
+
+on:
+  push:
+    branches:
+      - agent/569-runtime-durable-event-coverage
+    paths:
+      - .github/workflows/fix-concurrent-persist-569-v2.yml
+
+permissions:
+  contents: write
+
+jobs:
+  materialize:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
+      - name: Apply concurrent persistence fix
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          from pathlib import Path
+
+          journal = Path('crates/medusa-agent/src/journal.rs')
+          text = journal.read_text()
+          start = text.index('pub(crate) fn commit_snapshot(session: &AgentSession) -> MedusaResult<AgentSession> {')
+          end = text.index('\npub(crate) fn load_or_migrate(', start)
+          replacement = '''pub(crate) fn commit_snapshot(session: &AgentSession) -> MedusaResult<AgentSession> {
+              let _guard = lock_journal();
+              commit_snapshot_locked(session)
+          }
+
+          pub(crate) fn commit_snapshot_with<F>(
+              session: &AgentSession,
+              after_commit: F,
+          ) -> MedusaResult<AgentSession>
+          where
+              F: FnOnce(&AgentSession) -> MedusaResult<()>,
+          {
+              let _guard = lock_journal();
+              let committed = commit_snapshot_locked(session)?;
+              after_commit(&committed)?;
+              Ok(committed)
+          }
+
+          fn commit_snapshot_locked(session: &AgentSession) -> MedusaResult<AgentSession> {
+              verify_chain(&session.events)?;
+              ensure_initialized(session)?;
+              let path = journal_path(&session.repo, &session.id)?;
+              let state = read_journal(&path, &session.id, true, false)?;
+              let mut merged = session.clone();
+
+              if state.events != merged.events {
+                  if let Some(committed) = state.committed_snapshot.as_ref() {
+                      merge_committed_events(&mut merged, &committed.events)?;
+                  }
+              }
+
+              if state.events != merged.events {
+                  let recovered = read_journal(&path, &session.id, true, true)?;
+                  merged = session.clone();
+                  merge_committed_events(&mut merged, &recovered.events)?;
+                  if recovered.events != merged.events {
+                      return Err(persistence_error(
+                          "cannot commit a session whose events diverge from the journal",
+                      ));
+                  }
+              }
+
+              append_record(&path, &snapshot_record(&merged))?;
+              Ok(merged)
+          }
+          '''
+          journal.write_text(text[:start] + replacement + text[end:])
+
+          session = Path('crates/medusa-agent/src/session.rs')
+          text = session.read_text()
+          text = text.replace(
+              '    path::{Path, PathBuf},\n};',
+              '    path::{Path, PathBuf},\n    process,\n    sync::atomic::{AtomicU64, Ordering},\n};',
+              1,
+          )
+          text = text.replace(
+              'const MAX_DIAGNOSTICS: usize = 128;\n',
+              'const MAX_DIAGNOSTICS: usize = 128;\nstatic SNAPSHOT_TEMP_SEQUENCE: AtomicU64 = AtomicU64::new(0);\n',
+              1,
+          )
+          text = text.replace(
+              '    let committed = journal::commit_snapshot(session)?;\n    persist_compatibility_snapshot(&committed)?;',
+              '    let committed =\n        journal::commit_snapshot_with(session, persist_compatibility_snapshot)?;',
+              1,
+          )
+          persist_start = text.index('fn persist_at(path: &Path, session: &AgentSession) -> MedusaResult<()> {')
+          persist_end = text.index('\nfn sync_parent(', persist_start)
+          persist_replacement = '''fn persist_at(path: &Path, session: &AgentSession) -> MedusaResult<()> {
+              if let Some(parent) = path.parent() {
+                  fs::create_dir_all(parent)?;
+              }
+              let temporary = unique_snapshot_temporary(path);
+              let result = (|| {
+                  let mut file = fs::OpenOptions::new()
+                      .write(true)
+                      .create_new(true)
+                      .open(&temporary)?;
+                  file.write_all(&serde_json::to_vec_pretty(session)?)?;
+                  file.sync_all()?;
+                  fs::rename(&temporary, path)?;
+                  sync_parent(path);
+                  Ok(())
+              })();
+              if result.is_err() {
+                  let _ = fs::remove_file(&temporary);
+              }
+              result
+          }
+
+          fn unique_snapshot_temporary(path: &Path) -> PathBuf {
+              let sequence = SNAPSHOT_TEMP_SEQUENCE.fetch_add(1, Ordering::Relaxed);
+              let file_name = path
+                  .file_name()
+                  .map_or_else(|| "session.json".into(), |name| name.to_string_lossy());
+              path.with_file_name(format!(
+                  ".{file_name}.tmp.{}.{}",
+                  process::id(),
+                  sequence
+              ))
+          }
+          '''
+          text = text[:persist_start] + persist_replacement + text[persist_end:]
+
+          marker = '    #[test]\n    fn bootstrap_keeps_runtime_state_under_medusa_directory() {'
+          regression = '''    fn concurrent_test_session(repo: &Path) -> AgentSession {
+              AgentSession {
+                  id: SessionId::new(),
+                  objective: "concurrent persistence test".to_owned(),
+                  repo: repo.to_path_buf(),
+                  created_at: OffsetDateTime::UNIX_EPOCH,
+                  updated_at: OffsetDateTime::UNIX_EPOCH,
+                  completed: false,
+                  turn: 0,
+                  plan: Vec::new(),
+                  pending_question: None,
+                  messages: Vec::new(),
+                  events: Vec::new(),
+                  evidence: Vec::new(),
+                  tool_artifacts: Vec::new(),
+                  world_model: None,
+                  approval_grants: Vec::new(),
+                  approval_receipts: Vec::new(),
+                  rollback_receipts: Vec::new(),
+              }
+          }
+
+          #[test]
+          fn concurrent_full_persists_share_one_atomic_publication_boundary() {
+              use std::{
+                  sync::{Arc, Barrier},
+                  thread,
+              };
+
+              use medusa_protocol::{Actor, EventPayload};
+
+              let repository = tempfile::tempdir().expect("repository");
+              bootstrap(repository.path()).expect("bootstrap");
+              let mut session = concurrent_test_session(repository.path());
+              let objective = session.objective.clone();
+              journal::append_payload_committed(
+                  &mut session,
+                  Actor::Coordinator,
+                  EventPayload::SessionCreated { objective },
+              )
+              .expect("initial durable event");
+              persist(&session).expect("initial full persist");
+
+              let workers = 8;
+              let iterations = 24;
+              let barrier = Arc::new(Barrier::new(workers));
+              let session = Arc::new(session);
+              let handles = (0..workers)
+                  .map(|_| {
+                      let barrier = Arc::clone(&barrier);
+                      let session = Arc::clone(&session);
+                      thread::spawn(move || {
+                          for _ in 0..iterations {
+                              barrier.wait();
+                              persist(&session).expect("concurrent full persist");
+                          }
+                      })
+                  })
+                  .collect::<Vec<_>>();
+              for handle in handles {
+                  handle.join().expect("persistence worker");
+              }
+
+              let loaded =
+                  load(repository.path(), &session.id.to_string()).expect("load committed session");
+              assert_eq!(loaded.events, session.events);
+              let temporary_files = fs::read_dir(repository.path().join(".medusa/sessions"))
+                  .expect("session directory")
+                  .filter_map(Result::ok)
+                  .filter(|entry| entry.file_name().to_string_lossy().contains(".tmp."))
+                  .count();
+              assert_eq!(temporary_files, 0);
+          }
+
+          '''
+          if marker not in text:
+              raise SystemExit('session test insertion point not found')
+          session.write_text(text.replace(marker, regression + marker, 1))
+          PY
+          cargo fmt --all
+          rm .github/workflows/fix-concurrent-persist-569.yml
+          rm .github/workflows/fix-concurrent-persist-569-v2.yml
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add --all
+          git commit -m "Serialize concurrent session persistence"
+          git push
