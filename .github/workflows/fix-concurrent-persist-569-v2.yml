@@ -1,4 +1,5 @@
 name: Materialize issue 569 concurrent persistence fix
+# Triggered by the connected GitHub client so this workflow runs from a user-authored push.
 
 on:
   push:
