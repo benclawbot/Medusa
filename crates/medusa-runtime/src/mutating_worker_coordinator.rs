@@ -23,6 +23,7 @@ use serde_json::json;
 
 use crate::{
     RuntimeActivity, RuntimeActivityKind, RuntimeEvent,
+    team_control::{TeamControlPlane, TeamWorkerRegistration},
     multi_agent_coordinator::CoordinatorEvidence,
     production_orchestrator::{
         AgentContract, ContextPacket, ProductionExecutionPlan, context_for_task,
@@ -42,9 +43,13 @@ use support::{
 };
 
 const LEASE_TIMEOUT_MS: u64 = 10 * 60 * 1_000;
-const IMPLEMENTER_TURN_LIMIT: u32 = 12;
+const IMPLEMENTER_TURN_LIMIT: u32 = 24;
 const MAX_ATTEMPTS: u32 = 2;
 const IMPLEMENTER_ID: &str = "worker-implement";
+
+fn bounded_implementer_turns(configured: u32) -> u32 {
+    configured.clamp(1, IMPLEMENTER_TURN_LIMIT)
+}
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
@@ -112,6 +117,8 @@ struct ImplementationRequest {
     packet: ContextPacket,
     worker: Worker,
     team_context: TeamMemberContext,
+    control: TeamControlPlane,
+    events: Sender<RuntimeEvent>,
 }
 
 #[derive(Clone, Debug)]
@@ -121,6 +128,7 @@ struct WorkerRun {
     summary: String,
 }
 
+#[allow(clippy::too_many_arguments)]
 pub fn run_implementation(
     repo: &Path,
     config: &Config,
@@ -128,13 +136,23 @@ pub fn run_implementation(
     plan: &ProductionExecutionPlan,
     preflight: &CoordinatorEvidence,
     cancel: &Arc<AtomicBool>,
-    events: &Sender<RuntimeEvent>,
+    reporting: (&TeamControlPlane, &Sender<RuntimeEvent>),
 ) -> Result<ImplementationEvidence, String> {
-    coordinate_with_executor(repo, plan, preflight, cancel, events, |request| {
-        execute_production_implementer(config, session_api_key.clone(), cancel, request)
-    })
+    let (control, events) = reporting;
+    coordinate_with_control(
+        repo,
+        plan,
+        preflight,
+        cancel,
+        control,
+        events,
+        |request| {
+            execute_production_implementer(config, session_api_key.clone(), cancel, request)
+        },
+    )
 }
 
+#[cfg(test)]
 fn coordinate_with_executor<F>(
     repo: &Path,
     plan: &ProductionExecutionPlan,
@@ -146,9 +164,44 @@ fn coordinate_with_executor<F>(
 where
     F: Fn(ImplementationRequest) -> Result<WorkerRun, String>,
 {
+    coordinate_with_control(
+        repo,
+        plan,
+        preflight,
+        cancel,
+        &TeamControlPlane::default(),
+        events,
+        executor,
+    )
+}
+
+fn coordinate_with_control<F>(
+    repo: &Path,
+    plan: &ProductionExecutionPlan,
+    preflight: &CoordinatorEvidence,
+    cancel: &Arc<AtomicBool>,
+    control: &TeamControlPlane,
+    events: &Sender<RuntimeEvent>,
+    executor: F,
+) -> Result<ImplementationEvidence, String>
+where
+    F: Fn(ImplementationRequest) -> Result<WorkerRun, String>,
+{
     validate_preflight(plan, preflight)?;
     let contract = implementation_contract(plan)?;
     let task = implementation_task(plan, &contract)?;
+    let execution_id = control
+        .snapshot()
+        .execution_id
+        .unwrap_or_else(|| plan.fingerprint.clone());
+    let _ = events.send(RuntimeEvent::Team(control.begin(
+        execution_id,
+        [TeamWorkerRegistration {
+            worker_id: IMPLEMENTER_ID.to_owned(),
+            role: "implementer".to_owned(),
+            task_id: contract.task_id.clone(),
+        }],
+    )));
     let dependency_outputs = dependency_outputs(&contract, preflight)?;
     let packet = context_for_task(
         plan,
@@ -195,6 +248,15 @@ where
             ImplementationStatus::Integrated => {
                 let evidence = evidence_from_state(&state_path, &contract.task_id, &state)?;
                 team.finish_member(&state.worker.id, false)?;
+                if let Some(integration) = state.integration.as_ref()
+                    && let Ok(snapshot) = control.integrated(
+                        &state.worker.id,
+                        format!("restored integrated commit {}", integration.commit),
+                    )
+                {
+                    let _ = events.send(RuntimeEvent::Team(snapshot));
+                }
+                let _ = events.send(RuntimeEvent::Team(control.finish()));
                 manager
                     .cleanup(std::slice::from_ref(&state.worker))
                     .map_err(|error| error.to_string())?;
@@ -208,7 +270,7 @@ where
                     &state_path,
                     &contract.task_id,
                     state,
-                    events,
+                    (control, events),
                 );
             }
             ImplementationStatus::Running | ImplementationStatus::Retrying => {
@@ -221,6 +283,7 @@ where
                     preflight,
                     cancel,
                     events,
+                    control,
                     &executor,
                     &manager,
                     &team,
@@ -278,6 +341,7 @@ where
         preflight,
         cancel,
         events,
+        control,
         &executor,
         &manager,
         &team,
@@ -297,6 +361,7 @@ fn execute_attempts<F>(
     preflight: &CoordinatorEvidence,
     cancel: &Arc<AtomicBool>,
     events: &Sender<RuntimeEvent>,
+    control: &TeamControlPlane,
     executor: &F,
     manager: &WorkerManager,
     team: &TeamRuntime,
@@ -318,7 +383,7 @@ where
     }
     let mut last_error = None;
     for attempt in 1..=MAX_ATTEMPTS {
-        if cancel.load(Ordering::SeqCst) {
+        if cancel.load(Ordering::SeqCst) || control.is_cancelled(IMPLEMENTER_ID) {
             if let Some(worker) = initial_worker.as_ref() {
                 manager
                     .cleanup(std::slice::from_ref(worker))
@@ -346,6 +411,13 @@ where
         };
         let team_context = team.member_context(&assignment.worker_id)?;
         team.start_member(&assignment.worker_id, &assignment.task_id, "starting")?;
+        if let Ok(snapshot) = control.start(
+            &assignment.worker_id,
+            None,
+            format!("implementation attempt {attempt} dispatched"),
+        ) {
+            let _ = events.send(RuntimeEvent::Team(snapshot));
+        }
         let running = DurableImplementationState {
             plan_fingerprint: plan.fingerprint.clone(),
             repository_fingerprint: preflight.repository_fingerprint.clone(),
@@ -379,6 +451,8 @@ where
             packet: packet.clone(),
             worker: worker.clone(),
             team_context,
+            control: control.clone(),
+            events: events.clone(),
         };
         let run = match executor(request) {
             Ok(run) => run,
@@ -388,6 +462,8 @@ where
                 let recorded = record_attempt_failure(
                     &mut controller,
                     team,
+                    events,
+                    control,
                     manager,
                     state_path,
                     &assignment,
@@ -408,11 +484,13 @@ where
             }
         };
 
-        if let Err(error) = manager.discard_untracked_runtime_state(&worker) {
+        if let Err(error) = manager.discard_untracked_runtime_state(&worker, &base_head) {
             let retryable = attempt < MAX_ATTEMPTS;
             let recorded = record_attempt_failure(
                 &mut controller,
                 team,
+                events,
+                control,
                 manager,
                 state_path,
                 &assignment,
@@ -438,6 +516,8 @@ where
                 let recorded = record_attempt_failure(
                     &mut controller,
                     team,
+                    events,
+                    control,
                     manager,
                     state_path,
                     &assignment,
@@ -462,6 +542,8 @@ where
             let recorded = record_attempt_failure(
                 &mut controller,
                 team,
+                events,
+                control,
                 manager,
                 state_path,
                 &assignment,
@@ -487,6 +569,8 @@ where
                 let recorded = record_attempt_failure(
                     &mut controller,
                     team,
+                    events,
+                    control,
                     manager,
                     state_path,
                     &assignment,
@@ -515,6 +599,8 @@ where
             let recorded = record_attempt_failure(
                 &mut controller,
                 team,
+                events,
+                control,
                 manager,
                 state_path,
                 &assignment,
@@ -533,11 +619,13 @@ where
             }
             return Err(recorded);
         }
-        if let Err(error) = manager.discard_untracked_runtime_state(&worker) {
+        if let Err(error) = manager.discard_untracked_runtime_state(&worker, &base_head) {
             let retryable = attempt < MAX_ATTEMPTS;
             let recorded = record_attempt_failure(
                 &mut controller,
                 team,
+                events,
+                control,
                 manager,
                 state_path,
                 &assignment,
@@ -563,6 +651,8 @@ where
                 let recorded = record_attempt_failure(
                     &mut controller,
                     team,
+                    events,
+                    control,
                     manager,
                     state_path,
                     &assignment,
@@ -590,6 +680,8 @@ where
             let recorded = record_attempt_failure(
                 &mut controller,
                 team,
+                events,
+                control,
                 manager,
                 state_path,
                 &assignment,
@@ -620,6 +712,8 @@ where
                 let recorded = record_attempt_failure(
                     &mut controller,
                     team,
+                    events,
+                    control,
                     manager,
                     state_path,
                     &assignment,
@@ -663,13 +757,14 @@ where
             state_path,
             &contract.task_id,
             prepared,
-            events,
+            (control, events),
         );
     }
     Err(last_error.unwrap_or_else(|| "mutating worker execution exhausted attempts".to_owned()))
 }
 
 
+#[allow(clippy::too_many_arguments)]
 fn integrate_prepared(
     manager: &WorkerManager,
     controller: &mut WorkerExecutionController,
@@ -677,8 +772,9 @@ fn integrate_prepared(
     state_path: &Path,
     task_id: &str,
     mut state: DurableImplementationState,
-    events: &Sender<RuntimeEvent>,
+    reporting: (&TeamControlPlane, &Sender<RuntimeEvent>),
 ) -> Result<ImplementationEvidence, String> {
+    let (control, events) = reporting;
     let commit = state
         .worker
         .commit
@@ -769,6 +865,13 @@ fn integrate_prepared(
         }),
     )
     .map_err(|error| error.to_string())?;
+    if let Ok(snapshot) = control.integrated(
+        &state.worker.id,
+        format!("integrated commit {}", integration.commit),
+    ) {
+        let _ = events.send(RuntimeEvent::Team(snapshot));
+    }
+    let _ = events.send(RuntimeEvent::Team(control.finish()));
     manager
         .cleanup(std::slice::from_ref(&state.worker))
         .map_err(|error| error.to_string())?;
@@ -793,17 +896,16 @@ fn execute_production_implementer(
 ) -> Result<WorkerRun, String> {
     let mut worker_config = config.clone();
     worker_config.agent.mode = Mode::Yolo;
-    worker_config.agent.max_turns = worker_config
-        .agent
-        .max_turns
-        .clamp(1, IMPLEMENTER_TURN_LIMIT);
+    worker_config.agent.max_turns = bounded_implementer_turns(worker_config.agent.max_turns);
     let provider = ConfiguredProvider::manager_from_config(&worker_config, session_api_key)
         .map_err(|error| error.to_string())?;
+    let policy = AgentExecutionPolicy::for_team_role(TeamRole::Implementer)
+        .with_allowed_write_paths(request.contract.allowed_write_paths.clone());
     let engine = AgentEngine::new_with_cancellation(provider, worker_config.clone(), Arc::clone(cancel))
-        .with_execution_policy(AgentExecutionPolicy::for_team_role(TeamRole::Implementer))
+        .with_execution_policy(policy)
         .with_team_context(request.team_context.clone());
     let objective = format!(
-        "Implement delegated task `{}` inside this isolated Git worktree. Objective: {}. Stay within allowed write paths {:?}. Inspect existing code, make the smallest correct product change, run focused verification, and return a concise evidence-backed summary. Do not ask the user questions and do not modify tests or fixtures merely to make failures disappear.",
+        "Implement delegated task `{}` inside this isolated Git worktree. Objective: {}. Stay within allowed write paths {:?}. These paths are exact contract boundaries: do not create sibling files, package metadata, or convenience files outside them; report any genuinely required out-of-scope change instead. Use the bounded turn budget efficiently: batch independent reads, make every required product edit, run focused verification, and then return a concise evidence-backed summary. Do not ask the user questions and do not modify tests or fixtures merely to make failures disappear.",
         request.contract.task_id,
         request.contract.objective,
         request.contract.allowed_write_paths,
@@ -823,12 +925,32 @@ fn execute_production_implementer(
     );
     let mut summaries = Vec::new();
     let mut completed = false;
+    if let Ok(snapshot) = request.control.start(
+        &request.worker.id,
+        Some(session.id.as_str()),
+        "implementer model session started",
+    ) {
+        let _ = request.events.send(RuntimeEvent::Team(snapshot));
+    }
     for _ in 0..worker_config.agent.max_turns {
-        if cancel.load(Ordering::SeqCst) {
+        if cancel.load(Ordering::SeqCst) || request.control.is_cancelled(&request.worker.id) {
             return Err(format!("worker {} was cancelled", request.worker.id));
         }
+        let mut turn_context = system_context.clone();
+        if let Some(instruction) = request.control.take_instruction(&request.worker.id)? {
+            turn_context.push_str("\n\nLive steering instruction from the lead: ");
+            turn_context.push_str(&instruction);
+        }
+        if let Ok(snapshot) = request.control.progress(
+            &request.worker.id,
+            Some(session.id.as_str()),
+            session.turn,
+            "running implementation turn",
+        ) {
+            let _ = request.events.send(RuntimeEvent::Team(snapshot));
+        }
         let outcome = engine
-            .step_with_observer_and_context(&mut session, Some(&system_context), |update| {
+            .step_with_observer_and_context(&mut session, Some(&turn_context), |update| {
                 if let AgentUpdate::AssistantText(text) = update
                     && !text.trim().is_empty()
                 {
@@ -836,6 +958,14 @@ fn execute_production_implementer(
                 }
             })
             .map_err(|error| error.to_string())?;
+        if let Ok(snapshot) = request.control.progress(
+            &request.worker.id,
+            Some(session.id.as_str()),
+            session.turn,
+            "implementation turn completed",
+        ) {
+            let _ = request.events.send(RuntimeEvent::Team(snapshot));
+        }
         match outcome {
             StepOutcome::Continue => {}
             StepOutcome::TurnComplete | StepOutcome::Completed => {

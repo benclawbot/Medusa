@@ -32,6 +32,7 @@ use sha2::{Digest, Sha256};
 
 use crate::{
     RuntimeActivity, RuntimeActivityKind, RuntimeEvent,
+    team_control::{TeamControlPlane, TeamWorkerRegistration},
     production_orchestrator::{
         AgentContract, AgentRole, ContextPacket, ProductionExecutionPlan, context_for_task,
         validate_subagent_result,
@@ -39,7 +40,7 @@ use crate::{
 };
 
 const LEASE_TIMEOUT_MS: u64 = 5 * 60 * 1_000;
-const WORKER_TURN_LIMIT: u32 = 6;
+const WORKER_TURN_LIMIT: u32 = 12;
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct WorkerEvidence {
@@ -89,6 +90,8 @@ struct WorkerRequest {
     packet: ContextPacket,
     worker_id: String,
     team_context: TeamMemberContext,
+    control: TeamControlPlane,
+    events: Sender<RuntimeEvent>,
 }
 
 pub fn run_preflight(
@@ -97,11 +100,33 @@ pub fn run_preflight(
     session_api_key: Option<String>,
     plan: &ProductionExecutionPlan,
     cancel: &Arc<AtomicBool>,
+    control: &TeamControlPlane,
     events: &Sender<RuntimeEvent>,
 ) -> Result<CoordinatorEvidence, String> {
-    coordinate_with_executor(repo, plan, cancel, events, |request| {
+    coordinate_with_control(repo, plan, cancel, control, events, |request| {
         execute_production_worker(repo, config, session_api_key.clone(), cancel, request)
     })
+}
+
+#[cfg(test)]
+fn coordinate_with_executor<F>(
+    repo: &Path,
+    plan: &ProductionExecutionPlan,
+    cancel: &Arc<AtomicBool>,
+    events: &Sender<RuntimeEvent>,
+    executor: F,
+) -> Result<CoordinatorEvidence, String>
+where
+    F: Fn(WorkerRequest) -> Result<WorkerEvidence, String> + Sync,
+{
+    coordinate_with_control(
+        repo,
+        plan,
+        cancel,
+        &TeamControlPlane::default(),
+        events,
+        executor,
+    )
 }
 
 pub fn verify_repository(
@@ -131,10 +156,11 @@ pub fn verify_repository(
     Ok(result.evidence)
 }
 
-fn coordinate_with_executor<F>(
+fn coordinate_with_control<F>(
     repo: &Path,
     plan: &ProductionExecutionPlan,
     cancel: &Arc<AtomicBool>,
+    control: &TeamControlPlane,
     events: &Sender<RuntimeEvent>,
     executor: F,
 ) -> Result<CoordinatorEvidence, String>
@@ -144,12 +170,34 @@ where
     let repository_fingerprint = repository_fingerprint(repo)?;
     let root = execution_root(repo, &plan.fingerprint, &repository_fingerprint);
     let evidence_path = root.join("preflight-evidence.json");
+    let execution_key = execution_id(&plan.fingerprint, &repository_fingerprint);
     if evidence_path.is_file() {
         let restored: CoordinatorEvidence = serde_json::from_slice(
             &fs::read(&evidence_path).map_err(|error| error.to_string())?,
         )
         .map_err(|error| error.to_string())?;
         validate_evidence(plan, &repository_fingerprint, &evidence_path, &restored)?;
+        let _ = events.send(RuntimeEvent::Team(control.begin(
+            execution_key,
+            restored
+                .workers
+                .iter()
+                .map(|worker| TeamWorkerRegistration {
+                    worker_id: worker.worker_id.clone(),
+                    role: format!("{:?}", worker.role).to_ascii_lowercase(),
+                    task_id: worker.task_id.clone(),
+                }),
+        )));
+        for worker in &restored.workers {
+            if let Ok(snapshot) =
+                control.complete(&worker.worker_id, "durable evidence restored")
+            {
+                let _ = events.send(RuntimeEvent::Team(snapshot));
+            }
+        }
+        if !crate::production_orchestrator::requires_mutation(plan) {
+            let _ = events.send(RuntimeEvent::Team(control.finish()));
+        }
         return Ok(restored);
     }
 
@@ -157,6 +205,14 @@ where
     if contracts.len() < 2 {
         return Err("coordinated execution requires at least two independent preflight tasks".into());
     }
+    let _ = events.send(RuntimeEvent::Team(control.begin(
+        execution_key.clone(),
+        contracts.iter().map(|contract| TeamWorkerRegistration {
+            worker_id: worker_id_for(&contract.task_id),
+            role: format!("{:?}", contract.role).to_ascii_lowercase(),
+            task_id: contract.task_id.clone(),
+        }),
+    )));
     let contract_by_task = contracts
         .iter()
         .map(|contract| (contract.task_id.clone(), contract.clone()))
@@ -172,7 +228,7 @@ where
         }))
         .collect::<Vec<_>>();
     let team_path = root.join("team.json");
-    let execution_id = execution_id(&plan.fingerprint, &repository_fingerprint);
+    let execution_id = execution_key;
     let team = if team_path.is_file() {
         TeamRuntime::load(&team_path)?
     } else {
@@ -293,11 +349,16 @@ where
         )?;
         let team_context = team.member_context(&assignment.worker_id)?;
         team.start_member(&assignment.worker_id, &assignment.task_id, "starting")?;
+        if let Ok(snapshot) = control.start(&assignment.worker_id, None, "worker dispatched") {
+            let _ = events.send(RuntimeEvent::Team(snapshot));
+        }
         requests.push(WorkerRequest {
             contract,
             packet,
             worker_id: assignment.worker_id.clone(),
             team_context,
+            control: control.clone(),
+            events: events.clone(),
         });
     }
 
@@ -343,6 +404,9 @@ where
                     true,
                 )?;
                 team.finish_member(&worker_id, true)?;
+                if let Ok(snapshot) = control.fail(&worker_id, error.clone()) {
+                    let _ = events.send(RuntimeEvent::Team(snapshot));
+                }
                 failures.push(format!("{task_id} ({worker_id}): {error}"));
                 continue;
             }
@@ -385,6 +449,9 @@ where
                 true,
             )?;
             team.finish_member(&worker_id, true)?;
+            if let Ok(snapshot) = control.fail(&worker_id, error.clone()) {
+                let _ = events.send(RuntimeEvent::Team(snapshot));
+            }
             failures.push(format!("{task_id} ({worker_id}): {error}"));
             continue;
         }
@@ -406,11 +473,17 @@ where
                 true,
             )?;
             team.finish_member(&worker_id, true)?;
+            if let Ok(snapshot) = control.fail(&worker_id, error.clone()) {
+                let _ = events.send(RuntimeEvent::Team(snapshot));
+            }
             failures.push(format!("{task_id} ({worker_id}): {error}"));
             continue;
         }
         team.start_member(&result.worker_id, &result.task_id, &result.session_id)?;
         team.finish_member(&result.worker_id, false)?;
+        if let Ok(snapshot) = control.complete(&result.worker_id, "evidence accepted") {
+            let _ = events.send(RuntimeEvent::Team(snapshot));
+        }
         team.member_context(&result.worker_id)?.execute(
             "team_send_message",
             &json!({"recipient":"lead","body":result.summary.clone()}),
@@ -436,6 +509,9 @@ where
         state_path: evidence_path.clone(),
     };
     write_atomic(&evidence_path, &persisted)?;
+    if !crate::production_orchestrator::requires_mutation(plan) {
+        let _ = events.send(RuntimeEvent::Team(control.finish()));
+    }
     let _ = events.send(RuntimeEvent::Activity(RuntimeActivity {
         id: Some(plan.fingerprint.clone()),
         kind: RuntimeActivityKind::Done,
@@ -490,12 +566,32 @@ fn execute_production_worker(
     );
     let mut summaries = Vec::new();
     let mut completed = false;
+    if let Ok(snapshot) = request.control.start(
+        &request.worker_id,
+        Some(session.id.as_str()),
+        "model session started",
+    ) {
+        let _ = request.events.send(RuntimeEvent::Team(snapshot));
+    }
     for _ in 0..worker_config.agent.max_turns {
-        if cancel.load(Ordering::SeqCst) {
+        if cancel.load(Ordering::SeqCst) || request.control.is_cancelled(&request.worker_id) {
             return Err(format!("worker {} was cancelled", request.worker_id));
         }
+        let mut turn_context = system_context.clone();
+        if let Some(instruction) = request.control.take_instruction(&request.worker_id)? {
+            turn_context.push_str("\n\nLive steering instruction from the lead: ");
+            turn_context.push_str(&instruction);
+        }
+        if let Ok(snapshot) = request.control.progress(
+            &request.worker_id,
+            Some(session.id.as_str()),
+            session.turn,
+            "running model turn",
+        ) {
+            let _ = request.events.send(RuntimeEvent::Team(snapshot));
+        }
         let outcome = engine
-            .step_with_observer_and_context(&mut session, Some(&system_context), |update| {
+            .step_with_observer_and_context(&mut session, Some(&turn_context), |update| {
                 if let AgentUpdate::AssistantText(text) = update
                     && !text.trim().is_empty()
                 {
@@ -503,6 +599,14 @@ fn execute_production_worker(
                 }
             })
             .map_err(|error| error.to_string())?;
+        if let Ok(snapshot) = request.control.progress(
+            &request.worker_id,
+            Some(session.id.as_str()),
+            session.turn,
+            "model turn completed",
+        ) {
+            let _ = request.events.send(RuntimeEvent::Team(snapshot));
+        }
         match outcome {
             StepOutcome::Continue => {}
             StepOutcome::TurnComplete | StepOutcome::Completed => {

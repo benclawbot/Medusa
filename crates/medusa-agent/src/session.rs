@@ -169,7 +169,7 @@ pub struct AgentSession {
     pub rollback_receipts: Vec<RollbackReceipt>,
 }
 
-/// Creates the on-disk Medusa layout and repository map.
+/// Creates the on-disk Medusa runtime layout.
 pub fn bootstrap(repo: &Path) -> MedusaResult<()> {
     if fs::create_dir_all(repo.join(".medusa/sessions")).is_err() {
         fs::create_dir_all(fallback_session_root(repo))?;
@@ -188,21 +188,6 @@ pub fn bootstrap(repo: &Path) -> MedusaResult<()> {
     ] {
         if let Err(error) = fs::create_dir_all(&path) {
             record_nonfatal(repo, None, stage, operation, &error.to_string());
-        }
-    }
-    let map = repo.join("REPOSITORY_MAP.md");
-    if !map.exists() {
-        if let Err(error) = fs::write(
-            &map,
-            "# Repository Map\n\n## Overview\n\n## Languages and Frameworks\n\n## Entry Points\n\n## Build and Run Commands\n\n## Test Commands\n\n## Critical Invariants\n",
-        ) {
-            record_nonfatal(
-                repo,
-                None,
-                "bootstrap",
-                "write_repository_map",
-                &error.to_string(),
-            );
         }
     }
     Ok(())
@@ -382,4 +367,24 @@ fn redact_error(error: &str) -> String {
         })
         .collect::<Vec<_>>()
         .join(" ")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn bootstrap_keeps_runtime_state_under_medusa_directory() {
+        let repository = tempfile::tempdir().expect("repository");
+
+        bootstrap(repository.path()).expect("bootstrap");
+
+        assert!(repository.path().join(".medusa/sessions").is_dir());
+        let mut top_level = fs::read_dir(repository.path())
+            .expect("repository entries")
+            .map(|entry| entry.expect("repository entry").file_name())
+            .collect::<Vec<_>>();
+        top_level.sort();
+        assert_eq!(top_level, vec![std::ffi::OsString::from(".medusa")]);
+    }
 }

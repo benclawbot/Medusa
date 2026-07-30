@@ -384,13 +384,53 @@ impl WorkerManager {
         Ok(commit_tree == head_tree)
     }
 
-    /// Removes untracked per-session runtime state from an isolated worktree.
+    /// Removes per-session runtime state and generated interpreter caches from a worktree.
     ///
-    /// Agent sessions persist under `.medusa`; those files are execution evidence, not product
-    /// changes and must never enter a worker commit. Tracked `.medusa` files remain untouched and
-    /// are still subject to ordinary scope validation.
-    pub fn discard_untracked_runtime_state(&self, worker: &Worker) -> MedusaResult<()> {
-        run_git(&worker.worktree, &["clean", "-fd", "--", ".medusa"])
+    /// Agent sessions persist under `.medusa`, and supervised Python verification can create
+    /// bytecode or test caches. These files are execution residue, not product changes, and must
+    /// never enter a worker commit. Files tracked by the base commit remain untouched and are still
+    /// subject to ordinary scope validation.
+    pub fn discard_untracked_runtime_state(
+        &self,
+        worker: &Worker,
+        base_commit: &str,
+    ) -> MedusaResult<()> {
+        if base_commit.trim().is_empty() {
+            return Err(invalid("worker base commit cannot be empty"));
+        }
+        let added_runtime_paths = git_nul_paths(
+            &worker.worktree,
+            &[
+                "diff",
+                "--name-only",
+                "--diff-filter=A",
+                "-z",
+                base_commit,
+                "--",
+            ],
+        )?
+        .into_iter()
+        .filter(|path| is_runtime_residue(path))
+        .collect::<Vec<_>>();
+        for path in added_runtime_paths {
+            run_git(
+                &worker.worktree,
+                &["rm", "-f", "--ignore-unmatch", "--", &path],
+            )?;
+        }
+        run_git(
+            &worker.worktree,
+            &[
+                "clean",
+                "-fdx",
+                "--",
+                ".medusa",
+                ":(glob)**/__pycache__/**",
+                ":(glob)**/.pytest_cache/**",
+                ":(glob)**/*.pyc",
+                ":(glob)**/*.pyo",
+            ],
+        )
     }
 
     /// Runs combined repository verification after all worker commits merge.
@@ -516,17 +556,33 @@ fn changed_paths_for_commit(repo: &Path, commit: &str) -> MedusaResult<Vec<Strin
     Ok(paths)
 }
 
+fn is_runtime_residue(path: &str) -> bool {
+    path == ".medusa"
+        || path.starts_with(".medusa/")
+        || path
+            .split('/')
+            .any(|component| matches!(component, "__pycache__" | ".pytest_cache"))
+        || path.ends_with(".pyc")
+        || path.ends_with(".pyo")
+}
+
 fn ensure_clean(repo: &Path) -> MedusaResult<()> {
     let status = git_stdout(repo, &["status", "--porcelain", "--untracked-files=all"])?;
-    let dirty = status.lines().any(|line| {
-        let path = line.get(3..).unwrap_or_default().trim_matches('"');
-        !(line.starts_with("?? ") && (path == ".medusa" || path.starts_with(".medusa/")))
-    });
-    if dirty {
+    let dirty = status
+        .lines()
+        .filter(|line| {
+            let path = line.get(3..).unwrap_or_default().trim_matches('"');
+            !(line.starts_with("?? ") && (path == ".medusa" || path.starts_with(".medusa/")))
+        })
+        .collect::<Vec<_>>();
+    if !dirty.is_empty() {
         Err(MedusaError::new(
             ErrorCode::PolicyDenied,
             ErrorCategory::Policy,
-            "merge coordinator requires a clean repository outside Medusa runtime state",
+            format!(
+                "merge coordinator requires a clean repository outside Medusa runtime state; dirty entries: {}",
+                dirty.join(", ")
+            ),
         ))
     } else {
         Ok(())
@@ -755,6 +811,128 @@ mod tests {
         assert!(!worker_b.worktree.join("private.txt").exists());
         assert!(!repo.join("private.txt").exists());
         manager.cleanup(&[worker_a, worker_b]).expect("cleanup");
+    }
+
+    #[test]
+    fn clean_check_allows_only_untracked_medusa_runtime_state() {
+        let (_directory, repo, worktrees) = repository();
+        let manager = WorkerManager::new(&repo, &worktrees).expect("manager");
+        fs::create_dir_all(repo.join(".medusa/sessions/session-1")).expect("runtime directory");
+        fs::write(repo.join(".medusa/sessions/session-1/session.json"), "{}\n")
+            .expect("runtime state");
+
+        manager.require_clean().expect("runtime state is allowed");
+    }
+
+    #[test]
+    fn clean_check_reports_every_dirty_entry() {
+        let (_directory, repo, worktrees) = repository();
+        let manager = WorkerManager::new(&repo, &worktrees).expect("manager");
+        fs::write(repo.join("base.txt"), "changed\n").expect("tracked change");
+        fs::write(repo.join("unexpected.txt"), "untracked\n").expect("untracked change");
+
+        let error = manager.require_clean().expect_err("dirty repository");
+        let message = error.to_string();
+        assert!(message.contains("base.txt"));
+        assert!(message.contains("unexpected.txt"));
+    }
+
+    #[test]
+    fn runtime_residue_classification_is_narrow() {
+        for path in [
+            ".medusa/session.json",
+            "src/__pycache__/slugify.cpython-312.pyc",
+            "src/.pytest_cache/state",
+            "generated.pyc",
+            "generated.pyo",
+        ] {
+            assert!(is_runtime_residue(path), "{path} must be runtime residue");
+        }
+        for path in ["src/slugify.py", "src/cache.rs", "docs/pytest_cache.md"] {
+            assert!(
+                !is_runtime_residue(path),
+                "{path} must remain product content"
+            );
+        }
+    }
+
+    #[test]
+    fn worker_cleanup_discards_ignored_runtime_state_and_preserves_tracked_state() {
+        let (_directory, repo, worktrees) = repository();
+        fs::write(repo.join(".gitignore"), ".medusa/\n").expect("gitignore");
+        fs::create_dir(repo.join(".medusa")).expect("runtime directory");
+        fs::write(repo.join(".medusa/policy.json"), "{}\n").expect("tracked state");
+        git(&repo, &["add", ".gitignore"]);
+        git(&repo, &["add", "-f", ".medusa/policy.json"]);
+        git(&repo, &["commit", "-m", "track runtime policy"]);
+
+        let manager = WorkerManager::new(&repo, &worktrees).expect("manager");
+        let base = manager.repository_head().expect("base");
+        let worker = manager.create_worker("runtime-cleanup").expect("worker");
+        fs::create_dir_all(worker.worktree.join(".medusa/artifacts")).expect("artifacts");
+        fs::write(
+            worker.worktree.join(".medusa/artifacts/fs_read.txt"),
+            "runtime output\n",
+        )
+        .expect("runtime artifact");
+        fs::write(
+            worker
+                .worktree
+                .join(".medusa/artifacts/fs_read_committed.txt"),
+            "committed runtime output\n",
+        )
+        .expect("committed runtime artifact");
+        fs::create_dir_all(worker.worktree.join("src/__pycache__")).expect("python cache");
+        fs::write(
+            worker
+                .worktree
+                .join("src/__pycache__/slugify.cpython-312.pyc"),
+            "generated bytecode\n",
+        )
+        .expect("python bytecode");
+        git(
+            &worker.worktree,
+            &[
+                "add",
+                "-f",
+                ".medusa/artifacts/fs_read_committed.txt",
+                "src/__pycache__/slugify.cpython-312.pyc",
+            ],
+        );
+        git(&worker.worktree, &["commit", "-m", "worker checkpoint"]);
+        fs::create_dir_all(worker.worktree.join("src/.pytest_cache")).expect("pytest cache");
+        fs::write(
+            worker.worktree.join("src/.pytest_cache/state"),
+            "generated test cache\n",
+        )
+        .expect("pytest state");
+
+        manager
+            .discard_untracked_runtime_state(&worker, &base)
+            .expect("discard runtime state");
+
+        assert!(worker.worktree.join(".medusa/policy.json").is_file());
+        assert!(
+            !worker
+                .worktree
+                .join(".medusa/artifacts/fs_read.txt")
+                .exists()
+        );
+        assert!(
+            !worker
+                .worktree
+                .join(".medusa/artifacts/fs_read_committed.txt")
+                .exists()
+        );
+        assert!(!worker.worktree.join("src/__pycache__").exists());
+        assert!(!worker.worktree.join("src/.pytest_cache").exists());
+        assert!(
+            manager
+                .changed_paths_since(&worker, &base)
+                .expect("changed paths")
+                .is_empty()
+        );
+        manager.cleanup(&[worker]).expect("cleanup");
     }
 
     #[test]

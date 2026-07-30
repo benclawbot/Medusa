@@ -87,6 +87,7 @@ pub struct TeamMemberContext {
 pub struct AgentExecutionPolicy {
     allowed_tools: Option<BTreeSet<String>>,
     allow_user_questions: bool,
+    allowed_write_paths: Option<Vec<String>>,
 }
 
 impl AgentExecutionPolicy {
@@ -95,6 +96,7 @@ impl AgentExecutionPolicy {
         Self {
             allowed_tools: None,
             allow_user_questions: true,
+            allowed_write_paths: None,
         }
     }
 
@@ -125,7 +127,19 @@ impl AgentExecutionPolicy {
         Self {
             allowed_tools: Some(allowed),
             allow_user_questions: false,
+            allowed_write_paths: None,
         }
+    }
+
+    #[must_use]
+    pub fn with_allowed_write_paths(mut self, paths: impl IntoIterator<Item = String>) -> Self {
+        self.allowed_write_paths = Some(
+            paths
+                .into_iter()
+                .filter_map(|path| normalize_relative_path(&path))
+                .collect(),
+        );
+        self
     }
 
     #[must_use]
@@ -137,6 +151,84 @@ impl AgentExecutionPolicy {
             .as_ref()
             .is_none_or(|allowed| allowed.contains(tool))
     }
+
+    #[must_use]
+    pub fn denial_reason(&self, tool: &str, input: &Value) -> Option<String> {
+        if !self.allows(tool) {
+            return Some(format!(
+                "tool `{tool}` is denied by the role-bound execution policy"
+            ));
+        }
+        let scopes = self.allowed_write_paths.as_ref()?;
+        if tool == "symbol_rename" {
+            return Some(
+                "tool `symbol_rename` cannot prove its affected files are inside the delegated write scope; use guarded path-explicit edits instead"
+                    .to_owned(),
+            );
+        }
+        let paths = requested_write_paths(tool, input)?;
+        let allowed = paths.iter().all(|path| {
+            normalize_relative_path(path).is_some_and(|path| {
+                scopes.iter().any(|scope| {
+                    scope_allows(scope, &path)
+                        || (tool == "fs_create_dir" && directory_leads_to_scope(scope, &path))
+                })
+            })
+        });
+        (!allowed).then(|| {
+            format!(
+                "tool `{tool}` requested an out-of-scope path; allowed write scopes are {scopes:?}"
+            )
+        })
+    }
+}
+
+fn requested_write_paths<'a>(tool: &str, input: &'a Value) -> Option<Vec<&'a str>> {
+    match tool {
+        "fs_write" | "fs_create_dir" => Some(vec![input.get("path")?.as_str()?]),
+        "patch_apply" => input
+            .get("edits")?
+            .as_array()?
+            .iter()
+            .map(|edit| edit.get("path")?.as_str())
+            .collect(),
+        _ => None,
+    }
+}
+
+fn normalize_relative_path(path: &str) -> Option<String> {
+    let path = path.replace('\\', "/");
+    if path.starts_with('/') || path.as_bytes().get(1) == Some(&b':') {
+        return None;
+    }
+    let mut segments = Vec::new();
+    for segment in path.split('/') {
+        match segment {
+            "" | "." => {}
+            ".." => return None,
+            segment => segments.push(segment),
+        }
+    }
+    Some(if segments.is_empty() {
+        ".".to_owned()
+    } else {
+        segments.join("/")
+    })
+}
+
+fn scope_allows(scope: &str, path: &str) -> bool {
+    matches!(scope, "." | "repository")
+        || path == scope
+        || path
+            .strip_prefix(scope)
+            .is_some_and(|remainder| remainder.starts_with('/'))
+}
+
+fn directory_leads_to_scope(scope: &str, path: &str) -> bool {
+    matches!(scope, "." | "repository")
+        || scope
+            .strip_prefix(path)
+            .is_some_and(|remainder| remainder.starts_with('/'))
 }
 
 impl Default for TeamRuntime {
@@ -556,5 +648,100 @@ mod tests {
         assert!(!policy.allows("fs_write"));
         assert!(!policy.allows("shell_run"));
         assert!(!policy.allows("ask_user_question"));
+    }
+
+    #[test]
+    fn scoped_policy_rejects_out_of_contract_file_operations() {
+        let policy = AgentExecutionPolicy::for_team_role(TeamRole::Implementer)
+            .with_allowed_write_paths(vec!["src/slugify.py".to_owned()]);
+
+        assert!(
+            policy
+                .denial_reason(
+                    "fs_write",
+                    &json!({"path":"src/slugify.py","content":"fixed"})
+                )
+                .is_none()
+        );
+        assert!(
+            policy
+                .denial_reason("fs_create_dir", &json!({"path":"src"}))
+                .is_none()
+        );
+        assert!(
+            policy
+                .denial_reason(
+                    "patch_apply",
+                    &json!({"edits":[{
+                        "path":"src/slugify.py",
+                        "start_byte":0,
+                        "end_byte":0,
+                        "expected":"",
+                        "replacement":"fixed"
+                    }]})
+                )
+                .is_none()
+        );
+
+        for path in ["src/__init__.py", "../slugify.py", "/tmp/slugify.py"] {
+            assert!(
+                policy
+                    .denial_reason("fs_write", &json!({"path":path,"content":"blocked"}))
+                    .is_some(),
+                "{path} must be denied"
+            );
+        }
+        assert!(
+            policy
+                .denial_reason("fs_create_dir", &json!({"path":"tests"}))
+                .is_some()
+        );
+        assert!(
+            policy
+                .denial_reason(
+                    "patch_apply",
+                    &json!({"edits":[{
+                        "path":"src/__init__.py",
+                        "start_byte":0,
+                        "end_byte":0,
+                        "expected":"",
+                        "replacement":"blocked"
+                    }]})
+                )
+                .is_some()
+        );
+        assert!(
+            policy
+                .denial_reason(
+                    "symbol_rename",
+                    &json!({"old_name":"before","new_name":"after"})
+                )
+                .is_some()
+        );
+    }
+
+    #[test]
+    fn scoped_policy_allows_directory_scopes_and_unrestricted_reads() {
+        let policy = AgentExecutionPolicy::for_team_role(TeamRole::Implementer)
+            .with_allowed_write_paths(vec!["src/".to_owned()]);
+
+        assert!(
+            policy
+                .denial_reason("fs_read", &json!({"path":"README.md"}))
+                .is_none()
+        );
+        assert!(
+            policy
+                .denial_reason(
+                    "fs_write",
+                    &json!({"path":"src/nested/file.rs","content":""})
+                )
+                .is_none()
+        );
+        assert!(
+            policy
+                .denial_reason("fs_write", &json!({"path":"tests/file.rs","content":""}))
+                .is_some()
+        );
     }
 }

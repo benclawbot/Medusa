@@ -1,5 +1,5 @@
 use std::{
-    collections::BTreeMap,
+    collections::{BTreeMap, BTreeSet},
     fs,
     path::{Path, PathBuf},
 };
@@ -334,9 +334,9 @@ fn decompose(text: &str, mutating: bool) -> Vec<Task> {
         Task { id: "risk-review".to_owned(), dependencies: vec![], capabilities: vec!["risk-review".to_owned()], write_paths: vec![], speculative: false },
     ];
     if mutating {
-        let scope = infer_scope(text);
+        let scopes = infer_scopes(text);
         tasks.extend([
-            Task { id: "implement".to_owned(), dependencies: vec!["analyze".to_owned(), "risk-review".to_owned()], capabilities: vec!["coding".to_owned()], write_paths: vec![scope], speculative: false },
+            Task { id: "implement".to_owned(), dependencies: vec!["analyze".to_owned(), "risk-review".to_owned()], capabilities: vec!["coding".to_owned()], write_paths: scopes, speculative: false },
             Task { id: "review".to_owned(), dependencies: vec!["implement".to_owned()], capabilities: vec!["review".to_owned()], write_paths: vec![], speculative: false },
             Task { id: "verify".to_owned(), dependencies: vec!["review".to_owned()], capabilities: vec!["verification".to_owned()], write_paths: vec![], speculative: false },
         ]);
@@ -372,12 +372,61 @@ fn objective_requires_mutation(text: &str) -> bool {
         })
 }
 
-fn infer_scope(text: &str) -> String {
-    text.split_whitespace()
-        .find(|value| value.contains('/'))
-        .map(|value| value.trim_matches(|c: char| !c.is_ascii_alphanumeric() && c != '/' && c != '-' && c != '_').to_owned())
-        .filter(|value| !value.is_empty())
-        .unwrap_or_else(|| "repository".to_owned())
+fn infer_scopes(text: &str) -> Vec<String> {
+    let mut scopes = BTreeSet::new();
+    for sentence in text.split('\n').flat_map(|line| line.split(". ")) {
+        let lower = sentence.to_ascii_lowercase();
+        let forbids_mutation = [
+            "without modifying",
+            "do not modify",
+            "don't modify",
+            "must not modify",
+            "leave unchanged",
+            "keep unchanged",
+        ]
+        .iter()
+        .any(|marker| lower.contains(marker));
+        if forbids_mutation || !objective_requires_mutation(sentence) {
+            continue;
+        }
+        scopes.extend(
+            sentence
+                .split_whitespace()
+                .filter_map(normalize_candidate_path)
+                .filter(|candidate| looks_like_repo_path(candidate)),
+        );
+    }
+    if scopes.is_empty() {
+        vec!["repository".to_owned()]
+    } else {
+        scopes.into_iter().collect()
+    }
+}
+
+fn normalize_candidate_path(value: &str) -> Option<String> {
+    let candidate = value
+        .trim_matches(|character: char| {
+            !character.is_ascii_alphanumeric()
+                && !matches!(character, '/' | '\\' | '.' | '-' | '_')
+        })
+        .replace('\\', "/");
+    let candidate = candidate.trim_start_matches("./");
+    (!candidate.is_empty()
+        && !candidate.starts_with('/')
+        && !candidate.split('/').any(|segment| segment == ".."))
+    .then(|| candidate.to_owned())
+}
+
+fn looks_like_repo_path(candidate: &str) -> bool {
+    if candidate.contains("://") {
+        return false;
+    }
+    candidate.contains('/')
+        || candidate
+            .rsplit('/')
+            .next()
+            .and_then(|name| name.rsplit_once('.'))
+            .is_some_and(|(stem, extension)| !stem.is_empty() && !extension.is_empty())
 }
 
 fn default_workers() -> Vec<Worker> {
@@ -414,6 +463,34 @@ mod tests {
         assert_eq!(planned.schedule.as_ref().unwrap().waves.len(), 4);
         assert_eq!(planned.schedule.as_ref().unwrap().waves[0].len(), 2);
         assert!(planned.contracts.iter().any(|contract| contract.delegation.allowed));
+    }
+
+    #[test]
+    fn mutating_scope_collects_positive_paths_and_excludes_protected_files() {
+        let draft = PromptDraft {
+            text: "Repair all defects without modifying verify.sh, test.mjs, or package.json. Correct value.txt, implement src/slugify.py, and repair src/counter.js. Run ./verify.sh until it passes."
+                .to_owned(),
+            ..PromptDraft::default()
+        };
+        let planned = plan(&draft).unwrap();
+        let implementer = planned
+            .contracts
+            .iter()
+            .find(|contract| contract.role == AgentRole::Implementer)
+            .expect("implementer contract");
+        assert_eq!(
+            implementer.allowed_write_paths,
+            vec![
+                "src/counter.js".to_owned(),
+                "src/slugify.py".to_owned(),
+                "value.txt".to_owned(),
+            ]
+        );
+    }
+
+    #[test]
+    fn scope_defaults_to_repository_when_no_positive_path_is_named() {
+        assert_eq!(infer_scopes("Fix repository tests"), vec!["repository"]);
     }
 
     #[test]

@@ -82,6 +82,20 @@
     }
 
     #[test]
+    fn implementer_turn_budget_is_bounded_without_truncating_smaller_limits() {
+        assert_eq!(bounded_implementer_turns(0), 1);
+        assert_eq!(bounded_implementer_turns(8), 8);
+        assert_eq!(
+            bounded_implementer_turns(Config::default().agent.max_turns),
+            IMPLEMENTER_TURN_LIMIT
+        );
+        assert_eq!(
+            bounded_implementer_turns(IMPLEMENTER_TURN_LIMIT + 1),
+            IMPLEMENTER_TURN_LIMIT
+        );
+    }
+
+    #[test]
     fn isolated_implementation_is_verified_integrated_and_cleaned() {
         let (_directory, repo, plan, preflight) = repository("src/");
         let cancel = Arc::new(AtomicBool::new(false));

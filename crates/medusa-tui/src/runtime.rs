@@ -8,7 +8,7 @@ use crate::commands::{ModelConfiguration, SlashCommand};
 
 pub use medusa_runtime::{
     RecoveryActionRequest, RecoveryOperation, RecoveryPreflightEvidence, RecoveryView,
-    RuntimeActivity, RuntimeActivityKind, RuntimeError, SubmitDisposition,
+    RuntimeActivity, RuntimeActivityKind, RuntimeError, SubmitDisposition, TeamSnapshot,
 };
 
 #[derive(Debug)]
@@ -16,6 +16,7 @@ pub enum RuntimeEvent {
     Started,
     AssistantText(String),
     Activity(RuntimeActivity),
+    Team(TeamSnapshot),
     Plan(TranscriptPlan),
     Question(RuntimeQuestion),
     Usage {
@@ -127,6 +128,7 @@ fn map_event(event: medusa_runtime::RuntimeEvent) -> RuntimeEvent {
         medusa_runtime::RuntimeEvent::Activity(activity) => {
             RuntimeEvent::Activity(presentation_activity(activity))
         }
+        medusa_runtime::RuntimeEvent::Team(snapshot) => RuntimeEvent::Team(snapshot),
         medusa_runtime::RuntimeEvent::Plan(steps) => RuntimeEvent::Plan(TranscriptPlan {
             steps: steps
                 .into_iter()

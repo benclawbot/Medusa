@@ -387,6 +387,7 @@ fn run_supervised_command<S: AsRef<std::ffi::OsStr>>(
     let mut child = Command::new(program)
         .args(args)
         .current_dir(repo)
+        .env("PYTHONDONTWRITEBYTECODE", "1")
         .stdin(Stdio::null())
         .stdout(Stdio::from(stdout_file))
         .stderr(Stdio::from(stderr_file))
@@ -794,6 +795,27 @@ mod tests {
                 .iter()
                 .any(|line| line == "static_site=index.html")
         );
+    }
+
+    #[test]
+    fn verification_commands_disable_python_bytecode_writes() {
+        let directory = tempfile::tempdir().expect("tempdir");
+        #[cfg(windows)]
+        fs::write(
+            directory.path().join("verify.ps1"),
+            "if ($env:PYTHONDONTWRITEBYTECODE -ne '1') { exit 1 }\n",
+        )
+        .expect("verify");
+        #[cfg(not(windows))]
+        fs::write(
+            directory.path().join("verify.sh"),
+            "test \"${PYTHONDONTWRITEBYTECODE:-}\" = 1\n",
+        )
+        .expect("verify");
+
+        let result = targeted_verification(directory.path()).expect("verification");
+
+        assert!(result.passed);
     }
 
     #[test]

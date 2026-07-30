@@ -716,9 +716,9 @@ impl<P: ModelProvider> AgentEngine<P> {
                         "tool batch was unexpectedly empty",
                     )
                 })?;
-                let result = if !self.execution_policy.allows(&name) {
-                    let reason =
-                        format!("tool `{name}` is denied by the role-bound execution policy");
+                let result = if let Some(reason) =
+                    self.execution_policy.denial_reason(&name, &input)
+                {
                     append_observed(
                         session,
                         EventPayload::ToolCallDenied {
@@ -803,6 +803,7 @@ impl<P: ModelProvider> AgentEngine<P> {
                 if let Err(error) = &result
                     && error.code == ErrorCode::PolicyDenied
                     && self.config.agent.mode != Mode::ReadOnly
+                    && self.execution_policy.denial_reason(&name, &input).is_none()
                     && interactively_approvable(&name, &input)
                 {
                     let action = approval_action_label(&name, &input);
