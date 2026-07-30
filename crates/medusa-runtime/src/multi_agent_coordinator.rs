@@ -39,7 +39,9 @@ use crate::{
 };
 
 const LEASE_TIMEOUT_MS: u64 = 5 * 60 * 1_000;
-const WORKER_TURN_LIMIT: u32 = 6;
+// Read-only repository research can require several inspect/search tool cycles. Keep the
+// execution bounded while allowing the production live-coding path to finish its evidence pass.
+const WORKER_TURN_LIMIT: u32 = 12;
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct WorkerEvidence {
