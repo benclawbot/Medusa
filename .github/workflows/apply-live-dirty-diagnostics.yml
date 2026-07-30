@@ -1,0 +1,106 @@
+name: Apply live dirty-state diagnostics
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+
+permissions:
+  contents: write
+
+jobs:
+  apply-and-validate:
+    if: github.event.pull_request.head.ref == 'agent/fix-live-preflight-dirty-state'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          ref: ${{ github.event.pull_request.head.ref }}
+          fetch-depth: 0
+      - uses: dtolnay/rust-toolchain@39b0b3842c7e8bbf6904c0bfc3d9006fdd4dc4e0
+        with:
+          components: rustfmt, clippy
+      - name: Apply diagnostics and evidence capture
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          workers = Path('crates/medusa-workers/src/lib.rs')
+          source = workers.read_text()
+          old = '''fn ensure_clean(repo: &Path) -> MedusaResult<()> {
+    let status = git_stdout(repo, &["status", "--porcelain", "--untracked-files=all"])?;
+    let dirty = status.lines().any(|line| {
+        let path = line.get(3..).unwrap_or_default().trim_matches('"');
+        !(line.starts_with("?? ") && (path == ".medusa" || path.starts_with(".medusa/")))
+    });
+    if dirty {
+        Err(MedusaError::new(
+            ErrorCode::PolicyDenied,
+            ErrorCategory::Policy,
+            "merge coordinator requires a clean repository outside Medusa runtime state",
+        ))
+    } else {
+        Ok(())
+    }
+}
+'''
+          new = '''fn ensure_clean(repo: &Path) -> MedusaResult<()> {
+    let status = git_stdout(repo, &["status", "--porcelain", "--untracked-files=all"])?;
+    let dirty = status
+        .lines()
+        .filter(|line| {
+            let path = line.get(3..).unwrap_or_default().trim_matches('"');
+            !(line.starts_with("?? ") && (path == ".medusa" || path.starts_with(".medusa/")))
+        })
+        .map(str::to_owned)
+        .collect::<Vec<_>>();
+    if dirty.is_empty() {
+        Ok(())
+    } else {
+        Err(MedusaError::new(
+            ErrorCode::PolicyDenied,
+            ErrorCategory::Policy,
+            format!(
+                "merge coordinator requires a clean repository outside Medusa runtime state; dirty entries: {}",
+                dirty.join(" | ")
+            ),
+        ))
+    }
+}
+'''
+          if source.count(old) != 1:
+              raise SystemExit('expected one clean-repository implementation')
+          workers.write_text(source.replace(old, new, 1))
+
+          live = Path('scripts/live-coding-e2e.sh')
+          source = live.read_text()
+          old = '''  mkdir -p "${ARTIFACTS:-live-e2e-artifacts}"
+  printf '{"passed":0,"total":3,"sessions":1,"provider":"minimax","credential_persisted":false,"verification_contract_unchanged":false,"result":"failed","phase":"%s","exit_code":%d,"elapsed_seconds":%d}\n' \\
+'''
+          new = '''  mkdir -p "${ARTIFACTS:-live-e2e-artifacts}"
+  if [[ -n "${REPO:-}" && -d "$REPO/.git" ]]; then
+    git -C "$REPO" status --porcelain --untracked-files=all > "${ARTIFACTS:-live-e2e-artifacts}/repository-status.txt" || true
+    git -C "$REPO" diff --binary > "${ARTIFACTS:-live-e2e-artifacts}/repository-diff.patch" || true
+  fi
+  printf '{"passed":0,"total":3,"sessions":1,"provider":"minimax","credential_persisted":false,"verification_contract_unchanged":false,"result":"failed","phase":"%s","exit_code":%d,"elapsed_seconds":%d}\n' \\
+'''
+          if source.count(old) != 1:
+              raise SystemExit('expected one live failure-summary anchor')
+          live.write_text(source.replace(old, new, 1))
+          PY
+      - name: Format
+        run: cargo fmt --all
+      - name: Check workspace
+        run: cargo check --workspace --all-targets
+      - name: Strict Clippy
+        run: cargo clippy --workspace --all-targets --all-features -- -D warnings
+      - name: Affected tests
+        run: cargo test -p medusa-workers -p medusa-runtime
+      - name: Commit validated source and remove temporary workflow
+        shell: bash
+        run: |
+          rm .github/workflows/apply-live-dirty-diagnostics.yml
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add crates/medusa-workers/src/lib.rs scripts/live-coding-e2e.sh .github/workflows/apply-live-dirty-diagnostics.yml
+          git commit -m 'Expose dirty paths when worktree integration fails closed'
+          git push origin HEAD:${{ github.event.pull_request.head.ref }}
