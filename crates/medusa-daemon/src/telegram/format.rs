@@ -36,12 +36,7 @@ pub fn split_telegram_text(value: &str, limit_utf16: usize) -> Vec<String> {
             for character in line.chars() {
                 let character_len = character.len_utf16();
                 if current_len + character_len > limit_utf16 && !current.is_empty() {
-                    close_fence_if_possible(
-                        &mut current,
-                        &mut current_len,
-                        fenced,
-                        limit_utf16,
-                    );
+                    close_fence_if_possible(&mut current, &mut current_len, fenced, limit_utf16);
                     chunks.push(current);
                     current = if fenced {
                         CODE_FENCE.to_owned()
