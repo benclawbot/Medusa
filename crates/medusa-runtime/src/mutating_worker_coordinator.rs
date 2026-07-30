@@ -42,9 +42,12 @@ use support::{
 };
 
 const LEASE_TIMEOUT_MS: u64 = 10 * 60 * 1_000;
-const IMPLEMENTER_TURN_LIMIT: u32 = 12;
+// Keep implementation continuous and bounded. Restarting after a small ceiling discards the
+// model's accumulated repository context and repeats the same work in a fresh worktree.
+const IMPLEMENTER_TURN_LIMIT: u32 = 32;
 const MAX_ATTEMPTS: u32 = 2;
 const IMPLEMENTER_ID: &str = "worker-implement";
+const TURN_BUDGET_EXHAUSTED: &str = "exceeded its bounded turn budget";
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
@@ -384,7 +387,7 @@ where
             Ok(run) => run,
             Err(error) => {
                 let cancelled = cancel.load(Ordering::SeqCst);
-                let retryable = !cancelled && attempt < MAX_ATTEMPTS;
+                let retryable = executor_failure_retryable(&error, cancelled, attempt);
                 let recorded = record_attempt_failure(
                     &mut controller,
                     team,
@@ -785,6 +788,14 @@ fn integrate_prepared(
     evidence_from_state(state_path, task_id, &state)
 }
 
+fn bounded_implementer_turns(configured: u32) -> u32 {
+    configured.clamp(1, IMPLEMENTER_TURN_LIMIT)
+}
+
+fn executor_failure_retryable(error: &str, cancelled: bool, attempt: u32) -> bool {
+    !cancelled && attempt < MAX_ATTEMPTS && !error.ends_with(TURN_BUDGET_EXHAUSTED)
+}
+
 fn execute_production_implementer(
     config: &Config,
     session_api_key: Option<String>,
@@ -793,10 +804,7 @@ fn execute_production_implementer(
 ) -> Result<WorkerRun, String> {
     let mut worker_config = config.clone();
     worker_config.agent.mode = Mode::Yolo;
-    worker_config.agent.max_turns = worker_config
-        .agent
-        .max_turns
-        .clamp(1, IMPLEMENTER_TURN_LIMIT);
+    worker_config.agent.max_turns = bounded_implementer_turns(worker_config.agent.max_turns);
     let provider = ConfiguredProvider::manager_from_config(&worker_config, session_api_key)
         .map_err(|error| error.to_string())?;
     let engine = AgentEngine::new_with_cancellation(provider, worker_config.clone(), Arc::clone(cancel))
@@ -851,10 +859,7 @@ fn execute_production_implementer(
         }
     }
     if !completed {
-        return Err(format!(
-            "worker {} exceeded its bounded turn budget",
-            request.worker.id
-        ));
+        return Err(format!("worker {} {TURN_BUDGET_EXHAUSTED}", request.worker.id));
     }
     let summary = summaries.join("\n").trim().to_owned();
     if summary.is_empty() {
