@@ -96,7 +96,7 @@ Every shipped `RuntimeEvent` has an explicit durability classification:
 
 The central runtime dispatcher persists controller-owned canonical events before forwarding them. If serialization or journal persistence fails, the authoritative event is not published as though it succeeded. The failed authoritative event is suppressed; only an explicit persistence failure notification is forwarded. Agent-owned events use the same append-and-commit boundary before observers can derive frontend updates.
 
-The low-level `append_event` and `AppendDisposition` path remains retained for compatibility and explicit idempotency/conflict handling; production event creation now uses the committed append transaction. Snapshot commits accept an exact existing write-ahead tail, merge newer committed controller events into a stale session, and discard only an unrelated crash tail before failing closed on genuine divergence.
+The low-level `append_event`, `AppendDisposition`, and `commit_snapshot` paths remain retained for compatibility and explicit idempotency/conflict handling; production event creation and full persistence now use the committed append transaction and atomic publication boundary. Snapshot commits accept an exact existing write-ahead tail, merge newer committed controller events into a stale session, and discard only an unrelated crash tail before failing closed on genuine divergence.
 
 Concurrent full-session persistence now holds the same journal lock through compatibility-snapshot publication and uses collision-free temporary files, preventing competing writers from renaming the same temporary path. The regression suite exercises repeated multi-threaded persistence and verifies that no temporary files remain after publication.
 
