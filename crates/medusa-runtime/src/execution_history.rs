@@ -128,10 +128,7 @@ fn inspect_session(
     })
 }
 
-fn execution_log(
-    session_id: &str,
-    events: &[EventEnvelope],
-) -> Result<ExecutionLog, RuntimeError> {
+fn execution_log(session_id: &str, events: &[EventEnvelope]) -> Result<ExecutionLog, RuntimeError> {
     let mut log = ExecutionLog::new(session_id).map_err(RuntimeError::agent)?;
     for event in events {
         log.append_event(payload_kind(&event.payload), digest(&event.payload)?)
@@ -147,7 +144,8 @@ fn execution_log(
         subsystem_fingerprints(events)?,
     )
     .map_err(RuntimeError::agent)?;
-    log.add_checkpoint(checkpoint).map_err(RuntimeError::agent)?;
+    log.add_checkpoint(checkpoint)
+        .map_err(RuntimeError::agent)?;
     log.verify().map_err(RuntimeError::agent)?;
     Ok(log)
 }
@@ -289,10 +287,9 @@ fn reduce(session_id: &str, events: &[EventEnvelope]) -> ExecutionState {
 }
 
 fn trace(session_id: &str, events: &[EventEnvelope]) -> Result<ExecutionTrace, RuntimeError> {
-    let initial = events.first().map_or_else(
-        || digest(&Vec::<EventEnvelope>::new()),
-        digest,
-    )?;
+    let initial = events
+        .first()
+        .map_or_else(|| digest(&Vec::<EventEnvelope>::new()), digest)?;
     let schedule = category_fingerprint(events, |payload| {
         matches!(
             payload,
@@ -355,10 +352,7 @@ fn trace(session_id: &str, events: &[EventEnvelope]) -> Result<ExecutionTrace, R
     .map_err(RuntimeError::agent)
 }
 
-fn category_fingerprint<F>(
-    events: &[EventEnvelope],
-    include: F,
-) -> Result<String, RuntimeError>
+fn category_fingerprint<F>(events: &[EventEnvelope], include: F) -> Result<String, RuntimeError>
 where
     F: Fn(&EventPayload) -> bool,
 {
