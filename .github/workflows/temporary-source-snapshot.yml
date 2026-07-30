@@ -1,9 +1,6 @@
 name: Temporary source snapshot
 
 on:
-  push:
-    branches:
-      - agent/telegram-gateway-foundation
   pull_request:
     branches:
       - main
@@ -18,11 +15,11 @@ jobs:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
       - name: Package source
         shell: bash
-        run: tar --exclude=.git -czf medusa-source.tar.gz .
+        run: tar --exclude=.git -czf /tmp/medusa-source.tar.gz .
       - name: Upload source
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: medusa-source-${{ github.sha }}
-          path: medusa-source.tar.gz
+          path: /tmp/medusa-source.tar.gz
           retention-days: 1
           if-no-files-found: error
