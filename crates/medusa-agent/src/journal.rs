@@ -32,7 +32,7 @@ pub(crate) struct LoadOutcome {
 #[serde(tag = "record", rename_all = "snake_case")]
 enum JournalRecord {
     Event {
-        event: EventEnvelope,
+        event: Box<EventEnvelope>,
     },
     Snapshot {
         cursor: u64,
@@ -113,7 +113,7 @@ pub(crate) fn append_event(
     append_record(
         &path,
         &JournalRecord::Event {
-            event: event.clone(),
+            event: Box::new(event.clone()),
         },
     )?;
     Ok(AppendDisposition::Appended)
@@ -252,7 +252,7 @@ fn write_journal(path: &Path, session: &AgentSession) -> MedusaResult<()> {
         write_record(
             &mut file,
             &JournalRecord::Event {
-                event: event.clone(),
+                event: Box::new(event.clone()),
             },
         )?;
     }
@@ -349,7 +349,7 @@ fn read_journal(
         match record {
             JournalRecord::Event { event } => {
                 validate_event(session_id, &events, &event, &mut event_ids)?;
-                events.push(event);
+                events.push(*event);
             }
             JournalRecord::Snapshot {
                 cursor,
