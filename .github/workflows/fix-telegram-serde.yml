@@ -1,0 +1,44 @@
+name: Fix Telegram serde contracts
+
+on:
+  pull_request:
+    branches:
+      - main
+
+permissions:
+  contents: write
+
+jobs:
+  fix:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: agent/telegram-bot-api-transport
+      - name: Apply serde fixes and commit
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          from pathlib import Path
+          path = Path('crates/medusa-daemon/src/telegram/bot_api/types.rs')
+          text = path.read_text()
+          text = text.replace(
+              '#[derive(Clone, Copy, Debug, Eq, PartialEq)]\npub enum TelegramBotParseMode',
+              '#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq)]\npub enum TelegramBotParseMode',
+          )
+          text = text.replace(
+              '#[derive(Debug, Deserialize)]\npub(crate) struct TelegramApiEnvelope<T>',
+              '#[derive(Debug, Deserialize)]\n#[serde(bound(deserialize = "T: Deserialize<\'de>"))]\npub(crate) struct TelegramApiEnvelope<T>',
+          )
+          path.write_text(text)
+          PY
+          cargo fmt --all
+          rm .github/workflows/fix-telegram-serde.yml
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add -A
+          git diff --cached --check
+          git commit -m "Fix Telegram Bot API serde contracts"
+          git push origin HEAD:agent/telegram-bot-api-transport
