@@ -616,6 +616,30 @@ mod tests {
     }
 
     #[test]
+    fn controller_event_is_appended_and_committed_before_returning() {
+        let directory = tempfile::tempdir().expect("repository");
+        let mut current = session(directory.path());
+
+        crate::record_session_event(
+            &mut current,
+            Actor::User,
+            EventPayload::FollowUpQueued {
+                text: "continue the queued work".to_owned(),
+            },
+        )
+        .expect("record controller event");
+
+        let restored = load_or_migrate(directory.path(), &current.id, None)
+            .expect("committed session")
+            .session;
+        assert_eq!(restored.events, current.events);
+        assert!(matches!(
+            restored.events.last().map(|event| &event.payload),
+            Some(EventPayload::FollowUpQueued { text }) if text == "continue the queued work"
+        ));
+    }
+
+    #[test]
     fn committed_snapshot_repairs_stale_json_state() {
         let directory = tempfile::tempdir().expect("repository");
         let mut current = session(directory.path());

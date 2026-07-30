@@ -48,6 +48,18 @@ pub fn persist_session(session: &AgentSession) -> medusa_core::MedusaResult<()> 
     session::persist(session)
 }
 
+/// Appends a controller-owned authoritative event and commits the resulting session snapshot.
+///
+/// Runtime integrations must call this before publishing the corresponding live event.
+pub fn record_session_event(
+    session: &mut AgentSession,
+    actor: medusa_protocol::Actor,
+    payload: medusa_protocol::EventPayload,
+) -> medusa_core::MedusaResult<()> {
+    evidence::append_event(session, actor, payload)?;
+    session::persist(session)
+}
+
 #[cfg(test)]
 mod tests {
     use std::{
