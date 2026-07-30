@@ -1,6 +1,6 @@
+use crate::session::{AgentSession, journal};
 use medusa_core::{ErrorCategory, ErrorCode, MedusaError, MedusaResult};
 use medusa_protocol::{Actor, EventEnvelope, EventPayload};
-use crate::session::{AgentSession, journal};
 
 pub(crate) fn append_event(
     session: &mut AgentSession,

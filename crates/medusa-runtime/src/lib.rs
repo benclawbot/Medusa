@@ -137,48 +137,42 @@ impl RuntimeEvent {
     #[must_use]
     pub fn durability(&self) -> RuntimeEventDurability {
         match self {
-            Self::RecoveryAvailable(_) => RuntimeEventDurability::DurableProjection(
-                "recovery coordinator record",
-            ),
-            Self::RecoveryCompleted(_) => RuntimeEventDurability::CanonicalJournal(
-                "recovery_action_completed",
-            ),
-            Self::Started => RuntimeEventDurability::PresentationOnly(
-                "frontend busy indicator",
-            ),
-            Self::AssistantText(_) => RuntimeEventDurability::CanonicalJournal(
-                "assistant_message_recorded",
-            ),
+            Self::RecoveryAvailable(_) => {
+                RuntimeEventDurability::DurableProjection("recovery coordinator record")
+            }
+            Self::RecoveryCompleted(_) => {
+                RuntimeEventDurability::CanonicalJournal("recovery_action_completed")
+            }
+            Self::Started => RuntimeEventDurability::PresentationOnly("frontend busy indicator"),
+            Self::AssistantText(_) => {
+                RuntimeEventDurability::CanonicalJournal("assistant_message_recorded")
+            }
             Self::Activity(_) => RuntimeEventDurability::PresentationOnly(
                 "projection of model, tool, verification, or worker events",
             ),
             Self::Team(_) => RuntimeEventDurability::CanonicalJournal("team_state_changed"),
             Self::Plan(_) => RuntimeEventDurability::CanonicalJournal("plan_updated"),
             Self::Question(_) => RuntimeEventDurability::CanonicalJournal("question_requested"),
-            Self::Usage { .. } => RuntimeEventDurability::CanonicalJournal(
-                "model_response_received",
-            ),
-            Self::Progress { .. } => RuntimeEventDurability::DurableProjection(
-                "materialized session turn",
-            ),
-            Self::Settings { .. } => RuntimeEventDurability::PresentationOnly(
-                "process-local frontend settings",
-            ),
-            Self::Notice { .. } => RuntimeEventDurability::PresentationOnly(
-                "human-readable presentation notice",
-            ),
+            Self::Usage { .. } => {
+                RuntimeEventDurability::CanonicalJournal("model_response_received")
+            }
+            Self::Progress { .. } => {
+                RuntimeEventDurability::DurableProjection("materialized session turn")
+            }
+            Self::Settings { .. } => {
+                RuntimeEventDurability::PresentationOnly("process-local frontend settings")
+            }
+            Self::Notice { .. } => {
+                RuntimeEventDurability::PresentationOnly("human-readable presentation notice")
+            }
             Self::NewSession => RuntimeEventDurability::PresentationOnly(
                 "frontend transcript reset after controller state mutation",
             ),
-            Self::Compacted { .. } => RuntimeEventDurability::CanonicalJournal(
-                "conversation_compacted",
-            ),
-            Self::Completed { .. } => RuntimeEventDurability::CanonicalJournal(
-                "session_completed",
-            ),
-            Self::TurnFinished => RuntimeEventDurability::CanonicalJournal(
-                "runtime_turn_finished",
-            ),
+            Self::Compacted { .. } => {
+                RuntimeEventDurability::CanonicalJournal("conversation_compacted")
+            }
+            Self::Completed { .. } => RuntimeEventDurability::CanonicalJournal("session_completed"),
+            Self::TurnFinished => RuntimeEventDurability::CanonicalJournal("runtime_turn_finished"),
             Self::Cancelled => RuntimeEventDurability::SessionBoundCanonical {
                 journal_source: "cancellation_completed",
                 pre_session_classification: "cancelled before a session identity existed",
@@ -238,7 +232,8 @@ fn restore_queued_followups(
             EventPayload::UserFollowupQueued { command_id, prompt } => {
                 let draft = serde_json::from_value::<PromptDraft>(prompt.clone())
                     .map_err(RuntimeError::agent)?;
-                followups.retain(|queued: &QueuedFollowup| queued.command_id != command_id.as_str());
+                followups
+                    .retain(|queued: &QueuedFollowup| queued.command_id != command_id.as_str());
                 followups.push_back(QueuedFollowup {
                     command_id: command_id.clone(),
                     draft,
@@ -369,8 +364,7 @@ impl RuntimeController {
                     Actor::User,
                     EventPayload::UserFollowupQueued {
                         command_id,
-                        prompt: serde_json::to_value(&queued.draft)
-                            .map_err(RuntimeError::agent)?,
+                        prompt: serde_json::to_value(&queued.draft).map_err(RuntimeError::agent)?,
                     },
                 )?;
                 queued.durably_recorded = true;
@@ -507,9 +501,7 @@ fn dispatch_runtime_events(
         };
         if let Some(payload) = payload {
             let session_id = match &event {
-                RuntimeEvent::RecoveryCompleted(receipt) => {
-                    Some(receipt.record.session_id.clone())
-                }
+                RuntimeEvent::RecoveryCompleted(receipt) => Some(receipt.record.session_id.clone()),
                 _ => lock_submission(submission).active_session_id.clone(),
             };
             if let Some(session_id) = session_id {
@@ -585,8 +577,7 @@ fn record_controller_event(
 ) -> Result<(), RuntimeError> {
     let mut session = medusa_agent::session_browser::load_session(repo, session_id)
         .map_err(RuntimeError::agent)?;
-    medusa_agent::record_session_event(&mut session, actor, payload)
-        .map_err(RuntimeError::agent)
+    medusa_agent::record_session_event(&mut session, actor, payload).map_err(RuntimeError::agent)
 }
 
 fn lock_submission(
@@ -982,16 +973,9 @@ fn run_prompt(
         "Progressive verification requirements: {:?}. Rationale: {:?}. Complete the narrowest checks first and escalate only when required by risk or failure.",
         verification_plan.requirements, verification_plan.rationale
     );
-    let session_id = state
-        .session
-        .as_ref()
-        .map(|session| session.id.as_str());
-    let learning_context = crate::learning_retrieval::select(
-        &state.repo,
-        &draft,
-        session_id,
-        events,
-    );
+    let session_id = state.session.as_ref().map(|session| session.id.as_str());
+    let learning_context =
+        crate::learning_retrieval::select(&state.repo, &draft, session_id, events);
     let mut task_context = vec![
         orchestration_context,
         tool_policy_context,
@@ -1010,9 +994,10 @@ fn run_prompt(
         task_context.push(skill);
     }
     let skill_context = task_context.join("\n\n");
-    let mut session = state.session.take().ok_or_else(|| {
-        RuntimeError::agent("runtime session disappeared before execution")
-    })?;
+    let mut session = state
+        .session
+        .take()
+        .ok_or_else(|| RuntimeError::agent("runtime session disappeared before execution"))?;
     let mut updates = UpdateState::new();
     if !session.plan.is_empty() {
         let _ = events.send(RuntimeEvent::Plan(session.plan.clone()));
@@ -1222,8 +1207,7 @@ fn append_followups<P: ModelProvider>(
                 Actor::User,
                 EventPayload::UserFollowupQueued {
                     command_id: followup.command_id.clone(),
-                    prompt: serde_json::to_value(&followup.draft)
-                        .map_err(RuntimeError::agent)?,
+                    prompt: serde_json::to_value(&followup.draft).map_err(RuntimeError::agent)?,
                 },
             )
             .map_err(RuntimeError::agent)?;

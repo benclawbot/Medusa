@@ -50,7 +50,6 @@ struct JournalState {
     committed_snapshot: Option<AgentSession>,
 }
 
-
 pub(crate) fn append_payload_committed(
     session: &mut AgentSession,
     actor: Actor,
@@ -97,7 +96,9 @@ fn merge_committed_events(
         ));
     }
     if committed_events.len() > session.events.len() {
-        session.events.extend_from_slice(&committed_events[session.events.len()..]);
+        session
+            .events
+            .extend_from_slice(&committed_events[session.events.len()..]);
     }
     Ok(())
 }
@@ -808,12 +809,8 @@ mod tests {
             },
         )
         .expect("primary committed event");
-        append_payload_committed(
-            &mut stale,
-            Actor::Coordinator,
-            EventPayload::SessionResumed,
-        )
-        .expect("stale writer merges committed prefix");
+        append_payload_committed(&mut stale, Actor::Coordinator, EventPayload::SessionResumed)
+            .expect("stale writer merges committed prefix");
 
         assert_eq!(stale.events.len(), 3);
         assert_eq!(stale.events[2].sequence, 3);

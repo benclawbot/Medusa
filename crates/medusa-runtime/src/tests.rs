@@ -501,7 +501,6 @@ fn runtime_atomically_reopens_input_only_when_followups_are_empty() {
     assert!(!submission.lock().expect("submission state").busy);
 }
 
-
 fn durable_runtime_session(repo: &Path) -> medusa_agent::AgentSession {
     medusa_agent::AgentSession {
         id: SessionId::new(),
