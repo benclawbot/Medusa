@@ -38,7 +38,16 @@ jobs:
           replacements = [
               ('event: EventEnvelope,', 'event: Box<EventEnvelope>,'),
               ('event: event.clone(),', 'event: Box::new(event.clone()),'),
-              ('events.push(event);', 'events.push(*event);'),
+              (
+                  'JournalRecord::Event { event } => {\n'
+                  '                validate_event(session_id, &events, &event, &mut event_ids)?;\n'
+                  '                events.push(event);\n'
+                  '            }',
+                  'JournalRecord::Event { event } => {\n'
+                  '                validate_event(session_id, &events, &event, &mut event_ids)?;\n'
+                  '                events.push(*event);\n'
+                  '            }',
+              ),
           ]
           expected = [1, 2, 1]
           for (old, new), count in zip(replacements, expected):
