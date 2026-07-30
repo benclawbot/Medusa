@@ -63,11 +63,7 @@ pub fn list_sessions(repo: &Path) -> MedusaResult<Vec<SessionSummary>> {
 }
 
 /// Returns committed session events after a zero-based durable cursor.
-pub fn replay_events(
-    repo: &Path,
-    session: &str,
-    cursor: u64,
-) -> MedusaResult<Vec<EventEnvelope>> {
+pub fn replay_events(repo: &Path, session: &str, cursor: u64) -> MedusaResult<Vec<EventEnvelope>> {
     let id = SessionId::parse(session).map_err(|message| {
         MedusaError::new(
             ErrorCode::InvalidConfiguration,

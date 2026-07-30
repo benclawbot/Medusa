@@ -20,9 +20,9 @@ use crate::{
 mod browser_assisted_escalation;
 mod completed_learning;
 mod escalation_state;
-mod lessons;
 #[path = "journal.rs"]
 pub(crate) mod journal;
+mod lessons;
 mod manual_escalation;
 mod recall;
 mod skill_drafts;
@@ -312,7 +312,9 @@ pub(crate) fn fallback_storage_root(repo: &Path, category: &str) -> PathBuf {
         .map(PathBuf::from)
         .or_else(|| std::env::var_os("HOME").map(PathBuf::from))
         .unwrap_or_else(std::env::temp_dir);
-    root.join("Medusa").join(category).join(repository_key(repo))
+    root.join("Medusa")
+        .join(category)
+        .join(repository_key(repo))
 }
 
 fn repository_key(repo: &Path) -> String {

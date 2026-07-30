@@ -31,7 +31,9 @@ pub(crate) struct LoadOutcome {
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(tag = "record", rename_all = "snake_case")]
 enum JournalRecord {
-    Event { event: EventEnvelope },
+    Event {
+        event: EventEnvelope,
+    },
     Snapshot {
         cursor: u64,
         final_event_checksum: Option<String>,
@@ -51,7 +53,9 @@ pub(crate) fn append_event(
     verify_chain(&session.events)?;
     event.validate()?;
     if event.session_id != session.id {
-        return Err(persistence_error("journal event belongs to another session"));
+        return Err(persistence_error(
+            "journal event belongs to another session",
+        ));
     }
 
     if let Some(existing) = session
@@ -88,7 +92,10 @@ pub(crate) fn append_event(
             session.events.len()
         )));
     }
-    let expected_previous = session.events.last().map(|previous| previous.checksum.as_str());
+    let expected_previous = session
+        .events
+        .last()
+        .map(|previous| previous.checksum.as_str());
     if event.previous_hash.as_deref() != expected_previous {
         return Err(persistence_error(
             "event previous hash does not match the materialized session",
@@ -103,7 +110,12 @@ pub(crate) fn append_event(
             "journal event prefix does not match the materialized session",
         ));
     }
-    append_record(&path, &JournalRecord::Event { event: event.clone() })?;
+    append_record(
+        &path,
+        &JournalRecord::Event {
+            event: event.clone(),
+        },
+    )?;
     Ok(AppendDisposition::Appended)
 }
 
@@ -237,7 +249,12 @@ fn write_journal(path: &Path, session: &AgentSession) -> MedusaResult<()> {
     let mut file = File::create(&temporary)?;
     file.write_all(JOURNAL_MAGIC)?;
     for event in &session.events {
-        write_record(&mut file, &JournalRecord::Event { event: event.clone() })?;
+        write_record(
+            &mut file,
+            &JournalRecord::Event {
+                event: event.clone(),
+            },
+        )?;
     }
     write_record(&mut file, &snapshot_record(session))?;
     file.sync_all()?;
@@ -264,7 +281,9 @@ fn append_record(path: &Path, record: &JournalRecord) -> MedusaResult<()> {
 fn write_record(file: &mut File, record: &JournalRecord) -> MedusaResult<()> {
     let payload = serde_json::to_vec(record)?;
     if payload.is_empty() || payload.len() > MAX_FRAME_BYTES {
-        return Err(persistence_error("journal frame exceeds the supported size"));
+        return Err(persistence_error(
+            "journal frame exceeds the supported size",
+        ));
     }
     let length = u32::try_from(payload.len())
         .map_err(|_| persistence_error("journal frame length is unsupported"))?;
@@ -284,7 +303,9 @@ fn read_journal(
     let mut bytes = Vec::new();
     File::open(path)?.read_to_end(&mut bytes)?;
     if bytes.len() < JOURNAL_MAGIC.len() || &bytes[..JOURNAL_MAGIC.len()] != JOURNAL_MAGIC {
-        return Err(persistence_error("journal header is missing or unsupported"));
+        return Err(persistence_error(
+            "journal header is missing or unsupported",
+        ));
     }
 
     let mut offset = JOURNAL_MAGIC.len();
@@ -379,7 +400,9 @@ fn validate_event(
 ) -> MedusaResult<()> {
     event.validate()?;
     if &event.session_id != session_id {
-        return Err(persistence_error("journal contains an event for another session"));
+        return Err(persistence_error(
+            "journal contains an event for another session",
+        ));
     }
     let expected_sequence = u64::try_from(prior_events.len())
         .unwrap_or(u64::MAX)
@@ -392,7 +415,9 @@ fn validate_event(
     }
     let expected_previous = prior_events.last().map(|event| event.checksum.as_str());
     if event.previous_hash.as_deref() != expected_previous {
-        return Err(persistence_error("journal event previous hash chain is invalid"));
+        return Err(persistence_error(
+            "journal event previous hash chain is invalid",
+        ));
     }
     if !event_ids.insert(event.event_id.to_string()) {
         return Err(persistence_error(format!(
@@ -438,7 +463,9 @@ fn validate_snapshot_identity(
     session: &AgentSession,
 ) -> MedusaResult<()> {
     if &session.id != session_id {
-        return Err(persistence_error("journal snapshot belongs to another session"));
+        return Err(persistence_error(
+            "journal snapshot belongs to another session",
+        ));
     }
     if session.repo != repo {
         return Err(persistence_error(format!(
@@ -451,8 +478,8 @@ fn validate_snapshot_identity(
 }
 
 fn truncate(path: &Path, length: usize) -> MedusaResult<()> {
-    let length = u64::try_from(length)
-        .map_err(|_| persistence_error("journal length is unsupported"))?;
+    let length =
+        u64::try_from(length).map_err(|_| persistence_error("journal length is unsupported"))?;
     let file = OpenOptions::new().write(true).open(path)?;
     file.set_len(length)?;
     file.sync_data()?;
@@ -485,9 +512,8 @@ fn collect_journal_ids(root: &Path, ids: &mut BTreeSet<SessionId>) -> MedusaResu
 }
 
 fn journal_path(repo: &Path, session_id: &SessionId) -> MedusaResult<PathBuf> {
-    existing_journal_path(repo, session_id).ok_or_else(|| {
-        persistence_error(format!("session {session_id} journal does not exist"))
-    })
+    existing_journal_path(repo, session_id)
+        .ok_or_else(|| persistence_error(format!("session {session_id} journal does not exist")))
 }
 
 fn existing_journal_path(repo: &Path, session_id: &SessionId) -> Option<PathBuf> {
@@ -641,12 +667,8 @@ mod tests {
             AppendDisposition::Appended
         );
 
-        let outcome = load_or_migrate(
-            directory.path(),
-            &committed.id,
-            Some(committed.clone()),
-        )
-        .expect("recover");
+        let outcome = load_or_migrate(directory.path(), &committed.id, Some(committed.clone()))
+            .expect("recover");
         assert_eq!(outcome.session.events, committed.events);
         assert!(
             replay_from_cursor(directory.path(), &committed.id, 1)
@@ -680,12 +702,8 @@ mod tests {
             .write_all(&12_u32.to_be_bytes())
             .expect("partial frame");
 
-        let outcome = load_or_migrate(
-            directory.path(),
-            &committed.id,
-            Some(committed.clone()),
-        )
-        .expect("recover");
+        let outcome = load_or_migrate(directory.path(), &committed.id, Some(committed.clone()))
+            .expect("recover");
         assert_eq!(outcome.session.events, committed.events);
         assert_eq!(fs::metadata(path).expect("metadata").len(), valid_length);
     }
@@ -701,9 +719,7 @@ mod tests {
         *final_byte ^= 1;
         fs::write(&path, bytes).expect("tamper");
 
-        assert!(
-            load_or_migrate(directory.path(), &committed.id, Some(committed)).is_err()
-        );
+        assert!(load_or_migrate(directory.path(), &committed.id, Some(committed)).is_err());
     }
 
     #[test]

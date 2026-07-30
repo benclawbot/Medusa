@@ -21,7 +21,7 @@ pub(crate) fn append_event(
     )?;
     match journal::append_event(session, &event)? {
         journal::AppendDisposition::Appended => session.events.push(event),
-        journal::AppendDisposition::Replayed => {},
+        journal::AppendDisposition::Replayed => {}
     }
     Ok(())
 }
