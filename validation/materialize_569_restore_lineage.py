@@ -214,14 +214,43 @@ recovery = replace_once(
 ''',
     "recovery imports",
 )
-recovery = recovery.replace("use serde::Deserialize;\nuse thiserror::Error;\n", "use serde::Deserialize;\n\nuse crate::{RuntimeError, checkpoint_payload};\n")
+recovery = recovery.replace(
+    "use serde::Deserialize;\nuse thiserror::Error;\n",
+    "use serde::Deserialize;\n\nuse crate::{RuntimeError, checkpoint_payload};\n",
+)
 start = recovery.find('const CHECKPOINT_PAYLOAD_DIRECTORY: &str = ".medusa/recovery-checkpoints";')
 if start != -1:
     end = recovery.find("struct RuntimeRecoveryExecutor", start)
     if end == -1:
         raise SystemExit("recovery payload declarations end not found")
-    recovery = recovery[:start] + recovery[end:]
+    persisted_record = '''#[derive(Debug, Deserialize)]
+struct PersistedRecoveryRecord {
+    session_id: String,
+    last_durable_step: String,
+    interrupted_operation: Option<String>,
+    current_repository_fingerprint: String,
+    verification: VerificationState,
+    approvals_must_be_reestablished: bool,
+    containment_must_be_reestablished: bool,
+    checkpoints: Vec<CheckpointPresentation>,
+    selected_preview: Option<RecoveryPreview>,
+}
+
+'''
+    recovery = recovery[:start] + persisted_record + recovery[end:]
 recovery = recovery.replace("    type Error = RuntimeRecoveryError;\n", "    type Error = RuntimeError;\n")
+recovery = recovery.replace(
+    'RuntimeRecoveryError::InvalidPayload("missing checkpoint id".to_owned())',
+    'RuntimeError::InvalidCommand("missing checkpoint id".to_owned())',
+)
+recovery = recovery.replace(
+    '''RuntimeRecoveryError::InvalidPayload(
+                            "checkpoint metadata is unavailable".to_owned(),
+                        )''',
+    '''RuntimeError::InvalidCommand(
+                            "checkpoint metadata is unavailable".to_owned(),
+                        )''',
+)
 recovery = replace_once(
     recovery,
     '''                restore_checkpoint(repository, &action.session_id, checkpoint_id)?;
