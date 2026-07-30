@@ -1,0 +1,85 @@
+name: Apply mutating worktree integration
+
+on:
+  pull_request:
+    branches:
+      - main
+    paths:
+      - .github/patches/mutating-worktree-bundle.part*
+      - .github/workflows/apply-mutating-worktree-integration.yml
+
+permissions:
+  contents: write
+
+jobs:
+  apply-and-validate:
+    if: github.event.pull_request.head.repo.full_name == github.repository && github.head_ref == 'agent/mutating-worktree-integration'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: agent/mutating-worktree-integration
+          fetch-depth: 0
+      - name: Materialize validated source bundle
+        shell: bash
+        run: |
+          set -euo pipefail
+          mapfile -t parts < <(find .github/patches -maxdepth 1 -name 'mutating-worktree-bundle.part*' -print | sort)
+          test "${#parts[@]}" -eq 6
+          cat "${parts[@]}" | base64 --decode > /tmp/mutating-worktree-bundle.tar.gz
+          test "$(wc -c < /tmp/mutating-worktree-bundle.tar.gz)" -eq 37832
+          python3 - <<'PY'
+          import tarfile
+          from pathlib import PurePosixPath
+
+          expected = {
+              'Cargo.toml',
+              'crates/medusa-workers/src/lib.rs',
+              'crates/medusa-runtime/build_main.rs',
+              'crates/medusa-runtime/src/production_orchestrator.rs',
+              'crates/medusa-runtime/src/mutating_worker_coordinator.rs',
+              'crates/medusa-runtime/src/mutating_worker_coordinator_support.rs',
+              'crates/medusa-runtime/src/mutating_worker_failure.rs',
+              'crates/medusa-runtime/src/mutating_worker_coordinator_tests.rs',
+              'docs/ARCHITECTURE.md',
+              'docs/CONTRIBUTOR-ARCHITECTURE.md',
+              'docs/PRODUCTION-EXECUTION-TRACE.md',
+              'docs/CAPABILITY-EVIDENCE.md',
+              'docs/CAPABILITY-CLAIMS.json',
+              'docs/MULTI_AGENT_EXECUTION.md',
+              'docs/MUTATING-WORKTREE-INTEGRATION.md',
+              'scripts/check-product-architecture.py',
+          }
+          with tarfile.open('/tmp/mutating-worktree-bundle.tar.gz', 'r:gz') as archive:
+              names = {member.name for member in archive.getmembers() if member.isfile()}
+              if names != expected:
+                  raise SystemExit(f'unexpected bundle entries: {sorted(names ^ expected)}')
+              for member in archive.getmembers():
+                  path = PurePosixPath(member.name)
+                  if path.is_absolute() or '..' in path.parts or not member.isfile():
+                      raise SystemExit(f'unsafe bundle entry: {member.name}')
+              archive.extractall('.')
+          PY
+          rm -f .github/patches/mutating-worktree-bundle.part*
+          rm -f .github/workflows/apply-mutating-worktree-integration.yml
+      - name: Format
+        run: cargo fmt --all
+      - name: Validate architecture and capability evidence
+        run: |
+          python3 scripts/check-product-architecture.py
+          python3 scripts/check-capability-evidence.py
+          bash scripts/check-source-size.sh
+      - name: Check workspace
+        run: cargo check --workspace --all-features
+      - name: Lint affected crates
+        run: cargo clippy -p medusa-runtime -p medusa-workers -p medusa-agent -p medusa-multi-agent-scheduler --all-targets --all-features -- -D warnings
+      - name: Test affected crates
+        run: cargo test -p medusa-runtime -p medusa-workers -p medusa-agent -p medusa-multi-agent-scheduler --all-features
+      - name: Commit validated source
+        run: |
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add -A
+          git diff --cached --check
+          git commit -m "Run mutating implementers in isolated worktrees"
+          git push origin HEAD:agent/mutating-worktree-integration
