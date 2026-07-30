@@ -1,0 +1,46 @@
+name: Materialize checkpoint recovery projection
+
+on:
+  pull_request:
+    branches:
+      - agent/569-persisted-checkpoints
+    paths:
+      - crates/medusa-runtime/src/recovery_projection.rs
+      - validation/materialize_569_recovery_projection.py
+      - .github/workflows/materialize-569-recovery-projection.yml
+
+permissions:
+  contents: write
+
+concurrency:
+  group: materialize-569-recovery-${{ github.event.pull_request.number }}
+  cancel-in-progress: false
+
+jobs:
+  materialize:
+    if: github.event.pull_request.head.repo.full_name == github.repository && github.event.pull_request.head.ref == 'agent/569-checkpoint-recovery-projection'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.2.2
+        with:
+          ref: ${{ github.head_ref }}
+          token: ${{ secrets.GITHUB_TOKEN }}
+      - uses: dtolnay/rust-toolchain@39b0b3842c7e8bbf6904c0bfc3d9006fdd4dc4e0 # stable
+      - name: Materialize reviewed recovery projection
+        run: python3 validation/materialize_569_recovery_projection.py
+      - name: Format and validate recovery projection
+        run: |
+          cargo fmt --all
+          cargo fmt --all -- --check
+          cargo test -p medusa-runtime recovery_projection
+          cargo test -p medusa-runtime
+          cargo clippy -p medusa-runtime --all-targets --all-features -- -D warnings
+      - name: Commit source-only result
+        run: |
+          git rm .github/workflows/materialize-569-recovery-projection.yml
+          git rm validation/materialize_569_recovery_projection.py
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add crates/medusa-runtime/src/lib.rs crates/medusa-runtime/src/checkpoint_store.rs crates/medusa-runtime/src/recovery_projection.rs
+          git commit -m "Project checkpoints into runtime recovery"
+          git push origin HEAD:${{ github.head_ref }}
