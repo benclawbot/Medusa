@@ -72,6 +72,11 @@ source = remove_exact(
     "    ('        if cancel.load(Ordering::SeqCst) {', '        if cancel.load(Ordering::SeqCst) || control.is_cancelled(IMPLEMENTER_ID) {'),\n",
     1,
 )
+source = remove_exact(
+    source,
+    "    ('    events: &Sender<RuntimeEvent>,\\n) -> Result<ImplementationEvidence, String> {', '    events: &Sender<RuntimeEvent>,\\n    control: &TeamControlPlane,\\n) -> Result<ImplementationEvidence, String> {'),\n",
+    1,
+)
 exec(compile(source, "team-observability-materializer.py", "exec"), {})
 
 edit_once(
@@ -139,6 +144,30 @@ edit_once(
 """,
     """    for attempt in 1..=MAX_ATTEMPTS {
         if cancel.load(Ordering::SeqCst) || control.is_cancelled(IMPLEMENTER_ID) {
+""",
+)
+edit_once(
+    "crates/medusa-runtime/src/mutating_worker_coordinator.rs",
+    """fn integrate_prepared(
+    manager: &WorkerManager,
+    controller: &mut WorkerExecutionController,
+    team: &TeamRuntime,
+    state_path: &Path,
+    task_id: &str,
+    mut state: DurableImplementationState,
+    events: &Sender<RuntimeEvent>,
+) -> Result<ImplementationEvidence, String> {
+""",
+    """fn integrate_prepared(
+    manager: &WorkerManager,
+    controller: &mut WorkerExecutionController,
+    team: &TeamRuntime,
+    state_path: &Path,
+    task_id: &str,
+    mut state: DurableImplementationState,
+    events: &Sender<RuntimeEvent>,
+    control: &TeamControlPlane,
+) -> Result<ImplementationEvidence, String> {
 """,
 )
 
