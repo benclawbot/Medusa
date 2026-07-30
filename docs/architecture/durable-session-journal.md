@@ -38,4 +38,4 @@ Replay uses zero-based committed cursors. A cursor can return only events includ
 
 This foundation does not restore the removed lifecycle facade and does not remove any retained component. `medusa-execution-checkpoint`, `medusa-execution-replay`, `medusa-time-travel`, `medusa-session-continuity`, and all compatibility paths remain present. Later #569 slices will connect them to the committed journal and `RuntimeController`; any proposed deletion requires explicit approval before implementation.
 
-The repository CI matrix is authoritative for formatting, compilation, linting, tests, documentation, and cross-platform behavior of this foundation.
+The repository CI matrix is authoritative for formatting, compilation, linting, tests, documentation, and cross-platform behavior of this foundation. The focused journal tests cover stale snapshot repair, uncommitted-tail recovery, torn writes, checksum corruption, legacy migration, duplicate IDs, state-only commits, and cursor replay.
