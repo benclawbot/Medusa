@@ -1,0 +1,85 @@
+name: Apply runtime map isolation
+
+on:
+  pull_request:
+    types: [reopened, synchronize]
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    if: github.event.pull_request.head.ref == 'fix/read-only-preflight-diagnostic-clean'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          ref: ${{ github.event.pull_request.head.ref }}
+          fetch-depth: 0
+      - uses: dtolnay/rust-toolchain@39b0b3842c7e8bbf6904c0bfc3d9006fdd4dc4e0
+        with:
+          components: rustfmt, clippy
+      - name: Move generated repository map into runtime-owned state
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          path = Path('crates/medusa-agent/src/session.rs')
+          source = path.read_text()
+          old_doc = '/// Creates the on-disk Medusa layout and repository map.'
+          new_doc = '/// Creates the on-disk Medusa layout and runtime-owned repository map.'
+          old_path = '    let map = repo.join("REPOSITORY_MAP.md");'
+          new_path = '    let map = repo.join(".medusa/REPOSITORY_MAP.md");'
+          assert source.count(old_doc) == 1
+          assert source.count(old_path) == 1
+          source = source.replace(old_doc, new_doc).replace(old_path, new_path)
+          assert '#[cfg(test)]\nmod tests {' not in source
+          source += '''
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn bootstrap_keeps_generated_repository_map_in_runtime_state() {
+        let directory = tempfile::tempdir().expect("tempdir");
+        let repo = directory.path();
+
+        bootstrap(repo).expect("bootstrap");
+        assert!(repo.join(".medusa/REPOSITORY_MAP.md").is_file());
+        assert!(!repo.join("REPOSITORY_MAP.md").exists());
+
+        fs::write(repo.join("REPOSITORY_MAP.md"), "# User-owned map\\n")
+            .expect("user map");
+        bootstrap(repo).expect("second bootstrap");
+        assert_eq!(
+            fs::read_to_string(repo.join("REPOSITORY_MAP.md")).expect("read user map"),
+            "# User-owned map\\n"
+        );
+    }
+}
+'''
+          path.write_text(source)
+          PY
+      - name: Format
+        run: cargo fmt --all -- --check
+      - name: Compile affected targets
+        run: cargo check -p medusa-agent -p medusa-runtime -p medusa-workers --all-targets
+      - name: Strict affected lint
+        run: cargo clippy -p medusa-agent -p medusa-runtime -p medusa-workers --all-targets -- -D warnings
+      - name: Bootstrap regression
+        run: cargo test -p medusa-agent bootstrap_keeps_generated_repository_map_in_runtime_state
+      - name: Coordinator and worker regressions
+        run: |
+          cargo test -p medusa-runtime multi_agent_coordinator
+          cargo test -p medusa-workers clean_repository_error_reports_exact_dirty_paths
+      - name: Commit validated source only
+        env:
+          HEAD_REF: ${{ github.event.pull_request.head.ref }}
+        run: |
+          rm .github/workflows/apply-runtime-map-isolation.yml
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add crates/medusa-agent/src/session.rs
+          git add -u .github/workflows
+          git commit -m "fix(agent): keep repository map in runtime state"
+          git push origin HEAD:"${HEAD_REF}"
