@@ -5,7 +5,7 @@ on:
     types: [reopened, synchronize, ready_for_review]
 
 permissions:
-  contents: write
+  contents: read
 
 jobs:
   materialize:
@@ -19,6 +19,7 @@ jobs:
         with:
           ref: agent/team-observability-steering
           fetch-depth: 0
+          persist-credentials: false
       - name: Execute staged source edits
         shell: bash
         run: |
@@ -31,6 +32,9 @@ jobs:
           source = '\n'.join(line[10:] if line.startswith('          ') else line for line in workflow[start:end]) + '\n'
           exec(compile(source, 'team-observability-materializer.py', 'exec'), {})
           PY
+          rm -f .github/workflows/apply-team-observability.yml
+          rm -f .github/workflows/bootstrap-team-observability.yml
+          rm -f .github/team-observability-trigger
       - name: Format and validate
         run: |
           cargo fmt --all
@@ -41,13 +45,22 @@ jobs:
           cargo clippy --workspace --all-targets -- -D warnings
           cargo test -p medusa-runtime -p medusa-tui -p medusa-desktop-adapter
           npm --prefix apps/medusa-desktop test -- --run
-      - name: Commit production source
+      - name: Package validated source
+        shell: bash
         run: |
-          rm -f .github/workflows/apply-team-observability.yml
-          rm -f .github/workflows/bootstrap-team-observability.yml
-          rm -f .github/team-observability-trigger
-          git add -A
-          git config user.name 'github-actions[bot]'
-          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git commit -m 'Expose coordinated worker status and steering'
-          git push origin HEAD:agent/team-observability-steering
+          git diff --name-only --diff-filter=ACMRT origin/main...HEAD > materialized-files.txt
+          git diff --name-only --diff-filter=D origin/main...HEAD > materialized-deletions.txt
+          tar -czf team-observability-source.tar.gz --files-from materialized-files.txt
+          git rev-parse HEAD > materialized-parent.txt
+          sha256sum team-observability-source.tar.gz > materialized-sha256.txt
+      - name: Upload validated source
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: team-observability-source
+          path: |
+            team-observability-source.tar.gz
+            materialized-files.txt
+            materialized-deletions.txt
+            materialized-parent.txt
+            materialized-sha256.txt
+          if-no-files-found: error
