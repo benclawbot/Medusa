@@ -1,0 +1,44 @@
+name: Apply continuous implementer budget
+
+on:
+  pull_request:
+    types: [synchronize, reopened]
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    if: github.event.pull_request.head.ref == 'fix/read-only-preflight-isolation-clean'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          ref: ${{ github.event.pull_request.head.ref }}
+          fetch-depth: 0
+      - uses: dtolnay/rust-toolchain@39b0b3842c7e8bbf6904c0bfc3d9006fdd4dc4e0
+        with:
+          components: rustfmt, clippy
+      - name: Apply continuous bounded implementer budget
+        run: python3 .medusa-patches/apply_implementer_budget.py
+      - name: Format
+        run: cargo fmt --all -- --check
+      - name: Compile runtime targets
+        run: cargo check -p medusa-runtime --all-targets
+      - name: Strict runtime lint
+        run: cargo clippy -p medusa-runtime --all-targets -- -D warnings
+      - name: Mutating coordinator tests
+        run: cargo test -p medusa-runtime mutating_worker_coordinator
+      - name: Commit validated source only
+        env:
+          HEAD_REF: ${{ github.event.pull_request.head.ref }}
+        run: |
+          rm .medusa-patches/apply_implementer_budget.py
+          rm .github/workflows/apply-implementer-budget.yml
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add crates/medusa-runtime/src/mutating_worker_coordinator.rs
+          git add crates/medusa-runtime/src/mutating_worker_coordinator_tests.rs
+          git add -u .medusa-patches .github/workflows
+          git commit -m "fix(runtime): preserve implementer context through bounded execution"
+          git push origin HEAD:"${HEAD_REF}"
