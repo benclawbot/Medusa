@@ -221,6 +221,7 @@ pub(crate) fn sandboxed_command(
             .arg(&root)
             .args(["--tmpfs", "/tmp", "--clearenv", "--setenv", "PATH"])
             .arg(std::env::var("PATH").unwrap_or_else(|_| "/usr/local/bin:/usr/bin:/bin".into()))
+            .args(["--setenv", "PYTHONDONTWRITEBYTECODE", "1"])
             .arg("--")
             .arg(program)
             .args(args);
@@ -248,7 +249,8 @@ pub(crate) fn sandboxed_command(
             .arg(&profile_path)
             .arg(program)
             .args(args)
-            .current_dir(&root);
+            .current_dir(&root)
+            .env("PYTHONDONTWRITEBYTECODE", "1");
         let result = output_with_timeout(&mut command, "macOS sandbox-exec sandbox");
         let _ = fs::remove_file(&profile_path);
         result
