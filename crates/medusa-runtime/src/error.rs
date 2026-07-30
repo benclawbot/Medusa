@@ -263,9 +263,16 @@ fn resumed_worker_loop(
 
     while let Ok(command) = commands.recv() {
         match command {
-            RuntimeCommand::Submit(draft) => {
+            RuntimeCommand::Submit { draft, accepted } => {
                 let _ = events.send(RuntimeEvent::Started);
-                let event = match run_prompt(&mut state, draft, &events, &cancel, &submission) {
+                let event = match run_prompt(
+                    &mut state,
+                    draft,
+                    &events,
+                    &cancel,
+                    &submission,
+                    Some(accepted),
+                ) {
                     Ok(event) => event,
                     Err(error) => {
                         mark_idle(&submission, true);

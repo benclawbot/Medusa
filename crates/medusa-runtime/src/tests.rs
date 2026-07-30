@@ -673,3 +673,92 @@ fn runtime_event_durability_classification_is_explicit() {
         RuntimeEventDurability::SessionBoundCanonical { .. }
     ));
 }
+
+#[test]
+fn initial_submit_waits_for_session_acceptance_before_returning() {
+    let directory = tempdir().expect("temporary directory");
+    let submission = std::sync::Arc::new(std::sync::Mutex::new(SubmissionState::default()));
+    let (command_tx, command_rx) = mpsc::channel();
+    let (_frontend_tx, frontend_rx) = mpsc::channel();
+    let (event_sender, _runtime_event_rx) = mpsc::channel();
+    let runtime = RuntimeController {
+        commands: command_tx,
+        events: frontend_rx,
+        cancel: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
+        submission: std::sync::Arc::clone(&submission),
+        event_sender,
+        team_control: TeamControlPlane::default(),
+        repo: directory.path().to_path_buf(),
+    };
+    let worker_submission = std::sync::Arc::clone(&submission);
+    let worker = thread::spawn(move || {
+        let RuntimeCommand::Submit { draft, accepted } =
+            command_rx.recv().expect("submission command")
+        else {
+            panic!("expected submission command");
+        };
+        assert_eq!(draft.text, "start a durable session");
+        let mut state = worker_submission.lock().expect("submission state");
+        assert!(state.busy);
+        state.active_session_id = Some("session-accepted".to_owned());
+        drop(state);
+        accepted.send(()).expect("accept submission");
+    });
+
+    assert_eq!(
+        runtime
+            .submit(PromptDraft {
+                text: "start a durable session".to_owned(),
+                ..PromptDraft::default()
+            })
+            .expect("accepted submission"),
+        SubmitDisposition::Started
+    );
+    worker.join().expect("worker joins");
+    assert_eq!(
+        submission
+            .lock()
+            .expect("submission state")
+            .active_session_id
+            .as_deref(),
+        Some("session-accepted")
+    );
+}
+
+#[test]
+fn followup_fails_closed_until_a_durable_session_identity_exists() {
+    let directory = tempdir().expect("temporary directory");
+    let submission = std::sync::Arc::new(std::sync::Mutex::new(SubmissionState {
+        busy: true,
+        active_session_id: None,
+        ..SubmissionState::default()
+    }));
+    let (command_tx, command_rx) = mpsc::channel();
+    let (_frontend_tx, frontend_rx) = mpsc::channel();
+    let (event_sender, _runtime_event_rx) = mpsc::channel();
+    let runtime = RuntimeController {
+        commands: command_tx,
+        events: frontend_rx,
+        cancel: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
+        submission: std::sync::Arc::clone(&submission),
+        event_sender,
+        team_control: TeamControlPlane::default(),
+        repo: directory.path().to_path_buf(),
+    };
+
+    assert!(matches!(
+        runtime.submit(PromptDraft {
+            text: "do not acknowledge this before durability".to_owned(),
+            ..PromptDraft::default()
+        }),
+        Err(RuntimeError::Busy)
+    ));
+    assert!(command_rx.try_recv().is_err());
+    assert!(
+        submission
+            .lock()
+            .expect("submission state")
+            .followups
+            .is_empty()
+    );
+}
