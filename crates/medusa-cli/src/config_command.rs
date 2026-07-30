@@ -9,6 +9,10 @@ use medusa_config::{PROVIDER_PROFILE_KEYS, ProviderProfile, ProviderProfileStore
 use medusa_core::{ErrorCategory, ErrorCode, MedusaError, MedusaResult};
 use serde::Serialize;
 
+pub(crate) fn config_path() -> MedusaResult<std::path::PathBuf> {
+    Ok(ProviderProfileStore::user()?.path().to_path_buf())
+}
+
 pub(crate) fn load_profile() -> MedusaResult<ProviderProfile> {
     ProviderProfileStore::user()?.load()
 }

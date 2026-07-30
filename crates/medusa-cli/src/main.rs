@@ -11,8 +11,8 @@ use std::{
 
 use clap::{Parser, Subcommand};
 use config_command::{
-    configure_interactive, ensure_first_run, ensure_selected_runtime, reset as reset_config,
-    show as show_config,
+    configure_interactive, ensure_first_run, ensure_selected_runtime, get as get_config,
+    reset as reset_config, show as show_config, validate as validate_config,
 };
 use medusa_agent::bootstrap;
 use medusa_config::Config;
@@ -101,8 +101,27 @@ enum CommandKind {
 
 #[derive(Subcommand, Debug)]
 enum ConfigAction {
+    /// Run the interactive first-run provider setup.
+    Init,
     /// Print the non-secret provider profile.
-    Show,
+    Show {
+        /// Emit stable machine-readable JSON.
+        #[arg(long)]
+        json: bool,
+    },
+    /// Print one non-secret provider-profile key.
+    Get {
+        key: String,
+        /// Emit the value as JSON.
+        #[arg(long)]
+        json: bool,
+    },
+    /// Validate the shared provider profile without billable provider work.
+    Validate {
+        /// Emit stable machine-readable JSON.
+        #[arg(long)]
+        json: bool,
+    },
     /// Remove the provider profile so setup runs again.
     Reset,
 }
@@ -166,8 +185,10 @@ fn run() -> MedusaResult<()> {
 
     if let CommandKind::Config { action } = command {
         return match action {
-            None => configure_interactive(),
-            Some(ConfigAction::Show) => show_config(),
+            None | Some(ConfigAction::Init) => configure_interactive(),
+            Some(ConfigAction::Show { json }) => show_config(json),
+            Some(ConfigAction::Get { key, json }) => get_config(&key, json),
+            Some(ConfigAction::Validate { json }) => validate_config(json),
             Some(ConfigAction::Reset) => reset_config(),
         };
     }
@@ -641,7 +662,7 @@ mod tests {
         assert!(matches!(
             cli.command,
             Some(CommandKind::Config {
-                action: Some(ConfigAction::Show)
+                action: Some(ConfigAction::Show { json: false })
             })
         ));
     }

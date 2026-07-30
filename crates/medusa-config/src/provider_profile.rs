@@ -76,9 +76,7 @@ impl ProviderProfile {
             &["oauth", "api-key", "existing", "none"],
         )?;
 
-        if self.configured
-            && (self.provider.trim().is_empty() || self.model.trim().is_empty())
-        {
+        if self.configured && (self.provider.trim().is_empty() || self.model.trim().is_empty()) {
             return Err(config_error(
                 "configured provider profiles require a provider and model",
             ));
@@ -144,10 +142,11 @@ impl ProviderProfile {
             "speed" => Some(ProviderProfileValue::String(self.speed.clone())),
             "reasoning" => Some(ProviderProfileValue::String(self.reasoning.clone())),
             "auth" => Some(ProviderProfileValue::String(self.auth.clone())),
-            "base_url" => Some(self.base_url.clone().map_or(
-                ProviderProfileValue::Null,
-                ProviderProfileValue::String,
-            )),
+            "base_url" => Some(
+                self.base_url
+                    .clone()
+                    .map_or(ProviderProfileValue::Null, ProviderProfileValue::String),
+            ),
             "configured" => Some(ProviderProfileValue::Bool(self.configured)),
             _ => None,
         }

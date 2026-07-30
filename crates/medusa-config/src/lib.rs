@@ -5,6 +5,12 @@ use std::{collections::BTreeMap, fs, path::Path};
 use medusa_core::{ErrorCategory, ErrorCode, MedusaError, MedusaResult};
 use serde::{Deserialize, Serialize};
 
+mod provider_profile;
+
+pub use provider_profile::{
+    PROVIDER_PROFILE_KEYS, ProviderProfile, ProviderProfileStore, ProviderProfileValue,
+};
+
 /// Current configuration schema version.
 pub const CONFIG_VERSION: u16 = 1;
 
@@ -316,70 +322,28 @@ fn invalid(message: impl Into<String>) -> MedusaError {
     )
 }
 
-#[derive(Debug, Default, Deserialize)]
-#[serde(default, deny_unknown_fields)]
-struct ProviderProfile {
-    connection: String,
-    provider: String,
-    model: String,
-    #[serde(rename = "speed")]
-    _speed: String,
-    #[serde(rename = "reasoning")]
-    _reasoning: String,
-    auth: String,
-    base_url: Option<String>,
-    configured: bool,
-}
-
-fn provider_profile_path() -> Option<std::path::PathBuf> {
-    let base = if cfg!(windows) {
-        std::env::var_os("APPDATA").map(std::path::PathBuf::from)
-    } else if let Some(path) = std::env::var_os("XDG_CONFIG_HOME") {
-        Some(std::path::PathBuf::from(path))
-    } else {
-        std::env::var_os("HOME").map(|home| std::path::PathBuf::from(home).join(".config"))
-    }?;
-    Some(base.join("medusa").join("provider.toml"))
-}
-
 fn merge_provider_profile(base: &mut toml::Value) -> MedusaResult<()> {
-    let Some(path) = provider_profile_path() else {
-        return Ok(());
-    };
-    if !path.exists() {
-        return Ok(());
-    }
-    let text = fs::read_to_string(&path)
-        .map_err(|error| invalid(format!("read {}: {error}", path.display())))?;
-    let profile: ProviderProfile = toml::from_str(&text)
-        .map_err(|error| invalid(format!("parse {}: {error}", path.display())))?;
+    let profile = ProviderProfileStore::user()?.load()?;
     if !profile.configured {
         return Ok(());
     }
-    let protocol = match profile.connection.as_str() {
-        "direct"
-            if matches!(
-                profile.provider.as_str(),
-                "minimax" | "anthropic" | "anthropic-compatible"
-            ) =>
-        {
-            "anthropic"
-        }
-        _ => "openai",
-    };
+    let protocol = profile.protocol().to_owned();
+    let ProviderProfile {
+        provider,
+        model: model_name,
+        auth,
+        base_url,
+        ..
+    } = profile;
     let mut model = toml::map::Map::new();
-    model.insert("provider".to_owned(), toml::Value::String(profile.provider));
-    model.insert("name".to_owned(), toml::Value::String(profile.model));
-    model.insert(
-        "protocol".to_owned(),
-        toml::Value::String(protocol.to_owned()),
-    );
-    model.insert("auth".to_owned(), toml::Value::String(profile.auth));
+    model.insert("provider".to_owned(), toml::Value::String(provider));
+    model.insert("name".to_owned(), toml::Value::String(model_name));
+    model.insert("protocol".to_owned(), toml::Value::String(protocol));
+    model.insert("auth".to_owned(), toml::Value::String(auth));
     let mut root = toml::map::Map::new();
     root.insert("model".to_owned(), toml::Value::Table(model));
-    let overlay = toml::Value::Table(root);
-    merge(base, overlay);
-    if let Some(url) = profile.base_url {
+    merge(base, toml::Value::Table(root));
+    if let Some(url) = base_url {
         set_path(base, "model.base_url", toml::Value::String(url))?;
     }
     Ok(())
