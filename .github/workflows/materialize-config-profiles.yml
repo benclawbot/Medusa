@@ -1,0 +1,252 @@
+name: Materialize provider profiles and mutations
+
+on:
+  pull_request:
+    branches:
+      - main
+    types: [opened, synchronize, reopened]
+    paths:
+      - .github/workflows/materialize-config-profiles.yml
+
+permissions:
+  contents: write
+
+jobs:
+  materialize:
+    if: github.head_ref == 'agent/config-profiles-and-mutations'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          ref: agent/config-profiles-and-mutations
+          fetch-depth: 0
+      - uses: dtolnay/rust-toolchain@39b0b3842c7e8bbf6904c0bfc3d9006fdd4dc4e0
+        with:
+          toolchain: 1.88.0
+          components: rustfmt,clippy
+      - name: Wire and validate provider profiles
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY_LIB'
+          from pathlib import Path
+
+          path = Path('crates/medusa-config/src/lib.rs')
+          text = path.read_text()
+          old_modules = '''mod provider_profile;
+
+          pub use provider_profile::{
+              PROVIDER_PROFILE_KEYS, ProviderProfile, ProviderProfileStore, ProviderProfileValue,
+          };
+          '''
+          new_modules = '''mod provider_profile;
+          mod provider_profiles;
+
+          pub use provider_profile::{
+              PROVIDER_PROFILE_KEYS, ProviderProfile, ProviderProfileStore, ProviderProfileValue,
+          };
+          pub use provider_profiles::{ProviderProfileCatalog, ProviderProfileSummary};
+          '''
+          if old_modules not in text:
+              raise SystemExit('provider profile module block missing')
+          text = text.replace(old_modules, new_modules, 1)
+          old_load = '    let profile = ProviderProfileStore::user()?.load()?;'
+          new_load = '    let profile = ProviderProfileCatalog::user()?.active_store()?.load()?;'
+          if old_load not in text:
+              raise SystemExit('provider profile merge load missing')
+          text = text.replace(old_load, new_load, 1)
+          path.write_text(text)
+          PY_LIB
+          python3 - <<'PY_COMMAND'
+          from pathlib import Path
+
+          path = Path('crates/medusa-cli/src/config_command.rs')
+          text = path.read_text()
+          old_import = '''use medusa_config::{PROVIDER_PROFILE_KEYS, ProviderProfile, ProviderProfileStore};'''
+          new_import = '''use medusa_config::{PROVIDER_PROFILE_KEYS, ProviderProfile, ProviderProfileCatalog};'''
+          if old_import not in text:
+              raise SystemExit('config command import missing')
+          text = text.replace(old_import, new_import, 1)
+          occurrences = text.count('ProviderProfileStore::user()?')
+          if occurrences != 5:
+              raise SystemExit(f'expected 5 active-store call sites, found {occurrences}')
+          text = text.replace(
+              'ProviderProfileStore::user()?',
+              'ProviderProfileCatalog::user()?.active_store()?',
+          )
+          path.write_text(text)
+          PY_COMMAND
+          python3 - <<'PY_MAIN'
+          from pathlib import Path
+
+          path = Path('crates/medusa-cli/src/main.rs')
+          text = path.read_text()
+          if 'mod config_profiles;\n' not in text:
+              text = text.replace('mod config_command;\n', 'mod config_command;\nmod config_profiles;\n', 1)
+
+          import_anchor = '''use config_command::{
+              configure_interactive, ensure_first_run, ensure_selected_runtime, get as get_config,
+              reset as reset_config, show as show_config, validate as validate_config,
+          };
+          '''
+          import_block = import_anchor + '''use config_profiles::{
+              create as create_config_profile, delete as delete_config_profile,
+              list as list_config_profiles, set as set_config, unset as unset_config,
+              use_profile as use_config_profile,
+          };
+          '''
+          if import_anchor not in text:
+              raise SystemExit('config command import block missing')
+          text = text.replace(import_anchor, import_block, 1)
+
+          old_enum = '''#[derive(Subcommand, Debug)]
+          enum ConfigAction {
+              /// Run the interactive first-run provider setup.
+              Init,
+              /// Print the non-secret provider profile.
+              Show {
+                  /// Emit stable machine-readable JSON.
+                  #[arg(long)]
+                  json: bool,
+              },
+              /// Print one non-secret provider-profile key.
+              Get {
+                  key: String,
+                  /// Emit the value as JSON.
+                  #[arg(long)]
+                  json: bool,
+              },
+              /// Validate the shared provider profile without billable provider work.
+              Validate {
+                  /// Emit stable machine-readable JSON.
+                  #[arg(long)]
+                  json: bool,
+              },
+              /// Remove the provider profile so setup runs again.
+              Reset,
+          }
+          '''
+          new_enum = '''#[derive(Subcommand, Debug)]
+          enum ConfigAction {
+              /// Run the interactive first-run provider setup.
+              Init,
+              /// Print the non-secret provider profile.
+              Show {
+                  /// Emit stable machine-readable JSON.
+                  #[arg(long)]
+                  json: bool,
+              },
+              /// Print one non-secret provider-profile key.
+              Get {
+                  key: String,
+                  /// Emit the value as JSON.
+                  #[arg(long)]
+                  json: bool,
+              },
+              /// Set one known non-secret provider-profile key.
+              Set { key: String, value: String },
+              /// Reset one known provider-profile key to its default.
+              Unset { key: String },
+              /// Manage named provider profiles.
+              Profiles {
+                  #[command(subcommand)]
+                  action: ConfigProfileAction,
+              },
+              /// Validate the shared provider profile without billable provider work.
+              Validate {
+                  /// Emit stable machine-readable JSON.
+                  #[arg(long)]
+                  json: bool,
+              },
+              /// Remove the active provider profile so setup runs again.
+              Reset,
+          }
+
+          #[derive(Subcommand, Debug)]
+          enum ConfigProfileAction {
+              /// List named profiles and the built-in default profile.
+              List {
+                  /// Emit stable machine-readable JSON.
+                  #[arg(long)]
+                  json: bool,
+              },
+              /// Create a named profile from the current active configuration.
+              Create { name: String },
+              /// Select a named profile or the built-in `default` profile.
+              Use { name: String },
+              /// Delete an inactive named profile.
+              Delete { name: String },
+          }
+          '''
+          if old_enum not in text:
+              raise SystemExit('ConfigAction block missing')
+          text = text.replace(old_enum, new_enum, 1)
+
+          old_handler = '''            Some(ConfigAction::Show { json }) => show_config(json),
+                      Some(ConfigAction::Get { key, json }) => get_config(&key, json),
+                      Some(ConfigAction::Validate { json }) => validate_config(json),
+                      Some(ConfigAction::Reset) => reset_config(),
+          '''
+          new_handler = '''            Some(ConfigAction::Show { json }) => show_config(json),
+                      Some(ConfigAction::Get { key, json }) => get_config(&key, json),
+                      Some(ConfigAction::Set { key, value }) => set_config(&key, &value),
+                      Some(ConfigAction::Unset { key }) => unset_config(&key),
+                      Some(ConfigAction::Profiles { action }) => match action {
+                          ConfigProfileAction::List { json } => list_config_profiles(json),
+                          ConfigProfileAction::Create { name } => create_config_profile(&name),
+                          ConfigProfileAction::Use { name } => use_config_profile(&name),
+                          ConfigProfileAction::Delete { name } => delete_config_profile(&name),
+                      },
+                      Some(ConfigAction::Validate { json }) => validate_config(json),
+                      Some(ConfigAction::Reset) => reset_config(),
+          '''
+          if old_handler not in text:
+              raise SystemExit('ConfigAction handler missing')
+          text = text.replace(old_handler, new_handler, 1)
+
+          test_anchor = '''    #[test]
+              fn update_command_is_available_without_extra_arguments() {
+          '''
+          tests = '''    #[test]
+              fn config_set_is_available() {
+                  let cli = Cli::try_parse_from(["medusa", "config", "set", "model", "gpt-5"])
+                      .expect("parse config set");
+                  assert!(matches!(
+                      cli.command,
+                      Some(CommandKind::Config {
+                          action: Some(ConfigAction::Set { key, value })
+                      }) if key == "model" && value == "gpt-5"
+                  ));
+              }
+
+              #[test]
+              fn config_profiles_use_is_available() {
+                  let cli = Cli::try_parse_from([
+                      "medusa", "config", "profiles", "use", "work"
+                  ])
+                  .expect("parse profile selection");
+                  assert!(matches!(
+                      cli.command,
+                      Some(CommandKind::Config {
+                          action: Some(ConfigAction::Profiles {
+                              action: ConfigProfileAction::Use { name }
+                          })
+                      }) if name == "work"
+                  ));
+              }
+
+          ''' + test_anchor
+          if test_anchor not in text:
+              raise SystemExit('CLI parser test anchor missing')
+          text = text.replace(test_anchor, tests, 1)
+          path.write_text(text)
+          PY_MAIN
+          cargo fmt --all
+          cargo test -p medusa-config -p medusa-cli
+          cargo clippy -p medusa-config -p medusa-cli --all-targets -- -D warnings
+          rm .github/workflows/materialize-config-profiles.yml
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add -A
+          git commit -m 'Wire provider profiles and validated mutations'
+          git push origin HEAD:agent/config-profiles-and-mutations
