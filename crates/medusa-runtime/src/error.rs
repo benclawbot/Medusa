@@ -362,6 +362,8 @@ mod interruption_tests {
             pending_question: None,
             messages: Vec::new(),
             events: Vec::new(),
+            applied_journal_cursor: 0,
+            applied_journal_checksum: None,
             evidence: Vec::new(),
             tool_artifacts: Vec::new(),
             world_model: None,
