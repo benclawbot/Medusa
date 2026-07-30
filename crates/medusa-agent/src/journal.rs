@@ -181,6 +181,23 @@ pub(crate) fn append_event(
 
 pub(crate) fn commit_snapshot(session: &AgentSession) -> MedusaResult<AgentSession> {
     let _guard = lock_journal();
+    commit_snapshot_locked(session)
+}
+
+pub(crate) fn commit_snapshot_with<F>(
+    session: &AgentSession,
+    after_commit: F,
+) -> MedusaResult<AgentSession>
+where
+    F: FnOnce(&AgentSession) -> MedusaResult<()>,
+{
+    let _guard = lock_journal();
+    let committed = commit_snapshot_locked(session)?;
+    after_commit(&committed)?;
+    Ok(committed)
+}
+
+fn commit_snapshot_locked(session: &AgentSession) -> MedusaResult<AgentSession> {
     verify_chain(&session.events)?;
     ensure_initialized(session)?;
     let path = journal_path(&session.repo, &session.id)?;
