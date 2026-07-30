@@ -106,6 +106,8 @@ mod tests {
             updated_at: OffsetDateTime::now_utc(),
             messages: Vec::new(),
             events: Vec::new(),
+            applied_journal_cursor: 0,
+            applied_journal_checksum: None,
             evidence: Vec::new(),
             plan: Vec::new(),
             completed: false,
