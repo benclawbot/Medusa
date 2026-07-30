@@ -11,18 +11,7 @@ A capability is represented by exactly one maturity value:
 - `experimental`: research or early implementation that requires a deliberate feature or configuration opt-in.
 - `design-only`: architecture or scaffolding with no production entrypoint or opt-in. Production capabilities may not depend on it.
 
-Production code and tests on `main` remain the highest authority. The manifest records that authority in reviewable metadata; this ledger renders the public status without inventing stronger claims.
-
-The authoritative order is:
-
-1. production code and tests on `main`;
-2. canonical GitHub Actions definitions and retained evidence;
-3. `docs/CAPABILITY-CLAIMS.json`;
-4. this human-readable ledger;
-5. README and release claims;
-6. historical design documents.
-
-Every capability-changing pull request must update the manifest and ledger or explain why no capability record changes. Guardrails reject deleted file references, unknown gates or platforms, missing production evidence, incomplete promotion checklists, silent non-production defaults, design-only entrypoints, and production dependencies on non-production capabilities.
+Production code and tests on `main` remain the highest authority. Every capability-changing pull request must update the manifest and ledger or explain why no capability record changes.
 
 ## Capability maturity matrix
 
@@ -36,7 +25,7 @@ Every capability-changing pull request must update the manifest and ledger or ex
 | `daemon` | `production` | daemon maintainers | daemon and desktop adapter | Linux, macOS, Windows | none |
 | `release-trust` | `production` | release maintainers | publish-release workflow | Linux, macOS, Windows | GitHub artifact attestations |
 | `self-update` | `production` | CLI maintainers | `medusa update` | Linux, macOS, Windows | GitHub repository access |
-| `multi-agent-research` | `production` | agent runtime maintainers | coordinated `run_prompt` preflight | Linux, macOS, Windows | configured model provider |
+| `multi-agent-research` | `production` | agent runtime maintainers | coordinated `run_prompt` preflight and worktree implementation | Linux, macOS, Windows | configured model provider, Git |
 
 The manifest also records production paths, behavioral test paths, canonical gates, observability references, public documentation, promotion evidence, default activation, explicit opt-ins, and capability dependencies.
 
@@ -50,13 +39,13 @@ The manifest also records production paths, behavioral test paths, canonical gat
 - `daemon`: `crates/medusa-daemon`; validated by Daemon, Desktop, and CI.
 - `release-trust`: release evidence scripts and publish workflow; validated by CI, Desktop, Release Gates, and Refactor Guardrails.
 - `self-update`: `crates/medusa-cli`; validated by CI, Desktop, and Release Gates.
-- `multi-agent-research`: `run_prompt` invokes the durable coordinator, which dispatches independent read-only planner and risk-reviewer `AgentEngine` sessions under leases and role-bound policy; validated by CI, Daemon, and Refactor Guardrails.
+- `multi-agent-research`: `run_prompt` dispatches independent read-only planner and risk-reviewer `AgentEngine` sessions under durable leases. Explicit mutation objectives then run an implementer `AgentEngine` in an execution-specific isolated worktree, reject out-of-scope or overlapping changes, verify before integration, roll back integration conflicts, clean temporary resources, and hand durable evidence to a read-only parent reviewer. Validated by CI, Daemon, Desktop, and Refactor Guardrails.
 
 ## Planned and scaffolding behavior
 
 ### Remaining design-only boundary
 
-The production capability currently covers **read-only** planner and risk-reviewer teammates only. Mutating teammate worktrees, autonomous nested delegation, consensus voting, commit barriers, and distributed transaction coordination remain design-only until a production caller, recovery path, and behavioral proof are merged. Their presence in the workspace must not be presented as active behavior.
+The current production capability supports one mutating implementer contract after parallel read-only preflight. Autonomous nested delegation, dynamic multi-implementer task creation, consensus voting, commit barriers, and distributed transaction coordination remain design-only until a production caller, recovery path, observability contract, and behavioral proof are merged. Their presence in the workspace must not be presented as active behavior.
 
 ## Canonical gates
 
@@ -66,10 +55,6 @@ The production capability currently covers **read-only** planner and risk-review
 - **Refactor Guardrails** enforces source-size ceilings, workflow permissions, architecture metadata, and this maturity contract.
 - **Release Gates** validates coverage, adversarial regressions, fuzzing, chaos recovery, security, packages, documentation/schema consistency, and live-provider scenarios.
 
-A gate name in the manifest must match this retained set. Draft scheduling may defer expensive work, but it does not change capability maturity or promotion requirements.
-
 ## Operational boundaries
 
-Platform support is explicit per capability and does not imply identical containment internals. External dependencies are recorded so provider APIs, GitHub services, Node sidecars, or artifact-attestation infrastructure cannot be mistaken for repository-owned guarantees.
-
-README, configuration, compatibility, and release documentation may describe only behavior at or below the recorded maturity. A preview or experimental capability must name its explicit opt-in. A design-only capability must not be presented as available behavior.
+Platform support is explicit per capability and does not imply identical containment internals. External dependencies are recorded so provider APIs, Git services, Node sidecars, or artifact-attestation infrastructure cannot be mistaken for repository-owned guarantees. README, configuration, compatibility, and release documentation may describe only behavior at or below the recorded maturity.

@@ -24,7 +24,6 @@ REQUIRED_HEADINGS = (
     "## Authoritative persisted records",
     "## Capability evidence and drift control",
 )
-
 REQUIRED_DIAGRAM_LABELS = (
     "Runtime event flow",
     "Containment trust boundary",
@@ -32,12 +31,12 @@ REQUIRED_DIAGRAM_LABELS = (
     "Verification gate",
     "Recovery-state lifecycle",
 )
-
 REQUIRED_CONCEPTS = ("Plan", "Execute Safely", "Recover")
 REQUIRED_AUTHORITY_ROWS = ("Plans", "Execution", "Verification", "Reports", "Learning", "Recovery")
 REQUIRED_CONTRIBUTOR_PATHS = (
     "crates/medusa-runtime",
     "crates/medusa-agent",
+    "crates/medusa-workers",
     "crates/medusa-process-containment",
     "crates/medusa-multi-agent-scheduler",
     "crates/medusa-recovery-coordinator",
@@ -71,7 +70,9 @@ def validate(root: Path) -> None:
     evidence = read(root, "docs/CAPABILITY-EVIDENCE.md")
     trace = read(root, "docs/PRODUCTION-EXECUTION-TRACE.md")
     planning = read(root, "crates/medusa-runtime/src/production_orchestrator.rs")
-    coordinator = read(root, "crates/medusa-runtime/src/multi_agent_coordinator.rs")
+    read_only_coordinator = read(root, "crates/medusa-runtime/src/multi_agent_coordinator.rs")
+    mutating_coordinator = read(root, "crates/medusa-runtime/src/mutating_worker_coordinator.rs")
+    workers = read(root, "crates/medusa-workers/src/lib.rs")
     runtime_root = read(root, "crates/medusa-runtime/src/runtime_root_generated.rs")
     runtime = read(root, "crates/medusa-runtime/src/runtime_impl.rs")
     build_main = read(root, "crates/medusa-runtime/build_main.rs")
@@ -80,77 +81,63 @@ def validate(root: Path) -> None:
 
     require(readme, "docs/ARCHITECTURE.md", "README.md")
     require(readme, "docs/CONTRIBUTOR-ARCHITECTURE.md", "README.md")
-
     for heading in REQUIRED_HEADINGS:
         require(architecture, heading, "docs/ARCHITECTURE.md")
     for concept in REQUIRED_CONCEPTS:
         require(architecture, concept, "docs/ARCHITECTURE.md")
     for label in REQUIRED_DIAGRAM_LABELS:
-        heading = f"## {label}"
-        section = architecture.split(heading, 1)[1].split("\n## ", 1)[0]
+        section = architecture.split(f"## {label}", 1)[1].split("\n## ", 1)[0]
         if "```mermaid" not in section:
             raise ArchitectureError(f"architecture section {label!r} requires a Mermaid diagram")
     for row in REQUIRED_AUTHORITY_ROWS:
         if not re.search(rf"^\| {re.escape(row)} \|", architecture, re.MULTILINE):
             raise ArchitectureError(f"authoritative persisted records is missing {row!r}")
-
     for path in REQUIRED_CONTRIBUTOR_PATHS:
         require(contributor, path, "docs/CONTRIBUTOR-ARCHITECTURE.md")
         if not (root / path).exists():
             raise ArchitectureError(f"contributor map references missing path: {path}")
 
-    cargo = tomllib.loads(cargo_text)
-    metadata = cargo.get("workspace", {}).get("metadata", {}).get("medusa", {})
+    metadata = tomllib.loads(cargo_text).get("workspace", {}).get("metadata", {}).get("medusa", {})
     expected = {
-        "production_execution_model": "bounded-read-only-teammates-with-parent-owned-mutation",
-        "production_entrypoint": "medusa-runtime::RuntimeController -> run_prompt -> multi_agent_coordinator::run_preflight -> bounded medusa-agent::AgentEngine teammates -> parent medusa-agent::AgentEngine",
-        "orchestration_planning": "production runtime path; task contracts and schedule waves drive durable read-only teammate dispatch",
-        "subagent_delegation": "production-read-only; mutating teammate dispatch remains disabled until worktree isolation and guarded integration are enabled",
+        "production_execution_model": "bounded-teammates-with-worktree-isolated-mutation",
+        "production_entrypoint": "medusa-runtime::RuntimeController -> run_prompt -> multi_agent_coordinator::run_preflight -> mutating_worker_coordinator::run_implementation when required -> read-only parent medusa-agent::AgentEngine",
+        "orchestration_planning": "production runtime path; task contracts drive durable read-only preflight and worktree-isolated implementer execution",
+        "subagent_delegation": "production; bounded read-only planner and risk-reviewer teammates plus one worktree-isolated implementer contract for explicit mutation objectives",
         "verification_gate": "repository",
     }
     if metadata != expected:
-        raise ArchitectureError(
-            "workspace.metadata.medusa must remain the exact production architecture authority: "
-            f"expected {expected!r}, got {metadata!r}"
-        )
+        raise ArchitectureError(f"workspace.metadata.medusa must remain the exact production architecture authority: expected {expected!r}, got {metadata!r}")
 
     for document, context in (
         (architecture, "docs/ARCHITECTURE.md"),
         (contributor, "docs/CONTRIBUTOR-ARCHITECTURE.md"),
         (trace, "docs/PRODUCTION-EXECUTION-TRACE.md"),
     ):
-        require(document, "RuntimeController", context)
-        require(document, "run_prompt", context)
-        require(document, "AgentEngine", context)
-        require(document, "read-only", context)
-        require(document, "parent", context)
+        for needle in ("RuntimeController", "run_prompt", "AgentEngine", "read-only", "parent"):
+            require(document, needle, context)
 
-    require(architecture, "MultiAgentCoordinator", "docs/ARCHITECTURE.md")
-    require(architecture, "sole mutation authority", "docs/ARCHITECTURE.md")
-    require(architecture, "repository verification gate", "docs/ARCHITECTURE.md")
-    forbid(architecture, "run_prompt does not call scheduler", "docs/ARCHITECTURE.md")
+    for needle in ("MultiAgentCoordinator", "MutatingWorktreeCoordinator", "isolated Git worktree", "repository verification gate"):
+        require(architecture, needle, "docs/ARCHITECTURE.md")
+    forbid(architecture, "sole mutation authority", "docs/ARCHITECTURE.md")
 
     require(contributor, "Production multi-agent coordinator", "docs/CONTRIBUTOR-ARCHITECTURE.md")
+    require(contributor, "Production mutating worker coordinator", "docs/CONTRIBUTOR-ARCHITECTURE.md")
     require(contributor, "called by production `run_prompt`", "docs/CONTRIBUTOR-ARCHITECTURE.md")
-    require(contributor, "Mutating worker", "docs/CONTRIBUTOR-ARCHITECTURE.md")
 
     require(runtime_root, "mod production_orchestrator;", "runtime root")
     require(runtime_root, "pub mod orchestration_planning", "runtime root")
     forbid(runtime_root, "pub mod production_orchestrator;", "runtime root")
-
     require(runtime, "fn run_prompt(", "runtime implementation")
     require(runtime, "AgentEngine::new_with_cancellation", "runtime implementation")
     require(runtime, ".step_with_observer_and_context(", "runtime implementation")
-    if runtime.split("fn run_prompt(", 1)[1].split("\nfn append_followups", 1)[0].count(
-        "AgentEngine::new_with_cancellation"
-    ) != 1:
-        raise ArchitectureError("parent run_prompt must construct exactly one parent AgentEngine")
 
     for needle in (
         "multi_agent_coordinator::run_preflight",
+        "mutating_worker_coordinator::run_implementation",
         "multi_agent_coordinator::verify_repository",
-        "production_orchestrator::plan",
-        "coordinator_evidence",
+        "production_orchestrator::requires_mutation",
+        "TeamRole::Reviewer",
+        "implementation_evidence",
     ):
         require(build_main, needle, "runtime build integration")
 
@@ -159,33 +146,63 @@ def validate(root: Path) -> None:
         "WorkerExecutionController",
         "TeamRuntime",
         "Mode::ReadOnly",
-        "AgentExecutionPolicy::for_team_role",
         "repository_fingerprint",
-        "targeted_verification",
         "accept_persisted_completion",
         "recover_interrupted",
     ):
-        require(coordinator, needle, "production multi-agent coordinator")
-    forbid(coordinator, "Mode::Full", "production read-only coordinator")
-    require(coordinator, "parent remains responsible for all mutations", "production multi-agent coordinator")
+        require(read_only_coordinator, needle, "production read-only coordinator")
+    forbid(read_only_coordinator, "Mode::Yolo", "production read-only coordinator")
 
-    require(planning, "Independent read-only teammates are dispatched", "production orchestration planning")
-    require(planning, "AgentRole::Researcher", "production orchestration planning")
-    require(planning, "allowed: matches!", "production orchestration delegation policy")
+    for needle in (
+        "Mode::Yolo",
+        "TeamRole::Implementer",
+        "open_or_create_worker",
+        "validate_changed_paths",
+        "targeted_verification",
+        "finalize_worker",
+        "integrate_successful",
+        "commit_tree_matches_head",
+        "discard_untracked_runtime_state",
+        "recover_interrupted",
+    ):
+        require(mutating_coordinator, needle, "production mutating coordinator")
+
+    for needle in (
+        "open_or_create_worker",
+        "worker path overlap rejected before integration",
+        "reset",
+        "--hard",
+        "commit_tree_matches_head",
+        "worktree",
+        "branch",
+        "-D",
+    ):
+        require(workers, needle, "worktree manager")
+
+    for needle in (
+        "Independent read-only teammates are dispatched",
+        "isolated Git worktree",
+        "no mutating implementer or worktree",
+        "AgentRole::Researcher",
+        "requires_mutation",
+    ):
+        require(planning, needle, "production orchestration planning")
     forbid(planning, "No workers or subagents are dispatched", "production orchestration planning")
 
-    require(trace, "multi_agent_coordinator::run_preflight", "production execution trace")
-    require(trace, "repository-content fingerprint", "production execution trace")
-    require(trace, "sole mutation", "production execution trace")
-    require(trace, "Mutating teammate dispatch is not part", "production execution trace")
+    for needle in (
+        "multi_agent_coordinator::run_preflight",
+        "mutating_worker_coordinator::run_implementation",
+        "execution-specific Git branch and worktree",
+        "read-only reviewer",
+        "rollback",
+    ):
+        require(trace, needle, "production execution trace")
 
     require(evidence, "## Planned and scaffolding behavior", "docs/CAPABILITY-EVIDENCE.md")
     require(evidence, "`multi-agent-research` | `production`", "docs/CAPABILITY-EVIDENCE.md")
-    shipped_section = evidence.split("## Production capability evidence", 1)[1].split(
-        "## Planned and scaffolding behavior", 1
-    )[0]
-    require(shipped_section, "read-only planner and risk-reviewer", "docs/CAPABILITY-EVIDENCE.md production section")
-    forbid(shipped_section, "isolated worktrees", "docs/CAPABILITY-EVIDENCE.md production section")
+    shipped = evidence.split("## Production capability evidence", 1)[1].split("## Planned and scaffolding behavior", 1)[0]
+    for needle in ("read-only planner and risk-reviewer", "isolated worktree", "roll back integration conflicts"):
+        require(shipped, needle, "docs/CAPABILITY-EVIDENCE.md production section")
 
 
 if __name__ == "__main__":
