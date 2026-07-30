@@ -407,13 +407,13 @@ mod tests {
 
     #[test]
     fn steering_rejects_terminal_workers_and_full_queues() {
-        let control = control();
+        let queued = control();
         for index in 0..MAX_QUEUED_INSTRUCTIONS {
-            control
+            queued
                 .steer("worker-a", &format!("instruction {index}"))
                 .unwrap();
         }
-        assert!(control.steer("worker-a", "one too many").is_err());
+        assert!(queued.steer("worker-a", "one too many").is_err());
 
         let terminal = control();
         terminal.complete("worker-a", "done").unwrap();
