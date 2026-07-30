@@ -184,9 +184,26 @@ pub(crate) fn commit_snapshot(session: &AgentSession) -> MedusaResult<AgentSessi
     verify_chain(&session.events)?;
     ensure_initialized(session)?;
     let path = journal_path(&session.repo, &session.id)?;
-    let state = read_journal(&path, &session.id, true, true)?;
+    let state = read_journal(&path, &session.id, true, false)?;
     let mut merged = session.clone();
-    merge_committed_events(&mut merged, &state.events)?;
+
+    if state.events != merged.events {
+        if let Some(committed) = state.committed_snapshot.as_ref() {
+            merge_committed_events(&mut merged, &committed.events)?;
+        }
+    }
+
+    if state.events != merged.events {
+        let recovered = read_journal(&path, &session.id, true, true)?;
+        merged = session.clone();
+        merge_committed_events(&mut merged, &recovered.events)?;
+        if recovered.events != merged.events {
+            return Err(persistence_error(
+                "cannot commit a session whose events diverge from the journal",
+            ));
+        }
+    }
+
     append_record(&path, &snapshot_record(&merged))?;
     Ok(merged)
 }
