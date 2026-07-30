@@ -21,6 +21,7 @@ const MAX_FRAME_BYTES: usize = 32 * 1024 * 1024;
 
 static JOURNAL_WRITE_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
 
+#[allow(dead_code)]
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum AppendDisposition {
     Appended,
@@ -103,6 +104,7 @@ fn merge_committed_events(
     Ok(())
 }
 
+#[allow(dead_code)]
 pub(crate) fn append_event(
     session: &AgentSession,
     event: &EventEnvelope,
