@@ -384,11 +384,12 @@ impl WorkerManager {
         Ok(commit_tree == head_tree)
     }
 
-    /// Removes untracked per-session runtime state from an isolated worktree.
+    /// Removes per-session runtime state and generated interpreter caches from a worktree.
     ///
-    /// Agent sessions persist under `.medusa`; those files are execution evidence, not product
-    /// changes and must never enter a worker commit. Base-tracked `.medusa` files remain untouched
-    /// and are still subject to ordinary scope validation.
+    /// Agent sessions persist under `.medusa`, and supervised Python verification can create
+    /// bytecode or test caches. These files are execution residue, not product changes, and must
+    /// never enter a worker commit. Files tracked by the base commit remain untouched and are still
+    /// subject to ordinary scope validation.
     pub fn discard_untracked_runtime_state(
         &self,
         worker: &Worker,
@@ -406,16 +407,30 @@ impl WorkerManager {
                 "-z",
                 base_commit,
                 "--",
-                ".medusa",
             ],
-        )?;
+        )?
+        .into_iter()
+        .filter(|path| is_runtime_residue(path))
+        .collect::<Vec<_>>();
         for path in added_runtime_paths {
             run_git(
                 &worker.worktree,
                 &["rm", "-f", "--ignore-unmatch", "--", &path],
             )?;
         }
-        run_git(&worker.worktree, &["clean", "-fdx", "--", ".medusa"])
+        run_git(
+            &worker.worktree,
+            &[
+                "clean",
+                "-fdx",
+                "--",
+                ".medusa",
+                ":(glob)**/__pycache__/**",
+                ":(glob)**/.pytest_cache/**",
+                ":(glob)**/*.pyc",
+                ":(glob)**/*.pyo",
+            ],
+        )
     }
 
     /// Runs combined repository verification after all worker commits merge.
@@ -539,6 +554,16 @@ fn changed_paths_for_commit(repo: &Path, commit: &str) -> MedusaResult<Vec<Strin
     paths.sort();
     paths.dedup();
     Ok(paths)
+}
+
+fn is_runtime_residue(path: &str) -> bool {
+    path == ".medusa"
+        || path.starts_with(".medusa/")
+        || path
+            .split('/')
+            .any(|component| matches!(component, "__pycache__" | ".pytest_cache"))
+        || path.ends_with(".pyc")
+        || path.ends_with(".pyo")
 }
 
 fn ensure_clean(repo: &Path) -> MedusaResult<()> {
@@ -810,6 +835,22 @@ mod tests {
         let message = error.to_string();
         assert!(message.contains("base.txt"));
         assert!(message.contains("unexpected.txt"));
+    }
+
+    #[test]
+    fn runtime_residue_classification_is_narrow() {
+        for path in [
+            ".medusa/session.json",
+            "src/__pycache__/slugify.cpython-312.pyc",
+            "src/.pytest_cache/state",
+            "generated.pyc",
+            "generated.pyo",
+        ] {
+            assert!(is_runtime_residue(path), "{path} must be runtime residue");
+        }
+        for path in ["src/slugify.py", "src/cache.rs", "docs/pytest_cache.md"] {
+            assert!(!is_runtime_residue(path), "{path} must remain product content");
+        }
     }
 
     #[test]
