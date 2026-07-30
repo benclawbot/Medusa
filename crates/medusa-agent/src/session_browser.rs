@@ -8,10 +8,11 @@ use std::{
 use medusa_browser_client::BrowserClient;
 use medusa_core::{ErrorCategory, ErrorCode, MedusaError, MedusaResult, SessionId};
 use medusa_intelligence::{CodeIndex, IndexRefresh, IndexSnapshot};
+use medusa_protocol::EventEnvelope;
 use serde::{Deserialize, Serialize};
 use time::OffsetDateTime;
 
-use crate::session::load;
+use crate::session::{journal, load};
 
 /// Lightweight durable-session metadata suitable for frontend discovery lists.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -35,6 +36,7 @@ pub fn list_sessions(repo: &Path) -> MedusaResult<Vec<SessionSummary>> {
     let mut ids = BTreeSet::new();
     collect_session_ids(&repo.join(".medusa/sessions"), &mut ids)?;
     collect_session_ids(&fallback_session_root(repo), &mut ids)?;
+    ids.extend(journal::discover_session_ids(repo)?);
 
     let mut sessions = ids
         .into_iter()
@@ -58,6 +60,18 @@ pub fn list_sessions(repo: &Path) -> MedusaResult<Vec<SessionSummary>> {
             .then_with(|| left.id.cmp(&right.id))
     });
     Ok(sessions)
+}
+
+/// Returns committed session events after a zero-based durable cursor.
+pub fn replay_events(repo: &Path, session: &str, cursor: u64) -> MedusaResult<Vec<EventEnvelope>> {
+    let id = SessionId::parse(session).map_err(|message| {
+        MedusaError::new(
+            ErrorCode::InvalidConfiguration,
+            ErrorCategory::Validation,
+            message,
+        )
+    })?;
+    journal::replay_from_cursor(repo, &id, cursor)
 }
 
 fn collect_session_ids(root: &Path, ids: &mut BTreeSet<SessionId>) -> MedusaResult<()> {
@@ -304,6 +318,26 @@ mod tests {
         };
         let session = SessionBrowser::connect(&config).expect("browser configuration");
         assert!(!session.is_enabled());
+    }
+
+    #[test]
+    fn journal_only_session_is_discovered_and_repairs_its_snapshot() {
+        let repository = tempfile::tempdir().expect("repository");
+        let engine = AgentEngine::new(UnusedProvider, Config::default());
+        let session = engine
+            .create_session(repository.path(), "Recover journal-only session".to_owned())
+            .expect("session");
+        let snapshot = repository
+            .path()
+            .join(".medusa/sessions")
+            .join(format!("{}.json", session.id));
+        fs::remove_file(&snapshot).expect("remove compatibility snapshot");
+
+        let sessions = list_sessions(repository.path()).expect("session catalog");
+
+        assert_eq!(sessions.len(), 1);
+        assert_eq!(sessions[0].id, session.id.to_string());
+        assert!(snapshot.is_file());
     }
 
     #[test]

@@ -1,6 +1,7 @@
 use std::{
     collections::BTreeMap,
     fs,
+    io::Write,
     path::{Path, PathBuf},
 };
 
@@ -19,6 +20,8 @@ use crate::{
 mod browser_assisted_escalation;
 mod completed_learning;
 mod escalation_state;
+#[path = "journal.rs"]
+pub(crate) mod journal;
 mod lessons;
 mod manual_escalation;
 mod recall;
@@ -207,18 +210,23 @@ pub(crate) fn load(repo: &Path, session: &str) -> MedusaResult<AgentSession> {
     } else {
         fallback_session_path(repo, &id)
     };
-    let session: AgentSession = serde_json::from_slice(&fs::read(path)?)?;
-    verify_chain(&session.events)?;
-    Ok(session)
+    let snapshot = if path.is_file() {
+        let session: AgentSession = serde_json::from_slice(&fs::read(&path)?)?;
+        verify_chain(&session.events)?;
+        Some(session)
+    } else {
+        None
+    };
+    let outcome = journal::load_or_migrate(repo, &id, snapshot)?;
+    if outcome.repair_snapshot {
+        persist_compatibility_snapshot(&outcome.session)?;
+    }
+    Ok(outcome.session)
 }
 
 pub(crate) fn persist(session: &AgentSession) -> MedusaResult<()> {
-    let primary = session_path(&session.repo, &session.id);
-    let persisted = match persist_at(&primary, session) {
-        Ok(()) => Ok(()),
-        Err(_) => persist_at(&fallback_session_path(&session.repo, &session.id), session),
-    };
-    persisted?;
+    journal::commit_snapshot(session)?;
+    persist_compatibility_snapshot(session)?;
     if session.events.last().is_some_and(|event| {
         matches!(
             &event.payload,
@@ -256,14 +264,36 @@ pub(crate) fn persist(session: &AgentSession) -> MedusaResult<()> {
     Ok(())
 }
 
+fn persist_compatibility_snapshot(session: &AgentSession) -> MedusaResult<()> {
+    let primary = session_path(&session.repo, &session.id);
+    match persist_at(&primary, session) {
+        Ok(()) => Ok(()),
+        Err(_) => persist_at(&fallback_session_path(&session.repo, &session.id), session),
+    }
+}
+
 fn persist_at(path: &Path, session: &AgentSession) -> MedusaResult<()> {
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent)?;
     }
     let temporary = path.with_extension("json.tmp");
-    fs::write(&temporary, serde_json::to_vec_pretty(session)?)?;
+    let mut file = fs::File::create(&temporary)?;
+    file.write_all(&serde_json::to_vec_pretty(session)?)?;
+    file.sync_all()?;
     fs::rename(temporary, path)?;
+    sync_parent(path);
     Ok(())
+}
+
+fn sync_parent(path: &Path) {
+    #[cfg(unix)]
+    if let Some(parent) = path.parent() {
+        if let Ok(directory) = fs::File::open(parent) {
+            let _ = directory.sync_all();
+        }
+    }
+    #[cfg(not(unix))]
+    let _ = path;
 }
 
 fn session_path(repo: &Path, id: &SessionId) -> PathBuf {
@@ -275,12 +305,18 @@ fn fallback_session_path(repo: &Path, id: &SessionId) -> PathBuf {
 }
 
 fn fallback_session_root(repo: &Path) -> PathBuf {
+    fallback_storage_root(repo, "sessions")
+}
+
+pub(crate) fn fallback_storage_root(repo: &Path, category: &str) -> PathBuf {
     let root = std::env::var_os("LOCALAPPDATA")
         .or_else(|| std::env::var_os("APPDATA"))
         .map(PathBuf::from)
         .or_else(|| std::env::var_os("HOME").map(PathBuf::from))
         .unwrap_or_else(std::env::temp_dir);
-    root.join("Medusa/sessions").join(repository_key(repo))
+    root.join("Medusa")
+        .join(category)
+        .join(repository_key(repo))
 }
 
 fn repository_key(repo: &Path) -> String {
