@@ -10,14 +10,16 @@ Medusa's product model is **Plan, Execute Safely, Recover**. The Rust crate grap
 | **Execute Safely** | Apply guarded changes and run commands inside the platform containment boundary. | Runtime events, transactions, command evidence, and repository verification. |
 | **Recover** | Preserve enough authoritative state to resume, retry, roll back, or explain failure without inventing success. | Checkpoints, journals, failure history, replay data, and recovery decisions. |
 
-The production execution path is `medusa-runtime::RuntimeController -> run_prompt -> medusa-agent::AgentEngine`. Terminal, desktop, daemon, and headless interfaces use that shared single-agent runtime. The repository verification gate is authoritative for coding completion. The recovery coordinator and persisted `.medusa` state provide the continuation path after interruption or failure. See [`PRODUCTION-EXECUTION-TRACE.md`](PRODUCTION-EXECUTION-TRACE.md) for the source-to-entrypoint proof.
+The coordinated production path is `medusa-runtime::RuntimeController -> run_prompt -> multi_agent_coordinator::run_preflight -> read-only AgentEngine teammates -> parent AgentEngine`. Terminal, desktop, daemon, and headless interfaces use that shared runtime. The repository verification gate is authoritative for coding completion. The recovery coordinator and persisted `.medusa` state provide the continuation path after interruption or failure. See [`PRODUCTION-EXECUTION-TRACE.md`](PRODUCTION-EXECUTION-TRACE.md) for the source-to-entrypoint proof.
 
 ## Runtime event flow
 
 ```mermaid
 flowchart LR
     UI[Terminal / Desktop / Headless CLI] --> C[RuntimeController]
-    C --> A[Single AgentEngine]
+    C --> O[MultiAgentCoordinator]
+    O --> W[Read-only planner + risk reviewer]
+    W --> A[Parent AgentEngine]
     A --> P[Plan]
     P --> E[Execute Safely]
     E --> V{Repository verification gate}
@@ -39,7 +41,7 @@ Runtime events are the shared frontend contract. Frontends render plans, questio
 
 ```mermaid
 flowchart TB
-    subgraph Trusted[Medusa policy and single-agent runtime]
+    subgraph Trusted[Medusa policy and coordinated runtime]
       A[Plan-bound approval]
       T[Transactional repository tools]
       C[Command policy]
@@ -73,20 +75,23 @@ Platform note: Windows command containment requires Windows 11 with `Experimenta
 
 ```mermaid
 flowchart TD
-    C[RuntimeController] --> A[One production AgentEngine]
-    A --> G{Repository verification gate}
+    C[RuntimeController] --> P[Production task contracts]
+    P --> O[MultiAgentCoordinator]
+    O --> L[Durable leases and team state]
+    L --> A[Planner AgentEngine - read-only]
+    L --> R[Risk reviewer AgentEngine - read-only]
+    A --> E[Validated evidence]
+    R --> E
+    E --> Parent[Parent AgentEngine - sole mutation authority]
+    Parent --> G{Repository verification gate}
     G -->|pass| Done[Verified result]
     G -->|fail| Fix[Revise, retry, or recover]
-    Fix --> A
-    A -. optional planning metadata .-> P[Task contracts and schedule model]
-    P -. design-only .-> D[Future bounded subagent dispatch]
-    D -. design-only .-> I[Primary agent validates and integrates results]
-    I -. design-only .-> G
+    Fix --> Parent
 ```
 
-**Current shipped behavior:** every coding objective runs through one `AgentEngine`. `run_prompt` does not call scheduler, worker, lease, consensus, transaction-coordinator, or parent/subagent integration APIs. The public `medusa-runtime::production_orchestrator` export has been removed; planning helpers are exposed only as `medusa-runtime::orchestration_planning`, explicitly marked non-production metadata.
+**Current shipped behavior:** complex prompts dispatch two independent read-only teammates from `run_prompt`. Each has a separate durable session, role-bound runtime policy, a leased task, team mailbox access, and a repository-snapshot-bound context packet. Validated teammate evidence becomes protected parent context. The parent remains the only mutating authority and owns completion.
 
-**Design-only delegation contract:** if subagent execution is promoted later, the primary agent remains accountable for checking evidence, resolving conflicts, integrating accepted work, and presenting the combined repository state to the verification gate. Delegation never transfers completion authority.
+**Current boundary:** implementer worktrees, nested delegation, consensus voting, commit barriers, and distributed mutation coordination are not active production behavior. Those components require an explicit coordinator call path and behavioral proof before promotion.
 
 ## Verification gate
 
@@ -142,6 +147,6 @@ Persisted schedule, contract, role, or wave labels must not be rendered as proof
 
 ## Capability evidence and drift control
 
-Every production capability presented here must map to shipped production paths, executable tests, and canonical repository gates in [`CAPABILITY-CLAIMS.json`](CAPABILITY-CLAIMS.json) and [`CAPABILITY-EVIDENCE.md`](CAPABILITY-EVIDENCE.md). Run both `python3 scripts/check-product-architecture.py` and `python3 scripts/check-capability-evidence.py` after changing architecture or capability claims. The first validates the single-agent entrypoint trace, workspace metadata, runtime exports, production call path, contributor map, persisted-session wording, and README links; the second validates required documents, evidence paths, gates, and ledger synchronization. Experimental, design-only, or prerequisite-limited behavior must be labelled where it appears.
+Every production capability presented here must map to shipped production paths, executable tests, and canonical repository gates in [`CAPABILITY-CLAIMS.json`](CAPABILITY-CLAIMS.json) and [`CAPABILITY-EVIDENCE.md`](CAPABILITY-EVIDENCE.md). Run both `python3 scripts/check-product-architecture.py` and `python3 scripts/check-capability-evidence.py` after changing architecture or capability claims. The first validates the coordinated entrypoint trace, workspace metadata, production call path, contributor map, persisted-team wording, and README links; the second validates required documents, evidence paths, gates, and ledger synchronization. Experimental, design-only, or prerequisite-limited behavior must be labelled where it appears.
 
 For crate-level ownership and entrypoints, see [Contributor architecture map](CONTRIBUTOR-ARCHITECTURE.md).

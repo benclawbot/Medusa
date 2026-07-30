@@ -1616,6 +1616,7 @@ dependencies = [
  "medusa-tool-control",
  "medusa-tool-policy",
  "medusa-turn-assembly",
+ "medusa-workers",
  "png 0.17.16",
  "serde",
  "serde_json",
