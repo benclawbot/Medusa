@@ -14,6 +14,7 @@ use time::OffsetDateTime;
 use crate::{
     approval::{ApprovalGrant, ApprovalReceipt, RollbackReceipt},
     evidence::verify_chain,
+    journal,
 };
 
 mod browser_assisted_escalation;
@@ -156,6 +157,10 @@ pub struct AgentSession {
     pub pending_question: Option<AgentQuestion>,
     pub messages: Vec<Message>,
     pub events: Vec<EventEnvelope>,
+    #[serde(default)]
+    pub applied_journal_cursor: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub applied_journal_checksum: Option<String>,
     pub evidence: Vec<String>,
     #[serde(default)]
     pub tool_artifacts: Vec<PathBuf>,
@@ -207,12 +212,17 @@ pub(crate) fn load(repo: &Path, session: &str) -> MedusaResult<AgentSession> {
     } else {
         fallback_session_path(repo, &id)
     };
-    let session: AgentSession = serde_json::from_slice(&fs::read(path)?)?;
+    let mut session: AgentSession = serde_json::from_slice(&fs::read(&path)?)?;
     verify_chain(&session.events)?;
+    let reconciliation = journal::reconcile(&mut session)?;
+    if reconciliation.snapshot_changed {
+        persist_at(&path, &session)?;
+    }
     Ok(session)
 }
 
 pub(crate) fn persist(session: &AgentSession) -> MedusaResult<()> {
+    journal::validate_snapshot_binding(session)?;
     let primary = session_path(&session.repo, &session.id);
     let persisted = match persist_at(&primary, session) {
         Ok(()) => Ok(()),
@@ -275,12 +285,16 @@ fn fallback_session_path(repo: &Path, id: &SessionId) -> PathBuf {
 }
 
 fn fallback_session_root(repo: &Path) -> PathBuf {
+    fallback_storage_root(repo, "sessions")
+}
+
+pub(crate) fn fallback_storage_root(repo: &Path, category: &str) -> PathBuf {
     let root = std::env::var_os("LOCALAPPDATA")
         .or_else(|| std::env::var_os("APPDATA"))
         .map(PathBuf::from)
         .or_else(|| std::env::var_os("HOME").map(PathBuf::from))
         .unwrap_or_else(std::env::temp_dir);
-    root.join("Medusa/sessions").join(repository_key(repo))
+    root.join("Medusa").join(category).join(repository_key(repo))
 }
 
 fn repository_key(repo: &Path) -> String {
@@ -372,6 +386,102 @@ fn redact_error(error: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn journal_test_session(repo: &Path) -> AgentSession {
+        let id = SessionId::new();
+        let now = OffsetDateTime::UNIX_EPOCH;
+        let event = medusa_protocol::EventEnvelope::new(
+            1,
+            id.clone(),
+            medusa_protocol::Actor::Coordinator,
+            medusa_core::CorrelationId::new(),
+            medusa_protocol::EventPayload::SessionCreated {
+                objective: "recover journal".to_owned(),
+            },
+            None,
+            now,
+        )
+        .expect("event");
+        AgentSession {
+            id,
+            objective: "recover journal".to_owned(),
+            repo: repo.to_path_buf(),
+            created_at: now,
+            updated_at: now,
+            completed: false,
+            turn: 0,
+            plan: Vec::new(),
+            pending_question: None,
+            messages: Vec::new(),
+            events: vec![event],
+            applied_journal_cursor: 0,
+            applied_journal_checksum: None,
+            evidence: Vec::new(),
+            tool_artifacts: Vec::new(),
+            world_model: None,
+            approval_grants: Vec::new(),
+            approval_receipts: Vec::new(),
+            rollback_receipts: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn legacy_snapshot_is_migrated_to_the_append_only_journal() {
+        let repository = tempfile::tempdir().expect("repository");
+        let session = journal_test_session(repository.path());
+        let path = session_path(repository.path(), &session.id);
+        persist_at(&path, &session).expect("legacy snapshot");
+
+        let loaded = load(repository.path(), session.id.as_str()).expect("migrated session");
+
+        assert_eq!(loaded.applied_journal_cursor, 1);
+        assert_eq!(
+            loaded.applied_journal_checksum,
+            loaded.events.last().map(|event| event.checksum.clone())
+        );
+        assert!(
+            repository
+                .path()
+                .join(".medusa/journals")
+                .join(format!("{}.events", loaded.id))
+                .is_file()
+        );
+    }
+
+    #[test]
+    fn journal_tail_is_replayed_when_snapshot_update_was_interrupted() {
+        let repository = tempfile::tempdir().expect("repository");
+        let mut session = journal_test_session(repository.path());
+        crate::journal::reconcile(&mut session).expect("journal migration");
+        let path = session_path(repository.path(), &session.id);
+        persist_at(&path, &session).expect("snapshot");
+
+        let tail = medusa_protocol::EventEnvelope::new(
+            2,
+            session.id.clone(),
+            medusa_protocol::Actor::Coordinator,
+            medusa_core::CorrelationId::new(),
+            medusa_protocol::EventPayload::SessionResumed,
+            session.events.last().map(|event| event.checksum.clone()),
+            OffsetDateTime::UNIX_EPOCH,
+        )
+        .expect("tail event");
+        assert_eq!(
+            crate::journal::append_record(&session, &tail).expect("durable tail"),
+            crate::journal::AppendDisposition::Appended
+        );
+
+        let loaded = load(repository.path(), session.id.as_str()).expect("replayed session");
+
+        assert_eq!(loaded.events.len(), 2);
+        assert_eq!(loaded.events[1], tail);
+        assert_eq!(loaded.applied_journal_cursor, 2);
+        let persisted: AgentSession =
+            serde_json::from_slice(&fs::read(path).expect("materialized snapshot"))
+                .expect("snapshot json");
+        assert_eq!(persisted.applied_journal_cursor, 2);
+        assert_eq!(persisted.events.len(), 2);
+    }
 
     #[test]
     fn bootstrap_keeps_runtime_state_under_medusa_directory() {
