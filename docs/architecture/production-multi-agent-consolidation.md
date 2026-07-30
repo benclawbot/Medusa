@@ -18,7 +18,7 @@ The unused autonomous agent state machine, proposal/consensus/barrier transactio
 
 ## Source layout
 
-`medusa-runtime` now compiles from ordinary Rust modules. Generated roots, build-time source rewriting, `OUT_DIR` module bindings, and `.inc` assembly are no longer part of the build.
+`medusa-runtime` now compiles from ordinary Rust modules. Generated roots, build-time source rewriting, `OUT_DIR` module bindings, and `.inc` assembly are no longer part of the build. The capability-evidence manifest names `src/lib.rs` as the direct runtime integration authority.
 
 ## Validation contract
 
