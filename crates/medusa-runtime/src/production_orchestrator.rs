@@ -410,7 +410,7 @@ fn normalize_candidate_path(value: &str) -> Option<String> {
                 && !matches!(character, '/' | '\\' | '.' | '-' | '_')
         })
         .replace('\\', "/");
-    let candidate = candidate.trim_start_matches("./").trim_end_matches('/');
+    let candidate = candidate.trim_start_matches("./");
     (!candidate.is_empty()
         && !candidate.starts_with('/')
         && !candidate.split('/').any(|segment| segment == ".."))
