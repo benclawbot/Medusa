@@ -1,7 +1,7 @@
 diff --git a/scripts/live-coding-e2e.sh b/scripts/live-coding-e2e.sh
 --- a/scripts/live-coding-e2e.sh
 +++ b/scripts/live-coding-e2e.sh
-@@ -23,6 +23,11 @@ write_failure_summary() {
+@@ -23,5 +23,9 @@ write_failure_summary() {
    local exit_code=$?
    mkdir -p "${ARTIFACTS:-live-e2e-artifacts}"
 +  if [[ -n "${REPO:-}" && -d "$REPO/.git" ]]; then
