@@ -167,7 +167,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     replace_once(
         &mut source,
         "            crate::mutating_worker_coordinator::run_implementation(\n                &state.repo,\n                &config,\n                state.session_api_key.clone(),\n                &execution_plan,\n                preflight,\n                cancel,\n                events,\n            )",
-        "            crate::mutating_worker_coordinator::run_implementation(\n                &state.repo,\n                &config,\n                state.session_api_key.clone(),\n                &execution_plan,\n                preflight,\n                cancel,\n                &state.team_control,\n                events,\n            )",
+        "            crate::mutating_worker_coordinator::run_implementation(\n                &state.repo,\n                &config,\n                state.session_api_key.clone(),\n                &execution_plan,\n                preflight,\n                cancel,\n                (&state.team_control, events),\n            )",
     )?;
     replace_once(
         &mut source,

@@ -131,9 +131,9 @@ pub fn run_implementation(
     plan: &ProductionExecutionPlan,
     preflight: &CoordinatorEvidence,
     cancel: &Arc<AtomicBool>,
-    control: &TeamControlPlane,
-    events: &Sender<RuntimeEvent>,
+    reporting: (&TeamControlPlane, &Sender<RuntimeEvent>),
 ) -> Result<ImplementationEvidence, String> {
+    let (control, events) = reporting;
     coordinate_with_control(
         repo,
         plan,
@@ -265,8 +265,7 @@ where
                     &state_path,
                     &contract.task_id,
                     state,
-                    events,
-                    control,
+                    (control, events),
                 );
             }
             ImplementationStatus::Running | ImplementationStatus::Retrying => {
@@ -753,8 +752,7 @@ where
             state_path,
             &contract.task_id,
             prepared,
-            events,
-            control,
+            (control, events),
         );
     }
     Err(last_error.unwrap_or_else(|| "mutating worker execution exhausted attempts".to_owned()))
@@ -768,9 +766,9 @@ fn integrate_prepared(
     state_path: &Path,
     task_id: &str,
     mut state: DurableImplementationState,
-    events: &Sender<RuntimeEvent>,
-    control: &TeamControlPlane,
+    reporting: (&TeamControlPlane, &Sender<RuntimeEvent>),
 ) -> Result<ImplementationEvidence, String> {
+    let (control, events) = reporting;
     let commit = state
         .worker
         .commit
