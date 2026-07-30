@@ -1,1 +1,0 @@
-This branch fixes the live release regression where the read-only risk-review teammate exhausted a six-turn ceiling before producing evidence. The production ceiling remains bounded and is raised to twelve turns.
