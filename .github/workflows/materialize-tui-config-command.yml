@@ -1,0 +1,387 @@
+name: Materialize TUI configuration command
+
+on:
+  pull_request:
+    branches:
+      - main
+    types: [opened, synchronize, reopened]
+    paths:
+      - .github/workflows/materialize-tui-config-command.yml
+
+permissions:
+  contents: write
+
+jobs:
+  materialize:
+    if: github.head_ref == 'agent/tui-config-command'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          ref: agent/tui-config-command
+          fetch-depth: 0
+      - uses: dtolnay/rust-toolchain@39b0b3842c7e8bbf6904c0bfc3d9006fdd4dc4e0
+        with:
+          toolchain: 1.88.0
+          components: rustfmt,clippy
+      - name: Wire and validate TUI configuration command
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY_CONFIG'
+          from pathlib import Path
+
+          path = Path('crates/medusa-config/src/lib.rs')
+          text = path.read_text()
+          old_load = '''    /// Loads user, project, environment, and CLI layers in increasing precedence.
+              pub fn load_layers(
+                  user: Option<&Path>,
+                  project: Option<&Path>,
+                  environment: &BTreeMap<String, String>,
+                  cli: &BTreeMap<String, String>,
+              ) -> MedusaResult<Self> {
+                  let mut value =
+                      toml::Value::try_from(Self::default()).map_err(|error| invalid(error.to_string()))?;
+                  merge_provider_profile(&mut value)?;
+                  if let Some(path) = user {
+                      merge_file(&mut value, path)?;
+                  }
+                  if let Some(path) = project {
+                      merge_file(&mut value, path)?;
+                  }
+                  apply_overrides(&mut value, environment)?;
+                  apply_overrides(&mut value, cli)?;
+                  let config: Self = value
+                      .try_into()
+                      .map_err(|error| invalid(error.to_string()))?;
+                  config.validate()?;
+                  Ok(config)
+              }
+          '''
+          new_load = '''    /// Loads user, project, environment, and CLI layers in increasing precedence.
+              pub fn load_layers(
+                  user: Option<&Path>,
+                  project: Option<&Path>,
+                  environment: &BTreeMap<String, String>,
+                  cli: &BTreeMap<String, String>,
+              ) -> MedusaResult<Self> {
+                  let profile = ProviderProfileCatalog::user()?.active_store()?.load()?;
+                  Self::load_layers_with_provider_profile(
+                      &profile,
+                      user,
+                      project,
+                      environment,
+                      cli,
+                  )
+              }
+
+              /// Resolves and validates all layers against an explicit provider-profile candidate.
+              ///
+              /// Frontends use this before persisting a profile mutation or selection so an invalid
+              /// effective configuration never replaces the prior valid state.
+              pub fn load_layers_with_provider_profile(
+                  profile: &ProviderProfile,
+                  user: Option<&Path>,
+                  project: Option<&Path>,
+                  environment: &BTreeMap<String, String>,
+                  cli: &BTreeMap<String, String>,
+              ) -> MedusaResult<Self> {
+                  profile.validate()?;
+                  let mut value =
+                      toml::Value::try_from(Self::default()).map_err(|error| invalid(error.to_string()))?;
+                  merge_provider_profile(&mut value, profile)?;
+                  if let Some(path) = user {
+                      merge_file(&mut value, path)?;
+                  }
+                  if let Some(path) = project {
+                      merge_file(&mut value, path)?;
+                  }
+                  apply_overrides(&mut value, environment)?;
+                  apply_overrides(&mut value, cli)?;
+                  let config: Self = value
+                      .try_into()
+                      .map_err(|error| invalid(error.to_string()))?;
+                  config.validate()?;
+                  Ok(config)
+              }
+          '''
+          if old_load not in text:
+              raise SystemExit('Config::load_layers block missing')
+          text = text.replace(old_load, new_load, 1)
+
+          old_merge = '''fn merge_provider_profile(base: &mut toml::Value) -> MedusaResult<()> {
+              let profile = ProviderProfileCatalog::user()?.active_store()?.load()?;
+              if !profile.configured {
+                  return Ok(());
+              }
+              let protocol = profile.protocol().to_owned();
+              let ProviderProfile {
+                  provider,
+                  model: model_name,
+                  auth,
+                  base_url,
+                  ..
+              } = profile;
+          '''
+          new_merge = '''fn merge_provider_profile(
+              base: &mut toml::Value,
+              profile: &ProviderProfile,
+          ) -> MedusaResult<()> {
+              if !profile.configured {
+                  return Ok(());
+              }
+              let protocol = profile.protocol().to_owned();
+              let ProviderProfile {
+                  provider,
+                  model: model_name,
+                  auth,
+                  base_url,
+                  ..
+              } = profile.clone();
+          '''
+          if old_merge not in text:
+              raise SystemExit('provider profile merge block missing')
+          text = text.replace(old_merge, new_merge, 1)
+          path.write_text(text)
+
+          path = Path('crates/medusa-config/src/provider_profiles.rs')
+          text = path.read_text()
+          anchor = '''    pub fn active_store(&self) -> MedusaResult<ProviderProfileStore> {
+                  let name = self.active_name()?;
+                  Ok(self.store_for_name(&name))
+              }
+          '''
+          insertion = anchor + '''
+              /// Loads one existing named profile without changing the active selection.
+              pub fn load_profile(&self, name: &str) -> MedusaResult<ProviderProfile> {
+                  validate_profile_name(name)?;
+                  let store = self.store_for_name(name);
+                  if name != DEFAULT_PROFILE_NAME && !store.path().is_file() {
+                      return Err(config_error(format!(
+                          "provider profile `{name}` does not exist"
+                      )));
+                  }
+                  store.load()
+              }
+          '''
+          if anchor not in text:
+              raise SystemExit('active_store block missing')
+          text = text.replace(anchor, insertion, 1)
+          path.write_text(text)
+          PY_CONFIG
+          python3 - <<'PY_COMMANDS'
+          from pathlib import Path
+
+          path = Path('crates/medusa-runtime/src/commands.rs')
+          text = path.read_text()
+          old_variant = '''    Review {
+                  action: ReviewCommand,
+              },
+              New,
+          '''
+          new_variant = '''    Review {
+                  action: ReviewCommand,
+              },
+              Config(ConfigCommand),
+              New,
+          '''
+          if old_variant not in text:
+              raise SystemExit('SlashCommand variant anchor missing')
+          text = text.replace(old_variant, new_variant, 1)
+
+          team_anchor = '''#[derive(Clone, Debug, Eq, PartialEq)]
+          pub enum TeamCommand {
+          '''
+          config_enum = '''#[derive(Clone, Debug, Eq, PartialEq)]
+          pub enum ConfigCommand {
+              Show,
+              Profiles,
+              UseProfile { name: String },
+              Set { key: String, value: String },
+              Unset { key: String },
+              Validate,
+          }
+
+          ''' + team_anchor
+          if team_anchor not in text:
+              raise SystemExit('TeamCommand anchor missing')
+          text = text.replace(team_anchor, config_enum, 1)
+
+          spec_anchor = '''    CommandSpec {
+                  name: "model",
+                  usage: "/model [name|provider|key]",
+                  description: "configure provider, model, and session key",
+              },
+          '''
+          spec = '''    CommandSpec {
+                  name: "config",
+                  usage: "/config [show|profiles|use <name>|set <key> <value>|unset <key>|validate]",
+                  description: "inspect or update shared redacted configuration",
+              },
+          ''' + spec_anchor
+          if spec_anchor not in text:
+              raise SystemExit('model command spec anchor missing')
+          text = text.replace(spec_anchor, spec, 1)
+
+          parse_anchor = '''pub fn parse_slash_command(input: &str) -> Result<Option<SlashCommand>, String> {
+          '''
+          helper = '''fn parse_config_command(input: &str) -> Result<SlashCommand, String> {
+              let (action, arguments) = input
+                  .split_once(char::is_whitespace)
+                  .map_or((input, ""), |(action, arguments)| (action, arguments.trim()));
+              let no_arguments = |usage: &str| {
+                  if arguments.is_empty() {
+                      Ok(())
+                  } else {
+                      Err(format!("usage: {usage}"))
+                  }
+              };
+              match action.to_ascii_lowercase().as_str() {
+                  "" | "show" => {
+                      no_arguments("/config [show]")?;
+                      Ok(SlashCommand::Config(ConfigCommand::Show))
+                  }
+                  "profiles" => {
+                      no_arguments("/config profiles")?;
+                      Ok(SlashCommand::Config(ConfigCommand::Profiles))
+                  }
+                  "validate" => {
+                      no_arguments("/config validate")?;
+                      Ok(SlashCommand::Config(ConfigCommand::Validate))
+                  }
+                  "use" => {
+                      if arguments.is_empty() || arguments.contains(char::is_whitespace) {
+                          return Err("usage: /config use <profile>".to_owned());
+                      }
+                      Ok(SlashCommand::Config(ConfigCommand::UseProfile {
+                          name: arguments.to_owned(),
+                      }))
+                  }
+                  "unset" => {
+                      if arguments.is_empty() || arguments.contains(char::is_whitespace) {
+                          return Err("usage: /config unset <key>".to_owned());
+                      }
+                      Ok(SlashCommand::Config(ConfigCommand::Unset {
+                          key: arguments.to_owned(),
+                      }))
+                  }
+                  "set" => {
+                      let (key, value) = arguments
+                          .split_once(char::is_whitespace)
+                          .map_or((arguments, ""), |(key, value)| (key, value.trim()));
+                      if key.is_empty() || value.is_empty() {
+                          return Err("usage: /config set <key> <value>".to_owned());
+                      }
+                      Ok(SlashCommand::Config(ConfigCommand::Set {
+                          key: key.to_owned(),
+                          value: value.to_owned(),
+                      }))
+                  }
+                  other => Err(format!(
+                      "unknown /config action `{other}`; use show, profiles, use, set, unset, or validate"
+                  )),
+              }
+          }
+
+          ''' + parse_anchor
+          if parse_anchor not in text:
+              raise SystemExit('slash parser anchor missing')
+          text = text.replace(parse_anchor, helper, 1)
+
+          model_branch = '''        "model" => {
+          '''
+          config_branch = '''        "config" => Ok(Some(parse_config_command(remainder)?)),
+                  "model" => {
+          '''
+          if model_branch not in text:
+              raise SystemExit('model parser branch missing')
+          text = text.replace(model_branch, config_branch, 1)
+
+          tests_anchor = '''    #[test]
+              fn covers_all_effort_labels_and_parser_variants() {
+          '''
+          tests = '''    #[test]
+              fn config_commands_parse_and_are_discoverable() {
+                  assert_eq!(
+                      parse_slash_command("/config"),
+                      Ok(Some(SlashCommand::Config(ConfigCommand::Show)))
+                  );
+                  assert_eq!(
+                      parse_slash_command("/config profiles"),
+                      Ok(Some(SlashCommand::Config(ConfigCommand::Profiles)))
+                  );
+                  assert_eq!(
+                      parse_slash_command("/config use work"),
+                      Ok(Some(SlashCommand::Config(ConfigCommand::UseProfile {
+                          name: "work".to_owned()
+                      })))
+                  );
+                  assert_eq!(
+                      parse_slash_command("/config set model gpt-5"),
+                      Ok(Some(SlashCommand::Config(ConfigCommand::Set {
+                          key: "model".to_owned(),
+                          value: "gpt-5".to_owned()
+                      })))
+                  );
+                  assert_eq!(
+                      parse_slash_command("/config unset base_url"),
+                      Ok(Some(SlashCommand::Config(ConfigCommand::Unset {
+                          key: "base_url".to_owned()
+                      })))
+                  );
+                  assert_eq!(
+                      parse_slash_command("/config validate"),
+                      Ok(Some(SlashCommand::Config(ConfigCommand::Validate)))
+                  );
+                  assert!(parse_slash_command("/config use").is_err());
+                  assert!(parse_slash_command("/config set model").is_err());
+                  let directory = tempfile::tempdir().expect("temporary directory");
+                  assert_eq!(command_suggestions("/con", directory.path())[0].name, "config");
+                  assert!(!SlashCommand::Config(ConfigCommand::Show).runs_agent());
+              }
+
+          ''' + tests_anchor
+          if tests_anchor not in text:
+              raise SystemExit('commands test anchor missing')
+          text = text.replace(tests_anchor, tests, 1)
+          path.write_text(text)
+          PY_COMMANDS
+          python3 - <<'PY_RUNTIME'
+          from pathlib import Path
+
+          path = Path('crates/medusa-runtime/src/lib.rs')
+          text = path.read_text()
+          module_anchor = '''pub mod commands;
+          mod error;
+          '''
+          module_replacement = '''pub mod commands;
+          mod config_command;
+          mod error;
+          '''
+          if module_anchor not in text:
+              raise SystemExit('runtime module anchor missing')
+          text = text.replace(module_anchor, module_replacement, 1)
+
+          match_anchor = '''    match command {
+                  SlashCommand::Team(_) => {
+          '''
+          match_replacement = '''    match command {
+                  SlashCommand::Config(command) => {
+                      crate::config_command::execute(state, command, events)?;
+                  }
+                  SlashCommand::Team(_) => {
+          '''
+          if match_anchor not in text:
+              raise SystemExit('slash execution match anchor missing')
+          text = text.replace(match_anchor, match_replacement, 1)
+          path.write_text(text)
+          PY_RUNTIME
+          cargo fmt --all
+          cargo test -p medusa-config -p medusa-runtime -p medusa-tui
+          cargo clippy -p medusa-config -p medusa-runtime -p medusa-tui --all-targets -- -D warnings
+          rm .github/workflows/materialize-tui-config-command.yml
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add -A
+          git commit -m 'Wire TUI shared configuration command'
+          git push origin HEAD:agent/tui-config-command
