@@ -19,6 +19,15 @@ def download(path: str) -> str:
         return response.read().decode("utf-8")
 
 
+def edit_once(path: str, old: str, new: str) -> None:
+    file = Path(path)
+    source = file.read_text()
+    count = source.count(old)
+    if count != 1:
+        raise SystemExit(f"{path}: expected one anchor, found {count}: {old[:100]!r}")
+    file.write_text(source.replace(old, new, 1))
+
+
 Path("crates/medusa-runtime/src/team_control.rs").write_text(
     download("crates/medusa-runtime/src/team_control.rs")
 )
@@ -32,7 +41,55 @@ end = next(index for index in range(start, len(workflow)) if workflow[index].str
 source = "\n".join(
     line[10:] if line.startswith("          ") else line for line in workflow[start:end]
 ) + "\n"
+
+build_block_start = source.index("edit('crates/medusa-runtime/build_main.rs', [")
+build_block_end = source.index(
+    "\n\nedit('crates/medusa-runtime/src/multi_agent_coordinator.rs',",
+    build_block_start,
+)
+source = source[:build_block_start] + source[build_block_end + 2 :]
 exec(compile(source, "team-observability-materializer.py", "exec"), {})
+
+edit_once(
+    "crates/medusa-runtime/build_main.rs",
+    '    println!("cargo:rerun-if-changed=src/multi_agent_coordinator.rs");\n',
+    '    println!("cargo:rerun-if-changed=src/multi_agent_coordinator.rs");\n'
+    '    println!("cargo:rerun-if-changed=src/team_control.rs");\n',
+)
+edit_once(
+    "crates/medusa-runtime/build_main.rs",
+    '        ("mod multi_agent_coordinator;", "multi_agent_coordinator.rs"),\n',
+    '        ("mod multi_agent_coordinator;", "multi_agent_coordinator.rs"),\n'
+    '        ("mod team_control;", "team_control.rs"),\n',
+)
+late_wiring = r'''    replace_once(
+        &mut source,
+        "    let execution_plan = crate::production_orchestrator::plan(&draft).map_err(RuntimeError::agent)?;\n    for event",
+        "    let execution_plan = crate::production_orchestrator::plan(&draft).map_err(RuntimeError::agent)?;\n    if execution_plan.mode == crate::production_orchestrator::ExecutionMode::Direct { let _ = events.send(RuntimeEvent::Team(state.team_control.clear())); }\n    for event",
+    )?;
+    replace_once(
+        &mut source,
+        "                cancel,\n                events,\n            )\n            .map_err(RuntimeError::agent)?,\n        )\n    } else {\n        None\n    };\n    let coordinated",
+        "                cancel,\n                &state.team_control,\n                events,\n            )\n            .map_err(RuntimeError::agent)?,\n        )\n    } else {\n        None\n    };\n    let coordinated",
+    )?;
+    replace_once(
+        &mut source,
+        "                preflight,\n                cancel,\n                events,\n            )",
+        "                preflight,\n                cancel,\n                &state.team_control,\n                events,\n            )",
+    )?;
+    replace_once(
+        &mut source,
+        "    state.session = Some(session);\n    result\n}\n\nfn append_followups",
+        "    if coordinated { let _ = events.send(RuntimeEvent::Team(state.team_control.finish())); }\n    state.session = Some(session);\n    result\n}\n\nfn append_followups",
+    )?;
+
+'''
+edit_once(
+    "crates/medusa-runtime/build_main.rs",
+    '    source = source.replace("cancel: &AtomicBool", "cancel: &Arc<AtomicBool>");\n',
+    late_wiring
+    + '    source = source.replace("cancel: &AtomicBool", "cancel: &Arc<AtomicBool>");\n',
+)
 
 checker = CHECKER.read_text()
 start_index = checker.index(HOOK_START)
