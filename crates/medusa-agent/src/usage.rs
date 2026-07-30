@@ -284,6 +284,7 @@ mod tests {
             OffsetDateTime::now_utc(),
         )
         .expect("event");
+        let event_checksum = event.checksum.clone();
         let session = AgentSession {
             id,
             objective: "test".to_owned(),
@@ -296,6 +297,8 @@ mod tests {
             pending_question: None,
             messages: Vec::new(),
             events: vec![event],
+            applied_journal_cursor: 1,
+            applied_journal_checksum: Some(event_checksum),
             evidence: Vec::new(),
             tool_artifacts: Vec::new(),
             approval_grants: Vec::new(),
