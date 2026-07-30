@@ -390,7 +390,7 @@ impl WorkerManager {
     /// changes and must never enter a worker commit. Tracked `.medusa` files remain untouched and
     /// are still subject to ordinary scope validation.
     pub fn discard_untracked_runtime_state(&self, worker: &Worker) -> MedusaResult<()> {
-        run_git(&worker.worktree, &["clean", "-fd", "--", ".medusa"])
+        run_git(&worker.worktree, &["clean", "-fdx", "--", ".medusa"])
     }
 
     /// Runs combined repository verification after all worker commits merge.
