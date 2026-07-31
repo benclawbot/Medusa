@@ -287,13 +287,15 @@ class Harness:
             for name in ("verify.py", "test.mjs", "package.json")
         }
 
-    def medusa_binary(self) -> Path:
+    def binary_path(self) -> Path:
         suffix = ".exe" if os.name == "nt" else ""
-        binary = self.work_root / "installed" / "bin" / f"medusa{suffix}"
+        return self.work_root / "installed" / "bin" / f"medusa{suffix}"
+
+    def medusa_binary(self) -> Path:
+        binary = self.binary_path()
         if not binary.is_file():
             raise HarnessError(f"built Medusa binary not found at {binary}", "environment")
         return binary
-
     def run_agent(self) -> None:
         self.set_phase("autonomous-session")
         objective = (
@@ -501,6 +503,7 @@ class Harness:
         return (result.stdout or "unknown").strip()
 
     def write_summary(self, *, result: str, classification: str | None, detail: str | None) -> None:
+        binary = self.binary_path()
         summary = {
             "schema_version": SCHEMA_VERSION,
             "result": result,
@@ -513,7 +516,7 @@ class Harness:
             "sessions": 1,
             "passed": ASSERTION_COUNT if result == "passed" else 0,
             "build": {
-                "binary_sha256": sha256(self.medusa_binary()) if self.medusa_binary().is_file() else None,
+                "binary_sha256": sha256(binary) if binary.is_file() else None,
                 "architecture": platform.machine() or "unknown",
                 "os_release": platform.release() or "unknown",
             },

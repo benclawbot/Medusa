@@ -91,6 +91,29 @@ class LiveDogfoodContractTests(unittest.TestCase):
         summaries.pop()
         self.assertTrue(REPORT.validate(summaries))
 
+    def test_failed_summary_does_not_require_a_built_binary(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            harness = HARNESS.Harness(
+                repo_root=root,
+                output_dir=root / "artifacts",
+                timeout_seconds=1,
+                heartbeat_seconds=1,
+                api_key="credential-value",
+            )
+            harness.commit_sha = lambda: "abc123"
+            harness.write_summary(
+                result="failed",
+                classification="environment",
+                detail="release build failed",
+            )
+            summary = json.loads(
+                (harness.output_dir / "summary.json").read_text(encoding="utf-8")
+            )
+            self.assertEqual(summary["result"], "failed")
+            self.assertEqual(summary["commit"], "abc123")
+            self.assertIsNone(summary["build"]["binary_sha256"])
+
     def test_report_loader_ignores_unrelated_json(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
