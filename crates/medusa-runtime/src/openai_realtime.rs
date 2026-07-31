@@ -518,7 +518,7 @@ struct LegacyClientSecret {
 pub enum OpenAiRealtimeClientEvent {
     #[serde(rename = "session.update")]
     SessionUpdate {
-        session: OpenAiRealtimeSessionConfig,
+        session: Box<OpenAiRealtimeSessionConfig>,
     },
     #[serde(rename = "input_audio_buffer.append")]
     InputAudioAppend { audio: String },
@@ -801,7 +801,7 @@ pub fn map_server_event(
 #[must_use]
 pub fn session_update_event(instructions: impl Into<String>) -> OpenAiRealtimeClientEvent {
     OpenAiRealtimeClientEvent::SessionUpdate {
-        session: OpenAiRealtimeSessionConfig::medusa_default(instructions),
+        session: Box::new(OpenAiRealtimeSessionConfig::medusa_default(instructions)),
     }
 }
 
