@@ -19,12 +19,12 @@ pub struct TelegramInlineButton {
     pub callback_data: String,
 }
 
-#[derive(Clone, Debug, Default, Deserialize, Serialize)]
+#[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
 pub(crate) struct CallbackStore {
     records: BTreeMap<String, CallbackRecord>,
 }
 
-#[derive(Clone, Debug, Deserialize, Serialize)]
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 struct CallbackRecord {
     nonce: String,
     user_id: i64,
@@ -32,8 +32,8 @@ struct CallbackRecord {
     topic_id: Option<i64>,
     session_id: String,
     turn_id: Option<String>,
-    approval_id: String,
-    decision: ApprovalDecision,
+    group_id: String,
+    command: FrontendCommand,
     #[serde(with = "time::serde::rfc3339")]
     expires_at: OffsetDateTime,
     #[serde(with = "time::serde::rfc3339")]
@@ -46,8 +46,8 @@ struct ResolvedCallback {
     nonce: String,
     session_id: String,
     turn_id: Option<String>,
-    approval_id: String,
-    decision: ApprovalDecision,
+    group_id: String,
+    command: FrontendCommand,
 }
 
 impl CallbackStore {
@@ -60,37 +60,82 @@ impl CallbackStore {
         expires_at: OffsetDateTime,
         now: OffsetDateTime,
     ) -> Result<Vec<TelegramInlineButton>, TelegramGatewayError> {
-        if session_id.trim().is_empty() || approval_id.trim().is_empty() || expires_at <= now {
+        if approval_id.trim().is_empty() {
             return Err(TelegramGatewayError::InvalidCallbackRequest);
         }
-        let approve = self.issue(
-            identity,
-            session_id,
-            turn_id,
-            approval_id,
-            ApprovalDecision::ApproveOnce,
-            expires_at,
-            now,
-        );
-        let deny = self.issue(
-            identity,
-            session_id,
-            turn_id,
-            approval_id,
-            ApprovalDecision::Deny,
-            expires_at,
-            now,
-        );
+        let group_id = format!("approval:{approval_id}");
         Ok(vec![
-            TelegramInlineButton {
-                label: "Approve once".to_owned(),
-                callback_data: approve,
-            },
-            TelegramInlineButton {
-                label: "Deny".to_owned(),
-                callback_data: deny,
-            },
+            self.issue_command(
+                identity,
+                session_id,
+                turn_id,
+                &group_id,
+                "Approve once",
+                FrontendCommand::ResolveApproval {
+                    approval_id: approval_id.to_owned(),
+                    decision: ApprovalDecision::ApproveOnce,
+                },
+                expires_at,
+                now,
+            )?,
+            self.issue_command(
+                identity,
+                session_id,
+                turn_id,
+                &group_id,
+                "Deny",
+                FrontendCommand::ResolveApproval {
+                    approval_id: approval_id.to_owned(),
+                    decision: ApprovalDecision::Deny,
+                },
+                expires_at,
+                now,
+            )?,
         ])
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn issue_command(
+        &mut self,
+        identity: &TelegramIdentity,
+        session_id: &str,
+        turn_id: Option<&str>,
+        group_id: &str,
+        label: &str,
+        command: FrontendCommand,
+        expires_at: OffsetDateTime,
+        now: OffsetDateTime,
+    ) -> Result<TelegramInlineButton, TelegramGatewayError> {
+        if session_id.trim().is_empty()
+            || group_id.trim().is_empty()
+            || label.trim().is_empty()
+            || expires_at <= now
+            || command.validate().is_err()
+        {
+            return Err(TelegramGatewayError::InvalidCallbackRequest);
+        }
+        self.prune(now);
+        let nonce = Ulid::new().to_string();
+        self.records.insert(
+            nonce.clone(),
+            CallbackRecord {
+                nonce: nonce.clone(),
+                user_id: identity.user_id,
+                chat_id: identity.chat_id,
+                topic_id: identity.topic_id,
+                session_id: session_id.to_owned(),
+                turn_id: turn_id.map(str::to_owned),
+                group_id: group_id.to_owned(),
+                command,
+                expires_at,
+                issued_at: now,
+                consumed_at: None,
+            },
+        );
+        Ok(TelegramInlineButton {
+            label: label.to_owned(),
+            callback_data: format!("{CALLBACK_PREFIX}{nonce}"),
+        })
     }
 
     pub(crate) fn resolve(
@@ -125,8 +170,8 @@ impl CallbackStore {
             nonce: record.nonce.clone(),
             session_id: record.session_id.clone(),
             turn_id: record.turn_id.clone(),
-            approval_id: record.approval_id.clone(),
-            decision: record.decision,
+            group_id: record.group_id.clone(),
+            command: record.command.clone(),
         };
         let envelope = FrontendCommandEnvelope {
             protocol_version: FRONTEND_PROTOCOL_VERSION,
@@ -137,10 +182,7 @@ impl CallbackStore {
             session_id: Some(resolved.session_id.clone()),
             turn_id: resolved.turn_id.clone(),
             timestamp: now,
-            command: FrontendCommand::ResolveApproval {
-                approval_id: resolved.approval_id.clone(),
-                decision: resolved.decision,
-            },
+            command: resolved.command,
         };
         envelope
             .validate()
@@ -151,44 +193,12 @@ impl CallbackStore {
                 && record.topic_id == identity.topic_id
                 && record.session_id == resolved.session_id
                 && record.turn_id == resolved.turn_id
-                && record.approval_id == resolved.approval_id
+                && record.group_id == resolved.group_id
             {
                 record.consumed_at = Some(now);
             }
         }
         Ok(envelope)
-    }
-
-    #[allow(clippy::too_many_arguments)]
-    fn issue(
-        &mut self,
-        identity: &TelegramIdentity,
-        session_id: &str,
-        turn_id: Option<&str>,
-        approval_id: &str,
-        decision: ApprovalDecision,
-        expires_at: OffsetDateTime,
-        now: OffsetDateTime,
-    ) -> String {
-        self.prune(now);
-        let nonce = Ulid::new().to_string();
-        self.records.insert(
-            nonce.clone(),
-            CallbackRecord {
-                nonce: nonce.clone(),
-                user_id: identity.user_id,
-                chat_id: identity.chat_id,
-                topic_id: identity.topic_id,
-                session_id: session_id.to_owned(),
-                turn_id: turn_id.map(str::to_owned),
-                approval_id: approval_id.to_owned(),
-                decision,
-                expires_at,
-                issued_at: now,
-                consumed_at: None,
-            },
-        );
-        format!("{CALLBACK_PREFIX}{nonce}")
     }
 
     fn prune(&mut self, now: OffsetDateTime) {
@@ -262,6 +272,34 @@ mod tests {
         assert!(matches!(
             store.resolve(&identity(), &buttons[1].callback_data, now),
             Err(TelegramGatewayError::CallbackAlreadyResolved)
+        ));
+    }
+
+    #[test]
+    fn question_callbacks_reuse_the_same_bound_command_path() {
+        let mut store = CallbackStore::default();
+        let now = datetime!(2026-07-30 16:00 UTC);
+        let button = store
+            .issue_command(
+                &identity(),
+                "session-1",
+                None,
+                "question:q1",
+                "Continue",
+                FrontendCommand::AnswerQuestion {
+                    question_id: "q1".to_owned(),
+                    answer: "continue".to_owned(),
+                },
+                now + Duration::minutes(5),
+                now,
+            )
+            .expect("callback");
+        let command = store
+            .resolve(&identity(), &button.callback_data, now)
+            .expect("resolve");
+        assert!(matches!(
+            command.command,
+            FrontendCommand::AnswerQuestion { ref answer, .. } if answer == "continue"
         ));
     }
 }

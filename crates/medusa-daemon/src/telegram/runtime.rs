@@ -140,6 +140,8 @@ impl TelegramPollingRuntime {
                 }
             }
         }
+        self.service
+            .deliver_pending(&self.client, OffsetDateTime::now_utc())?;
         Ok(outcomes)
     }
 

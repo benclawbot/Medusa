@@ -19,6 +19,7 @@ pub use types::{
     TelegramEditMessageOutcome, TelegramEditMessageText, TelegramInboundCallback,
     TelegramInlineKeyboardMarkup, TelegramLinkPreviewOptions, TelegramReplyParameters,
     TelegramSendMessage, TelegramTransportUpdate, TelegramUpdate, TelegramUpdateCursor,
+    TelegramWebAppInfo,
 };
 
 #[cfg(test)]
@@ -362,6 +363,19 @@ impl TelegramBotApiError {
             self,
             Self::Rejected { description, .. }
                 if description.to_ascii_lowercase().contains("message is not modified")
+        )
+    }
+
+    #[must_use]
+    pub(crate) fn is_formatting_rejection(&self) -> bool {
+        matches!(
+            self,
+            Self::Rejected { description, .. } if {
+                let description = description.to_ascii_lowercase();
+                description.contains("can't parse entities")
+                    || description.contains("cannot parse entities")
+                    || description.contains("entity") && description.contains("parse")
+            }
         )
     }
 }

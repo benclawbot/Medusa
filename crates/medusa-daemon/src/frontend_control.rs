@@ -112,6 +112,15 @@ impl FrontendControlPlane {
         }
     }
 
+    /// Replays canonical journal events for one process-local attached client.
+    pub fn replay_events(
+        &self,
+        client_id: &str,
+        cursor: u64,
+    ) -> Result<Vec<EventEnvelope>, FrontendControlError> {
+        self.broker.replay(client_id, cursor).map_err(Into::into)
+    }
+
     /// Validates, serializes, and idempotently acknowledges one frontend command.
     pub fn dispatch(
         &mut self,

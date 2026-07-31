@@ -112,7 +112,7 @@ jobs:
           if-no-files-found: warn
 
   bundle-smoke:
-    timeout-minutes: 75
+    timeout-minutes: 120
     strategy:
       fail-fast: false
       matrix:

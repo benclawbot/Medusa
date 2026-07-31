@@ -5,13 +5,19 @@
 //! in the daemon frontend control plane and production runtime.
 
 use std::{
-    collections::BTreeMap,
+    collections::{BTreeMap, BTreeSet},
     fs::{self, OpenOptions},
     io::Write,
     path::{Path, PathBuf},
 };
 
-use medusa_protocol::frontend::FrontendCommand;
+use medusa_protocol::{
+    EventEnvelope, EventPayload,
+    frontend::{
+        AttachmentMode, FRONTEND_PROTOCOL_VERSION, FrontendCommand, FrontendCommandEnvelope,
+        FrontendKind,
+    },
+};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
@@ -21,11 +27,17 @@ use crate::{
 };
 
 use super::{
-    TelegramGateway, TelegramGatewayError, TelegramIdentity, TelegramInboundAction,
-    TelegramInboundMessage, TelegramVoiceMode, ToolProgressMode, bot_api::TelegramUpdateCursor,
+    TelegramChatKind, TelegramDeliveryState, TelegramGateway, TelegramGatewayError,
+    TelegramIdentity, TelegramInboundAction, TelegramInboundMessage, TelegramRenderer,
+    TelegramVoiceMode, ToolProgressMode,
+    bot_api::{TelegramBotApiClient, TelegramUpdateCursor},
+    callback::CallbackStore,
+    delivery::execute_actions,
+    project_event,
 };
 
-const TELEGRAM_SERVICE_SCHEMA_VERSION: u32 = 1;
+const LEGACY_TELEGRAM_SERVICE_SCHEMA_VERSION: u32 = 1;
+const TELEGRAM_SERVICE_SCHEMA_VERSION: u32 = 2;
 const MAX_BINDINGS: usize = 4_096;
 
 #[derive(Clone, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize)]
@@ -61,11 +73,21 @@ impl TelegramBindingKey {
 pub struct TelegramSessionBinding {
     pub key: TelegramBindingKey,
     pub client_id: String,
+    #[serde(default)]
+    pub chat_kind: TelegramChatKind,
     pub session_id: Option<String>,
     pub acknowledged_cursor: u64,
+    #[serde(default)]
+    pub delivered_cursor: u64,
+    #[serde(default)]
+    pub presentation_cursor: u64,
     pub tool_progress: ToolProgressMode,
     pub voice_mode: TelegramVoiceMode,
     pub last_update_id: Option<i64>,
+    #[serde(default)]
+    pub delivery: TelegramDeliveryState,
+    #[serde(default)]
+    pub renderer: Option<TelegramRenderer>,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -74,6 +96,8 @@ struct TelegramServiceState {
     schema_version: u32,
     next_update_offset: Option<i64>,
     bindings: BTreeMap<String, TelegramSessionBinding>,
+    #[serde(default)]
+    callbacks: CallbackStore,
 }
 
 impl Default for TelegramServiceState {
@@ -82,11 +106,30 @@ impl Default for TelegramServiceState {
             schema_version: TELEGRAM_SERVICE_SCHEMA_VERSION,
             next_update_offset: None,
             bindings: BTreeMap::new(),
+            callbacks: CallbackStore::default(),
         }
     }
 }
 
 impl TelegramServiceState {
+    fn migrate(mut self) -> Result<Self, TelegramSessionServiceError> {
+        match self.schema_version {
+            TELEGRAM_SERVICE_SCHEMA_VERSION => Ok(self),
+            LEGACY_TELEGRAM_SERVICE_SCHEMA_VERSION => {
+                for binding in self.bindings.values_mut() {
+                    binding.delivered_cursor =
+                        binding.delivered_cursor.max(binding.acknowledged_cursor);
+                    if binding.chat_kind == TelegramChatKind::Private && binding.key.chat_id < 0 {
+                        binding.chat_kind = TelegramChatKind::Supergroup;
+                    }
+                }
+                self.schema_version = TELEGRAM_SERVICE_SCHEMA_VERSION;
+                Ok(self)
+            }
+            version => Err(TelegramSessionServiceError::UnsupportedSchema(version)),
+        }
+    }
+
     fn validate(&self) -> Result<(), TelegramSessionServiceError> {
         if self.schema_version != TELEGRAM_SERVICE_SCHEMA_VERSION {
             return Err(TelegramSessionServiceError::UnsupportedSchema(
@@ -106,6 +149,7 @@ impl TelegramServiceState {
                     .session_id
                     .as_deref()
                     .is_some_and(|session_id| session_id.trim().is_empty())
+                || binding.acknowledged_cursor > binding.delivered_cursor
                 || binding
                     .last_update_id
                     .is_some_and(|update_id| update_id < 0)
@@ -142,6 +186,7 @@ pub struct TelegramSessionService {
     gateway: TelegramGateway,
     control: FrontendControlPlane,
     state: TelegramServiceState,
+    attached_clients: BTreeSet<String>,
 }
 
 impl TelegramSessionService {
@@ -154,16 +199,20 @@ impl TelegramSessionService {
         let state = if path.is_file() {
             let bytes = fs::read(&path)?;
             let state: TelegramServiceState = serde_json::from_slice(&bytes)?;
+            let state = state.migrate()?;
             state.validate()?;
             state
         } else {
             TelegramServiceState::default()
         };
+        let mut gateway = gateway;
+        gateway.restore_callbacks(state.callbacks.clone());
         Ok(Self {
             path,
             gateway,
             control,
             state,
+            attached_clients: BTreeSet::new(),
         })
     }
 
@@ -189,6 +238,8 @@ impl TelegramSessionService {
             return Err(TelegramSessionServiceError::InvalidUpdateOffset);
         }
         let previous_state = self.state.clone();
+        let source_message_id = message.message_id;
+        let source_chat_kind = message.identity.chat_kind;
         let key = TelegramBindingKey::from_identity(&message.identity);
         let stable_id = key.stable_id();
         let existing = self.state.bindings.get(&stable_id).cloned();
@@ -214,6 +265,7 @@ impl TelegramSessionService {
                 let acknowledgement = self.control.dispatch(envelope)?;
                 let binding = self.binding_after_acknowledgement(
                     key,
+                    source_chat_kind,
                     existing,
                     update_id,
                     &command,
@@ -221,7 +273,7 @@ impl TelegramSessionService {
                 )?;
                 match binding {
                     Some(binding) => {
-                        self.state.bindings.insert(stable_id, binding);
+                        self.state.bindings.insert(stable_id.clone(), binding);
                     }
                     None => {
                         self.state.bindings.remove(&stable_id);
@@ -232,9 +284,9 @@ impl TelegramSessionService {
                 }
             }
             TelegramInboundAction::SetToolProgress(mode) => {
-                let binding = ensure_binding(key, existing, update_id);
+                let binding = ensure_binding(key, source_chat_kind, existing, update_id);
                 self.state.bindings.insert(
-                    stable_id,
+                    stable_id.clone(),
                     TelegramSessionBinding {
                         tool_progress: mode,
                         ..binding
@@ -243,9 +295,9 @@ impl TelegramSessionService {
                 TelegramServiceOutcome::ToolProgressUpdated { mode }
             }
             TelegramInboundAction::SetVoiceMode(mode) => {
-                let binding = ensure_binding(key, existing, update_id);
+                let binding = ensure_binding(key, source_chat_kind, existing, update_id);
                 self.state.bindings.insert(
-                    stable_id,
+                    stable_id.clone(),
                     TelegramSessionBinding {
                         voice_mode: mode,
                         ..binding
@@ -264,6 +316,15 @@ impl TelegramSessionService {
             TelegramInboundAction::Help => TelegramServiceOutcome::Help,
         };
 
+        if let Some(binding) = self.state.bindings.get_mut(&stable_id) {
+            binding.delivery.set_source_message(source_message_id);
+            if binding.session_id.is_some() {
+                self.attached_clients.insert(binding.client_id.clone());
+            }
+        } else {
+            self.attached_clients
+                .remove(&format!("telegram:{stable_id}"));
+        }
         let persisted = self
             .acknowledge_update(update_id)
             .and_then(|()| self.persist());
@@ -311,13 +372,22 @@ impl TelegramSessionService {
             command: FrontendCommand::AcknowledgeCursor { cursor },
         };
         let acknowledgement = self.control.dispatch(envelope)?;
+        let FrontendControlResult::CursorAcknowledged { attachment } = &acknowledgement.result
+        else {
+            return Err(TelegramSessionServiceError::InvalidCursorAcknowledgement);
+        };
+        let previous_state = self.state.clone();
         let entry = self
             .state
             .bindings
             .get_mut(&binding.key.stable_id())
             .ok_or(TelegramSessionServiceError::BindingNotFound)?;
-        entry.acknowledged_cursor = entry.acknowledged_cursor.max(cursor);
-        self.persist()?;
+        entry.delivered_cursor = entry.delivered_cursor.max(attachment.acknowledged_cursor);
+        entry.acknowledged_cursor = attachment.acknowledged_cursor;
+        if let Err(error) = self.persist() {
+            self.state = previous_state;
+            return Err(error);
+        }
         Ok(acknowledgement)
     }
 
@@ -345,12 +415,13 @@ impl TelegramSessionService {
             let acknowledgement = self.control.dispatch(envelope)?;
             if let Some(binding) = self.binding_after_acknowledgement(
                 key,
+                identity.chat_kind,
                 existing,
                 update_id,
                 &command,
                 &acknowledgement,
             )? {
-                self.state.bindings.insert(stable_id, binding);
+                self.state.bindings.insert(stable_id.clone(), binding);
             }
             self.acknowledge_update(update_id)?;
             self.persist()?;
@@ -378,9 +449,187 @@ impl TelegramSessionService {
         result
     }
 
+    /// Replays and delivers every pending canonical event for all bound Telegram chats.
+    ///
+    /// Canonical cursors advance only after Bot API actions and durable delivery state succeed.
+    pub fn deliver_pending(
+        &mut self,
+        client: &TelegramBotApiClient,
+        now: time::OffsetDateTime,
+    ) -> Result<usize, TelegramSessionServiceError> {
+        let binding_ids = self.state.bindings.keys().cloned().collect::<Vec<_>>();
+        let mut delivered = 0_usize;
+        for stable_id in binding_ids {
+            let Some(binding) = self.state.bindings.get(&stable_id).cloned() else {
+                continue;
+            };
+            let Some(session_id) = binding.session_id.clone() else {
+                continue;
+            };
+            let events = self.replay_for_binding(&binding, &session_id, now)?;
+            for event in events {
+                if event.sequence <= binding.acknowledged_cursor {
+                    continue;
+                }
+                self.deliver_event(client, &stable_id, &event, now)?;
+                delivered = delivered.saturating_add(1);
+            }
+        }
+        Ok(delivered)
+    }
+
+    fn replay_for_binding(
+        &mut self,
+        binding: &TelegramSessionBinding,
+        session_id: &str,
+        now: time::OffsetDateTime,
+    ) -> Result<Vec<EventEnvelope>, TelegramSessionServiceError> {
+        if self.attached_clients.contains(&binding.client_id) {
+            return self
+                .control
+                .replay_events(&binding.client_id, binding.acknowledged_cursor)
+                .map_err(Into::into);
+        }
+        let stable = format!(
+            "{}:attach:{}:{}",
+            binding.key.stable_id(),
+            session_id,
+            binding.acknowledged_cursor
+        );
+        let acknowledgement = self.control.dispatch(FrontendCommandEnvelope {
+            protocol_version: FRONTEND_PROTOCOL_VERSION,
+            command_id: format!("telegram-replay-{}", digest_prefix(&stable)),
+            idempotency_key: format!("telegram-replay:{stable}"),
+            frontend: FrontendKind::Telegram,
+            client_id: binding.client_id.clone(),
+            session_id: Some(session_id.to_owned()),
+            turn_id: None,
+            timestamp: now,
+            command: FrontendCommand::Attach {
+                session_id: session_id.to_owned(),
+                mode: AttachmentMode::ReadOnly,
+                after_cursor: Some(binding.acknowledged_cursor),
+            },
+        })?;
+        let FrontendControlResult::Attached { attachment } = acknowledgement.result else {
+            return Err(TelegramSessionServiceError::InvalidReplayAttachment);
+        };
+        self.attached_clients.insert(binding.client_id.clone());
+        Ok(attachment.replay)
+    }
+
+    fn deliver_event(
+        &mut self,
+        client: &TelegramBotApiClient,
+        stable_id: &str,
+        event: &EventEnvelope,
+        now: time::OffsetDateTime,
+    ) -> Result<(), TelegramSessionServiceError> {
+        let original_state = self.state.clone();
+        let original_gateway = self.gateway.clone();
+        let mut binding = self
+            .state
+            .bindings
+            .get(stable_id)
+            .cloned()
+            .ok_or(TelegramSessionServiceError::BindingNotFound)?;
+        let session_id = binding
+            .session_id
+            .clone()
+            .ok_or(TelegramSessionServiceError::SessionNotBound)?;
+        let identity = TelegramIdentity {
+            user_id: binding.key.user_id,
+            chat_id: binding.key.chat_id,
+            topic_id: binding.key.topic_id,
+            chat_kind: binding.chat_kind,
+            bot_mentioned: true,
+        };
+
+        if event.sequence > binding.delivered_cursor {
+            let mut display = self.gateway.config().display.clone();
+            display.tool_progress = binding.tool_progress;
+            let source_message_id = binding.delivery.source_message_id.unwrap_or_default();
+            let mut renderer = binding
+                .renderer
+                .take()
+                .map_or_else(|| TelegramRenderer::new(display, source_message_id), Ok)?;
+            if matches!(
+                &event.payload,
+                EventPayload::UserPromptReceived { .. } | EventPayload::UserFollowupDequeued { .. }
+            ) {
+                renderer.begin_turn(source_message_id);
+            }
+            let next_presentation_cursor = binding.presentation_cursor.saturating_add(1);
+            if let Some(projected) = project_event(event, next_presentation_cursor) {
+                let actions = renderer.render(&projected, now)?;
+                let mini_app_url = self
+                    .gateway
+                    .config()
+                    .voice
+                    .mini_app_enabled
+                    .then(|| self.gateway.config().voice.mini_app_public_url.clone())
+                    .flatten();
+                execute_actions(
+                    client,
+                    &mut self.gateway,
+                    &identity,
+                    &session_id,
+                    projected.turn_id.as_deref(),
+                    &mut binding.delivery,
+                    &actions,
+                    mini_app_url.as_deref(),
+                    now,
+                )?;
+                binding.presentation_cursor = next_presentation_cursor;
+            }
+            binding.renderer = Some(renderer);
+            binding.delivered_cursor = event.sequence;
+            self.state
+                .bindings
+                .insert(stable_id.to_owned(), binding.clone());
+            if let Err(error) = self.persist() {
+                self.state = original_state;
+                self.gateway = original_gateway;
+                return Err(error);
+            }
+        }
+
+        if event.sequence > binding.acknowledged_cursor {
+            let acknowledgement = self.control.dispatch(FrontendCommandEnvelope {
+                protocol_version: FRONTEND_PROTOCOL_VERSION,
+                command_id: format!(
+                    "telegram-cursor-{}",
+                    digest_prefix(&format!("{stable_id}:{}", event.sequence))
+                ),
+                idempotency_key: format!("telegram:{stable_id}:cursor:{}", event.sequence),
+                frontend: FrontendKind::Telegram,
+                client_id: binding.client_id.clone(),
+                session_id: Some(session_id),
+                turn_id: None,
+                timestamp: now,
+                command: FrontendCommand::AcknowledgeCursor {
+                    cursor: event.sequence,
+                },
+            })?;
+            let FrontendControlResult::CursorAcknowledged { attachment } = acknowledgement.result
+            else {
+                return Err(TelegramSessionServiceError::InvalidCursorAcknowledgement);
+            };
+            let entry = self
+                .state
+                .bindings
+                .get_mut(stable_id)
+                .ok_or(TelegramSessionServiceError::BindingNotFound)?;
+            entry.acknowledged_cursor = attachment.acknowledged_cursor;
+            self.persist()?;
+        }
+        Ok(())
+    }
+
     fn binding_after_acknowledgement(
         &self,
         key: TelegramBindingKey,
+        chat_kind: TelegramChatKind,
         existing: Option<TelegramSessionBinding>,
         update_id: i64,
         command: &FrontendCommand,
@@ -389,7 +638,7 @@ impl TelegramSessionService {
         if matches!(command, FrontendCommand::Detach) {
             return Ok(None);
         }
-        let mut binding = ensure_binding(key, existing, update_id);
+        let mut binding = ensure_binding(key, chat_kind, existing, update_id);
         let result_session_id = match &acknowledgement.result {
             FrontendControlResult::Attached { attachment }
             | FrontendControlResult::RuntimeReady { attachment }
@@ -442,7 +691,8 @@ impl TelegramSessionService {
         Ok(())
     }
 
-    fn persist(&self) -> Result<(), TelegramSessionServiceError> {
+    fn persist(&mut self) -> Result<(), TelegramSessionServiceError> {
+        self.state.callbacks = self.gateway.callback_snapshot();
         self.state.validate()?;
         let parent = self
             .path
@@ -484,6 +734,7 @@ fn command_uses_current_binding(command: &FrontendCommand) -> bool {
 
 fn ensure_binding(
     key: TelegramBindingKey,
+    chat_kind: TelegramChatKind,
     existing: Option<TelegramSessionBinding>,
     update_id: i64,
 ) -> TelegramSessionBinding {
@@ -491,13 +742,19 @@ fn ensure_binding(
         || TelegramSessionBinding {
             client_id: format!("telegram:{}", key.stable_id()),
             key,
+            chat_kind,
             session_id: None,
             acknowledged_cursor: 0,
+            delivered_cursor: 0,
+            presentation_cursor: 0,
             tool_progress: ToolProgressMode::New,
             voice_mode: TelegramVoiceMode::Off,
             last_update_id: Some(update_id),
+            delivery: TelegramDeliveryState::default(),
+            renderer: None,
         },
         |mut binding| {
+            binding.chat_kind = chat_kind;
             binding.last_update_id = Some(update_id);
             binding
         },
@@ -540,6 +797,10 @@ pub enum TelegramSessionServiceError {
     SessionBindingConflict,
     #[error("Telegram service state path has no parent directory")]
     MissingParentDirectory,
+    #[error("Telegram replay attach did not return an attachment")]
+    InvalidReplayAttachment,
+    #[error("Telegram cursor acknowledgement returned an unexpected result")]
+    InvalidCursorAcknowledgement,
     #[error(transparent)]
     Gateway(#[from] TelegramGatewayError),
     #[error(transparent)]
@@ -637,6 +898,67 @@ mod tests {
         assert_eq!(binding.tool_progress, ToolProgressMode::All);
         assert_eq!(binding.voice_mode, TelegramVoiceMode::All);
         assert_eq!(reloaded.next_update_offset(), Some(13));
+    }
+
+    #[test]
+    fn legacy_state_migrates_delivery_cursor_and_group_kind() {
+        let repository = tempfile::tempdir().expect("repository");
+        let state_path = repository.path().join(".medusa/telegram/state.json");
+        std::fs::create_dir_all(state_path.parent().expect("state parent"))
+            .expect("create state parent");
+        let legacy = serde_json::json!({
+            "schema_version": LEGACY_TELEGRAM_SERVICE_SCHEMA_VERSION,
+            "next_update_offset": 8,
+            "bindings": {
+                "-100:0:42": {
+                    "key": {
+                        "chat_id": -100,
+                        "topic_id": null,
+                        "user_id": 42
+                    },
+                    "client_id": "telegram:-100:0:42",
+                    "session_id": "session-1",
+                    "acknowledged_cursor": 7,
+                    "tool_progress": "new",
+                    "voice_mode": "off",
+                    "last_update_id": 7
+                }
+            }
+        });
+        std::fs::write(
+            &state_path,
+            serde_json::to_vec_pretty(&legacy).expect("serialize legacy state"),
+        )
+        .expect("write legacy state");
+
+        let control = FrontendControlPlane::new(repository.path().to_path_buf(), Config::default());
+        let mut service =
+            TelegramSessionService::load(&state_path, gateway(), control).expect("migrate state");
+        let group_identity = TelegramIdentity {
+            user_id: 42,
+            chat_id: -100,
+            topic_id: None,
+            chat_kind: TelegramChatKind::Supergroup,
+            bot_mentioned: true,
+        };
+        let binding = service.binding(&group_identity).expect("migrated binding");
+        assert_eq!(binding.delivered_cursor, 7);
+        assert_eq!(binding.chat_kind, TelegramChatKind::Supergroup);
+
+        service
+            .acknowledge_transport_update(8)
+            .expect("persist migrated state");
+        let persisted: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(&state_path).expect("read migrated state"))
+                .expect("parse migrated state");
+        assert_eq!(
+            persisted["schema_version"],
+            serde_json::json!(TELEGRAM_SERVICE_SCHEMA_VERSION)
+        );
+        assert_eq!(
+            persisted["bindings"]["-100:0:42"]["delivered_cursor"],
+            serde_json::json!(7)
+        );
     }
 
     #[test]
