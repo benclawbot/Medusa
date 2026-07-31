@@ -4,6 +4,8 @@ on:
   push:
     branches:
       - agent/555-cross-platform-dogfood
+  pull_request:
+    types: [opened, synchronize, reopened]
 
 permissions:
   contents: write
@@ -14,7 +16,7 @@ concurrency:
 
 jobs:
   patch:
-    if: github.actor != 'github-actions[bot]' || contains(github.event.head_commit.message, 'Temporarily patch')
+    if: github.event_name == 'push' || github.head_ref == 'agent/555-cross-platform-dogfood'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
