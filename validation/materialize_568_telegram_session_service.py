@@ -37,3 +37,22 @@ pub use service::{
     "Telegram service exports",
 )
 path.write_text(source)
+
+path = Path("crates/medusa-daemon/src/telegram/service.rs")
+source = path.read_text()
+source = replace_once(
+    source,
+    '''            FrontendControlResult::SubmissionAccepted { session_id, .. }
+            | FrontendControlResult::CancellationRequested { session_id, .. }
+            | FrontendControlResult::Status { session_id, .. }
+            | FrontendControlResult::Events { session_id, .. } => Some(session_id.clone()),
+''',
+    '''            FrontendControlResult::SubmissionAccepted { session_id, .. }
+            | FrontendControlResult::CancellationRequested { session_id, .. }
+            | FrontendControlResult::CommandAccepted { session_id, .. }
+            | FrontendControlResult::Status { session_id, .. }
+            | FrontendControlResult::Events { session_id, .. } => Some(session_id.clone()),
+''',
+    "Telegram command acknowledgement session binding",
+)
+path.write_text(source)
