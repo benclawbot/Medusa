@@ -62,6 +62,44 @@ path = Path("crates/medusa-daemon/src/telegram/service.rs")
 source = path.read_text()
 source = replace_once(
     source,
+    '''    pub fn process_message(
+        &mut self,
+        update_id: i64,
+        mut message: TelegramInboundMessage,
+    ) -> Result<TelegramServiceOutcome, TelegramSessionServiceError> {
+''',
+    '''    pub fn process_message(
+        &mut self,
+        update_id: i64,
+        message: TelegramInboundMessage,
+    ) -> Result<TelegramServiceOutcome, TelegramSessionServiceError> {
+''',
+    "immutable Telegram message input",
+)
+source = replace_once(
+    source,
+    '''        if message.attached_session_id.is_none() {
+            message.attached_session_id = existing
+                .as_ref()
+                .and_then(|binding| binding.session_id.clone());
+        }
+
+        let action = self.gateway.map_message(&message)?;
+''',
+    '''        let mut action = self.gateway.map_message(&message)?;
+        if let TelegramInboundAction::Forward(envelope) = &mut action
+            && envelope.session_id.is_none()
+            && command_uses_current_binding(&envelope.command)
+        {
+            envelope.session_id = existing
+                .as_ref()
+                .and_then(|binding| binding.session_id.clone());
+        }
+''',
+    "stable command identity before binding enrichment",
+)
+source = replace_once(
+    source,
     '''            FrontendControlResult::SubmissionAccepted { session_id, .. }
             | FrontendControlResult::CancellationRequested { session_id, .. }
             | FrontendControlResult::Status { session_id, .. }
@@ -74,5 +112,26 @@ source = replace_once(
             | FrontendControlResult::Events { session_id, .. } => Some(session_id.clone()),
 ''',
     "Telegram command acknowledgement session binding",
+)
+source = replace_once(
+    source,
+    '''fn ensure_binding(
+    key: TelegramBindingKey,
+''',
+    '''fn command_uses_current_binding(command: &FrontendCommand) -> bool {
+    !matches!(
+        command,
+        FrontendCommand::CreateSession { .. }
+            | FrontendCommand::ListSessions
+            | FrontendCommand::ResumeSession { .. }
+            | FrontendCommand::Attach { .. }
+            | FrontendCommand::Detach
+    )
+}
+
+fn ensure_binding(
+    key: TelegramBindingKey,
+''',
+    "current binding command classification",
 )
 path.write_text(source)
