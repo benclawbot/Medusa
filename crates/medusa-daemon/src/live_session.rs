@@ -8,10 +8,10 @@ use std::{collections::BTreeMap, path::PathBuf};
 
 use medusa_agent::session_browser::{SessionSummary, list_sessions};
 use medusa_protocol::EventEnvelope;
-use medusa_runtime::{RuntimeController, RuntimeError};
-use medusa_runtime::attachment::{
+use medusa_runtime::attachment::session::{
     AttachmentMode, ClientKind, ContinuitySession, RuntimeAttachRequest, RuntimeSessionAttachment,
 };
+use medusa_runtime::{RuntimeController, RuntimeError};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 use time::OffsetDateTime;
@@ -136,14 +136,11 @@ impl LiveSessionBroker {
                 to_client_id.to_owned(),
             ));
         }
-        let session_id = self
-            .attachment(from_client_id)?
-            .session
-            .id
-            .to_string();
+        let session_id = self.attachment(from_client_id)?.session.id.to_string();
         if self.attachment(to_client_id)?.session.id.to_string() != session_id {
             return Err(LiveSessionBrokerError::HandoffAcrossSessions);
         }
+        self.attachment_mut(from_client_id)?.refresh_continuity()?;
         self.attachment_mut(from_client_id)?.handoff(
             to_client_id.to_owned(),
             occurred_at_unix_ms,
@@ -223,7 +220,9 @@ fn attachment_view(
         .attachments
         .iter()
         .find(|candidate| candidate.client_id == attachment.client_id())
-        .ok_or_else(|| LiveSessionBrokerError::ClientNotAttached(attachment.client_id().to_owned()))?;
+        .ok_or_else(|| {
+            LiveSessionBrokerError::ClientNotAttached(attachment.client_id().to_owned())
+        })?;
     Ok(LiveSessionAttachmentView {
         session: LiveSessionSummary {
             id: attachment.session.id.to_string(),

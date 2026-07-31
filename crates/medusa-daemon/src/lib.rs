@@ -3,6 +3,7 @@
 mod cancellation;
 mod control_plane;
 mod lifecycle;
+pub mod live_session;
 mod paths;
 mod process;
 mod protocol;
@@ -15,6 +16,9 @@ pub use control_plane::{
     ControlPlaneError, RuntimeBinding, SupervisionControlPlane, SupervisionEvent,
 };
 pub use lifecycle::{DaemonLaunch, DaemonLifecycle, DaemonLifecycleState, DaemonSupervisor};
+pub use live_session::{
+    LiveSessionAttachmentView, LiveSessionBroker, LiveSessionBrokerError, LiveSessionSummary,
+};
 pub use paths::DaemonPaths;
 pub use protocol::{
     DAEMON_PROTOCOL_VERSION, JobRecord, JobState, Request, RequestEnvelope, Response,
