@@ -188,6 +188,7 @@ impl TelegramSessionService {
         if update_id < 0 {
             return Err(TelegramSessionServiceError::InvalidUpdateOffset);
         }
+        let previous_state = self.state.clone();
         let key = TelegramBindingKey::from_identity(&message.identity);
         let stable_id = key.stable_id();
         let existing = self.state.bindings.get(&stable_id).cloned();
@@ -263,8 +264,13 @@ impl TelegramSessionService {
             TelegramInboundAction::Help => TelegramServiceOutcome::Help,
         };
 
-        self.acknowledge_update(update_id)?;
-        self.persist()?;
+        let persisted = self
+            .acknowledge_update(update_id)
+            .and_then(|()| self.persist());
+        if let Err(error) = persisted {
+            self.state = previous_state;
+            return Err(error);
+        }
         Ok(outcome)
     }
 
@@ -313,6 +319,63 @@ impl TelegramSessionService {
         entry.acknowledged_cursor = entry.acknowledged_cursor.max(cursor);
         self.persist()?;
         Ok(acknowledgement)
+    }
+
+    /// Resolves one signed callback through the same frontend control plane and durable binding.
+    pub fn process_callback(
+        &mut self,
+        update_id: i64,
+        identity: TelegramIdentity,
+        callback_data: &str,
+        received_at: time::OffsetDateTime,
+    ) -> Result<FrontendCommandAcknowledgement, TelegramSessionServiceError> {
+        if update_id < 0 {
+            return Err(TelegramSessionServiceError::InvalidUpdateOffset);
+        }
+        let previous_gateway = self.gateway.clone();
+        let previous_state = self.state.clone();
+        let result = (|| {
+            let key = TelegramBindingKey::from_identity(&identity);
+            let stable_id = key.stable_id();
+            let existing = self.state.bindings.get(&stable_id).cloned();
+            let envelope = self
+                .gateway
+                .resolve_callback(&identity, callback_data, received_at)?;
+            let command = envelope.command.clone();
+            let acknowledgement = self.control.dispatch(envelope)?;
+            if let Some(binding) = self.binding_after_acknowledgement(
+                key,
+                existing,
+                update_id,
+                &command,
+                &acknowledgement,
+            )? {
+                self.state.bindings.insert(stable_id, binding);
+            }
+            self.acknowledge_update(update_id)?;
+            self.persist()?;
+            Ok(acknowledgement)
+        })();
+        if result.is_err() {
+            self.gateway = previous_gateway;
+            self.state = previous_state;
+        }
+        result
+    }
+
+    /// Advances the durable Bot API cursor for an unsupported or rejected valid update.
+    pub fn acknowledge_transport_update(
+        &mut self,
+        update_id: i64,
+    ) -> Result<(), TelegramSessionServiceError> {
+        let previous_state = self.state.clone();
+        let result = self
+            .acknowledge_update(update_id)
+            .and_then(|()| self.persist());
+        if result.is_err() {
+            self.state = previous_state;
+        }
+        result
     }
 
     fn binding_after_acknowledgement(

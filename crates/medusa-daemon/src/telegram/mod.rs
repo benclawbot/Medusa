@@ -9,6 +9,7 @@ mod command;
 mod config;
 mod format;
 mod render;
+mod runtime;
 mod service;
 
 use medusa_protocol::frontend::FrontendCommandEnvelope;
@@ -27,6 +28,7 @@ pub use render::{
     TelegramAction, TelegramButtonIntent, TelegramMessageSlot, TelegramParseMode, TelegramReaction,
     TelegramRenderButton, TelegramRenderer,
 };
+pub use runtime::{TelegramPollingConfig, TelegramPollingRuntime, TelegramRuntimeError};
 pub use service::{
     TelegramBindingKey, TelegramServiceOutcome, TelegramSessionBinding, TelegramSessionService,
     TelegramSessionServiceError,

@@ -1,9 +1,4 @@
-from pathlib import Path
-
-root = Path(__file__).resolve().parents[1]
-telegram = root / "crates/medusa-daemon/src/telegram"
-
-runtime = r'''//! Supervised Telegram polling runtime over the authoritative daemon control plane.
+//! Supervised Telegram polling runtime over the authoritative daemon control plane.
 
 use std::{
     sync::atomic::{AtomicBool, Ordering},
@@ -158,10 +153,7 @@ impl TelegramPollingRuntime {
                 Ok(_) => consecutive_failures = 0,
                 Err(error) if error.is_transient() => {
                     consecutive_failures = consecutive_failures.saturating_add(1);
-                    if sleep_until_cancelled(
-                        cancelled,
-                        error.retry_delay(consecutive_failures),
-                    ) {
+                    if sleep_until_cancelled(cancelled, error.retry_delay(consecutive_failures)) {
                         break;
                     }
                 }
@@ -224,9 +216,7 @@ fn mentions_bot(text: &str, bot_username: &str) -> bool {
     let username = bot_username.trim().trim_start_matches('@');
     text.split_whitespace().any(|token| {
         let token = token.trim_matches(|character: char| {
-            !character.is_ascii_alphanumeric()
-                && character != '_'
-                && character != '@'
+            !character.is_ascii_alphanumeric() && character != '_' && character != '@'
         });
         token
             .strip_prefix('@')
@@ -361,10 +351,7 @@ mod tests {
     #[test]
     fn group_mentions_are_exact_and_case_insensitive() {
         let inbound = inbound_message(
-            message(
-                TelegramBotChatKind::Supergroup,
-                "Hello (@Medusa_Bot),",
-            ),
+            message(TelegramBotChatKind::Supergroup, "Hello (@Medusa_Bot),"),
             "medusa_bot",
         )
         .expect("normalize");
@@ -398,100 +385,3 @@ mod tests {
         assert!(sleep_until_cancelled(&cancelled, MAX_RETRY_BACKOFF));
     }
 }
-'''
-(telegram / "runtime.rs").write_text(runtime)
-
-mod_path = telegram / "mod.rs"
-source = mod_path.read_text()
-source = source.replace("mod render;\nmod service;", "mod render;\nmod runtime;\nmod service;")
-source = source.replace(
-    "pub use render::{\n",
-    "pub use runtime::{TelegramPollingConfig, TelegramPollingRuntime, TelegramRuntimeError};\npub use render::{\n",
-)
-mod_path.write_text(source)
-
-service_path = telegram / "service.rs"
-source = service_path.read_text()
-source = source.replace(
-    "        let key = TelegramBindingKey::from_identity(&message.identity);\n",
-    "        let previous_state = self.state.clone();\n"
-    "        let key = TelegramBindingKey::from_identity(&message.identity);\n",
-    1,
-)
-source = source.replace(
-    "        self.acknowledge_update(update_id)?;\n"
-    "        self.persist()?;\n"
-    "        Ok(outcome)\n",
-    "        let persisted = self\n"
-    "            .acknowledge_update(update_id)\n"
-    "            .and_then(|()| self.persist());\n"
-    "        if let Err(error) = persisted {\n"
-    "            self.state = previous_state;\n"
-    "            return Err(error);\n"
-    "        }\n"
-    "        Ok(outcome)\n",
-    1,
-)
-marker = "    fn binding_after_acknowledgement(\n"
-insert = r'''    /// Resolves one signed callback through the same frontend control plane and durable binding.
-    pub fn process_callback(
-        &mut self,
-        update_id: i64,
-        identity: TelegramIdentity,
-        callback_data: &str,
-        received_at: time::OffsetDateTime,
-    ) -> Result<FrontendCommandAcknowledgement, TelegramSessionServiceError> {
-        if update_id < 0 {
-            return Err(TelegramSessionServiceError::InvalidUpdateOffset);
-        }
-        let previous_gateway = self.gateway.clone();
-        let previous_state = self.state.clone();
-        let result = (|| {
-            let key = TelegramBindingKey::from_identity(&identity);
-            let stable_id = key.stable_id();
-            let existing = self.state.bindings.get(&stable_id).cloned();
-            let envelope = self
-                .gateway
-                .resolve_callback(&identity, callback_data, received_at)?;
-            let command = envelope.command.clone();
-            let acknowledgement = self.control.dispatch(envelope)?;
-            if let Some(binding) = self.binding_after_acknowledgement(
-                key,
-                existing,
-                update_id,
-                &command,
-                &acknowledgement,
-            )? {
-                self.state.bindings.insert(stable_id, binding);
-            }
-            self.acknowledge_update(update_id)?;
-            self.persist()?;
-            Ok(acknowledgement)
-        })();
-        if result.is_err() {
-            self.gateway = previous_gateway;
-            self.state = previous_state;
-        }
-        result
-    }
-
-    /// Advances the durable Bot API cursor for an unsupported or rejected valid update.
-    pub fn acknowledge_transport_update(
-        &mut self,
-        update_id: i64,
-    ) -> Result<(), TelegramSessionServiceError> {
-        let previous_state = self.state.clone();
-        let result = self
-            .acknowledge_update(update_id)
-            .and_then(|()| self.persist());
-        if result.is_err() {
-            self.state = previous_state;
-        }
-        result
-    }
-
-'''
-if marker not in source:
-    raise SystemExit("service insertion marker missing")
-source = source.replace(marker, insert + marker, 1)
-service_path.write_text(source)
