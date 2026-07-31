@@ -15,6 +15,8 @@ pub struct TelegramInboundMessage {
     pub identity: TelegramIdentity,
     pub message_id: i64,
     pub text: String,
+    #[serde(default)]
+    pub attachment_ids: Vec<String>,
     pub attached_session_id: Option<String>,
     #[serde(with = "time::serde::rfc3339")]
     pub received_at: OffsetDateTime,
@@ -37,16 +39,19 @@ pub(crate) fn map_message(
 ) -> Result<TelegramInboundAction, TelegramGatewayError> {
     config.authorize(&message.identity)?;
     let trimmed = message.text.trim();
-    if trimmed.is_empty() {
+    if trimmed.is_empty() && message.attachment_ids.is_empty() {
         return Err(TelegramGatewayError::EmptyMessage);
     }
     let (command, arguments) = split_command(trimmed);
+    if command.is_some() && !message.attachment_ids.is_empty() {
+        return Err(TelegramGatewayError::AttachmentsNotAllowedForCommand);
+    }
     match command {
         None => forward(
             message,
             FrontendCommand::Submit {
                 text: trimmed.to_owned(),
-                attachment_ids: Vec::new(),
+                attachment_ids: message.attachment_ids.clone(),
             },
         ),
         Some("/new") => forward(
@@ -220,6 +225,7 @@ mod tests {
             },
             message_id: 9,
             text: text.to_owned(),
+            attachment_ids: Vec::new(),
             attached_session_id: Some("session-1".to_owned()),
             received_at: datetime!(2026-07-30 16:00 UTC),
         }
@@ -247,5 +253,21 @@ mod tests {
         let first = map_message(&config(), &message("/status")).expect("first");
         let second = map_message(&config(), &message("/status")).expect("second");
         assert_eq!(first, second);
+    }
+
+    #[test]
+    fn attachment_only_message_maps_to_shared_submission() {
+        let mut source = message("");
+        source.attachment_ids = vec!["frontend-artifact-abc".to_owned()];
+        let TelegramInboundAction::Forward(submit) =
+            map_message(&config(), &source).expect("attachment submission")
+        else {
+            panic!("expected forwarded attachment submission");
+        };
+        assert!(matches!(
+            submit.command,
+            FrontendCommand::Submit { ref text, ref attachment_ids }
+                if text.is_empty() && attachment_ids == &["frontend-artifact-abc"]
+        ));
     }
 }
