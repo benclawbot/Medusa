@@ -65,6 +65,8 @@ jobs:
         with:
           node-version: "22"
       - uses: dtolnay/rust-toolchain@39b0b3842c7e8bbf6904c0bfc3d9006fdd4dc4e0
+      - name: Prepare exact dependency resolution
+        run: cargo generate-lockfile
       - name: Install Linux containment backend
         if: runner.os == 'Linux'
         run: |
