@@ -1,3 +1,4 @@
+# Revalidate after frontend control source materialization.
 name: Materialize Telegram session service
 
 on:
