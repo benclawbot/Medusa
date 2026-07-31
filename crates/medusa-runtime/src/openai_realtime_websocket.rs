@@ -20,9 +20,7 @@ use tungstenite::{
 
 use crate::{
     openai_realtime::OpenAiRealtimeRoute,
-    openai_realtime_session::{
-        SessionCredential, SessionOwner, SessionOwnerError, WireFactory,
-    },
+    openai_realtime_session::{SessionCredential, SessionOwner, SessionOwnerError, WireFactory},
 };
 
 type Socket = WebSocket<MaybeTlsStream<TcpStream>>;
@@ -109,9 +107,7 @@ impl Wire for OpenAiWebSocketWire {
                     return Ok(None);
                 }
                 Message::Ping(_) => {
-                    self.socket_mut()?
-                        .flush()
-                        .map_err(safe_websocket_error)?;
+                    self.socket_mut()?.flush().map_err(safe_websocket_error)?;
                 }
                 Message::Pong(_) | Message::Frame(_) => {}
                 Message::Binary(_) => {
@@ -164,10 +160,7 @@ impl WireFactory<OpenAiWebSocketWire> for OpenAiWebSocketFactory {
         if capability.wire != Some(WireKind::WebSocket) {
             return Err("authenticated Realtime route does not select WebSocket".to_owned());
         }
-        OpenAiWebSocketWire::connect(
-            credential.websocket_url(),
-            credential.authorization_token(),
-        )
+        OpenAiWebSocketWire::connect(credential.websocket_url(), credential.authorization_token())
     }
 }
 
@@ -235,11 +228,7 @@ fn safe_websocket_error(error: WebSocketError) -> String {
 
 #[cfg(test)]
 mod tests {
-    use std::{
-        net::TcpListener,
-        sync::mpsc,
-        thread,
-    };
+    use std::{net::TcpListener, sync::mpsc, thread};
 
     use serde_json::json;
     use tungstenite::{accept_hdr, http::header::AUTHORIZATION};
@@ -287,12 +276,8 @@ mod tests {
                 .expect("send response");
         });
 
-        let mut wire = OpenAiWebSocketWire::connect_with_policy(
-            &endpoint,
-            "short-secret",
-            true,
-        )
-        .expect("loopback connection");
+        let mut wire = OpenAiWebSocketWire::connect_with_policy(&endpoint, "short-secret", true)
+            .expect("loopback connection");
         assert_eq!(
             observed_rx.recv().expect("authorization"),
             "Bearer short-secret"
@@ -329,12 +314,8 @@ mod tests {
             }
         });
 
-        let mut wire = OpenAiWebSocketWire::connect_with_policy(
-            &endpoint,
-            "renewed-secret",
-            true,
-        )
-        .expect("first connection");
+        let mut wire = OpenAiWebSocketWire::connect_with_policy(&endpoint, "renewed-secret", true)
+            .expect("first connection");
         assert_eq!(
             observed_rx.recv().expect("first authorization"),
             "Bearer renewed-secret"
@@ -355,12 +336,9 @@ mod tests {
         let listener = TcpListener::bind("127.0.0.1:0").expect("listener");
         let endpoint = format!("ws://{}/realtime", listener.local_addr().expect("address"));
         drop(listener);
-        let error = OpenAiWebSocketWire::connect_with_policy(
-            &endpoint,
-            "never-log-this-secret",
-            true,
-        )
-        .expect_err("connection must fail");
+        let error =
+            OpenAiWebSocketWire::connect_with_policy(&endpoint, "never-log-this-secret", true)
+                .expect_err("connection must fail");
         assert!(!error.contains("never-log-this-secret"));
         assert!(!error.contains(&endpoint));
     }
