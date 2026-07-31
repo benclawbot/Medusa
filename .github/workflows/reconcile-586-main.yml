@@ -1,9 +1,9 @@
 name: Reconcile checkpoint recovery projection with main
 
 on:
-  push:
+  pull_request:
     branches:
-      - agent/569-checkpoint-recovery-projection
+      - main
     paths:
       - .github/workflows/reconcile-586-main.yml
 
@@ -16,12 +16,12 @@ concurrency:
 
 jobs:
   reconcile:
-    if: github.repository == 'benclawbot/Medusa'
+    if: github.event.pull_request.head.repo.full_name == github.repository && github.event.pull_request.head.ref == 'agent/569-checkpoint-recovery-projection'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.2.2
         with:
-          ref: agent/569-checkpoint-recovery-projection
+          ref: ${{ github.head_ref }}
           fetch-depth: 0
           token: ${{ secrets.GITHUB_TOKEN }}
       - uses: dtolnay/rust-toolchain@39b0b3842c7e8bbf6904c0bfc3d9006fdd4dc4e0 # stable
@@ -72,4 +72,4 @@ jobs:
           git rm .github/workflows/reconcile-586-main.yml
           git add crates/medusa-runtime/src/lib.rs crates/medusa-runtime/src/recovery_projection.rs
           git commit -m "Reconcile recovery projection with current main"
-          git push origin HEAD:agent/569-checkpoint-recovery-projection
+          git push origin HEAD:${{ github.head_ref }}
