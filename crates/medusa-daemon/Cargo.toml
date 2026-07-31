@@ -9,10 +9,12 @@ repository.workspace = true
 # The shipped daemon owns durable process supervision and recovery coordination.
 [dependencies]
 hex.workspace = true
+medusa-agent = { path = "../medusa-agent" }
 medusa-core.workspace = true
 medusa-process-registry = { path = "../medusa-process-registry" }
 medusa-protocol.workspace = true
 medusa-recovery-coordinator = { path = "../medusa-recovery-coordinator" }
+medusa-runtime = { path = "../medusa-runtime" }
 medusa-runtime-supervisor = { path = "../medusa-runtime-supervisor" }
 medusa-wakeup = { path = "../medusa-wakeup" }
 reqwest.workspace = true
@@ -28,6 +30,8 @@ getrandom.workspace = true
 medusa-process-containment.workspace = true
 
 [dev-dependencies]
+medusa-config = { path = "../medusa-config" }
+medusa-provider = { path = "../medusa-provider" }
 medusa-testkit.workspace = true
 tempfile.workspace = true
 

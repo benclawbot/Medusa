@@ -153,6 +153,23 @@ impl RuntimeSessionAttachment {
         Ok(outcome.session().clone())
     }
 
+    /// Reloads durable continuity metadata after another client changes ownership or cursor state.
+    pub fn refresh_continuity(&mut self) -> Result<(), RuntimeError> {
+        let continuity = continuity_store(&self.repo, &self.session.id.to_string())
+            .load()
+            .map_err(RuntimeError::agent)?;
+        validate_continuity_identity(&continuity, &self.session.id.to_string())?;
+        let mode = continuity
+            .attachments
+            .iter()
+            .find(|attachment| attachment.client_id == self.client_id)
+            .map(|attachment| attachment.mode)
+            .ok_or_else(|| RuntimeError::agent("client is no longer attached"))?;
+        self.mode = mode;
+        self.continuity = continuity;
+        Ok(())
+    }
+
     /// Starts the production controller only when this client is the current owner.
     pub fn into_controller(self) -> Result<RuntimeController, RuntimeError> {
         self.validate_owner()?;
