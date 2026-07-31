@@ -14,9 +14,19 @@ cargo_path = Path("crates/medusa-daemon/Cargo.toml")
 cargo = cargo_path.read_text()
 cargo = replace_once(
     cargo,
+    'medusa-agent = { path = "../medusa-agent" }\nmedusa-core.workspace = true\n',
+    'medusa-agent = { path = "../medusa-agent" }\nmedusa-config = { path = "../medusa-config" }\nmedusa-core.workspace = true\n',
+    "daemon config dependency",
+)
+cargo = replace_once(
+    cargo,
     'medusa-runtime = { path = "../medusa-runtime" }\n',
     'medusa-runtime = { path = "../medusa-runtime" }\nmedusa-session-continuity = { path = "../medusa-session-continuity" }\n',
     "continuity dependency",
+)
+cargo = cargo.replace(
+    '[dev-dependencies]\nmedusa-config = { path = "../medusa-config" }\n',
+    '[dev-dependencies]\n',
 )
 cargo_path.write_text(cargo)
 
