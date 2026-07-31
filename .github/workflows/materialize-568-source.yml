@@ -1,0 +1,27 @@
+name: Materialize #568 source
+
+on:
+  push:
+    branches: [agent/568-complete-telegram]
+
+permissions:
+  contents: read
+
+jobs:
+  export:
+    if: github.repository == 'benclawbot/Medusa' && github.ref == 'refs/heads/agent/568-complete-telegram'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - name: Package source checkout
+        shell: bash
+        run: |
+          set -euo pipefail
+          tar --exclude=.git --exclude=medusa-source.tar.gz -czf medusa-source.tar.gz .
+      - name: Upload source checkout
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: medusa-568-source
+          path: medusa-source.tar.gz
+          if-no-files-found: error
+          retention-days: 1
