@@ -114,12 +114,6 @@ The TUI presents the shared runtime event stream as a conversation and activity 
 
 The desktop app runs the same Medusa runtime through a Tauri/React interface. It provides session navigation, a central execution timeline, plan and activity presentation, provider/runtime status, settings, attachments, review and learning surfaces, and desktop-native voice controls.
 
-<p align="center">
-  <img src="docs/assets/medusa-desktop.jpg" alt="Actual Medusa desktop application running on Linux" width="100%">
-</p>
-
-*Actual Linux package captured from the running application. The credential notice is the expected first-run state in an isolated test environment.*
-
 ### Telegram
 
 Telegram is implemented as a frontend to the same authoritative Medusa session, not as a separate bot-owned agent.
