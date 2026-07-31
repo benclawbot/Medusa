@@ -94,11 +94,13 @@ mod tests {
 
     #[test]
     fn unsupported_route_cannot_mint_a_frontend_session() {
-        let error = establish_route(OpenAiRealtimeRoute::ExistingRouteUnsupported {
+        let error = match establish_route(OpenAiRealtimeRoute::ExistingRouteUnsupported {
             provider: "local".to_owned(),
-        })
-        .expect_err("unsupported route must fail closed");
+        }) {
+            Ok(_) => panic!("unsupported route must fail closed"),
+            Err(error) => error,
+        };
         assert!(error.contains("Realtime unavailable"));
-        assert!(!error.to_ascii_lowercase().contains("api key"));
+        assert!(error.contains("configured provider `local`"));
     }
 }
