@@ -1,0 +1,46 @@
+name: Diagnose #605 Telegram
+
+on:
+  push:
+    branches: [agent/568-complete-telegram]
+  pull_request:
+    types: [synchronize]
+
+permissions:
+  contents: write
+
+concurrency:
+  group: diagnose-605-telegram
+  cancel-in-progress: true
+
+jobs:
+  diagnose:
+    if: >-
+      github.repository == 'benclawbot/Medusa' &&
+      ((github.event_name == 'push' && github.ref == 'refs/heads/agent/568-complete-telegram') ||
+       (github.event_name == 'pull_request' && github.head_ref == 'agent/568-complete-telegram'))
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: agent/568-complete-telegram
+          fetch-depth: 0
+      - uses: dtolnay/rust-toolchain@39b0b3842c7e8bbf6904c0bfc3d9006fdd4dc4e0 # 1.88.0
+        with:
+          components: rustfmt,clippy
+      - name: Remove one-shot workflow from branch
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm .github/workflows/diagnose-605.yml
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add -A
+          git commit -m "Remove Telegram diagnostic workflow"
+          git push origin HEAD:agent/568-complete-telegram
+      - name: Check formatting
+        run: cargo fmt --all -- --check
+      - name: Clippy
+        run: cargo clippy -p medusa-daemon --all-targets --locked -- -D warnings
+      - name: Focused Telegram tests
+        run: cargo test -p medusa-daemon --locked telegram -- --nocapture
