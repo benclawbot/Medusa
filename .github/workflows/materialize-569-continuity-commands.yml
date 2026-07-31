@@ -6,6 +6,7 @@ on:
       - main
     paths:
       - validation/materialize_569_continuity_commands.py
+      - validation/fix_569_continuity_attach_tests.py
       - .github/workflows/materialize-569-continuity-commands.yml
 
 permissions:
@@ -26,7 +27,9 @@ jobs:
           token: ${{ secrets.GITHUB_TOKEN }}
       - uses: dtolnay/rust-toolchain@39b0b3842c7e8bbf6904c0bfc3d9006fdd4dc4e0 # stable
       - name: Materialize reviewed continuity commands
-        run: python3 validation/materialize_569_continuity_commands.py
+        run: |
+          python3 validation/materialize_569_continuity_commands.py
+          python3 validation/fix_569_continuity_attach_tests.py
       - name: Format and validate continuity commands
         run: |
           cargo fmt --all
@@ -38,6 +41,7 @@ jobs:
         run: |
           git rm .github/workflows/materialize-569-continuity-commands.yml
           git rm validation/materialize_569_continuity_commands.py
+          git rm validation/fix_569_continuity_attach_tests.py
           git config user.name github-actions[bot]
           git config user.email 41898282+github-actions[bot]@users.noreply.github.com
           git add crates/medusa-session-continuity/src/root.rs
