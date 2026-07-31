@@ -13,7 +13,10 @@ use medusa_agent::{
     session_browser::{load_session, replay_events},
 };
 use medusa_protocol::EventEnvelope;
-use medusa_session_continuity::{AttachRequest, ContinuityError, ContinuityStore};
+use medusa_session_continuity::{
+    AttachRequest, ContinuityError, ContinuityStore, CursorAckRequest, DetachRequest,
+    HandoffRequest,
+};
 
 pub use medusa_session_continuity::{AttachmentMode, ClientKind, ContinuitySession};
 
@@ -55,6 +58,7 @@ impl RuntimeSessionAttachment {
                 client_kind: request.client_kind,
                 requested_mode: request.requested_mode,
                 expected_revision: request.expected_revision,
+                journal_cursor: request.cursor,
                 occurred_at_unix_ms: request.occurred_at_unix_ms,
                 event_id: request.event_id,
             })
@@ -66,7 +70,8 @@ impl RuntimeSessionAttachment {
             .iter()
             .find(|attachment| attachment.client_id == request.client_id)
             .ok_or_else(|| RuntimeError::agent("continuity attach did not retain the client"))?;
-        let replay = replay_events(&repo, &request.session_id, request.cursor)
+        let replay_cursor = request.cursor.max(attachment.journal_cursor);
+        let replay = replay_events(&repo, &request.session_id, replay_cursor)
             .map_err(RuntimeError::agent)?;
         Ok(Self {
             repo,
@@ -81,6 +86,71 @@ impl RuntimeSessionAttachment {
     /// Returns new committed execution events from a zero-based journal cursor.
     pub fn replay_from(&self, cursor: u64) -> Result<Vec<EventEnvelope>, RuntimeError> {
         replay_events(&self.repo, &self.session.id.to_string(), cursor).map_err(RuntimeError::agent)
+    }
+
+    /// Acknowledges the highest canonical journal cursor observed by this client.
+    pub fn acknowledge_cursor(
+        &mut self,
+        cursor: u64,
+        occurred_at_unix_ms: i64,
+        event_id: impl Into<String>,
+    ) -> Result<(), RuntimeError> {
+        let outcome = continuity_store(&self.repo, &self.session.id.to_string())
+            .acknowledge_cursor(CursorAckRequest {
+                client_id: self.client_id.clone(),
+                expected_revision: self.continuity.revision,
+                cursor,
+                occurred_at_unix_ms,
+                event_id: event_id.into(),
+            })
+            .map_err(RuntimeError::agent)?;
+        self.continuity = outcome.session().clone();
+        Ok(())
+    }
+
+    /// Hands mutable ownership to an already attached client.
+    pub fn handoff(
+        &mut self,
+        to_client_id: impl Into<String>,
+        occurred_at_unix_ms: i64,
+        event_id: impl Into<String>,
+    ) -> Result<(), RuntimeError> {
+        self.validate_owner()?;
+        let outcome = continuity_store(&self.repo, &self.session.id.to_string())
+            .handoff(HandoffRequest {
+                from_client_id: self.client_id.clone(),
+                to_client_id: to_client_id.into(),
+                expected_revision: self.continuity.revision,
+                occurred_at_unix_ms,
+                event_id: event_id.into(),
+            })
+            .map_err(RuntimeError::agent)?;
+        self.continuity = outcome.session().clone();
+        self.mode = self
+            .continuity
+            .attachments
+            .iter()
+            .find(|attachment| attachment.client_id == self.client_id)
+            .map_or(AttachmentMode::ReadOnly, |attachment| attachment.mode);
+        Ok(())
+    }
+
+    /// Detaches this client. Detaching the owner leaves the session ownerless until an explicit
+    /// owner attachment or handoff occurs.
+    pub fn detach(
+        self,
+        occurred_at_unix_ms: i64,
+        event_id: impl Into<String>,
+    ) -> Result<ContinuitySession, RuntimeError> {
+        let outcome = continuity_store(&self.repo, &self.session.id.to_string())
+            .detach(DetachRequest {
+                client_id: self.client_id,
+                expected_revision: self.continuity.revision,
+                occurred_at_unix_ms,
+                event_id: event_id.into(),
+            })
+            .map_err(RuntimeError::agent)?;
+        Ok(outcome.session().clone())
     }
 
     /// Starts the production controller only when this client is the current owner.
@@ -293,5 +363,157 @@ mod tests {
             .err()
             .expect("read-only controller must fail");
         assert!(error.to_string().contains("read-only"));
+    }
+}
+
+#[cfg(test)]
+mod continuity_command_tests {
+    use medusa_agent::AgentEngine;
+    use medusa_config::Config;
+    use medusa_core::MedusaResult;
+    use medusa_provider::{ModelProvider, ModelRequest, ModelResponse};
+
+    use super::*;
+
+    struct UnusedProvider;
+
+    impl ModelProvider for UnusedProvider {
+        fn complete(&self, _: &ModelRequest) -> MedusaResult<ModelResponse> {
+            unreachable!("session creation does not call the provider")
+        }
+    }
+
+    fn request(
+        session_id: &str,
+        client_id: &str,
+        client_kind: ClientKind,
+        requested_mode: AttachmentMode,
+        expected_revision: u64,
+        cursor: u64,
+        event_id: &str,
+    ) -> RuntimeAttachRequest {
+        RuntimeAttachRequest {
+            session_id: session_id.to_owned(),
+            client_id: client_id.to_owned(),
+            client_kind,
+            requested_mode,
+            expected_revision,
+            cursor,
+            occurred_at_unix_ms: 10_000 + i64::try_from(expected_revision).unwrap_or(i64::MAX),
+            event_id: event_id.to_owned(),
+        }
+    }
+
+    #[test]
+    fn telegram_cursor_handoff_and_detach_are_durable() {
+        let repository = tempfile::tempdir().expect("repository");
+        let session = AgentEngine::new(UnusedProvider, Config::default())
+            .create_session(repository.path(), "Share one transcript".to_owned())
+            .expect("session");
+        let session_id = session.id.to_string();
+        let mut owner = RuntimeSessionAttachment::attach(
+            repository.path().to_path_buf(),
+            request(
+                &session_id,
+                "tui-owner",
+                ClientKind::Tui,
+                AttachmentMode::Owner,
+                0,
+                0,
+                "attach-owner",
+            ),
+        )
+        .expect("owner");
+        let mut telegram = RuntimeSessionAttachment::attach(
+            repository.path().to_path_buf(),
+            request(
+                &session_id,
+                "telegram-42",
+                ClientKind::Telegram,
+                AttachmentMode::ReadOnly,
+                owner.continuity.revision,
+                1,
+                "attach-telegram",
+            ),
+        )
+        .expect("telegram");
+        assert!(telegram.replay.is_empty());
+        telegram
+            .acknowledge_cursor(1, 10_002, "ack-telegram-1")
+            .expect("cursor ack");
+        let store = continuity_store(repository.path(), &session_id);
+        let after_ack = store.load().expect("continuity");
+        assert_eq!(
+            after_ack
+                .attachments
+                .iter()
+                .find(|attachment| attachment.client_id == "telegram-42")
+                .expect("telegram attachment")
+                .journal_cursor,
+            1
+        );
+
+        owner.continuity = after_ack;
+        owner
+            .handoff("telegram-42", 10_003, "handoff-telegram")
+            .expect("handoff");
+        assert_eq!(owner.mode(), AttachmentMode::ReadOnly);
+        let telegram_state = store.load().expect("continuity");
+        telegram.continuity = telegram_state;
+        telegram.mode = AttachmentMode::Owner;
+        let detached = telegram.detach(10_004, "detach-telegram").expect("detach");
+        assert_eq!(detached.owner_client_id, None);
+        assert!(
+            detached
+                .attachments
+                .iter()
+                .all(|attachment| attachment.client_id != "telegram-42")
+        );
+    }
+
+    #[test]
+    fn cursor_acknowledgement_is_monotonic_and_idempotent() {
+        let repository = tempfile::tempdir().expect("repository");
+        let session = AgentEngine::new(UnusedProvider, Config::default())
+            .create_session(repository.path(), "Cursor semantics".to_owned())
+            .expect("session");
+        let mut attachment = RuntimeSessionAttachment::attach(
+            repository.path().to_path_buf(),
+            request(
+                &session.id.to_string(),
+                "daemon-subscriber",
+                ClientKind::Daemon,
+                AttachmentMode::ReadOnly,
+                0,
+                0,
+                "attach-daemon",
+            ),
+        )
+        .expect("attach");
+        attachment
+            .acknowledge_cursor(1, 20_000, "ack-daemon")
+            .expect("ack");
+        let revision = attachment.continuity.revision;
+        let store = continuity_store(repository.path(), &session.id.to_string());
+        let replay = store
+            .acknowledge_cursor(CursorAckRequest {
+                client_id: "daemon-subscriber".to_owned(),
+                expected_revision: 0,
+                cursor: 1,
+                occurred_at_unix_ms: 20_000,
+                event_id: "ack-daemon".to_owned(),
+            })
+            .expect("idempotent replay");
+        assert_eq!(replay.session().revision, revision);
+        let error = store
+            .acknowledge_cursor(CursorAckRequest {
+                client_id: "daemon-subscriber".to_owned(),
+                expected_revision: revision,
+                cursor: 0,
+                occurred_at_unix_ms: 20_001,
+                event_id: "ack-regression".to_owned(),
+            })
+            .expect_err("cursor regression");
+        assert!(error.to_string().contains("regressed"));
     }
 }

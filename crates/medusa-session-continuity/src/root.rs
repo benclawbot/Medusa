@@ -7,13 +7,15 @@ use std::{
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
-pub const CURRENT_SCHEMA_VERSION: u32 = 1;
+pub const CURRENT_SCHEMA_VERSION: u32 = 2;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ClientKind {
     Tui,
     Desktop,
+    Telegram,
+    Daemon,
     Other(String),
 }
 
@@ -31,6 +33,8 @@ pub struct ClientAttachment {
     pub mode: AttachmentMode,
     pub attached_at_unix_ms: i64,
     pub last_seen_revision: u64,
+    #[serde(default)]
+    pub journal_cursor: u64,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -50,6 +54,9 @@ pub enum SessionEventKind {
         mode: AttachmentMode,
     },
     ClientDetached,
+    CursorAcknowledged {
+        cursor: u64,
+    },
     OwnershipHandedOff {
         from_client_id: String,
         to_client_id: String,
@@ -124,6 +131,7 @@ pub struct AttachRequest {
     pub client_kind: ClientKind,
     pub requested_mode: AttachmentMode,
     pub expected_revision: u64,
+    pub journal_cursor: u64,
     pub occurred_at_unix_ms: i64,
     pub event_id: String,
 }
@@ -143,6 +151,23 @@ pub struct HandoffRequest {
     pub from_client_id: String,
     pub to_client_id: String,
     pub expected_revision: u64,
+    pub occurred_at_unix_ms: i64,
+    pub event_id: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DetachRequest {
+    pub client_id: String,
+    pub expected_revision: u64,
+    pub occurred_at_unix_ms: i64,
+    pub event_id: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CursorAckRequest {
+    pub client_id: String,
+    pub expected_revision: u64,
+    pub cursor: u64,
     pub occurred_at_unix_ms: i64,
     pub event_id: String,
 }
@@ -183,6 +208,8 @@ pub enum ContinuityError {
     HandoffTargetNotAttached { client_id: String },
     #[error("event id {event_id} was reused with conflicting content")]
     ConflictingReplay { event_id: String },
+    #[error("client cursor regressed from {acknowledged} to {requested}")]
+    CursorRegression { acknowledged: u64, requested: u64 },
     #[error("event sequence is invalid")]
     InvalidEventSequence,
     #[error("session attachment state is inconsistent")]
@@ -242,9 +269,17 @@ impl ContinuityStore {
                             }
                         }
                     }
+                    if session.owner_client_id.as_deref() == Some(request.client_id.as_str())
+                        && request.requested_mode == AttachmentMode::ReadOnly
+                    {
+                        return Err(ContinuityError::NotOwner {
+                            client_id: request.client_id.clone(),
+                        });
+                    }
                     existing.client_kind = request.client_kind.clone();
                     existing.mode = request.requested_mode;
                     existing.last_seen_revision = session.revision + 1;
+                    existing.journal_cursor = existing.journal_cursor.max(request.journal_cursor);
                 } else {
                     if request.requested_mode == AttachmentMode::Owner {
                         if let Some(owner) = &session.owner_client_id {
@@ -260,6 +295,7 @@ impl ContinuityStore {
                         mode: request.requested_mode,
                         attached_at_unix_ms: request.occurred_at_unix_ms,
                         last_seen_revision: session.revision + 1,
+                        journal_cursor: request.journal_cursor,
                     });
                 }
                 Ok(SessionEventKind::ClientAttached {
@@ -308,6 +344,61 @@ impl ContinuityStore {
                 })
             },
             &request.from_client_id,
+            request.occurred_at_unix_ms,
+        )
+    }
+
+    pub fn detach(&self, request: DetachRequest) -> Result<ApplyOutcome, ContinuityError> {
+        self.update(
+            request.expected_revision,
+            &request.event_id,
+            |session| {
+                let position = session
+                    .attachments
+                    .iter()
+                    .position(|attachment| attachment.client_id == request.client_id)
+                    .ok_or_else(|| ContinuityError::ClientNotAttached {
+                        client_id: request.client_id.clone(),
+                    })?;
+                if session.owner_client_id.as_deref() == Some(request.client_id.as_str()) {
+                    session.owner_client_id = None;
+                }
+                session.attachments.remove(position);
+                Ok(SessionEventKind::ClientDetached)
+            },
+            &request.client_id,
+            request.occurred_at_unix_ms,
+        )
+    }
+
+    pub fn acknowledge_cursor(
+        &self,
+        request: CursorAckRequest,
+    ) -> Result<ApplyOutcome, ContinuityError> {
+        self.update(
+            request.expected_revision,
+            &request.event_id,
+            |session| {
+                let attachment = session
+                    .attachments
+                    .iter_mut()
+                    .find(|attachment| attachment.client_id == request.client_id)
+                    .ok_or_else(|| ContinuityError::ClientNotAttached {
+                        client_id: request.client_id.clone(),
+                    })?;
+                if request.cursor < attachment.journal_cursor {
+                    return Err(ContinuityError::CursorRegression {
+                        acknowledged: attachment.journal_cursor,
+                        requested: request.cursor,
+                    });
+                }
+                attachment.journal_cursor = request.cursor;
+                attachment.last_seen_revision = session.revision + 1;
+                Ok(SessionEventKind::CursorAcknowledged {
+                    cursor: request.cursor,
+                })
+            },
+            &request.client_id,
             request.occurred_at_unix_ms,
         )
     }
@@ -418,51 +509,72 @@ fn migrate(mut value: serde_json::Value) -> Result<serde_json::Value, Continuity
         .get("schema_version")
         .and_then(serde_json::Value::as_u64)
         .unwrap_or(0);
-    match version {
-        0 => {
-            let object = value.as_object_mut().ok_or_else(|| {
+    if version == 0 {
+        let object = value.as_object_mut().ok_or_else(|| {
+            serde_json::Error::io(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "session root must be an object",
+            ))
+        })?;
+        object
+            .entry("revision")
+            .or_insert_with(|| serde_json::Value::from(0));
+        object
+            .entry("owner_client_id")
+            .or_insert(serde_json::Value::Null);
+        object
+            .entry("attachments")
+            .or_insert_with(|| serde_json::Value::Array(Vec::new()));
+        object.entry("task").or_insert_with(|| {
+            serde_json::json!({
+                "plan_state": null,
+                "active_step": null,
+                "attention_required": false,
+                "approvals": [],
+                "checkpoints": [],
+                "recovery_state": null,
+                "verification_evidence": [],
+                "file_changes": [],
+                "completion_status": null,
+            })
+        });
+        object
+            .entry("events")
+            .or_insert_with(|| serde_json::Value::Array(Vec::new()));
+    } else if version > u64::from(CURRENT_SCHEMA_VERSION) {
+        return Err(ContinuityError::UnsupportedSchema {
+            found: u32::try_from(version).unwrap_or(u32::MAX),
+            current: CURRENT_SCHEMA_VERSION,
+        });
+    }
+
+    let object = value.as_object_mut().ok_or_else(|| {
+        serde_json::Error::io(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "session root must be an object",
+        ))
+    })?;
+    if let Some(attachments) = object
+        .get_mut("attachments")
+        .and_then(serde_json::Value::as_array_mut)
+    {
+        for attachment in attachments {
+            let attachment = attachment.as_object_mut().ok_or_else(|| {
                 serde_json::Error::io(io::Error::new(
                     io::ErrorKind::InvalidData,
-                    "session root must be an object",
+                    "session attachment must be an object",
                 ))
             })?;
-            object.insert(
-                "schema_version".to_owned(),
-                serde_json::Value::from(CURRENT_SCHEMA_VERSION),
-            );
-            object
-                .entry("revision")
+            attachment
+                .entry("journal_cursor")
                 .or_insert_with(|| serde_json::Value::from(0));
-            object
-                .entry("owner_client_id")
-                .or_insert(serde_json::Value::Null);
-            object
-                .entry("attachments")
-                .or_insert_with(|| serde_json::Value::Array(Vec::new()));
-            object.entry("task").or_insert_with(|| {
-                serde_json::json!({
-                    "plan_state": null,
-                    "active_step": null,
-                    "attention_required": false,
-                    "approvals": [],
-                    "checkpoints": [],
-                    "recovery_state": null,
-                    "verification_evidence": [],
-                    "file_changes": [],
-                    "completion_status": null,
-                })
-            });
-            object
-                .entry("events")
-                .or_insert_with(|| serde_json::Value::Array(Vec::new()));
-            Ok(value)
         }
-        current if current == u64::from(CURRENT_SCHEMA_VERSION) => Ok(value),
-        found => Err(ContinuityError::UnsupportedSchema {
-            found: u32::try_from(found).unwrap_or(u32::MAX),
-            current: CURRENT_SCHEMA_VERSION,
-        }),
     }
+    object.insert(
+        "schema_version".to_owned(),
+        serde_json::Value::from(CURRENT_SCHEMA_VERSION),
+    );
+    Ok(value)
 }
 
 fn validate(session: &ContinuitySession) -> Result<(), ContinuityError> {
@@ -523,6 +635,7 @@ mod tests {
                 client_kind: kind,
                 requested_mode: mode,
                 expected_revision: revision,
+                journal_cursor: 0,
                 occurred_at_unix_ms: at,
                 event_id: event.to_owned(),
             })
@@ -721,6 +834,7 @@ mod tests {
             client_kind: ClientKind::Tui,
             requested_mode: AttachmentMode::Owner,
             expected_revision: 0,
+            journal_cursor: 0,
             occurred_at_unix_ms: 1,
             event_id: "attach".to_owned(),
         };
@@ -735,6 +849,7 @@ mod tests {
             client_kind: ClientKind::Desktop,
             requested_mode: AttachmentMode::ReadOnly,
             expected_revision: applied.session().revision,
+            journal_cursor: 0,
             occurred_at_unix_ms: 2,
             event_id: "attach".to_owned(),
         });
@@ -782,6 +897,7 @@ mod tests {
             client_kind: ClientKind::Desktop,
             requested_mode: AttachmentMode::Owner,
             expected_revision: owner.revision,
+            journal_cursor: 0,
             occurred_at_unix_ms: 2,
             event_id: "b".to_owned(),
         });
