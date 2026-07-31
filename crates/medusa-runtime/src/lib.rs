@@ -531,6 +531,12 @@ impl RuntimeController {
         lock_submission(&self.submission).busy
     }
 
+    /// Returns the durable session identity after a submission has been accepted.
+    #[must_use]
+    pub fn active_session_id(&self) -> Option<String> {
+        lock_submission(&self.submission).active_session_id.clone()
+    }
+
     pub fn try_event(&self) -> Result<Option<RuntimeEvent>, RuntimeError> {
         match self.events.try_recv() {
             Ok(event) => Ok(Some(event)),

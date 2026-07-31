@@ -10,11 +10,13 @@ repository.workspace = true
 [dependencies]
 hex.workspace = true
 medusa-agent = { path = "../medusa-agent" }
+medusa-config = { path = "../medusa-config" }
 medusa-core.workspace = true
 medusa-process-registry = { path = "../medusa-process-registry" }
 medusa-protocol.workspace = true
 medusa-recovery-coordinator = { path = "../medusa-recovery-coordinator" }
 medusa-runtime = { path = "../medusa-runtime" }
+medusa-session-continuity = { path = "../medusa-session-continuity" }
 medusa-runtime-supervisor = { path = "../medusa-runtime-supervisor" }
 medusa-wakeup = { path = "../medusa-wakeup" }
 reqwest.workspace = true
@@ -30,7 +32,6 @@ getrandom.workspace = true
 medusa-process-containment.workspace = true
 
 [dev-dependencies]
-medusa-config = { path = "../medusa-config" }
 medusa-provider = { path = "../medusa-provider" }
 medusa-testkit.workspace = true
 tempfile.workspace = true
