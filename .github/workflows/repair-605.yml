@@ -1,0 +1,42 @@
+name: Repair #605 validation
+
+on:
+  push:
+    branches: [agent/568-complete-telegram]
+
+permissions:
+  contents: write
+
+concurrency:
+  group: repair-605-validation
+  cancel-in-progress: true
+
+jobs:
+  repair:
+    if: github.repository == 'benclawbot/Medusa' && github.ref == 'refs/heads/agent/568-complete-telegram'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: agent/568-complete-telegram
+          fetch-depth: 0
+      - uses: dtolnay/rust-toolchain@39b0b3842c7e8bbf6904c0bfc3d9006fdd4dc4e0 # 1.88.0
+        with:
+          components: rustfmt,clippy
+      - name: Refresh lockfile and remove one-shot workflow
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo generate-lockfile
+          cargo fmt --all
+          rm .github/workflows/repair-605.yml
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add -A
+          git diff --cached --check
+          git commit -m "Refresh Telegram validation lockfile"
+          git push origin HEAD:agent/568-complete-telegram
+      - name: Clippy
+        run: cargo clippy -p medusa-daemon --all-targets --locked -- -D warnings
+      - name: Focused Telegram tests
+        run: cargo test -p medusa-daemon --locked telegram -- --nocapture
