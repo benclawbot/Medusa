@@ -53,9 +53,7 @@ impl From<OpenAiRealtimeSessionCredential> for DesktopRealtimeSession {
 #[tauri::command]
 pub fn desktop_realtime_capability() -> Result<DesktopRealtimeCapability, String> {
     let config = active_config()?;
-    Ok(resolve_openai_realtime_route(&config)
-        .availability()
-        .into())
+    Ok(resolve_openai_realtime_route(&config).availability().into())
 }
 
 #[tauri::command]
@@ -78,10 +76,8 @@ mod tests {
 
     #[test]
     fn capability_response_preserves_fail_closed_reason() {
-        let capability: DesktopRealtimeCapability = VoiceAvailability::unavailable(
-            "the existing account does not expose Realtime",
-        )
-        .into();
+        let capability: DesktopRealtimeCapability =
+            VoiceAvailability::unavailable("the existing account does not expose Realtime").into();
         assert!(!capability.available);
         assert_eq!(
             capability.reason.as_deref(),
