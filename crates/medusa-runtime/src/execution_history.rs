@@ -69,10 +69,15 @@ pub(crate) fn verify_resumed_session(
     repo: &Path,
     session: &AgentSession,
 ) -> Result<(), RuntimeError> {
-    let health = inspect_session(repo, session)?;
-    if !health.replay.equivalent {
-        let first = health
-            .replay
+    let session_id = session.id.to_string();
+    let journal_events = replay_events(repo, &session_id, 0).map_err(RuntimeError::agent)?;
+    let expected = trace(&session_id, &journal_events)?;
+    let actual = trace(&session_id, &session.events)?;
+    let replay =
+        medusa_execution_replay::verify(&expected, &actual).map_err(RuntimeError::agent)?;
+    replay.validate().map_err(RuntimeError::agent)?;
+    if !replay.equivalent {
+        let first = replay
             .divergences
             .first()
             .map(|divergence| format!("{:?}:{}", divergence.kind, divergence.subject))
@@ -84,7 +89,6 @@ pub(crate) fn verify_resumed_session(
     }
     Ok(())
 }
-
 pub fn inspect(repo: &Path, session_id: &str) -> Result<RuntimeExecutionHealth, RuntimeError> {
     let session = load_session(repo, session_id).map_err(RuntimeError::agent)?;
     inspect_session(repo, &session)
@@ -572,5 +576,26 @@ mod tests {
         let error = historical(repository.path(), &session.id.to_string(), 2)
             .expect_err("cursor must fail");
         assert!(error.to_string().contains("beyond"));
+    }
+    #[test]
+    fn malformed_optional_continuity_does_not_block_resume_verification() {
+        let repository = tempfile::tempdir().expect("repository");
+        let engine = AgentEngine::new(UnusedProvider, Config::default());
+        let session = engine
+            .create_session(repository.path(), "Resume canonical journal".to_owned())
+            .expect("session");
+        let continuity = repository
+            .path()
+            .join(".medusa/continuity")
+            .join(format!("{}.json", session.id));
+        std::fs::create_dir_all(continuity.parent().expect("continuity parent"))
+            .expect("continuity directory");
+        std::fs::write(&continuity, b"{malformed").expect("malformed continuity");
+
+        let restored = load_session(repository.path(), &session.id.to_string())
+            .expect("journal-backed session");
+        verify_resumed_session(repository.path(), &restored)
+            .expect("optional continuity must not block resume verification");
+        assert!(inspect(repository.path(), &session.id.to_string()).is_err());
     }
 }
