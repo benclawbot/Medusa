@@ -1,28 +1,43 @@
-use medusa_config::{ProviderProfileCatalog, ProviderProfileSummary};
+use medusa_config::{
+    ConfigurationApplyTiming, ConfigurationChangeOrigin, ProviderProfileCatalog,
+    ProviderProfileSummary,
+};
 use medusa_core::{ErrorCategory, ErrorCode, MedusaError, MedusaResult};
 
 pub(crate) fn set(key: &str, value: &str) -> MedusaResult<()> {
     let catalog = ProviderProfileCatalog::user()?;
-    let store = catalog.active_store()?;
-    let mut profile = store.load()?;
+    let snapshot = catalog.snapshot()?;
+    let mut profile = snapshot.profile;
     profile.set_value(key, value)?;
-    store.save(&profile)?;
+    let change = catalog.save_active_profile(
+        &profile,
+        snapshot.revision,
+        ConfigurationChangeOrigin::Cli,
+        [key.to_owned()],
+        ConfigurationApplyTiming::NextSession,
+    )?;
     println!(
-        "Updated `{key}` in provider profile `{}`.",
-        catalog.active_name()?
+        "Updated `{key}` in provider profile `{}` at revision {}.",
+        change.active_profile, change.revision
     );
     Ok(())
 }
 
 pub(crate) fn unset(key: &str) -> MedusaResult<()> {
     let catalog = ProviderProfileCatalog::user()?;
-    let store = catalog.active_store()?;
-    let mut profile = store.load()?;
+    let snapshot = catalog.snapshot()?;
+    let mut profile = snapshot.profile;
     profile.unset_value(key)?;
-    store.save(&profile)?;
+    let change = catalog.save_active_profile(
+        &profile,
+        snapshot.revision,
+        ConfigurationChangeOrigin::Cli,
+        [key.to_owned()],
+        ConfigurationApplyTiming::NextSession,
+    )?;
     println!(
-        "Reset `{key}` to its default in provider profile `{}`.",
-        catalog.active_name()?
+        "Reset `{key}` to its default in provider profile `{}` at revision {}.",
+        change.active_profile, change.revision
     );
     Ok(())
 }
@@ -53,23 +68,45 @@ pub(crate) fn list(json: bool) -> MedusaResult<()> {
 }
 
 pub(crate) fn create(name: &str) -> MedusaResult<()> {
-    let profile = ProviderProfileCatalog::user()?.create(name)?;
+    let catalog = ProviderProfileCatalog::user()?;
+    let revision = catalog.revision()?;
+    let (profile, change) = catalog.create_at_revision(
+        name,
+        revision,
+        ConfigurationChangeOrigin::Cli,
+    )?;
     print_created(&profile);
+    println!("Configuration revision: {}.", change.revision);
     Ok(())
 }
 
 pub(crate) fn use_profile(name: &str) -> MedusaResult<()> {
-    let profile = ProviderProfileCatalog::user()?.use_profile(name)?;
+    let catalog = ProviderProfileCatalog::user()?;
+    let revision = catalog.revision()?;
+    let (profile, change) = catalog.use_profile_at_revision(
+        name,
+        revision,
+        ConfigurationChangeOrigin::Cli,
+    )?;
     println!(
-        "Active provider profile is now `{}` — {} / {}.",
-        profile.name, profile.provider, profile.model
+        "Active provider profile is now `{}` — {} / {} (revision {}).",
+        profile.name, profile.provider, profile.model, change.revision
     );
     Ok(())
 }
 
 pub(crate) fn delete(name: &str) -> MedusaResult<()> {
-    ProviderProfileCatalog::user()?.delete(name)?;
-    println!("Deleted provider profile `{name}`.");
+    let catalog = ProviderProfileCatalog::user()?;
+    let revision = catalog.revision()?;
+    let change = catalog.delete_at_revision(
+        name,
+        revision,
+        ConfigurationChangeOrigin::Cli,
+    )?;
+    println!(
+        "Deleted provider profile `{name}` at revision {}.",
+        change.revision
+    );
     Ok(())
 }
 
