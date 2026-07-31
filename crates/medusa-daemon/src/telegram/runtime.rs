@@ -236,9 +236,10 @@ impl TelegramPollingRuntime {
                         &callback.data,
                         OffsetDateTime::now_utc(),
                     ) {
-                        Ok(_) => self
-                            .client
-                            .answer_callback_query(&callback.query_id, None)?,
+                        Ok(_) => {
+                            self.client
+                                .answer_callback_query(&callback.query_id, None)?;
+                        }
                         Err(error) if is_rejected_input(&error) => {
                             self.service.acknowledge_transport_update(update_id)?;
                             self.client.answer_callback_query(
