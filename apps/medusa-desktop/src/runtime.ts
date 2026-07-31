@@ -59,6 +59,18 @@ export interface RuntimeStartResponse {
   repo: string;
 }
 
+export interface SharedConfiguration {
+  activeProfile: string;
+  connection: string;
+  provider: string;
+  model: string;
+  effort: Effort;
+  auth: string;
+  baseUrl?: string;
+  configured: boolean;
+  credentialConfigured: boolean;
+}
+
 export interface SessionSummary {
   id: string;
   objective: string;
@@ -344,6 +356,10 @@ export function getRecoveryCompletion(): { auditPath: string } | undefined {
 export function subscribeRecovery(listener: () => void): () => void {
   recoveryListeners.add(listener);
   return () => recoveryListeners.delete(listener);
+}
+
+export async function loadSharedConfiguration(): Promise<SharedConfiguration> {
+  return invoke<SharedConfiguration>("desktop_shared_configuration");
 }
 
 export async function startRuntime(repo?: string): Promise<RuntimeStartResponse> {
