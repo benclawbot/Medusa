@@ -1,4 +1,4 @@
-//! Telegram transport policy, command mapping, callback safety, and deterministic rendering.
+//! Telegram transport policy, command mapping, callback safety, deterministic rendering, and supervised polling.
 //!
 //! The gateway is a frontend adapter to the authoritative live-session broker. It does not own an
 //! agent, repository policy, or approval execution path.
