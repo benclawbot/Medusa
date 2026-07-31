@@ -24,7 +24,7 @@ export function OpenAiRealtimeLiveEvidence() {
     "No microphone access has been requested. Start only when you are ready to speak.",
   );
   const [report, setReport] = useState<OpenAiRealtimeLiveEvidenceReport>();
-  const transportRef = useRef<OpenAiRealtimeWebRtcTransport>();
+  const transportRef = useRef<OpenAiRealtimeWebRtcTransport | undefined>(undefined);
 
   useEffect(
     () => () => {
@@ -63,7 +63,11 @@ export function OpenAiRealtimeLiveEvidence() {
       if (timeout !== undefined) window.clearTimeout(timeout);
       observations.finishedAtMs = Date.now();
       observations.result = requestedResult;
-      observations.failureReason = failureReason;
+      if (failureReason) {
+        observations.failureReason = failureReason;
+      } else {
+        delete observations.failureReason;
+      }
       await transport?.disconnect().catch(() => undefined);
       transportRef.current = undefined;
 
@@ -103,7 +107,8 @@ export function OpenAiRealtimeLiveEvidence() {
 
     const rememberPhase = (phase: VoicePhase): void => {
       if (finished) return;
-      if (observations.phases.at(-1) !== phase && observations.phases.length < 32) {
+      const lastPhase = observations.phases[observations.phases.length - 1];
+      if (lastPhase !== phase && observations.phases.length < 32) {
         observations.phases.push(phase);
       }
       if (phase === "assistant-speaking") {
@@ -156,13 +161,24 @@ export function OpenAiRealtimeLiveEvidence() {
       return audio;
     };
 
+    timeout = window.setTimeout(() => {
+      void finish(
+        "failed",
+        "The bounded live evidence window expired before a final user transcript and assistant audio playback were both observed.",
+      );
+    }, OPENAI_REALTIME_LIVE_EVIDENCE_TIMEOUT_MS);
+
     try {
       const capability = await loadDesktopRealtimeCapability(invokeWithEvidence);
-      if (!capability.available) {
+      if (
+        !capability.available ||
+        !capability.supportsInputAudio ||
+        !capability.supportsOutputAudio
+      ) {
         await finish(
           "failed",
           capability.reason ??
-            "The active authenticated account does not expose OpenAI Realtime.",
+            "The active authenticated account does not expose full-duplex OpenAI Realtime audio.",
         );
         return;
       }
@@ -178,12 +194,6 @@ export function OpenAiRealtimeLiveEvidence() {
         },
       );
       transportRef.current = transport;
-      timeout = window.setTimeout(() => {
-        void finish(
-          "failed",
-          "The bounded live evidence window expired before a final user transcript and assistant audio playback were both observed.",
-        );
-      }, OPENAI_REALTIME_LIVE_EVIDENCE_TIMEOUT_MS);
 
       setStatus(`Speak this phrase, then pause: “${evidencePhrase}”`);
       await transport.connect({
@@ -214,6 +224,10 @@ export function OpenAiRealtimeLiveEvidence() {
 
   async function copyReport(): Promise<void> {
     if (!report) return;
+    if (!navigator.clipboard) {
+      setStatus("Clipboard access is unavailable; select and copy the JSON manually.");
+      return;
+    }
     await navigator.clipboard.writeText(JSON.stringify(report, null, 2));
     setStatus("Sanitized evidence JSON copied.");
   }
