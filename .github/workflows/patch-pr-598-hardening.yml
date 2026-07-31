@@ -1,9 +1,8 @@
 name: Patch PR 598 failure evidence
 
 on:
-  push:
-    branches:
-      - agent/555-cross-platform-dogfood
+  pull_request:
+    types: [opened, synchronize, reopened]
     paths:
       - .github/workflows/patch-pr-598-hardening.yml
 
@@ -16,6 +15,7 @@ concurrency:
 
 jobs:
   patch:
+    if: github.head_ref == 'agent/555-cross-platform-dogfood'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
