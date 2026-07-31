@@ -7,6 +7,7 @@ on:
     paths:
       - crates/medusa-daemon/src/frontend_control.rs
       - validation/materialize_569_frontend_control_plane.py
+      - validation/fix_569_frontend_control_plane.py
       - .github/workflows/materialize-569-frontend-control-plane.yml
 
 permissions:
@@ -27,7 +28,9 @@ jobs:
           token: ${{ secrets.GITHUB_TOKEN }}
       - uses: dtolnay/rust-toolchain@39b0b3842c7e8bbf6904c0bfc3d9006fdd4dc4e0 # stable
       - name: Materialize reviewed frontend control wiring
-        run: python3 validation/materialize_569_frontend_control_plane.py
+        run: |
+          python3 validation/materialize_569_frontend_control_plane.py
+          python3 validation/fix_569_frontend_control_plane.py
       - name: Format and validate frontend control plane
         run: |
           cargo fmt --all
@@ -41,6 +44,7 @@ jobs:
         run: |
           git rm .github/workflows/materialize-569-frontend-control-plane.yml
           git rm validation/materialize_569_frontend_control_plane.py
+          git rm validation/fix_569_frontend_control_plane.py
           git config user.name github-actions[bot]
           git config user.email 41898282+github-actions[bot]@users.noreply.github.com
           git add crates/medusa-daemon/Cargo.toml
