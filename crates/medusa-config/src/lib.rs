@@ -10,6 +10,7 @@ mod provider_profiles;
 
 pub use provider_profile::{
     PROVIDER_PROFILE_KEYS, ProviderProfile, ProviderProfileStore, ProviderProfileValue,
+    credential_environment,
 };
 pub use provider_profiles::{ProviderProfileCatalog, ProviderProfileSummary};
 

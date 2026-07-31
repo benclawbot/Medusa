@@ -153,6 +153,19 @@ impl ProviderProfile {
     }
 }
 
+/// Returns the registered environment-variable credential source for a provider.
+#[must_use]
+pub fn credential_environment(provider: &str) -> Option<&'static str> {
+    match provider {
+        "minimax" => Some("MINIMAX_API_KEY"),
+        "anthropic" => Some("ANTHROPIC_API_KEY"),
+        "anthropic-compatible" | "openai-compatible" => Some("MEDUSA_API_KEY"),
+        "openai" => Some("OPENAI_API_KEY"),
+        "openai-oauth" | "omniroute" | "local" => None,
+        _ => None,
+    }
+}
+
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 #[serde(untagged)]
 pub enum ProviderProfileValue {

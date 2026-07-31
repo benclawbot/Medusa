@@ -12,8 +12,9 @@ use std::{
 
 use clap::{Parser, Subcommand};
 use config_command::{
-    configure_interactive, ensure_first_run, ensure_selected_runtime, get as get_config,
-    reset as reset_config, show as show_config, validate as validate_config,
+    configure_interactive, doctor as doctor_config, edit as edit_config, ensure_first_run,
+    ensure_selected_runtime, get as get_config, reset as reset_config, show as show_config,
+    validate as validate_config,
 };
 use config_profiles::{
     create as create_config_profile, delete as delete_config_profile,
@@ -115,6 +116,8 @@ enum ConfigAction {
         #[arg(long)]
         json: bool,
     },
+    /// Edit the active provider profile and commit it only when the complete result is valid.
+    Edit,
     /// Print one non-secret provider-profile key.
     Get {
         key: String,
@@ -133,6 +136,12 @@ enum ConfigAction {
     },
     /// Validate the shared provider profile without billable provider work.
     Validate {
+        /// Emit stable machine-readable JSON.
+        #[arg(long)]
+        json: bool,
+    },
+    /// Run redacted, non-billable configuration diagnostics.
+    Doctor {
         /// Emit stable machine-readable JSON.
         #[arg(long)]
         json: bool,
@@ -218,6 +227,7 @@ fn run() -> MedusaResult<()> {
         return match action {
             None | Some(ConfigAction::Init) => configure_interactive(),
             Some(ConfigAction::Show { json }) => show_config(json),
+            Some(ConfigAction::Edit) => edit_config(),
             Some(ConfigAction::Get { key, json }) => get_config(&key, json),
             Some(ConfigAction::Set { key, value }) => set_config(&key, &value),
             Some(ConfigAction::Unset { key }) => unset_config(&key),
@@ -228,6 +238,7 @@ fn run() -> MedusaResult<()> {
                 ConfigProfileAction::Delete { name } => delete_config_profile(&name),
             },
             Some(ConfigAction::Validate { json }) => validate_config(json),
+            Some(ConfigAction::Doctor { json }) => doctor_config(json),
             Some(ConfigAction::Reset) => reset_config(),
         };
     }
