@@ -14,7 +14,9 @@ use serde_json::Value;
 
 use crate::{
     commands::{Effort, ModelConfiguration},
-    prompt::{ImageAttachment, PromptAttachment, PromptDraft},
+    prompt::{
+        ImageAttachment, MAX_IMAGE_BYTES, MAX_IMAGE_PIXELS, PromptAttachment, PromptDraft,
+    },
 };
 
 use super::{
@@ -615,6 +617,20 @@ pub(super) fn message_blocks(draft: &PromptDraft) -> Result<Vec<MessageBlock>, R
             PromptAttachment::Image(image) => blocks.push(image_block(image)?),
             PromptAttachment::File(file) => {
                 let bytes = fs::read(&file.path)?;
+                if let Some(image) = encoded_image_info(&bytes, &file.path)? {
+                    blocks.push(MessageBlock::Image {
+                        source: ImageSource::Base64 {
+                            media_type: image.media_type.to_owned(),
+                            data: STANDARD.encode(bytes),
+                        },
+                        alt_text: file
+                            .path
+                            .file_name()
+                            .and_then(|name| name.to_str())
+                            .map(str::to_owned),
+                    });
+                    continue;
+                }
                 if bytes.len() > MAX_FILE_CONTEXT_BYTES {
                     return Err(RuntimeError::FileTooLarge {
                         path: file.path.clone(),
@@ -638,6 +654,127 @@ pub(super) fn message_blocks(draft: &PromptDraft) -> Result<Vec<MessageBlock>, R
         return Err(RuntimeError::EmptyPrompt);
     }
     Ok(blocks)
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct EncodedImageInfo {
+    media_type: &'static str,
+}
+
+fn encoded_image_info(
+    bytes: &[u8],
+    path: &Path,
+) -> Result<Option<EncodedImageInfo>, RuntimeError> {
+    let info = if bytes.starts_with(b"\x89PNG\r\n\x1a\n") {
+        Some(parse_png_dimensions(bytes))
+    } else if bytes.starts_with(&[0xff, 0xd8]) {
+        Some(parse_jpeg_dimensions(bytes))
+    } else if bytes.len() >= 12 && &bytes[..4] == b"RIFF" && &bytes[8..12] == b"WEBP" {
+        Some(parse_webp_dimensions(bytes))
+    } else {
+        None
+    };
+    let Some(info) = info else {
+        return Ok(None);
+    };
+    let (media_type, width, height) = info.ok_or_else(|| RuntimeError::InvalidImage {
+        path: path.to_path_buf(),
+    })?;
+    if bytes.len() > MAX_IMAGE_BYTES {
+        return Err(RuntimeError::FileTooLarge {
+            path: path.to_path_buf(),
+            bytes: bytes.len(),
+        });
+    }
+    let pixels = u64::from(width).saturating_mul(u64::from(height));
+    if width == 0 || height == 0 || pixels > MAX_IMAGE_PIXELS {
+        return Err(RuntimeError::ImagePixelLimit {
+            path: path.to_path_buf(),
+            pixels,
+            limit: MAX_IMAGE_PIXELS,
+        });
+    }
+    Ok(Some(EncodedImageInfo { media_type }))
+}
+
+fn parse_png_dimensions(bytes: &[u8]) -> Option<(&'static str, u32, u32)> {
+    if bytes.len() < 24 || &bytes[12..16] != b"IHDR" {
+        return None;
+    }
+    Some((
+        "image/png",
+        u32::from_be_bytes(bytes[16..20].try_into().ok()?),
+        u32::from_be_bytes(bytes[20..24].try_into().ok()?),
+    ))
+}
+
+fn parse_jpeg_dimensions(bytes: &[u8]) -> Option<(&'static str, u32, u32)> {
+    let mut cursor = 2_usize;
+    while cursor + 1 < bytes.len() {
+        while cursor < bytes.len() && bytes[cursor] != 0xff {
+            cursor = cursor.saturating_add(1);
+        }
+        while cursor < bytes.len() && bytes[cursor] == 0xff {
+            cursor = cursor.saturating_add(1);
+        }
+        let marker = *bytes.get(cursor)?;
+        cursor = cursor.saturating_add(1);
+        if matches!(marker, 0x01 | 0xd0..=0xd9) {
+            continue;
+        }
+        let length = usize::from(u16::from_be_bytes([
+            *bytes.get(cursor)?,
+            *bytes.get(cursor.saturating_add(1))?,
+        ]));
+        if length < 2 || cursor.saturating_add(length) > bytes.len() {
+            return None;
+        }
+        if matches!(
+            marker,
+            0xc0 | 0xc1 | 0xc2 | 0xc3 | 0xc5 | 0xc6 | 0xc7 | 0xc9 | 0xca | 0xcb | 0xcd
+                | 0xce | 0xcf
+        ) {
+            let height = u32::from(u16::from_be_bytes([
+                *bytes.get(cursor.saturating_add(3))?,
+                *bytes.get(cursor.saturating_add(4))?,
+            ]));
+            let width = u32::from(u16::from_be_bytes([
+                *bytes.get(cursor.saturating_add(5))?,
+                *bytes.get(cursor.saturating_add(6))?,
+            ]));
+            return Some(("image/jpeg", width, height));
+        }
+        cursor = cursor.saturating_add(length);
+    }
+    None
+}
+
+fn parse_webp_dimensions(bytes: &[u8]) -> Option<(&'static str, u32, u32)> {
+    let chunk = bytes.get(12..16)?;
+    let payload = bytes.get(20..)?;
+    match chunk {
+        b"VP8X" if payload.len() >= 10 => {
+            let width = 1 + u32::from(payload[4])
+                + (u32::from(payload[5]) << 8)
+                + (u32::from(payload[6]) << 16);
+            let height = 1 + u32::from(payload[7])
+                + (u32::from(payload[8]) << 8)
+                + (u32::from(payload[9]) << 16);
+            Some(("image/webp", width, height))
+        }
+        b"VP8 " if payload.len() >= 10 && payload[3..6] == [0x9d, 0x01, 0x2a] => {
+            let width = u32::from(u16::from_le_bytes([payload[6], payload[7]]) & 0x3fff);
+            let height = u32::from(u16::from_le_bytes([payload[8], payload[9]]) & 0x3fff);
+            Some(("image/webp", width, height))
+        }
+        b"VP8L" if payload.len() >= 5 && payload[0] == 0x2f => {
+            let bits = u32::from_le_bytes([payload[1], payload[2], payload[3], payload[4]]);
+            let width = (bits & 0x3fff) + 1;
+            let height = ((bits >> 14) & 0x3fff) + 1;
+            Some(("image/webp", width, height))
+        }
+        _ => None,
+    }
 }
 
 fn image_block(image: &ImageAttachment) -> Result<MessageBlock, RuntimeError> {
@@ -745,5 +882,27 @@ mod tests {
             objective_for(&attachments),
             "Use the 1 attached item(s) as context and complete the coding task."
         );
+    }
+
+    #[test]
+    fn encoded_jpeg_dimensions_are_detected() {
+        let bytes = vec![
+            0xff, 0xd8, 0xff, 0xc0, 0x00, 0x11, 0x08, 0x00, 0x02, 0x00, 0x03, 0x03, 0x01,
+            0x11, 0x00, 0x02, 0x11, 0x00, 0x03, 0x11, 0x00, 0xff, 0xd9,
+        ];
+        assert_eq!(
+            parse_jpeg_dimensions(&bytes),
+            Some(("image/jpeg", 3, 2))
+        );
+    }
+
+    #[test]
+    fn encoded_image_dimensions_are_bounded() {
+        let mut bytes = b"\x89PNG\r\n\x1a\n\0\0\0\rIHDR".to_vec();
+        bytes.extend_from_slice(&100_000_u32.to_be_bytes());
+        bytes.extend_from_slice(&100_000_u32.to_be_bytes());
+        let error = encoded_image_info(&bytes, Path::new("large.png"))
+            .expect_err("reject large image");
+        assert!(matches!(error, RuntimeError::ImagePixelLimit { .. }));
     }
 }
