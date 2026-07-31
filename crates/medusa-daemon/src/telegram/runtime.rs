@@ -1,11 +1,16 @@
 //! Supervised Telegram polling runtime over the authoritative daemon control plane.
 
 use std::{
+    collections::BTreeMap,
+    fs::{self, OpenOptions},
+    io::Write,
+    path::{Path, PathBuf},
     sync::atomic::{AtomicBool, Ordering},
     thread,
     time::Duration,
 };
 
+use serde::{Deserialize, Serialize};
 use time::OffsetDateTime;
 
 use super::{
@@ -20,8 +25,14 @@ use super::{
 const DEFAULT_TRANSIENT_BACKOFF: Duration = Duration::from_secs(2);
 const MAX_RETRY_BACKOFF: Duration = Duration::from_secs(60);
 const CANCELLATION_POLL_INTERVAL: Duration = Duration::from_millis(200);
+const MEDIA_GROUP_QUIET_PERIOD_SECONDS: i64 = 2;
+const MAX_PENDING_MEDIA_GROUPS: usize = 256;
+const MAX_MEDIA_GROUP_MESSAGES: usize = 10;
+const MEDIA_GROUP_SCHEMA_VERSION: u32 = 1;
 const MAX_IMAGE_DOWNLOAD_BYTES: u64 = 20 * 1024 * 1024;
 const MAX_TEXT_DOWNLOAD_BYTES: u64 = 4 * 1024 * 1024;
+const MEDIA_GROUP_STATE_ENV: &str = "MEDUSA_TELEGRAM_MEDIA_GROUP_STATE_PATH";
+const DEFAULT_MEDIA_GROUP_STATE_PATH: &str = ".medusa/telegram-media-groups.json";
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct TelegramPollingConfig {
@@ -47,10 +58,104 @@ impl TelegramPollingConfig {
     }
 }
 
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+struct PendingMediaGroup {
+    highest_update_id: i64,
+    updated_at_unix: i64,
+    messages: Vec<TelegramBotMessage>,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+struct PendingMediaGroupState {
+    schema_version: u32,
+    groups: BTreeMap<String, PendingMediaGroup>,
+}
+
+impl Default for PendingMediaGroupState {
+    fn default() -> Self {
+        Self {
+            schema_version: MEDIA_GROUP_SCHEMA_VERSION,
+            groups: BTreeMap::new(),
+        }
+    }
+}
+
+impl PendingMediaGroupState {
+    fn validate(&self) -> Result<(), TelegramRuntimeError> {
+        if self.schema_version != MEDIA_GROUP_SCHEMA_VERSION
+            || self.groups.len() > MAX_PENDING_MEDIA_GROUPS
+            || self.groups.values().any(|group| {
+                group.highest_update_id < 0
+                    || group.updated_at_unix < 0
+                    || group.messages.is_empty()
+                    || group.messages.len() > MAX_MEDIA_GROUP_MESSAGES
+                    || group
+                        .messages
+                        .iter()
+                        .any(|message| message.media_group_id.is_none())
+            })
+        {
+            return Err(TelegramRuntimeError::InvalidMediaGroupState);
+        }
+        Ok(())
+    }
+
+    fn insert(
+        &mut self,
+        update_id: i64,
+        message: TelegramBotMessage,
+        now: OffsetDateTime,
+    ) -> Result<(), TelegramRuntimeError> {
+        let key = media_group_key(&message).ok_or(TelegramRuntimeError::InvalidUpdate)?;
+        if !self.groups.contains_key(&key) && self.groups.len() >= MAX_PENDING_MEDIA_GROUPS {
+            return Err(TelegramRuntimeError::TooManyPendingMediaGroups);
+        }
+        let group = self.groups.entry(key).or_insert_with(|| PendingMediaGroup {
+            highest_update_id: update_id,
+            updated_at_unix: now.unix_timestamp(),
+            messages: Vec::new(),
+        });
+        if let Some(first) = group.messages.first()
+            && !same_media_group(Some(first), &message)
+        {
+            return Err(TelegramRuntimeError::InvalidUpdate);
+        }
+        if !group
+            .messages
+            .iter()
+            .any(|candidate| candidate.message_id == message.message_id)
+        {
+            if group.messages.len() >= MAX_MEDIA_GROUP_MESSAGES {
+                return Err(TelegramRuntimeError::MediaGroupTooLarge);
+            }
+            group.messages.push(message);
+            group.messages.sort_by_key(|candidate| candidate.message_id);
+        }
+        group.highest_update_id = group.highest_update_id.max(update_id);
+        group.updated_at_unix = now.unix_timestamp();
+        Ok(())
+    }
+
+    fn due_keys(&self, now: OffsetDateTime) -> Vec<String> {
+        self.groups
+            .iter()
+            .filter(|(_, group)| {
+                now.unix_timestamp().saturating_sub(group.updated_at_unix)
+                    >= MEDIA_GROUP_QUIET_PERIOD_SECONDS
+            })
+            .map(|(key, _)| key.clone())
+            .collect()
+    }
+}
+
 pub struct TelegramPollingRuntime {
     client: TelegramBotApiClient,
     service: TelegramSessionService,
     config: TelegramPollingConfig,
+    media_group_path: PathBuf,
+    pending_media_groups: PendingMediaGroupState,
 }
 
 impl TelegramPollingRuntime {
@@ -60,10 +165,16 @@ impl TelegramPollingRuntime {
         config: TelegramPollingConfig,
     ) -> Result<Self, TelegramRuntimeError> {
         config.validate()?;
+        let media_group_path = std::env::var_os(MEDIA_GROUP_STATE_ENV)
+            .map(PathBuf::from)
+            .unwrap_or_else(|| PathBuf::from(DEFAULT_MEDIA_GROUP_STATE_PATH));
+        let pending_media_groups = load_media_group_state(&media_group_path)?;
         Ok(Self {
             client,
             service,
             config,
+            media_group_path,
+            pending_media_groups,
         })
     }
 
@@ -78,9 +189,17 @@ impl TelegramPollingRuntime {
     }
 
     pub fn poll_once(&mut self) -> Result<Vec<TelegramServiceOutcome>, TelegramRuntimeError> {
+        let mut outcomes = Vec::new();
+        self.flush_due_media_groups(OffsetDateTime::now_utc(), &mut outcomes)?;
+
+        let timeout_seconds = if self.pending_media_groups.groups.is_empty() {
+            self.config.timeout_seconds
+        } else {
+            self.config.timeout_seconds.min(1)
+        };
         let updates = self.client.get_updates(
             self.service.next_update_offset(),
-            self.config.timeout_seconds,
+            timeout_seconds,
             self.config.limit,
         )?;
         let mut normalized = Vec::with_capacity(updates.len());
@@ -95,30 +214,18 @@ impl TelegramPollingRuntime {
             }
         }
 
-        let mut outcomes = Vec::new();
-        for unit in group_transport_updates(normalized) {
-            match unit {
-                TelegramPollingUnit::Messages {
-                    update_id,
-                    messages,
-                } => {
-                    let inbound = match self.inbound_batch(&messages) {
-                        Ok(inbound) => inbound,
-                        Err(error) if error.is_rejected_media() => {
-                            self.service.acknowledge_transport_update(update_id)?;
-                            continue;
-                        }
-                        Err(error) => return Err(error),
-                    };
-                    match self.service.process_message(update_id, inbound) {
-                        Ok(outcome) => outcomes.push(outcome),
-                        Err(error) if is_rejected_input(&error) => {
-                            self.service.acknowledge_transport_update(update_id)?;
-                        }
-                        Err(error) => return Err(error.into()),
-                    }
+        for update in normalized {
+            match update {
+                TelegramTransportUpdate::Message { update_id, message }
+                    if message.media_group_id.is_some() =>
+                {
+                    self.queue_media_group(update_id, message, OffsetDateTime::now_utc())?;
                 }
-                TelegramPollingUnit::Callback {
+                TelegramTransportUpdate::Message { update_id, message } => {
+                    self.flush_conversation_media_groups(&message, &mut outcomes)?;
+                    self.process_messages(update_id, &[message], &mut outcomes)?;
+                }
+                TelegramTransportUpdate::Callback {
                     update_id,
                     callback,
                 } => {
@@ -129,10 +236,7 @@ impl TelegramPollingRuntime {
                         &callback.data,
                         OffsetDateTime::now_utc(),
                     ) {
-                        Ok(_) => {
-                            self.client
-                                .answer_callback_query(&callback.query_id, None)?;
-                        }
+                        Ok(_) => self.client.answer_callback_query(&callback.query_id, None)?,
                         Err(error) if is_rejected_input(&error) => {
                             self.service.acknowledge_transport_update(update_id)?;
                             self.client.answer_callback_query(
@@ -143,14 +247,109 @@ impl TelegramPollingRuntime {
                         Err(error) => return Err(error.into()),
                     }
                 }
-                TelegramPollingUnit::Unsupported { update_id } => {
+                TelegramTransportUpdate::Unsupported { update_id } => {
                     self.service.acknowledge_transport_update(update_id)?;
                 }
             }
         }
+
+        self.flush_due_media_groups(OffsetDateTime::now_utc(), &mut outcomes)?;
         self.service
             .deliver_pending(&self.client, OffsetDateTime::now_utc())?;
         Ok(outcomes)
+    }
+
+    fn queue_media_group(
+        &mut self,
+        update_id: i64,
+        message: TelegramBotMessage,
+        now: OffsetDateTime,
+    ) -> Result<(), TelegramRuntimeError> {
+        let previous = self.pending_media_groups.clone();
+        self.pending_media_groups.insert(update_id, message, now)?;
+        if let Err(error) = persist_media_group_state(
+            &self.media_group_path,
+            &self.pending_media_groups,
+        ) {
+            self.pending_media_groups = previous;
+            return Err(error);
+        }
+        self.service.acknowledge_transport_update(update_id)?;
+        Ok(())
+    }
+
+    fn flush_due_media_groups(
+        &mut self,
+        now: OffsetDateTime,
+        outcomes: &mut Vec<TelegramServiceOutcome>,
+    ) -> Result<(), TelegramRuntimeError> {
+        for key in self.pending_media_groups.due_keys(now) {
+            self.flush_media_group(&key, outcomes)?;
+        }
+        Ok(())
+    }
+
+    fn flush_conversation_media_groups(
+        &mut self,
+        next: &TelegramBotMessage,
+        outcomes: &mut Vec<TelegramServiceOutcome>,
+    ) -> Result<(), TelegramRuntimeError> {
+        let keys = self
+            .pending_media_groups
+            .groups
+            .iter()
+            .filter(|(_, group)| group.messages.first().is_some_and(|first| {
+                first.chat.id == next.chat.id
+                    && first.message_thread_id == next.message_thread_id
+                    && first.from.as_ref().map(|user| user.id)
+                        == next.from.as_ref().map(|user| user.id)
+            }))
+            .map(|(key, _)| key.clone())
+            .collect::<Vec<_>>();
+        for key in keys {
+            self.flush_media_group(&key, outcomes)?;
+        }
+        Ok(())
+    }
+
+    fn flush_media_group(
+        &mut self,
+        key: &str,
+        outcomes: &mut Vec<TelegramServiceOutcome>,
+    ) -> Result<(), TelegramRuntimeError> {
+        let Some(group) = self.pending_media_groups.groups.get(key).cloned() else {
+            return Ok(());
+        };
+        match self.process_messages(group.highest_update_id, &group.messages, outcomes) {
+            Ok(()) => {
+                self.pending_media_groups.groups.remove(key);
+                persist_media_group_state(&self.media_group_path, &self.pending_media_groups)?;
+                Ok(())
+            }
+            Err(error) if error.is_rejected_media() => {
+                self.pending_media_groups.groups.remove(key);
+                persist_media_group_state(&self.media_group_path, &self.pending_media_groups)?;
+                Ok(())
+            }
+            Err(error) => Err(error),
+        }
+    }
+
+    fn process_messages(
+        &mut self,
+        update_id: i64,
+        messages: &[TelegramBotMessage],
+        outcomes: &mut Vec<TelegramServiceOutcome>,
+    ) -> Result<(), TelegramRuntimeError> {
+        let inbound = self.inbound_batch(messages)?;
+        match self.service.process_message(update_id, inbound) {
+            Ok(outcome) => outcomes.push(outcome),
+            Err(error) if is_rejected_input(&error) => {
+                self.service.acknowledge_transport_update(update_id)?;
+            }
+            Err(error) => return Err(error.into()),
+        }
+        Ok(())
     }
 
     fn inbound_batch(
@@ -248,54 +447,56 @@ impl TelegramPollingRuntime {
     }
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
-enum TelegramPollingUnit {
-    Messages {
-        update_id: i64,
-        messages: Vec<TelegramBotMessage>,
-    },
-    Callback {
-        update_id: i64,
-        callback: TelegramInboundCallback,
-    },
-    Unsupported {
-        update_id: i64,
-    },
+fn load_media_group_state(path: &Path) -> Result<PendingMediaGroupState, TelegramRuntimeError> {
+    if !path.is_file() {
+        return Ok(PendingMediaGroupState::default());
+    }
+    let bytes = fs::read(path)?;
+    let state: PendingMediaGroupState = serde_json::from_slice(&bytes)?;
+    state.validate()?;
+    Ok(state)
 }
 
-fn group_transport_updates(updates: Vec<TelegramTransportUpdate>) -> Vec<TelegramPollingUnit> {
-    let mut units = Vec::with_capacity(updates.len());
-    for update in updates {
-        match update {
-            TelegramTransportUpdate::Message { update_id, message } => {
-                if let Some(TelegramPollingUnit::Messages {
-                    update_id: current_update_id,
-                    messages,
-                }) = units.last_mut()
-                    && same_media_group(messages.last(), &message)
-                {
-                    *current_update_id = (*current_update_id).max(update_id);
-                    messages.push(message);
-                    continue;
-                }
-                units.push(TelegramPollingUnit::Messages {
-                    update_id,
-                    messages: vec![message],
-                });
-            }
-            TelegramTransportUpdate::Callback {
-                update_id,
-                callback,
-            } => units.push(TelegramPollingUnit::Callback {
-                update_id,
-                callback,
-            }),
-            TelegramTransportUpdate::Unsupported { update_id } => {
-                units.push(TelegramPollingUnit::Unsupported { update_id });
-            }
+fn persist_media_group_state(
+    path: &Path,
+    state: &PendingMediaGroupState,
+) -> Result<(), TelegramRuntimeError> {
+    state.validate()?;
+    if state.groups.is_empty() {
+        if path.is_file() {
+            fs::remove_file(path)?;
         }
+        return Ok(());
     }
-    units
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent)?;
+    }
+    let temporary = path.with_extension("tmp");
+    let bytes = serde_json::to_vec_pretty(state)?;
+    let mut file = OpenOptions::new()
+        .create(true)
+        .truncate(true)
+        .write(true)
+        .open(&temporary)?;
+    file.write_all(&bytes)?;
+    file.sync_all()?;
+    if path.is_file() {
+        fs::remove_file(path)?;
+    }
+    fs::rename(temporary, path)?;
+    Ok(())
+}
+
+fn media_group_key(message: &TelegramBotMessage) -> Option<String> {
+    let group_id = message.media_group_id.as_deref()?;
+    let user_id = message.from.as_ref()?.id;
+    Some(format!(
+        "{}:{}:{}:{}",
+        message.chat.id,
+        message.message_thread_id.unwrap_or_default(),
+        user_id,
+        group_id
+    ))
 }
 
 fn same_media_group(current: Option<&TelegramBotMessage>, next: &TelegramBotMessage) -> bool {
@@ -547,8 +748,18 @@ pub enum TelegramRuntimeError {
     InvalidConfiguration,
     #[error("Telegram transport update is invalid")]
     InvalidUpdate,
+    #[error("Telegram media-group state is invalid")]
+    InvalidMediaGroupState,
+    #[error("too many pending Telegram media groups")]
+    TooManyPendingMediaGroups,
+    #[error("Telegram media group exceeds the supported message count")]
+    MediaGroupTooLarge,
     #[error("Telegram media was rejected: {0}")]
     RejectedMedia(String),
+    #[error(transparent)]
+    Io(#[from] std::io::Error),
+    #[error(transparent)]
+    Json(#[from] serde_json::Error),
     #[error(transparent)]
     BotApi(#[from] TelegramBotApiError),
     #[error(transparent)]
@@ -557,7 +768,14 @@ pub enum TelegramRuntimeError {
 
 impl TelegramRuntimeError {
     fn is_rejected_media(&self) -> bool {
-        matches!(self, Self::InvalidUpdate | Self::RejectedMedia(_))
+        matches!(
+            self,
+            Self::InvalidUpdate
+                | Self::InvalidMediaGroupState
+                | Self::TooManyPendingMediaGroups
+                | Self::MediaGroupTooLarge
+                | Self::RejectedMedia(_)
+        )
     }
 
     #[must_use]
@@ -623,6 +841,20 @@ mod tests {
         }
     }
 
+    fn album_message(message_id: i64, text: &str) -> TelegramBotMessage {
+        let mut source = message(TelegramBotChatKind::Private, text);
+        source.message_id = message_id;
+        source.media_group_id = Some("album-1".to_owned());
+        source.photo.push(TelegramPhotoSize {
+            file_id: format!("file-{message_id}"),
+            file_unique_id: format!("unique-{message_id}"),
+            width: 10,
+            height: 10,
+            file_size: Some(100),
+        });
+        source
+    }
+
     #[test]
     fn private_messages_are_normalized_without_requiring_a_mention() {
         let source = message(TelegramBotChatKind::Private, "status");
@@ -663,50 +895,54 @@ mod tests {
     }
 
     #[test]
-    fn contiguous_album_updates_are_batched_once() {
-        let mut first = message(TelegramBotChatKind::Private, "album caption");
-        first.media_group_id = Some("album-1".to_owned());
-        first.photo.push(TelegramPhotoSize {
-            file_id: "file-1".to_owned(),
-            file_unique_id: "unique-1".to_owned(),
-            width: 10,
-            height: 10,
-            file_size: Some(100),
-        });
-        let mut second = message(TelegramBotChatKind::Private, "");
-        second.message_id = 8;
-        second.media_group_id = Some("album-1".to_owned());
-        second.photo.push(TelegramPhotoSize {
-            file_id: "file-2".to_owned(),
-            file_unique_id: "unique-2".to_owned(),
-            width: 20,
-            height: 20,
-            file_size: Some(200),
-        });
-        let grouped = group_transport_updates(vec![
-            TelegramTransportUpdate::Message {
-                update_id: 11,
-                message: first,
-            },
-            TelegramTransportUpdate::Message {
-                update_id: 12,
-                message: second,
-            },
-        ]);
-        assert!(matches!(
-            grouped.as_slice(),
-            [TelegramPollingUnit::Messages { update_id: 12, messages }] if messages.len() == 2
+    fn media_group_members_coalesce_across_insert_calls() {
+        let mut state = PendingMediaGroupState::default();
+        let now = OffsetDateTime::from_unix_timestamp(1_700_000_000).expect("timestamp");
+        state
+            .insert(11, album_message(7, "album caption"), now)
+            .expect("first");
+        state
+            .insert(12, album_message(8, ""), now + Duration::from_secs(1))
+            .expect("second");
+        let group = state.groups.values().next().expect("group");
+        assert_eq!(group.highest_update_id, 12);
+        assert_eq!(group.messages.len(), 2);
+        assert!(state.due_keys(now + Duration::from_secs(2)).is_empty());
+        assert_eq!(state.due_keys(now + Duration::from_secs(3)).len(), 1);
+    }
+
+    #[test]
+    fn duplicate_redelivery_does_not_duplicate_album_members() {
+        let mut state = PendingMediaGroupState::default();
+        let now = OffsetDateTime::from_unix_timestamp(1_700_000_000).expect("timestamp");
+        let source = album_message(7, "album caption");
+        state.insert(11, source.clone(), now).expect("first");
+        state.insert(11, source, now).expect("redelivery");
+        assert_eq!(state.groups.values().next().expect("group").messages.len(), 1);
+    }
+
+    #[test]
+    fn pending_media_groups_round_trip_durably() {
+        let root = std::env::temp_dir().join(format!(
+            "medusa-telegram-media-groups-{}",
+            std::process::id()
         ));
+        let path = root.join("pending.json");
+        let _ = fs::remove_dir_all(&root);
+        let mut state = PendingMediaGroupState::default();
+        let now = OffsetDateTime::from_unix_timestamp(1_700_000_000).expect("timestamp");
+        state
+            .insert(11, album_message(7, "album caption"), now)
+            .expect("insert");
+        persist_media_group_state(&path, &state).expect("persist");
+        assert_eq!(load_media_group_state(&path).expect("load"), state);
+        let _ = fs::remove_dir_all(root);
     }
 
     #[test]
     fn attachment_batch_preserves_caption_and_ids() {
-        let mut first = message(TelegramBotChatKind::Private, "inspect these");
-        first.media_group_id = Some("album-1".to_owned());
-        let mut second = message(TelegramBotChatKind::Private, "");
-        second.media_group_id = Some("album-1".to_owned());
         let inbound = normalize_message_batch(
-            &[first, second],
+            &[album_message(7, "inspect these"), album_message(8, "")],
             "medusa_bot",
             vec!["artifact-1".to_owned(), "artifact-2".to_owned()],
         )
