@@ -22,23 +22,25 @@ jobs:
           toolchain: 1.88.0
           components: rustfmt
       - name: Normalize callback result type
-        shell: python
+        shell: bash
         run: |
+          python - <<'PY'
           from pathlib import Path
           path = Path("crates/medusa-daemon/src/telegram/runtime.rs")
           source = path.read_text()
           old = '''                        Ok(_) => self
-                            .client
-                            .answer_callback_query(&callback.query_id, None)?,
-'''
+                              .client
+                              .answer_callback_query(&callback.query_id, None)?,
+          '''
           new = '''                        Ok(_) => {
-                            self.client
-                                .answer_callback_query(&callback.query_id, None)?;
-                        }
-'''
+                              self.client
+                                  .answer_callback_query(&callback.query_id, None)?;
+                          }
+          '''
           if source.count(old) != 1:
               raise SystemExit("expected callback branch not found exactly once")
           path.write_text(source.replace(old, new))
+          PY
       - run: cargo fmt --all
       - name: Commit source fix
         run: |
