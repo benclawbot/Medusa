@@ -609,6 +609,7 @@ fn record_controller_event(
     if checkpoint_boundary {
         let checkpoint = crate::checkpoint_store::materialize(repo, session_id)?;
         let checkpoint_id = checkpoint.checkpoint.fingerprint;
+        crate::recovery_projection::refresh(repo, session_id)?;
         let mut session = medusa_agent::session_browser::load_session(repo, session_id)
             .map_err(RuntimeError::agent)?;
         let already_recorded = session.events.last().is_some_and(|event| {
@@ -1844,6 +1845,7 @@ fn execute_slash_command_with_submission(
     Ok(None)
 }
 
+mod recovery_projection;
 mod recovery_tui;
 mod tool_policy;
 
