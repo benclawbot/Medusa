@@ -1,5 +1,7 @@
 //! Telegram transport policy, command mapping, callback safety, deterministic rendering, and supervised polling.
 //!
+//! Canonical journal events are projected into renderer actions and cursor-acknowledged only after
+//! durable Bot API delivery state is persisted.
 //! The gateway remains a frontend adapter to the authoritative live-session broker. It does not own
 //! an agent, repository policy, or approval execution path.
 
