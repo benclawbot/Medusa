@@ -60,6 +60,7 @@ export interface RuntimeStartResponse {
 }
 
 export interface SharedConfiguration {
+  revision: number;
   activeProfile: string;
   connection: string;
   provider: string;
@@ -69,6 +70,14 @@ export interface SharedConfiguration {
   baseUrl?: string;
   configured: boolean;
   credentialConfigured: boolean;
+}
+
+export interface ConfigurationChanged {
+  revision: number;
+  activeProfile: string;
+  changedKeys: string[];
+  origin: "cli" | "tui" | "desktop" | "system" | string;
+  applyTiming: "immediate" | "next-session" | "restart-required" | string;
 }
 
 export interface SessionSummary {
@@ -202,6 +211,7 @@ export type RuntimeEvent =
       planMode: boolean;
       credentialConfigured: boolean;
     }
+  | ({ type: "configurationChanged" } & ConfigurationChanged)
   | { type: "notice"; title: string; details: string[] }
   | { type: "newSession" }
   | { type: "compacted"; message: string }
@@ -237,6 +247,7 @@ export interface ModelConfiguration {
   provider: string;
   model: string;
   effort: Effort;
+  expectedRevision: number;
   apiKey?: string;
 }
 
@@ -435,8 +446,11 @@ export async function pollRuntime(runtimeId: string): Promise<RuntimeEvent[]> {
 export async function configureRuntime(
   runtimeId: string,
   configuration: ModelConfiguration,
-): Promise<void> {
-  await invoke("runtime_configure_model", { runtimeId, configuration });
+): Promise<ConfigurationChanged | undefined> {
+  return invoke<ConfigurationChanged | undefined>("runtime_configure_model", {
+    runtimeId,
+    configuration,
+  });
 }
 
 export async function performRecoveryAction(
