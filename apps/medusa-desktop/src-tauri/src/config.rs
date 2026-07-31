@@ -21,6 +21,7 @@ pub struct DesktopSharedConfiguration {
     pub credential_configured: bool,
 }
 
+/// Validated active-profile candidate; persistence is deferred until runtime acceptance.
 pub(crate) struct PreparedProviderProfile {
     store: ProviderProfileStore,
     profile: ProviderProfile,
