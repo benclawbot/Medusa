@@ -296,6 +296,7 @@ class Harness:
         if not binary.is_file():
             raise HarnessError(f"built Medusa binary not found at {binary}", "environment")
         return binary
+
     def run_agent(self) -> None:
         self.set_phase("autonomous-session")
         objective = (
