@@ -330,7 +330,9 @@ mod tests {
         }
     }
 
-    fn owner(issued: VecDeque<Result<SessionCredential, String>>) -> SessionOwner<FakeIssuer, FakeFactory, FakeWire> {
+    fn owner(
+        issued: VecDeque<Result<SessionCredential, String>>,
+    ) -> SessionOwner<FakeIssuer, FakeFactory, FakeWire> {
         SessionOwner::new(
             FakeIssuer(issued),
             FakeFactory,
@@ -346,7 +348,9 @@ mod tests {
         let mut owner = owner(VecDeque::from([Err("OAuth unavailable".to_owned())]));
         assert_eq!(
             owner.activate(100),
-            Err(SessionOwnerError::Credential("OAuth unavailable".to_owned()))
+            Err(SessionOwnerError::Credential(
+                "OAuth unavailable".to_owned()
+            ))
         );
         assert!(!owner.is_established());
     }
