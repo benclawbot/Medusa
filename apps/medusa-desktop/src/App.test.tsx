@@ -1,7 +1,15 @@
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { App } from "./App";
-import { commandSuggestions, loadSharedConfiguration, pollRuntime, runRuntimeCommand, startRuntime } from "./runtime";
+import {
+  closeRuntime,
+  commandSuggestions,
+  configureRuntime,
+  loadSharedConfiguration,
+  pollRuntime,
+  runRuntimeCommand,
+  startRuntime,
+} from "./runtime";
 
 vi.mock("@tauri-apps/plugin-dialog", () => ({ open: vi.fn() }));
 vi.mock("./runtime", async () => {
@@ -42,6 +50,8 @@ beforeEach(() => {
     credentialConfigured: false,
   });
   vi.mocked(startRuntime).mockReset();
+  vi.mocked(closeRuntime).mockReset().mockResolvedValue(undefined);
+  vi.mocked(configureRuntime).mockReset().mockResolvedValue(undefined);
   vi.mocked(commandSuggestions).mockReset().mockResolvedValue([]);
   vi.mocked(runRuntimeCommand).mockReset();
   vi.mocked(pollRuntime).mockReset().mockResolvedValue([]);
@@ -59,6 +69,18 @@ it("starts a general chat without requiring a project", async () => {
   expect(screen.getByRole("heading", { name: "General chat" })).toBeInTheDocument();
   expect(screen.getByRole("textbox")).toBeEnabled();
   expect(screen.getByText("Medusa policy remains authoritative")).toBeInTheDocument();
+});
+
+it("closes a newly started runtime when shared configuration is rejected", async () => {
+  vi.mocked(startRuntime).mockResolvedValue({ runtimeId: "runtime-orphan", repo: "" });
+  vi.mocked(configureRuntime).mockRejectedValueOnce(new Error("configuration rejected"));
+
+  render(<App />);
+
+  await waitFor(() =>
+    expect(closeRuntime).toHaveBeenCalledWith("runtime-orphan"),
+  );
+  expect(screen.getByText(/configuration rejected/i)).toBeInTheDocument();
 });
 
 it("presents API keys as persistent OS-managed credentials", async () => {

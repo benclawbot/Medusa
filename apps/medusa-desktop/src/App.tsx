@@ -155,6 +155,25 @@ function ConversationText({ text }: { text: string }) {
   return <>{parts}</>;
 }
 
+async function configureStartedRuntime(
+  started: Awaited<ReturnType<typeof startRuntime>>,
+  configuration: { provider: string; model: string; effort: Effort },
+): Promise<Awaited<ReturnType<typeof startRuntime>>> {
+  try {
+    await configureRuntime(started.runtimeId, configuration);
+    return started;
+  } catch (cause) {
+    try {
+      await closeRuntime(started.runtimeId);
+    } catch (cleanupCause) {
+      throw new Error(
+        `Runtime configuration failed (${String(cause)}); cleanup also failed (${String(cleanupCause)}).`,
+      );
+    }
+    throw cause;
+  }
+}
+
 export function App() {
   const [runtimeId, setRuntimeId] = useState<string>();
   const [repo, setRepo] = useState("");
@@ -358,12 +377,11 @@ export function App() {
         window.localStorage.removeItem("medusa.desktop.repo");
         started = await startRuntime();
       }
-      await configureRuntime(started.runtimeId, {
+      return configureStartedRuntime(started, {
         provider: configuration.provider,
         model: configuration.model,
         effort: configuration.effort,
       });
-      return started;
     };
     void start()
       .then((started) => {
@@ -390,8 +408,11 @@ export function App() {
     const selected = await open({ directory: true, multiple: false, title: "Open a Medusa project" });
     if (typeof selected !== "string") return;
     try {
-      const started = await startRuntime(selected);
-      await configureRuntime(started.runtimeId, { provider, model, effort });
+      const started = await configureStartedRuntime(await startRuntime(selected), {
+        provider,
+        model,
+        effort,
+      });
       if (runtimeId) await closeRuntime(runtimeId);
       setRuntimeId(started.runtimeId);
       setRepo(started.repo);
@@ -408,8 +429,11 @@ export function App() {
 
   const openGeneralChat = async () => {
     try {
-      const started = await startRuntime();
-      await configureRuntime(started.runtimeId, { provider, model, effort });
+      const started = await configureStartedRuntime(await startRuntime(), {
+        provider,
+        model,
+        effort,
+      });
       if (runtimeId) await closeRuntime(runtimeId);
       setRuntimeId(started.runtimeId);
       setRepo("");
