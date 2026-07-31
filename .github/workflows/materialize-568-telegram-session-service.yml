@@ -1,0 +1,49 @@
+name: Materialize Telegram session service
+
+on:
+  pull_request:
+    branches:
+      - agent/569-frontend-control-plane
+    paths:
+      - crates/medusa-daemon/src/telegram/service.rs
+      - validation/materialize_568_telegram_session_service.py
+      - .github/workflows/materialize-568-telegram-session-service.yml
+
+permissions:
+  contents: write
+
+concurrency:
+  group: materialize-568-telegram-service-${{ github.event.pull_request.number }}
+  cancel-in-progress: false
+
+jobs:
+  materialize:
+    if: github.event.pull_request.head.repo.full_name == github.repository && github.event.pull_request.head.ref == 'agent/568-telegram-session-service'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.2.2
+        with:
+          ref: ${{ github.head_ref }}
+          token: ${{ secrets.GITHUB_TOKEN }}
+      - uses: dtolnay/rust-toolchain@39b0b3842c7e8bbf6904c0bfc3d9006fdd4dc4e0 # stable
+      - name: Materialize reviewed Telegram service wiring
+        run: python3 validation/materialize_568_telegram_session_service.py
+      - name: Format and validate Telegram session service
+        run: |
+          cargo fmt --all
+          cargo fmt --all -- --check
+          cargo test -p medusa-daemon telegram::service
+          cargo test -p medusa-daemon frontend_control
+          cargo test -p medusa-daemon live_session
+          cargo test -p medusa-daemon telegram::command
+          cargo clippy -p medusa-daemon -p medusa-runtime --all-targets --all-features -- -D warnings
+      - name: Commit source-only result
+        run: |
+          git rm .github/workflows/materialize-568-telegram-session-service.yml
+          git rm validation/materialize_568_telegram_session_service.py
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add crates/medusa-daemon/src/telegram/mod.rs
+          git add crates/medusa-daemon/src/telegram/service.rs
+          git commit -m "Add durable Telegram session service"
+          git push origin HEAD:${{ github.head_ref }}
