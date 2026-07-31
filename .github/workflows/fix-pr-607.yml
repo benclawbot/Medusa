@@ -26,20 +26,29 @@ jobs:
         run: |
           python - <<'PY'
           from pathlib import Path
+          import re
+
           path = Path("crates/medusa-daemon/src/telegram/runtime.rs")
           source = path.read_text()
-          old = '''                        Ok(_) => self
-                              .client
-                              .answer_callback_query(&callback.query_id, None)?,
-          '''
-          new = '''                        Ok(_) => {
-                              self.client
-                                  .answer_callback_query(&callback.query_id, None)?;
-                          }
-          '''
-          if source.count(old) != 1:
-              raise SystemExit("expected callback branch not found exactly once")
-          path.write_text(source.replace(old, new))
+          pattern = re.compile(
+              r'(?m)^(?P<indent>\s*)Ok\(_\) => self\n'
+              r'(?P=indent)    \.client\n'
+              r'(?P=indent)    \.answer_callback_query\(&callback\.query_id, None\)\?,\n'
+          )
+
+          def replace(match: re.Match[str]) -> str:
+              indent = match.group("indent")
+              return (
+                  f"{indent}Ok(_) => {{\n"
+                  f"{indent}    self.client\n"
+                  f"{indent}        .answer_callback_query(&callback.query_id, None)?;\n"
+                  f"{indent}}}\n"
+              )
+
+          updated, count = pattern.subn(replace, source)
+          if count != 1:
+              raise SystemExit(f"expected one callback branch, found {count}")
+          path.write_text(updated)
           PY
       - run: cargo fmt --all
       - name: Commit source fix
