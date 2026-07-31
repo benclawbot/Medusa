@@ -117,9 +117,8 @@ impl TelegramServiceState {
             TELEGRAM_SERVICE_SCHEMA_VERSION => Ok(self),
             LEGACY_TELEGRAM_SERVICE_SCHEMA_VERSION => {
                 for binding in self.bindings.values_mut() {
-                    binding.delivered_cursor = binding
-                        .delivered_cursor
-                        .max(binding.acknowledged_cursor);
+                    binding.delivered_cursor =
+                        binding.delivered_cursor.max(binding.acknowledged_cursor);
                     if binding.chat_kind == TelegramChatKind::Private && binding.key.chat_id < 0 {
                         binding.chat_kind = TelegramChatKind::Supergroup;
                     }
@@ -383,9 +382,7 @@ impl TelegramSessionService {
             .bindings
             .get_mut(&binding.key.stable_id())
             .ok_or(TelegramSessionServiceError::BindingNotFound)?;
-        entry.delivered_cursor = entry
-            .delivered_cursor
-            .max(attachment.acknowledged_cursor);
+        entry.delivered_cursor = entry.delivered_cursor.max(attachment.acknowledged_cursor);
         entry.acknowledged_cursor = attachment.acknowledged_cursor;
         if let Err(error) = self.persist() {
             self.state = previous_state;
@@ -951,10 +948,9 @@ mod tests {
         service
             .acknowledge_transport_update(8)
             .expect("persist migrated state");
-        let persisted: serde_json::Value = serde_json::from_slice(
-            &std::fs::read(&state_path).expect("read migrated state"),
-        )
-        .expect("parse migrated state");
+        let persisted: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(&state_path).expect("read migrated state"))
+                .expect("parse migrated state");
         assert_eq!(
             persisted["schema_version"],
             serde_json::json!(TELEGRAM_SERVICE_SCHEMA_VERSION)
