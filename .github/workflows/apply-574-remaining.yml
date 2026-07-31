@@ -56,34 +56,19 @@ jobs:
       - name: Focused Rust Clippy
         run: cargo clippy -p medusa-config -p medusa-runtime -p medusa-cli --all-targets --all-features --locked -- -D warnings
       - name: Desktop Rust tests
-        id: desktop_rust
-        shell: bash
-        run: |
-          set +e
-          cargo test --manifest-path apps/medusa-desktop/src-tauri/Cargo.toml --lib --locked -- --nocapture 2>&1 | tee /tmp/desktop-rust.log
-          status=${PIPESTATUS[0]}
-          exit "$status"
-      - name: Upload desktop Rust diagnostics
-        if: failure() && steps.desktop_rust.outcome == 'failure'
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
-        with:
-          name: desktop-rust-diagnostics
-          path: /tmp/desktop-rust.log
-          if-no-files-found: error
-          retention-days: 1
+        run: cargo test --manifest-path apps/medusa-desktop/src-tauri/Cargo.toml --lib --locked -- --nocapture
       - name: Desktop frontend checks
         working-directory: apps/medusa-desktop
         run: |
           npm ci
           npm run typecheck
           npm test
-      - name: Commit implementation only
+      - name: Publish validated implementation
         shell: bash
         run: |
           set -euo pipefail
-          git restore Cargo.lock apps/medusa-desktop/src-tauri/Cargo.lock
-          git rm .github/patches/574.remaining.*
-          git rm .github/workflows/apply-574-remaining.yml
+          git restore --source=HEAD -- Cargo.lock || true
+          git restore --source=HEAD -- apps/medusa-desktop/src-tauri/Cargo.lock || true
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add -A
