@@ -246,7 +246,6 @@ fn is_rejected_input(error: &TelegramSessionServiceError) -> bool {
                 | TelegramGatewayError::CallbackIdentityMismatch
                 | TelegramGatewayError::CallbackExpired
                 | TelegramGatewayError::CallbackAlreadyResolved
-                | TelegramGatewayError::Protocol(_)
         )
     )
 }
@@ -367,6 +366,19 @@ mod tests {
             inbound_message(source, "medusa_bot"),
             Err(TelegramRuntimeError::InvalidUpdate)
         ));
+    }
+
+    #[test]
+    fn protocol_failures_are_not_acknowledged_as_rejected_input() {
+        let unauthorized = TelegramSessionServiceError::Gateway(
+            TelegramGatewayError::Unauthorized,
+        );
+        assert!(is_rejected_input(&unauthorized));
+
+        let protocol = TelegramSessionServiceError::Gateway(
+            TelegramGatewayError::Protocol("invalid envelope".to_owned()),
+        );
+        assert!(!is_rejected_input(&protocol));
     }
 
     #[test]
