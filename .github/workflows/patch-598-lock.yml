@@ -1,0 +1,63 @@
+name: Patch live dogfood lock refresh
+
+on:
+  push:
+    branches:
+      - agent/555-cross-platform-dogfood
+
+permissions:
+  contents: write
+
+concurrency:
+  group: patch-598-lock
+  cancel-in-progress: false
+
+jobs:
+  patch:
+    if: github.actor != 'github-actions[bot]' || contains(github.event.head_commit.message, 'Temporarily patch')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          ref: agent/555-cross-platform-dogfood
+          token: ${{ secrets.GITHUB_TOKEN }}
+      - name: Apply and validate lock refresh
+        shell: python
+        run: |
+          from pathlib import Path
+          path = Path('scripts/live-coding-e2e.py')
+          text = path.read_text(encoding='utf-8')
+          old = '''        self.set_phase("build-medusa")
+          run_checked(
+              ["cargo", "build", "--release", "--locked", "--bin", "medusa"],
+              cwd=self.repo_root,
+          )
+          '''
+          old = old.replace('          run_checked', '        run_checked').replace('              [', '            [').replace('              cwd', '            cwd').replace('          )', '        )')
+          new = '''        self.set_phase("refresh-dependency-lock")
+          run_checked(["cargo", "generate-lockfile"], cwd=self.repo_root)
+
+          self.set_phase("build-medusa")
+          run_checked(
+              ["cargo", "build", "--release", "--locked", "--bin", "medusa"],
+              cwd=self.repo_root,
+          )
+          '''
+          new = new.replace('          run_checked', '        run_checked').replace('          self.set_phase', '        self.set_phase').replace('              [', '            [').replace('              cwd', '            cwd').replace('          )', '        )')
+          if new in text:
+              raise SystemExit(0)
+          if old not in text:
+              raise SystemExit('expected build block not found')
+          path.write_text(text.replace(old, new, 1), encoding='utf-8')
+      - name: Validate contract
+        run: |
+          python -m py_compile scripts/live-coding-e2e.py scripts/live-dogfood-report.py scripts/test-live-dogfood.py
+          python scripts/test-live-dogfood.py
+      - name: Commit production patch
+        run: |
+          if git diff --quiet -- scripts/live-coding-e2e.py; then exit 0; fi
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add scripts/live-coding-e2e.py
+          git commit -m "Refresh merged dependency lock before live build"
+          git push origin HEAD:agent/555-cross-platform-dogfood
