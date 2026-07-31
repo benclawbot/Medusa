@@ -37,8 +37,11 @@ jobs:
         run: cargo fmt --all
       - name: Check whitespace
         run: git diff --check
-      - name: Refresh merged dependency graph
-        run: cargo generate-lockfile
+      - name: Refresh merged dependency graphs
+        shell: bash
+        run: |
+          cargo generate-lockfile
+          cargo generate-lockfile --manifest-path apps/medusa-desktop/src-tauri/Cargo.toml
       - name: Focused Rust tests
         run: cargo test -p medusa-config -p medusa-runtime -p medusa-cli --all-features --locked -- --nocapture
       - name: Focused Rust Clippy
@@ -55,7 +58,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          git restore Cargo.lock
+          git restore Cargo.lock apps/medusa-desktop/src-tauri/Cargo.lock
           git rm .github/patches/574.remaining.*
           git rm .github/workflows/apply-574-remaining.yml
           git config user.name "github-actions[bot]"
