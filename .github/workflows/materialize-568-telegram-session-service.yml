@@ -1,4 +1,3 @@
-# Revalidate after frontend control source materialization.
 name: Materialize Telegram session service
 
 on:
@@ -26,6 +25,13 @@ jobs:
         with:
           ref: ${{ github.head_ref }}
           token: ${{ secrets.GITHUB_TOKEN }}
+          fetch-depth: 0
+      - name: Reconcile validated control-plane base
+        run: |
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git fetch origin "${{ github.base_ref }}"
+          git merge --no-edit "origin/${{ github.base_ref }}"
       - uses: dtolnay/rust-toolchain@39b0b3842c7e8bbf6904c0bfc3d9006fdd4dc4e0 # stable
       - name: Materialize reviewed Telegram service wiring
         run: python3 validation/materialize_568_telegram_session_service.py
