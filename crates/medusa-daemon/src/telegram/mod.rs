@@ -9,6 +9,7 @@ mod command;
 mod config;
 mod format;
 mod render;
+mod service;
 
 use medusa_protocol::frontend::FrontendCommandEnvelope;
 use serde::{Deserialize, Serialize};
@@ -25,6 +26,10 @@ pub use format::{normalize_markdown_tables, split_telegram_text, telegram_markdo
 pub use render::{
     TelegramAction, TelegramButtonIntent, TelegramMessageSlot, TelegramParseMode, TelegramReaction,
     TelegramRenderButton, TelegramRenderer,
+};
+pub use service::{
+    TelegramBindingKey, TelegramServiceOutcome, TelegramSessionBinding, TelegramSessionService,
+    TelegramSessionServiceError,
 };
 
 use callback::CallbackStore;

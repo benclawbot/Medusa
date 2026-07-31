@@ -22,8 +22,7 @@ use crate::{
 
 use super::{
     TelegramGateway, TelegramGatewayError, TelegramIdentity, TelegramInboundAction,
-    TelegramInboundMessage, TelegramVoiceMode, ToolProgressMode,
-    bot_api::TelegramUpdateCursor,
+    TelegramInboundMessage, TelegramVoiceMode, ToolProgressMode, bot_api::TelegramUpdateCursor,
 };
 
 const TELEGRAM_SERVICE_SCHEMA_VERSION: u32 = 1;
@@ -107,7 +106,9 @@ impl TelegramServiceState {
                     .session_id
                     .as_deref()
                     .is_some_and(|session_id| session_id.trim().is_empty())
-                || binding.last_update_id.is_some_and(|update_id| update_id < 0)
+                || binding
+                    .last_update_id
+                    .is_some_and(|update_id| update_id < 0)
             {
                 return Err(TelegramSessionServiceError::InvalidBinding);
             }
@@ -120,7 +121,7 @@ impl TelegramServiceState {
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum TelegramServiceOutcome {
     Forwarded {
-        acknowledgement: FrontendCommandAcknowledgement,
+        acknowledgement: Box<FrontendCommandAcknowledgement>,
     },
     ToolProgressUpdated {
         mode: ToolProgressMode,
@@ -182,7 +183,7 @@ impl TelegramSessionService {
     pub fn process_message(
         &mut self,
         update_id: i64,
-        mut message: TelegramInboundMessage,
+        message: TelegramInboundMessage,
     ) -> Result<TelegramServiceOutcome, TelegramSessionServiceError> {
         if update_id < 0 {
             return Err(TelegramSessionServiceError::InvalidUpdateOffset);
@@ -197,13 +198,15 @@ impl TelegramSessionService {
         {
             return Err(TelegramSessionServiceError::StaleUpdate(update_id));
         }
-        if message.attached_session_id.is_none() {
-            message.attached_session_id = existing
+        let mut action = self.gateway.map_message(&message)?;
+        if let TelegramInboundAction::Forward(envelope) = &mut action
+            && envelope.session_id.is_none()
+            && command_uses_current_binding(&envelope.command)
+        {
+            envelope.session_id = existing
                 .as_ref()
                 .and_then(|binding| binding.session_id.clone());
         }
-
-        let action = self.gateway.map_message(&message)?;
         let outcome = match action {
             TelegramInboundAction::Forward(envelope) => {
                 let command = envelope.command.clone();
@@ -223,7 +226,9 @@ impl TelegramSessionService {
                         self.state.bindings.remove(&stable_id);
                     }
                 }
-                TelegramServiceOutcome::Forwarded { acknowledgement }
+                TelegramServiceOutcome::Forwarded {
+                    acknowledgement: Box::new(acknowledgement),
+                }
             }
             TelegramInboundAction::SetToolProgress(mode) => {
                 let binding = ensure_binding(key, existing, update_id);
@@ -250,7 +255,9 @@ impl TelegramSessionService {
             TelegramInboundAction::VoiceStatus => TelegramServiceOutcome::VoiceStatus {
                 mode: existing
                     .as_ref()
-                    .map_or(self.gateway.config().voice.mode, |binding| binding.voice_mode),
+                    .map_or(self.gateway.config().voice.mode, |binding| {
+                        binding.voice_mode
+                    }),
             },
             TelegramInboundAction::StartLiveVoice => TelegramServiceOutcome::StartLiveVoice,
             TelegramInboundAction::Help => TelegramServiceOutcome::Help,
@@ -333,10 +340,10 @@ impl TelegramSessionService {
             }
             FrontendControlResult::SubmissionAccepted { session_id, .. }
             | FrontendControlResult::CancellationRequested { session_id, .. }
+            | FrontendControlResult::CommandAccepted { session_id, .. }
             | FrontendControlResult::Status { session_id, .. }
             | FrontendControlResult::Events { session_id, .. } => Some(session_id.clone()),
-            FrontendControlResult::Sessions { .. }
-            | FrontendControlResult::Detached { .. } => None,
+            FrontendControlResult::Sessions { .. } | FrontendControlResult::Detached { .. } => None,
         };
         if let Some(session_id) = result_session_id.or_else(|| acknowledgement.session_id.clone()) {
             if binding
@@ -399,6 +406,17 @@ impl TelegramSessionService {
         }
         Ok(())
     }
+}
+
+fn command_uses_current_binding(command: &FrontendCommand) -> bool {
+    !matches!(
+        command,
+        FrontendCommand::CreateSession { .. }
+            | FrontendCommand::ListSessions
+            | FrontendCommand::ResumeSession { .. }
+            | FrontendCommand::Attach { .. }
+            | FrontendCommand::Detach
+    )
 }
 
 fn ensure_binding(
@@ -528,8 +546,7 @@ mod tests {
             .create_session(repository.path(), "Telegram shared session".to_owned())
             .expect("session");
         let state_path = repository.path().join(".medusa/telegram/state.json");
-        let control =
-            FrontendControlPlane::new(repository.path().to_path_buf(), Config::default());
+        let control = FrontendControlPlane::new(repository.path().to_path_buf(), Config::default());
         let mut service =
             TelegramSessionService::load(&state_path, gateway(), control).expect("service");
 
@@ -549,8 +566,7 @@ mod tests {
         assert_eq!(service.next_update_offset(), Some(13));
         drop(service);
 
-        let control =
-            FrontendControlPlane::new(repository.path().to_path_buf(), Config::default());
+        let control = FrontendControlPlane::new(repository.path().to_path_buf(), Config::default());
         let reloaded =
             TelegramSessionService::load(&state_path, gateway(), control).expect("reload");
         let binding = reloaded.binding(&identity()).expect("binding");
@@ -567,8 +583,7 @@ mod tests {
             .create_session(repository.path(), "Idempotent Telegram update".to_owned())
             .expect("session");
         let state_path = repository.path().join(".medusa/telegram/state.json");
-        let control =
-            FrontendControlPlane::new(repository.path().to_path_buf(), Config::default());
+        let control = FrontendControlPlane::new(repository.path().to_path_buf(), Config::default());
         let mut service =
             TelegramSessionService::load(&state_path, gateway(), control).expect("service");
         let attach = message(20, &format!("/attach {}", session.id));
