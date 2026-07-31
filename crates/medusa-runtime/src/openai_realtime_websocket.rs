@@ -231,7 +231,11 @@ mod tests {
     use std::{net::TcpListener, sync::mpsc, thread};
 
     use serde_json::json;
-    use tungstenite::{accept_hdr, http::header::AUTHORIZATION};
+    use tungstenite::{
+        accept_hdr,
+        handshake::server::{Request, Response},
+        http::header::AUTHORIZATION,
+    };
 
     use super::*;
 
@@ -250,16 +254,19 @@ mod tests {
         let (observed_tx, observed_rx) = mpsc::channel();
         let server = thread::spawn(move || {
             let (stream, _) = listener.accept().expect("accept");
-            let mut socket = accept_hdr(stream, move |request, response| {
-                let authorization = request
-                    .headers()
-                    .get(AUTHORIZATION)
-                    .and_then(|value| value.to_str().ok())
-                    .unwrap_or_default()
-                    .to_owned();
-                observed_tx.send(authorization).expect("send header");
-                Ok(response)
-            })
+            let mut socket = accept_hdr(
+                stream,
+                move |request: &Request, response: Response| {
+                    let authorization = request
+                        .headers()
+                        .get(AUTHORIZATION)
+                        .and_then(|value| value.to_str().ok())
+                        .unwrap_or_default()
+                        .to_owned();
+                    observed_tx.send(authorization).expect("send header");
+                    Ok(response)
+                },
+            )
             .expect("handshake");
             let message = socket.read().expect("read request");
             let payload = message.into_text().expect("text request");
@@ -300,16 +307,19 @@ mod tests {
             for _ in 0..2 {
                 let (stream, _) = listener.accept().expect("accept");
                 let observed_tx = observed_tx.clone();
-                let _socket = accept_hdr(stream, move |request, response| {
-                    let authorization = request
-                        .headers()
-                        .get(AUTHORIZATION)
-                        .and_then(|value| value.to_str().ok())
-                        .unwrap_or_default()
-                        .to_owned();
-                    observed_tx.send(authorization).expect("send header");
-                    Ok(response)
-                })
+                let _socket = accept_hdr(
+                    stream,
+                    move |request: &Request, response: Response| {
+                        let authorization = request
+                            .headers()
+                            .get(AUTHORIZATION)
+                            .and_then(|value| value.to_str().ok())
+                            .unwrap_or_default()
+                            .to_owned();
+                        observed_tx.send(authorization).expect("send header");
+                        Ok(response)
+                    },
+                )
                 .expect("handshake");
             }
         });
