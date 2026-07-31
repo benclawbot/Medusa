@@ -30,39 +30,31 @@ jobs:
           harness_path = Path("scripts/live-coding-e2e.py")
           harness = harness_path.read_text(encoding="utf-8")
 
-          old_binary = '''    def medusa_binary(self) -> Path:
-              suffix = ".exe" if os.name == "nt" else ""
-              binary = self.work_root / "installed" / "bin" / f"medusa{suffix}"
-              if not binary.is_file():
-                  raise HarnessError(f"built Medusa binary not found at {binary}", "environment")
-              return binary
-          '''.replace("              ", "        ")
-          new_binary = '''    def binary_path(self) -> Path:
-              suffix = ".exe" if os.name == "nt" else ""
-              return self.work_root / "installed" / "bin" / f"medusa{suffix}"
+          method_start = harness.index("    def medusa_binary(self) -> Path:\n")
+          method_end = harness.index("\n    def run_agent(self) -> None:\n", method_start)
+          new_binary = "\n".join(
+              [
+                  "    def binary_path(self) -> Path:",
+                  '        suffix = ".exe" if os.name == "nt" else ""',
+                  '        return self.work_root / "installed" / "bin" / f"medusa{suffix}"',
+                  "",
+                  "    def medusa_binary(self) -> Path:",
+                  "        binary = self.binary_path()",
+                  "        if not binary.is_file():",
+                  '            raise HarnessError(f"built Medusa binary not found at {binary}", "environment")',
+                  "        return binary",
+                  "",
+              ]
+          )
+          harness = harness[:method_start] + new_binary + harness[method_end + 1 :]
 
-              def medusa_binary(self) -> Path:
-              binary = self.binary_path()
-              if not binary.is_file():
-                  raise HarnessError(f"built Medusa binary not found at {binary}", "environment")
-              return binary
-          '''
-          new_binary = new_binary.replace("              def medusa_binary", "    def medusa_binary")
-          new_binary = new_binary.replace("              ", "        ")
-          if harness.count(old_binary) != 1:
-              raise SystemExit("expected exactly one medusa_binary block")
-          harness = harness.replace(old_binary, new_binary, 1)
-
-          old_summary = '''    def write_summary(self, *, result: str, classification: str | None, detail: str | None) -> None:
-              summary = {
-          '''.replace("              ", "        ")
-          new_summary = '''    def write_summary(self, *, result: str, classification: str | None, detail: str | None) -> None:
-              binary = self.binary_path()
-              summary = {
-          '''.replace("              ", "        ")
-          if harness.count(old_summary) != 1:
-              raise SystemExit("expected exactly one write_summary block")
-          harness = harness.replace(old_summary, new_summary, 1)
+          summary_signature = (
+              "    def write_summary(self, *, result: str, classification: str | None, "
+              "detail: str | None) -> None:\n"
+          )
+          summary_start = harness.index(summary_signature)
+          insertion = summary_start + len(summary_signature)
+          harness = harness[:insertion] + "        binary = self.binary_path()\n" + harness[insertion:]
 
           old_identity = '                "binary_sha256": sha256(self.medusa_binary()) if self.medusa_binary().is_file() else None,\n'
           new_identity = '                "binary_sha256": sha256(binary) if binary.is_file() else None,\n'
@@ -73,32 +65,35 @@ jobs:
 
           test_path = Path("scripts/test-live-dogfood.py")
           tests = test_path.read_text(encoding="utf-8")
-          marker = '''    def test_report_loader_ignores_unrelated_json(self) -> None:
-          '''.replace("              ", "        ")
-          regression = '''    def test_failed_summary_does_not_require_a_built_binary(self) -> None:
-              with tempfile.TemporaryDirectory() as directory:
-                  root = Path(directory)
-                  harness = HARNESS.Harness(
-                      repo_root=root,
-                      output_dir=root / "artifacts",
-                      timeout_seconds=1,
-                      heartbeat_seconds=1,
-                      api_key="credential-value",
-                  )
-                  harness.commit_sha = lambda: "abc123"
-                  harness.write_summary(
-                      result="failed",
-                      classification="environment",
-                      detail="release build failed",
-                  )
-                  summary = json.loads(
-                      (harness.output_dir / "summary.json").read_text(encoding="utf-8")
-                  )
-                  self.assertEqual(summary["result"], "failed")
-                  self.assertEqual(summary["commit"], "abc123")
-                  self.assertIsNone(summary["build"]["binary_sha256"])
-
-          '''.replace("              ", "        ")
+          marker = "    def test_report_loader_ignores_unrelated_json(self) -> None:\n"
+          regression = "\n".join(
+              [
+                  "    def test_failed_summary_does_not_require_a_built_binary(self) -> None:",
+                  "        with tempfile.TemporaryDirectory() as directory:",
+                  "            root = Path(directory)",
+                  "            harness = HARNESS.Harness(",
+                  "                repo_root=root,",
+                  '                output_dir=root / "artifacts",',
+                  "                timeout_seconds=1,",
+                  "                heartbeat_seconds=1,",
+                  '                api_key="credential-value",',
+                  "            )",
+                  '            harness.commit_sha = lambda: "abc123"',
+                  "            harness.write_summary(",
+                  '                result="failed",',
+                  '                classification="environment",',
+                  '                detail="release build failed",',
+                  "            )",
+                  "            summary = json.loads(",
+                  '                (harness.output_dir / "summary.json").read_text(encoding="utf-8")',
+                  "            )",
+                  '            self.assertEqual(summary["result"], "failed")',
+                  '            self.assertEqual(summary["commit"], "abc123")',
+                  '            self.assertIsNone(summary["build"]["binary_sha256"])',
+                  "",
+                  "",
+              ]
+          )
           if "test_failed_summary_does_not_require_a_built_binary" not in tests:
               if tests.count(marker) != 1:
                   raise SystemExit("expected exactly one test insertion marker")
