@@ -23,7 +23,7 @@ use medusa_runtime::{
 use tauri::{AppHandle, Manager, State};
 
 use crate::{
-    config::prepare_provider_profile,
+    config::{DesktopConfigurationChanged, prepare_provider_profile},
     credentials::{CredentialStore, SystemCredentialStore},
     dto::{
         DesktopAttachment, DesktopCommandSuggestion, DesktopModelConfiguration, DesktopPromptDraft,
@@ -264,7 +264,7 @@ pub fn runtime_configure_model(
     runtime_id: String,
     configuration: DesktopModelConfiguration,
     registry: State<'_, RuntimeRegistry>,
-) -> Result<(), String> {
+) -> Result<Option<DesktopConfigurationChanged>, String> {
     let effort_name = configuration.effort.to_ascii_lowercase();
     let effort = match effort_name.as_str() {
         "low" => Effort::Low,
@@ -275,7 +275,14 @@ pub fn runtime_configure_model(
     };
     let provider = configuration.provider;
     let model = configuration.model;
-    let prepared_profile = prepare_provider_profile(&provider, &model, &effort_name)?;
+    let prepared_profile = prepare_provider_profile(
+        &provider,
+        &model,
+        &effort_name,
+        configuration.expected_revision,
+    )?;
+    let previous_profile = prepared_profile.previous_profile().clone();
+    let profile_changed = prepared_profile.is_changed();
     let supplied_api_key = configuration.api_key.filter(|key| !key.trim().is_empty());
     let credentials = SystemCredentialStore;
     let api_key = match supplied_api_key.as_ref() {
@@ -293,11 +300,49 @@ pub fn runtime_configure_model(
             })
             .map_err(|error| error.to_string())
     })?;
-    if let Some(api_key) = supplied_api_key {
-        credentials.save(&provider, &api_key)?;
+    let persisted = (|| {
+        if let Some(api_key) = supplied_api_key {
+            credentials.save(&provider, &api_key)?;
+        }
+        if profile_changed {
+            prepared_profile.commit().map(Some)
+        } else {
+            drop(prepared_profile);
+            Ok(None)
+        }
+    })();
+    match persisted {
+        Ok(change) => Ok(change.map(Into::into)),
+        Err(error) => {
+            restore_runtime_profile(&runtime_id, &previous_profile, &registry, &credentials)?;
+            Err(error)
+        }
     }
-    prepared_profile.commit()?;
-    Ok(())
+}
+
+fn restore_runtime_profile(
+    runtime_id: &str,
+    profile: &medusa_config::ProviderProfile,
+    registry: &State<'_, RuntimeRegistry>,
+    credentials: &SystemCredentialStore,
+) -> Result<(), String> {
+    let effort = match profile.reasoning.as_str() {
+        "low" => Effort::Low,
+        "high" | "maximum" => Effort::High,
+        _ => Effort::Medium,
+    };
+    let api_key = credentials.load(&profile.provider)?;
+    registry.with_entry(runtime_id, |entry| {
+        entry
+            .controller
+            .configure_model(ModelConfiguration {
+                provider: profile.provider.clone(),
+                model: profile.model.clone(),
+                effort,
+                api_key,
+            })
+            .map_err(|error| error.to_string())
+    })
 }
 
 fn canonical_directory(path: &Path) -> Result<PathBuf, String> {
