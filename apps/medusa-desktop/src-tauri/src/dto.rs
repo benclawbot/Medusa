@@ -40,6 +40,7 @@ pub struct DesktopModelConfiguration {
     pub provider: String,
     pub model: String,
     pub effort: String,
+    pub expected_revision: u64,
     #[serde(default)]
     pub api_key: Option<String>,
 }
@@ -118,6 +119,13 @@ pub enum DesktopRuntimeEvent {
         effort: String,
         plan_mode: bool,
         credential_configured: bool,
+    },
+    ConfigurationChanged {
+        revision: u64,
+        active_profile: String,
+        changed_keys: Vec<String>,
+        origin: String,
+        apply_timing: String,
     },
     Notice {
         title: String,
@@ -293,6 +301,13 @@ impl From<RuntimeEvent> for DesktopRuntimeEvent {
                 effort,
                 plan_mode,
                 credential_configured,
+            },
+            RuntimeEvent::ConfigurationChanged(change) => Self::ConfigurationChanged {
+                revision: change.revision,
+                active_profile: change.active_profile,
+                changed_keys: change.changed_keys,
+                origin: change.origin.label().to_owned(),
+                apply_timing: change.apply_timing.label().to_owned(),
             },
             RuntimeEvent::Notice { title, details } => Self::Notice { title, details },
             RuntimeEvent::NewSession => Self::NewSession,
