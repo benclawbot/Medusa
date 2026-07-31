@@ -23,7 +23,6 @@ pub struct DesktopSharedConfiguration {
     pub credential_configured: bool,
 }
 
-
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct DesktopConfigurationChanged {
