@@ -4,51 +4,167 @@
 
 # Medusa
 
-Medusa is a repository-aware coding agent written in Rust. It can inspect an existing codebase, plan a change, edit files, run guarded commands, verify the result, preserve the session, and continue later through a terminal interface, desktop application, or headless CLI command.
+Medusa is a local-first, repository-aware coding agent written in Rust. It inspects real codebases, turns objectives into explicit plans, coordinates bounded specialist agents, isolates mutations in Git worktrees, edits files, runs guarded commands, verifies results, preserves durable evidence, and continues later through a CLI, terminal UI, desktop application, or the developing Telegram frontend.
 
-Medusa is strongest when the task belongs inside a real repository: fixing a failing test, tracing a bug across files, making a bounded feature change, reviewing impact, running the relevant checks, and leaving durable evidence of what happened.
+Medusa is strongest when the work belongs inside an existing repository: tracing failures across files, implementing bounded changes, reviewing risk, running the right checks, recovering from interruption, and distinguishing a plausible answer from a verified result.
 
-## What Medusa is good at
+> **Product status:** the CLI, TUI, desktop application, shared runtime, daemon/control plane, bounded multi-agent execution, containment, repository verification, durable sessions, browser verification, and voice interaction foundations are shipped in the repository. Telegram has a shipped protocol, renderer, authorization layer, and durable session-service foundation; complete Bot API operation, media handling, voice-note delivery, and the duplex Mini App remain active roadmap work. The current ChatGPT/Codex OAuth gateway does not expose an authenticated OpenAI Realtime endpoint, so microphone streaming on that route is capability-gated and fails closed.
 
-- **Working in existing repositories.** It searches and reads the project before editing, uses repository-aware file and Git tools, and keeps mutations inside guarded transaction boundaries.
-- **Small, verified changes.** The runtime prefers the smallest complete fix, records changed paths, selects targeted checks when possible, and requires verification before an autonomous coding session is considered complete.
-- **Long-running work.** Sessions, plans, prompts, tool activity, verification evidence, and recovery state are stored under the repository's `.medusa` directory and can be resumed.
-- **Showing its work.** The TUI and desktop app share the same runtime event stream, including assistant output, plans, tool activity, questions, approvals, failures, and completion state.
-- **Operating with explicit boundaries.** Repository writes are path-checked and transactional, sensitive external paths remain denied, dangerous shell operations fail closed, and approval grants are tied to the exact action and current plan.
-- **Learning from outcomes.** Verified sessions can contribute bounded repository-local recall and Markdown lessons. Failed sessions retain failure history and negative skill outcomes instead of being counted as successful experience.
+## Contents
 
-Medusa is not a general-purpose shell replacement. It intentionally rejects commands and paths that would weaken its containment or persistence boundaries.
+- [Why Medusa](#why-medusa)
+- [Interfaces](#interfaces)
+- [Installation](#installation)
+- [First run](#first-run)
+- [Quick start](#quick-start)
+- [Configuration](#configuration)
+- [Capabilities and strengths](#capabilities-and-strengths)
+- [Architecture](#architecture)
+- [Safety and containment](#safety-and-containment)
+- [Persistent state and recovery](#persistent-state-and-recovery)
+- [Platform support](#platform-support)
+- [Current limitations](#current-limitations)
+- [Roadmap](#roadmap)
+- [Development](#development)
+
+## Why Medusa
+
+Medusa combines an interactive coding product with explicit execution boundaries.
+
+- **Repository-native work.** File, search, Git, command, browser, attachment, memory, and verification capabilities operate around a selected repository rather than an unrestricted machine-wide shell.
+- **Plan, execute safely, recover.** Objectives become task contracts; mutating work is isolated; integration is guarded; failures and interruptions preserve evidence instead of being rewritten as success.
+- **Verified completion.** A model response, edit, commit, or cherry-pick is not enough. Coding completion is decided by the configured repository verification gate.
+- **Bounded multi-agent coordination.** The production path uses read-only planning and risk-review teammates plus one worktree-isolated implementer when mutation is required. The parent remains a read-only lead and reviewer.
+- **Safe by default.** Repository writes are path-checked, symlink-aware, and transactional. Commands are policy-checked and executed through platform containment that fails closed when unavailable.
+- **Durable and inspectable.** Sessions, plans, events, approvals, verification evidence, worker receipts, transactions, memory, checkpoints, and recovery state live under `.medusa`.
+- **One runtime, multiple frontends.** TUI, desktop, headless CLI, daemon clients, and Telegram foundations use shared runtime and protocol authorities instead of creating separate agents.
+- **Cross-platform Rust core.** The workspace contains more than 50 focused crates and is tested across Linux, macOS, and Windows.
 
 ## Interfaces
 
-Medusa has one production runtime with three user-facing entry points:
+The interface changes presentation and interaction style; it does not create a separate policy engine, transcript, or repository authority.
 
-| Interface | Use it for |
-|---|---|
-| Terminal UI | Interactive coding sessions, questions, approvals, attachments, plans, and live activity. |
-| Desktop app | The same runtime in a React/Tauri interface with a central execution timeline, session navigation, diffs, memory views, settings, and approvals. |
-| Headless CLI | Scripted objectives, resumable sessions, and unattended runs with an explicit command-approval allowlist. |
+| Interface | Status | Best for |
+|---|---|---|
+| **CLI** | Shipped | Automation, CI/CD, scripts, diagnostics, repository utilities, and headless objectives. |
+| **Terminal UI (TUI)** | Shipped | Interactive coding, plans, questions, approvals, activity, sessions, attachments, recovery, metrics, and keyboard-first workflows. |
+| **Desktop application** | Shipped | A graphical multi-pane workspace with sessions, chat, plans, activity, settings, review, attachments, and voice controls. |
+| **Telegram** | Foundation shipped; full service in progress | Remote session attachment, mobile status/control, approvals, progressive rendering, files, voice notes, and planned duplex voice. |
+
+### CLI
+
+Run a headless objective:
+
+```bash
+medusa run "Fix the failing tests and verify the result"
+```
+
+For unattended approval of known shell commands, provide one exact command per line:
+
+```text
+# .medusa/approve.txt
+cargo test --workspace
+cargo fmt --all -- --check
+```
+
+```bash
+medusa run \
+  --non-interactive \
+  --approve-allowlist .medusa/approve.txt \
+  "Fix the failing tests and verify the result"
+```
+
+The allowlist does not bypass policy. Medusa still validates the exact action, active plan, containment, command restrictions, approval scope, and expiry.
+
+Additional commands include:
+
+```bash
+medusa doctor
+medusa migrate
+medusa update --check
+medusa update
+medusa search "RuntimeController"
+medusa shell cargo test --workspace
+medusa checkpoint "before refactor"
+medusa resume <session-id>
+```
 
 ### Terminal UI
 
-<p align="center">
-  <img src="docs/assets/medusa-tui.svg" alt="Medusa terminal interface during a verified coding task" width="100%">
-</p>
+Run `medusa` without a subcommand to open the interactive terminal:
+
+```bash
+cd /path/to/repository
+medusa
+```
+
+Useful entry options:
+
+```bash
+medusa --repo /path/to/repository
+medusa --prompt "Inspect the failures and propose the smallest safe fix"
+medusa --continue
+medusa --resume <session-id>
+medusa --fresh
+```
+
+The TUI presents the shared runtime event stream as a conversation and activity timeline. It supports plans, questions, approvals, queued follow-ups, cancellation, session resume, settings, usage metrics, clipboard/file/image attachments, recovery views, team activity, and realtime voice controls.
 
 ### Desktop application
 
+The desktop app runs the same Medusa runtime through a Tauri/React interface. It provides session navigation, a central execution timeline, plan and activity presentation, provider/runtime status, settings, attachments, review and learning surfaces, and desktop-native voice controls.
+
 <p align="center">
-  <img src="docs/assets/medusa-desktop.svg" alt="Medusa desktop application showing chat, plan, activity, and usage" width="100%">
+  <img src="docs/assets/medusa-desktop.jpg" alt="Actual Medusa desktop application running on Linux" width="100%">
 </p>
+
+*Actual Linux package captured from the running application. The credential notice is the expected first-run state in an isolated test environment.*
+
+### Telegram
+
+Telegram is implemented as a frontend to the same authoritative Medusa session, not as a separate bot-owned agent.
+
+Already present:
+
+- versioned frontend command and presentation-event contracts;
+- default-deny authorization using numeric Telegram identities;
+- idempotent command mapping and replay-safe renderer foundations;
+- MarkdownV2 escaping, UTF-16-aware splitting, tables, plans, teams, activities, questions, approvals, artifacts, completion, cancellation, and failure rendering;
+- opaque, expiring, one-shot approval callbacks;
+- durable chat/topic/user bindings, update offsets, event cursors, display preferences, and voice-mode preferences;
+- routing through the daemon frontend control plane and shared runtime session authority.
+
+Still in active development:
+
+- complete Bot API long-polling and webhook operation;
+- end-to-end retries, media groups, attachments, service installation, and health management;
+- Telegram-native voice-note transcription and Opus/OGG replies;
+- the authenticated Telegram Mini App that exposes the shared full-duplex voice session;
+- complete cross-surface handoff and product acceptance coverage.
+
+Track the complete frontend in [issue #568](https://github.com/benclawbot/Medusa/issues/568).
+
+### Full-duplex voice
+
+Medusa has one provider-neutral realtime voice model rather than a separate voice agent for each frontend. It includes bounded input/output audio queues, partial and final transcripts, voice activity, tool and approval states, reconnect behavior, deterministic resource cleanup, and barge-in that stops spoken output without implicitly cancelling the coding task.
+
+| Surface | Capability |
+|---|---|
+| **TUI** | Full-duplex controller with `/voice`, `/voice off`, `/mute`, `/unmute`, `/stop-speech`, `/cancel-response`, and `/cancel-task`. Hold Space focuses capture without ending duplex mode. Unsupported SSH, container, WSL, CI, or headless audio environments are reported explicitly. |
+| **Desktop** | Compact voice entry beside the composer, explicit microphone permission, mute and speaker controls, device selection, refresh/reconnect, transcripts, transmitting state, barge-in, and deterministic track/transport cleanup. |
+| **Telegram** | Durable voice-mode preferences and live-voice command mapping are shipped in the gateway foundation. Voice notes/TTS and true duplex voice through a Telegram Mini App are planned in #568 and remain bound to the same Medusa session. |
+
+The provider transport is capability-gated. The current local `openai-oauth` ChatGPT/Codex gateway exposes text endpoints but not an authenticated Realtime endpoint. Medusa therefore refuses microphone streaming on that route and does not request a separate voice API key. The shared voice core and frontend controls remain ready for a supported authenticated route.
 
 ## Installation
 
 ### Prerequisites
 
 - Git
-- Rust 1.88 or newer; this repository pins Rust 1.88.0
+- Rust 1.88 or newer; the repository pins Rust 1.88.0
 - A supported model connection
 - Node.js 22 for ChatGPT OAuth, browser verification, desktop development, or desktop packaging
+- The platform containment backend required for guarded shell execution
 
 ### Install the CLI from `main`
 
@@ -56,7 +172,7 @@ Medusa has one production runtime with three user-facing entry points:
 cargo install --git https://github.com/benclawbot/Medusa.git --locked medusa-cli
 ```
 
-Confirm the installation:
+Confirm installation:
 
 ```bash
 medusa --version
@@ -74,15 +190,19 @@ medusa doctor
 
 ### Desktop packages
 
-The release workflow builds unsigned desktop packages for Linux, macOS, and Windows:
+The release workflow produces unsigned packages for:
 
-- Linux: Debian package and AppImage
-- macOS: application archive and DMG
-- Windows: NSIS installer
+- **Linux:** Debian package and AppImage
+- **macOS:** application archive and DMG
+- **Windows:** NSIS installer
 
-Release assets remain draft-only until a maintainer reviews the packages, checksums, SBOM, and provenance. Windows packages are not Authenticode-signed, macOS packages are not Developer ID signed or notarized, and Linux packages are not distributed through a signed package repository.
+Release assets remain draft-only until a maintainer reviews packages, checksums, SBOM, and provenance. Windows packages are not Authenticode-signed, macOS packages are not Developer ID signed or notarized, and Linux packages are not distributed through a signed package repository.
 
-For desktop development from source, install Node.js 22 and use the scripts in `apps/medusa-desktop`.
+For desktop development, install Node.js 22 and use the scripts under `apps/medusa-desktop`.
+
+### Telegram installation status
+
+The Telegram protocol, renderer, authorization, and durable session service are present under the daemon. The complete always-on Bot API product is not yet a finished installation target. Follow #568 for setup, service operation, media, voice, Mini App, and release work.
 
 ## First run
 
@@ -93,186 +213,373 @@ cd /path/to/project
 medusa
 ```
 
-On the first interactive launch, Medusa asks you to choose a model connection and stores the non-secret profile in your user configuration directory:
+The first interactive launch asks for a model connection and stores the non-secret profile in the user configuration directory:
 
 - Linux and macOS: `${XDG_CONFIG_HOME:-~/.config}/medusa/provider.toml`
 - Windows: `%APPDATA%\medusa\provider.toml`
 
 API keys are read from the environment and are not written to `provider.toml`.
 
-### Direct provider routes
-
-The Rust provider layer directly implements Anthropic Messages-compatible routes:
+Direct provider routes include:
 
 | Route | Credential |
 |---|---|
 | MiniMax | `MINIMAX_API_KEY` |
 | Anthropic | `ANTHROPIC_API_KEY` |
-| Anthropic-compatible endpoint | `MEDUSA_API_KEY` and optionally `MEDUSA_BASE_URL` |
+| Anthropic-compatible endpoint | `MEDUSA_API_KEY`, optionally `MEDUSA_BASE_URL` |
 
-MiniMax is the default route. Review or reset the saved connection with:
+The setup and provider layer also support configured OpenAI-compatible gateways, local model runtimes, OmniRoute, the OpenAI API, and ChatGPT OAuth where their advertised capabilities meet the selected workflow.
+
+ChatGPT OAuth is supplied through the separately distributed `openai-oauth` loopback gateway:
 
 ```bash
-medusa config show
-medusa config reset
-medusa config
+npx --yes openai-oauth@latest --detach
 ```
 
-## Everyday use
+Medusa expects the gateway at `127.0.0.1:10531`. The gateway owns the OAuth credential; Medusa does not read its credential file.
 
-Open the interactive terminal in the current repository:
+## Quick start
+
+Open an interactive session:
 
 ```bash
 medusa
 ```
 
-Open another repository or begin with a prompt:
+Start with an objective:
 
 ```bash
-medusa --repo /path/to/project
 medusa --prompt "Fix the failing tests and verify the result"
 ```
 
-Resume a known session or continue the most recent one:
+Work in another repository:
+
+```bash
+medusa --repo /path/to/project
+```
+
+Resume or continue:
 
 ```bash
 medusa --resume <session-id>
 medusa --continue
 ```
 
-Run a headless objective:
+Run headlessly:
 
 ```bash
-medusa run "Fix the failing tests and verify the result"
+medusa run "Review this repository for the cause of the failing integration test"
 ```
 
-A normal headless run stops if the agent needs user input. For unattended approval of known shell commands, create an allowlist containing one exact command per line:
-
-```text
-# .medusa/approve.txt
-cargo test --workspace
-cargo fmt --all -- --check
-```
-
-Then run:
-
-```bash
-medusa run \
-  --non-interactive \
-  --approve-allowlist .medusa/approve.txt \
-  "Fix the failing tests and verify the result"
-```
-
-The allowlist does not bypass policy. The runtime still validates the exact action, current plan fingerprint, command restrictions, containment, and approval expiry before execution.
-
-Useful maintenance commands:
+Maintenance:
 
 ```bash
 medusa doctor
 medusa migrate
 medusa update --check
-medusa update
 ```
 
 `medusa update --check` is read-only. Source-installed binaries can update from a verified immutable commit on `main`; package-managed installations are not overwritten and instead report the relevant package-manager command.
 
 ## Configuration
 
-Medusa loads typed configuration with unknown fields denied. The principal runtime settings cover agent mode and turn limits, provider route and model details, retry policy, Markdown memory, and required verification.
+Medusa uses typed TOML configuration with unknown fields denied. Configuration precedence is:
+
+```text
+CLI --set overrides
+  > environment overrides
+  > project TOML
+  > user TOML
+  > built-in defaults
+```
+
+Supported runtime configuration currently includes:
+
+```toml
+version = 1
+
+[agent]
+mode = "yolo"
+max_turns = 500
+parallel_workers = 4
+
+[model]
+provider = "minimax"
+fallback_providers = []
+name = "MiniMax-M3"
+protocol = "openai"
+temperature_milli = 200
+max_output_tokens = 32768
+context_window_tokens = 1000000
+auto_compact_percent = 40
+auth = "api-key"
+# base_url = "https://example.invalid/v1"
+
+[memory]
+enabled = true
+format = "markdown"
+
+[verification]
+required = true
+browser_on_ui_change = true
+```
+
+`agent.parallel_workers` controls bounded parallel tool work in schema version 1; it does not create unconstrained independent coding agents.
 
 Command-line overrides use `--set key=value`:
 
 ```bash
 medusa --set agent.mode=read-only
+medusa --set agent.max_turns=100
 medusa --set verification.browser_on_ui_change=false
 ```
 
-Fallback providers are complete routes with their own provider, model, protocol, endpoint, authentication mode, capabilities, and retry policy. A fallback does not inherit the primary provider's credentials or request-specific fields.
-
-See [Configuration](docs/CONFIGURATION.md) for the complete supported schema.
-
-## Verification and safety
-
-Medusa treats successful model output and successful repository work as different things. Coding completion requires repository verification.
-
-After mutations, the runtime can build a code index, inspect changed symbols and affected files, select impacted tests, detect public API risk, and run targeted commands. It falls back to broader repository checks when semantic selection is unavailable or unsafe.
-
-Shell execution fails closed when the platform containment backend is unavailable:
-
-- Linux uses Bubblewrap.
-- macOS uses Seatbelt.
-- Windows uses the Windows 11 composable sandbox API with repository read/write binding, toolchain read-only binding, network denial, an environment allowlist, and Job Object limits.
-
-Windows command containment requires Windows 11 with `Experimental_CreateProcessInSandbox` available. There is no unsandboxed fallback through the sandbox API.
-
-Repository writes are symlink-aware and transactional. `.git`, credential locations, operating-system configuration and executable paths, and login-persistence locations remain denied even when an external write receives approval.
-
-## Persistent state and learning
-
-Repository-local state is stored under `.medusa`, including sessions, prompts, daemon records, verification evidence, memory, failure history, skill outcomes, checkpoints, and transaction journals.
-
-Medusa's durable memory is Markdown-first. Recall is repository-scoped and bounded; it does not treat every previous session as trustworthy. Completed-session learning requires verified evidence, starts accepted lessons in probation, and preserves provenance.
-
-## Built-in integrations
-
-### ChatGPT OAuth and OpenAI-compatible gateways
-
-First-run setup supports local or externally supplied gateways, including OmniRoute, OpenAI-compatible endpoints, local model runtimes, the OpenAI API, and ChatGPT OAuth.
-
-ChatGPT OAuth is provided through the separately distributed `openai-oauth` loopback gateway. Medusa expects it at `127.0.0.1:10531` and can start it with:
+### Configuration commands
 
 ```bash
-npx --yes openai-oauth@latest --detach
+medusa config init
+medusa config show
+medusa config show --json
+medusa config edit
+medusa config get model.provider
+medusa config set model.provider minimax
+medusa config unset model.base_url
+medusa config validate
+medusa config validate --json
+medusa config doctor
+medusa config doctor --json
+medusa config reset
 ```
 
-The gateway owns the OAuth credential. Medusa communicates with its local OpenAI-compatible endpoint and does not read the gateway credential file.
+Named profiles:
 
-### Browser verification
+```bash
+medusa config profiles list
+medusa config profiles create work
+medusa config profiles use work
+medusa config profiles delete work
+```
 
-When `verification.browser_on_ui_change` is enabled, Medusa automatically verifies effective UI changes through the Playwright sidecar. Documentation-only, generated, snapshot-only, lockfile, and build-output changes are excluded.
+Fallback providers are complete routes with their own provider, model, protocol, endpoint, authentication, capability, and retry settings. A fallback does not silently inherit credentials or request-specific fields from the primary route.
 
-A browser run records the route, assertions, screenshots, console errors, override state, and result. Node.js, the browser sidecar, and a reachable development route are required. Missing prerequisites produce an actionable failure rather than a false pass.
+See [Configuration](docs/CONFIGURATION.md) for the canonical supported schema and migration notes.
 
-### Image prompts
+## Capabilities and strengths
 
-The runtime supports image message blocks. Screenshots are sent only when the selected provider declares compatible image-input support, media types, byte limits, and image-count limits.
+### Repository intelligence
 
-### Desktop Commander
+- repository and file discovery;
+- bounded text and symbol search;
+- repository context retrieval and turn assembly;
+- goals, progress, confidence, continuation, escalation, and failure tracking;
+- changed-symbol and affected-file analysis;
+- targeted verification selection with broader fallback checks.
 
-Desktop Commander is isolated behind its extension boundary. The normal repository tools, runtime, TUI, and desktop application do not depend on it.
+### Agent execution
+
+- durable sessions and objectives;
+- explicit plans and task contracts;
+- read-only planner and risk-review teammates;
+- one worktree-isolated mutating implementer when required;
+- durable worker leases, epochs, task evidence, and cleanup;
+- deterministic guarded integration and rollback on conflict;
+- a read-only parent lead/reviewer and authoritative repository verification gate.
+
+### Tools and integrations
+
+- guarded repository file operations;
+- Git-aware change and integration workflows;
+- policy-controlled command execution;
+- browser verification through the Playwright sidecar;
+- image and file prompt attachments when provider capabilities permit them;
+- MCP and extension boundaries;
+- provider routing and fallback chains;
+- GitHub, browser, update, and optional Desktop Commander integrations.
+
+### Verification
+
+After mutation, Medusa can:
+
+- inspect changed paths and public API risk;
+- select impacted checks when semantic evidence is sufficient;
+- run broader checks when a narrow selection would be unsafe;
+- require browser verification for effective UI changes;
+- record commands, assertions, routes, screenshots, console errors, overrides, and results;
+- reject completion when required evidence is absent or failed.
+
+### Memory and learning
+
+- repository-scoped Markdown memory;
+- bounded recall with provenance;
+- memory consolidation and writeback;
+- verified-session learning and probationary lessons;
+- failure history and negative skill outcomes;
+- no promotion of optimistic or unverified completion claims as successful experience.
+
+### Observability and resilience
+
+- typed runtime events shared by frontends;
+- usage, progress, activity, team, plan, question, completion, cancellation, failure, and recovery state;
+- process registry and runtime supervision;
+- checkpoints, replay, time-travel, transaction, and continuity foundations;
+- deterministic cancellation and resource cleanup;
+- privacy-safe evidence and diagnostics.
+
+## Architecture
+
+Medusa's product architecture is **Plan, Execute Safely, Recover**.
+
+<p align="center">
+  <img src="docs/assets/medusa-architecture.jpg" alt="Medusa architecture showing interfaces, runtime, safety, state, integrations, and foundation layers" width="100%">
+</p>
+
+*High-level product map. The interface and roadmap sections are authoritative about which surfaces are shipped, foundational, prerequisite-limited, or planned.*
+
+The canonical production path is:
+
+```text
+CLI / TUI / Desktop / daemon frontend / Telegram foundation
+  -> typed frontend command
+  -> RuntimeController
+  -> production task contracts
+  -> MultiAgentCoordinator
+  -> read-only planner and risk reviewer
+  -> worktree-isolated implementer when mutation is required
+  -> guarded integration
+  -> read-only parent review
+  -> repository verification gate
+  -> typed events and durable evidence
+```
+
+### Major layers
+
+| Layer | Responsibilities | Principal crates/components |
+|---|---|---|
+| **Interfaces** | CLI parsing, terminal interaction, desktop UI, Telegram command/rendering | `medusa-cli`, `medusa-tui`, desktop app, daemon Telegram modules |
+| **Runtime authority** | Session lifecycle, commands, events, coordination, completion, cancellation | `medusa-runtime`, `medusa-agent`, `medusa-daemon` |
+| **Multi-agent execution** | Task contracts, scheduling, leases, isolated implementation, parent review | scheduler, workers, worker leases, runtime coordinators |
+| **Context and intelligence** | Repository context, retrieval, turn assembly, goals, progress, confidence, failure | context and intelligence crate families |
+| **Tools and policy** | Capability discovery, authorization, execution control, Git/browser/extensions | capability, policy, control, extension, GitHub, and browser crates |
+| **State and recovery** | Sessions, checkpoints, replay, time travel, continuity, transactions, recovery | checkpoint, replay, time-travel, continuity, transaction, recovery crates |
+| **Memory and improvement** | Markdown memory, consolidation, writeback, learning, hardening | memory, improvement, and hardening crate families |
+| **Containment** | Platform sandboxing, process ownership, limits, cleanup | process containment, process registry, runtime supervisor |
+| **Protocol and providers** | Typed frontend/event contracts, model routes, Realtime voice contracts | `medusa-protocol`, `medusa-provider`, `medusa-openai-realtime` |
+
+For source-level ownership, see [Product architecture](docs/ARCHITECTURE.md), [Production execution trace](docs/PRODUCTION-EXECUTION-TRACE.md), and [Contributor architecture](docs/CONTRIBUTOR-ARCHITECTURE.md).
+
+## Safety and containment
+
+Medusa is intentionally not an unrestricted shell replacement.
+
+### Repository writes
+
+Writes are resolved against the selected repository, symlink-aware, policy checked, transactional, and recorded with evidence and rollback information. Sensitive locations remain denied, including `.git` internals, credential stores, operating-system configuration and executable paths, and login-persistence locations.
+
+### Command containment
+
+Shell execution fails closed if the platform backend is unavailable:
+
+- **Linux:** Bubblewrap
+- **macOS:** Seatbelt
+- **Windows:** Windows 11 composable sandbox API with repository read/write binding, toolchain read-only binding, network denial, environment allowlisting, and Job Object limits
+
+Windows command containment requires Windows 11 with `Experimental_CreateProcessInSandbox`. There is no unsandboxed fallback through that API.
+
+### Approvals
+
+Approvals are bound to structured actions and current runtime state. Exact command allowlists, interactive approve-once decisions, Telegram callback foundations, expiry, idempotency, and plan fingerprints do not weaken the underlying policy or containment boundary.
+
+### Cancellation and cleanup
+
+Cancellation propagates through runtime, model, tool, process, worker, and frontend state. Process ownership and containment are designed to terminate child process trees and preserve durable cancellation or failure evidence.
+
+## Persistent state and recovery
+
+Repository-local state lives under `.medusa`. Durable authority categories include:
+
+- sessions, objectives, messages, and typed events;
+- plans, task contracts, questions, and approvals;
+- model, tool, integration, and verification evidence;
+- worker leases, epochs, worktrees, changed paths, and commit receipts;
+- checkpoints, snapshots, replay, and time-travel state;
+- process, cancellation, transaction, and rollback records;
+- failure history and recovery decisions;
+- Markdown memory, recall, lessons, and skill outcomes;
+- daemon and frontend continuity records.
+
+Resume and recovery never treat display text or an optimistic model response as authoritative execution evidence.
 
 ## Platform support
 
-The canonical workflows test the Rust workspace and daemon behavior across Linux, macOS, and Windows. Desktop CI builds and validates unsigned packages on all three platforms. Release gates also cover coverage, security checks, adversarial regressions, fuzz smoke tests, chaos and migration recovery, documentation/schema consistency, package smoke tests, and live provider scenarios.
+Canonical workflows test the Rust workspace and daemon behavior across Linux, macOS, and Windows. Desktop CI builds and validates unsigned packages on all three platforms.
 
-Platform support does not imply identical containment internals or operating-system signing.
+Repository gates cover formatting, Clippy, tests, documentation, dependency and security policy, architecture drift, containment regressions, adversarial cases, fuzz smoke tests, migration and chaos recovery, package smoke tests, and selected live-provider scenarios.
+
+Platform support does not imply identical containment, audio, browser, credential-store, or operating-system signing behavior.
 
 ## Current limitations
 
+- The current ChatGPT/Codex OAuth gateway does not expose an authenticated OpenAI Realtime endpoint; microphone streaming fails closed even though the shared voice core and TUI/desktop controls exist.
+- Telegram is not yet a complete production Bot API installation surface; protocol, renderer, authorization, and durable session-service foundations are shipped.
 - ChatGPT OAuth depends on the separately distributed `openai-oauth` gateway and Node.js.
-- Browser verification depends on Node.js, Playwright-sidecar availability, and a reachable development route.
-- Provider streaming is represented in configuration and capability checks, but the native Anthropic-compatible adapter currently performs non-streaming requests.
-- Screenshot input is accepted only when the selected provider declares compatible image support.
+- Browser verification depends on Node.js, the Playwright sidecar, and a reachable development route.
+- Native Anthropic-compatible provider requests are currently non-streaming even though streaming is represented in capability contracts.
+- Screenshot input is accepted only when the selected provider declares compatible image support and limits.
 - Desktop release packages are unsigned at the operating-system level.
 - Windows command containment requires the Windows 11 composable sandbox API.
+- The production coordinator intentionally supports a bounded teammate set and one mutating implementer contract rather than unconstrained dynamic agent teams.
+
+## Roadmap
+
+These items come from open repository issues and are not presented as completed behavior.
+
+### Product presentation and whole-app proof — [#555](https://github.com/benclawbot/Medusa/issues/555)
+
+- complete typed presentation coverage for every production runtime event;
+- improve approval, diff, verification, failure, recovery, and session-picker UX;
+- strengthen first-run and provider diagnostics;
+- add deterministic installed-binary, PTY, headless, recovery, and live-provider dogfood gates.
+
+### Telegram frontend — [#568](https://github.com/benclawbot/Medusa/issues/568)
+
+- complete polling/webhook transport and always-on service operation;
+- attach to one live session shared with TUI and desktop;
+- Hermes-style reactions, typing, progressive edits, action cards, approvals, files, and retries;
+- Telegram-native voice notes and TTS voice bubbles;
+- authenticated Mini App access to the shared full-duplex voice session;
+- cross-platform service and live acceptance tests.
+
+### Canonical durable journal and multi-client continuity — [#569](https://github.com/benclawbot/Medusa/issues/569)
+
+- consolidate authoritative transitions into one crash-durable append-only journal;
+- append before frontend publication and recover torn tails safely;
+- bind checkpoints to real runtime, worker, repository, approval, and verification state;
+- deterministic state replay and historical views;
+- cursor-based TUI, desktop, Telegram, and future-client attachment without transcript forks.
+
+### Unified configuration UX — [#574](https://github.com/benclawbot/Medusa/issues/574)
+
+- one configuration authority across CLI, TUI, desktop, daemon, and Telegram;
+- guided first-run, profiles, provider/auth/model setup, and OpenAI OAuth visibility;
+- platform-appropriate `/config`, desktop Settings, and safe Telegram configuration;
+- secure secret abstraction, revisioned atomic edits, synchronization, and expanded doctor coverage.
 
 ## Project documentation
 
-The README is the product overview and installation guide. Retained documentation describes current operation:
-
-- [Product architecture: Plan, Execute Safely, Recover](docs/ARCHITECTURE.md)
-- [Contributor architecture map](docs/CONTRIBUTOR-ARCHITECTURE.md)
+- [Product architecture](docs/ARCHITECTURE.md)
+- [Contributor architecture](docs/CONTRIBUTOR-ARCHITECTURE.md)
+- [Production execution trace](docs/PRODUCTION-EXECUTION-TRACE.md)
 - [Configuration](docs/CONFIGURATION.md)
+- [Capability evidence](docs/CAPABILITY-EVIDENCE.md)
+- [Observability](docs/OBSERVABILITY.md)
+- [Security hardening](docs/SECURITY-HARDENING.md)
+- [Desktop distribution](docs/DESKTOP-DISTRIBUTION.md)
 - [Release process](docs/RELEASE.md)
 - [Release compatibility](docs/COMPATIBILITY.md)
-- [Security hardening](docs/SECURITY-HARDENING.md)
-- [Observability](docs/OBSERVABILITY.md)
-- [Desktop distribution](docs/DESKTOP-DISTRIBUTION.md)
-- [Capability evidence](docs/CAPABILITY-EVIDENCE.md)
 
 ## Development
 
-Use the pinned toolchain and run the repository gates relevant to your change:
+Use the pinned toolchain and run the gates relevant to the change:
 
 ```bash
 cargo fmt --all -- --check
@@ -281,6 +588,15 @@ cargo test --workspace --all-features --locked
 cargo doc --workspace --all-features --no-deps
 ```
 
-Frontend and desktop changes must also pass the checks defined in `apps/medusa-desktop` and the Desktop workflow.
+Architecture or capability changes must also pass:
 
-Medusa is licensed under the MIT License.
+```bash
+python3 scripts/check-product-architecture.py
+python3 scripts/check-capability-evidence.py
+```
+
+Frontend and desktop changes must pass the checks defined under `apps/medusa-desktop` and the desktop workflow. Telegram changes must preserve shared runtime authority, numeric authorization, callback replay safety, idempotency, redaction, and deterministic renderer tests.
+
+## License
+
+Medusa is licensed under the [MIT License](LICENSE).
