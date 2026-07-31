@@ -100,7 +100,7 @@ struct RenderedEvent {
     fingerprint: String,
 }
 
-#[derive(Clone, Debug, Deserialize, Serialize)]
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct TelegramRenderer {
     config: TelegramDisplayConfig,
     source_message_id: i64,
@@ -138,6 +138,16 @@ impl TelegramRenderer {
     #[must_use]
     pub const fn is_active(&self) -> bool {
         self.active
+    }
+
+    /// Starts a new user-visible turn while retaining replay fingerprints.
+    pub fn begin_turn(&mut self, source_message_id: i64) {
+        self.source_message_id = source_message_id;
+        self.preview.clear();
+        self.preview_chunk_count = 0;
+        self.last_edit_at = None;
+        self.last_flushed_chars = 0;
+        self.active = false;
     }
 
     pub fn render(

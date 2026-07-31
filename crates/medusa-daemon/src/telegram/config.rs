@@ -28,9 +28,10 @@ pub enum TelegramVoiceMode {
     All,
 }
 
-#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum TelegramChatKind {
+    #[default]
     Private,
     Group,
     Supergroup,

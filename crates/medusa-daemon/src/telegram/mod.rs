@@ -7,7 +7,9 @@ pub mod bot_api;
 mod callback;
 mod command;
 mod config;
+mod delivery;
 mod format;
+mod projection;
 mod render;
 mod runtime;
 mod service;
@@ -23,7 +25,9 @@ pub use config::{
     TelegramChatKind, TelegramConfig, TelegramDisplayConfig, TelegramIdentity, TelegramTransport,
     TelegramVoiceConfig, TelegramVoiceMode, ToolProgressMode,
 };
+pub use delivery::TelegramDeliveryState;
 pub use format::{normalize_markdown_tables, split_telegram_text, telegram_markdown_v2, utf16_len};
+pub use projection::project_event;
 pub use render::{
     TelegramAction, TelegramButtonIntent, TelegramMessageSlot, TelegramParseMode, TelegramReaction,
     TelegramRenderButton, TelegramRenderer,
@@ -79,6 +83,32 @@ impl TelegramGateway {
         self.config.authorize(identity)?;
         self.callbacks
             .issue_approval(identity, session_id, turn_id, approval_id, expires_at, now)
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn issue_command_callback(
+        &mut self,
+        identity: &TelegramIdentity,
+        session_id: &str,
+        turn_id: Option<&str>,
+        group_id: &str,
+        label: &str,
+        command: medusa_protocol::frontend::FrontendCommand,
+        expires_at: OffsetDateTime,
+        now: OffsetDateTime,
+    ) -> Result<TelegramInlineButton, TelegramGatewayError> {
+        self.config.authorize(identity)?;
+        self.callbacks.issue_command(
+            identity, session_id, turn_id, group_id, label, command, expires_at, now,
+        )
+    }
+
+    pub(crate) fn callback_snapshot(&self) -> CallbackStore {
+        self.callbacks.clone()
+    }
+
+    pub(crate) fn restore_callbacks(&mut self, callbacks: CallbackStore) {
+        self.callbacks = callbacks;
     }
 
     pub fn resolve_callback(
