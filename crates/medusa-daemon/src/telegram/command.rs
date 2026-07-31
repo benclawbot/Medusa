@@ -61,7 +61,7 @@ pub(crate) fn map_message(
             message,
             FrontendCommand::Attach {
                 session_id: required(arguments, "usage: /attach <session>")?.to_owned(),
-                mode: AttachmentMode::Owner,
+                mode: AttachmentMode::ReadOnly,
                 after_cursor: None,
             },
         ),
