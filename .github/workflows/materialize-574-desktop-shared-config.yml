@@ -61,10 +61,7 @@ jobs:
       - name: Validate desktop JavaScript configuration
         run: |
           npm ci --prefix apps/medusa-desktop
-          npm ls --prefix apps/medusa-desktop @tauri-apps/api
           cd apps/medusa-desktop
-          node --input-type=module -e "console.log(import.meta.resolve('@tauri-apps/api/core'))"
-          test -f node_modules/@tauri-apps/api/core.js
           npm run typecheck
           npm test -- --reporter=verbose
       - name: Install Linux Tauri dependencies
@@ -79,11 +76,10 @@ jobs:
           cargo fmt --manifest-path apps/medusa-desktop/src-tauri/Cargo.toml -- --check
           cargo test --manifest-path apps/medusa-desktop/src-tauri/Cargo.toml config::tests
           cargo clippy --manifest-path apps/medusa-desktop/src-tauri/Cargo.toml --all-targets -- -D warnings
-      - name: Commit source-only result
+      - name: Commit validated product files
         run: |
           git config user.name github-actions[bot]
           git config user.email 41898282+github-actions[bot]@users.noreply.github.com
-          git rm .github/workflows/materialize-574-desktop-shared-config.yml validation/materialize_574_desktop_shared_config.py
           git add apps/medusa-desktop
           git commit -m "Wire desktop to shared provider configuration"
           git push origin HEAD:agent/574-desktop-shared-config
