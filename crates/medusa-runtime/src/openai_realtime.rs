@@ -196,10 +196,7 @@ impl OpenAiRealtimeRoute {
             expires_at,
             model: model.clone(),
             websocket_url: realtime_websocket_url(api_base_url, model),
-            webrtc_call_url: format!(
-                "{}/realtime/calls",
-                api_base_url.trim_end_matches('/')
-            ),
+            webrtc_call_url: format!("{}/realtime/calls", api_base_url.trim_end_matches('/')),
         })
     }
 }
@@ -276,8 +273,7 @@ impl OpenAiRealtimeSessionCredential {
     #[must_use]
     pub fn permits_microphone_streaming_at(&self, now_seconds: u64) -> bool {
         !self.client_secret.is_empty()
-            && self.expires_at
-                > now_seconds.saturating_add(MIN_CLIENT_SECRET_REMAINING_SECONDS)
+            && self.expires_at > now_seconds.saturating_add(MIN_CLIENT_SECRET_REMAINING_SECONDS)
     }
 }
 
@@ -358,7 +354,9 @@ fn codex_auth_path() -> Result<PathBuf, String> {
 }
 
 fn inspect_chatgpt_auth(path: &Path) -> Result<(), String> {
-    load_chatgpt_api_key(path).map(drop).map_err(|error| error.to_string())
+    load_chatgpt_api_key(path)
+        .map(drop)
+        .map_err(|error| error.to_string())
 }
 
 fn load_chatgpt_api_key(path: &Path) -> Result<String, OpenAiRealtimeEstablishError> {
@@ -458,7 +456,10 @@ fn realtime_websocket_url(api_base_url: &str, model: &str) -> String {
     let websocket_base = base
         .strip_prefix("https://")
         .map(|rest| format!("wss://{rest}"))
-        .or_else(|| base.strip_prefix("http://").map(|rest| format!("ws://{rest}")))
+        .or_else(|| {
+            base.strip_prefix("http://")
+                .map(|rest| format!("ws://{rest}"))
+        })
         .unwrap_or_else(|| base.to_owned());
     format!("{websocket_base}/realtime?model={model}")
 }
@@ -798,9 +799,7 @@ pub fn map_server_event(
 }
 
 #[must_use]
-pub fn session_update_event(
-    instructions: impl Into<String>,
-) -> OpenAiRealtimeClientEvent {
+pub fn session_update_event(instructions: impl Into<String>) -> OpenAiRealtimeClientEvent {
     OpenAiRealtimeClientEvent::SessionUpdate {
         session: OpenAiRealtimeSessionConfig::medusa_default(instructions),
     }
@@ -858,8 +857,11 @@ mod tests {
                 "refresh_token": "not-used-by-realtime"
             }
         });
-        fs::write(&path, serde_json::to_vec(&document).expect("serialize auth"))
-            .expect("write auth");
+        fs::write(
+            &path,
+            serde_json::to_vec(&document).expect("serialize auth"),
+        )
+        .expect("write auth");
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt as _;
@@ -929,7 +931,9 @@ mod tests {
                 body.len(),
                 body
             );
-            stream.write_all(response.as_bytes()).expect("write response");
+            stream
+                .write_all(response.as_bytes())
+                .expect("write response");
         });
         (format!("http://{address}/v1"), handle)
     }
@@ -1068,10 +1072,7 @@ mod tests {
             value["session"]["audio"]["input"]["format"]["type"],
             "audio/pcm"
         );
-        assert_eq!(
-            value["session"]["audio"]["input"]["format"]["rate"],
-            24_000
-        );
+        assert_eq!(value["session"]["audio"]["input"]["format"]["rate"], 24_000);
         assert_eq!(
             value["session"]["audio"]["input"]["turn_detection"]["type"],
             "server_vad"
