@@ -20,6 +20,20 @@ old = '''        let event = medusa_protocol::EventEnvelope::new(
 '''
 new = '''        let event = medusa_protocol::EventEnvelope::new(
             0,
+            SessionId::parse("ses-01ARZ3NDEKTSV4RRFFQ69G5FAV").expect("session"),
+            Actor::Coordinator,
+            CorrelationId::parse("cor-01ARZ3NDEKTSV4RRFFQ69G5FAV").expect("correlation"),
+            EventPayload::FileTransactionCommitted {
+                paths: vec!["binary.bin".to_owned()],
+                rollback_ref: "rollback".to_owned(),
+            },
+            None,
+            time::OffsetDateTime::UNIX_EPOCH,
+        )
+'''
+if new not in source:
+    current = '''        let event = medusa_protocol::EventEnvelope::new(
+            0,
             SessionId::parse("session-1").expect("session"),
             Actor::Coordinator,
             CorrelationId::parse("correlation-1").expect("correlation"),
@@ -31,9 +45,11 @@ new = '''        let event = medusa_protocol::EventEnvelope::new(
             time::OffsetDateTime::UNIX_EPOCH,
         )
 '''
-if new not in source:
-    count = source.count(old)
-    if count != 1:
-        raise SystemExit(f"checkpoint payload test constructor target changed: {count}")
-    source = source.replace(old, new, 1)
+    if current in source:
+        source = source.replace(current, new, 1)
+    else:
+        count = source.count(old)
+        if count != 1:
+            raise SystemExit(f"checkpoint payload test constructor target changed: {count}")
+        source = source.replace(old, new, 1)
 path.write_text(source)
