@@ -7,7 +7,13 @@ use std::{
 use medusa_core::{ErrorCategory, ErrorCode, MedusaError, MedusaResult};
 use serde::{Deserialize, Serialize};
 
-use super::{PROVIDER_PROFILE_KEYS, ProviderProfile, ProviderProfileStore};
+use super::{
+    PROVIDER_PROFILE_KEYS, ProviderProfile, ProviderProfileStore,
+    configuration_state::{
+        ConfigurationApplyTiming, ConfigurationChangeOrigin, ConfigurationChanged,
+        ConfigurationStateGuard, ConfigurationStateStore,
+    },
+};
 
 const ACTIVE_PROFILE_SCHEMA_VERSION: u32 = 1;
 const DEFAULT_PROFILE_NAME: &str = "default";
@@ -17,6 +23,60 @@ const DEFAULT_PROFILE_NAME: &str = "default";
 struct ActiveProfileSelection {
     schema_version: u32,
     name: String,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct ProviderProfileSnapshot {
+    pub revision: u64,
+    pub active_profile: String,
+    pub profile: ProviderProfile,
+}
+
+pub struct ProviderProfileUpdate {
+    guard: ConfigurationStateGuard,
+    store: ProviderProfileStore,
+    active_profile: String,
+    existed: bool,
+    previous: ProviderProfile,
+}
+
+impl ProviderProfileUpdate {
+    #[must_use]
+    pub fn revision(&self) -> u64 {
+        self.guard.revision()
+    }
+
+    #[must_use]
+    pub fn profile(&self) -> &ProviderProfile {
+        &self.previous
+    }
+
+    pub fn commit(
+        mut self,
+        profile: &ProviderProfile,
+        origin: ConfigurationChangeOrigin,
+        changed_keys: impl IntoIterator<Item = String>,
+        apply_timing: ConfigurationApplyTiming,
+    ) -> MedusaResult<ConfigurationChanged> {
+        profile.validate()?;
+        self.store.save(profile)?;
+        match self.guard.commit(
+            self.active_profile.clone(),
+            changed_keys,
+            origin,
+            apply_timing,
+        ) {
+            Ok(change) => Ok(change),
+            Err(error) => {
+                restore_profile(&self.store, self.existed, &self.previous).map_err(|rollback| {
+                    store_error(format!(
+                        "commit configuration metadata: {error}; rollback failed: {rollback}"
+                    ))
+                })?;
+                Err(error)
+            }
+        }
+    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
@@ -51,6 +111,25 @@ impl ProviderProfileCatalog {
     #[must_use]
     pub fn root(&self) -> &Path {
         &self.root
+    }
+
+    pub fn revision(&self) -> MedusaResult<u64> {
+        self.state_store().revision()
+    }
+
+    pub fn last_change(&self) -> MedusaResult<Option<ConfigurationChanged>> {
+        self.state_store().last_change()
+    }
+
+    pub fn snapshot(&self) -> MedusaResult<ProviderProfileSnapshot> {
+        let guard = self.state_store().acquire()?;
+        let active_profile = self.active_name()?;
+        let profile = self.store_for_name(&active_profile).load()?;
+        Ok(ProviderProfileSnapshot {
+            revision: guard.revision(),
+            active_profile,
+            profile,
+        })
     }
 
     pub fn active_name(&self) -> MedusaResult<String> {
@@ -154,28 +233,139 @@ impl ProviderProfileCatalog {
             .collect()
     }
 
+    pub fn begin_active_profile_update(
+        &self,
+        expected_revision: u64,
+    ) -> MedusaResult<ProviderProfileUpdate> {
+        let guard = self.state_store().acquire()?;
+        guard.check_expected(expected_revision)?;
+        let active_profile = self.active_name()?;
+        let store = self.store_for_name(&active_profile);
+        let existed = store.path().is_file();
+        let previous = store.load()?;
+        Ok(ProviderProfileUpdate {
+            guard,
+            store,
+            active_profile,
+            existed,
+            previous,
+        })
+    }
+
+    pub fn save_active_profile(
+        &self,
+        profile: &ProviderProfile,
+        expected_revision: u64,
+        origin: ConfigurationChangeOrigin,
+        changed_keys: impl IntoIterator<Item = String>,
+        apply_timing: ConfigurationApplyTiming,
+    ) -> MedusaResult<ConfigurationChanged> {
+        self.begin_active_profile_update(expected_revision)?.commit(
+            profile,
+            origin,
+            changed_keys,
+            apply_timing,
+        )
+    }
+
+    pub fn reset_active_profile(
+        &self,
+        expected_revision: u64,
+        origin: ConfigurationChangeOrigin,
+    ) -> MedusaResult<(bool, ConfigurationChanged)> {
+        let mut guard = self.state_store().acquire()?;
+        guard.check_expected(expected_revision)?;
+        let active_profile = self.active_name()?;
+        let store = self.store_for_name(&active_profile);
+        let existed = store.path().is_file();
+        let previous = store.load()?;
+        let removed = store.reset()?;
+        match guard.commit(
+            active_profile,
+            ["profile".to_owned()],
+            origin,
+            ConfigurationApplyTiming::NextSession,
+        ) {
+            Ok(change) => Ok((removed, change)),
+            Err(error) => {
+                restore_profile(&store, existed, &previous).map_err(|rollback| {
+                    store_error(format!(
+                        "commit configuration metadata: {error}; rollback failed: {rollback}"
+                    ))
+                })?;
+                Err(error)
+            }
+        }
+    }
+
     pub fn create(&self, name: &str) -> MedusaResult<ProviderProfileSummary> {
+        let expected_revision = self.revision()?;
+        self.create_at_revision(name, expected_revision, ConfigurationChangeOrigin::System)
+            .map(|(summary, _)| summary)
+    }
+
+    pub fn create_at_revision(
+        &self,
+        name: &str,
+        expected_revision: u64,
+        origin: ConfigurationChangeOrigin,
+    ) -> MedusaResult<(ProviderProfileSummary, ConfigurationChanged)> {
         validate_named_profile(name)?;
+        let mut guard = self.state_store().acquire()?;
+        guard.check_expected(expected_revision)?;
         let path = self.named_profile_path(name);
         if path.exists() {
             return Err(config_error(format!(
                 "provider profile `{name}` already exists"
             )));
         }
-        let profile = self.active_store()?.load()?;
+        let active_profile = self.active_name()?;
+        let profile = self.store_for_name(&active_profile).load()?;
         let store = ProviderProfileStore::at(path);
         store.save(&profile)?;
-        Ok(ProviderProfileSummary {
-            name: name.to_owned(),
-            active: false,
-            configured: profile.configured,
-            provider: profile.provider,
-            model: profile.model,
-        })
+        let change = match guard.commit(
+            active_profile,
+            [format!("profiles.{name}")],
+            origin,
+            ConfigurationApplyTiming::Immediate,
+        ) {
+            Ok(change) => change,
+            Err(error) => {
+                store.reset().map_err(|rollback| {
+                    store_error(format!(
+                        "commit configuration metadata: {error}; rollback failed: {rollback}"
+                    ))
+                })?;
+                return Err(error);
+            }
+        };
+        Ok((
+            ProviderProfileSummary {
+                name: name.to_owned(),
+                active: false,
+                configured: profile.configured,
+                provider: profile.provider,
+                model: profile.model,
+            },
+            change,
+        ))
     }
 
     pub fn use_profile(&self, name: &str) -> MedusaResult<ProviderProfileSummary> {
+        let expected_revision = self.revision()?;
+        self.use_profile_at_revision(name, expected_revision, ConfigurationChangeOrigin::System)
+            .map(|(summary, _)| summary)
+    }
+
+    pub fn use_profile_at_revision(
+        &self,
+        name: &str,
+        expected_revision: u64,
+        origin: ConfigurationChangeOrigin,
+    ) -> MedusaResult<(ProviderProfileSummary, ConfigurationChanged)> {
         validate_profile_name(name)?;
+        let mut guard = self.state_store().acquire()?;
+        guard.check_expected(expected_revision)?;
         let store = self.store_for_name(name);
         if name != DEFAULT_PROFILE_NAME && !store.path().is_file() {
             return Err(config_error(format!(
@@ -183,43 +373,86 @@ impl ProviderProfileCatalog {
             )));
         }
         let profile = store.load()?;
-        if name == DEFAULT_PROFILE_NAME {
-            remove_if_exists(&self.selection_path())?;
-        } else {
-            let selection = ActiveProfileSelection {
-                schema_version: ACTIVE_PROFILE_SCHEMA_VERSION,
+        let selection_path = self.selection_path();
+        let previous_selection = read_optional(&selection_path)?;
+        write_selection(&selection_path, name)?;
+        let change = match guard.commit(
+            name.to_owned(),
+            ["active_profile".to_owned()],
+            origin,
+            ConfigurationApplyTiming::Immediate,
+        ) {
+            Ok(change) => change,
+            Err(error) => {
+                restore_optional(&selection_path, previous_selection.as_deref()).map_err(
+                    |rollback| {
+                        store_error(format!(
+                            "commit configuration metadata: {error}; rollback failed: {rollback}"
+                        ))
+                    },
+                )?;
+                return Err(error);
+            }
+        };
+        Ok((
+            ProviderProfileSummary {
                 name: name.to_owned(),
-            };
-            let text = toml::to_string_pretty(&selection)
-                .map_err(|error| store_error(error.to_string()))?;
-            atomic_write(&self.selection_path(), text.as_bytes())?;
-        }
-        Ok(ProviderProfileSummary {
-            name: name.to_owned(),
-            active: true,
-            configured: profile.configured,
-            provider: profile.provider,
-            model: profile.model,
-        })
+                active: true,
+                configured: profile.configured,
+                provider: profile.provider,
+                model: profile.model,
+            },
+            change,
+        ))
     }
 
     pub fn delete(&self, name: &str) -> MedusaResult<()> {
+        let expected_revision = self.revision()?;
+        self.delete_at_revision(name, expected_revision, ConfigurationChangeOrigin::System)
+            .map(|_| ())
+    }
+
+    pub fn delete_at_revision(
+        &self,
+        name: &str,
+        expected_revision: u64,
+        origin: ConfigurationChangeOrigin,
+    ) -> MedusaResult<ConfigurationChanged> {
         validate_named_profile(name)?;
+        let mut guard = self.state_store().acquire()?;
+        guard.check_expected(expected_revision)?;
         if self.active_name()? == name {
             return Err(config_error(format!(
                 "cannot delete active provider profile `{name}`; select another profile first"
             )));
         }
         let path = self.named_profile_path(name);
-        if !path.is_file() {
-            return Err(config_error(format!(
-                "provider profile `{name}` does not exist"
-            )));
-        }
+        let previous = read_optional(&path)?
+            .ok_or_else(|| config_error(format!("provider profile `{name}` does not exist")))?;
         fs::remove_file(&path)
             .map_err(|error| store_error(format!("remove {}: {error}", path.display())))?;
         sync_parent(&path);
-        Ok(())
+        let active_profile = self.active_name()?;
+        match guard.commit(
+            active_profile,
+            [format!("profiles.{name}")],
+            origin,
+            ConfigurationApplyTiming::Immediate,
+        ) {
+            Ok(change) => Ok(change),
+            Err(error) => {
+                atomic_write(&path, &previous).map_err(|rollback| {
+                    store_error(format!(
+                        "commit configuration metadata: {error}; rollback failed: {rollback}"
+                    ))
+                })?;
+                Err(error)
+            }
+        }
+    }
+
+    fn state_store(&self) -> ConfigurationStateStore {
+        ConfigurationStateStore::at(&self.root)
     }
 
     fn store_for_name(&self, name: &str) -> ProviderProfileStore {
@@ -344,6 +577,46 @@ fn unknown_key(key: &str) -> MedusaError {
     ))
 }
 
+fn write_selection(path: &Path, name: &str) -> MedusaResult<()> {
+    if name == DEFAULT_PROFILE_NAME {
+        return remove_if_exists(path);
+    }
+    let selection = ActiveProfileSelection {
+        schema_version: ACTIVE_PROFILE_SCHEMA_VERSION,
+        name: name.to_owned(),
+    };
+    let text =
+        toml::to_string_pretty(&selection).map_err(|error| store_error(error.to_string()))?;
+    atomic_write(path, text.as_bytes())
+}
+
+fn read_optional(path: &Path) -> MedusaResult<Option<Vec<u8>>> {
+    match fs::read(path) {
+        Ok(bytes) => Ok(Some(bytes)),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(error) => Err(store_error(format!("read {}: {error}", path.display()))),
+    }
+}
+
+fn restore_optional(path: &Path, previous: Option<&[u8]>) -> MedusaResult<()> {
+    match previous {
+        Some(bytes) => atomic_write(path, bytes),
+        None => remove_if_exists(path),
+    }
+}
+
+fn restore_profile(
+    store: &ProviderProfileStore,
+    existed: bool,
+    previous: &ProviderProfile,
+) -> MedusaResult<()> {
+    if existed {
+        store.save(previous)
+    } else {
+        store.reset().map(|_| ())
+    }
+}
+
 fn remove_if_exists(path: &Path) -> MedusaResult<()> {
     match fs::remove_file(path) {
         Ok(()) => {
@@ -460,6 +733,105 @@ mod tests {
             default
         );
         assert!(catalog.delete("work").is_ok());
+    }
+
+    #[test]
+    fn stale_active_profile_write_is_rejected_without_replacing_valid_state() {
+        let directory = tempfile::tempdir().expect("tempdir");
+        let catalog = ProviderProfileCatalog::at(directory.path());
+        let snapshot = catalog.snapshot().expect("snapshot");
+
+        let mut first = snapshot.profile.clone();
+        first
+            .set_value("model", "first-model")
+            .expect("first model");
+        let change = catalog
+            .save_active_profile(
+                &first,
+                snapshot.revision,
+                ConfigurationChangeOrigin::Cli,
+                ["model".to_owned()],
+                ConfigurationApplyTiming::Immediate,
+            )
+            .expect("first save");
+        assert_eq!(change.revision, 1);
+
+        let mut stale = snapshot.profile;
+        stale
+            .set_value("model", "stale-model")
+            .expect("stale model");
+        let error = catalog
+            .save_active_profile(
+                &stale,
+                snapshot.revision,
+                ConfigurationChangeOrigin::Desktop,
+                ["model".to_owned()],
+                ConfigurationApplyTiming::Immediate,
+            )
+            .expect_err("stale write");
+        assert!(error.to_string().contains("current revision is 1"));
+        assert_eq!(catalog.snapshot().expect("current").profile, first);
+    }
+
+    #[test]
+    fn concurrent_writers_with_one_revision_have_one_winner() {
+        use std::sync::{Arc, Barrier};
+        use std::thread;
+
+        let directory = tempfile::tempdir().expect("tempdir");
+        let catalog = ProviderProfileCatalog::at(directory.path());
+        let snapshot = catalog.snapshot().expect("snapshot");
+        let barrier = Arc::new(Barrier::new(3));
+        let revision = snapshot.revision;
+        let mut handles = Vec::new();
+        for model in ["model-a", "model-b"] {
+            let catalog = catalog.clone();
+            let barrier = Arc::clone(&barrier);
+            let mut profile = snapshot.profile.clone();
+            profile.set_value("model", model).expect("model");
+            handles.push(thread::spawn(move || {
+                barrier.wait();
+                catalog.save_active_profile(
+                    &profile,
+                    revision,
+                    ConfigurationChangeOrigin::System,
+                    ["model".to_owned()],
+                    ConfigurationApplyTiming::Immediate,
+                )
+            }));
+        }
+        barrier.wait();
+        let results = handles
+            .into_iter()
+            .map(|handle| handle.join().expect("writer"))
+            .collect::<Vec<_>>();
+        assert_eq!(results.iter().filter(|result| result.is_ok()).count(), 1);
+        assert_eq!(results.iter().filter(|result| result.is_err()).count(), 1);
+        assert_eq!(catalog.revision().expect("revision"), 1);
+    }
+
+    #[test]
+    fn persisted_change_record_contains_keys_but_no_values() {
+        let directory = tempfile::tempdir().expect("tempdir");
+        let catalog = ProviderProfileCatalog::at(directory.path());
+        let snapshot = catalog.snapshot().expect("snapshot");
+        let mut profile = snapshot.profile;
+        profile
+            .set_value("model", "sensitive-looking-model-value")
+            .expect("model");
+        catalog
+            .save_active_profile(
+                &profile,
+                snapshot.revision,
+                ConfigurationChangeOrigin::Tui,
+                ["model".to_owned()],
+                ConfigurationApplyTiming::Immediate,
+            )
+            .expect("save");
+        let state =
+            fs::read_to_string(directory.path().join("configuration-state.toml")).expect("state");
+        assert!(state.contains("model"));
+        assert!(!state.contains("sensitive-looking-model-value"));
     }
 
     #[test]

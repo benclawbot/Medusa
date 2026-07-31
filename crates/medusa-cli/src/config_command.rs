@@ -10,7 +10,8 @@ use std::{
 };
 
 use medusa_config::{
-    Config, PROVIDER_PROFILE_KEYS, ProviderProfile, ProviderProfileCatalog, ProviderProfileStore,
+    Config, PROVIDER_PROFILE_KEYS, ConfigurationApplyTiming, ConfigurationChangeOrigin,
+    ConfigurationChanged, ProviderProfile, ProviderProfileCatalog, ProviderProfileStore,
     credential_environment,
 };
 use medusa_core::{ErrorCategory, ErrorCode, MedusaError, MedusaResult};
@@ -33,8 +34,10 @@ pub(crate) fn ensure_first_run() -> MedusaResult<()> {
 }
 
 pub(crate) fn configure_interactive() -> MedusaResult<()> {
-    let store = ProviderProfileCatalog::user()?.active_store()?;
-    let mut profile = store.load()?;
+    let catalog = ProviderProfileCatalog::user()?;
+    let snapshot = catalog.snapshot()?;
+    let store = catalog.active_store()?;
+    let mut profile = snapshot.profile;
     profile.connection = choose(
         "Connection type",
         &[
@@ -119,26 +122,48 @@ pub(crate) fn configure_interactive() -> MedusaResult<()> {
         )?;
     }
     profile.configured = true;
-    store.save(&profile)?;
+    let change = catalog.save_active_profile(
+        &profile,
+        snapshot.revision,
+        ConfigurationChangeOrigin::Cli,
+        PROVIDER_PROFILE_KEYS.iter().map(|key| (*key).to_owned()),
+        ConfigurationApplyTiming::NextSession,
+    )?;
     ensure_runtime_for_profile(&profile)?;
 
-    println!("\nConfiguration saved to {}", store.path().display());
+    println!(
+        "\nConfiguration saved to {} at revision {}",
+        store.path().display(),
+        change.revision
+    );
     print_auth_guidance(&profile);
     Ok(())
 }
 
+#[derive(Debug, Serialize)]
+struct ConfigShowOutput {
+    revision: u64,
+    active_profile: String,
+    profile: ProviderProfile,
+}
+
 pub(crate) fn show(json: bool) -> MedusaResult<()> {
-    let profile = load_profile()?;
+    let snapshot = ProviderProfileCatalog::user()?.snapshot()?;
+    let output = ConfigShowOutput {
+        revision: snapshot.revision,
+        active_profile: snapshot.active_profile,
+        profile: snapshot.profile,
+    };
     if json {
         println!(
             "{}",
-            serde_json::to_string_pretty(&profile)
+            serde_json::to_string_pretty(&output)
                 .map_err(|error| config_error(error.to_string()))?
         );
     } else {
         println!(
             "{}",
-            toml::to_string_pretty(&profile).map_err(|error| config_error(error.to_string()))?
+            toml::to_string_pretty(&output).map_err(|error| config_error(error.to_string()))?
         );
     }
     Ok(())
@@ -166,6 +191,8 @@ pub(crate) fn get(key: &str, json: bool) -> MedusaResult<()> {
 #[derive(Debug, Serialize)]
 struct ValidationOutput {
     valid: bool,
+    revision: u64,
+    active_profile: String,
     configured: bool,
     path: String,
     provider: String,
@@ -176,11 +203,15 @@ struct ValidationOutput {
 }
 
 pub(crate) fn validate(json: bool) -> MedusaResult<()> {
-    let store = ProviderProfileCatalog::user()?.active_store()?;
-    let profile = store.load()?;
+    let catalog = ProviderProfileCatalog::user()?;
+    let snapshot = catalog.snapshot()?;
+    let store = catalog.active_store()?;
+    let profile = snapshot.profile;
     profile.validate()?;
     let output = ValidationOutput {
         valid: true,
+        revision: snapshot.revision,
+        active_profile: snapshot.active_profile,
         configured: profile.configured,
         path: store.path().display().to_string(),
         provider: profile.provider.clone(),
@@ -197,6 +228,8 @@ pub(crate) fn validate(json: bool) -> MedusaResult<()> {
         );
     } else {
         println!("Configuration is valid.");
+        println!("Revision: {}", output.revision);
+        println!("Active profile: {}", output.active_profile);
         println!("Path: {}", output.path);
         println!("Configured: {}", output.configured);
         println!(
@@ -209,23 +242,32 @@ pub(crate) fn validate(json: bool) -> MedusaResult<()> {
 }
 
 pub(crate) fn edit() -> MedusaResult<()> {
-    let store = ProviderProfileCatalog::user()?.active_store()?;
-    let previous = store.load()?;
-    let existed = store.path().is_file();
-    if !existed {
-        store.save(&previous)?;
-    }
+    let catalog = ProviderProfileCatalog::user()?;
+    let snapshot = catalog.snapshot()?;
+    let store = catalog.active_store()?;
+    let edit_path = store.path().with_extension(format!(
+        "toml.edit-{}",
+        std::process::id()
+    ));
+    let edit_store = ProviderProfileStore::at(edit_path);
+    edit_store.save(&snapshot.profile)?;
 
-    let status = launch_editor(store.path())?;
+    let status = launch_editor(edit_store.path())?;
     if !status.success() {
-        rollback_profile(&store, existed, &previous)?;
+        let _ = edit_store.reset();
         return Err(config_error(format!(
-            "configuration editor exited with status {status}; previous configuration restored"
+            "configuration editor exited with status {status}; shared configuration was not changed"
         )));
     }
 
-    let edited = commit_edited_profile(&store, existed, &previous)?;
-    println!("Configuration saved to {}", store.path().display());
+    let result = commit_edited_profile(&catalog, &edit_store, snapshot.revision);
+    let _ = edit_store.reset();
+    let (edited, change) = result?;
+    println!(
+        "Configuration saved to {} at revision {}",
+        store.path().display(),
+        change.revision
+    );
     print_auth_guidance(&edited);
     Ok(())
 }
@@ -258,57 +300,38 @@ fn launch_editor(path: &Path) -> MedusaResult<std::process::ExitStatus> {
 }
 
 fn commit_edited_profile(
-    store: &ProviderProfileStore,
-    existed: bool,
-    previous: &ProviderProfile,
-) -> MedusaResult<ProviderProfile> {
-    let candidate = match store.load() {
-        Ok(candidate) => candidate,
-        Err(_) => {
-            rollback_profile(store, existed, previous)?;
-            return Err(config_error(
-                "edited configuration was invalid; previous configuration restored",
-            ));
-        }
-    };
-    if Config::load_layers_with_provider_profile(
+    catalog: &ProviderProfileCatalog,
+    edit_store: &ProviderProfileStore,
+    expected_revision: u64,
+) -> MedusaResult<(ProviderProfile, ConfigurationChanged)> {
+    let candidate = edit_store.load().map_err(|_| {
+        config_error("edited configuration was invalid; shared configuration was not changed")
+    })?;
+    Config::load_layers_with_provider_profile(
         &candidate,
         None,
         None,
         &BTreeMap::new(),
         &BTreeMap::new(),
     )
-    .is_err()
-    {
-        rollback_profile(store, existed, previous)?;
-        return Err(config_error(
-            "edited configuration was invalid; previous configuration restored",
-        ));
-    }
-    if store.save(&candidate).is_err() {
-        rollback_profile(store, existed, previous)?;
-        return Err(config_error(
-            "edited configuration could not be committed; previous configuration restored",
-        ));
-    }
-    Ok(candidate)
-}
-
-fn rollback_profile(
-    store: &ProviderProfileStore,
-    existed: bool,
-    previous: &ProviderProfile,
-) -> MedusaResult<()> {
-    if existed {
-        store.save(previous)
-    } else {
-        store.reset().map(|_| ())
-    }
+    .map_err(|_| {
+        config_error("edited configuration was invalid; shared configuration was not changed")
+    })?;
+    let change = catalog.save_active_profile(
+        &candidate,
+        expected_revision,
+        ConfigurationChangeOrigin::Cli,
+        PROVIDER_PROFILE_KEYS.iter().map(|key| (*key).to_owned()),
+        ConfigurationApplyTiming::NextSession,
+    )?;
+    Ok((candidate, change))
 }
 
 #[derive(Debug, Serialize)]
 struct ConfigDoctorOutput {
     healthy: bool,
+    revision: u64,
+    active_profile: String,
     configured: bool,
     path: String,
     checks: Vec<ConfigDoctorCheck>,
@@ -324,8 +347,11 @@ struct ConfigDoctorCheck {
 }
 
 pub(crate) fn doctor(json: bool) -> MedusaResult<()> {
-    let store = ProviderProfileCatalog::user()?.active_store()?;
-    let report = diagnose_store(&store);
+    let catalog = ProviderProfileCatalog::user()?;
+    let revision = catalog.revision()?;
+    let active_profile = catalog.active_name()?;
+    let store = catalog.active_store()?;
+    let report = diagnose_store(&store, revision, active_profile);
     if json {
         println!(
             "{}",
@@ -336,6 +362,8 @@ pub(crate) fn doctor(json: bool) -> MedusaResult<()> {
     }
 
     println!("Configuration doctor");
+    println!("Revision: {}", report.revision);
+    println!("Active profile: {}", report.active_profile);
     println!("Path: {}", report.path);
     for check in &report.checks {
         let marker = if check.ok { "ok" } else { "fix" };
@@ -351,7 +379,11 @@ pub(crate) fn doctor(json: bool) -> MedusaResult<()> {
     Ok(())
 }
 
-fn diagnose_store(store: &ProviderProfileStore) -> ConfigDoctorOutput {
+fn diagnose_store(
+    store: &ProviderProfileStore,
+    revision: u64,
+    active_profile: String,
+) -> ConfigDoctorOutput {
     let path = store.path().display().to_string();
     let mut checks = Vec::new();
     let exists = store.path().is_file();
@@ -398,7 +430,7 @@ fn diagnose_store(store: &ProviderProfileStore) -> ConfigDoctorOutput {
                 "profile cannot be parsed or validated",
                 Some("run `medusa config edit` or `medusa config reset`"),
             );
-            return finish_doctor(path, false, checks);
+            return finish_doctor(path, revision, active_profile, false, checks);
         }
     };
 
@@ -435,7 +467,7 @@ fn diagnose_store(store: &ProviderProfileStore) -> ConfigDoctorOutput {
 
     diagnose_endpoint(&profile, &mut checks);
     diagnose_credential(&profile, &mut checks);
-    finish_doctor(path, profile.configured, checks)
+    finish_doctor(path, revision, active_profile, profile.configured, checks)
 }
 
 fn diagnose_endpoint(profile: &ProviderProfile, checks: &mut Vec<ConfigDoctorCheck>) {
@@ -583,11 +615,15 @@ fn add_check(
 
 fn finish_doctor(
     path: String,
+    revision: u64,
+    active_profile: String,
     configured: bool,
     checks: Vec<ConfigDoctorCheck>,
 ) -> ConfigDoctorOutput {
     ConfigDoctorOutput {
         healthy: checks.iter().all(|check| check.ok),
+        revision,
+        active_profile,
         configured,
         path,
         checks,
@@ -595,12 +631,20 @@ fn finish_doctor(
 }
 
 pub(crate) fn reset() -> MedusaResult<()> {
-    let store = ProviderProfileCatalog::user()?.active_store()?;
-    let removed = store.reset()?;
+    let catalog = ProviderProfileCatalog::user()?;
+    let revision = catalog.revision()?;
+    let (removed, change) =
+        catalog.reset_active_profile(revision, ConfigurationChangeOrigin::Cli)?;
     if removed {
-        println!("Medusa provider configuration reset.");
+        println!(
+            "Medusa provider configuration reset at revision {}.",
+            change.revision
+        );
     } else {
-        println!("Medusa provider configuration was already empty.");
+        println!(
+            "Medusa provider configuration was already empty; revision {} records the reset request.",
+            change.revision
+        );
     }
     Ok(())
 }
@@ -807,9 +851,13 @@ token = 'super-secret-value'
         )
         .expect("write invalid edit");
 
-        let error = commit_edited_profile(&store, true, &previous).expect_err("invalid edit");
+        let catalog = ProviderProfileCatalog::at(directory.path());
+        let edit_store = ProviderProfileStore::at(directory.path().join("provider.edit.toml"));
+        fs::rename(store.path(), edit_store.path()).expect("move invalid edit");
+        store.save(&previous).expect("restore shared profile");
+        let error = commit_edited_profile(&catalog, &edit_store, 0).expect_err("invalid edit");
         assert!(!error.to_string().contains("super-secret-value"));
-        assert_eq!(store.load().expect("restored"), previous);
+        assert_eq!(store.load().expect("unchanged"), previous);
     }
 
     #[test]
@@ -818,7 +866,7 @@ token = 'super-secret-value'
         let store = ProviderProfileStore::at(directory.path().join("provider.toml"));
         fs::write(store.path(), "token = 'super-secret-value'
 ").expect("malformed profile");
-        let report = diagnose_store(&store);
+        let report = diagnose_store(&store, 0, "default".to_owned());
         let encoded = serde_json::to_string(&report).expect("doctor json");
         assert!(!report.healthy);
         assert!(!encoded.contains("super-secret-value"));

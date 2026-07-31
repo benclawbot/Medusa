@@ -1,6 +1,9 @@
 use std::{collections::BTreeMap, sync::mpsc::Sender};
 
-use medusa_config::{Config, ProviderProfile, ProviderProfileCatalog};
+use medusa_config::{
+    Config, ConfigurationApplyTiming, ConfigurationChangeOrigin, ProviderProfile,
+    ProviderProfileCatalog,
+};
 
 use crate::{RuntimeError, RuntimeEvent, RuntimeState, commands::ConfigCommand};
 
@@ -21,22 +24,25 @@ fn execute_with_catalog(
 ) -> Result<(), RuntimeError> {
     match command {
         ConfigCommand::Show => {
-            let name = catalog.active_name().map_err(RuntimeError::agent)?;
-            let profile = catalog
-                .active_store()
-                .map_err(RuntimeError::agent)?
-                .load()
-                .map_err(RuntimeError::agent)?;
-            let effective = effective_config(state, &profile)?;
+            let snapshot = catalog.snapshot().map_err(RuntimeError::agent)?;
+            let effective = effective_config(state, &snapshot.profile)?;
             send_notice(
                 events,
                 "Configuration",
-                status_details(catalog, &name, &profile, &effective),
+                status_details(
+                    catalog,
+                    snapshot.revision,
+                    &snapshot.active_profile,
+                    &snapshot.profile,
+                    &effective,
+                ),
             );
         }
         ConfigCommand::Profiles => {
+            let revision = catalog.revision().map_err(RuntimeError::agent)?;
             let profiles = catalog.list().map_err(RuntimeError::agent)?;
-            let details = profiles
+            let mut details = vec![format!("Configuration revision: {revision}")];
+            details.extend(profiles
                 .into_iter()
                 .map(|profile| {
                     let marker = if profile.active { "*" } else { " " };
@@ -50,20 +56,25 @@ fn execute_with_catalog(
                         profile.name, profile.provider, profile.model
                     )
                 })
-                .collect();
+                .collect::<Vec<_>>());
             send_notice(events, "Provider profiles", details);
         }
         ConfigCommand::UseProfile { name } => {
+            let revision = catalog.revision().map_err(RuntimeError::agent)?;
             let profile = catalog.load_profile(&name).map_err(RuntimeError::agent)?;
             let effective = effective_config(state, &profile)?;
-            catalog.use_profile(&name).map_err(RuntimeError::agent)?;
+            let (_, change) = catalog
+                .use_profile_at_revision(&name, revision, ConfigurationChangeOrigin::Tui)
+                .map_err(RuntimeError::agent)?;
             apply_effective_model(state, effective);
+            let _ = events.send(RuntimeEvent::ConfigurationChanged(change.clone()));
             let _ = events.send(state.settings_event());
             send_notice(
                 events,
                 "Provider profile selected",
                 vec![
                     format!("Active profile: {name}"),
+                    format!("Configuration revision: {}", change.revision),
                     format!(
                         "Effective route: {} / {}",
                         state.config.model.provider, state.config.model.name
@@ -73,14 +84,23 @@ fn execute_with_catalog(
             );
         }
         ConfigCommand::Set { key, value } => {
-            let store = catalog.active_store().map_err(RuntimeError::agent)?;
-            let mut candidate = store.load().map_err(RuntimeError::agent)?;
+            let snapshot = catalog.snapshot().map_err(RuntimeError::agent)?;
+            let mut candidate = snapshot.profile;
             candidate
                 .set_value(&key, &value)
                 .map_err(RuntimeError::agent)?;
             let effective = effective_config(state, &candidate)?;
-            store.save(&candidate).map_err(RuntimeError::agent)?;
+            let change = catalog
+                .save_active_profile(
+                    &candidate,
+                    snapshot.revision,
+                    ConfigurationChangeOrigin::Tui,
+                    [key.clone()],
+                    ConfigurationApplyTiming::Immediate,
+                )
+                .map_err(RuntimeError::agent)?;
             apply_effective_model(state, effective);
+            let _ = events.send(RuntimeEvent::ConfigurationChanged(change.clone()));
             let _ = events.send(state.settings_event());
             send_notice(
                 events,
@@ -91,6 +111,7 @@ fn execute_with_catalog(
                         catalog.active_name().map_err(RuntimeError::agent)?
                     ),
                     format!("Updated key: {key}"),
+                    format!("Configuration revision: {}", change.revision),
                     format!(
                         "Effective route: {} / {}",
                         state.config.model.provider, state.config.model.name
@@ -99,12 +120,21 @@ fn execute_with_catalog(
             );
         }
         ConfigCommand::Unset { key } => {
-            let store = catalog.active_store().map_err(RuntimeError::agent)?;
-            let mut candidate = store.load().map_err(RuntimeError::agent)?;
+            let snapshot = catalog.snapshot().map_err(RuntimeError::agent)?;
+            let mut candidate = snapshot.profile;
             candidate.unset_value(&key).map_err(RuntimeError::agent)?;
             let effective = effective_config(state, &candidate)?;
-            store.save(&candidate).map_err(RuntimeError::agent)?;
+            let change = catalog
+                .save_active_profile(
+                    &candidate,
+                    snapshot.revision,
+                    ConfigurationChangeOrigin::Tui,
+                    [key.clone()],
+                    ConfigurationApplyTiming::Immediate,
+                )
+                .map_err(RuntimeError::agent)?;
             apply_effective_model(state, effective);
+            let _ = events.send(RuntimeEvent::ConfigurationChanged(change.clone()));
             let _ = events.send(state.settings_event());
             send_notice(
                 events,
@@ -115,6 +145,7 @@ fn execute_with_catalog(
                         catalog.active_name().map_err(RuntimeError::agent)?
                     ),
                     format!("Reset key: {key}"),
+                    format!("Configuration revision: {}", change.revision),
                     format!(
                         "Effective route: {} / {}",
                         state.config.model.provider, state.config.model.name
@@ -123,18 +154,14 @@ fn execute_with_catalog(
             );
         }
         ConfigCommand::Validate => {
-            let name = catalog.active_name().map_err(RuntimeError::agent)?;
-            let profile = catalog
-                .active_store()
-                .map_err(RuntimeError::agent)?
-                .load()
-                .map_err(RuntimeError::agent)?;
-            let effective = effective_config(state, &profile)?;
+            let snapshot = catalog.snapshot().map_err(RuntimeError::agent)?;
+            let effective = effective_config(state, &snapshot.profile)?;
             send_notice(
                 events,
                 "Configuration is valid",
                 vec![
-                    format!("Active profile: {name}"),
+                    format!("Active profile: {}", snapshot.active_profile),
+                    format!("Configuration revision: {}", snapshot.revision),
                     format!(
                         "Effective route: {} / {} ({}, auth: {})",
                         effective.model.provider,
@@ -174,11 +201,13 @@ fn apply_effective_model(state: &mut RuntimeState, effective: Config) {
 
 fn status_details(
     catalog: &ProviderProfileCatalog,
+    revision: u64,
     name: &str,
     profile: &ProviderProfile,
     effective: &Config,
 ) -> Vec<String> {
     vec![
+        format!("Configuration revision: {revision}"),
         format!("Active profile: {name}"),
         format!("Profile path: {}", catalog.active_store().map_or_else(
             |error| format!("unavailable: {error}"),

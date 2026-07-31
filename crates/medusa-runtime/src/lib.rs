@@ -15,7 +15,7 @@ use medusa_agent::{
     compact_session, update_session_objective,
 };
 use medusa_capabilities::CapabilityRegistry;
-use medusa_config::{Config, Mode};
+use medusa_config::{Config, ConfigurationChanged, Mode};
 use medusa_protocol::{Actor, EventPayload};
 use medusa_provider::{ConfiguredProvider, ModelProvider};
 
@@ -118,6 +118,7 @@ pub enum RuntimeEvent {
         context_window_tokens: u64,
         auto_compact_percent: u8,
     },
+    ConfigurationChanged(ConfigurationChanged),
     Notice {
         title: String,
         details: Vec<String>,
@@ -173,6 +174,9 @@ impl RuntimeEvent {
             }
             Self::Settings { .. } => {
                 RuntimeEventDurability::PresentationOnly("process-local frontend settings")
+            }
+            Self::ConfigurationChanged(_) => {
+                RuntimeEventDurability::DurableProjection("configuration-state.toml")
             }
             Self::Notice { .. } => {
                 RuntimeEventDurability::PresentationOnly("human-readable presentation notice")
@@ -616,6 +620,7 @@ fn controller_event_payload(event: &RuntimeEvent) -> Result<Option<EventPayload>
         | RuntimeEvent::Usage { .. }
         | RuntimeEvent::Progress { .. }
         | RuntimeEvent::Settings { .. }
+        | RuntimeEvent::ConfigurationChanged(_)
         | RuntimeEvent::Notice { .. }
         | RuntimeEvent::NewSession
         | RuntimeEvent::Compacted { .. }
