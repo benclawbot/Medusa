@@ -8,6 +8,7 @@ on:
       - crates/medusa-daemon/src/frontend_control.rs
       - validation/materialize_569_frontend_control_plane.py
       - validation/fix_569_frontend_control_plane.py
+      - validation/remove_569_dead_attachment_mode.py
       - .github/workflows/materialize-569-frontend-control-plane.yml
 
 permissions:
@@ -31,6 +32,7 @@ jobs:
         run: |
           python3 validation/materialize_569_frontend_control_plane.py
           python3 validation/fix_569_frontend_control_plane.py
+          python3 validation/remove_569_dead_attachment_mode.py
       - name: Format and validate frontend control plane
         run: |
           cargo fmt --all
@@ -45,6 +47,7 @@ jobs:
           git rm .github/workflows/materialize-569-frontend-control-plane.yml
           git rm validation/materialize_569_frontend_control_plane.py
           git rm validation/fix_569_frontend_control_plane.py
+          git rm validation/remove_569_dead_attachment_mode.py
           git config user.name github-actions[bot]
           git config user.email 41898282+github-actions[bot]@users.noreply.github.com
           git add crates/medusa-daemon/Cargo.toml
