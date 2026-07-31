@@ -75,10 +75,9 @@ impl FrontendArtifactStore {
                 limit: byte_limit,
             });
         }
-        if mime_type
-            .as_deref()
-            .is_some_and(|value| value.starts_with("image/") && !is_supported_image_mime(Some(value)))
-        {
+        if mime_type.as_deref().is_some_and(|value| {
+            value.starts_with("image/") && !is_supported_image_mime(Some(value))
+        }) {
             return Err(FrontendArtifactStoreError::UnsupportedImageMimeType);
         }
 
@@ -234,9 +233,9 @@ fn validate_mime_type(value: Option<&str>) -> Result<Option<String>, FrontendArt
     let trimmed = value.trim().to_ascii_lowercase();
     if trimmed.is_empty()
         || trimmed.len() > MAX_MIME_TYPE_CHARS
-        || !trimmed.bytes().all(|byte| {
-            byte.is_ascii_alphanumeric() || matches!(byte, b'/' | b'+' | b'-' | b'.')
-        })
+        || !trimmed
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'/' | b'+' | b'-' | b'.'))
     {
         return Err(FrontendArtifactStoreError::InvalidMimeType);
     }
