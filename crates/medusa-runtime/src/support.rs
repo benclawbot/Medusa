@@ -138,7 +138,7 @@ pub(super) fn should_auto_compact(
 
 pub(super) fn model_configuration_details(state: &RuntimeState) -> Vec<String> {
     let credential = if state.session_api_key.is_some()
-        || credential_environment(&state.config.model.provider)
+        || medusa_config::credential_environment(&state.config.model.provider)
             .is_some_and(|name| env::var(name).is_ok())
     {
         "credential: configured"
