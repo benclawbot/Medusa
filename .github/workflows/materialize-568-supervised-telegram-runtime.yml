@@ -4,43 +4,15 @@ on:
   pull_request:
     types: [opened, synchronize, reopened]
     paths:
-      - "crates/medusa-daemon/**"
       - "validation/materialize_568_supervised_telegram_runtime.py"
       - ".github/workflows/materialize-568-supervised-telegram-runtime.yml"
 
 permissions:
-  contents: write
-
-concurrency:
-  group: materialize-568-runtime-${{ github.event.pull_request.number }}
-  cancel-in-progress: true
+  contents: read
 
 jobs:
   materialize:
-    if: github.head_ref == 'agent/568-supervised-telegram-runtime'
+    if: false
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
-        with:
-          ref: agent/568-supervised-telegram-runtime
-          token: ${{ secrets.GITHUB_TOKEN }}
-          fetch-depth: 0
-      - uses: dtolnay/rust-toolchain@39b0b3842c7e8bbf6904c0bfc3d9006fdd4dc4e0
-        with:
-          components: rustfmt,clippy
-      - name: Materialize supervised runtime
-        run: python3 validation/materialize_568_supervised_telegram_runtime.py
-      - name: Validate supervised runtime
-        run: |
-          cargo fmt --all
-          cargo fmt --all -- --check
-          cargo test -p medusa-daemon telegram::runtime
-          cargo test -p medusa-daemon telegram::service
-          cargo clippy -p medusa-daemon --all-targets -- -D warnings
-      - name: Commit validated product files
-        run: |
-          git config user.name github-actions[bot]
-          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
-          git add crates/medusa-daemon/src/telegram
-          git commit -m "Supervise Telegram polling through daemon control plane"
-          git push origin HEAD:agent/568-supervised-telegram-runtime
+      - run: echo "Materialization paused while the generator is hardened"
