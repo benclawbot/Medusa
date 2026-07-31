@@ -39,6 +39,7 @@ medusa-tool-policy = { path = "../medusa-tool-policy" }
 medusa-turn-assembly = { path = "../medusa-turn-assembly" }
 medusa-workers = { path = "../medusa-workers" }
 png = "0.17"
+# Trusted runtime-only HTTP client for bounded Realtime client-secret minting.
 reqwest.workspace = true
 serde.workspace = true
 serde_json.workspace = true
