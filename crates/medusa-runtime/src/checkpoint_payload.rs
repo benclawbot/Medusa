@@ -229,10 +229,7 @@ pub(crate) fn current_repository_fingerprint(
     repository_fingerprint_from_files(&current)
 }
 
-pub(crate) fn restore(
-    repo: &Path,
-    payload: &RuntimeCheckpointPayload,
-) -> Result<(), RuntimeError> {
+pub(crate) fn restore(repo: &Path, payload: &RuntimeCheckpointPayload) -> Result<(), RuntimeError> {
     payload.verify()?;
     if !payload.unresolved_risks.is_empty()
         || payload
@@ -272,11 +269,15 @@ pub(crate) fn restore(
         if existed {
             fs::copy(&destination, &backup).map_err(RuntimeError::agent)?;
         }
-        let staged_path = file.content.as_ref().map(|content| {
-            let path = staged.join(index.to_string());
-            fs::write(&path, content.as_bytes()).map_err(RuntimeError::agent)?;
-            Ok::<PathBuf, RuntimeError>(path)
-        }).transpose()?;
+        let staged_path = file
+            .content
+            .as_ref()
+            .map(|content| {
+                let path = staged.join(index.to_string());
+                fs::write(&path, content.as_bytes()).map_err(RuntimeError::agent)?;
+                Ok::<PathBuf, RuntimeError>(path)
+            })
+            .transpose()?;
         prepared.push((destination, backup, existed, staged_path));
     }
 
@@ -288,10 +289,8 @@ pub(crate) fn restore(
             }
             match staged_path {
                 Some(path) => {
-                    let temporary = destination.with_extension(format!(
-                        "medusa-restore-{}-tmp",
-                        std::process::id()
-                    ));
+                    let temporary = destination
+                        .with_extension(format!("medusa-restore-{}-tmp", std::process::id()));
                     fs::copy(path, &temporary).map_err(RuntimeError::agent)?;
                     sync_file(&temporary)?;
                     if destination.exists() {
@@ -568,7 +567,7 @@ fn sync_parent(_: &Path) -> std::io::Result<()> {
 mod tests {
     use medusa_agent::{AgentEngine, record_session_event};
     use medusa_config::Config;
-    use medusa_core::MedusaResult;
+    use medusa_core::{CorrelationId, MedusaResult, SessionId};
     use medusa_protocol::Actor;
     use medusa_provider::{ModelProvider, ModelRequest, ModelResponse};
     use tempfile::tempdir;
@@ -601,11 +600,9 @@ mod tests {
             },
         )
         .expect("file event");
-        let checkpoint = crate::checkpoint_store::materialize(
-            repository.path(),
-            session.id.as_str(),
-        )
-        .expect("checkpoint");
+        let checkpoint =
+            crate::checkpoint_store::materialize(repository.path(), session.id.as_str())
+                .expect("checkpoint");
         let payload = materialize(repository.path(), &checkpoint).expect("payload");
         fs::write(repository.path().join("src/lib.rs"), "changed").expect("change");
 
@@ -627,15 +624,16 @@ mod tests {
         let repository = tempdir().expect("repository");
         fs::write(repository.path().join("binary.bin"), [0xff, 0xfe]).expect("binary");
         let event = medusa_protocol::EventEnvelope::new(
-            medusa_protocol::SessionId::parse("session-1").expect("session"),
             0,
+            SessionId::parse("ses-01ARZ3NDEKTSV4RRFFQ69G5FAV").expect("session"),
             Actor::Coordinator,
-            medusa_protocol::CorrelationId::parse("correlation-1").expect("correlation"),
-            None,
+            CorrelationId::parse("cor-01ARZ3NDEKTSV4RRFFQ69G5FAV").expect("correlation"),
             EventPayload::FileTransactionCommitted {
                 paths: vec!["binary.bin".to_owned()],
                 rollback_ref: "rollback".to_owned(),
             },
+            None,
+            time::OffsetDateTime::UNIX_EPOCH,
         )
         .expect("event");
         let files = capture_files(repository.path(), &[event]).expect("capture");

@@ -27,6 +27,7 @@ use crate::{
 };
 
 pub mod attachment;
+pub mod checkpoint_payload;
 pub mod checkpoint_store;
 pub mod commands;
 mod config_command;
@@ -48,6 +49,7 @@ mod tests;
 pub mod voice;
 pub mod voice_agent_bridge;
 
+pub use checkpoint_payload::{CheckpointFilePayload, RuntimeCheckpointPayload};
 pub use checkpoint_store::RuntimeCheckpointRecord;
 pub use error::RuntimeError;
 pub use execution_history::{
@@ -462,6 +464,35 @@ impl RuntimeController {
         if lock_submission(&self.submission).busy {
             return Err(RuntimeError::Busy);
         }
+        let (view, preflight) = if matches!(
+            request.operation,
+            medusa_recovery_coordinator::RecoveryOperation::RestoreCheckpoint
+        ) {
+            let checkpoint_id = request.checkpoint_id.as_deref().ok_or_else(|| {
+                RuntimeError::InvalidCommand("restore requires a checkpoint id".to_owned())
+            })?;
+            self.preview_checkpoint_restore(&request.session_id, checkpoint_id)?;
+            let (authoritative_view, authoritative_preflight) =
+                recovery_action_context(&self.repo, &request).map_err(RuntimeError::agent)?;
+            if preflight != authoritative_preflight {
+                return Err(RuntimeError::InvalidCommand(
+                    "recovery preflight is stale; refresh the checkpoint preview".to_owned(),
+                ));
+            }
+            let source_cursor = self.execution_health(&request.session_id)?.journal_cursor;
+            record_controller_event(
+                &self.repo,
+                &request.session_id,
+                Actor::User,
+                EventPayload::CheckpointRestoreRequested {
+                    checkpoint_id: checkpoint_id.to_owned(),
+                    source_cursor,
+                },
+            )?;
+            (authoritative_view, authoritative_preflight)
+        } else {
+            (view, preflight)
+        };
         self.commands
             .send(RuntimeCommand::Recovery {
                 view: Box::new(view),

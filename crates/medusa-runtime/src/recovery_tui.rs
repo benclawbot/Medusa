@@ -1,7 +1,7 @@
 use std::{
     collections::BTreeMap,
-    fs, io,
-    path::{Component, Path, PathBuf},
+    fs,
+    path::Path,
     time::{SystemTime, UNIX_EPOCH},
 };
 
@@ -12,11 +12,10 @@ use medusa_recovery_coordinator::{
     RecoveryView, RecoveryViewInput, VerificationState,
 };
 use serde::Deserialize;
-use thiserror::Error;
+
+use crate::{RuntimeError, checkpoint_payload};
 
 const RECOVERY_DIRECTORY: &str = ".medusa/recovery";
-const CHECKPOINT_PAYLOAD_DIRECTORY: &str = ".medusa/recovery-checkpoints";
-
 #[derive(Debug, Deserialize)]
 struct PersistedRecoveryRecord {
     session_id: String,
@@ -30,37 +29,13 @@ struct PersistedRecoveryRecord {
     selected_preview: Option<RecoveryPreview>,
 }
 
-#[derive(Debug, Deserialize)]
-struct PersistedCheckpointPayload {
-    checkpoint_id: String,
-    files: Vec<CheckpointFilePayload>,
-}
-
-#[derive(Debug, Deserialize)]
-struct CheckpointFilePayload {
-    path: String,
-    content: Option<String>,
-}
-
-#[derive(Debug, Error)]
-enum RuntimeRecoveryError {
-    #[error("checkpoint payload is unavailable: {0}")]
-    MissingPayload(PathBuf),
-    #[error("checkpoint payload is invalid: {0}")]
-    InvalidPayload(String),
-    #[error("checkpoint restore I/O failed: {0}")]
-    Io(#[from] io::Error),
-    #[error("checkpoint payload could not be decoded: {0}")]
-    Decode(#[from] serde_json::Error),
-}
-
 struct RuntimeRecoveryExecutor {
     repository_fingerprint: String,
     checkpoint_fingerprints: BTreeMap<String, String>,
 }
 
 impl RecoveryActionExecutor for RuntimeRecoveryExecutor {
-    type Error = RuntimeRecoveryError;
+    type Error = RuntimeError;
 
     fn execute(
         &mut self,
@@ -85,15 +60,17 @@ impl RecoveryActionExecutor for RuntimeRecoveryExecutor {
             }
             RecoveryOperation::RestoreCheckpoint => {
                 let checkpoint_id = action.checkpoint_id.as_deref().ok_or_else(|| {
-                    RuntimeRecoveryError::InvalidPayload("missing checkpoint id".to_owned())
+                    RuntimeError::InvalidCommand("missing checkpoint id".to_owned())
                 })?;
-                restore_checkpoint(repository, &action.session_id, checkpoint_id)?;
+                let payload =
+                    checkpoint_payload::load(repository, &action.session_id, checkpoint_id)?;
+                checkpoint_payload::restore(repository, &payload)?;
                 let fingerprint = self
                     .checkpoint_fingerprints
                     .get(checkpoint_id)
                     .cloned()
                     .ok_or_else(|| {
-                        RuntimeRecoveryError::InvalidPayload(
+                        RuntimeError::InvalidCommand(
                             "checkpoint metadata is unavailable".to_owned(),
                         )
                     })?;
@@ -234,140 +211,10 @@ fn discover(repo: &Path) -> Result<RecoveryView, String> {
     }))
 }
 
-fn restore_checkpoint(
-    repository: &Path,
-    session_id: &str,
-    checkpoint_id: &str,
-) -> Result<(), RuntimeRecoveryError> {
-    validate_identifier(session_id)?;
-    validate_identifier(checkpoint_id)?;
-    let payload_path = repository
-        .join(CHECKPOINT_PAYLOAD_DIRECTORY)
-        .join(session_id)
-        .join(format!("{checkpoint_id}.json"));
-    if !payload_path.is_file() {
-        return Err(RuntimeRecoveryError::MissingPayload(payload_path));
-    }
-    let payload: PersistedCheckpointPayload = serde_json::from_slice(&fs::read(&payload_path)?)?;
-    if payload.checkpoint_id != checkpoint_id {
-        return Err(RuntimeRecoveryError::InvalidPayload(
-            "payload checkpoint id does not match the selected checkpoint".to_owned(),
-        ));
-    }
-    for file in payload.files {
-        let destination = repository.join(safe_relative_path(&file.path)?);
-        match file.content {
-            Some(content) => {
-                if let Some(parent) = destination.parent() {
-                    fs::create_dir_all(parent)?;
-                }
-                let temporary = destination.with_extension("medusa-restore-tmp");
-                fs::write(&temporary, content.as_bytes())?;
-                if destination.exists() {
-                    fs::remove_file(&destination)?;
-                }
-                fs::rename(temporary, destination)?;
-            }
-            None if destination.exists() => fs::remove_file(destination)?,
-            None => {}
-        }
-    }
-    Ok(())
-}
-
-fn validate_identifier(value: &str) -> Result<(), RuntimeRecoveryError> {
-    if value.is_empty()
-        || !value
-            .bytes()
-            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_'))
-    {
-        return Err(RuntimeRecoveryError::InvalidPayload(
-            "session and checkpoint identifiers must be path-safe".to_owned(),
-        ));
-    }
-    Ok(())
-}
-
-fn safe_relative_path(value: &str) -> Result<PathBuf, RuntimeRecoveryError> {
-    let path = Path::new(value);
-    if value.is_empty()
-        || path.is_absolute()
-        || path.components().any(|component| {
-            matches!(
-                component,
-                Component::ParentDir | Component::RootDir | Component::Prefix(_)
-            )
-        })
-    {
-        return Err(RuntimeRecoveryError::InvalidPayload(format!(
-            "unsafe repository path: {value}"
-        )));
-    }
-    Ok(path.to_path_buf())
-}
-
 fn now_unix_ms() -> i64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .ok()
         .and_then(|duration| i64::try_from(duration.as_millis()).ok())
         .unwrap_or_default()
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use tempfile::tempdir;
-
-    #[test]
-    fn restores_files_and_deletions() {
-        let repo = tempdir().expect("temporary repository");
-        fs::create_dir_all(repo.path().join("src")).expect("create src");
-        fs::write(repo.path().join("src/lib.rs"), "current").expect("write current");
-        fs::write(repo.path().join("obsolete.txt"), "remove").expect("write obsolete");
-        let payload_dir = repo
-            .path()
-            .join(CHECKPOINT_PAYLOAD_DIRECTORY)
-            .join("session-1");
-        fs::create_dir_all(&payload_dir).expect("create payload directory");
-        fs::write(
-            payload_dir.join("checkpoint-1.json"),
-            serde_json::to_vec(&serde_json::json!({
-                "checkpoint_id": "checkpoint-1",
-                "files": [
-                    {"path": "src/lib.rs", "content": "restored"},
-                    {"path": "obsolete.txt", "content": null}
-                ]
-            }))
-            .expect("serialize payload"),
-        )
-        .expect("write payload");
-
-        restore_checkpoint(repo.path(), "session-1", "checkpoint-1").expect("restore checkpoint");
-        assert_eq!(
-            fs::read_to_string(repo.path().join("src/lib.rs")).expect("read restored"),
-            "restored"
-        );
-        assert!(!repo.path().join("obsolete.txt").exists());
-    }
-
-    #[test]
-    fn rejects_path_traversal() {
-        let repo = tempdir().expect("temporary repository");
-        let payload_dir = repo
-            .path()
-            .join(CHECKPOINT_PAYLOAD_DIRECTORY)
-            .join("session-1");
-        fs::create_dir_all(&payload_dir).expect("create payload directory");
-        fs::write(
-            payload_dir.join("checkpoint-1.json"),
-            serde_json::to_vec(&serde_json::json!({
-                "checkpoint_id": "checkpoint-1",
-                "files": [{"path": "../escape", "content": "bad"}]
-            }))
-            .expect("serialize payload"),
-        )
-        .expect("write payload");
-        assert!(restore_checkpoint(repo.path(), "session-1", "checkpoint-1").is_err());
-    }
 }

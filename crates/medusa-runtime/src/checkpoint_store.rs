@@ -153,6 +153,7 @@ pub(crate) fn materialize(
         health.checkpoint,
     )?;
     persist(repo, &record)?;
+    crate::checkpoint_payload::materialize(repo, &record)?;
     Ok(record)
 }
 

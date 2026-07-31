@@ -146,11 +146,8 @@ fn build_record(
     }
     let selected_payload = checkpoint_payload::load(repo, session_id, selected_id)?;
     let selected_preview = checkpoint_payload::preview(repo, &selected_payload)?;
-    let latest_payload = checkpoint_payload::load(
-        repo,
-        session_id,
-        &latest.checkpoint.fingerprint,
-    )?;
+    let latest_payload =
+        checkpoint_payload::load(repo, session_id, &latest.checkpoint.fingerprint)?;
     let current_repository_fingerprint =
         checkpoint_payload::current_repository_fingerprint(repo, &latest_payload)?;
     let interrupted_operation = matches!(latest_step.as_str(), "runtime_failed" | "session_failed")
