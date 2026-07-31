@@ -22,92 +22,27 @@ jobs:
         with:
           ref: agent/555-cross-platform-dogfood
           token: ${{ secrets.GITHUB_TOKEN }}
-      - name: Apply exact hardening patch
+      - name: Normalize method spacing
         shell: python
         run: |
           from pathlib import Path
 
-          harness_path = Path("scripts/live-coding-e2e.py")
-          harness = harness_path.read_text(encoding="utf-8")
-
-          method_start = harness.index("    def medusa_binary(self) -> Path:\n")
-          method_end = harness.index("\n    def run_agent(self) -> None:\n", method_start)
-          new_binary = "\n".join(
-              [
-                  "    def binary_path(self) -> Path:",
-                  '        suffix = ".exe" if os.name == "nt" else ""',
-                  '        return self.work_root / "installed" / "bin" / f"medusa{suffix}"',
-                  "",
-                  "    def medusa_binary(self) -> Path:",
-                  "        binary = self.binary_path()",
-                  "        if not binary.is_file():",
-                  '            raise HarnessError(f"built Medusa binary not found at {binary}", "environment")',
-                  "        return binary",
-                  "",
-              ]
-          )
-          harness = harness[:method_start] + new_binary + harness[method_end + 1 :]
-
-          summary_signature = (
-              "    def write_summary(self, *, result: str, classification: str | None, "
-              "detail: str | None) -> None:\n"
-          )
-          summary_start = harness.index(summary_signature)
-          insertion = summary_start + len(summary_signature)
-          harness = harness[:insertion] + "        binary = self.binary_path()\n" + harness[insertion:]
-
-          old_identity = '                "binary_sha256": sha256(self.medusa_binary()) if self.medusa_binary().is_file() else None,\n'
-          new_identity = '                "binary_sha256": sha256(binary) if binary.is_file() else None,\n'
-          if harness.count(old_identity) != 1:
-              raise SystemExit("expected exactly one binary identity expression")
-          harness = harness.replace(old_identity, new_identity, 1)
-          harness_path.write_text(harness, encoding="utf-8")
-
-          test_path = Path("scripts/test-live-dogfood.py")
-          tests = test_path.read_text(encoding="utf-8")
-          marker = "    def test_report_loader_ignores_unrelated_json(self) -> None:\n"
-          regression = "\n".join(
-              [
-                  "    def test_failed_summary_does_not_require_a_built_binary(self) -> None:",
-                  "        with tempfile.TemporaryDirectory() as directory:",
-                  "            root = Path(directory)",
-                  "            harness = HARNESS.Harness(",
-                  "                repo_root=root,",
-                  '                output_dir=root / "artifacts",',
-                  "                timeout_seconds=1,",
-                  "                heartbeat_seconds=1,",
-                  '                api_key="credential-value",',
-                  "            )",
-                  '            harness.commit_sha = lambda: "abc123"',
-                  "            harness.write_summary(",
-                  '                result="failed",',
-                  '                classification="environment",',
-                  '                detail="release build failed",',
-                  "            )",
-                  "            summary = json.loads(",
-                  '                (harness.output_dir / "summary.json").read_text(encoding="utf-8")',
-                  "            )",
-                  '            self.assertEqual(summary["result"], "failed")',
-                  '            self.assertEqual(summary["commit"], "abc123")',
-                  '            self.assertIsNone(summary["build"]["binary_sha256"])',
-                  "",
-                  "",
-              ]
-          )
-          if "test_failed_summary_does_not_require_a_built_binary" not in tests:
-              if tests.count(marker) != 1:
-                  raise SystemExit("expected exactly one test insertion marker")
-              tests = tests.replace(marker, regression + marker, 1)
-          test_path.write_text(tests, encoding="utf-8")
+          path = Path("scripts/live-coding-e2e.py")
+          text = path.read_text(encoding="utf-8")
+          old = "        return binary\n    def run_agent(self) -> None:\n"
+          new = "        return binary\n\n    def run_agent(self) -> None:\n"
+          if text.count(old) != 1:
+              raise SystemExit("expected exactly one method-spacing boundary")
+          path.write_text(text.replace(old, new, 1), encoding="utf-8")
       - name: Validate contract and regression
         run: |
           python -m py_compile scripts/live-coding-e2e.py scripts/live-dogfood-report.py scripts/test-live-dogfood.py
           python scripts/test-live-dogfood.py
-      - name: Commit production changes
+      - name: Commit production change
         run: |
           git config user.name github-actions[bot]
           git config user.email 41898282+github-actions[bot]@users.noreply.github.com
-          git add scripts/live-coding-e2e.py scripts/test-live-dogfood.py
+          git add scripts/live-coding-e2e.py
           git diff --cached --check
-          git commit -m "Preserve live dogfood failure evidence"
+          git commit -m "Normalize live dogfood harness formatting"
           git push origin HEAD:agent/555-cross-platform-dogfood
