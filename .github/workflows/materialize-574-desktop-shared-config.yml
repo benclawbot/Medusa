@@ -1,0 +1,57 @@
+name: Materialize shared desktop configuration
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+    paths:
+      - "apps/medusa-desktop/**"
+      - "validation/materialize_574_desktop_shared_config.py"
+      - ".github/workflows/materialize-574-desktop-shared-config.yml"
+
+permissions:
+  contents: write
+
+concurrency:
+  group: materialize-574-desktop-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  materialize:
+    if: github.head_ref == 'agent/574-desktop-shared-config'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          ref: agent/574-desktop-shared-config
+          token: ${{ secrets.GITHUB_TOKEN }}
+          fetch-depth: 0
+      - name: Install Linux Tauri dependencies
+        run: sudo apt-get update && sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf
+      - uses: dtolnay/rust-toolchain@39b0b3842c7e8bbf6904c0bfc3d9006fdd4dc4e0
+        with:
+          components: rustfmt,clippy
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: apps/medusa-desktop/package-lock.json
+      - name: Materialize shared configuration wiring
+        run: python3 validation/materialize_574_desktop_shared_config.py
+      - name: Validate desktop shared configuration
+        run: |
+          cargo generate-lockfile --manifest-path apps/medusa-desktop/src-tauri/Cargo.toml
+          cargo fmt --manifest-path apps/medusa-desktop/src-tauri/Cargo.toml
+          cargo fmt --manifest-path apps/medusa-desktop/src-tauri/Cargo.toml -- --check
+          cargo test --manifest-path apps/medusa-desktop/src-tauri/Cargo.toml config::tests
+          cargo clippy --manifest-path apps/medusa-desktop/src-tauri/Cargo.toml --all-targets -- -D warnings
+          npm ci --prefix apps/medusa-desktop
+          npm run typecheck --prefix apps/medusa-desktop
+          npm test --prefix apps/medusa-desktop
+      - name: Commit source-only result
+        run: |
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git rm .github/workflows/materialize-574-desktop-shared-config.yml validation/materialize_574_desktop_shared_config.py
+          git add apps/medusa-desktop
+          git commit -m "Wire desktop to shared provider configuration"
+          git push origin HEAD:agent/574-desktop-shared-config
