@@ -212,6 +212,15 @@ fn map_event(event: medusa_runtime::RuntimeEvent) -> RuntimeEvent {
             context_window_tokens,
             auto_compact_percent,
         },
+        medusa_runtime::RuntimeEvent::ConfigurationChanged(change) => RuntimeEvent::Notice {
+            title: format!("Configuration revision {} applied", change.revision),
+            details: vec![
+                format!("Profile: {}", change.active_profile),
+                format!("Changed: {}", change.changed_keys.join(", ")),
+                format!("Origin: {:?}", change.origin),
+                format!("Apply timing: {:?}", change.apply_timing),
+            ],
+        },
         medusa_runtime::RuntimeEvent::Notice { title, details } => {
             RuntimeEvent::Notice { title, details }
         }
