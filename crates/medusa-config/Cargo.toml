@@ -7,9 +7,6 @@ rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
 
-[lib]
-path = "src/root.rs"
-
 [lints.rust]
 # Tests need `unsafe` to mutate process environment (unsafe since Rust 1.86).
 unsafe_code = "deny"
@@ -17,7 +14,6 @@ unsafe_code = "deny"
 [dependencies]
 medusa-core.workspace = true
 serde.workspace = true
-serde_json.workspace = true
 toml.workspace = true
 
 [dev-dependencies]
