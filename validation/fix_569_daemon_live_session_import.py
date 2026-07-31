@@ -9,4 +9,13 @@ if new not in source:
     if count != 1:
         raise SystemExit(f"daemon broker import target changed: {count}")
     source = source.replace(old, new, 1)
+
+old = "        self.attachment_mut(from_client_id)?.handoff(\n"
+new = "        self.attachment_mut(from_client_id)?.refresh_continuity()?;\n        self.attachment_mut(from_client_id)?.handoff(\n"
+if new not in source:
+    count = source.count(old)
+    if count != 1:
+        raise SystemExit(f"handoff refresh target changed: {count}")
+    source = source.replace(old, new, 1)
+
 path.write_text(source)
