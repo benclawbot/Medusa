@@ -14,3 +14,6 @@ path = "src/main.rs"
 medusa-browser-client = { path = "../medusa-browser-client" }
 serde_json = { workspace = true }
 url = "2.5"
+
+[lints]
+workspace = true
