@@ -16,6 +16,7 @@ use medusa_protocol::{
 };
 use medusa_runtime::{
     RuntimeController, SubmitDisposition,
+    attachment::session::{AttachmentMode, ClientKind, RuntimeAttachRequest},
     commands::{Effort, ModelCommand, SlashCommand, TeamCommand},
     prompt::PromptDraft,
 };
@@ -23,10 +24,12 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use thiserror::Error;
 
-use crate::live_session::{
-    LiveSessionAttachmentView, LiveSessionBroker, LiveSessionBrokerError, LiveSessionSummary,
+use crate::{
+    artifact_store::{FrontendArtifactInput, FrontendArtifactStore, FrontendArtifactStoreError},
+    live_session::{
+        LiveSessionAttachmentView, LiveSessionBroker, LiveSessionBrokerError, LiveSessionSummary,
+    },
 };
-use medusa_runtime::attachment::session::{AttachmentMode, ClientKind, RuntimeAttachRequest};
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
@@ -97,6 +100,7 @@ pub struct FrontendControlPlane {
     controllers: BTreeMap<String, RuntimeController>,
     control_clients: BTreeMap<String, String>,
     acknowledgements: BTreeMap<String, CachedAcknowledgement>,
+    artifacts: FrontendArtifactStore,
 }
 
 impl FrontendControlPlane {
@@ -104,6 +108,7 @@ impl FrontendControlPlane {
     pub fn new(repo: PathBuf, config: Config) -> Self {
         Self {
             broker: LiveSessionBroker::new(repo.clone()),
+            artifacts: FrontendArtifactStore::new(repo.join(".medusa/frontend-artifacts")),
             repo,
             config,
             controllers: BTreeMap::new(),
@@ -119,6 +124,22 @@ impl FrontendControlPlane {
         cursor: u64,
     ) -> Result<Vec<EventEnvelope>, FrontendControlError> {
         self.broker.replay(client_id, cursor).map_err(Into::into)
+    }
+
+    /// Stages one bounded frontend attachment and returns its opaque content-addressed id.
+    pub fn ingest_attachment(
+        &self,
+        display_name: String,
+        mime_type: Option<String>,
+        bytes: Vec<u8>,
+    ) -> Result<String, FrontendControlError> {
+        self.artifacts
+            .ingest(FrontendArtifactInput {
+                display_name,
+                mime_type,
+                bytes,
+            })
+            .map_err(Into::into)
     }
 
     /// Validates, serializes, and idempotently acknowledges one frontend command.
@@ -301,12 +322,15 @@ impl FrontendControlPlane {
                 text,
                 attachment_ids,
             } => {
-                if !attachment_ids.is_empty() {
-                    return Err(FrontendControlError::UnsupportedCommand(
-                        "attachment submission requires the daemon artifact store",
-                    ));
-                }
-                self.submit_text(envelope, text)
+                let attachments = self.artifacts.resolve(attachment_ids)?;
+                self.submit_draft(
+                    envelope,
+                    PromptDraft {
+                        text: text.clone(),
+                        attachments,
+                        revision: 0,
+                    },
+                )
             }
             FrontendCommand::AnswerQuestion { answer, .. } => self.submit_text(envelope, answer),
             FrontendCommand::ResolveApproval { decision, .. } => self.submit_text(
@@ -427,12 +451,23 @@ impl FrontendControlPlane {
         envelope: &FrontendCommandEnvelope,
         text: &str,
     ) -> Result<FrontendControlResult, FrontendControlError> {
+        self.submit_draft(
+            envelope,
+            PromptDraft {
+                text: text.to_owned(),
+                ..PromptDraft::default()
+            },
+        )
+    }
+
+    fn submit_draft(
+        &self,
+        envelope: &FrontendCommandEnvelope,
+        draft: PromptDraft,
+    ) -> Result<FrontendControlResult, FrontendControlError> {
         let session_id = required_session_id(envelope)?;
         self.authorize_control(&session_id, &envelope.client_id)?;
-        let disposition = self.controller(&session_id)?.submit(PromptDraft {
-            text: text.to_owned(),
-            ..PromptDraft::default()
-        })?;
+        let disposition = self.controller(&session_id)?.submit(draft)?;
         Ok(FrontendControlResult::SubmissionAccepted {
             session_id,
             queued: disposition == SubmitDisposition::Queued,
@@ -526,6 +561,8 @@ pub enum FrontendControlError {
     ReadOnlyClient(String),
     #[error("unsupported frontend command: {0}")]
     UnsupportedCommand(&'static str),
+    #[error(transparent)]
+    Artifact(#[from] FrontendArtifactStoreError),
     #[error(transparent)]
     Broker(#[from] LiveSessionBrokerError),
     #[error(transparent)]
