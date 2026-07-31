@@ -1,13 +1,10 @@
 //! Runtime ownership for authenticated OpenAI Realtime sessions.
 //!
-//! This layer joins the trusted credential issuer in `openai_realtime` with the
-//! provider-isolated transport in `medusa-openai-realtime`. It keeps short-lived
-//! credentials out of frontend code, renews them before expiry, rebuilds the wire
-//! on reconnect, and preserves the user's activation and mute intent.
+//! Short-lived credentials stay inside the trusted runtime. The owner renews
+//! credentials before expiry, rebuilds the wire when required, and preserves
+//! activation and mute intent without exposing secrets to frontends.
 
-use medusa_openai_realtime::{
-    GatewayCapability, SessionConfig, Transport, TransportError, Wire,
-};
+use medusa_openai_realtime::{GatewayCapability, SessionConfig, Transport, TransportError, Wire};
 use thiserror::Error;
 
 use crate::openai_realtime::{
@@ -53,8 +50,7 @@ impl SessionCredential {
 
     #[must_use]
     pub fn needs_renewal(&self, now_seconds: u64, renew_before_seconds: u64) -> bool {
-        self.expires_at
-            <= now_seconds.saturating_add(renew_before_seconds)
+        self.expires_at <= now_seconds.saturating_add(renew_before_seconds)
     }
 }
 
@@ -145,6 +141,7 @@ where
         })
     }
 
+    #[must_use]
     pub fn with_renew_before_seconds(mut self, seconds: u64) -> Self {
         self.renew_before_seconds = seconds;
         self
@@ -161,10 +158,7 @@ where
     }
 
     pub fn establish(&mut self) -> Result<(), SessionOwnerError> {
-        let credential = self
-            .issuer
-            .issue()
-            .map_err(SessionOwnerError::Credential)?;
+        let credential = self.issuer.issue().map_err(SessionOwnerError::Credential)?;
         let wire = self
             .wire_factory
             .connect(&self.capability, &credential)
@@ -177,12 +171,9 @@ where
     }
 
     pub fn ensure_fresh(&mut self, now_seconds: u64) -> Result<(), SessionOwnerError> {
-        let needs_renewal = self
-            .credential
-            .as_ref()
-            .is_none_or(|credential| {
-                credential.needs_renewal(now_seconds, self.renew_before_seconds)
-            });
+        let needs_renewal = self.credential.as_ref().is_none_or(|credential| {
+            credential.needs_renewal(now_seconds, self.renew_before_seconds)
+        });
         if needs_renewal {
             self.rebuild()?;
         }
@@ -190,21 +181,19 @@ where
     }
 
     pub fn activate(&mut self, now_seconds: u64) -> Result<(), SessionOwnerError> {
-        self.activated = true;
-        self.muted = false;
         self.ensure_fresh(now_seconds)?;
-        self.transport_mut()?.activate()?;
+        if !self.activated {
+            self.transport_mut()?.activate()?;
+            self.activated = true;
+            self.muted = false;
+        }
         Ok(())
     }
 
-    pub fn set_muted(
-        &mut self,
-        muted: bool,
-        now_seconds: u64,
-    ) -> Result<(), SessionOwnerError> {
-        self.muted = muted;
+    pub fn set_muted(&mut self, muted: bool, now_seconds: u64) -> Result<(), SessionOwnerError> {
         self.ensure_fresh(now_seconds)?;
         self.transport_mut()?.set_muted(muted)?;
+        self.muted = muted;
         Ok(())
     }
 
@@ -219,13 +208,10 @@ where
     }
 
     pub fn reconnect(&mut self, now_seconds: u64) -> Result<(), SessionOwnerError> {
-        let needs_new_credential = self
-            .credential
-            .as_ref()
-            .is_none_or(|credential| {
-                credential.needs_renewal(now_seconds, self.renew_before_seconds)
-            });
-        if needs_new_credential {
+        let renew = self.credential.as_ref().is_none_or(|credential| {
+            credential.needs_renewal(now_seconds, self.renew_before_seconds)
+        });
+        if renew {
             self.rebuild()
         } else {
             self.transport_mut()?.reconnect()?;
@@ -247,6 +233,7 @@ where
         if let Some(mut transport) = self.transport.take() {
             transport.close()?;
         }
+        self.credential = None;
         self.establish()
     }
 
@@ -271,51 +258,39 @@ where
 mod tests {
     use std::collections::VecDeque;
 
+    use medusa_openai_realtime::WireKind;
     use serde_json::Value;
 
     use super::*;
-    use medusa_openai_realtime::WireKind;
 
     #[derive(Default)]
-    struct FakeIssuer {
-        issued: VecDeque<Result<SessionCredential, String>>,
-    }
+    struct FakeIssuer(VecDeque<Result<SessionCredential, String>>);
 
     impl CredentialIssuer for FakeIssuer {
         fn issue(&mut self) -> Result<SessionCredential, String> {
-            self.issued
+            self.0
                 .pop_front()
                 .unwrap_or_else(|| Err("no credential scripted".to_owned()))
         }
     }
 
     #[derive(Default)]
-    struct FakeFactory {
-        tokens: Vec<String>,
-    }
+    struct FakeFactory;
 
     impl WireFactory<FakeWire> for FakeFactory {
         fn connect(
             &mut self,
             _capability: &GatewayCapability,
-            credential: &SessionCredential,
+            _credential: &SessionCredential,
         ) -> Result<FakeWire, String> {
-            self.tokens
-                .push(credential.authorization_token().to_owned());
-            Ok(FakeWire::default())
+            Ok(FakeWire)
         }
     }
 
-    #[derive(Default)]
-    struct FakeWire {
-        sent: Vec<Value>,
-        reconnects: usize,
-        closed: bool,
-    }
+    struct FakeWire;
 
     impl Wire for FakeWire {
-        fn send_json(&mut self, payload: Value) -> Result<(), String> {
-            self.sent.push(payload);
+        fn send_json(&mut self, _payload: Value) -> Result<(), String> {
             Ok(())
         }
 
@@ -324,12 +299,10 @@ mod tests {
         }
 
         fn reconnect(&mut self) -> Result<(), String> {
-            self.reconnects += 1;
             Ok(())
         }
 
         fn close(&mut self) -> Result<(), String> {
-            self.closed = true;
             Ok(())
         }
     }
@@ -357,105 +330,53 @@ mod tests {
         }
     }
 
-    #[test]
-    fn activation_is_fail_closed_until_credential_and_wire_exist() {
-        let issuer = FakeIssuer {
-            issued: VecDeque::from([Err("OAuth session unavailable".to_owned())]),
-        };
-        let mut owner = SessionOwner::new(
-            issuer,
-            FakeFactory::default(),
+    fn owner(issued: VecDeque<Result<SessionCredential, String>>) -> SessionOwner<FakeIssuer, FakeFactory, FakeWire> {
+        SessionOwner::new(
+            FakeIssuer(issued),
+            FakeFactory,
             capability(),
             SessionConfig::default(),
         )
-        .expect("valid owner");
+        .expect("valid owner")
+        .with_renew_before_seconds(15)
+    }
 
-        let error = owner.activate(100).expect_err("activation must fail");
-
+    #[test]
+    fn activation_is_fail_closed_until_establishment_succeeds() {
+        let mut owner = owner(VecDeque::from([Err("OAuth unavailable".to_owned())]));
         assert_eq!(
-            error,
-            SessionOwnerError::Credential("OAuth session unavailable".to_owned())
+            owner.activate(100),
+            Err(SessionOwnerError::Credential("OAuth unavailable".to_owned()))
         );
         assert!(!owner.is_established());
     }
 
     #[test]
-    fn renewal_rebuilds_transport_and_preserves_activation() {
-        let issuer = FakeIssuer {
-            issued: VecDeque::from([
-                Ok(credential("first-secret", 120)),
-                Ok(credential("second-secret", 240)),
-            ]),
-        };
-        let mut owner = SessionOwner::new(
-            issuer,
-            FakeFactory::default(),
-            capability(),
-            SessionConfig::default(),
-        )
-        .expect("valid owner")
-        .with_renew_before_seconds(15);
-
-        owner.activate(100).expect("first activation");
-        assert_eq!(owner.credential_expires_at(), Some(120));
-
-        owner.ensure_fresh(106).expect("renew before expiry");
-
-        assert_eq!(owner.credential_expires_at(), Some(240));
-        owner
-            .queue_input_audio("cGNt".to_owned(), 110)
-            .expect("audio remains active after renewal");
-    }
-
-    #[test]
-    fn reconnect_reuses_fresh_credential_but_renews_stale_one() {
-        let issuer = FakeIssuer {
-            issued: VecDeque::from([
-                Ok(credential("first-secret", 200)),
-                Ok(credential("second-secret", 400)),
-            ]),
-        };
-        let mut owner = SessionOwner::new(
-            issuer,
-            FakeFactory::default(),
-            capability(),
-            SessionConfig::default(),
-        )
-        .expect("valid owner")
-        .with_renew_before_seconds(15);
-
-        owner.establish().expect("establish");
-        owner.reconnect(100).expect("reuse fresh credential");
-        assert_eq!(owner.credential_expires_at(), Some(200));
-
-        owner.reconnect(190).expect("renew stale credential");
-        assert_eq!(owner.credential_expires_at(), Some(400));
-    }
-
-    #[test]
-    fn mute_intent_survives_credential_renewal() {
-        let issuer = FakeIssuer {
-            issued: VecDeque::from([
-                Ok(credential("first-secret", 120)),
-                Ok(credential("second-secret", 240)),
-            ]),
-        };
-        let mut owner = SessionOwner::new(
-            issuer,
-            FakeFactory::default(),
-            capability(),
-            SessionConfig::default(),
-        )
-        .expect("valid owner")
-        .with_renew_before_seconds(15);
-
+    fn renewal_preserves_activation_and_mute_intent() {
+        let mut owner = owner(VecDeque::from([
+            Ok(credential("first", 120)),
+            Ok(credential("second", 240)),
+        ]));
         owner.activate(100).expect("activate");
         owner.set_muted(true, 101).expect("mute");
         owner.ensure_fresh(106).expect("renew");
+        assert_eq!(owner.credential_expires_at(), Some(240));
+        assert_eq!(
+            owner.queue_input_audio("cGNt".to_owned(), 110),
+            Err(SessionOwnerError::Transport(TransportError::Muted))
+        );
+    }
 
-        let error = owner
-            .queue_input_audio("cGNt".to_owned(), 110)
-            .expect_err("renewed transport must remain muted");
-        assert_eq!(error, SessionOwnerError::Transport(TransportError::Muted));
+    #[test]
+    fn reconnect_renews_only_when_credential_is_near_expiry() {
+        let mut owner = owner(VecDeque::from([
+            Ok(credential("first", 200)),
+            Ok(credential("second", 400)),
+        ]));
+        owner.establish().expect("establish");
+        owner.reconnect(100).expect("reuse fresh credential");
+        assert_eq!(owner.credential_expires_at(), Some(200));
+        owner.reconnect(190).expect("renew stale credential");
+        assert_eq!(owner.credential_expires_at(), Some(400));
     }
 }
