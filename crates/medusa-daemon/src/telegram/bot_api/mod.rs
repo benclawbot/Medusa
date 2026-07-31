@@ -175,7 +175,10 @@ impl TelegramBotApiClient {
                 }
             });
         }
-        if let Some(bytes) = response.content_length().filter(|length| *length > max_bytes) {
+        if let Some(bytes) = response
+            .content_length()
+            .filter(|length| *length > max_bytes)
+        {
             return Err(TelegramBotApiError::FileTooLarge {
                 bytes,
                 limit: max_bytes,
@@ -485,9 +488,9 @@ fn validate_file_path(file_path: &str) -> Result<(), TelegramBotApiError> {
             segment.is_empty()
                 || segment == "."
                 || segment == ".."
-                || !segment.bytes().all(|byte| {
-                    byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'-' | b'.')
-                })
+                || !segment
+                    .bytes()
+                    .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'-' | b'.'))
         })
     {
         return Err(TelegramBotApiError::InvalidRequest(
