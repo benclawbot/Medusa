@@ -38,6 +38,26 @@ pub use service::{
 )
 path.write_text(source)
 
+path = Path("crates/medusa-daemon/src/telegram/command.rs")
+source = path.read_text()
+source = replace_once(
+    source,
+    '''            FrontendCommand::Attach {
+                session_id: required(arguments, "usage: /attach <session>")?.to_owned(),
+                mode: AttachmentMode::Owner,
+                after_cursor: None,
+            },
+''',
+    '''            FrontendCommand::Attach {
+                session_id: required(arguments, "usage: /attach <session>")?.to_owned(),
+                mode: AttachmentMode::ReadOnly,
+                after_cursor: None,
+            },
+''',
+    "Telegram attach remains a frontend observer",
+)
+path.write_text(source)
+
 path = Path("crates/medusa-daemon/src/telegram/service.rs")
 source = path.read_text()
 source = replace_once(
