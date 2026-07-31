@@ -229,8 +229,7 @@ impl ConfigurationStateGuard {
             revision,
             last_change: Some(change.clone()),
         };
-        let text = toml::to_string_pretty(&next)
-            .map_err(|error| store_error(error.to_string()))?;
+        let text = toml::to_string_pretty(&next).map_err(|error| store_error(error.to_string()))?;
         atomic_write(&self.state_path, text.as_bytes())?;
         self.state = next;
         Ok(change)
@@ -286,7 +285,9 @@ fn validate_profile_name(name: &str) -> MedusaResult<()> {
     if valid {
         Ok(())
     } else {
-        Err(config_error("configuration state contains an invalid profile name"))
+        Err(config_error(
+            "configuration state contains an invalid profile name",
+        ))
     }
 }
 

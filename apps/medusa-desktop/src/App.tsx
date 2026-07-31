@@ -157,7 +157,12 @@ function ConversationText({ text }: { text: string }) {
 
 async function configureStartedRuntime(
   started: Awaited<ReturnType<typeof startRuntime>>,
-  configuration: { provider: string; model: string; effort: Effort },
+  configuration: {
+    provider: string;
+    model: string;
+    effort: Effort;
+    expectedRevision: number;
+  },
 ): Promise<Awaited<ReturnType<typeof startRuntime>>> {
   try {
     await configureRuntime(started.runtimeId, configuration);
@@ -256,6 +261,16 @@ export function App() {
           planMode: event.planMode,
           credentialConfigured: event.credentialConfigured,
         });
+        break;
+      case "configurationChanged":
+        void loadSharedConfiguration()
+          .then((configuration) => {
+            setSharedConfiguration(configuration);
+            setProvider(configuration.provider);
+            setModel(configuration.model);
+            setEffort(configuration.effort);
+          })
+          .catch((cause) => setError(String(cause)));
         break;
       case "notice":
         setMessages((current) => [
@@ -381,6 +396,7 @@ export function App() {
         provider: configuration.provider,
         model: configuration.model,
         effort: configuration.effort,
+        expectedRevision: configuration.revision,
       });
     };
     void start()
@@ -412,7 +428,13 @@ export function App() {
         provider,
         model,
         effort,
+        expectedRevision: sharedConfiguration?.revision ?? 0,
       });
+      const configuration = await loadSharedConfiguration();
+      setSharedConfiguration(configuration);
+      setProvider(configuration.provider);
+      setModel(configuration.model);
+      setEffort(configuration.effort);
       if (runtimeId) await closeRuntime(runtimeId);
       setRuntimeId(started.runtimeId);
       setRepo(started.repo);
@@ -433,7 +455,13 @@ export function App() {
         provider,
         model,
         effort,
+        expectedRevision: sharedConfiguration?.revision ?? 0,
       });
+      const configuration = await loadSharedConfiguration();
+      setSharedConfiguration(configuration);
+      setProvider(configuration.provider);
+      setModel(configuration.model);
+      setEffort(configuration.effort);
       if (runtimeId) await closeRuntime(runtimeId);
       setRuntimeId(started.runtimeId);
       setRepo("");
@@ -544,6 +572,7 @@ export function App() {
         provider,
         model,
         effort,
+        expectedRevision: sharedConfiguration?.revision ?? 0,
         apiKey: apiKey.trim() || undefined,
       });
       const configuration = await loadSharedConfiguration();
@@ -800,12 +829,12 @@ export function App() {
 
         {activePanel === "settings" && (
           <div className="standalone-panel settings-form">
-            <div className="panel-title"><Settings size={18} /><div><h2>Model settings</h2><p>Saved securely in your operating system credential manager</p><small>Shared profile: {sharedConfiguration?.activeProfile ?? "loading"}</small></div></div>
+            <div className="panel-title"><Settings size={18} /><div><h2>Model settings</h2><p>Saved securely in your operating system credential manager</p><small>Shared profile: {sharedConfiguration?.activeProfile ?? "loading"} · revision {sharedConfiguration?.revision ?? "…"}</small></div></div>
             <label>Provider<select value={provider} onChange={(event) => setProvider(event.target.value)}><option value="minimax">MiniMax</option><option value="anthropic">Anthropic</option><option value="anthropic-compatible">Anthropic-compatible</option><option value="openai">OpenAI API</option><option value="openai-oauth">ChatGPT OAuth</option><option value="openai-compatible">OpenAI-compatible</option><option value="omniroute">OmniRoute</option><option value="local">Local endpoint</option></select></label>
             <label>Model<input value={model} onChange={(event) => setModel(event.target.value)} /></label>
             <label>Effort<select value={effort} onChange={(event) => setEffort(event.target.value as Effort)}><option value="auto">Auto</option><option value="low">Low</option><option value="medium">Medium</option><option value="high">High</option></select></label>
             <label>API key<input type="password" value={apiKey} onChange={(event) => setApiKey(event.target.value)} placeholder={credentiallessProvider ? "This route does not require an API key" : "Leave blank to use the saved key"} disabled={credentiallessProvider} /></label>
-            <button className="primary-action" onClick={applyModel} disabled={!runtimeId || !provider.trim() || !model.trim()}>Apply configuration</button>
+            <button className="primary-action" onClick={applyModel} disabled={!runtimeId || !sharedConfiguration || !provider.trim() || !model.trim()}>Apply configuration</button>
           </div>
         )}
       </section>

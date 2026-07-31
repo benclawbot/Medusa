@@ -5,14 +5,20 @@ use std::{collections::BTreeMap, fs, path::Path};
 use medusa_core::{ErrorCategory, ErrorCode, MedusaError, MedusaResult};
 use serde::{Deserialize, Serialize};
 
+mod configuration_state;
 mod provider_profile;
 mod provider_profiles;
 
+pub use configuration_state::{
+    ConfigurationApplyTiming, ConfigurationChangeOrigin, ConfigurationChanged,
+};
 pub use provider_profile::{
     PROVIDER_PROFILE_KEYS, ProviderProfile, ProviderProfileStore, ProviderProfileValue,
     credential_environment,
 };
-pub use provider_profiles::{ProviderProfileCatalog, ProviderProfileSummary};
+pub use provider_profiles::{
+    ProviderProfileCatalog, ProviderProfileSnapshot, ProviderProfileSummary, ProviderProfileUpdate,
+};
 
 /// Current configuration schema version.
 pub const CONFIG_VERSION: u16 = 1;
