@@ -109,7 +109,7 @@ fn inspect_session(
 ) -> Result<RuntimeExecutionHealth, RuntimeError> {
     let session_id = session.id.to_string();
     let journal_events = replay_events(repo, &session_id, 0).map_err(RuntimeError::agent)?;
-    let log = execution_log(&session_id, &journal_events)?;
+    let log = execution_log(repo, &session_id, &journal_events)?;
     let checkpoint = build_checkpoint(session, &journal_events, log.latest_checkpoint())?;
     let expected = trace(&session_id, &journal_events)?;
     let actual = trace(&session_id, &session.events)?;
@@ -132,7 +132,11 @@ fn inspect_session(
     })
 }
 
-fn execution_log(session_id: &str, events: &[EventEnvelope]) -> Result<ExecutionLog, RuntimeError> {
+fn execution_log(
+    repo: &Path,
+    session_id: &str,
+    events: &[EventEnvelope],
+) -> Result<ExecutionLog, RuntimeError> {
     let mut log = ExecutionLog::new(session_id).map_err(RuntimeError::agent)?;
     for event in events {
         log.append_event(payload_kind(&event.payload), digest(&event.payload)?)
@@ -143,7 +147,7 @@ fn execution_log(session_id: &str, events: &[EventEnvelope]) -> Result<Execution
         session_id,
         u64::try_from(events.len()).unwrap_or(u64::MAX),
         digest(&state.values)?,
-        repository_receipt_fingerprint(events)?,
+        crate::checkpoint_payload::repository_fingerprint(repo, events)?,
         log.events.last().map(|event| event.fingerprint.clone()),
         subsystem_fingerprints(events)?,
     )
@@ -258,6 +262,16 @@ fn reduce(session_id: &str, events: &[EventEnvelope]) -> ExecutionState {
             EventPayload::RecoveryActionCompleted { receipt } => {
                 values.insert("recovery".to_owned(), digest_lossy(receipt));
             }
+            EventPayload::CheckpointRestoreRequested {
+                checkpoint_id,
+                source_cursor,
+            } => {
+                values.insert("restore_checkpoint".to_owned(), checkpoint_id.clone());
+                values.insert(
+                    "restore_source_cursor".to_owned(),
+                    source_cursor.to_string(),
+                );
+            }
             EventPayload::VerificationCompleted { passed, evidence } => {
                 values.insert("verification_passed".to_owned(), passed.to_string());
                 values.insert("verification_evidence".to_owned(), digest_lossy(evidence));
@@ -367,17 +381,6 @@ where
     digest(&selected)
 }
 
-fn repository_receipt_fingerprint(events: &[EventEnvelope]) -> Result<String, RuntimeError> {
-    category_fingerprint(events, |payload| {
-        matches!(
-            payload,
-            EventPayload::FileTransactionCommitted { .. }
-                | EventPayload::IntegrationReceiptRecorded { .. }
-                | EventPayload::VerificationCompleted { .. }
-        )
-    })
-}
-
 fn subsystem_fingerprints(
     events: &[EventEnvelope],
 ) -> Result<BTreeMap<String, String>, RuntimeError> {
@@ -474,6 +477,7 @@ fn payload_kind(payload: &EventPayload) -> &'static str {
         EventPayload::WorkerEvidenceRecorded { .. } => "worker_evidence_recorded",
         EventPayload::IntegrationReceiptRecorded { .. } => "integration_receipt_recorded",
         EventPayload::RecoveryActionCompleted { .. } => "recovery_action_completed",
+        EventPayload::CheckpointRestoreRequested { .. } => "checkpoint_restore_requested",
         EventPayload::CancellationRequested { .. } => "cancellation_requested",
         EventPayload::CancellationCompleted => "cancellation_completed",
         EventPayload::RuntimeTurnFinished => "runtime_turn_finished",

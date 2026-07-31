@@ -143,6 +143,10 @@ pub enum EventPayload {
     RecoveryActionCompleted {
         receipt: Value,
     },
+    CheckpointRestoreRequested {
+        checkpoint_id: String,
+        source_cursor: u64,
+    },
     CancellationRequested {
         source: String,
     },
