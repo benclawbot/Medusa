@@ -14,8 +14,8 @@ use std::{
 use time::OffsetDateTime;
 
 use super::{
-    TelegramChatKind, TelegramIdentity, TelegramInboundMessage, TelegramServiceOutcome,
-    TelegramSessionService, TelegramSessionServiceError,
+    TelegramChatKind, TelegramGatewayError, TelegramIdentity, TelegramInboundMessage,
+    TelegramServiceOutcome, TelegramSessionService, TelegramSessionServiceError,
     bot_api::{
         TelegramBotApiClient, TelegramBotApiError, TelegramBotChatKind, TelegramBotMessage,
         TelegramInboundCallback, TelegramTransportUpdate,
@@ -24,6 +24,7 @@ use super::{
 
 const DEFAULT_TRANSIENT_BACKOFF: Duration = Duration::from_secs(2);
 const MAX_RETRY_BACKOFF: Duration = Duration::from_secs(60);
+const CANCELLATION_POLL_INTERVAL: Duration = Duration::from_millis(200);
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct TelegramPollingConfig {
@@ -34,7 +35,12 @@ pub struct TelegramPollingConfig {
 
 impl TelegramPollingConfig {
     pub fn validate(&self) -> Result<(), TelegramRuntimeError> {
-        if self.bot_username.trim().is_empty()
+        let username = self.bot_username.trim().trim_start_matches('@');
+        if username.is_empty()
+            || username.len() > 32
+            || !username
+                .bytes()
+                .all(|byte| byte.is_ascii_alphanumeric() || byte == b'_')
             || !(1..=50).contains(&self.timeout_seconds)
             || !(1..=100).contains(&self.limit)
         {
@@ -44,7 +50,6 @@ impl TelegramPollingConfig {
     }
 }
 
-#[derive(Debug)]
 pub struct TelegramPollingRuntime {
     client: TelegramBotApiClient,
     service: TelegramSessionService,
@@ -58,12 +63,21 @@ impl TelegramPollingRuntime {
         config: TelegramPollingConfig,
     ) -> Result<Self, TelegramRuntimeError> {
         config.validate()?;
-        Ok(Self { client, service, config })
+        Ok(Self {
+            client,
+            service,
+            config,
+        })
     }
 
     #[must_use]
     pub const fn service(&self) -> &TelegramSessionService {
         &self.service
+    }
+
+    #[must_use]
+    pub const fn service_mut(&mut self) -> &mut TelegramSessionService {
+        &mut self.service
     }
 
     pub fn poll_once(&mut self) -> Result<Vec<TelegramServiceOutcome>, TelegramRuntimeError> {
@@ -73,22 +87,58 @@ impl TelegramPollingRuntime {
             self.config.limit,
         )?;
         let mut outcomes = Vec::new();
-        for update in updates {
-            match TelegramTransportUpdate::try_from(update)? {
-                TelegramTransportUpdate::Message { update_id, message } => {
-                    let inbound = inbound_message(message, &self.config.bot_username)?;
-                    outcomes.push(self.service.process_message(update_id, inbound)?);
+        for raw_update in updates {
+            let update_id = raw_update.update_id;
+            let update = match TelegramTransportUpdate::try_from(raw_update) {
+                Ok(update) => update,
+                Err(error) if update_id >= 0 && is_poison_transport_update(&error) => {
+                    self.service.acknowledge_transport_update(update_id)?;
+                    continue;
                 }
-                TelegramTransportUpdate::Callback { update_id, callback } => {
+                Err(error) => return Err(error.into()),
+            };
+            match update {
+                TelegramTransportUpdate::Message { update_id, message } => {
+                    let inbound = match inbound_message(message, &self.config.bot_username) {
+                        Ok(inbound) => inbound,
+                        Err(TelegramRuntimeError::InvalidUpdate) => {
+                            self.service.acknowledge_transport_update(update_id)?;
+                            continue;
+                        }
+                        Err(error) => return Err(error),
+                    };
+                    match self.service.process_message(update_id, inbound) {
+                        Ok(outcome) => outcomes.push(outcome),
+                        Err(error) if is_rejected_input(&error) => {
+                            self.service.acknowledge_transport_update(update_id)?;
+                        }
+                        Err(error) => return Err(error.into()),
+                    }
+                }
+                TelegramTransportUpdate::Callback {
+                    update_id,
+                    callback,
+                } => {
                     let identity = callback_identity(&callback);
-                    self.service.process_callback(
+                    match self.service.process_callback(
                         update_id,
                         identity,
                         &callback.data,
                         OffsetDateTime::now_utc(),
-                    )?;
-                    self.client
-                        .answer_callback_query(&callback.query_id, None)?;
+                    ) {
+                        Ok(_) => {
+                            self.client
+                                .answer_callback_query(&callback.query_id, None)?;
+                        }
+                        Err(error) if is_rejected_input(&error) => {
+                            self.service.acknowledge_transport_update(update_id)?;
+                            self.client.answer_callback_query(
+                                &callback.query_id,
+                                Some("Request rejected"),
+                            )?;
+                        }
+                        Err(error) => return Err(error.into()),
+                    }
                 }
                 TelegramTransportUpdate::Unsupported { update_id } => {
                     self.service.acknowledge_transport_update(update_id)?;
@@ -108,7 +158,12 @@ impl TelegramPollingRuntime {
                 Ok(_) => consecutive_failures = 0,
                 Err(error) if error.is_transient() => {
                     consecutive_failures = consecutive_failures.saturating_add(1);
-                    thread::sleep(error.retry_delay(consecutive_failures));
+                    if sleep_until_cancelled(
+                        cancelled,
+                        error.retry_delay(consecutive_failures),
+                    ) {
+                        break;
+                    }
                 }
                 Err(error) => return Err(error),
             }
@@ -122,10 +177,13 @@ fn inbound_message(
     bot_username: &str,
 ) -> Result<TelegramInboundMessage, TelegramRuntimeError> {
     let user = message.from.ok_or(TelegramRuntimeError::InvalidUpdate)?;
+    if user.is_bot {
+        return Err(TelegramRuntimeError::InvalidUpdate);
+    }
     let text = message.text.or(message.caption).unwrap_or_default();
     let chat_kind = chat_kind(message.chat.kind);
-    let bot_mentioned = matches!(chat_kind, TelegramChatKind::Private)
-        || mentions_bot(&text, bot_username);
+    let bot_mentioned =
+        matches!(chat_kind, TelegramChatKind::Private) || mentions_bot(&text, bot_username);
     let received_at = OffsetDateTime::from_unix_timestamp(message.date)
         .map_err(|_| TelegramRuntimeError::InvalidUpdate)?;
     Ok(TelegramInboundMessage {
@@ -164,11 +222,56 @@ const fn chat_kind(kind: TelegramBotChatKind) -> TelegramChatKind {
 
 fn mentions_bot(text: &str, bot_username: &str) -> bool {
     let username = bot_username.trim().trim_start_matches('@');
-    let mention = format!("@{}", username.to_ascii_lowercase());
-    text.to_ascii_lowercase()
-        .split(|character: char| character.is_whitespace() || character.is_ascii_punctuation())
-        .any(|part| part == mention.trim_start_matches('@'))
-        || text.to_ascii_lowercase().contains(&mention)
+    text.split_whitespace().any(|token| {
+        let token = token.trim_matches(|character: char| {
+            !character.is_ascii_alphanumeric()
+                && character != '_'
+                && character != '@'
+        });
+        token
+            .strip_prefix('@')
+            .is_some_and(|candidate| candidate.eq_ignore_ascii_case(username))
+    })
+}
+
+fn is_poison_transport_update(error: &TelegramBotApiError) -> bool {
+    matches!(
+        error,
+        TelegramBotApiError::InvalidTimestamp | TelegramBotApiError::InvalidUpdate
+    )
+}
+
+fn is_rejected_input(error: &TelegramSessionServiceError) -> bool {
+    matches!(
+        error,
+        TelegramSessionServiceError::Gateway(
+            TelegramGatewayError::Disabled
+                | TelegramGatewayError::Unauthorized
+                | TelegramGatewayError::MentionRequired
+                | TelegramGatewayError::EmptyMessage
+                | TelegramGatewayError::UnknownCommand(_)
+                | TelegramGatewayError::MissingArgument(_)
+                | TelegramGatewayError::InvalidCallbackRequest
+                | TelegramGatewayError::InvalidCallback
+                | TelegramGatewayError::CallbackIdentityMismatch
+                | TelegramGatewayError::CallbackExpired
+                | TelegramGatewayError::CallbackAlreadyResolved
+                | TelegramGatewayError::Protocol(_)
+        )
+    )
+}
+
+fn sleep_until_cancelled(cancelled: &AtomicBool, duration: Duration) -> bool {
+    let mut remaining = duration;
+    while !remaining.is_zero() {
+        if cancelled.load(Ordering::Acquire) {
+            return true;
+        }
+        let interval = remaining.min(CANCELLATION_POLL_INTERVAL);
+        thread::sleep(interval);
+        remaining = remaining.saturating_sub(interval);
+    }
+    cancelled.load(Ordering::Acquire)
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -187,12 +290,22 @@ impl TelegramRuntimeError {
     #[must_use]
     pub fn is_transient(&self) -> bool {
         matches!(self, Self::BotApi(error) if error.is_transient())
+            || matches!(
+                self,
+                Self::Service(TelegramSessionServiceError::BotApi(error))
+                    if error.is_transient()
+            )
     }
 
     fn retry_delay(&self, consecutive_failures: u32) -> Duration {
-        if let Self::BotApi(error) = self
-            && let Some(seconds) = error.retry_after_seconds()
-        {
+        let retry_after = match self {
+            Self::BotApi(error) => error.retry_after_seconds(),
+            Self::Service(TelegramSessionServiceError::BotApi(error)) => {
+                error.retry_after_seconds()
+            }
+            _ => None,
+        };
+        if let Some(seconds) = retry_after {
             return Duration::from_secs(seconds.min(MAX_RETRY_BACKOFF.as_secs()));
         }
         let exponent = consecutive_failures.saturating_sub(1).min(5);
@@ -212,7 +325,11 @@ mod tests {
             message_id: 7,
             date: 1_700_000_000,
             chat: TelegramBotChat {
-                id: if kind == TelegramBotChatKind::Private { 42 } else { -100 },
+                id: if kind == TelegramBotChatKind::Private {
+                    42
+                } else {
+                    -100
+                },
                 kind,
                 title: None,
                 username: None,
@@ -232,20 +349,37 @@ mod tests {
 
     #[test]
     fn private_messages_are_normalized_without_requiring_a_mention() {
-        let inbound = inbound_message(message(TelegramBotChatKind::Private, "status"), "medusa_bot")
-            .expect("normalize");
+        let inbound = inbound_message(
+            message(TelegramBotChatKind::Private, "status"),
+            "medusa_bot",
+        )
+        .expect("normalize");
         assert!(inbound.identity.bot_mentioned);
         assert_eq!(inbound.identity.topic_id, Some(9));
     }
 
     #[test]
-    fn group_mentions_are_detected_case_insensitively() {
+    fn group_mentions_are_exact_and_case_insensitive() {
         let inbound = inbound_message(
-            message(TelegramBotChatKind::Supergroup, "Hello @Medusa_Bot"),
+            message(
+                TelegramBotChatKind::Supergroup,
+                "Hello (@Medusa_Bot),",
+            ),
             "medusa_bot",
         )
         .expect("normalize");
         assert!(inbound.identity.bot_mentioned);
+        assert!(!mentions_bot("hello @medusa_bot_extra", "medusa_bot"));
+    }
+
+    #[test]
+    fn bot_messages_are_rejected_to_prevent_feedback_loops() {
+        let mut source = message(TelegramBotChatKind::Private, "status");
+        source.from.as_mut().expect("sender").is_bot = true;
+        assert!(matches!(
+            inbound_message(source, "medusa_bot"),
+            Err(TelegramRuntimeError::InvalidUpdate)
+        ));
     }
 
     #[test]
@@ -256,6 +390,12 @@ mod tests {
         });
         assert!(error.is_transient());
         assert_eq!(error.retry_delay(100), MAX_RETRY_BACKOFF);
+    }
+
+    #[test]
+    fn cancellation_interrupts_retry_sleep() {
+        let cancelled = AtomicBool::new(true);
+        assert!(sleep_until_cancelled(&cancelled, MAX_RETRY_BACKOFF));
     }
 }
 '''
@@ -272,6 +412,26 @@ mod_path.write_text(source)
 
 service_path = telegram / "service.rs"
 source = service_path.read_text()
+source = source.replace(
+    "        let key = TelegramBindingKey::from_identity(&message.identity);\n",
+    "        let previous_state = self.state.clone();\n"
+    "        let key = TelegramBindingKey::from_identity(&message.identity);\n",
+    1,
+)
+source = source.replace(
+    "        self.acknowledge_update(update_id)?;\n"
+    "        self.persist()?;\n"
+    "        Ok(outcome)\n",
+    "        let persisted = self\n"
+    "            .acknowledge_update(update_id)\n"
+    "            .and_then(|()| self.persist());\n"
+    "        if let Err(error) = persisted {\n"
+    "            self.state = previous_state;\n"
+    "            return Err(error);\n"
+    "        }\n"
+    "        Ok(outcome)\n",
+    1,
+)
 marker = "    fn binding_after_acknowledgement(\n"
 insert = r'''    /// Resolves one signed callback through the same frontend control plane and durable binding.
     pub fn process_callback(
@@ -284,35 +444,50 @@ insert = r'''    /// Resolves one signed callback through the same frontend cont
         if update_id < 0 {
             return Err(TelegramSessionServiceError::InvalidUpdateOffset);
         }
-        let key = TelegramBindingKey::from_identity(&identity);
-        let stable_id = key.stable_id();
-        let existing = self.state.bindings.get(&stable_id).cloned();
-        let envelope = self
-            .gateway
-            .resolve_callback(&identity, callback_data, received_at)?;
-        let command = envelope.command.clone();
-        let acknowledgement = self.control.dispatch(envelope)?;
-        if let Some(binding) = self.binding_after_acknowledgement(
-            key,
-            existing,
-            update_id,
-            &command,
-            &acknowledgement,
-        )? {
-            self.state.bindings.insert(stable_id, binding);
+        let previous_gateway = self.gateway.clone();
+        let previous_state = self.state.clone();
+        let result = (|| {
+            let key = TelegramBindingKey::from_identity(&identity);
+            let stable_id = key.stable_id();
+            let existing = self.state.bindings.get(&stable_id).cloned();
+            let envelope = self
+                .gateway
+                .resolve_callback(&identity, callback_data, received_at)?;
+            let command = envelope.command.clone();
+            let acknowledgement = self.control.dispatch(envelope)?;
+            if let Some(binding) = self.binding_after_acknowledgement(
+                key,
+                existing,
+                update_id,
+                &command,
+                &acknowledgement,
+            )? {
+                self.state.bindings.insert(stable_id, binding);
+            }
+            self.acknowledge_update(update_id)?;
+            self.persist()?;
+            Ok(acknowledgement)
+        })();
+        if result.is_err() {
+            self.gateway = previous_gateway;
+            self.state = previous_state;
         }
-        self.acknowledge_update(update_id)?;
-        self.persist()?;
-        Ok(acknowledgement)
+        result
     }
 
-    /// Advances the durable Bot API cursor for an unsupported but valid update.
+    /// Advances the durable Bot API cursor for an unsupported or rejected valid update.
     pub fn acknowledge_transport_update(
         &mut self,
         update_id: i64,
     ) -> Result<(), TelegramSessionServiceError> {
-        self.acknowledge_update(update_id)?;
-        self.persist()
+        let previous_state = self.state.clone();
+        let result = self
+            .acknowledge_update(update_id)
+            .and_then(|()| self.persist());
+        if result.is_err() {
+            self.state = previous_state;
+        }
+        result
     }
 
 '''
