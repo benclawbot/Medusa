@@ -1,3 +1,4 @@
+mod config;
 mod credentials;
 mod desktop_update;
 mod diffs;
@@ -35,6 +36,7 @@ extern crate self as tempfile;
 #[cfg(test)]
 pub(crate) use test_tempfile::tempdir;
 
+use config::desktop_shared_configuration;
 use desktop_update::{desktop_update_from_main, desktop_update_status};
 use diffs::runtime_read_diff;
 use engineering::{
@@ -77,6 +79,7 @@ pub fn run() -> tauri::Result<()> {
         .plugin(tauri_plugin_dialog::init())
         .manage(RuntimeRegistry::default())
         .invoke_handler(tauri::generate_handler![
+            desktop_shared_configuration,
             runtime_start,
             runtime_resume,
             runtime_close,

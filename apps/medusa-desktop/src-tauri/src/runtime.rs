@@ -23,6 +23,7 @@ use medusa_runtime::{
 use tauri::{AppHandle, Manager, State};
 
 use crate::{
+    config::prepare_provider_profile,
     credentials::{CredentialStore, SystemCredentialStore},
     dto::{
         DesktopAttachment, DesktopCommandSuggestion, DesktopModelConfiguration, DesktopPromptDraft,
@@ -264,7 +265,8 @@ pub fn runtime_configure_model(
     configuration: DesktopModelConfiguration,
     registry: State<'_, RuntimeRegistry>,
 ) -> Result<(), String> {
-    let effort = match configuration.effort.to_ascii_lowercase().as_str() {
+    let effort_name = configuration.effort.to_ascii_lowercase();
+    let effort = match effort_name.as_str() {
         "low" => Effort::Low,
         "medium" => Effort::Medium,
         "high" => Effort::High,
@@ -272,6 +274,8 @@ pub fn runtime_configure_model(
         _ => return Err("effort must be low, medium, high, or auto".to_owned()),
     };
     let provider = configuration.provider;
+    let model = configuration.model;
+    let prepared_profile = prepare_provider_profile(&provider, &model, &effort_name)?;
     let supplied_api_key = configuration.api_key.filter(|key| !key.trim().is_empty());
     let credentials = SystemCredentialStore;
     let api_key = match supplied_api_key.as_ref() {
@@ -283,7 +287,7 @@ pub fn runtime_configure_model(
             .controller
             .configure_model(ModelConfiguration {
                 provider: provider.clone(),
-                model: configuration.model,
+                model,
                 effort,
                 api_key,
             })
@@ -292,6 +296,7 @@ pub fn runtime_configure_model(
     if let Some(api_key) = supplied_api_key {
         credentials.save(&provider, &api_key)?;
     }
+    prepared_profile.commit()?;
     Ok(())
 }
 

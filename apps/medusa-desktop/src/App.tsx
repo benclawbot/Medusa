@@ -29,6 +29,7 @@ import {
   commandSuggestions,
   closeRuntime,
   configureRuntime,
+  loadSharedConfiguration,
   pollRuntime,
   runRuntimeCommand,
   startRuntime,
@@ -40,6 +41,7 @@ import {
   type QuestionPrompt,
   type RuntimeActivity,
   type RuntimeEvent,
+  type SharedConfiguration,
 } from "./runtime";
 
 interface ConversationMessage {
@@ -65,18 +67,7 @@ interface SettingsState {
   credentialConfigured: boolean;
 }
 
-interface ModelPreferences {
-  provider: string;
-  model: string;
-  effort: Effort;
-}
-
 const emptyUsage: UsageState = { input: 0, output: 0, cached: 0, cacheWrite: 0, elapsed: 0 };
-const defaultModelPreferences: ModelPreferences = {
-  provider: "minimax",
-  model: "MiniMax-M2.5",
-  effort: "auto",
-};
 let messageCounter = 0;
 const nextMessageId = () => ++messageCounter;
 const MAX_IMAGE_BYTES = 20 * 1024 * 1024;
@@ -91,24 +82,6 @@ function formatBytes(bytes?: number): string {
 
 function basename(path: string): string {
   return path.split(/[\\/]/).filter(Boolean).pop() ?? path;
-}
-
-function loadModelPreferences(): ModelPreferences {
-  const raw = window.localStorage.getItem("medusa.desktop.model");
-  if (!raw) return defaultModelPreferences;
-  try {
-    const value = JSON.parse(raw) as Partial<ModelPreferences>;
-    if (
-      typeof value.provider === "string" && value.provider.trim() &&
-      typeof value.model === "string" && value.model.trim() &&
-      ["auto", "low", "medium", "high"].includes(value.effort ?? "")
-    ) {
-      return value as ModelPreferences;
-    }
-  } catch {
-    window.localStorage.removeItem("medusa.desktop.model");
-  }
-  return defaultModelPreferences;
 }
 
 function readImage(file: File): Promise<DesktopAttachment> {
@@ -182,8 +155,26 @@ function ConversationText({ text }: { text: string }) {
   return <>{parts}</>;
 }
 
+async function configureStartedRuntime(
+  started: Awaited<ReturnType<typeof startRuntime>>,
+  configuration: { provider: string; model: string; effort: Effort },
+): Promise<Awaited<ReturnType<typeof startRuntime>>> {
+  try {
+    await configureRuntime(started.runtimeId, configuration);
+    return started;
+  } catch (cause) {
+    try {
+      await closeRuntime(started.runtimeId);
+    } catch (cleanupCause) {
+      throw new Error(
+        `Runtime configuration failed (${String(cause)}); cleanup also failed (${String(cleanupCause)}).`,
+      );
+    }
+    throw cause;
+  }
+}
+
 export function App() {
-  const modelPreferences = useMemo(loadModelPreferences, []);
   const [runtimeId, setRuntimeId] = useState<string>();
   const [repo, setRepo] = useState("");
   const [messages, setMessages] = useState<ConversationMessage[]>([]);
@@ -206,9 +197,10 @@ export function App() {
   const [busy, setBusy] = useState(false);
   const [turn, setTurn] = useState(0);
   const [error, setError] = useState<string>();
-  const [provider, setProvider] = useState(modelPreferences.provider);
-  const [model, setModel] = useState(modelPreferences.model);
-  const [effort, setEffort] = useState<Effort>(modelPreferences.effort);
+  const [provider, setProvider] = useState("");
+  const [model, setModel] = useState("");
+  const [effort, setEffort] = useState<Effort>("medium");
+  const [sharedConfiguration, setSharedConfiguration] = useState<SharedConfiguration>();
   const [apiKey, setApiKey] = useState("");
   const [activePanel, setActivePanel] = useState<"chat" | "plan" | "settings">("chat");
   const pollBusy = useRef(false);
@@ -370,13 +362,26 @@ export function App() {
     const previous = window.localStorage.getItem("medusa.desktop.repo");
     let disposed = false;
     const start = async () => {
+      const configuration = await loadSharedConfiguration();
+      if (!disposed) {
+        setSharedConfiguration(configuration);
+        setProvider(configuration.provider);
+        setModel(configuration.model);
+        setEffort(configuration.effort);
+      }
+      let started;
       try {
-        return await startRuntime(previous || undefined);
+        started = await startRuntime(previous || undefined);
       } catch (cause) {
         if (!previous) throw cause;
         window.localStorage.removeItem("medusa.desktop.repo");
-        return startRuntime();
+        started = await startRuntime();
       }
+      return configureStartedRuntime(started, {
+        provider: configuration.provider,
+        model: configuration.model,
+        effort: configuration.effort,
+      });
     };
     void start()
       .then((started) => {
@@ -386,9 +391,6 @@ export function App() {
         }
         setRuntimeId(started.runtimeId);
         setRepo(started.repo);
-        void configureRuntime(started.runtimeId, modelPreferences).catch((cause) => {
-          if (!disposed) setError(String(cause));
-        });
       })
       .catch((cause) => {
         if (!disposed) setError(String(cause));
@@ -406,8 +408,11 @@ export function App() {
     const selected = await open({ directory: true, multiple: false, title: "Open a Medusa project" });
     if (typeof selected !== "string") return;
     try {
-      const started = await startRuntime(selected);
-      await configureRuntime(started.runtimeId, { provider, model, effort });
+      const started = await configureStartedRuntime(await startRuntime(selected), {
+        provider,
+        model,
+        effort,
+      });
       if (runtimeId) await closeRuntime(runtimeId);
       setRuntimeId(started.runtimeId);
       setRepo(started.repo);
@@ -424,8 +429,11 @@ export function App() {
 
   const openGeneralChat = async () => {
     try {
-      const started = await startRuntime();
-      await configureRuntime(started.runtimeId, { provider, model, effort });
+      const started = await configureStartedRuntime(await startRuntime(), {
+        provider,
+        model,
+        effort,
+      });
       if (runtimeId) await closeRuntime(runtimeId);
       setRuntimeId(started.runtimeId);
       setRepo("");
@@ -538,10 +546,11 @@ export function App() {
         effort,
         apiKey: apiKey.trim() || undefined,
       });
-      window.localStorage.setItem(
-        "medusa.desktop.model",
-        JSON.stringify({ provider, model, effort }),
-      );
+      const configuration = await loadSharedConfiguration();
+      setSharedConfiguration(configuration);
+      setProvider(configuration.provider);
+      setModel(configuration.model);
+      setEffort(configuration.effort);
       setApiKey("");
       setError(undefined);
     } catch (cause) {
@@ -567,6 +576,7 @@ export function App() {
     }
   };
 
+  const credentiallessProvider = ["openai-oauth", "omniroute", "local"].includes(provider);
   const repoName = useMemo(() => basename(repo) || "General chat", [repo]);
   const totalTokens = usage.input + usage.output;
 
@@ -790,12 +800,12 @@ export function App() {
 
         {activePanel === "settings" && (
           <div className="standalone-panel settings-form">
-            <div className="panel-title"><Settings size={18} /><div><h2>Model settings</h2><p>Saved securely in your operating system credential manager</p></div></div>
-            <label>Provider<select value={provider} onChange={(event) => setProvider(event.target.value)}><option value="minimax">MiniMax</option><option value="anthropic">Anthropic</option><option value="anthropic-compatible">Anthropic-compatible</option></select></label>
+            <div className="panel-title"><Settings size={18} /><div><h2>Model settings</h2><p>Saved securely in your operating system credential manager</p><small>Shared profile: {sharedConfiguration?.activeProfile ?? "loading"}</small></div></div>
+            <label>Provider<select value={provider} onChange={(event) => setProvider(event.target.value)}><option value="minimax">MiniMax</option><option value="anthropic">Anthropic</option><option value="anthropic-compatible">Anthropic-compatible</option><option value="openai">OpenAI API</option><option value="openai-oauth">ChatGPT OAuth</option><option value="openai-compatible">OpenAI-compatible</option><option value="omniroute">OmniRoute</option><option value="local">Local endpoint</option></select></label>
             <label>Model<input value={model} onChange={(event) => setModel(event.target.value)} /></label>
             <label>Effort<select value={effort} onChange={(event) => setEffort(event.target.value as Effort)}><option value="auto">Auto</option><option value="low">Low</option><option value="medium">Medium</option><option value="high">High</option></select></label>
-            <label>API key<input type="password" value={apiKey} onChange={(event) => setApiKey(event.target.value)} placeholder="Leave blank to use the saved key" /></label>
-            <button className="primary-action" onClick={applyModel} disabled={!runtimeId}>Apply configuration</button>
+            <label>API key<input type="password" value={apiKey} onChange={(event) => setApiKey(event.target.value)} placeholder={credentiallessProvider ? "This route does not require an API key" : "Leave blank to use the saved key"} disabled={credentiallessProvider} /></label>
+            <button className="primary-action" onClick={applyModel} disabled={!runtimeId || !provider.trim() || !model.trim()}>Apply configuration</button>
           </div>
         )}
       </section>
