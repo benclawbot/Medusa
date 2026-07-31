@@ -255,7 +255,6 @@ fn render_keyboard(
     now: OffsetDateTime,
 ) -> Result<Option<TelegramInlineKeyboardMarkup>, TelegramSessionServiceError> {
     let mut rows = Vec::new();
-    let group_id = format!("render:{}", slot_fingerprint(slot));
     for button in buttons {
         let rendered = match &button.intent {
             TelegramButtonIntent::StartLiveVoice => {
@@ -269,6 +268,7 @@ fn render_keyboard(
             }
             intent => {
                 let command = command_for_intent(intent);
+                let group_id = callback_group_id(slot, intent);
                 let callback = gateway.issue_command_callback(
                     identity,
                     session_id,
@@ -295,6 +295,23 @@ fn render_keyboard(
     }))
 }
 
+fn callback_group_id(slot: &TelegramMessageSlot, intent: &TelegramButtonIntent) -> String {
+    let slot = slot_fingerprint(slot);
+    match intent {
+        TelegramButtonIntent::Details { reference } => {
+            format!("render:{slot}:details:{}", digest_prefix(reference))
+        }
+        TelegramButtonIntent::AnswerQuestion { question_id, .. } => {
+            format!("render:{slot}:question:{}", digest_prefix(question_id))
+        }
+        TelegramButtonIntent::Approval { approval_id, .. } => {
+            format!("render:{slot}:approval:{}", digest_prefix(approval_id))
+        }
+        TelegramButtonIntent::CancelQueued => format!("render:{slot}:cancel"),
+        TelegramButtonIntent::StartLiveVoice => format!("render:{slot}:voice"),
+    }
+}
+
 fn command_for_intent(intent: &TelegramButtonIntent) -> FrontendCommand {
     match intent {
         TelegramButtonIntent::AnswerQuestion { question_id, value } => {
@@ -319,6 +336,10 @@ fn command_for_intent(intent: &TelegramButtonIntent) -> FrontendCommand {
 fn slot_fingerprint(slot: &TelegramMessageSlot) -> String {
     let bytes = serde_json::to_vec(slot).unwrap_or_default();
     hex::encode(Sha256::digest(bytes))[..24].to_owned()
+}
+
+fn digest_prefix(value: &str) -> String {
+    hex::encode(Sha256::digest(value.as_bytes()))[..24].to_owned()
 }
 
 #[cfg(test)]
@@ -355,5 +376,48 @@ mod tests {
             command_for_intent(&TelegramButtonIntent::CancelQueued),
             FrontendCommand::CancelTurn
         );
+    }
+
+    #[test]
+    fn details_callbacks_do_not_consume_approval_or_question_resolution() {
+        let approval_slot = TelegramMessageSlot::Approval("approval-1".to_owned());
+        let details = callback_group_id(
+            &approval_slot,
+            &TelegramButtonIntent::Details {
+                reference: "approval-1".to_owned(),
+            },
+        );
+        let approve = callback_group_id(
+            &approval_slot,
+            &TelegramButtonIntent::Approval {
+                approval_id: "approval-1".to_owned(),
+                decision: medusa_protocol::frontend::ApprovalDecision::ApproveOnce,
+            },
+        );
+        let deny = callback_group_id(
+            &approval_slot,
+            &TelegramButtonIntent::Approval {
+                approval_id: "approval-1".to_owned(),
+                decision: medusa_protocol::frontend::ApprovalDecision::Deny,
+            },
+        );
+        assert_ne!(details, approve);
+        assert_eq!(approve, deny);
+
+        let question_slot = TelegramMessageSlot::Question("question-1".to_owned());
+        let inspect = callback_group_id(
+            &question_slot,
+            &TelegramButtonIntent::Details {
+                reference: "question-1".to_owned(),
+            },
+        );
+        let answer = callback_group_id(
+            &question_slot,
+            &TelegramButtonIntent::AnswerQuestion {
+                question_id: "question-1".to_owned(),
+                value: "yes".to_owned(),
+            },
+        );
+        assert_ne!(inspect, answer);
     }
 }
