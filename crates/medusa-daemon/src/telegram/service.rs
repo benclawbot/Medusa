@@ -36,7 +36,8 @@ use super::{
     project_event,
 };
 
-const TELEGRAM_SERVICE_SCHEMA_VERSION: u32 = 1;
+const LEGACY_TELEGRAM_SERVICE_SCHEMA_VERSION: u32 = 1;
+const TELEGRAM_SERVICE_SCHEMA_VERSION: u32 = 2;
 const MAX_BINDINGS: usize = 4_096;
 
 #[derive(Clone, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize)]
@@ -111,6 +112,25 @@ impl Default for TelegramServiceState {
 }
 
 impl TelegramServiceState {
+    fn migrate(mut self) -> Result<Self, TelegramSessionServiceError> {
+        match self.schema_version {
+            TELEGRAM_SERVICE_SCHEMA_VERSION => Ok(self),
+            LEGACY_TELEGRAM_SERVICE_SCHEMA_VERSION => {
+                for binding in self.bindings.values_mut() {
+                    binding.delivered_cursor = binding
+                        .delivered_cursor
+                        .max(binding.acknowledged_cursor);
+                    if binding.chat_kind == TelegramChatKind::Private && binding.key.chat_id < 0 {
+                        binding.chat_kind = TelegramChatKind::Supergroup;
+                    }
+                }
+                self.schema_version = TELEGRAM_SERVICE_SCHEMA_VERSION;
+                Ok(self)
+            }
+            version => Err(TelegramSessionServiceError::UnsupportedSchema(version)),
+        }
+    }
+
     fn validate(&self) -> Result<(), TelegramSessionServiceError> {
         if self.schema_version != TELEGRAM_SERVICE_SCHEMA_VERSION {
             return Err(TelegramSessionServiceError::UnsupportedSchema(
@@ -180,6 +200,7 @@ impl TelegramSessionService {
         let state = if path.is_file() {
             let bytes = fs::read(&path)?;
             let state: TelegramServiceState = serde_json::from_slice(&bytes)?;
+            let state = state.migrate()?;
             state.validate()?;
             state
         } else {
@@ -352,13 +373,24 @@ impl TelegramSessionService {
             command: FrontendCommand::AcknowledgeCursor { cursor },
         };
         let acknowledgement = self.control.dispatch(envelope)?;
+        let FrontendControlResult::CursorAcknowledged { attachment } = &acknowledgement.result
+        else {
+            return Err(TelegramSessionServiceError::InvalidCursorAcknowledgement);
+        };
+        let previous_state = self.state.clone();
         let entry = self
             .state
             .bindings
             .get_mut(&binding.key.stable_id())
             .ok_or(TelegramSessionServiceError::BindingNotFound)?;
-        entry.acknowledged_cursor = entry.acknowledged_cursor.max(cursor);
-        self.persist()?;
+        entry.delivered_cursor = entry
+            .delivered_cursor
+            .max(attachment.acknowledged_cursor);
+        entry.acknowledged_cursor = attachment.acknowledged_cursor;
+        if let Err(error) = self.persist() {
+            self.state = previous_state;
+            return Err(error);
+        }
         Ok(acknowledgement)
     }
 
@@ -869,6 +901,68 @@ mod tests {
         assert_eq!(binding.tool_progress, ToolProgressMode::All);
         assert_eq!(binding.voice_mode, TelegramVoiceMode::All);
         assert_eq!(reloaded.next_update_offset(), Some(13));
+    }
+
+    #[test]
+    fn legacy_state_migrates_delivery_cursor_and_group_kind() {
+        let repository = tempfile::tempdir().expect("repository");
+        let state_path = repository.path().join(".medusa/telegram/state.json");
+        std::fs::create_dir_all(state_path.parent().expect("state parent"))
+            .expect("create state parent");
+        let legacy = serde_json::json!({
+            "schema_version": LEGACY_TELEGRAM_SERVICE_SCHEMA_VERSION,
+            "next_update_offset": 8,
+            "bindings": {
+                "-100:0:42": {
+                    "key": {
+                        "chat_id": -100,
+                        "topic_id": null,
+                        "user_id": 42
+                    },
+                    "client_id": "telegram:-100:0:42",
+                    "session_id": "session-1",
+                    "acknowledged_cursor": 7,
+                    "tool_progress": "new",
+                    "voice_mode": "off",
+                    "last_update_id": 7
+                }
+            }
+        });
+        std::fs::write(
+            &state_path,
+            serde_json::to_vec_pretty(&legacy).expect("serialize legacy state"),
+        )
+        .expect("write legacy state");
+
+        let control = FrontendControlPlane::new(repository.path().to_path_buf(), Config::default());
+        let mut service =
+            TelegramSessionService::load(&state_path, gateway(), control).expect("migrate state");
+        let group_identity = TelegramIdentity {
+            user_id: 42,
+            chat_id: -100,
+            topic_id: None,
+            chat_kind: TelegramChatKind::Supergroup,
+            bot_mentioned: true,
+        };
+        let binding = service.binding(&group_identity).expect("migrated binding");
+        assert_eq!(binding.delivered_cursor, 7);
+        assert_eq!(binding.chat_kind, TelegramChatKind::Supergroup);
+
+        service
+            .acknowledge_transport_update(8)
+            .expect("persist migrated state");
+        let persisted: serde_json::Value = serde_json::from_slice(
+            &std::fs::read(&state_path).expect("read migrated state"),
+        )
+        .expect("parse migrated state");
+        assert_eq!(
+            persisted["schema_version"],
+            serde_json::json!(TELEGRAM_SERVICE_SCHEMA_VERSION)
+        );
+        assert_eq!(
+            persisted["bindings"]["-100:0:42"]["delivered_cursor"],
+            serde_json::json!(7)
+        );
     }
 
     #[test]
