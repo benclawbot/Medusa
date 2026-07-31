@@ -30,6 +30,32 @@ jobs:
           node-version: "22"
           cache: npm
           cache-dependency-path: apps/medusa-desktop/package-lock.json
+      - name: Correct one-shot generator deletion handling
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          path = Path("validation/materialize_574_desktop_shared_config.py")
+          source = path.read_text()
+          old = '''def replace_once(source: str, old: str, new: str, label: str) -> str:
+              if new in source:
+                  return source
+              count = source.count(old)
+              if count != 1:
+                  raise SystemExit(f"{label}: expected one target, found {count}")
+              return source.replace(old, new, 1)
+          '''
+          new = '''def replace_once(source: str, old: str, new: str, label: str) -> str:
+              count = source.count(old)
+              if count == 1:
+                  return source.replace(old, new, 1)
+              if count == 0 and new and new in source:
+                  return source
+              raise SystemExit(f"{label}: expected one target, found {count}")
+          '''
+          if old not in source:
+              raise SystemExit("replace_once helper changed unexpectedly")
+          path.write_text(source.replace(old, new, 1))
+          PY
       - name: Materialize shared configuration wiring
         run: python3 validation/materialize_574_desktop_shared_config.py
       - name: Validate desktop JavaScript configuration
