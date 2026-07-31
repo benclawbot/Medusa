@@ -12,6 +12,7 @@ use medusa_runtime::attachment::session::{
     AttachmentMode, ClientKind, ContinuitySession, RuntimeAttachRequest, RuntimeSessionAttachment,
 };
 use medusa_runtime::{RuntimeController, RuntimeError};
+use medusa_session_continuity::{ContinuityError, ContinuityStore};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 use time::OffsetDateTime;
@@ -77,6 +78,27 @@ impl LiveSessionBroker {
         list_sessions(&self.repo)
             .map(|sessions| sessions.into_iter().map(Into::into).collect())
             .map_err(|error| LiveSessionBrokerError::Session(error.to_string()))
+    }
+
+    /// Attaches using the latest durable continuity revision.
+    ///
+    /// The daemon serializes calls to this method. A concurrent external writer still produces a
+    /// normal revision conflict rather than being overwritten.
+    pub fn attach_current(
+        &mut self,
+        mut request: RuntimeAttachRequest,
+    ) -> Result<LiveSessionAttachmentView, LiveSessionBrokerError> {
+        let store = ContinuityStore::new(
+            self.repo
+                .join(".medusa/continuity")
+                .join(format!("{}.json", request.session_id)),
+        );
+        request.expected_revision = match store.load() {
+            Ok(continuity) => continuity.revision,
+            Err(ContinuityError::Io(error)) if error.kind() == std::io::ErrorKind::NotFound => 0,
+            Err(error) => return Err(LiveSessionBrokerError::Session(error.to_string())),
+        };
+        self.attach(request)
     }
 
     /// Attaches or refreshes one frontend client without allowing an implicit session switch.

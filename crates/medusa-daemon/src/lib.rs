@@ -2,6 +2,7 @@
 
 mod cancellation;
 mod control_plane;
+pub mod frontend_control;
 mod lifecycle;
 pub mod live_session;
 mod paths;
@@ -14,6 +15,10 @@ mod transport;
 
 pub use control_plane::{
     ControlPlaneError, RuntimeBinding, SupervisionControlPlane, SupervisionEvent,
+};
+pub use frontend_control::{
+    FrontendCommandAcknowledgement, FrontendControlError, FrontendControlPlane,
+    FrontendControlResult,
 };
 pub use lifecycle::{DaemonLaunch, DaemonLifecycle, DaemonLifecycleState, DaemonSupervisor};
 pub use live_session::{
