@@ -236,7 +236,9 @@ impl TelegramPollingRuntime {
                         &callback.data,
                         OffsetDateTime::now_utc(),
                     ) {
-                        Ok(_) => self.client.answer_callback_query(&callback.query_id, None)?,
+                        Ok(_) => self
+                            .client
+                            .answer_callback_query(&callback.query_id, None)?,
                         Err(error) if is_rejected_input(&error) => {
                             self.service.acknowledge_transport_update(update_id)?;
                             self.client.answer_callback_query(
@@ -267,10 +269,9 @@ impl TelegramPollingRuntime {
     ) -> Result<(), TelegramRuntimeError> {
         let previous = self.pending_media_groups.clone();
         self.pending_media_groups.insert(update_id, message, now)?;
-        if let Err(error) = persist_media_group_state(
-            &self.media_group_path,
-            &self.pending_media_groups,
-        ) {
+        if let Err(error) =
+            persist_media_group_state(&self.media_group_path, &self.pending_media_groups)
+        {
             self.pending_media_groups = previous;
             return Err(error);
         }
@@ -298,12 +299,14 @@ impl TelegramPollingRuntime {
             .pending_media_groups
             .groups
             .iter()
-            .filter(|(_, group)| group.messages.first().is_some_and(|first| {
-                first.chat.id == next.chat.id
-                    && first.message_thread_id == next.message_thread_id
-                    && first.from.as_ref().map(|user| user.id)
-                        == next.from.as_ref().map(|user| user.id)
-            }))
+            .filter(|(_, group)| {
+                group.messages.first().is_some_and(|first| {
+                    first.chat.id == next.chat.id
+                        && first.message_thread_id == next.message_thread_id
+                        && first.from.as_ref().map(|user| user.id)
+                            == next.from.as_ref().map(|user| user.id)
+                })
+            })
             .map(|(key, _)| key.clone())
             .collect::<Vec<_>>();
         for key in keys {
@@ -918,7 +921,10 @@ mod tests {
         let source = album_message(7, "album caption");
         state.insert(11, source.clone(), now).expect("first");
         state.insert(11, source, now).expect("redelivery");
-        assert_eq!(state.groups.values().next().expect("group").messages.len(), 1);
+        assert_eq!(
+            state.groups.values().next().expect("group").messages.len(),
+            1
+        );
     }
 
     #[test]
