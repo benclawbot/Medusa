@@ -177,7 +177,7 @@ describe("OpenAiRealtimeWebRtcTransport", () => {
       }),
     } as MessageEvent);
 
-    expect(transcripts.at(-1)).toEqual({
+    expect(transcripts[transcripts.length - 1]).toEqual({
       id: "user:user-1",
       role: "user",
       text: "run tests",
@@ -191,7 +191,7 @@ describe("OpenAiRealtimeWebRtcTransport", () => {
       { type: "response.cancel", response_id: "response-1" },
       { type: "output_audio_buffer.clear" },
     ]);
-    expect(phases.at(-1)).toBe("interrupted");
+    expect(phases[phases.length - 1]).toBe("interrupted");
   });
 
   it("mutes capture and releases every media and peer resource", async () => {
