@@ -62,6 +62,18 @@ path = Path("crates/medusa-daemon/src/telegram/service.rs")
 source = path.read_text()
 source = replace_once(
     source,
+    '''    Forwarded {
+        acknowledgement: FrontendCommandAcknowledgement,
+    },
+''',
+    '''    Forwarded {
+        acknowledgement: Box<FrontendCommandAcknowledgement>,
+    },
+''',
+    "boxed Telegram acknowledgement outcome",
+)
+source = replace_once(
+    source,
     '''    pub fn process_message(
         &mut self,
         update_id: i64,
@@ -97,6 +109,16 @@ source = replace_once(
         }
 ''',
     "stable command identity before binding enrichment",
+)
+source = replace_once(
+    source,
+    '''                TelegramServiceOutcome::Forwarded { acknowledgement }
+''',
+    '''                TelegramServiceOutcome::Forwarded {
+                    acknowledgement: Box::new(acknowledgement),
+                }
+''',
+    "box forwarded Telegram acknowledgement",
 )
 source = replace_once(
     source,
