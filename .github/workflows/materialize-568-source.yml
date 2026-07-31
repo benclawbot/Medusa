@@ -22,11 +22,11 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          tar --exclude=.git --exclude=medusa-source.tar.gz -czf medusa-source.tar.gz .
+          tar --exclude=.git -czf "$RUNNER_TEMP/medusa-source.tar.gz" .
       - name: Upload source checkout
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: medusa-568-source
-          path: medusa-source.tar.gz
+          path: ${{ runner.temp }}/medusa-source.tar.gz
           if-no-files-found: error
           retention-days: 1
