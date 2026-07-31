@@ -228,6 +228,18 @@ impl TelegramSessionService {
             .get(&TelegramBindingKey::from_identity(identity).stable_id())
     }
 
+    /// Stages one bounded Telegram attachment in the shared daemon artifact store.
+    pub fn ingest_attachment(
+        &self,
+        display_name: String,
+        mime_type: Option<String>,
+        bytes: Vec<u8>,
+    ) -> Result<String, TelegramSessionServiceError> {
+        self.control
+            .ingest_attachment(display_name, mime_type, bytes)
+            .map_err(Into::into)
+    }
+
     /// Processes one normalized Telegram message and persists transport state only after success.
     pub fn process_message(
         &mut self,
@@ -356,6 +368,7 @@ impl TelegramSessionService {
             identity: identity.clone(),
             message_id: update_id,
             text: "/status".to_owned(),
+            attachment_ids: Vec::new(),
             attached_session_id: Some(session_id.clone()),
             received_at,
         };
@@ -858,6 +871,7 @@ mod tests {
             identity: identity(),
             message_id: id,
             text: text.to_owned(),
+            attachment_ids: Vec::new(),
             attached_session_id: None,
             received_at: datetime!(2026-07-31 01:00 UTC),
         }

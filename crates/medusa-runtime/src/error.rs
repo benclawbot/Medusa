@@ -32,6 +32,8 @@ pub enum RuntimeError {
     TurnLimit(u32),
     InvalidCommand(String),
     BinaryFile { path: PathBuf },
+    InvalidImage { path: PathBuf },
+    ImagePixelLimit { path: PathBuf, pixels: u64, limit: u64 },
     FileTooLarge { path: PathBuf, bytes: usize },
 }
 
@@ -58,7 +60,17 @@ impl std::fmt::Display for RuntimeError {
             Self::InvalidCommand(error) => formatter.write_str(error),
             Self::BinaryFile { path } => write!(
                 formatter,
-                "attached file is not UTF-8 text: {}",
+                "attached file is not UTF-8 text or a supported image: {}",
+                path.display()
+            ),
+            Self::InvalidImage { path } => write!(
+                formatter,
+                "attached image has an invalid encoded structure: {}",
+                path.display()
+            ),
+            Self::ImagePixelLimit { path, pixels, limit } => write!(
+                formatter,
+                "attached image has {pixels} pixels; limit is {limit}: {}",
                 path.display()
             ),
             Self::FileTooLarge { path, bytes } => write!(

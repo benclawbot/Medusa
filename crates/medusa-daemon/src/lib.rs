@@ -1,5 +1,6 @@
 //! Persistent local daemon, cross-platform IPC, process ownership, crash recovery, lifecycle supervision, and remote frontend gateways.
 
+mod artifact_store;
 mod cancellation;
 mod control_plane;
 pub mod frontend_control;

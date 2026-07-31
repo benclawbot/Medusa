@@ -10,16 +10,17 @@ use serde::{Serialize, de::DeserializeOwned};
 mod types;
 
 use types::{
-    AnswerCallbackQueryRequest, DeleteMessageRequest, EmptyRequest, GetUpdatesRequest,
-    SendChatActionRequest, SetMessageReactionRequest, TelegramApiEnvelope, TelegramReactionType,
+    AnswerCallbackQueryRequest, DeleteMessageRequest, EmptyRequest, GetFileRequest,
+    GetUpdatesRequest, SendChatActionRequest, SetMessageReactionRequest, TelegramApiEnvelope,
+    TelegramReactionType,
 };
 pub use types::{
     TelegramBotChat, TelegramBotChatKind, TelegramBotInlineButton, TelegramBotMessage,
     TelegramBotParseMode, TelegramBotUser, TelegramCallbackQuery, TelegramChatAction,
-    TelegramEditMessageOutcome, TelegramEditMessageText, TelegramInboundCallback,
-    TelegramInlineKeyboardMarkup, TelegramLinkPreviewOptions, TelegramReplyParameters,
-    TelegramSendMessage, TelegramTransportUpdate, TelegramUpdate, TelegramUpdateCursor,
-    TelegramWebAppInfo,
+    TelegramDocument, TelegramEditMessageOutcome, TelegramEditMessageText, TelegramFile,
+    TelegramInboundCallback, TelegramInlineKeyboardMarkup, TelegramLinkPreviewOptions,
+    TelegramPhotoSize, TelegramReplyParameters, TelegramSendMessage, TelegramTransportUpdate,
+    TelegramUpdate, TelegramUpdateCursor, TelegramWebAppInfo,
 };
 
 #[cfg(test)]
@@ -30,6 +31,8 @@ const DEFAULT_REQUEST_TIMEOUT: Duration = Duration::from_secs(45);
 const DEFAULT_CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
 const MAX_ERROR_DESCRIPTION_CHARS: usize = 512;
 const MAX_RESPONSE_BYTES: u64 = 16 * 1024 * 1024;
+const MAX_FILE_ID_CHARS: usize = 512;
+const MAX_FILE_PATH_CHARS: usize = 1_024;
 
 #[derive(Clone, Eq, PartialEq)]
 pub struct TelegramBotToken(String);
@@ -116,6 +119,86 @@ impl TelegramBotApiClient {
 
     pub fn get_me(&self) -> Result<TelegramBotUser, TelegramBotApiError> {
         self.call("getMe", &EmptyRequest {})
+    }
+
+    pub fn get_file(&self, file_id: &str) -> Result<TelegramFile, TelegramBotApiError> {
+        if file_id.is_empty()
+            || file_id.len() > MAX_FILE_ID_CHARS
+            || !file_id.bytes().all(|byte| byte.is_ascii_graphic())
+        {
+            return Err(TelegramBotApiError::InvalidRequest(
+                "Telegram file id is invalid".to_owned(),
+            ));
+        }
+        self.call("getFile", &GetFileRequest { file_id })
+    }
+
+    pub fn download_file(
+        &self,
+        file_path: &str,
+        max_bytes: u64,
+    ) -> Result<Vec<u8>, TelegramBotApiError> {
+        validate_file_path(file_path)?;
+        if max_bytes == 0
+            || max_bytes > medusa_runtime::attachment::MAX_TOTAL_ATTACHMENT_BYTES as u64
+        {
+            return Err(TelegramBotApiError::InvalidRequest(
+                "Telegram file byte limit is invalid".to_owned(),
+            ));
+        }
+        let url = format!(
+            "{}/file/bot{}/{}",
+            self.api_base,
+            self.token.expose(),
+            file_path
+        );
+        let response = self
+            .client
+            .get(url)
+            .send()
+            .map_err(classify_transport_error)?;
+        let status = response.status();
+        if let Some(seconds) = retry_after_header(&response) {
+            return Err(TelegramBotApiError::RetryAfter { seconds });
+        }
+        if !status.is_success() {
+            return Err(if status.is_server_error() {
+                TelegramBotApiError::Transport {
+                    kind: TelegramTransportFailure::Server,
+                    status: Some(status.as_u16()),
+                }
+            } else {
+                TelegramBotApiError::Rejected {
+                    status: Some(status.as_u16()),
+                    code: None,
+                    description: "Telegram rejected the file download".to_owned(),
+                }
+            });
+        }
+        if let Some(bytes) = response
+            .content_length()
+            .filter(|length| *length > max_bytes)
+        {
+            return Err(TelegramBotApiError::FileTooLarge {
+                bytes,
+                limit: max_bytes,
+            });
+        }
+        let mut bytes = Vec::new();
+        response
+            .take(max_bytes.saturating_add(1))
+            .read_to_end(&mut bytes)
+            .map_err(|_| TelegramBotApiError::Transport {
+                kind: TelegramTransportFailure::Read,
+                status: Some(status.as_u16()),
+            })?;
+        if bytes.len() as u64 > max_bytes {
+            return Err(TelegramBotApiError::FileTooLarge {
+                bytes: bytes.len() as u64,
+                limit: max_bytes,
+            });
+        }
+        Ok(bytes)
     }
 
     pub fn get_updates(
@@ -338,6 +421,8 @@ pub enum TelegramBotApiError {
     },
     #[error("Telegram Bot API returned an invalid response for {method}")]
     InvalidResponse { method: &'static str },
+    #[error("Telegram file is {bytes} bytes; limit is {limit}")]
+    FileTooLarge { bytes: u64, limit: u64 },
     #[error("Telegram update timestamp is invalid")]
     InvalidTimestamp,
     #[error("Telegram update does not contain a usable sender and chat")]
@@ -391,6 +476,26 @@ fn validate_api_base(api_base: &str) -> Result<(), TelegramBotApiError> {
     });
     if (!secure && !loopback) || parsed.query().is_some() || parsed.fragment().is_some() {
         return Err(TelegramBotApiError::InvalidEndpoint);
+    }
+    Ok(())
+}
+
+fn validate_file_path(file_path: &str) -> Result<(), TelegramBotApiError> {
+    if file_path.is_empty()
+        || file_path.len() > MAX_FILE_PATH_CHARS
+        || file_path.starts_with('/')
+        || file_path.split('/').any(|segment| {
+            segment.is_empty()
+                || segment == "."
+                || segment == ".."
+                || !segment
+                    .bytes()
+                    .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'-' | b'.'))
+        })
+    {
+        return Err(TelegramBotApiError::InvalidRequest(
+            "Telegram file path is invalid".to_owned(),
+        ));
     }
     Ok(())
 }
