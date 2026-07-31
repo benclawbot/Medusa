@@ -8,6 +8,7 @@ import { DiffDock } from "./DiffDock";
 import { EngineeringDashboardLauncher } from "./EngineeringDashboard";
 import { LearningDock } from "./LearningDock";
 import { MemoryDock } from "./MemoryDock";
+import { OpenAiRealtimeLiveEvidence } from "./OpenAiRealtimeLiveEvidence";
 import { RecoveryDock } from "./RecoveryDock";
 import { SessionDock } from "./SessionDock";
 import "./styles.css";
@@ -22,17 +23,27 @@ import "./desktop-timeline.css";
 import "./structured-timeline.css";
 import "./desktop-update.css";
 
+const liveEvidenceEnabled =
+  import.meta.env.VITE_MEDUSA_OPENAI_REALTIME_EVIDENCE === "1" ||
+  new URLSearchParams(window.location.search).get("openai-realtime-evidence") === "1";
+
 ReactDOM.createRoot(document.getElementById("root") as HTMLElement).render(
   <React.StrictMode>
-    <App />
-    <DesktopVoiceDock />
-    <DesktopTimelineBridge />
-    <SessionDock />
-    <DiffDock />
-    <MemoryDock />
-    <RecoveryDock />
-    <DesktopUpdateControl />
-    <LearningDock />
-    <EngineeringDashboardLauncher />
+    {liveEvidenceEnabled ? (
+      <OpenAiRealtimeLiveEvidence />
+    ) : (
+      <>
+        <App />
+        <DesktopVoiceDock />
+        <DesktopTimelineBridge />
+        <SessionDock />
+        <DiffDock />
+        <MemoryDock />
+        <RecoveryDock />
+        <DesktopUpdateControl />
+        <LearningDock />
+        <EngineeringDashboardLauncher />
+      </>
+    )}
   </React.StrictMode>,
 );
