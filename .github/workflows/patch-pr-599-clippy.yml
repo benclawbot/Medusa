@@ -1,0 +1,80 @@
+name: Patch PR 599 Clippy
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+    paths:
+      - .github/workflows/patch-pr-599-clippy.yml
+
+permissions:
+  contents: write
+
+concurrency:
+  group: patch-pr-599-clippy
+  cancel-in-progress: false
+
+jobs:
+  patch:
+    if: github.head_ref == 'agent/482-oauth-realtime-session'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          ref: agent/482-oauth-realtime-session
+          token: ${{ secrets.GITHUB_TOKEN }}
+          fetch-depth: 0
+      - uses: dtolnay/rust-toolchain@39b0b3842c7e8bbf6904c0bfc3d9006fdd4dc4e0
+        with:
+          components: rustfmt,clippy
+      - name: Sync current main and box the large event payload
+        shell: bash
+        run: |
+          set -euo pipefail
+          git fetch origin main
+          if ! git merge-base --is-ancestor origin/main HEAD; then
+            git merge --no-edit origin/main
+          fi
+          python - <<'PY'
+          from pathlib import Path
+
+          path = Path('crates/medusa-runtime/src/openai_realtime.rs')
+          text = path.read_text(encoding='utf-8')
+          replacements = [
+              (
+                  '        session: OpenAiRealtimeSessionConfig,\n',
+                  '        session: Box<OpenAiRealtimeSessionConfig>,\n',
+              ),
+              (
+                  '        session: OpenAiRealtimeSessionConfig::medusa_default(instructions),\n',
+                  '        session: Box::new(OpenAiRealtimeSessionConfig::medusa_default(instructions)),\n',
+              ),
+          ]
+          for old, new in replacements:
+              if old in text:
+                  if text.count(old) != 1:
+                      raise SystemExit(f'expected exactly one occurrence of {old!r}')
+                  text = text.replace(old, new, 1)
+              elif new not in text:
+                  raise SystemExit(f'expected source form missing: {old!r}')
+          path.write_text(text, encoding='utf-8')
+          PY
+          cargo fmt --all
+      - name: Validate runtime contract
+        run: |
+          cargo generate-lockfile
+          cargo clippy -p medusa-runtime --all-targets --all-features --locked -- -D warnings
+          cargo test -p medusa-runtime openai_realtime --all-features --locked
+      - name: Commit and push production changes
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          if ! git diff --quiet -- crates/medusa-runtime/src/openai_realtime.rs; then
+            git add crates/medusa-runtime/src/openai_realtime.rs
+            git diff --cached --check
+            git commit -m "Box Realtime session update payload"
+          fi
+          if [ "$(git rev-parse HEAD)" != "$(git rev-parse origin/agent/482-oauth-realtime-session)" ]; then
+            git push origin HEAD:agent/482-oauth-realtime-session
+          fi
