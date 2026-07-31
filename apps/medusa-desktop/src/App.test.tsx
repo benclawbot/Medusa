@@ -17,6 +17,7 @@ vi.mock("./runtime", async () => {
   return {
     ...actual,
     loadSharedConfiguration: vi.fn().mockResolvedValue({
+      revision: 0,
       activeProfile: "default",
       connection: "direct",
       provider: "minimax",
@@ -40,6 +41,7 @@ vi.mock("./runtime", async () => {
 beforeEach(() => {
   window.localStorage.clear();
   vi.mocked(loadSharedConfiguration).mockReset().mockResolvedValue({
+    revision: 0,
     activeProfile: "default",
     connection: "direct",
     provider: "minimax",
