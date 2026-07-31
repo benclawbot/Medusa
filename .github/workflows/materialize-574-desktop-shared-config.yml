@@ -45,8 +45,11 @@ jobs:
           cargo test --manifest-path apps/medusa-desktop/src-tauri/Cargo.toml config::tests
           cargo clippy --manifest-path apps/medusa-desktop/src-tauri/Cargo.toml --all-targets -- -D warnings
           npm ci --prefix apps/medusa-desktop
+          npm ls --prefix apps/medusa-desktop @tauri-apps/api
+          node --input-type=module -e "console.log(await import.meta.resolve('@tauri-apps/api/core', new URL('./apps/medusa-desktop/', import.meta.url)))"
+          test -f apps/medusa-desktop/node_modules/@tauri-apps/api/core.js
           npm run typecheck --prefix apps/medusa-desktop
-          npm test --prefix apps/medusa-desktop
+          npm test --prefix apps/medusa-desktop -- --reporter=verbose
       - name: Commit source-only result
         run: |
           git config user.name github-actions[bot]
