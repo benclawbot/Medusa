@@ -14,7 +14,11 @@ use medusa_protocol::{
         FrontendCommandEnvelope, FrontendKind,
     },
 };
-use medusa_runtime::{RuntimeController, SubmitDisposition, prompt::PromptDraft};
+use medusa_runtime::{
+    RuntimeController, SubmitDisposition,
+    commands::{Effort, ModelCommand, SlashCommand, TeamCommand},
+    prompt::PromptDraft,
+};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use thiserror::Error;
@@ -22,7 +26,7 @@ use thiserror::Error;
 use crate::live_session::{
     LiveSessionAttachmentView, LiveSessionBroker, LiveSessionBrokerError, LiveSessionSummary,
 };
-use medusa_runtime::attachment::session::{AttachmentMode, ClientKind};
+use medusa_runtime::attachment::session::{AttachmentMode, ClientKind, RuntimeAttachRequest};
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
@@ -56,6 +60,10 @@ pub enum FrontendControlResult {
     CancellationRequested {
         session_id: String,
         requested: bool,
+    },
+    CommandAccepted {
+        session_id: String,
+        command: String,
     },
     Status {
         session_id: String,
@@ -160,15 +168,23 @@ impl FrontendControlPlane {
                         session_id.clone(),
                     ));
                 }
-                let attachment = self.broker.attach_current(
-                    session_id,
-                    envelope.client_id.clone(),
-                    client_kind(envelope.frontend),
-                    attachment_mode(*mode),
-                    after_cursor.unwrap_or_default(),
-                    timestamp_unix_ms(envelope.timestamp),
-                    envelope.command_id.clone(),
-                )?;
+                if *mode == FrontendAttachmentMode::Owner {
+                    if !self.controllers.contains_key(session_id) {
+                        return Err(FrontendControlError::RuntimeNotActive(session_id.clone()));
+                    }
+                    self.control_clients
+                        .insert(session_id.clone(), envelope.client_id.clone());
+                }
+                let attachment = self.broker.attach_current(RuntimeAttachRequest {
+                    session_id: session_id.clone(),
+                    client_id: envelope.client_id.clone(),
+                    client_kind: client_kind(envelope.frontend),
+                    requested_mode: AttachmentMode::ReadOnly,
+                    expected_revision: 0,
+                    cursor: after_cursor.unwrap_or_default(),
+                    occurred_at_unix_ms: timestamp_unix_ms(envelope.timestamp),
+                    event_id: envelope.command_id.clone(),
+                })?;
                 Ok(FrontendControlResult::Attached { attachment })
             }
             FrontendCommand::Detach => {
@@ -201,24 +217,26 @@ impl FrontendControlPlane {
                     ));
                 }
                 let daemon_client_id = format!("daemon-runtime:{session_id}");
-                self.broker.attach_current(
-                    session_id,
-                    daemon_client_id.clone(),
-                    ClientKind::Daemon,
-                    AttachmentMode::Owner,
-                    0,
-                    timestamp_unix_ms(envelope.timestamp),
-                    format!("{}:daemon-owner", envelope.command_id),
-                )?;
-                let attachment = self.broker.attach_current(
-                    session_id,
-                    envelope.client_id.clone(),
-                    client_kind(envelope.frontend),
-                    AttachmentMode::ReadOnly,
-                    0,
-                    timestamp_unix_ms(envelope.timestamp),
-                    format!("{}:frontend", envelope.command_id),
-                )?;
+                self.broker.attach_current(RuntimeAttachRequest {
+                    session_id: session_id.clone(),
+                    client_id: daemon_client_id.clone(),
+                    client_kind: ClientKind::Daemon,
+                    requested_mode: AttachmentMode::Owner,
+                    expected_revision: 0,
+                    cursor: 0,
+                    occurred_at_unix_ms: timestamp_unix_ms(envelope.timestamp),
+                    event_id: format!("{}:daemon-owner", envelope.command_id),
+                })?;
+                let attachment = self.broker.attach_current(RuntimeAttachRequest {
+                    session_id: session_id.clone(),
+                    client_id: envelope.client_id.clone(),
+                    client_kind: client_kind(envelope.frontend),
+                    requested_mode: AttachmentMode::ReadOnly,
+                    expected_revision: 0,
+                    cursor: 0,
+                    occurred_at_unix_ms: timestamp_unix_ms(envelope.timestamp),
+                    event_id: format!("{}:frontend", envelope.command_id),
+                })?;
                 let controller = self.broker.resume_owner(&daemon_client_id)?;
                 self.controllers.insert(session_id.clone(), controller);
                 self.control_clients
@@ -233,17 +251,35 @@ impl FrontendControlPlane {
                     .as_deref()
                     .filter(|value| !value.trim().is_empty())
                     .ok_or(FrontendControlError::ObjectiveRequired)?;
-                let controller = RuntimeController::start_with_config(
-                    self.repo.clone(),
-                    self.config.clone(),
-                );
+                let controller =
+                    RuntimeController::start_with_config(self.repo.clone(), self.config.clone());
                 let disposition = controller.submit(PromptDraft {
                     text: objective.to_owned(),
                     ..PromptDraft::default()
                 })?;
-                let session_id = controller.active_session_id().ok_or(
-                    FrontendControlError::RuntimeDidNotAcceptSession,
-                )?;
+                let session_id = controller
+                    .active_session_id()
+                    .ok_or(FrontendControlError::RuntimeDidNotAcceptSession)?;
+                self.broker.attach_current(RuntimeAttachRequest {
+                    session_id: session_id.clone(),
+                    client_id: format!("daemon-runtime:{session_id}"),
+                    client_kind: ClientKind::Daemon,
+                    requested_mode: AttachmentMode::Owner,
+                    expected_revision: 0,
+                    cursor: 0,
+                    occurred_at_unix_ms: timestamp_unix_ms(envelope.timestamp),
+                    event_id: format!("{}:daemon-owner", envelope.command_id),
+                })?;
+                self.broker.attach_current(RuntimeAttachRequest {
+                    session_id: session_id.clone(),
+                    client_id: envelope.client_id.clone(),
+                    client_kind: client_kind(envelope.frontend),
+                    requested_mode: AttachmentMode::ReadOnly,
+                    expected_revision: 0,
+                    cursor: 0,
+                    occurred_at_unix_ms: timestamp_unix_ms(envelope.timestamp),
+                    event_id: format!("{}:frontend", envelope.command_id),
+                })?;
                 self.controllers.insert(session_id.clone(), controller);
                 self.control_clients
                     .insert(session_id.clone(), envelope.client_id.clone());
@@ -263,9 +299,7 @@ impl FrontendControlPlane {
                 }
                 self.submit_text(envelope, text)
             }
-            FrontendCommand::AnswerQuestion { answer, .. } => {
-                self.submit_text(envelope, answer)
-            }
+            FrontendCommand::AnswerQuestion { answer, .. } => self.submit_text(envelope, answer),
             FrontendCommand::ResolveApproval { decision, .. } => self.submit_text(
                 envelope,
                 match decision {
@@ -298,14 +332,84 @@ impl FrontendControlPlane {
                     replay_equivalent: health.replay.equivalent,
                 })
             }
-            FrontendCommand::ConfigureModel { .. }
-            | FrontendCommand::SetEffort { .. }
-            | FrontendCommand::SetPlanMode { .. }
-            | FrontendCommand::SteerWorker { .. }
-            | FrontendCommand::CancelWorker { .. }
-            | FrontendCommand::StopTeam => Err(FrontendControlError::UnsupportedCommand(
-                "command mapping is not yet available in the daemon control plane",
-            )),
+            FrontendCommand::ConfigureModel { provider, model } => {
+                let session_id = required_session_id(envelope)?;
+                self.authorize_control(&session_id, &envelope.client_id)?;
+                let controller = self.controller(&session_id)?;
+                if let Some(provider) = provider {
+                    controller.run_command(SlashCommand::Model(ModelCommand::SetProvider(
+                        provider.clone(),
+                    )))?;
+                }
+                controller
+                    .run_command(SlashCommand::Model(ModelCommand::SetModel(model.clone())))?;
+                Ok(FrontendControlResult::CommandAccepted {
+                    session_id,
+                    command: "configure_model".to_owned(),
+                })
+            }
+            FrontendCommand::SetEffort { effort } => {
+                let session_id = required_session_id(envelope)?;
+                self.authorize_control(&session_id, &envelope.client_id)?;
+                self.controller(&session_id)?
+                    .run_command(SlashCommand::Effort {
+                        effort: Some(parse_effort(effort)?),
+                    })?;
+                Ok(FrontendControlResult::CommandAccepted {
+                    session_id,
+                    command: "set_effort".to_owned(),
+                })
+            }
+            FrontendCommand::SetPlanMode { enabled } => {
+                let session_id = required_session_id(envelope)?;
+                self.authorize_control(&session_id, &envelope.client_id)?;
+                self.controller(&session_id)?
+                    .run_command(SlashCommand::Plan {
+                        task: (!enabled).then(|| "off".to_owned()),
+                    })?;
+                Ok(FrontendControlResult::CommandAccepted {
+                    session_id,
+                    command: "set_plan_mode".to_owned(),
+                })
+            }
+            FrontendCommand::SteerWorker {
+                worker_id,
+                instruction,
+            } => {
+                let session_id = required_session_id(envelope)?;
+                self.authorize_control(&session_id, &envelope.client_id)?;
+                self.controller(&session_id)?
+                    .run_command(SlashCommand::Team(TeamCommand::Steer {
+                        worker_id: worker_id.clone(),
+                        instruction: instruction.clone(),
+                    }))?;
+                Ok(FrontendControlResult::CommandAccepted {
+                    session_id,
+                    command: "steer_worker".to_owned(),
+                })
+            }
+            FrontendCommand::CancelWorker { worker_id } => {
+                let session_id = required_session_id(envelope)?;
+                self.authorize_control(&session_id, &envelope.client_id)?;
+                self.controller(&session_id)?
+                    .run_command(SlashCommand::Team(TeamCommand::StopWorker {
+                        worker_id: worker_id.clone(),
+                    }))?;
+                Ok(FrontendControlResult::CommandAccepted {
+                    session_id,
+                    command: "cancel_worker".to_owned(),
+                })
+            }
+            FrontendCommand::StopTeam => {
+                let session_id = required_session_id(envelope)?;
+                self.authorize_control(&session_id, &envelope.client_id)?;
+                self.controller(&session_id)?
+                    .run_command(SlashCommand::Team(TeamCommand::StopTeam))?;
+                Ok(FrontendControlResult::CommandAccepted {
+                    session_id,
+                    command: "stop_team".to_owned(),
+                })
+            }
         }
     }
 
@@ -337,13 +441,20 @@ impl FrontendControlPlane {
         }
     }
 
-    fn controller(
-        &self,
-        session_id: &str,
-    ) -> Result<&RuntimeController, FrontendControlError> {
+    fn controller(&self, session_id: &str) -> Result<&RuntimeController, FrontendControlError> {
         self.controllers
             .get(session_id)
             .ok_or_else(|| FrontendControlError::RuntimeNotActive(session_id.to_owned()))
+    }
+}
+
+fn parse_effort(value: &str) -> Result<Effort, FrontendControlError> {
+    match value.trim().to_ascii_lowercase().as_str() {
+        "low" => Ok(Effort::Low),
+        "medium" => Ok(Effort::Medium),
+        "high" => Ok(Effort::High),
+        "auto" => Ok(Effort::Auto),
+        _ => Err(FrontendControlError::InvalidEffort(value.to_owned())),
     }
 }
 
@@ -356,9 +467,7 @@ fn command_session_id(envelope: &FrontendCommandEnvelope) -> Option<String> {
     }
 }
 
-fn required_session_id(
-    envelope: &FrontendCommandEnvelope,
-) -> Result<String, FrontendControlError> {
+fn required_session_id(envelope: &FrontendCommandEnvelope) -> Result<String, FrontendControlError> {
     command_session_id(envelope).ok_or(FrontendControlError::SessionRequired)
 }
 
@@ -369,13 +478,6 @@ fn client_kind(kind: FrontendKind) -> ClientKind {
         FrontendKind::Telegram => ClientKind::Telegram,
         FrontendKind::Headless => ClientKind::Daemon,
         FrontendKind::Other => ClientKind::Other("frontend".to_owned()),
-    }
-}
-
-fn attachment_mode(mode: FrontendAttachmentMode) -> AttachmentMode {
-    match mode {
-        FrontendAttachmentMode::Owner => AttachmentMode::Owner,
-        FrontendAttachmentMode::ReadOnly => AttachmentMode::ReadOnly,
     }
 }
 
@@ -409,6 +511,8 @@ pub enum FrontendControlError {
     RuntimeAlreadyActive(String),
     #[error("runtime for session {0} is not active")]
     RuntimeNotActive(String),
+    #[error("invalid effort level {0}")]
+    InvalidEffort(String),
     #[error("frontend client {0} is attached read-only for runtime control")]
     ReadOnlyClient(String),
     #[error("unsupported frontend command: {0}")]
@@ -425,8 +529,8 @@ pub enum FrontendControlError {
 mod tests {
     use medusa_agent::AgentEngine;
     use medusa_core::MedusaResult;
-    use medusa_provider::{ModelProvider, ModelRequest, ModelResponse};
     use medusa_protocol::frontend::FRONTEND_PROTOCOL_VERSION;
+    use medusa_provider::{ModelProvider, ModelRequest, ModelResponse};
     use time::macros::datetime;
 
     use super::*;
