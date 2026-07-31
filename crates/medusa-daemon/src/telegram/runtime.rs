@@ -314,7 +314,9 @@ fn normalize_message_batch(
     bot_username: &str,
     attachment_ids: Vec<String>,
 ) -> Result<TelegramInboundMessage, TelegramRuntimeError> {
-    let first = messages.first().ok_or(TelegramRuntimeError::InvalidUpdate)?;
+    let first = messages
+        .first()
+        .ok_or(TelegramRuntimeError::InvalidUpdate)?;
     let user = first
         .from
         .as_ref()
@@ -407,8 +409,8 @@ fn mime_from_file_name(file_name: &str) -> Option<&'static str> {
         "jpg" | "jpeg" => Some("image/jpeg"),
         "png" => Some("image/png"),
         "webp" => Some("image/webp"),
-        "txt" | "md" | "rs" | "py" | "js" | "ts" | "tsx" | "jsx" | "css" | "html"
-        | "toml" | "yaml" | "yml" | "json" | "xml" | "csv" | "log" => Some("text/plain"),
+        "txt" | "md" | "rs" | "py" | "js" | "ts" | "tsx" | "jsx" | "css" | "html" | "toml"
+        | "yaml" | "yml" | "json" | "xml" | "csv" | "log" => Some("text/plain"),
         _ => None,
     }
 }
