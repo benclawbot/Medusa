@@ -13,6 +13,7 @@ mod projection;
 mod render;
 mod runtime;
 mod service;
+mod text_fragments;
 
 use medusa_protocol::frontend::FrontendCommandEnvelope;
 use serde::{Deserialize, Serialize};
