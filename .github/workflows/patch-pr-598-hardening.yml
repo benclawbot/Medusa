@@ -1,0 +1,131 @@
+name: Patch PR 598 failure evidence
+
+on:
+  push:
+    branches:
+      - agent/555-cross-platform-dogfood
+    paths:
+      - .github/workflows/patch-pr-598-hardening.yml
+
+permissions:
+  contents: write
+
+concurrency:
+  group: patch-pr-598-hardening
+  cancel-in-progress: false
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          ref: agent/555-cross-platform-dogfood
+          token: ${{ secrets.GITHUB_TOKEN }}
+          persist-credentials: true
+      - name: Apply exact hardening patch
+        shell: python
+        run: |
+          from pathlib import Path
+
+          harness_path = Path("scripts/live-coding-e2e.py")
+          harness = harness_path.read_text(encoding="utf-8")
+
+          old_binary = '''    def medusa_binary(self) -> Path:
+              suffix = ".exe" if os.name == "nt" else ""
+              binary = self.work_root / "installed" / "bin" / f"medusa{suffix}"
+              if not binary.is_file():
+                  raise HarnessError(f"built Medusa binary not found at {binary}", "environment")
+              return binary
+          '''
+          old_binary = old_binary.replace("              ", "        ", 1)
+          old_binary = old_binary.replace("              ", "        ")
+          new_binary = '''    def binary_path(self) -> Path:
+              suffix = ".exe" if os.name == "nt" else ""
+              return self.work_root / "installed" / "bin" / f"medusa{suffix}"
+
+              def medusa_binary(self) -> Path:
+              binary = self.binary_path()
+              if not binary.is_file():
+                  raise HarnessError(f"built Medusa binary not found at {binary}", "environment")
+              return binary
+          '''
+          new_binary = new_binary.replace("              def medusa_binary", "    def medusa_binary")
+          new_binary = new_binary.replace("              ", "        ")
+
+          old_summary = '''    def write_summary(self, *, result: str, classification: str | None, detail: str | None) -> None:
+              summary = {
+          '''
+          old_summary = old_summary.replace("              ", "        ")
+          new_summary = '''    def write_summary(self, *, result: str, classification: str | None, detail: str | None) -> None:
+              binary = self.binary_path()
+              summary = {
+          '''
+          new_summary = new_summary.replace("              ", "        ")
+
+          old_identity = '''                "binary_sha256": sha256(self.medusa_binary()) if self.medusa_binary().is_file() else None,
+          '''
+          new_identity = '''                "binary_sha256": sha256(binary) if binary.is_file() else None,
+          '''
+
+          if "def binary_path(self)" not in harness:
+              if old_binary not in harness:
+                  raise SystemExit("expected medusa_binary block not found")
+              harness = harness.replace(old_binary, new_binary, 1)
+          if "binary = self.binary_path()" not in harness.split("def write_summary", 1)[1].split("def run", 1)[0]:
+              if old_summary not in harness:
+                  raise SystemExit("expected write_summary block not found")
+              harness = harness.replace(old_summary, new_summary, 1)
+          if old_identity in harness:
+              harness = harness.replace(old_identity, new_identity, 1)
+          elif new_identity not in harness:
+              raise SystemExit("expected binary identity expression not found")
+          harness_path.write_text(harness, encoding="utf-8")
+
+          test_path = Path("scripts/test-live-dogfood.py")
+          tests = test_path.read_text(encoding="utf-8")
+          marker = '''    def test_report_loader_ignores_unrelated_json(self) -> None:
+          '''
+          regression = '''    def test_failed_summary_does_not_require_a_built_binary(self) -> None:
+              with tempfile.TemporaryDirectory() as directory:
+                  root = Path(directory)
+                  harness = HARNESS.Harness(
+                      repo_root=root,
+                      output_dir=root / "artifacts",
+                      timeout_seconds=1,
+                      heartbeat_seconds=1,
+                      api_key="credential-value",
+                  )
+                  harness.commit_sha = lambda: "abc123"
+                  harness.write_summary(
+                      result="failed",
+                      classification="environment",
+                      detail="release build failed",
+                  )
+                  summary = json.loads(
+                      (harness.output_dir / "summary.json").read_text(encoding="utf-8")
+                  )
+                  self.assertEqual(summary["result"], "failed")
+                  self.assertEqual(summary["commit"], "abc123")
+                  self.assertIsNone(summary["build"]["binary_sha256"])
+
+          '''
+          regression = regression.replace("              ", "        ")
+          if "test_failed_summary_does_not_require_a_built_binary" not in tests:
+              if marker not in tests:
+                  raise SystemExit("test insertion marker not found")
+              tests = tests.replace(marker, regression + marker, 1)
+          test_path.write_text(tests, encoding="utf-8")
+      - name: Validate contract and regression
+        run: |
+          python -m py_compile scripts/live-coding-e2e.py scripts/live-dogfood-report.py scripts/test-live-dogfood.py
+          python scripts/test-live-dogfood.py
+      - name: Commit production changes and remove patch runner
+        run: |
+          rm .github/workflows/patch-pr-598-hardening.yml
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add scripts/live-coding-e2e.py scripts/test-live-dogfood.py .github/workflows/patch-pr-598-hardening.yml
+          git diff --cached --check
+          git commit -m "Preserve live dogfood failure evidence"
+          git push origin HEAD:agent/555-cross-platform-dogfood
