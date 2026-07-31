@@ -6,6 +6,7 @@ on:
       - main
     paths:
       - validation/materialize_574_config_edit_doctor.py
+      - validation/fix_574_config_edit_doctor.py
       - .github/workflows/materialize-574-config-edit-doctor.yml
 
 permissions:
@@ -26,7 +27,9 @@ jobs:
           token: ${{ secrets.GITHUB_TOKEN }}
       - uses: dtolnay/rust-toolchain@39b0b3842c7e8bbf6904c0bfc3d9006fdd4dc4e0 # stable
       - name: Materialize reviewed configuration wiring
-        run: python3 validation/materialize_574_config_edit_doctor.py
+        run: |
+          python3 validation/materialize_574_config_edit_doctor.py
+          python3 validation/fix_574_config_edit_doctor.py
       - name: Format and validate configuration surfaces
         run: |
           cargo fmt --all
@@ -39,6 +42,7 @@ jobs:
         run: |
           git rm .github/workflows/materialize-574-config-edit-doctor.yml
           git rm validation/materialize_574_config_edit_doctor.py
+          git rm validation/fix_574_config_edit_doctor.py
           git config user.name github-actions[bot]
           git config user.email 41898282+github-actions[bot]@users.noreply.github.com
           git add crates/medusa-cli/src/main.rs
