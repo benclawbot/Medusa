@@ -35,6 +35,28 @@ pub struct TelegramBotChat {
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct TelegramPhotoSize {
+    pub file_id: String,
+    pub file_unique_id: String,
+    pub width: u32,
+    pub height: u32,
+    #[serde(default)]
+    pub file_size: Option<u64>,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct TelegramDocument {
+    pub file_id: String,
+    pub file_unique_id: String,
+    #[serde(default)]
+    pub file_name: Option<String>,
+    #[serde(default)]
+    pub mime_type: Option<String>,
+    #[serde(default)]
+    pub file_size: Option<u64>,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct TelegramBotMessage {
     pub message_id: i64,
     pub date: i64,
@@ -43,6 +65,12 @@ pub struct TelegramBotMessage {
     pub from: Option<TelegramBotUser>,
     #[serde(default)]
     pub message_thread_id: Option<i64>,
+    #[serde(default)]
+    pub media_group_id: Option<String>,
+    #[serde(default)]
+    pub photo: Vec<TelegramPhotoSize>,
+    #[serde(default)]
+    pub document: Option<TelegramDocument>,
     #[serde(default)]
     pub text: Option<String>,
     #[serde(default)]
@@ -244,6 +272,16 @@ pub enum TelegramEditMessageOutcome {
     Unchanged,
 }
 
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct TelegramFile {
+    pub file_id: String,
+    pub file_unique_id: String,
+    #[serde(default)]
+    pub file_size: Option<u64>,
+    #[serde(default)]
+    pub file_path: Option<String>,
+}
+
 #[derive(Debug, Deserialize)]
 #[serde(bound(deserialize = "T: Deserialize<'de>"))]
 pub(crate) struct TelegramApiEnvelope<T> {
@@ -274,6 +312,10 @@ pub(crate) struct TelegramResponseParameters {
 
 #[derive(Serialize)]
 pub(crate) struct EmptyRequest {}
+#[derive(Serialize)]
+pub(crate) struct GetFileRequest<'a> {
+    pub file_id: &'a str,
+}
 #[derive(Serialize)]
 pub(crate) struct GetUpdatesRequest<'a> {
     pub offset: Option<i64>,
