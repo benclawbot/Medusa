@@ -3,13 +3,18 @@ name: Materialize #568 source
 on:
   push:
     branches: [agent/568-complete-telegram]
+  pull_request:
+    types: [opened, synchronize]
 
 permissions:
   contents: read
 
 jobs:
   export:
-    if: github.repository == 'benclawbot/Medusa' && github.ref == 'refs/heads/agent/568-complete-telegram'
+    if: >-
+      github.repository == 'benclawbot/Medusa' &&
+      ((github.event_name == 'push' && github.ref == 'refs/heads/agent/568-complete-telegram') ||
+       (github.event_name == 'pull_request' && github.head_ref == 'agent/568-complete-telegram'))
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
