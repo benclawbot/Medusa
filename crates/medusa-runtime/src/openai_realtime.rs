@@ -97,8 +97,8 @@ impl OpenAiRealtimeRoute {
         }
     }
 
-    /// A route alone never authorizes microphone capture. The caller must first
-    /// mint and validate a short-lived session credential.
+    /// A discovered route alone never authorizes microphone capture. The caller
+    /// must first mint and validate a short-lived session credential.
     #[must_use]
     pub fn permits_microphone_streaming(&self) -> bool {
         false
@@ -358,19 +358,19 @@ fn codex_auth_path() -> Result<PathBuf, String> {
 }
 
 fn inspect_chatgpt_auth(path: &Path) -> Result<(), String> {
-    load_chatgpt_api_key(path).map(|credential| drop(credential))
+    load_chatgpt_api_key(path).map(drop).map_err(|error| error.to_string())
 }
 
 fn load_chatgpt_api_key(path: &Path) -> Result<String, OpenAiRealtimeEstablishError> {
-    let metadata = fs::metadata(path).map_err(|error| {
+    let metadata = fs::symlink_metadata(path).map_err(|error| {
         OpenAiRealtimeEstablishError::Credential(format!(
             "cannot read existing Codex authentication at {}: {error}",
             path.display()
         ))
     })?;
-    if !metadata.is_file() {
+    if metadata.file_type().is_symlink() || !metadata.is_file() {
         return Err(OpenAiRealtimeEstablishError::Credential(format!(
-            "Codex authentication path is not a regular file: {}",
+            "Codex authentication path is not a regular non-symlink file: {}",
             path.display()
         )));
     }
@@ -477,9 +477,14 @@ struct ClientSecretResponse {
 
 impl ClientSecretResponse {
     fn into_secret(self) -> Result<(String, u64), OpenAiRealtimeEstablishError> {
-        if let (Some(value), Some(expires_at)) = (self.value, self.expires_at) {
-            if self
-                .session
+        let Self {
+            value,
+            expires_at,
+            client_secret,
+            session,
+        } = self;
+        if let (Some(value), Some(expires_at)) = (value, expires_at) {
+            if session
                 .as_ref()
                 .and_then(|session| session.get("type"))
                 .and_then(Value::as_str)
@@ -491,7 +496,7 @@ impl ClientSecretResponse {
             }
             return Ok((value, expires_at));
         }
-        self.client_secret
+        client_secret
             .map(|secret| (secret.value, secret.expires_at))
             .ok_or_else(|| {
                 OpenAiRealtimeEstablishError::Protocol(
@@ -507,7 +512,7 @@ struct LegacyClientSecret {
     expires_at: u64,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+#[derive(Clone, Debug, PartialEq, Serialize)]
 #[serde(tag = "type")]
 pub enum OpenAiRealtimeClientEvent {
     #[serde(rename = "session.update")]
@@ -530,7 +535,7 @@ pub enum OpenAiRealtimeClientEvent {
     },
 }
 
-#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+#[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct OpenAiRealtimeSessionConfig {
     #[serde(rename = "type")]
     pub session_type: String,
@@ -566,7 +571,7 @@ impl OpenAiRealtimeSessionConfig {
                     },
                     turn_detection: OpenAiRealtimeTurnDetection {
                         detection_type: "server_vad".to_owned(),
-                        threshold_milli: 500,
+                        threshold: 0.5,
                         prefix_padding_ms: 300,
                         silence_duration_ms: 500,
                         create_response: true,
@@ -576,20 +581,20 @@ impl OpenAiRealtimeSessionConfig {
                 output: OpenAiRealtimeOutputAudioConfig {
                     format: OpenAiRealtimePcmFormat::default(),
                     voice: "alloy".to_owned(),
-                    speed_milli: 1_000,
+                    speed: 1.0,
                 },
             },
         }
     }
 }
 
-#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+#[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct OpenAiRealtimeAudioConfig {
     pub input: OpenAiRealtimeInputAudioConfig,
     pub output: OpenAiRealtimeOutputAudioConfig,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+#[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct OpenAiRealtimeInputAudioConfig {
     pub format: OpenAiRealtimePcmFormat,
     pub transcription: OpenAiRealtimeTranscriptionConfig,
@@ -597,12 +602,11 @@ pub struct OpenAiRealtimeInputAudioConfig {
     pub turn_detection: OpenAiRealtimeTurnDetection,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+#[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct OpenAiRealtimeOutputAudioConfig {
     pub format: OpenAiRealtimePcmFormat,
     pub voice: String,
-    #[serde(rename = "speed")]
-    pub speed_milli: u16,
+    pub speed: f64,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
@@ -632,19 +636,18 @@ pub struct OpenAiRealtimeNoiseReduction {
     pub reduction_type: String,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+#[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct OpenAiRealtimeTurnDetection {
     #[serde(rename = "type")]
     pub detection_type: String,
-    #[serde(rename = "threshold")]
-    pub threshold_milli: u16,
+    pub threshold: f64,
     pub prefix_padding_ms: u32,
     pub silence_duration_ms: u32,
     pub create_response: bool,
     pub interrupt_response: bool,
 }
 
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq)]
+#[derive(Clone, Debug, Deserialize, PartialEq)]
 pub struct OpenAiRealtimeServerEvent {
     #[serde(rename = "type")]
     pub event_type: String,
@@ -910,6 +913,8 @@ mod tests {
             )));
             assert!(request.contains("\"type\":\"realtime\""));
             assert!(request.contains("\"model\":\"gpt-realtime\""));
+            assert!(request.contains("\"threshold\":0.5"));
+            assert!(request.contains("\"speed\":1.0"));
             let body = json!({
                 "value": secret,
                 "expires_at": expires_at,
@@ -1071,6 +1076,11 @@ mod tests {
             value["session"]["audio"]["input"]["turn_detection"]["type"],
             "server_vad"
         );
+        assert_eq!(
+            value["session"]["audio"]["input"]["turn_detection"]["threshold"],
+            0.5
+        );
+        assert_eq!(value["session"]["audio"]["output"]["speed"], 1.0);
         assert_eq!(
             value["session"]["audio"]["input"]["transcription"]["model"],
             "gpt-4o-mini-transcribe"
