@@ -42,6 +42,23 @@ pub fn desktop_shared_configuration() -> Result<DesktopSharedConfiguration, Stri
     shared_configuration(&catalog, |provider| credentials.load(provider))
 }
 
+pub(crate) fn active_config() -> Result<Config, String> {
+    let catalog = ProviderProfileCatalog::user().map_err(|error| error.to_string())?;
+    let profile = catalog
+        .active_store()
+        .map_err(|error| error.to_string())?
+        .load()
+        .map_err(|error| error.to_string())?;
+    Config::load_layers_with_provider_profile(
+        &profile,
+        None,
+        None,
+        &BTreeMap::new(),
+        &BTreeMap::new(),
+    )
+    .map_err(|error| error.to_string())
+}
+
 pub(crate) fn prepare_provider_profile(
     provider: &str,
     model: &str,

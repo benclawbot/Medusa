@@ -3,13 +3,13 @@ import ReactDOM from "react-dom/client";
 import { App } from "./App";
 import { DesktopTimelineBridge } from "./DesktopTimelineBridge";
 import { DesktopUpdateControl } from "./DesktopUpdateControl";
+import { DesktopVoiceDock } from "./DesktopVoiceDock";
 import { DiffDock } from "./DiffDock";
 import { EngineeringDashboardLauncher } from "./EngineeringDashboard";
 import { LearningDock } from "./LearningDock";
 import { MemoryDock } from "./MemoryDock";
 import { RecoveryDock } from "./RecoveryDock";
 import { SessionDock } from "./SessionDock";
-import { VoiceControls } from "./VoiceControls";
 import "./styles.css";
 import "./medusa-desktop.css";
 import "./recovery.css";
@@ -25,14 +25,7 @@ import "./desktop-update.css";
 ReactDOM.createRoot(document.getElementById("root") as HTMLElement).render(
   <React.StrictMode>
     <App />
-    <div className="desktop-voice-dock">
-      <VoiceControls
-        capability={{
-          available: false,
-          reason: "Voice is unavailable because the configured ChatGPT OAuth gateway does not expose an authenticated Realtime route. No microphone access was requested.",
-        }}
-      />
-    </div>
+    <DesktopVoiceDock />
     <DesktopTimelineBridge />
     <SessionDock />
     <DiffDock />

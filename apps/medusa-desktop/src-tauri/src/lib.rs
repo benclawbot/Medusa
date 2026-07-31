@@ -30,6 +30,7 @@ mod runtime {
 mod sessions;
 #[cfg(test)]
 mod test_tempfile;
+mod voice;
 mod worktree;
 #[cfg(test)]
 extern crate self as tempfile;
@@ -71,6 +72,7 @@ use runtime::{
     runtime_submit,
 };
 use sessions::{runtime_list_sessions, runtime_read_session};
+use voice::{desktop_establish_realtime_session, desktop_realtime_capability};
 use worktree::runtime_read_worktree;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -80,6 +82,8 @@ pub fn run() -> tauri::Result<()> {
         .manage(RuntimeRegistry::default())
         .invoke_handler(tauri::generate_handler![
             desktop_shared_configuration,
+            desktop_realtime_capability,
+            desktop_establish_realtime_session,
             runtime_start,
             runtime_resume,
             runtime_close,
