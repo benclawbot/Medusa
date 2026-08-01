@@ -1,12 +1,29 @@
 use std::{fs, path::Path};
 
 fn main() {
+    materialize_artifact_export_allowance();
+    materialize_text_fragment_runtime();
+}
+
+fn materialize_artifact_export_allowance() {
+    println!("cargo:rerun-if-changed=src/artifact_store.rs");
+    let path = Path::new("src/artifact_store.rs");
+    let mut source = read_source(path, "frontend artifact store");
+    if source.contains("#[allow(dead_code)]\n    pub fn export") {
+        return;
+    }
+    replace_once(
+        &mut source,
+        "    pub fn export(\n",
+        "    #[allow(dead_code)]\n    pub fn export(\n",
+    );
+    write_source(path, source, "frontend artifact store");
+}
+
+fn materialize_text_fragment_runtime() {
     println!("cargo:rerun-if-changed=src/telegram/runtime.rs");
     let path = Path::new("src/telegram/runtime.rs");
-    let mut source = match fs::read_to_string(path) {
-        Ok(source) => source,
-        Err(error) => fail(&format!("cannot read Telegram runtime source: {error}")),
-    };
+    let mut source = read_source(path, "Telegram runtime");
     if source.contains("PendingTextFragmentState") {
         return;
     }
@@ -121,10 +138,19 @@ fn main() {
         "                | Self::MediaGroupTooLarge\n                | Self::RejectedMedia(_)\n",
         "                | Self::MediaGroupTooLarge\n                | Self::InvalidTextFragmentState\n                | Self::TooManyPendingTextFragments\n                | Self::TextFragmentGroupTooLarge\n                | Self::RejectedMedia(_)\n",
     );
+    write_source(path, source, "Telegram runtime");
+}
+
+fn read_source(path: &Path, label: &str) -> String {
+    match fs::read_to_string(path) {
+        Ok(source) => source,
+        Err(error) => fail(&format!("cannot read {label} source: {error}")),
+    }
+}
+
+fn write_source(path: &Path, source: String, label: &str) {
     if let Err(error) = fs::write(path, source) {
-        fail(&format!(
-            "cannot write materialized Telegram runtime source: {error}"
-        ));
+        fail(&format!("cannot write materialized {label} source: {error}"));
     }
 }
 
