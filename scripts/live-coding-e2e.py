@@ -18,6 +18,14 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Iterable, Sequence
 
+
+def configure_utf8_stdio() -> None:
+    """Keep harness diagnostics printable on Windows hosts using CP1252."""
+    for stream in (sys.stdout, sys.stderr):
+        reconfigure = getattr(stream, "reconfigure", None)
+        if reconfigure is not None:
+            reconfigure(encoding="utf-8", errors="replace")
+
 PROVIDER = "minimax"
 MODEL = "MiniMax-M3"
 ASSERTION_COUNT = 3
@@ -594,6 +602,7 @@ def parse_args() -> argparse.Namespace:
 
 
 def main() -> int:
+    configure_utf8_stdio()
     args = parse_args()
     if args.timeout_seconds <= 0 or args.heartbeat_seconds <= 0:
         print("timeouts must be positive", file=sys.stderr)
