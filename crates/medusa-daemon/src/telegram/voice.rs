@@ -258,12 +258,7 @@ fn push_text_part(body: &mut Vec<u8>, boundary: &str, name: &str, value: &str) {
     body.extend_from_slice(b"\r\n");
 }
 
-fn push_file_part(
-    body: &mut Vec<u8>,
-    boundary: &str,
-    name: &str,
-    input: &TelegramVoiceInput,
-) {
+fn push_file_part(body: &mut Vec<u8>, boundary: &str, name: &str, input: &TelegramVoiceInput) {
     body.extend_from_slice(format!("--{boundary}\r\n").as_bytes());
     body.extend_from_slice(
         format!(

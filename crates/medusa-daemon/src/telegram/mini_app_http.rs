@@ -113,9 +113,7 @@ impl TelegramMiniAppHttpServer {
                     stream.set_write_timeout(Some(CONNECTION_TIMEOUT))?;
                     let response = match read_request(&mut stream) {
                         Ok(request) => self.handle(request, OffsetDateTime::now_utc()),
-                        Err(RequestRejection::TooLarge) => {
-                            Response::text(413, "payload too large")
-                        }
+                        Err(RequestRejection::TooLarge) => Response::text(413, "payload too large"),
                         Err(RequestRejection::Malformed) => Response::text(400, "bad request"),
                     };
                     write_response(
@@ -149,11 +147,9 @@ impl TelegramMiniAppHttpServer {
             ("POST", path) if path == realtime => {
                 self.handle_realtime(request.authorization.as_deref(), now)
             }
-            ("POST", path) if path == transcript => self.handle_transcript(
-                request.authorization.as_deref(),
-                &request.body,
-                now,
-            ),
+            ("POST", path) if path == transcript => {
+                self.handle_transcript(request.authorization.as_deref(), &request.body, now)
+            }
             ("OPTIONS", _) => Response {
                 status: 204,
                 content_type: "text/plain",
@@ -255,7 +251,9 @@ fn read_request(stream: &mut TcpStream) -> Result<Request, RequestRejection> {
             return Err(RequestRejection::TooLarge);
         }
         let mut chunk = [0_u8; 1_024];
-        let read = stream.read(&mut chunk).map_err(|_| RequestRejection::Malformed)?;
+        let read = stream
+            .read(&mut chunk)
+            .map_err(|_| RequestRejection::Malformed)?;
         if read == 0 {
             return Err(RequestRejection::Malformed);
         }
@@ -264,8 +262,8 @@ fn read_request(stream: &mut TcpStream) -> Result<Request, RequestRejection> {
             break index + 4;
         }
     };
-    let header_text = std::str::from_utf8(&bytes[..header_end])
-        .map_err(|_| RequestRejection::Malformed)?;
+    let header_text =
+        std::str::from_utf8(&bytes[..header_end]).map_err(|_| RequestRejection::Malformed)?;
     let mut lines = header_text.split("\r\n");
     let request_line = lines.next().ok_or(RequestRejection::Malformed)?;
     let mut request_parts = request_line.split_ascii_whitespace();
@@ -310,7 +308,9 @@ fn read_request(stream: &mut TcpStream) -> Result<Request, RequestRejection> {
     while bytes.len() < total {
         let remaining = total - bytes.len();
         let mut chunk = vec![0_u8; remaining.min(8_192)];
-        let read = stream.read(&mut chunk).map_err(|_| RequestRejection::Malformed)?;
+        let read = stream
+            .read(&mut chunk)
+            .map_err(|_| RequestRejection::Malformed)?;
         if read == 0 {
             return Err(RequestRejection::Malformed);
         }

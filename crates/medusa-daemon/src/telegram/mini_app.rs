@@ -6,9 +6,9 @@
 
 use std::collections::BTreeMap;
 
-use medusa_config::MedusaConfig;
+use medusa_config::Config;
 use medusa_protocol::frontend::{
-    FrontendActor, FrontendCommand, FrontendCommandEnvelope, FrontendRequestContext,
+    FRONTEND_PROTOCOL_VERSION, FrontendCommand, FrontendCommandEnvelope, FrontendKind,
 };
 use medusa_runtime::openai_realtime::{
     OpenAiRealtimeSessionCredential, resolve_openai_realtime_route,
@@ -18,7 +18,7 @@ use sha2::{Digest, Sha256};
 use time::{Duration, OffsetDateTime};
 use ulid::Ulid;
 
-use super::{TelegramIdentity, TelegramSessionServiceError};
+use super::{TelegramChatKind, TelegramIdentity};
 use crate::FrontendControlPlane;
 
 const INIT_DATA_MAX_AGE: Duration = Duration::minutes(10);
@@ -66,6 +66,13 @@ pub struct VerifiedMiniAppIdentity {
     pub query_id: Option<String>,
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct TelegramMiniAppBinding {
+    pub identity: TelegramIdentity,
+    pub session_id: String,
+    pub expires_at: i64,
+}
+
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct TelegramMiniAppLaunchTicket {
@@ -81,6 +88,7 @@ struct LaunchClaims {
     chat_id: i64,
     topic_id: Option<i64>,
     user_id: i64,
+    chat_kind: TelegramChatKind,
     session_id: String,
     expires_at: i64,
 }
@@ -95,6 +103,7 @@ pub struct TelegramMiniAppRealtimeSession {
     pub session_id: String,
 }
 
+#[derive(Clone)]
 pub struct TelegramMiniAppBridge {
     secret: TelegramMiniAppSecret,
 }
@@ -118,7 +127,8 @@ impl TelegramMiniAppBridge {
         let supplied_hash = fields
             .remove("hash")
             .ok_or(TelegramMiniAppError::InvalidInitData)?;
-        if supplied_hash.len() != 64 || !supplied_hash.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+        if supplied_hash.len() != 64 || !supplied_hash.bytes().all(|byte| byte.is_ascii_hexdigit())
+        {
             return Err(TelegramMiniAppError::InvalidInitData);
         }
         let data_check_string = fields
@@ -128,7 +138,10 @@ impl TelegramMiniAppBridge {
             .join("\n");
         let secret_key = hmac_sha256(b"WebAppData", &self.secret.0);
         let expected_hash = hex::encode(hmac_sha256(&secret_key, data_check_string.as_bytes()));
-        if !constant_time_eq(expected_hash.as_bytes(), supplied_hash.to_ascii_lowercase().as_bytes()) {
+        if !constant_time_eq(
+            expected_hash.as_bytes(),
+            supplied_hash.to_ascii_lowercase().as_bytes(),
+        ) {
             return Err(TelegramMiniAppError::InvalidSignature);
         }
 
@@ -181,13 +194,56 @@ impl TelegramMiniAppBridge {
             chat_id: identity.chat_id,
             topic_id: identity.topic_id,
             user_id: identity.user_id,
+            chat_kind: identity.chat_kind,
             session_id: session_id.to_owned(),
             expires_at: (now + LAUNCH_TICKET_LIFETIME).unix_timestamp(),
         };
-        let payload = serde_json::to_vec(&claims).map_err(|_| TelegramMiniAppError::InvalidTicket)?;
+        let payload =
+            serde_json::to_vec(&claims).map_err(|_| TelegramMiniAppError::InvalidTicket)?;
         let signature = hmac_sha256(&self.secret.0, &payload);
         Ok(TelegramMiniAppLaunchTicket {
             token: format!("{}.{}", hex::encode(payload), hex::encode(signature)),
+            expires_at: claims.expires_at,
+        })
+    }
+
+    pub fn inspect_launch_ticket(
+        &self,
+        token: &str,
+        now: OffsetDateTime,
+    ) -> Result<TelegramMiniAppBinding, TelegramMiniAppError> {
+        let (payload_hex, signature_hex) = token
+            .split_once('.')
+            .ok_or(TelegramMiniAppError::InvalidTicket)?;
+        if payload_hex.len() > MAX_INIT_DATA_BYTES * 2
+            || signature_hex.len() != 64
+            || !payload_hex.bytes().all(|byte| byte.is_ascii_hexdigit())
+            || !signature_hex.bytes().all(|byte| byte.is_ascii_hexdigit())
+        {
+            return Err(TelegramMiniAppError::InvalidTicket);
+        }
+        let payload = hex::decode(payload_hex).map_err(|_| TelegramMiniAppError::InvalidTicket)?;
+        let supplied =
+            hex::decode(signature_hex).map_err(|_| TelegramMiniAppError::InvalidTicket)?;
+        let expected_signature = hmac_sha256(&self.secret.0, &payload);
+        if !constant_time_eq(&expected_signature, &supplied) {
+            return Err(TelegramMiniAppError::InvalidSignature);
+        }
+        let claims: LaunchClaims =
+            serde_json::from_slice(&payload).map_err(|_| TelegramMiniAppError::InvalidTicket)?;
+        if claims.version != 1 || claims.expires_at < now.unix_timestamp() {
+            return Err(TelegramMiniAppError::InvalidTicket);
+        }
+        validate_session_id(&claims.session_id)?;
+        Ok(TelegramMiniAppBinding {
+            identity: TelegramIdentity {
+                chat_id: claims.chat_id,
+                topic_id: claims.topic_id,
+                user_id: claims.user_id,
+                chat_kind: TelegramChatKind::Private,
+                bot_mentioned: false,
+            },
+            session_id: claims.session_id,
             expires_at: claims.expires_at,
         })
     }
@@ -209,7 +265,8 @@ impl TelegramMiniAppBridge {
             return Err(TelegramMiniAppError::InvalidTicket);
         }
         let payload = hex::decode(payload_hex).map_err(|_| TelegramMiniAppError::InvalidTicket)?;
-        let supplied = hex::decode(signature_hex).map_err(|_| TelegramMiniAppError::InvalidTicket)?;
+        let supplied =
+            hex::decode(signature_hex).map_err(|_| TelegramMiniAppError::InvalidTicket)?;
         let expected_signature = hmac_sha256(&self.secret.0, &payload);
         if !constant_time_eq(&expected_signature, &supplied) {
             return Err(TelegramMiniAppError::InvalidSignature);
@@ -220,6 +277,7 @@ impl TelegramMiniAppBridge {
             || claims.chat_id != expected.chat_id
             || claims.topic_id != expected.topic_id
             || claims.user_id != expected.user_id
+            || claims.chat_kind != expected.chat_kind
             || claims.expires_at < now.unix_timestamp()
         {
             return Err(TelegramMiniAppError::IdentityMismatch);
@@ -232,7 +290,7 @@ impl TelegramMiniAppBridge {
         &self,
         ticket: &str,
         identity: &TelegramIdentity,
-        config: &MedusaConfig,
+        config: &Config,
         now: OffsetDateTime,
     ) -> Result<TelegramMiniAppRealtimeSession, TelegramMiniAppError> {
         let session_id = self.verify_launch_ticket(ticket, identity, now)?;
@@ -255,28 +313,25 @@ impl TelegramMiniAppBridge {
         if transcript.is_empty() || transcript.chars().count() > MAX_TRANSCRIPT_CHARS {
             return Err(TelegramMiniAppError::InvalidTranscript);
         }
-        let actor = FrontendActor {
-            frontend: medusa_protocol::frontend::FrontendKind::Telegram,
-            principal: identity.user_id.to_string(),
-            display_name: None,
-        };
-        let command = FrontendCommandEnvelope::new(
-            actor,
-            FrontendRequestContext {
-                session_id: Some(session_id),
-                turn_id: None,
-                idempotency_key: Some(format!("telegram-mini-app:{}", Ulid::new())),
-            },
-            FrontendCommand::Submit {
-                prompt: transcript.to_owned(),
+        let command = FrontendCommandEnvelope {
+            protocol_version: FRONTEND_PROTOCOL_VERSION,
+            command_id: Ulid::new().to_string(),
+            idempotency_key: format!("telegram-mini-app:{}", Ulid::new()),
+            frontend: FrontendKind::Telegram,
+            client_id: identity.user_id.to_string(),
+            session_id: Some(session_id),
+            turn_id: None,
+            timestamp: now,
+            command: FrontendCommand::Submit {
+                text: transcript.to_owned(),
                 attachment_ids: Vec::new(),
-                queue_if_busy: true,
             },
-            now,
-        )
-        .map_err(|error| TelegramMiniAppError::Protocol(error.to_string()))?;
+        };
+        command
+            .validate()
+            .map_err(|error| TelegramMiniAppError::Protocol(error.to_owned()))?;
         control_plane
-            .dispatch(command, now)
+            .dispatch(command)
             .map_err(|error| TelegramMiniAppError::ControlPlane(error.to_string()))?;
         Ok(())
     }
@@ -357,9 +412,9 @@ fn hex_value(byte: u8) -> Result<u8, TelegramMiniAppError> {
 fn validate_session_id(session_id: &str) -> Result<(), TelegramMiniAppError> {
     if session_id.is_empty()
         || session_id.len() > MAX_SESSION_ID_CHARS
-        || !session_id.bytes().all(|byte| {
-            byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.' | b':')
-        })
+        || !session_id
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.' | b':'))
     {
         return Err(TelegramMiniAppError::InvalidSession);
     }
@@ -433,8 +488,6 @@ pub enum TelegramMiniAppError {
     ControlPlane(String),
     #[error("Telegram Mini App Realtime session failed: {0}")]
     Realtime(String),
-    #[error(transparent)]
-    Telegram(#[from] TelegramSessionServiceError),
 }
 
 const MINI_APP_HTML: &str = r#"<!doctype html>
@@ -445,10 +498,12 @@ const MINI_APP_HTML: &str = r#"<!doctype html>
 <script src="https://telegram.org/js/telegram-web-app.js"></script>
 <script>
 const tg = window.Telegram.WebApp; tg.ready();
+const launchTicket = new URLSearchParams(window.location.search).get('ticket');
 let pc, stream, muted = false, ticket;
 const status = document.getElementById('status'), start = document.getElementById('start'), mute = document.getElementById('mute'), transcript = document.getElementById('transcript');
 (async () => {
-  const auth = await fetch('/telegram/mini-app/auth', {method:'POST', headers:{'content-type':'application/json'}, body:JSON.stringify({initData:tg.initData})});
+  if (!launchTicket) throw new Error('Missing signed launch ticket');
+  const auth = await fetch('/telegram/mini-app/auth', {method:'POST', headers:{'content-type':'application/json'}, body:JSON.stringify({ticket:launchTicket, initData:tg.initData})});
   if (!auth.ok) throw new Error('Telegram authentication failed');
   ticket = (await auth.json()).token; status.textContent = 'Ready'; start.disabled = false;
 })().catch(error => status.textContent = error.message);
@@ -459,7 +514,7 @@ start.onclick = async () => {
   const session = await response.json();
   stream = await navigator.mediaDevices.getUserMedia({audio:true});
   pc = new RTCPeerConnection(); pc.addTrack(stream.getAudioTracks()[0], stream); pc.ontrack = event => { const audio = new Audio(); audio.autoplay = true; audio.srcObject = event.streams[0]; };
-  const channel = pc.createDataChannel('oai-events'); channel.onmessage = event => { const data = JSON.parse(event.data); if (data.type && data.type.includes('transcript')) transcript.textContent += data.delta || data.transcript || ''; };
+  const channel = pc.createDataChannel('oai-events'); channel.onmessage = async event => { const data = JSON.parse(event.data); if (data.type && data.type.includes('transcript')) transcript.textContent += data.delta || data.transcript || ''; if (data.type === 'conversation.item.input_audio_transcription.completed' && data.transcript) { await fetch('/telegram/mini-app/transcript', {method:'POST', headers:{'content-type':'application/json','authorization':`Bearer ${ticket}`}, body:JSON.stringify({transcript:data.transcript})}); } };
   const offer = await pc.createOffer(); await pc.setLocalDescription(offer);
   const answer = await fetch(`${session.webrtcCallUrl}?model=${encodeURIComponent(session.model)}`, {method:'POST', headers:{'authorization':`Bearer ${session.authorizationToken}`,'content-type':'application/sdp'}, body:offer.sdp});
   await pc.setRemoteDescription({type:'answer', sdp:await answer.text()});
@@ -475,7 +530,10 @@ mod tests {
     #[test]
     fn hmac_matches_known_vector() {
         assert_eq!(
-            hex::encode(hmac_sha256(b"key", b"The quick brown fox jumps over the lazy dog")),
+            hex::encode(hmac_sha256(
+                b"key",
+                b"The quick brown fox jumps over the lazy dog"
+            )),
             "f7bc83f430538424b13298e6aa6fb143ef4d59a14946175997479dbc2d1a3cd8"
         );
     }
@@ -483,12 +541,15 @@ mod tests {
     #[test]
     fn tickets_are_bound_to_identity_and_expiry() {
         let bridge = TelegramMiniAppBridge::new(
-            TelegramMiniAppSecret::from_bot_token("123456:abcdefghijklmnopqrstuvwxyz").expect("secret"),
+            TelegramMiniAppSecret::from_bot_token("123456:abcdefghijklmnopqrstuvwxyz")
+                .expect("secret"),
         );
         let identity = TelegramIdentity {
             chat_id: 7,
             topic_id: Some(9),
             user_id: 11,
+            chat_kind: super::super::TelegramChatKind::Private,
+            bot_mentioned: false,
         };
         let now = OffsetDateTime::from_unix_timestamp(1_700_000_000).expect("time");
         let ticket = bridge
@@ -504,7 +565,11 @@ mod tests {
             user_id: 12,
             ..identity.clone()
         };
-        assert!(bridge.verify_launch_ticket(&ticket.token, &other, now).is_err());
+        assert!(
+            bridge
+                .verify_launch_ticket(&ticket.token, &other, now)
+                .is_err()
+        );
         assert!(
             bridge
                 .verify_launch_ticket(&ticket.token, &identity, now + Duration::minutes(6))
@@ -514,8 +579,14 @@ mod tests {
 
     #[test]
     fn percent_decoding_is_strict() {
-        assert_eq!(percent_decode("Ada+Lovelace").expect("decode"), "Ada Lovelace");
-        assert_eq!(percent_decode("%7B%22id%22%3A1%7D").expect("decode"), "{\"id\":1}");
+        assert_eq!(
+            percent_decode("Ada+Lovelace").expect("decode"),
+            "Ada Lovelace"
+        );
+        assert_eq!(
+            percent_decode("%7B%22id%22%3A1%7D").expect("decode"),
+            "{\"id\":1}"
+        );
         assert!(percent_decode("%zz").is_err());
     }
 }

@@ -65,10 +65,7 @@ impl TelegramBotApiClient {
         )
     }
 
-    pub fn delete_webhook(
-        &self,
-        drop_pending_updates: bool,
-    ) -> Result<bool, TelegramBotApiError> {
+    pub fn delete_webhook(&self, drop_pending_updates: bool) -> Result<bool, TelegramBotApiError> {
         self.call(
             "deleteWebhook",
             &DeleteWebhookRequest {
@@ -95,13 +92,7 @@ impl TelegramBotApiClient {
         message_thread_id: Option<i64>,
         file: &TelegramOutboundFile,
     ) -> Result<TelegramBotMessage, TelegramBotApiError> {
-        self.send_multipart_file(
-            "sendDocument",
-            "document",
-            chat_id,
-            message_thread_id,
-            file,
-        )
+        self.send_multipart_file("sendDocument", "document", chat_id, message_thread_id, file)
     }
 
     pub fn send_voice(
@@ -147,13 +138,12 @@ impl TelegramBotApiClient {
             push_text_part(&mut body, &boundary, "caption", caption);
         }
         if let Some(message_id) = file.reply_to_message_id {
-            let value = serde_json::to_string(&TelegramReplyParameters { message_id }).map_err(
-                |_| {
+            let value =
+                serde_json::to_string(&TelegramReplyParameters { message_id }).map_err(|_| {
                     TelegramBotApiError::InvalidRequest(
                         "Telegram reply parameters are invalid".to_owned(),
                     )
-                },
-            )?;
+                })?;
             push_text_part(&mut body, &boundary, "reply_parameters", &value);
         }
         push_file_part(&mut body, &boundary, field_name, file);
@@ -264,12 +254,7 @@ fn push_text_part(body: &mut Vec<u8>, boundary: &str, name: &str, value: &str) {
     body.extend_from_slice(b"\r\n");
 }
 
-fn push_file_part(
-    body: &mut Vec<u8>,
-    boundary: &str,
-    name: &str,
-    file: &TelegramOutboundFile,
-) {
+fn push_file_part(body: &mut Vec<u8>, boundary: &str, name: &str, file: &TelegramOutboundFile) {
     body.extend_from_slice(format!("--{boundary}\r\n").as_bytes());
     body.extend_from_slice(
         format!(

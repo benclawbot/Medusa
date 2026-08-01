@@ -146,6 +146,7 @@ impl FrontendArtifactStore {
         Ok(attachments)
     }
 
+    #[allow(dead_code)]
     pub fn export(
         &self,
         artifact_id: &str,

@@ -126,7 +126,9 @@ fn read_request(
             return Err(RequestRejection::TooLarge);
         }
         let mut chunk = [0_u8; 1_024];
-        let read = stream.read(&mut chunk).map_err(|_| RequestRejection::Malformed)?;
+        let read = stream
+            .read(&mut chunk)
+            .map_err(|_| RequestRejection::Malformed)?;
         if read == 0 {
             return Err(RequestRejection::Malformed);
         }
@@ -135,8 +137,8 @@ fn read_request(
             break index + 4;
         }
     };
-    let headers = std::str::from_utf8(&bytes[..header_end])
-        .map_err(|_| RequestRejection::Malformed)?;
+    let headers =
+        std::str::from_utf8(&bytes[..header_end]).map_err(|_| RequestRejection::Malformed)?;
     let mut lines = headers.split("\r\n");
     let request_line = lines.next().ok_or(RequestRejection::Malformed)?;
     let mut request_parts = request_line.split_ascii_whitespace();
@@ -181,7 +183,8 @@ fn read_request(
     if content_length == 0 || content_length > MAX_WEBHOOK_BODY_BYTES {
         return Err(RequestRejection::TooLarge);
     }
-    if !secret.is_some_and(|value| constant_time_eq(value.as_bytes(), config.secret_token.as_bytes()))
+    if !secret
+        .is_some_and(|value| constant_time_eq(value.as_bytes(), config.secret_token.as_bytes()))
     {
         return Err(RequestRejection::Unauthorized);
     }
@@ -192,7 +195,9 @@ fn read_request(
     while bytes.len() < total {
         let remaining = total - bytes.len();
         let mut chunk = vec![0_u8; remaining.min(8_192)];
-        let read = stream.read(&mut chunk).map_err(|_| RequestRejection::Malformed)?;
+        let read = stream
+            .read(&mut chunk)
+            .map_err(|_| RequestRejection::Malformed)?;
         if read == 0 {
             return Err(RequestRejection::Malformed);
         }
