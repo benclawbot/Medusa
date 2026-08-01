@@ -229,6 +229,7 @@ pub(super) fn format_token_count(tokens: u64) -> String {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(super) struct UiIdentity {
+    project: String,
     model: String,
     effort: String,
 }
@@ -241,6 +242,12 @@ impl UiIdentity {
             Config::load_layers(None, project.as_deref(), &BTreeMap::new(), &BTreeMap::new())
                 .unwrap_or_default();
         Self {
+            project: repo
+                .file_name()
+                .and_then(|name| name.to_str())
+                .filter(|name| !name.is_empty())
+                .unwrap_or("General chat")
+                .to_owned(),
             model: config.model.name,
             effort: effort_label(config.agent.max_turns).to_owned(),
         }
@@ -280,30 +287,29 @@ pub(super) fn render_frame(
         return frame;
     }
     let mut row = usize::from(HEADER_TOP_PADDING);
-    for logo_line in MEDUSA_LOGO {
-        set_frame_line(&mut frame, row, StyledLine::new(logo_line, Color::Cyan));
-        row = row.saturating_add(1);
-    }
+    let status = if app.is_running() {
+        running_status(app)
+    } else {
+        active_status(app).to_owned()
+    };
     set_frame_line(
         &mut frame,
         row,
         StyledLine::new(
             format!(
-                "{} {}",
+                "Medusa · {} · {} {} · {}",
+                identity.project,
                 app.model_label.as_deref().unwrap_or(&identity.model),
-                app.effort_label.as_deref().unwrap_or(&identity.effort)
+                app.effort_label.as_deref().unwrap_or(&identity.effort),
+                status,
             ),
-            Color::Magenta,
+            Color::Cyan,
         ),
     );
     row = row.saturating_add(1);
-    set_frame_line(
-        &mut frame,
-        row,
-        StyledLine::new(session_metrics_line(app, width), Color::DarkGrey),
-    );
+    set_frame_line(&mut frame, row, separator_line(width));
 
-    let header_height = HEADER_TOP_PADDING + 5;
+    let header_height = HEADER_TOP_PADDING + 2;
     let question_modal = app.question_modal();
     let model_modal = app.model_modal();
     let modal_lines = question_modal
@@ -312,7 +318,14 @@ pub(super) fn render_frame(
         .unwrap_or_default();
     let is_modal = question_modal.is_some() || model_modal.is_some();
     let plan_panel = if !is_modal && app.task_list_visible {
-        app.plan.as_ref().map(plan_lines).unwrap_or_default()
+        let mut details = vec![StyledLine::new(
+            session_metrics_line(app, width),
+            Color::DarkGrey,
+        )];
+        if let Some(plan) = app.plan.as_ref() {
+            details.extend(plan_lines(plan));
+        }
+        details
     } else {
         Vec::new()
     };
@@ -460,9 +473,9 @@ pub(super) fn render_frame(
             "> ",
             Color::Magenta,
             if app.is_running() {
-                "enter queue follow-up - ctrl+c interrupt - ctrl+t tasks · ctrl+e details"
+                "enter queue follow-up - ctrl+c stop - ctrl+t session details · ctrl+e activity details"
             } else {
-                "enter submit - ctrl+v paste - tab commands - ctrl+t tasks · ctrl+e details"
+                "enter submit - ctrl+v paste - tab commands - ctrl+t session details · ctrl+e activity details"
             },
             Color::DarkGrey,
         ),
