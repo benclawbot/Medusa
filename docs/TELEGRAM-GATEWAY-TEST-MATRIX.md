@@ -1,6 +1,6 @@
 # Telegram gateway network test matrix
 
-The automated network suite exercises the production loopback transports rather than substituting transport mocks at the gateway boundary. It uses only portable loopback TCP behavior so the daemon matrix validates the same contract on Linux, macOS, and Windows.
+The automated network suite exercises the production loopback transports rather than substituting transport mocks at the gateway boundary. It uses only portable loopback TCP behavior so the daemon matrix validates the same contract on Linux, macOS, and Windows. Request assertions verify authenticated header structure without embedding credentials in failure output.
 
 | Surface | Covered behavior |
 | --- | --- |
