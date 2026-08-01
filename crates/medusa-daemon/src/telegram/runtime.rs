@@ -416,7 +416,8 @@ impl TelegramPollingRuntime {
         let Some(group) = self.pending_media_groups.groups.get(key).cloned() else {
             return Ok(());
         };
-        match self.process_messages(group.highest_update_id, &group.messages, outcomes) {
+        match self.process_acknowledged_messages(group.highest_update_id, &group.messages, outcomes)
+        {
             Ok(()) => {
                 self.pending_media_groups.groups.remove(key);
                 persist_media_group_state(&self.media_group_path, &self.pending_media_groups)?;
@@ -437,8 +438,30 @@ impl TelegramPollingRuntime {
         messages: &[TelegramBotMessage],
         outcomes: &mut Vec<TelegramServiceOutcome>,
     ) -> Result<(), TelegramRuntimeError> {
+        self.process_messages_with_transport_state(update_id, messages, outcomes, false)
+    }
+
+    fn process_acknowledged_messages(
+        &mut self,
+        update_id: i64,
+        messages: &[TelegramBotMessage],
+        outcomes: &mut Vec<TelegramServiceOutcome>,
+    ) -> Result<(), TelegramRuntimeError> {
+        self.process_messages_with_transport_state(update_id, messages, outcomes, true)
+    }
+
+    fn process_messages_with_transport_state(
+        &mut self,
+        update_id: i64,
+        messages: &[TelegramBotMessage],
+        outcomes: &mut Vec<TelegramServiceOutcome>,
+        transport_already_acknowledged: bool,
+    ) -> Result<(), TelegramRuntimeError> {
         let (inbound, voice_source) = self.inbound_batch(messages)?;
-        let result = if voice_source {
+        let result = if transport_already_acknowledged {
+            self.service
+                .process_acknowledged_message(update_id, inbound, voice_source)
+        } else if voice_source {
             self.service.process_voice_message(update_id, inbound)
         } else {
             self.service.process_message(update_id, inbound)
@@ -446,7 +469,9 @@ impl TelegramPollingRuntime {
         match result {
             Ok(outcome) => outcomes.push(outcome),
             Err(error) if is_rejected_input(&error) => {
-                self.service.acknowledge_transport_update(update_id)?;
+                if !transport_already_acknowledged {
+                    self.service.acknowledge_transport_update(update_id)?;
+                }
             }
             Err(error) => return Err(error.into()),
         }
@@ -617,7 +642,7 @@ impl TelegramPollingRuntime {
             return Ok(());
         };
         let message = merge_text_fragment(&group)?;
-        match self.process_messages(group.highest_update_id, &[message], outcomes) {
+        match self.process_acknowledged_messages(group.highest_update_id, &[message], outcomes) {
             Ok(()) => {
                 self.pending_text_fragments.remove(key);
                 self.pending_text_fragments.persist()?;

@@ -330,7 +330,7 @@ impl TelegramSessionService {
         update_id: i64,
         message: TelegramInboundMessage,
     ) -> Result<TelegramServiceOutcome, TelegramSessionServiceError> {
-        self.process_message_with_source(update_id, message, false)
+        self.process_message_with_source(update_id, message, false, false)
     }
 
     pub fn process_voice_message(
@@ -338,7 +338,16 @@ impl TelegramSessionService {
         update_id: i64,
         message: TelegramInboundMessage,
     ) -> Result<TelegramServiceOutcome, TelegramSessionServiceError> {
-        self.process_message_with_source(update_id, message, true)
+        self.process_message_with_source(update_id, message, true, false)
+    }
+
+    pub(crate) fn process_acknowledged_message(
+        &mut self,
+        update_id: i64,
+        message: TelegramInboundMessage,
+        voice_source: bool,
+    ) -> Result<TelegramServiceOutcome, TelegramSessionServiceError> {
+        self.process_message_with_source(update_id, message, voice_source, true)
     }
 
     fn process_message_with_source(
@@ -346,6 +355,7 @@ impl TelegramSessionService {
         update_id: i64,
         message: TelegramInboundMessage,
         voice_source: bool,
+        transport_already_acknowledged: bool,
     ) -> Result<TelegramServiceOutcome, TelegramSessionServiceError> {
         if update_id < 0 {
             return Err(TelegramSessionServiceError::InvalidUpdateOffset);
@@ -356,13 +366,22 @@ impl TelegramSessionService {
         let key = TelegramBindingKey::from_identity(&message.identity);
         let stable_id = key.stable_id();
         let existing = self.state.bindings.get(&stable_id).cloned();
-        if existing
-            .as_ref()
-            .and_then(|binding| binding.last_update_id)
-            .is_some_and(|last| update_id < last)
+        if !transport_already_acknowledged
+            && existing
+                .as_ref()
+                .and_then(|binding| binding.last_update_id)
+                .is_some_and(|last| update_id < last)
         {
             return Err(TelegramSessionServiceError::StaleUpdate(update_id));
         }
+        let binding_update_id = if transport_already_acknowledged {
+            existing
+                .as_ref()
+                .and_then(|binding| binding.last_update_id)
+                .map_or(update_id, |last| last.max(update_id))
+        } else {
+            update_id
+        };
         let mut action = self.gateway.map_message(&message)?;
         if let TelegramInboundAction::Forward(envelope) = &mut action
             && envelope.session_id.is_none()
@@ -380,7 +399,7 @@ impl TelegramSessionService {
                     key,
                     source_chat_kind,
                     existing,
-                    update_id,
+                    binding_update_id,
                     &command,
                     &acknowledgement,
                 )?;
@@ -397,7 +416,7 @@ impl TelegramSessionService {
                 }
             }
             TelegramInboundAction::SetToolProgress(mode) => {
-                let binding = ensure_binding(key, source_chat_kind, existing, update_id);
+                let binding = ensure_binding(key, source_chat_kind, existing, binding_update_id);
                 self.state.bindings.insert(
                     stable_id.clone(),
                     TelegramSessionBinding {
@@ -408,7 +427,7 @@ impl TelegramSessionService {
                 TelegramServiceOutcome::ToolProgressUpdated { mode }
             }
             TelegramInboundAction::SetVoiceMode(mode) => {
-                let binding = ensure_binding(key, source_chat_kind, existing, update_id);
+                let binding = ensure_binding(key, source_chat_kind, existing, binding_update_id);
                 self.state.bindings.insert(
                     stable_id.clone(),
                     TelegramSessionBinding {
@@ -452,9 +471,12 @@ impl TelegramSessionService {
             self.attached_clients
                 .remove(&format!("telegram:{stable_id}"));
         }
-        let persisted = self
-            .acknowledge_update(update_id)
-            .and_then(|()| self.persist());
+        let persisted = if transport_already_acknowledged {
+            self.persist()
+        } else {
+            self.acknowledge_update(update_id)
+                .and_then(|()| self.persist())
+        };
         if let Err(error) = persisted {
             self.state = previous_state;
             return Err(error);
@@ -1299,6 +1321,42 @@ mod tests {
         assert!(state.voice_reply_bindings.contains(&stable_id));
         state.clear_voice_tracking(&stable_id);
         assert!(state.validate().is_ok());
+    }
+
+    #[test]
+    fn acknowledged_buffered_message_preserves_newer_transport_and_binding_cursors() {
+        let repository = tempfile::tempdir().expect("repository");
+        let state_path = repository.path().join(".medusa/telegram/state.json");
+        let control = FrontendControlPlane::new(repository.path().to_path_buf(), Config::default());
+        let mut service =
+            TelegramSessionService::load(&state_path, gateway(), control).expect("service");
+
+        service
+            .process_message(12, message(12, "/verbose all"))
+            .expect("newer update");
+        assert!(matches!(
+            service.process_message(11, message(11, "/voice tts")),
+            Err(TelegramSessionServiceError::StaleUpdate(11))
+        ));
+        service
+            .process_acknowledged_message(11, message(11, "/voice tts"), false)
+            .expect("buffered update");
+
+        let binding = service.binding(&identity()).expect("binding");
+        assert_eq!(binding.last_update_id, Some(12));
+        assert_eq!(binding.tool_progress, ToolProgressMode::All);
+        assert_eq!(binding.voice_mode, TelegramVoiceMode::All);
+        assert_eq!(service.next_update_offset(), Some(13));
+        drop(service);
+
+        let control = FrontendControlPlane::new(repository.path().to_path_buf(), Config::default());
+        let reloaded =
+            TelegramSessionService::load(&state_path, gateway(), control).expect("reload");
+        let binding = reloaded.binding(&identity()).expect("reloaded binding");
+        assert_eq!(binding.last_update_id, Some(12));
+        assert_eq!(binding.tool_progress, ToolProgressMode::All);
+        assert_eq!(binding.voice_mode, TelegramVoiceMode::All);
+        assert_eq!(reloaded.next_update_offset(), Some(13));
     }
 
     #[test]
