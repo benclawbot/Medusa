@@ -1,10 +1,31 @@
 use std::{fs, path::Path};
 
 pub fn run() {
+    patch_module_wiring();
     patch_runtime();
     patch_service();
     patch_mini_app_http();
     patch_voice();
+}
+
+fn patch_module_wiring() {
+    let path = Path::new("src/telegram/mod.rs");
+    let mut source = read(path);
+    while source.contains("mod mini_app_http;\nmod mini_app_http;\n") {
+        source = source.replacen(
+            "mod mini_app_http;\nmod mini_app_http;\n",
+            "mod mini_app_http;\n",
+            1,
+        );
+    }
+    while source.contains("mod supervisor;\nmod supervisor;\n") {
+        source = source.replacen(
+            "mod supervisor;\nmod supervisor;\n",
+            "mod supervisor;\n",
+            1,
+        );
+    }
+    write(path, source);
 }
 
 fn patch_runtime() {
