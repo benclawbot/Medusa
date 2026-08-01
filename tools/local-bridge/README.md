@@ -1,13 +1,13 @@
 # Medusa Local Execution Bridge
 
-This bridge lets an orchestrator request a small, explicit set of Git, Cargo,
-and GitHub CLI operations on the machine that owns the repository checkout.
-It is intended to fill execution gaps in remote connectors without exposing an
-arbitrary shell.
+This is the sole supported local execution bridge for Medusa. It lets an
+orchestrator request a small, explicit set of Git, Cargo, and GitHub CLI
+operations on the machine that owns the repository checkout. It is intended to
+fill execution gaps in remote connectors without exposing an arbitrary shell.
 
 ## Security model
 
-- Listens on `127.0.0.1` by default.
+- Accepts only `localhost` or an IPv4/IPv6 loopback address as the listen host.
 - Requires a bearer token of at least 32 characters.
 - Executes only named actions from a static allowlist.
 - Never uses `shell=True` or evaluates command strings.
@@ -19,8 +19,8 @@ arbitrary shell.
 - Limits request and command-output sizes.
 - Records every accepted or rejected request in `.git/medusa-bridge-audit.jsonl`.
 
-Do not bind this service to a public interface. The bearer token authorizes
-repository mutations when mutation mode is enabled.
+The service rejects non-loopback `--host` values before server startup. The
+bearer token authorizes repository mutations when mutation mode is enabled.
 
 ## Install
 
@@ -48,6 +48,9 @@ python3 tools/local-bridge/medusa_bridge.py \
   --token-file ~/.config/medusa/local-bridge-token
 ```
 
+An explicit host may be supplied only when it is loopback, for example
+`--host 127.0.0.1`, `--host localhost`, or `--host ::1`.
+
 ## API
 
 Health and action discovery:
@@ -69,11 +72,11 @@ curl -sS \
   http://127.0.0.1:8765/v1/run
 ```
 
-Fix and validate PR #220 locally:
+Fix and validate a branch locally:
 
 ```sh
 curl -sS -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' \
-  -d '{"action":"git.checkout","args":["agent/time-travel-snapshots"]}' \
+  -d '{"action":"git.checkout","args":["agent/example-branch"]}' \
   http://127.0.0.1:8765/v1/run
 
 curl -sS -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' \
@@ -101,7 +104,7 @@ curl -sS -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' \
   http://127.0.0.1:8765/v1/run
 
 curl -sS -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' \
-  -d '{"action":"git.push","args":["origin","agent/time-travel-snapshots"]}' \
+  -d '{"action":"git.push","args":["origin","agent/example-branch"]}' \
   http://127.0.0.1:8765/v1/run
 ```
 
