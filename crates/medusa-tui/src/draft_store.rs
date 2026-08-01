@@ -2,7 +2,7 @@ use std::{
     collections::BTreeMap,
     fs, io,
     path::{Path, PathBuf},
-    sync::{Arc, Mutex},
+    sync::{Arc, Mutex, OnceLock, Weak},
     thread,
     time::Duration,
 };
@@ -18,6 +18,8 @@ const MANIFEST_NAME: &str = "draft.json";
 const ATTACHMENTS_DIR: &str = "attachments";
 const MAX_DRAFT_KEY_LEN: usize = 128;
 const DRAFT_WRITE_DEBOUNCE: Duration = Duration::from_millis(75);
+
+static DRAFT_WRITERS: OnceLock<Mutex<BTreeMap<PathBuf, Weak<DraftWriter>>>> = OnceLock::new();
 
 #[derive(Clone, Debug)]
 pub struct DraftStore {
@@ -56,9 +58,10 @@ struct StoredIoError {
 impl DraftStore {
     #[must_use]
     pub fn for_repo(repo: &Path) -> Self {
+        let root = repo.join(".medusa/drafts");
         Self {
-            root: repo.join(".medusa/drafts"),
-            writer: Arc::new(DraftWriter::default()),
+            writer: shared_writer(&root),
+            root,
         }
     }
 
@@ -216,6 +219,18 @@ impl DraftStore {
             None => Ok(()),
         }
     }
+}
+
+fn shared_writer(root: &Path) -> Arc<DraftWriter> {
+    let writers = DRAFT_WRITERS.get_or_init(|| Mutex::new(BTreeMap::new()));
+    let mut writers = lock(writers);
+    writers.retain(|_, writer| writer.strong_count() > 0);
+    if let Some(writer) = writers.get(root).and_then(Weak::upgrade) {
+        return writer;
+    }
+    let writer = Arc::new(DraftWriter::default());
+    writers.insert(root.to_path_buf(), Arc::downgrade(&writer));
+    writer
 }
 
 fn writer_loop(root: PathBuf, writer: Arc<DraftWriter>) {
@@ -443,6 +458,31 @@ mod tests {
         assert_eq!(
             reopened.load("current").expect("load persisted draft"),
             Some(draft)
+        );
+    }
+
+    #[test]
+    fn independent_handles_share_pending_writes() {
+        let repository = tempdir().expect("temporary repository");
+        let writer = DraftStore::for_repo(repository.path());
+        writer
+            .save(
+                "current",
+                &PromptDraft {
+                    text: "shared pending draft".to_owned(),
+                    ..PromptDraft::default()
+                },
+            )
+            .expect("queue draft");
+
+        let reader = DraftStore::for_repo(repository.path());
+        assert_eq!(
+            reader
+                .load("current")
+                .expect("load shared draft")
+                .expect("draft exists")
+                .text,
+            "shared pending draft"
         );
     }
 
