@@ -20,9 +20,7 @@ use serde::{Deserialize, Serialize};
 use time::OffsetDateTime;
 use ulid::Ulid;
 
-use super::{
-    TelegramIdentity, TelegramMiniAppBridge, TelegramMiniAppError, TelegramMiniAppRealtimeSession,
-};
+use super::{TelegramIdentity, TelegramMiniAppBridge, TelegramMiniAppError};
 
 const MAX_HEADER_BYTES: usize = 16 * 1024;
 const MAX_BODY_BYTES: usize = 64 * 1024;
@@ -276,7 +274,11 @@ fn read_request(stream: &mut TcpStream) -> Result<Request, RequestRejection> {
         .ok_or(RequestRejection::Malformed)?
         .to_owned();
     let target = request_parts.next().ok_or(RequestRejection::Malformed)?;
-    let path = target.split('?').next().ok_or(RequestRejection::Malformed)?;
+    let path = target
+        .split('?')
+        .next()
+        .ok_or(RequestRejection::Malformed)?
+        .to_owned();
     let version = request_parts.next().ok_or(RequestRejection::Malformed)?;
     if request_parts.next().is_some() || !matches!(version, "HTTP/1.0" | "HTTP/1.1") {
         return Err(RequestRejection::Malformed);
@@ -319,14 +321,16 @@ fn read_request(stream: &mut TcpStream) -> Result<Request, RequestRejection> {
     }
     Ok(Request {
         method,
-        path: path.to_owned(),
+        path,
         authorization,
         body: bytes[header_end..total].to_vec(),
     })
 }
 
 fn bearer_token(value: Option<&str>) -> Option<&str> {
-    value?.strip_prefix("Bearer ").filter(|token| !token.is_empty())
+    value?
+        .strip_prefix("Bearer ")
+        .filter(|token| !token.is_empty())
 }
 
 fn write_response(
@@ -447,18 +451,22 @@ mod tests {
 
     #[test]
     fn configuration_is_loopback_only() {
-        assert!(TelegramMiniAppHttpConfig {
-            bind: "127.0.0.1:0".parse().expect("bind"),
-            path_prefix: "/telegram/mini-app".to_owned(),
-        }
-        .validate()
-        .is_ok());
-        assert!(TelegramMiniAppHttpConfig {
-            bind: "0.0.0.0:8080".parse().expect("bind"),
-            path_prefix: "/telegram/mini-app".to_owned(),
-        }
-        .validate()
-        .is_err());
+        assert!(
+            TelegramMiniAppHttpConfig {
+                bind: "127.0.0.1:0".parse().expect("bind"),
+                path_prefix: "/telegram/mini-app".to_owned(),
+            }
+            .validate()
+            .is_ok()
+        );
+        assert!(
+            TelegramMiniAppHttpConfig {
+                bind: "0.0.0.0:8080".parse().expect("bind"),
+                path_prefix: "/telegram/mini-app".to_owned(),
+            }
+            .validate()
+            .is_err()
+        );
     }
 
     #[test]
