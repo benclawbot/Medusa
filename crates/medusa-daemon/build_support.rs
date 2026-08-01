@@ -41,7 +41,11 @@ fn materialize_module_wiring() {
     let bot_api_path = Path::new("src/telegram/bot_api/mod.rs");
     let mut bot_api = read_source(bot_api_path, "Telegram Bot API module");
     if !bot_api.contains("mod operations;") {
-        replace_once(&mut bot_api, "mod types;\n", "mod operations;\nmod types;\n");
+        replace_once(
+            &mut bot_api,
+            "mod types;\n",
+            "mod operations;\nmod types;\n",
+        );
         replace_once(
             &mut bot_api,
             "pub use types::{\n",
@@ -76,7 +80,9 @@ fn materialize_mini_app_interfaces() {
             "use medusa_config::Config;\n",
         );
     }
-    if source.contains("    FrontendActor, FrontendCommand, FrontendCommandEnvelope, FrontendRequestContext,\n") {
+    if source.contains(
+        "    FrontendActor, FrontendCommand, FrontendCommandEnvelope, FrontendRequestContext,\n",
+    ) {
         replace_once(
             &mut source,
             "    FrontendActor, FrontendCommand, FrontendCommandEnvelope, FrontendRequestContext,\n",
@@ -137,9 +143,9 @@ fn materialize_mini_app_interfaces() {
     if source.contains(old) {
         replace_once(&mut source, old, new);
     }
-    if source.contains(
-        "    #[error(transparent)]\n    Telegram(#[from] TelegramSessionServiceError),\n",
-    ) {
+    if source
+        .contains("    #[error(transparent)]\n    Telegram(#[from] TelegramSessionServiceError),\n")
+    {
         replace_once(
             &mut source,
             "    #[error(transparent)]\n    Telegram(#[from] TelegramSessionServiceError),\n",
@@ -294,7 +300,9 @@ fn read_source(path: &Path, label: &str) -> String {
 
 fn write_source(path: &Path, source: String, label: &str) {
     if let Err(error) = fs::write(path, source) {
-        fail(&format!("cannot write materialized {label} source: {error}"));
+        fail(&format!(
+            "cannot write materialized {label} source: {error}"
+        ));
     }
 }
 
