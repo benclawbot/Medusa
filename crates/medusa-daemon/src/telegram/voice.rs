@@ -121,12 +121,7 @@ impl TelegramVoicePipeline {
         validate_input(input)?;
         let boundary = format!("medusa-voice-{}", Ulid::new());
         let mut body = Vec::with_capacity(input.bytes.len().saturating_add(1_024));
-        push_text_part(
-            &mut body,
-            &boundary,
-            "model",
-            &self.transcription_model,
-        );
+        push_text_part(&mut body, &boundary, "model", &self.transcription_model);
         push_file_part(&mut body, &boundary, "file", input);
         body.extend_from_slice(format!("--{boundary}--\r\n").as_bytes());
         let response = self
@@ -191,7 +186,9 @@ fn validate_api_base(value: &str) -> Result<(), TelegramVoiceError> {
     let parsed = reqwest::Url::parse(value).map_err(|_| TelegramVoiceError::InvalidApiBase)?;
     let loopback = parsed.host_str().is_some_and(|host| {
         host.eq_ignore_ascii_case("localhost")
-            || host.parse::<std::net::IpAddr>().is_ok_and(|address| address.is_loopback())
+            || host
+                .parse::<std::net::IpAddr>()
+                .is_ok_and(|address| address.is_loopback())
     });
     if parsed.host_str().is_none()
         || parsed.query().is_some()
@@ -280,8 +277,11 @@ fn push_file_part(
     body.extend_from_slice(b"\r\n");
 }
 
-fn read_bounded(mut response: Response, limit: u64) -> Result<Vec<u8>, TelegramVoiceError> {
-    if response.content_length().is_some_and(|length| length > limit) {
+fn read_bounded(response: Response, limit: u64) -> Result<Vec<u8>, TelegramVoiceError> {
+    if response
+        .content_length()
+        .is_some_and(|length| length > limit)
+    {
         return Err(TelegramVoiceError::ResponseTooLarge);
     }
     let mut bytes = Vec::new();
@@ -376,17 +376,21 @@ mod tests {
 
     #[test]
     fn voice_input_is_bounded_and_typed() {
-        assert!(validate_input(&TelegramVoiceInput {
-            file_name: "voice.ogg".to_owned(),
-            mime_type: "audio/ogg".to_owned(),
-            bytes: b"OggS".to_vec(),
-        })
-        .is_ok());
-        assert!(validate_input(&TelegramVoiceInput {
-            file_name: "voice.exe".to_owned(),
-            mime_type: "application/octet-stream".to_owned(),
-            bytes: vec![1],
-        })
-        .is_err());
+        assert!(
+            validate_input(&TelegramVoiceInput {
+                file_name: "voice.ogg".to_owned(),
+                mime_type: "audio/ogg".to_owned(),
+                bytes: b"OggS".to_vec(),
+            })
+            .is_ok()
+        );
+        assert!(
+            validate_input(&TelegramVoiceInput {
+                file_name: "voice.exe".to_owned(),
+                mime_type: "application/octet-stream".to_owned(),
+                bytes: vec![1],
+            })
+            .is_err()
+        );
     }
 }
