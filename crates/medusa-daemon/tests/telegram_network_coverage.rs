@@ -67,12 +67,8 @@ fn mini_app_http_exercises_authentication_routes_and_queue_bounds() {
     let missing = http_request(address, "GET", "/missing", &[], b"");
     assert_status(&missing, 404);
 
-    let malformed_auth = http_json_request(
-        address,
-        "/custom/telegram/voice/auth",
-        None,
-        b"not-json",
-    );
+    let malformed_auth =
+        http_json_request(address, "/custom/telegram/voice/auth", None, b"not-json");
     assert_status(&malformed_auth, 400);
 
     let invalid_ticket_body = serde_json::to_vec(&json!({
@@ -106,12 +102,7 @@ fn mini_app_http_exercises_authentication_routes_and_queue_bounds() {
         "initData": signed_init_data(BOT_TOKEN, identity.user_id, now),
     }))
     .expect("serialize auth request");
-    let auth = http_json_request(
-        address,
-        "/custom/telegram/voice/auth",
-        None,
-        &auth_body,
-    );
+    let auth = http_json_request(address, "/custom/telegram/voice/auth", None, &auth_body);
     assert_status(&auth, 200);
     let auth_json: Value = serde_json::from_str(response_body(&auth)).expect("auth response JSON");
     let auth_token = auth_json["token"]
@@ -128,12 +119,8 @@ fn mini_app_http_exercises_authentication_routes_and_queue_bounds() {
     );
     assert_status(&launch_token_realtime, 401);
 
-    let missing_realtime = http_json_request(
-        address,
-        "/custom/telegram/voice/realtime",
-        None,
-        b"{}",
-    );
+    let missing_realtime =
+        http_json_request(address, "/custom/telegram/voice/realtime", None, b"{}");
     assert_status(&missing_realtime, 401);
 
     let unavailable_realtime = http_json_request(
@@ -353,30 +340,36 @@ fn webhook_server_exercises_authorization_parsing_and_handler_failures() {
 fn voice_pipeline_exercises_provider_success_validation_and_status_mapping() {
     assert!(OpenAiAudioToken::new("short").is_err());
     let token = OpenAiAudioToken::new("sk-test-token-1234567890").expect("audio token");
-    assert!(TelegramVoicePipeline::new(
-        token.clone(),
-        "http://example.com",
-        "transcribe",
-        "tts",
-        "alloy",
-    )
-    .is_err());
-    assert!(TelegramVoicePipeline::new(
-        token.clone(),
-        "http://127.0.0.1:1",
-        "bad model",
-        "tts",
-        "alloy",
-    )
-    .is_err());
-    assert!(TelegramVoicePipeline::new(
-        token.clone(),
-        "http://127.0.0.1:1",
-        "transcribe",
-        "tts",
-        "bad voice!",
-    )
-    .is_err());
+    assert!(
+        TelegramVoicePipeline::new(
+            token.clone(),
+            "http://example.com",
+            "transcribe",
+            "tts",
+            "alloy",
+        )
+        .is_err()
+    );
+    assert!(
+        TelegramVoicePipeline::new(
+            token.clone(),
+            "http://127.0.0.1:1",
+            "bad model",
+            "tts",
+            "alloy",
+        )
+        .is_err()
+    );
+    assert!(
+        TelegramVoicePipeline::new(
+            token.clone(),
+            "http://127.0.0.1:1",
+            "transcribe",
+            "tts",
+            "bad voice!",
+        )
+        .is_err()
+    );
 
     let responses = VecDeque::from([
         MockResponse::json(200, br#"{"text":"  verified transcript  "}"#),
@@ -404,7 +397,10 @@ fn voice_pipeline_exercises_provider_success_validation_and_status_mapping() {
         bytes: b"OggSinput-audio".to_vec(),
     };
 
-    assert_eq!(pipeline.transcribe(&input).expect("transcript"), "verified transcript");
+    assert_eq!(
+        pipeline.transcribe(&input).expect("transcript"),
+        "verified transcript"
+    );
     assert!(matches!(
         pipeline.transcribe(&input),
         Err(TelegramVoiceError::InvalidTranscript)
@@ -414,7 +410,9 @@ fn voice_pipeline_exercises_provider_success_validation_and_status_mapping() {
         Err(TelegramVoiceError::Authentication)
     ));
 
-    let voice = pipeline.synthesize("speak the result").expect("synthesized voice");
+    let voice = pipeline
+        .synthesize("speak the result")
+        .expect("synthesized voice");
     assert_eq!(voice.mime_type, "audio/ogg");
     assert!(voice.file_name.starts_with("medusa-"));
     assert!(voice.bytes.starts_with(b"OggS"));
@@ -526,12 +524,7 @@ fn percent_encode(value: &str) -> String {
     encoded
 }
 
-fn http_json_request(
-    address: SocketAddr,
-    path: &str,
-    bearer: Option<&str>,
-    body: &[u8],
-) -> String {
+fn http_json_request(address: SocketAddr, path: &str, bearer: Option<&str>, body: &[u8]) -> String {
     let mut headers = vec![("Content-Type", "application/json")];
     let authorization;
     if let Some(token) = bearer {
@@ -572,9 +565,13 @@ fn raw_http_request(address: SocketAddr, request: &str) -> String {
     stream
         .set_read_timeout(Some(StdDuration::from_secs(5)))
         .expect("set raw read timeout");
-    stream.write_all(request.as_bytes()).expect("write raw request");
+    stream
+        .write_all(request.as_bytes())
+        .expect("write raw request");
     let mut response = String::new();
-    stream.read_to_string(&mut response).expect("read raw response");
+    stream
+        .read_to_string(&mut response)
+        .expect("read raw response");
     response
 }
 
@@ -643,7 +640,9 @@ fn spawn_mock_http(
                 response.content_type,
                 response.body.len()
             );
-            stream.write_all(headers.as_bytes()).expect("write mock headers");
+            stream
+                .write_all(headers.as_bytes())
+                .expect("write mock headers");
             stream.write_all(&response.body).expect("write mock body");
             stream.flush().expect("flush mock response");
         }
