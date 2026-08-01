@@ -10,14 +10,16 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use time::{Duration, OffsetDateTime};
 
+use crate::FrontendControlPlane;
+
 use super::{
     TelegramAction, TelegramButtonIntent, TelegramGateway, TelegramMessageSlot, TelegramParseMode,
     TelegramRenderButton, TelegramSessionServiceError,
     bot_api::{
         TelegramBotApiClient, TelegramBotInlineButton, TelegramBotParseMode,
         TelegramEditMessageOutcome, TelegramEditMessageText, TelegramInlineKeyboardMarkup,
-        TelegramLinkPreviewOptions, TelegramReplyParameters, TelegramSendMessage,
-        TelegramWebAppInfo,
+        TelegramLinkPreviewOptions, TelegramOutboundFile, TelegramReplyParameters,
+        TelegramSendMessage, TelegramWebAppInfo,
     },
     config::TelegramIdentity,
 };
@@ -43,6 +45,7 @@ impl TelegramDeliveryState {
 pub(super) fn execute_actions(
     client: &TelegramBotApiClient,
     gateway: &mut TelegramGateway,
+    control: &FrontendControlPlane,
     identity: &TelegramIdentity,
     session_id: &str,
     turn_id: Option<&str>,
@@ -55,6 +58,7 @@ pub(super) fn execute_actions(
         execute_action(
             client,
             gateway,
+            control,
             identity,
             session_id,
             turn_id,
@@ -71,6 +75,7 @@ pub(super) fn execute_actions(
 fn execute_action(
     client: &TelegramBotApiClient,
     gateway: &mut TelegramGateway,
+    control: &FrontendControlPlane,
     identity: &TelegramIdentity,
     session_id: &str,
     turn_id: Option<&str>,
@@ -134,23 +139,25 @@ fn execute_action(
             evidence_ref,
             caption,
         } => {
-            // Native artifact upload is handled by the attachment slice. Until a resolver provides
-            // bounded bytes, preserve a safe visible reference instead of reading arbitrary paths.
+            let artifact = control.export_attachment(artifact_id)?;
             let slot = TelegramMessageSlot::Notice(format!("artifact:{artifact_id}"));
-            let text = caption.as_ref().map_or_else(
-                || format!("Artifact available — {evidence_ref}"),
-                |caption| format!("{caption}\n\nArtifact: {evidence_ref}"),
-            );
-            upsert_text(
-                client,
-                identity,
-                state,
-                &slot,
-                &text,
-                TelegramParseMode::Plain,
-                None,
-                true,
+            let reply_to_message_id = reply_target(state, &slot);
+            let message = client.send_document(
+                identity.chat_id,
+                identity.topic_id,
+                &TelegramOutboundFile {
+                    file_name: artifact.display_name,
+                    mime_type: artifact
+                        .mime_type
+                        .unwrap_or_else(|| "application/octet-stream".to_owned()),
+                    bytes: artifact.bytes,
+                    caption: caption
+                        .clone()
+                        .or_else(|| Some(format!("Evidence: {evidence_ref}"))),
+                    reply_to_message_id,
+                },
             )?;
+            state.slots.insert(slot, message.message_id);
         }
     }
     Ok(())

@@ -7,8 +7,10 @@ use reqwest::{
 };
 use serde::{Serialize, de::DeserializeOwned};
 
+mod operations;
 mod types;
 
+pub use operations::{TelegramBotCommand, TelegramOutboundFile, TelegramWebhookInfo};
 use types::{
     AnswerCallbackQueryRequest, DeleteMessageRequest, EmptyRequest, GetFileRequest,
     GetUpdatesRequest, SendChatActionRequest, SetMessageReactionRequest, TelegramApiEnvelope,

@@ -9,10 +9,16 @@ mod command;
 mod config;
 mod delivery;
 mod format;
+mod mini_app;
+mod mini_app_http;
 mod projection;
 mod render;
 mod runtime;
 mod service;
+mod supervisor;
+mod text_fragments;
+mod voice;
+mod webhook;
 
 use medusa_protocol::frontend::FrontendCommandEnvelope;
 use serde::{Deserialize, Serialize};
@@ -27,6 +33,15 @@ pub use config::{
 };
 pub use delivery::TelegramDeliveryState;
 pub use format::{normalize_markdown_tables, split_telegram_text, telegram_markdown_v2, utf16_len};
+pub use mini_app::{
+    TelegramMiniAppAuthToken, TelegramMiniAppBinding, TelegramMiniAppBridge, TelegramMiniAppError,
+    TelegramMiniAppLaunchTicket, TelegramMiniAppRealtimeSession, TelegramMiniAppSecret,
+    TelegramMiniAppUser, VerifiedMiniAppIdentity,
+};
+pub use mini_app_http::{
+    TelegramMiniAppCommand, TelegramMiniAppHttpConfig, TelegramMiniAppHttpError,
+    TelegramMiniAppHttpServer,
+};
 pub use projection::project_event;
 pub use render::{
     TelegramAction, TelegramButtonIntent, TelegramMessageSlot, TelegramParseMode, TelegramReaction,
@@ -37,6 +52,12 @@ pub use service::{
     TelegramBindingKey, TelegramServiceOutcome, TelegramSessionBinding, TelegramSessionService,
     TelegramSessionServiceError,
 };
+pub use supervisor::{TelegramServiceMode, TelegramServiceSupervisor, TelegramSupervisorError};
+pub use voice::{
+    OpenAiAudioToken, TelegramSynthesizedVoice, TelegramVoiceError, TelegramVoiceInput,
+    TelegramVoicePipeline,
+};
+pub use webhook::{TelegramWebhookConfig, TelegramWebhookError, TelegramWebhookServer};
 
 use callback::CallbackStore;
 

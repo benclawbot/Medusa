@@ -33,6 +33,13 @@ pub struct FrontendArtifactInput {
     pub bytes: Vec<u8>,
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct FrontendArtifactExport {
+    pub display_name: String,
+    pub mime_type: Option<String>,
+    pub bytes: Vec<u8>,
+}
+
 #[derive(Clone, Debug)]
 pub struct FrontendArtifactStore {
     root: PathBuf,
@@ -118,25 +125,7 @@ impl FrontendArtifactStore {
         let mut image_count = 0_usize;
         let mut attachments = Vec::with_capacity(artifact_ids.len());
         for artifact_id in artifact_ids {
-            let digest = parse_artifact_id(artifact_id)?;
-            let metadata: FrontendArtifactMetadata =
-                serde_json::from_slice(&fs::read(self.metadata_path(digest))?)?;
-            if metadata.schema_version != ARTIFACT_SCHEMA_VERSION
-                || metadata.artifact_id != *artifact_id
-            {
-                return Err(FrontendArtifactStoreError::CorruptArtifact(
-                    artifact_id.clone(),
-                ));
-            }
-            let blob_path = self.blob_path(digest, &metadata.display_name);
-            let bytes = fs::read(&blob_path)?;
-            if bytes.len() != metadata.byte_len
-                || hex::encode(Sha256::digest(&bytes)) != metadata.sha256
-            {
-                return Err(FrontendArtifactStoreError::CorruptArtifact(
-                    artifact_id.clone(),
-                ));
-            }
+            let (metadata, blob_path, bytes) = self.read_verified(artifact_id)?;
             total_bytes = total_bytes.saturating_add(bytes.len());
             if is_supported_image_mime(metadata.mime_type.as_deref()) {
                 image_count = image_count.saturating_add(1);
@@ -155,6 +144,44 @@ impl FrontendArtifactStore {
             attachments.push(resolve_attachment(metadata, blob_path, bytes)?);
         }
         Ok(attachments)
+    }
+
+    #[allow(dead_code)]
+    pub fn export(
+        &self,
+        artifact_id: &str,
+    ) -> Result<FrontendArtifactExport, FrontendArtifactStoreError> {
+        let (metadata, _, bytes) = self.read_verified(artifact_id)?;
+        Ok(FrontendArtifactExport {
+            display_name: metadata.display_name,
+            mime_type: metadata.mime_type,
+            bytes,
+        })
+    }
+
+    fn read_verified(
+        &self,
+        artifact_id: &str,
+    ) -> Result<(FrontendArtifactMetadata, PathBuf, Vec<u8>), FrontendArtifactStoreError> {
+        let digest = parse_artifact_id(artifact_id)?;
+        let metadata: FrontendArtifactMetadata =
+            serde_json::from_slice(&fs::read(self.metadata_path(digest))?)?;
+        if metadata.schema_version != ARTIFACT_SCHEMA_VERSION || metadata.artifact_id != artifact_id
+        {
+            return Err(FrontendArtifactStoreError::CorruptArtifact(
+                artifact_id.to_owned(),
+            ));
+        }
+        let blob_path = self.blob_path(digest, &metadata.display_name);
+        let bytes = fs::read(&blob_path)?;
+        if bytes.len() != metadata.byte_len
+            || hex::encode(Sha256::digest(&bytes)) != metadata.sha256
+        {
+            return Err(FrontendArtifactStoreError::CorruptArtifact(
+                artifact_id.to_owned(),
+            ));
+        }
+        Ok((metadata, blob_path, bytes))
     }
 
     fn metadata_path(&self, digest: &str) -> PathBuf {
@@ -336,5 +363,26 @@ mod tests {
             store.resolve(&["frontend-artifact-../secret".to_owned()]),
             Err(FrontendArtifactStoreError::InvalidArtifactId(_))
         ));
+    }
+
+    #[test]
+    fn export_preserves_verified_bytes_and_metadata() {
+        let directory = tempfile::tempdir().expect("artifact store");
+        let store = FrontendArtifactStore::new(directory.path().to_path_buf());
+        let id = store
+            .ingest(FrontendArtifactInput {
+                display_name: "report.txt".to_owned(),
+                mime_type: Some("text/plain".to_owned()),
+                bytes: b"verified report".to_vec(),
+            })
+            .expect("ingest");
+        assert_eq!(
+            store.export(&id).expect("export"),
+            FrontendArtifactExport {
+                display_name: "report.txt".to_owned(),
+                mime_type: Some("text/plain".to_owned()),
+                bytes: b"verified report".to_vec(),
+            }
+        );
     }
 }

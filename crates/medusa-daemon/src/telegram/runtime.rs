@@ -5,7 +5,10 @@ use std::{
     fs::{self, OpenOptions},
     io::Write,
     path::{Path, PathBuf},
-    sync::atomic::{AtomicBool, Ordering},
+    sync::{
+        atomic::{AtomicBool, Ordering},
+        mpsc::{Receiver, RecvTimeoutError, TryRecvError},
+    },
     thread,
     time::Duration,
 };
@@ -13,9 +16,15 @@ use std::{
 use serde::{Deserialize, Serialize};
 use time::OffsetDateTime;
 
+use super::bot_api::TelegramUpdate;
+
+use super::text_fragments::{
+    PendingTextFragmentState, is_text_fragment_candidate, merge_text_fragment,
+};
 use super::{
     TelegramChatKind, TelegramGatewayError, TelegramIdentity, TelegramInboundMessage,
-    TelegramServiceOutcome, TelegramSessionService, TelegramSessionServiceError,
+    TelegramMiniAppCommand, TelegramServiceOutcome, TelegramSessionService,
+    TelegramSessionServiceError, TelegramVoiceError, TelegramVoiceInput, TelegramVoicePipeline,
     bot_api::{
         TelegramBotApiClient, TelegramBotApiError, TelegramBotChatKind, TelegramBotMessage,
         TelegramDocument, TelegramInboundCallback, TelegramPhotoSize, TelegramTransportUpdate,
@@ -31,6 +40,7 @@ const MAX_MEDIA_GROUP_MESSAGES: usize = 10;
 const MEDIA_GROUP_SCHEMA_VERSION: u32 = 1;
 const MAX_IMAGE_DOWNLOAD_BYTES: u64 = 20 * 1024 * 1024;
 const MAX_TEXT_DOWNLOAD_BYTES: u64 = 4 * 1024 * 1024;
+const MAX_AUDIO_DOWNLOAD_BYTES: u64 = 20 * 1024 * 1024;
 const MEDIA_GROUP_STATE_ENV: &str = "MEDUSA_TELEGRAM_MEDIA_GROUP_STATE_PATH";
 const DEFAULT_MEDIA_GROUP_STATE_PATH: &str = ".medusa/telegram-media-groups.json";
 
@@ -156,6 +166,10 @@ pub struct TelegramPollingRuntime {
     config: TelegramPollingConfig,
     media_group_path: PathBuf,
     pending_media_groups: PendingMediaGroupState,
+    pending_text_fragments: PendingTextFragmentState,
+    voice_pipeline: Option<TelegramVoicePipeline>,
+    mini_app_commands: Option<Receiver<TelegramMiniAppCommand>>,
+    webhook_updates: Option<Receiver<TelegramUpdate>>,
 }
 
 impl TelegramPollingRuntime {
@@ -169,12 +183,17 @@ impl TelegramPollingRuntime {
             .map(PathBuf::from)
             .unwrap_or_else(|| PathBuf::from(DEFAULT_MEDIA_GROUP_STATE_PATH));
         let pending_media_groups = load_media_group_state(&media_group_path)?;
+        let pending_text_fragments = PendingTextFragmentState::load()?;
         Ok(Self {
             client,
             service,
             config,
             media_group_path,
             pending_media_groups,
+            pending_text_fragments,
+            voice_pipeline: None,
+            mini_app_commands: None,
+            webhook_updates: None,
         })
     }
 
@@ -188,20 +207,63 @@ impl TelegramPollingRuntime {
         &mut self.service
     }
 
+    #[must_use]
+    pub fn with_voice_pipeline(mut self, pipeline: TelegramVoicePipeline) -> Self {
+        self.voice_pipeline = Some(pipeline);
+        self
+    }
+
+    #[must_use]
+    pub fn with_mini_app_commands(mut self, commands: Receiver<TelegramMiniAppCommand>) -> Self {
+        self.mini_app_commands = Some(commands);
+        self
+    }
+
+    #[must_use]
+    pub fn with_webhook_updates(mut self, updates: Receiver<TelegramUpdate>) -> Self {
+        self.webhook_updates = Some(updates);
+        self
+    }
+
     pub fn poll_once(&mut self) -> Result<Vec<TelegramServiceOutcome>, TelegramRuntimeError> {
         let mut outcomes = Vec::new();
+        self.drain_mini_app_commands(&mut outcomes)?;
         self.flush_due_media_groups(OffsetDateTime::now_utc(), &mut outcomes)?;
+        self.flush_due_text_fragments(OffsetDateTime::now_utc(), &mut outcomes)?;
 
-        let timeout_seconds = if self.pending_media_groups.groups.is_empty() {
+        let timeout_seconds = if self.pending_media_groups.groups.is_empty()
+            && self.pending_text_fragments.is_empty()
+        {
             self.config.timeout_seconds
         } else {
             self.config.timeout_seconds.min(1)
         };
-        let updates = self.client.get_updates(
-            self.service.next_update_offset(),
-            timeout_seconds,
-            self.config.limit,
-        )?;
+        let updates = if let Some(receiver) = self.webhook_updates.as_ref() {
+            let mut updates = Vec::new();
+            match receiver.recv_timeout(Duration::from_secs(1)) {
+                Ok(update) => updates.push(update),
+                Err(RecvTimeoutError::Timeout) => {}
+                Err(RecvTimeoutError::Disconnected) => {
+                    return Err(TelegramRuntimeError::WebhookDisconnected);
+                }
+            }
+            while updates.len() < usize::from(self.config.limit) {
+                match receiver.try_recv() {
+                    Ok(update) => updates.push(update),
+                    Err(TryRecvError::Empty) => break,
+                    Err(TryRecvError::Disconnected) => {
+                        return Err(TelegramRuntimeError::WebhookDisconnected);
+                    }
+                }
+            }
+            updates
+        } else {
+            self.client.get_updates(
+                self.service.next_update_offset(),
+                timeout_seconds,
+                self.config.limit,
+            )?
+        };
         let mut normalized = Vec::with_capacity(updates.len());
         for raw_update in updates {
             let update_id = raw_update.update_id;
@@ -221,7 +283,13 @@ impl TelegramPollingRuntime {
                 {
                     self.queue_media_group(update_id, message, OffsetDateTime::now_utc())?;
                 }
+                TelegramTransportUpdate::Message { update_id, message }
+                    if is_text_fragment_candidate(&message) =>
+                {
+                    self.queue_text_fragment(update_id, message, OffsetDateTime::now_utc())?;
+                }
                 TelegramTransportUpdate::Message { update_id, message } => {
+                    self.flush_conversation_text_fragments(&message, &mut outcomes)?;
                     self.flush_conversation_media_groups(&message, &mut outcomes)?;
                     self.process_messages(update_id, &[message], &mut outcomes)?;
                 }
@@ -257,9 +325,33 @@ impl TelegramPollingRuntime {
         }
 
         self.flush_due_media_groups(OffsetDateTime::now_utc(), &mut outcomes)?;
-        self.service
-            .deliver_pending(&self.client, OffsetDateTime::now_utc())?;
+        self.flush_due_text_fragments(OffsetDateTime::now_utc(), &mut outcomes)?;
+        self.service.deliver_pending_with_voice(
+            &self.client,
+            self.voice_pipeline.as_ref(),
+            OffsetDateTime::now_utc(),
+        )?;
         Ok(outcomes)
+    }
+
+    fn drain_mini_app_commands(
+        &mut self,
+        outcomes: &mut Vec<TelegramServiceOutcome>,
+    ) -> Result<(), TelegramRuntimeError> {
+        loop {
+            let result = match self.mini_app_commands.as_ref() {
+                Some(receiver) => receiver.try_recv(),
+                None => return Ok(()),
+            };
+            match result {
+                Ok(command) => outcomes.push(self.service.process_mini_app_command(command)?),
+                Err(TryRecvError::Empty) => return Ok(()),
+                Err(TryRecvError::Disconnected) => {
+                    self.mini_app_commands = None;
+                    return Ok(());
+                }
+            }
+        }
     }
 
     fn queue_media_group(
@@ -324,7 +416,8 @@ impl TelegramPollingRuntime {
         let Some(group) = self.pending_media_groups.groups.get(key).cloned() else {
             return Ok(());
         };
-        match self.process_messages(group.highest_update_id, &group.messages, outcomes) {
+        match self.process_acknowledged_messages(group.highest_update_id, &group.messages, outcomes)
+        {
             Ok(()) => {
                 self.pending_media_groups.groups.remove(key);
                 persist_media_group_state(&self.media_group_path, &self.pending_media_groups)?;
@@ -345,11 +438,40 @@ impl TelegramPollingRuntime {
         messages: &[TelegramBotMessage],
         outcomes: &mut Vec<TelegramServiceOutcome>,
     ) -> Result<(), TelegramRuntimeError> {
-        let inbound = self.inbound_batch(messages)?;
-        match self.service.process_message(update_id, inbound) {
+        self.process_messages_with_transport_state(update_id, messages, outcomes, false)
+    }
+
+    fn process_acknowledged_messages(
+        &mut self,
+        update_id: i64,
+        messages: &[TelegramBotMessage],
+        outcomes: &mut Vec<TelegramServiceOutcome>,
+    ) -> Result<(), TelegramRuntimeError> {
+        self.process_messages_with_transport_state(update_id, messages, outcomes, true)
+    }
+
+    fn process_messages_with_transport_state(
+        &mut self,
+        update_id: i64,
+        messages: &[TelegramBotMessage],
+        outcomes: &mut Vec<TelegramServiceOutcome>,
+        transport_already_acknowledged: bool,
+    ) -> Result<(), TelegramRuntimeError> {
+        let (inbound, voice_source) = self.inbound_batch(messages)?;
+        let result = if transport_already_acknowledged {
+            self.service
+                .process_acknowledged_message(update_id, inbound, voice_source)
+        } else if voice_source {
+            self.service.process_voice_message(update_id, inbound)
+        } else {
+            self.service.process_message(update_id, inbound)
+        };
+        match result {
             Ok(outcome) => outcomes.push(outcome),
             Err(error) if is_rejected_input(&error) => {
-                self.service.acknowledge_transport_update(update_id)?;
+                if !transport_already_acknowledged {
+                    self.service.acknowledge_transport_update(update_id)?;
+                }
             }
             Err(error) => return Err(error.into()),
         }
@@ -359,9 +481,11 @@ impl TelegramPollingRuntime {
     fn inbound_batch(
         &self,
         messages: &[TelegramBotMessage],
-    ) -> Result<TelegramInboundMessage, TelegramRuntimeError> {
+    ) -> Result<(TelegramInboundMessage, bool), TelegramRuntimeError> {
+        let mut normalized_messages = messages.to_vec();
         let mut attachment_ids = Vec::new();
-        for message in messages {
+        let mut voice_source = false;
+        for message in &mut normalized_messages {
             if let Some(photo) = largest_photo(&message.photo) {
                 attachment_ids.push(self.stage_file(
                     &photo.file_id,
@@ -374,18 +498,163 @@ impl TelegramPollingRuntime {
                     MAX_IMAGE_DOWNLOAD_BYTES,
                 )?);
             }
-            if let Some(document) = &message.document {
-                let (display_name, mime_type, limit) = document_metadata(document)?;
-                attachment_ids.push(self.stage_file(
-                    &document.file_id,
-                    document.file_size,
-                    display_name,
-                    mime_type,
-                    limit,
-                )?);
+            if let Some(document) = message.document.clone() {
+                if document
+                    .mime_type
+                    .as_deref()
+                    .is_some_and(|mime| mime.starts_with("audio/"))
+                {
+                    let transcript = self.transcribe_document(&document)?;
+                    let prefix = message
+                        .text
+                        .take()
+                        .or_else(|| message.caption.take())
+                        .map(|text| text.trim().to_owned())
+                        .filter(|text| !text.is_empty());
+                    message.text = Some(prefix.map_or(transcript.clone(), |prefix| {
+                        format!("{prefix}\n\n{transcript}")
+                    }));
+                    message.document = None;
+                    voice_source = true;
+                } else {
+                    let (display_name, mime_type, limit) = document_metadata(&document)?;
+                    attachment_ids.push(self.stage_file(
+                        &document.file_id,
+                        document.file_size,
+                        display_name,
+                        mime_type,
+                        limit,
+                    )?);
+                }
             }
         }
-        normalize_message_batch(messages, &self.config.bot_username, attachment_ids)
+        Ok((
+            normalize_message_batch(
+                &normalized_messages,
+                &self.config.bot_username,
+                attachment_ids,
+            )?,
+            voice_source,
+        ))
+    }
+
+    fn transcribe_document(
+        &self,
+        document: &TelegramDocument,
+    ) -> Result<String, TelegramRuntimeError> {
+        let pipeline = self
+            .voice_pipeline
+            .as_ref()
+            .ok_or(TelegramRuntimeError::VoiceUnavailable)?;
+        if document
+            .file_size
+            .is_some_and(|size| size > MAX_AUDIO_DOWNLOAD_BYTES)
+        {
+            return Err(TelegramRuntimeError::RejectedMedia(format!(
+                "Telegram audio exceeds the {MAX_AUDIO_DOWNLOAD_BYTES}-byte limit"
+            )));
+        }
+        let file = self
+            .client
+            .get_file(&document.file_id)
+            .map_err(media_api_error)?;
+        if file
+            .file_size
+            .is_some_and(|size| size > MAX_AUDIO_DOWNLOAD_BYTES)
+        {
+            return Err(TelegramRuntimeError::RejectedMedia(format!(
+                "Telegram audio exceeds the {MAX_AUDIO_DOWNLOAD_BYTES}-byte limit"
+            )));
+        }
+        let path = file.file_path.ok_or_else(|| {
+            TelegramRuntimeError::RejectedMedia(
+                "Telegram did not provide a downloadable audio path".to_owned(),
+            )
+        })?;
+        let bytes = self
+            .client
+            .download_file(&path, MAX_AUDIO_DOWNLOAD_BYTES)
+            .map_err(media_api_error)?;
+        pipeline
+            .transcribe(&TelegramVoiceInput {
+                file_name: document
+                    .file_name
+                    .clone()
+                    .unwrap_or_else(|| "voice.ogg".to_owned()),
+                mime_type: document
+                    .mime_type
+                    .clone()
+                    .unwrap_or_else(|| "audio/ogg".to_owned()),
+                bytes,
+            })
+            .map_err(voice_error)
+    }
+
+    fn queue_text_fragment(
+        &mut self,
+        update_id: i64,
+        message: TelegramBotMessage,
+        now: OffsetDateTime,
+    ) -> Result<(), TelegramRuntimeError> {
+        let previous = self.pending_text_fragments.clone();
+        self.pending_text_fragments
+            .insert(update_id, message, now)?;
+        if let Err(error) = self.pending_text_fragments.persist() {
+            self.pending_text_fragments = previous;
+            return Err(error);
+        }
+        if let Err(error) = self.service.acknowledge_transport_update(update_id) {
+            self.pending_text_fragments = previous;
+            self.pending_text_fragments.persist()?;
+            return Err(error.into());
+        }
+        Ok(())
+    }
+
+    fn flush_due_text_fragments(
+        &mut self,
+        now: OffsetDateTime,
+        outcomes: &mut Vec<TelegramServiceOutcome>,
+    ) -> Result<(), TelegramRuntimeError> {
+        for key in self.pending_text_fragments.due_keys(now)? {
+            self.flush_text_fragment(&key, outcomes)?;
+        }
+        Ok(())
+    }
+
+    fn flush_conversation_text_fragments(
+        &mut self,
+        next: &TelegramBotMessage,
+        outcomes: &mut Vec<TelegramServiceOutcome>,
+    ) -> Result<(), TelegramRuntimeError> {
+        for key in self.pending_text_fragments.conversation_keys(next) {
+            self.flush_text_fragment(&key, outcomes)?;
+        }
+        Ok(())
+    }
+
+    fn flush_text_fragment(
+        &mut self,
+        key: &str,
+        outcomes: &mut Vec<TelegramServiceOutcome>,
+    ) -> Result<(), TelegramRuntimeError> {
+        let Some(group) = self.pending_text_fragments.get(key).cloned() else {
+            return Ok(());
+        };
+        let message = merge_text_fragment(&group)?;
+        match self.process_acknowledged_messages(group.highest_update_id, &[message], outcomes) {
+            Ok(()) => {
+                self.pending_text_fragments.remove(key);
+                self.pending_text_fragments.persist()?;
+                Ok(())
+            }
+            Err(error) if error.is_rejected_media() => {
+                self.pending_text_fragments.remove(key);
+                self.pending_text_fragments.persist()?;
+                Ok(())
+            }
+            Err(error) => Err(error),
+        }
     }
 
     fn stage_file(
@@ -706,6 +975,21 @@ fn mentions_bot(text: &str, bot_username: &str) -> bool {
     })
 }
 
+fn voice_error(error: TelegramVoiceError) -> TelegramRuntimeError {
+    match error {
+        TelegramVoiceError::InvalidInputAudio
+        | TelegramVoiceError::InvalidTranscript
+        | TelegramVoiceError::InvalidSpeechInput
+        | TelegramVoiceError::InvalidOggOpus
+        | TelegramVoiceError::Rejected
+        | TelegramVoiceError::MalformedResponse
+        | TelegramVoiceError::ResponseTooLarge => {
+            TelegramRuntimeError::RejectedMedia(error.to_string())
+        }
+        error => TelegramRuntimeError::Voice(error),
+    }
+}
+
 fn is_poison_transport_update(error: &TelegramBotApiError) -> bool {
     matches!(
         error,
@@ -758,8 +1042,20 @@ pub enum TelegramRuntimeError {
     TooManyPendingMediaGroups,
     #[error("Telegram media group exceeds the supported message count")]
     MediaGroupTooLarge,
+    #[error("Telegram text-fragment state is invalid")]
+    InvalidTextFragmentState,
+    #[error("too many pending Telegram text-fragment groups")]
+    TooManyPendingTextFragments,
+    #[error("Telegram text-fragment group exceeds the supported size")]
+    TextFragmentGroupTooLarge,
     #[error("Telegram media was rejected: {0}")]
     RejectedMedia(String),
+    #[error("Telegram voice pipeline is not configured")]
+    VoiceUnavailable,
+    #[error("Telegram webhook update channel disconnected")]
+    WebhookDisconnected,
+    #[error(transparent)]
+    Voice(#[from] TelegramVoiceError),
     #[error(transparent)]
     Io(#[from] std::io::Error),
     #[error(transparent)]
@@ -778,6 +1074,9 @@ impl TelegramRuntimeError {
                 | Self::InvalidMediaGroupState
                 | Self::TooManyPendingMediaGroups
                 | Self::MediaGroupTooLarge
+                | Self::InvalidTextFragmentState
+                | Self::TooManyPendingTextFragments
+                | Self::TextFragmentGroupTooLarge
                 | Self::RejectedMedia(_)
         )
     }
@@ -785,6 +1084,14 @@ impl TelegramRuntimeError {
     #[must_use]
     pub fn is_transient(&self) -> bool {
         matches!(self, Self::BotApi(error) if error.is_transient())
+            || matches!(
+                self,
+                Self::Voice(
+                    TelegramVoiceError::Transport
+                        | TelegramVoiceError::RateLimited
+                        | TelegramVoiceError::ProviderUnavailable
+                )
+            )
             || matches!(
                 self,
                 Self::Service(TelegramSessionServiceError::BotApi(error))

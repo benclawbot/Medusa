@@ -25,7 +25,10 @@ use sha2::{Digest, Sha256};
 use thiserror::Error;
 
 use crate::{
-    artifact_store::{FrontendArtifactInput, FrontendArtifactStore, FrontendArtifactStoreError},
+    artifact_store::{
+        FrontendArtifactExport, FrontendArtifactInput, FrontendArtifactStore,
+        FrontendArtifactStoreError,
+    },
     live_session::{
         LiveSessionAttachmentView, LiveSessionBroker, LiveSessionBrokerError, LiveSessionSummary,
     },
@@ -140,6 +143,14 @@ impl FrontendControlPlane {
                 bytes,
             })
             .map_err(Into::into)
+    }
+
+    /// Exports one verified opaque artifact for a native frontend delivery.
+    pub fn export_attachment(
+        &self,
+        artifact_id: &str,
+    ) -> Result<FrontendArtifactExport, FrontendControlError> {
+        self.artifacts.export(artifact_id).map_err(Into::into)
     }
 
     /// Validates, serializes, and idempotently acknowledges one frontend command.
