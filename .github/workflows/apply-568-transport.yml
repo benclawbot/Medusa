@@ -34,14 +34,6 @@ jobs:
               source = source.replace(old, new, 1)
 
           replace_once(
-              '''use super::{
-    TelegramChatKind, TelegramGatewayError, TelegramIdentity, TelegramInboundMessage,
-''',
-              '''use super::{
-    TelegramChatKind, TelegramGatewayError, TelegramIdentity, TelegramInboundMessage,
-'''
-          )
-          replace_once(
               '''};
 
 const DEFAULT_TRANSIENT_BACKOFF''',
