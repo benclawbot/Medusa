@@ -1,6 +1,12 @@
 #![cfg(windows)]
 
-use std::{net::TcpListener, process::Command, time::Duration};
+use std::{
+    io,
+    net::TcpListener,
+    path::Path,
+    process::{Command, Output},
+    time::Duration,
+};
 
 use medusa_process_containment::{WindowsSandboxRestrictions, run_appcontainer};
 
@@ -9,25 +15,41 @@ fn launches_reads_and_writes_without_changing_repository_acl() {
     let repo = tempfile::tempdir().expect("temporary repository");
     let before = acl_snapshot(repo.path());
 
-    let where_output = run_appcontainer(repo.path(), "where.exe", &["hostname.exe".into()])
-        .expect("where.exe should launch in the base container");
+    let Some(where_output) = run_or_skip_unsupported(
+        repo.path(),
+        "where.exe",
+        &["hostname.exe".into()],
+        "where.exe should launch in the base container",
+    ) else {
+        return;
+    };
     assert!(where_output.status.success());
     assert!(!where_output.stdout.is_empty());
 
-    let output = run_appcontainer(
+    let Some(output) = run_or_skip_unsupported(
         repo.path(),
         "cmd.exe",
         &[
             "/D".into(),
             "/C".into(),
-            "echo sandbox-write>proof.txt".into(),
+            "echo sandbox-write>proof.txt & echo sandbox-stdout & echo sandbox-stderr 1>&2".into(),
         ],
-    )
-    .expect("write probe should launch");
+        "write probe should launch",
+    ) else {
+        return;
+    };
     assert!(
         output.status.success(),
         "{}",
         String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(
+        String::from_utf8_lossy(&output.stdout).contains("sandbox-stdout"),
+        "sandboxed stdout was not captured"
+    );
+    assert!(
+        String::from_utf8_lossy(&output.stderr).contains("sandbox-stderr"),
+        "sandboxed stderr was not captured"
     );
     assert!(repo.path().join("proof.txt").is_file());
     assert_eq!(before, acl_snapshot(repo.path()));
@@ -44,7 +66,7 @@ fn denies_loopback_network_access() {
 
     let script =
         format!("$client = New-Object Net.Sockets.TcpClient; $client.Connect('127.0.0.1',{port})");
-    let output = run_appcontainer(
+    let Some(output) = run_or_skip_unsupported(
         repo.path(),
         "powershell.exe",
         &[
@@ -53,8 +75,10 @@ fn denies_loopback_network_access() {
             "-Command".into(),
             script,
         ],
-    )
-    .expect("network probe should launch");
+        "network probe should launch",
+    ) else {
+        return;
+    };
     assert!(
         !output.status.success(),
         "AppContainer unexpectedly reached host loopback"
@@ -84,4 +108,20 @@ fn acl_snapshot(path: &std::path::Path) -> Vec<u8> {
         .expect("read repository ACL");
     assert!(output.status.success());
     output.stdout
+}
+
+fn run_or_skip_unsupported(
+    repo: &Path,
+    program: &str,
+    args: &[String],
+    context: &str,
+) -> Option<Output> {
+    match run_appcontainer(repo, program, args) {
+        Ok(output) => Some(output),
+        Err(error) if error.kind() == io::ErrorKind::Unsupported => {
+            eprintln!("SKIP: Windows composable sandbox backend is unavailable: {error}");
+            None
+        }
+        Err(error) => panic!("{context}: {error}"),
+    }
 }

@@ -40,6 +40,14 @@ jobs:
       - uses: dtolnay/rust-toolchain@39b0b3842c7e8bbf6904c0bfc3d9006fdd4dc4e0 # 1.88.0
       - name: Refresh merged dependency lock
         run: cargo generate-lockfile
+      - name: Install Linux sandbox backend
+        shell: bash
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y bubblewrap
+          if [[ -e /proc/sys/kernel/apparmor_restrict_unprivileged_userns ]]; then
+            echo 0 | sudo tee /proc/sys/kernel/apparmor_restrict_unprivileged_userns
+          fi
       - name: Run release-blocking reliability benchmark
         env:
           MEDUSA_BENCHMARK_COMMIT: ${{ github.sha }}
@@ -50,6 +58,7 @@ jobs:
         run: python3 scripts/orchestration-benchmark.py
       - name: Upload benchmark evidence
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        if: always()
         with:
           name: reliability-benchmark-${{ github.sha }}
           path: |

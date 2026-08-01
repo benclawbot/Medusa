@@ -328,7 +328,8 @@ mod tests {
     use std::{fs, path::Path};
 
     use super::{
-        approved_absolute_path, create_dir, read, reject_sensitive_approved_path, search, write,
+        approved_absolute_path, create_dir, normalized_policy_path, read,
+        reject_sensitive_approved_path, search, write,
     };
 
     #[test]
@@ -392,7 +393,9 @@ mod tests {
             "c:/windows/system32/drivers/etc/hosts"
         );
 
-        let windows = std::env::var_os("WINDIR").expect("WINDIR");
+        let windows = std::env::var_os("WINDIR")
+            .or_else(|| std::env::var_os("SystemRoot"))
+            .expect("WINDIR or SystemRoot");
         let target = Path::new(&windows).join("System32/drivers/etc/hosts");
         assert!(
             approved_absolute_path(target.to_str().expect("utf8 system path")).is_err(),
@@ -466,8 +469,10 @@ mod tests {
         let directory = tempfile::tempdir().expect("tempdir");
         let target = directory.path().join("exports/report.txt");
         assert_eq!(
-            approved_absolute_path(target.to_str().expect("utf8 path")).expect("allowed"),
-            target
+            normalized_policy_path(
+                &approved_absolute_path(target.to_str().expect("utf8 path")).expect("allowed")
+            ),
+            normalized_policy_path(&target)
         );
     }
 

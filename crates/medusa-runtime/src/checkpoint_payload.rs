@@ -246,12 +246,15 @@ pub(crate) fn restore(repo: &Path, payload: &RuntimeCheckpointPayload) -> Result
         .join(RESTORE_TRANSACTION_DIRECTORY)
         .join(&payload.payload_fingerprint);
     if transaction.exists() {
-        fs::remove_dir_all(&transaction).map_err(RuntimeError::agent)?;
+        fs::remove_dir_all(&transaction)
+            .map_err(|error| checkpoint_io("remove stale restore transaction", &transaction, error))?;
     }
     let staged = transaction.join("staged");
     let backups = transaction.join("backups");
-    fs::create_dir_all(&staged).map_err(RuntimeError::agent)?;
-    fs::create_dir_all(&backups).map_err(RuntimeError::agent)?;
+    fs::create_dir_all(&staged)
+        .map_err(|error| checkpoint_io("create restore staging directory", &staged, error))?;
+    fs::create_dir_all(&backups)
+        .map_err(|error| checkpoint_io("create restore backup directory", &backups, error))?;
 
     let mut prepared = Vec::with_capacity(payload.files.len());
     for (index, file) in payload.files.iter().enumerate() {
@@ -267,14 +270,16 @@ pub(crate) fn restore(repo: &Path, payload: &RuntimeCheckpointPayload) -> Result
             )));
         }
         if existed {
-            fs::copy(&destination, &backup).map_err(RuntimeError::agent)?;
+            fs::copy(&destination, &backup)
+                .map_err(|error| checkpoint_io("back up restore target", &destination, error))?;
         }
         let staged_path = file
             .content
             .as_ref()
             .map(|content| {
                 let path = staged.join(index.to_string());
-                fs::write(&path, content.as_bytes()).map_err(RuntimeError::agent)?;
+                fs::write(&path, content.as_bytes())
+                    .map_err(|error| checkpoint_io("write staged restore payload", &path, error))?;
                 Ok::<PathBuf, RuntimeError>(path)
             })
             .transpose()?;
@@ -285,21 +290,31 @@ pub(crate) fn restore(repo: &Path, payload: &RuntimeCheckpointPayload) -> Result
     let apply_result = (|| -> Result<(), RuntimeError> {
         for (destination, _, _, staged_path) in &prepared {
             if let Some(parent) = destination.parent() {
-                fs::create_dir_all(parent).map_err(RuntimeError::agent)?;
+                fs::create_dir_all(parent).map_err(|error| {
+                    checkpoint_io("create restore target directory", parent, error)
+                })?;
             }
             match staged_path {
                 Some(path) => {
                     let temporary = destination
                         .with_extension(format!("medusa-restore-{}-tmp", std::process::id()));
-                    fs::copy(path, &temporary).map_err(RuntimeError::agent)?;
+                    fs::copy(path, &temporary).map_err(|error| {
+                        checkpoint_io("copy staged restore payload", &temporary, error)
+                    })?;
                     sync_file(&temporary)?;
                     if destination.exists() {
-                        fs::remove_file(destination).map_err(RuntimeError::agent)?;
+                        fs::remove_file(destination).map_err(|error| {
+                            checkpoint_io("remove prior restore target", destination, error)
+                        })?;
                     }
-                    fs::rename(&temporary, destination).map_err(RuntimeError::agent)?;
+                    fs::rename(&temporary, destination).map_err(|error| {
+                        checkpoint_io("install restored file", destination, error)
+                    })?;
                 }
                 None if destination.exists() => {
-                    fs::remove_file(destination).map_err(RuntimeError::agent)?;
+                    fs::remove_file(destination).map_err(|error| {
+                        checkpoint_io("remove checkpoint-deleted file", destination, error)
+                    })?;
                 }
                 None => {}
             }
@@ -331,7 +346,8 @@ pub(crate) fn restore(repo: &Path, payload: &RuntimeCheckpointPayload) -> Result
         return Err(error);
     }
 
-    fs::remove_dir_all(&transaction).map_err(RuntimeError::agent)?;
+    fs::remove_dir_all(&transaction)
+        .map_err(|error| checkpoint_io("remove completed restore transaction", &transaction, error))?;
     if let Some(parent) = transaction.parent() {
         sync_parent(parent).map_err(RuntimeError::agent)?;
     }
@@ -547,10 +563,14 @@ fn reject_symlink_components(repo: &Path, relative: &Path) -> Result<(), Runtime
 
 fn sync_file(path: &Path) -> Result<(), RuntimeError> {
     OpenOptions::new()
-        .read(true)
+        .write(true)
         .open(path)
         .and_then(|file| file.sync_all())
-        .map_err(RuntimeError::agent)
+        .map_err(|error| checkpoint_io("sync restored file", path, error))
+}
+
+fn checkpoint_io(operation: &str, path: &Path, error: std::io::Error) -> RuntimeError {
+    RuntimeError::agent(format!("{operation} at {}: {error}", path.display()))
 }
 
 #[cfg(unix)]

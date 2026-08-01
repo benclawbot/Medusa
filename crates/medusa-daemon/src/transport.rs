@@ -130,10 +130,10 @@ mod platform {
         net::{Ipv4Addr, SocketAddr, TcpListener, TcpStream},
         os::windows::fs::MetadataExt,
         path::{Path, PathBuf},
-        process::Command,
         time::Duration,
     };
 
+    use medusa_process_containment::{secure_current_user_only, verify_current_user_only};
     use serde::{Deserialize, Serialize};
 
     const CAPABILITY_BYTES: usize = 32;
@@ -145,12 +145,6 @@ mod platform {
     struct EndpointDescriptor {
         address: String,
         capability: String,
-    }
-
-    #[derive(Clone, Debug)]
-    struct UserIdentity {
-        account: String,
-        sid: String,
     }
 
     pub struct LocalListener {
@@ -169,8 +163,7 @@ mod platform {
             })?;
             fs::create_dir_all(parent)?;
             ensure_real_directory(parent)?;
-            let identity = current_user_identity()?;
-            secure_owner_only(parent, &identity, true)?;
+            secure_current_user_only(parent, true)?;
 
             match fs::symlink_metadata(endpoint) {
                 Ok(metadata) => {
@@ -217,9 +210,9 @@ mod platform {
                     .open(&temporary)?;
                 file.write_all(&encoded)?;
                 file.sync_all()?;
-                secure_owner_only(&temporary, &identity, false)?;
+                secure_current_user_only(&temporary, false)?;
                 fs::rename(&temporary, endpoint)?;
-                secure_owner_only(endpoint, &identity, false)
+                secure_current_user_only(endpoint, false)
             })();
             if let Err(error) = write_result {
                 let _ = fs::remove_file(&temporary);
@@ -327,150 +320,8 @@ mod platform {
                 "daemon endpoint descriptor must be a regular file",
             ));
         }
-        let identity = current_user_identity()?;
-        verify_owner_only(parent, &identity)?;
-        verify_owner_only(endpoint, &identity)
-    }
-
-    fn current_user_identity() -> io::Result<UserIdentity> {
-        let output = Command::new("whoami.exe")
-            .args(["/user", "/fo", "csv", "/nh"])
-            .output()?;
-        if !output.status.success() {
-            return Err(io::Error::other(format!(
-                "whoami.exe failed with {}",
-                output.status
-            )));
-        }
-        let text = String::from_utf8_lossy(&output.stdout);
-        let mut fields = text
-            .trim()
-            .split("\",\"")
-            .map(|field| field.trim_matches('"'));
-        let account = fields
-            .next()
-            .filter(|value| !value.trim().is_empty())
-            .ok_or_else(|| {
-                io::Error::new(io::ErrorKind::InvalidData, "invalid current-user account")
-            })?;
-        let sid = fields
-            .next()
-            .filter(|value| value.starts_with("S-1-"))
-            .ok_or_else(|| {
-                io::Error::new(io::ErrorKind::InvalidData, "invalid current-user SID")
-            })?;
-        Ok(UserIdentity {
-            account: account.to_owned(),
-            sid: sid.to_owned(),
-        })
-    }
-
-    fn secure_owner_only(path: &Path, identity: &UserIdentity, directory: bool) -> io::Result<()> {
-        let rights = if directory { "(OI)(CI)F" } else { "F" };
-        run_icacls(path, &["/inheritance:r"])?;
-        run_icacls(path, &["/grant:r", &format!("*{}:{rights}", identity.sid)])?;
-        verify_owner_only(path, identity)
-    }
-
-    fn verify_owner_only(path: &Path, identity: &UserIdentity) -> io::Result<()> {
-        let output = Command::new("icacls.exe").arg(path).output()?;
-        if !output.status.success() {
-            return Err(io::Error::other(format!(
-                "icacls.exe verification failed with {}",
-                output.status
-            )));
-        }
-        let text = String::from_utf8_lossy(&output.stdout);
-        let principals = acl_principals(path, &text);
-        if principals.is_empty() {
-            return Err(io::Error::new(
-                io::ErrorKind::PermissionDenied,
-                "daemon endpoint ACL could not be read",
-            ));
-        }
-        // `/grant:r` replaced the ACL, so the only remaining principals must
-        // be the caller and a small set of well-known Windows principals that
-        // the kernel or filesystem layer adds independently of our grant
-        // (SYSTEM is granted by the object manager; CREATOR OWNER and
-        // CURRENT_USER are inherited from the parent and resolve to the
-        // caller in most cases). Comparing case-insensitively keeps this
-        // independent of the Windows display language.
-        for principal in &principals {
-            if grants_identity(principal, identity) || is_known_system_principal(principal) {
-                continue;
-            }
-            return Err(io::Error::new(
-                io::ErrorKind::PermissionDenied,
-                format!("daemon endpoint ACL contains foreign principal {principal}"),
-            ));
-        }
-        Ok(())
-    }
-
-    /// Windows-internal principals the kernel or filesystem add without
-    /// consulting the caller. They are not introduced by this code, so
-    /// accepting them does not widen the trust boundary.
-    fn is_known_system_principal(principal: &str) -> bool {
-        const KNOWN: &[&str] = &[
-            r"NT AUTHORITY\SYSTEM",
-            "SYSTEM",
-            "CREATOR OWNER",
-            "CREATOR GROUP",
-            r"BUILTIN\Administrators",
-        ];
-        KNOWN
-            .iter()
-            .any(|known| principal.eq_ignore_ascii_case(known))
-    }
-
-    /// Extracts the granted principals from `icacls` output.
-    ///
-    /// Entries are rendered as `PRINCIPAL:(RIGHTS)`, with the inspected path
-    /// prefixed onto the first line only.
-    fn acl_principals(path: &Path, text: &str) -> Vec<String> {
-        let displayed = path.to_string_lossy().to_string();
-        let mut principals = Vec::new();
-        for line in text.lines() {
-            let entry = line
-                .strip_prefix(displayed.as_str())
-                .unwrap_or(line)
-                .trim_start();
-            let Some(index) = entry.find(":(") else {
-                continue;
-            };
-            let principal = entry[..index].trim();
-            if !principal.is_empty() {
-                principals.push(principal.to_owned());
-            }
-        }
-        principals
-    }
-
-    /// Compares an `icacls` principal against the caller identity.
-    ///
-    /// `icacls` resolves SIDs to account names, and `whoami` may report the
-    /// machine component in a different case, so both forms are compared
-    /// case-insensitively.
-    fn grants_identity(principal: &str, identity: &UserIdentity) -> bool {
-        principal.eq_ignore_ascii_case(&identity.account)
-            || principal.eq_ignore_ascii_case(&identity.sid)
-            || principal
-                .trim_start_matches('*')
-                .eq_ignore_ascii_case(&identity.sid)
-    }
-
-    fn run_icacls(path: &Path, args: &[&str]) -> io::Result<()> {
-        // `.output()` keeps icacls progress text out of the inherited streams,
-        // which would otherwise interleave with agent and TUI output.
-        let output = Command::new("icacls.exe").arg(path).args(args).output()?;
-        if output.status.success() {
-            Ok(())
-        } else {
-            Err(io::Error::other(format!(
-                "icacls.exe failed with {}",
-                output.status
-            )))
-        }
+        verify_current_user_only(parent, true)?;
+        verify_current_user_only(endpoint, false)
     }
 
     fn read_descriptor(endpoint: &Path) -> io::Result<EndpointDescriptor> {
@@ -630,9 +481,9 @@ mod tests {
         fs,
         io::{BufRead, BufReader, Write},
         net::{SocketAddr, TcpStream},
-        process::Command,
     };
 
+    use medusa_process_containment::verify_current_user_only;
     use serde_json::Value;
     use tempfile::tempdir;
 
@@ -696,28 +547,8 @@ mod tests {
         let endpoint = directory.path().join("medusa.sock");
         let _listener = LocalListener::bind(&endpoint).expect("bind listener");
 
-        let output = Command::new("icacls.exe")
-            .arg(&endpoint)
-            .output()
-            .expect("inspect endpoint ACL");
-        assert!(output.status.success());
-        let text = String::from_utf8_lossy(&output.stdout);
-        // The trust boundary is "no anonymous or unauthenticated principal
-        // can read the descriptor", not "the ACL lists the caller and nothing
-        // else". `NT AUTHORITY\SYSTEM` is granted by the object manager
-        // independently of the caller, so a strict allowlist of just the
-        // current user would always fail.
-        for forbidden in [
-            "Everyone",
-            "Authenticated Users",
-            "BUILTIN\\Users",
-            "Anonymous",
-        ] {
-            assert!(
-                !text.contains(forbidden),
-                "endpoint ACL must not contain {forbidden}: {text}"
-            );
-        }
+        verify_current_user_only(&endpoint, false)
+            .expect("endpoint ACL must grant only the current user");
     }
 
     fn descriptor_address(raw: &str) -> SocketAddr {

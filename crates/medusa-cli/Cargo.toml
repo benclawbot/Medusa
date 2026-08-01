@@ -33,6 +33,10 @@ name = "medusa-proof"
 path = "src/proof.rs"
 
 [[bin]]
+name = "medusa-recall"
+path = "src/recall.rs"
+
+[[bin]]
 name = "medusa-provider-diagnostic"
 path = "src/provider_diagnostic.rs"
 
@@ -49,12 +53,14 @@ medusa-daemon = { path = "../medusa-daemon" }
 medusa-extensions = { path = "../medusa-extensions" }
 medusa-github = { path = "../medusa-github" }
 medusa-hardening = { path = "../medusa-hardening" }
+medusa-memory = { path = "../medusa-memory" }
 medusa-protocol.workspace = true
 medusa-provider = { path = "../medusa-provider" }
 medusa-runtime = { path = "../medusa-runtime" }
 medusa-tui = { path = "../medusa-tui" }
 medusa-update = { path = "../medusa-update" }
 reqwest.workspace = true
+rusqlite = { version = "0.32", features = ["bundled"] }
 serde.workspace = true
 serde_json.workspace = true
 sha2.workspace = true

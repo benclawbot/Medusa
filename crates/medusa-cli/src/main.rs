@@ -773,8 +773,50 @@ fn shell(repo: &Path, program: &str, args: &[String]) -> MedusaResult<()> {
 }
 
 fn checkpoint(repo: &Path, message: &str) -> MedusaResult<()> {
+    ensure_git_root(repo)?;
     run_git(repo, &["add", "-A"])?;
     run_git(repo, &["commit", "-m", message])
+}
+
+fn ensure_git_root(repo: &Path) -> MedusaResult<()> {
+    let expected = repo.canonicalize().map_err(|error| {
+        MedusaError::new(
+            ErrorCode::ToolExecutionFailed,
+            ErrorCategory::Execution,
+            format!("git add -A failed to resolve repository path {}: {error}", repo.display()),
+        )
+    })?;
+    let output = Command::new("git")
+        .args(["rev-parse", "--show-toplevel"])
+        .current_dir(repo)
+        .output()?;
+    if !output.status.success() {
+        return Err(MedusaError::new(
+            ErrorCode::ToolExecutionFailed,
+            ErrorCategory::Execution,
+            format!("git add -A failed with {}", output.status),
+        ));
+    }
+    let discovered = String::from_utf8_lossy(&output.stdout);
+    let discovered = Path::new(discovered.trim()).canonicalize().map_err(|error| {
+        MedusaError::new(
+            ErrorCode::ToolExecutionFailed,
+            ErrorCategory::Execution,
+            format!("git add -A failed to resolve discovered repository root: {error}"),
+        )
+    })?;
+    if discovered != expected {
+        return Err(MedusaError::new(
+            ErrorCode::ToolExecutionFailed,
+            ErrorCategory::Execution,
+            format!(
+                "git add -A failed: repository root {} does not match requested path {}",
+                discovered.display(),
+                expected.display()
+            ),
+        ));
+    }
+    Ok(())
 }
 
 fn run_git(repo: &Path, args: &[&str]) -> MedusaResult<()> {

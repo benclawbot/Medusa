@@ -109,6 +109,29 @@ pub(crate) fn internal(message: impl Into<String>) -> MedusaError {
     )
 }
 
+pub(crate) fn subprocess_containment_available() -> bool {
+    false
+}
+
+pub(crate) fn subprocess_containment_error(component: &str) -> MedusaError {
+    let mut error = MedusaError::new(
+        ErrorCode::SandboxUnavailable,
+        ErrorCategory::Environment,
+        format!(
+            "{component} requires OS process containment; refusing to launch an uncontained subprocess"
+        ),
+    );
+    error.context.insert(
+        "component".into(),
+        serde_json::Value::String(component.to_owned()),
+    );
+    error.context.insert(
+        "required_boundary".into(),
+        serde_json::Value::String("os_process_containment".into()),
+    );
+    error
+}
+
 pub(crate) fn yaml_error(error: serde_yaml::Error) -> MedusaError {
     invalid(error.to_string())
 }

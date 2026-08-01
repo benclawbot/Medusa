@@ -58,7 +58,10 @@ beforeEach(() => {
   vi.mocked(runRuntimeCommand).mockReset();
   vi.mocked(pollRuntime).mockReset().mockResolvedValue([]);
 });
-afterEach(cleanup);
+afterEach(() => {
+  cleanup();
+  vi.restoreAllMocks();
+});
 
 it("starts a general chat without requiring a project", async () => {
   vi.mocked(startRuntime).mockResolvedValue({ runtimeId: "runtime-general", repo: "" });
@@ -71,6 +74,34 @@ it("starts a general chat without requiring a project", async () => {
   expect(screen.getByRole("heading", { name: "General chat" })).toBeInTheDocument();
   expect(screen.getByRole("textbox")).toBeEnabled();
   expect(screen.getByText("Medusa policy remains authoritative")).toBeInTheDocument();
+});
+
+it("gives the icon-only send button an accessible name", async () => {
+  vi.mocked(startRuntime).mockResolvedValue({ runtimeId: "runtime-general", repo: "" });
+  render(<App />);
+
+  const composer = await screen.findByRole("textbox");
+  const sendButton = screen.getByRole("button", { name: "Send message" });
+  expect(sendButton).toBeDisabled();
+
+  fireEvent.change(composer, { target: { value: "Hello" } });
+  expect(sendButton).toBeEnabled();
+});
+
+it.each([
+  { platform: "Win32", label: "Ctrl+N", modifier: { ctrlKey: true } },
+  { platform: "Linux x86_64", label: "Ctrl+N", modifier: { ctrlKey: true } },
+  { platform: "MacIntel", label: "⌘N", modifier: { metaKey: true } },
+])("uses $label to create a new session on $platform", async ({ platform, label, modifier }) => {
+  vi.spyOn(window.navigator, "platform", "get").mockReturnValue(platform);
+  vi.mocked(startRuntime).mockResolvedValue({ runtimeId: "runtime-general", repo: "" });
+  render(<App />);
+
+  await screen.findByRole("textbox");
+  expect(screen.getByText(label)).toBeInTheDocument();
+
+  fireEvent.keyDown(document, { key: "n", ...modifier });
+  await waitFor(() => expect(runRuntimeCommand).toHaveBeenCalledWith("runtime-general", "/new"));
 });
 
 it("closes a newly started runtime when shared configuration is rejected", async () => {

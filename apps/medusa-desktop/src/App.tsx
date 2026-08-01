@@ -80,6 +80,10 @@ function formatBytes(bytes?: number): string {
   return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
 }
 
+function isMacPlatform(): boolean {
+  return /Mac|iPhone|iPad/.test(navigator.platform);
+}
+
 function basename(path: string): string {
   return path.split(/[\\/]/).filter(Boolean).pop() ?? path;
 }
@@ -596,14 +600,30 @@ export function App() {
     }
   };
 
-  const newSession = async () => {
+  const newSession = useCallback(async () => {
     if (!runtimeId) return;
     try {
       await runRuntimeCommand(runtimeId, "/new");
     } catch (cause) {
       setError(String(cause));
     }
-  };
+  }, [runtimeId]);
+
+  const macPlatform = isMacPlatform();
+  const newSessionShortcut = macPlatform ? "⌘N" : "Ctrl+N";
+
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent) => {
+      const primaryModifier = macPlatform
+        ? event.metaKey && !event.ctrlKey
+        : event.ctrlKey && !event.metaKey;
+      if (!primaryModifier || event.altKey || event.shiftKey || event.key.toLowerCase() !== "n") return;
+      event.preventDefault();
+      void newSession();
+    };
+    document.addEventListener("keydown", onKeyDown);
+    return () => document.removeEventListener("keydown", onKeyDown);
+  }, [macPlatform, newSession]);
 
   const credentiallessProvider = ["openai-oauth", "omniroute", "local"].includes(provider);
   const repoName = useMemo(() => basename(repo) || "General chat", [repo]);
@@ -621,8 +641,8 @@ export function App() {
           <div><h1>Medusa</h1><small>Desktop</small></div>
           <span className="version">v1.0</span>
         </div>
-        <button className="new-session" onClick={newSession} disabled={!runtimeId}>
-          <span><Plus size={15} /> New session</span><kbd>⌘N</kbd>
+        <button className="new-session" onClick={newSession} disabled={!runtimeId} aria-keyshortcuts={macPlatform ? "Meta+N" : "Control+N"}>
+          <span><Plus size={15} /> New session</span><kbd>{newSessionShortcut}</kbd>
         </button>
         <nav className="nav-list" aria-label="Workspace views">
           <button className={`nav-item ${activePanel === "chat" ? "active" : ""}`} onClick={() => setActivePanel("chat")}>
@@ -809,7 +829,7 @@ export function App() {
                   </div>
                   <div className="composer-actions">
                     {busy && <button className="cancel-button" onClick={cancel}><Square size={13} /> Cancel</button>}
-                    <button className="send-button" onClick={submit} disabled={!runtimeId || (!prompt.trim() && attachments.length === 0)}><Send size={16} /></button>
+                    <button className="send-button" onClick={submit} disabled={!runtimeId || (!prompt.trim() && attachments.length === 0)} aria-label="Send message"><Send size={16} /></button>
                   </div>
                 </div>
               </div>
