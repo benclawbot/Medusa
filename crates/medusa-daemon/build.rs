@@ -122,14 +122,18 @@ fn main() {
         "                | Self::MediaGroupTooLarge\n                | Self::InvalidTextFragmentState\n                | Self::TooManyPendingTextFragments\n                | Self::TextFragmentGroupTooLarge\n                | Self::RejectedMedia(_)\n",
     );
     if let Err(error) = fs::write(path, source) {
-        fail(&format!("cannot write materialized Telegram runtime source: {error}"));
+        fail(&format!(
+            "cannot write materialized Telegram runtime source: {error}"
+        ));
     }
 }
 
 fn replace_once(source: &mut String, old: &str, new: &str) {
     let count = source.matches(old).count();
     if count != 1 {
-        fail(&format!("expected one source match, found {count}: {old:?}"));
+        fail(&format!(
+            "expected one source match, found {count}: {old:?}"
+        ));
     }
     *source = source.replacen(old, new, 1);
 }
