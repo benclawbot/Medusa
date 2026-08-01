@@ -21,7 +21,10 @@ fn emit_materialized_telegram_sources() {
             "src/telegram/bot_api/operations.rs",
             include_str!("bot_api/operations.rs"),
         ),
-        ("src/artifact_store.rs", include_str!("../artifact_store.rs")),
+        (
+            "src/artifact_store.rs",
+            include_str!("../artifact_store.rs"),
+        ),
         (
             "src/frontend_control.rs",
             include_str!("../frontend_control.rs"),
