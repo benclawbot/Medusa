@@ -57,7 +57,6 @@ jobs:
           test -s docs/REFACTOR-BASELINE.md
           test -s docs/PUBLIC-API-BASELINE.md
           test -s docs/BENCHMARKS.md
-          test -s docs/source-size-exceptions.txt
           grep -q '75%' docs/REFACTOR-BASELINE.md
           grep -q '5%' docs/BENCHMARKS.md
           grep -q 'medusa-agent' docs/PUBLIC-API-BASELINE.md

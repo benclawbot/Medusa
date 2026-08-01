@@ -3,7 +3,7 @@
 
 A small, dependency-free localhost service that exposes a constrained set of
 repository maintenance commands to an orchestrator. It never invokes a shell,
-binds to loopback by default, requires a bearer token, confines execution to a
+binds only to loopback, requires a bearer token, confines execution to a
 configured repository, and writes an append-only JSONL audit log.
 """
 
@@ -11,10 +11,12 @@ from __future__ import annotations
 
 import argparse
 import hmac
+import ipaddress
 import json
 import os
 import secrets
 import shlex
+import socket
 import subprocess
 import sys
 import threading
@@ -73,6 +75,10 @@ FORBIDDEN_EXTRA_TOKENS: Final = {
 }
 
 
+class IPv6ThreadingHTTPServer(ThreadingHTTPServer):
+    address_family = socket.AF_INET6
+
+
 class BridgeError(Exception):
     def __init__(self, status: HTTPStatus, message: str) -> None:
         super().__init__(message)
@@ -87,6 +93,30 @@ def secure_repo_root(value: str) -> Path:
     if not (root / ".git").exists():
         raise ValueError(f"repository root does not contain .git: {root}")
     return root
+
+
+def validate_bind_host(value: str) -> str:
+    host = value.strip()
+    if not host:
+        raise ValueError("bridge host must not be empty")
+    if host.casefold() == "localhost":
+        return host
+    address_value = host[1:-1] if host.startswith("[") and host.endswith("]") else host
+    try:
+        address = ipaddress.ip_address(address_value)
+    except ValueError as exc:
+        raise ValueError("bridge host must be localhost or a loopback IP address") from exc
+    if not address.is_loopback:
+        raise ValueError("bridge host must be localhost or a loopback IP address")
+    return address_value
+
+
+def server_type_for_host(host: str) -> type[ThreadingHTTPServer]:
+    try:
+        address = ipaddress.ip_address(host)
+    except ValueError:
+        return ThreadingHTTPServer
+    return IPv6ThreadingHTTPServer if address.version == 6 else ThreadingHTTPServer
 
 
 def validate_extra_args(values: Any) -> list[str]:
@@ -335,7 +365,7 @@ class Handler(BaseHTTPRequestHandler):
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--repo", required=True, help="repository root to confine all commands to")
-    parser.add_argument("--host", default="127.0.0.1", help="listen address; loopback is strongly recommended")
+    parser.add_argument("--host", default="127.0.0.1", help="loopback listen address")
     parser.add_argument("--port", type=int, default=8765)
     parser.add_argument("--token", default=os.environ.get("MEDUSA_BRIDGE_TOKEN"))
     parser.add_argument("--token-file", type=Path)
@@ -362,6 +392,7 @@ def main() -> int:
     try:
         repo_root = secure_repo_root(args.repo)
         token = resolve_token(args)
+        host = validate_bind_host(args.host)
         if not 1 <= args.port <= 65535:
             raise ValueError("port must be between 1 and 65535")
         if args.timeout < 1 or args.timeout > 7200:
@@ -381,9 +412,10 @@ def main() -> int:
         max_output_bytes=args.max_output_bytes,
         audit_log=audit_log,
     )
-    server = ThreadingHTTPServer((args.host, args.port), Handler)
+    server_type = server_type_for_host(host)
+    server = server_type((host, args.port), Handler)
     server.state = state  # type: ignore[attr-defined]
-    print(f"Medusa local bridge listening on http://{args.host}:{args.port}")
+    print(f"Medusa local bridge listening on http://{host}:{args.port}")
     print(f"Repository: {repo_root}")
     print(f"Mutating actions: {'enabled' if args.allow_mutation else 'disabled'}")
     print(f"Audit log: {audit_log}")

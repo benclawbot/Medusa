@@ -17,6 +17,32 @@ class BridgeTests(unittest.TestCase):
             (Path(tmp) / ".git").mkdir()
             self.assertEqual(medusa_bridge.secure_repo_root(tmp), Path(tmp).resolve())
 
+    def test_bind_host_accepts_loopback_values(self) -> None:
+        self.assertEqual(medusa_bridge.validate_bind_host("127.0.0.1"), "127.0.0.1")
+        self.assertEqual(medusa_bridge.validate_bind_host("localhost"), "localhost")
+        self.assertEqual(medusa_bridge.validate_bind_host("LOCALHOST"), "LOCALHOST")
+        self.assertEqual(medusa_bridge.validate_bind_host("::1"), "::1")
+        self.assertEqual(medusa_bridge.validate_bind_host("[::1]"), "::1")
+
+    def test_server_type_matches_loopback_address_family(self) -> None:
+        self.assertIs(
+            medusa_bridge.server_type_for_host("127.0.0.1"),
+            medusa_bridge.ThreadingHTTPServer,
+        )
+        self.assertIs(
+            medusa_bridge.server_type_for_host("localhost"),
+            medusa_bridge.ThreadingHTTPServer,
+        )
+        self.assertIs(
+            medusa_bridge.server_type_for_host("::1"),
+            medusa_bridge.IPv6ThreadingHTTPServer,
+        )
+
+    def test_bind_host_rejects_non_loopback_values(self) -> None:
+        for host in ("0.0.0.0", "192.168.1.10", "8.8.8.8", "example.com", ""):
+            with self.subTest(host=host), self.assertRaises(ValueError):
+                medusa_bridge.validate_bind_host(host)
+
     def test_unknown_action_is_rejected(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
