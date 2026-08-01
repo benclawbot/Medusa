@@ -81,7 +81,7 @@ it("gives the icon-only send button an accessible name", async () => {
   render(<App />);
 
   const composer = await screen.findByRole("textbox");
-  const sendButton = screen.getByRole("button", { name: "Send message" });
+  const sendButton = screen.getByRole("button", { name: "Send" });
   expect(sendButton).toBeDisabled();
 
   fireEvent.change(composer, { target: { value: "Hello" } });
@@ -180,4 +180,46 @@ it("focuses Approve by default and renders conversation URLs as Ctrl-click links
   expect(approve).toHaveFocus();
   const link = await screen.findByRole("link", { name: "https://example.com/docs" });
   expect(link).toHaveAttribute("title", "Ctrl+click to open");
+});
+
+it("keeps diagnostics behind an explicit Session details control", async () => {
+  vi.mocked(startRuntime).mockResolvedValue({ runtimeId: "runtime-general", repo: "" });
+  render(<App />);
+
+  await screen.findByRole("textbox");
+  const details = screen.getByRole("button", { name: "Session details" });
+  expect(details).toHaveAttribute("aria-expanded", "false");
+  expect(screen.queryByRole("complementary", { name: "Session details" })).not.toBeInTheDocument();
+
+  fireEvent.click(details);
+  expect(details).toHaveAttribute("aria-expanded", "true");
+  expect(screen.getByRole("complementary", { name: "Session details" })).toBeInTheDocument();
+});
+
+it("consolidates desktop tools in the session rail", async () => {
+  vi.mocked(startRuntime).mockResolvedValue({ runtimeId: "runtime-general", repo: "" });
+  render(<App />);
+
+  await screen.findByRole("textbox");
+  expect(screen.getByRole("button", { name: "Sessions" })).toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "Review changes" })).toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "Memory" })).toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "Learning" })).toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "Engineering" })).toBeInTheDocument();
+});
+
+it("renders tool work as collapsed activity rows", async () => {
+  vi.mocked(startRuntime).mockResolvedValue({ runtimeId: "runtime-general", repo: "" });
+  vi.mocked(pollRuntime)
+    .mockResolvedValueOnce([{
+      type: "activity",
+      activity: { id: "tool-1", kind: "tool", title: "Inspect repository", details: ["private command output"] },
+    }])
+    .mockResolvedValue([]);
+  render(<App />);
+
+  const summary = await screen.findByText("Inspect repository");
+  const row = summary.closest("details");
+  expect(row).not.toHaveAttribute("open");
+  expect(row).toContainElement(screen.getByText("private command output"));
 });
