@@ -3,7 +3,10 @@ use std::{fs, path::Path};
 fn main() {
     println!("cargo:rerun-if-changed=src/telegram/runtime.rs");
     let path = Path::new("src/telegram/runtime.rs");
-    let mut source = fs::read_to_string(path).expect("read Telegram runtime source");
+    let mut source = match fs::read_to_string(path) {
+        Ok(source) => source,
+        Err(error) => fail(&format!("cannot read Telegram runtime source: {error}")),
+    };
     if source.contains("PendingTextFragmentState") {
         return;
     }
@@ -118,11 +121,20 @@ fn main() {
         "                | Self::MediaGroupTooLarge\n                | Self::RejectedMedia(_)\n",
         "                | Self::MediaGroupTooLarge\n                | Self::InvalidTextFragmentState\n                | Self::TooManyPendingTextFragments\n                | Self::TextFragmentGroupTooLarge\n                | Self::RejectedMedia(_)\n",
     );
-    fs::write(path, source).expect("write materialized Telegram runtime source");
+    if let Err(error) = fs::write(path, source) {
+        fail(&format!("cannot write materialized Telegram runtime source: {error}"));
+    }
 }
 
 fn replace_once(source: &mut String, old: &str, new: &str) {
     let count = source.matches(old).count();
-    assert_eq!(count, 1, "expected one source match for {old:?}");
+    if count != 1 {
+        fail(&format!("expected one source match, found {count}: {old:?}"));
+    }
     *source = source.replacen(old, new, 1);
+}
+
+fn fail(message: &str) -> ! {
+    eprintln!("cargo:warning={message}");
+    std::process::exit(1)
 }
