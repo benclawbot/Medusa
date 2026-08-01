@@ -2,6 +2,8 @@
 
 The Telegram gateway is an authenticated frontend to Medusa's daemon-owned live-session control plane. It does not create a Telegram-specific agent, transcript, approval policy, or repository mutation path.
 
+The checked-in implementation is ordinary Rust source and does not rely on build-time source mutation.
+
 ## Architecture
 
 ```text
