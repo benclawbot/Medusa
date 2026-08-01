@@ -24,6 +24,27 @@ REPORT = load("live_dogfood_report", ROOT / "live-dogfood-report.py")
 
 
 class LiveDogfoodContractTests(unittest.TestCase):
+    def test_configure_utf8_stdio_handles_windows_console_encoding(self) -> None:
+        class FakeStream:
+            def __init__(self) -> None:
+                self.calls: list[dict[str, str]] = []
+
+            def reconfigure(self, **kwargs: str) -> None:
+                self.calls.append(kwargs)
+
+        original_stdout, original_stderr = sys.stdout, sys.stderr
+        fake_stdout, fake_stderr = FakeStream(), FakeStream()
+        try:
+            HARNESS.sys.stdout = fake_stdout
+            HARNESS.sys.stderr = fake_stderr
+            HARNESS.configure_utf8_stdio()
+        finally:
+            HARNESS.sys.stdout = original_stdout
+            HARNESS.sys.stderr = original_stderr
+
+        self.assertEqual(fake_stdout.calls, [{"encoding": "utf-8", "errors": "replace"}])
+        self.assertEqual(fake_stderr.calls, [{"encoding": "utf-8", "errors": "replace"}])
+
     def test_sanitizer_removes_exact_credentials(self) -> None:
         self.assertEqual(
             HARNESS.sanitize("prefix secret-value suffix", ["secret-value"]),
