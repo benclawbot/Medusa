@@ -8,6 +8,10 @@ fn defaults_and_read_only_mode_filter_write_tools() {
     assert!(settings.effective_tools().contains("read_file"));
     assert!(!settings.effective_tools().contains("start_process"));
     settings.enabled = true;
+    assert!(
+        !settings.enabled(),
+        "Desktop Commander must not be advertised without process containment"
+    );
     settings.allow_write = true;
     settings.allowed_tools.insert("write_file".to_owned());
     assert!(
@@ -72,67 +76,68 @@ fn mcp_error_result_is_not_recorded_as_success() {
     assert!(validate_tool_result("write_file", &mut result).is_err());
 }
 
-#[cfg(unix)]
 #[test]
-fn persistent_stdio_client_initializes_discovers_and_calls() {
-    use std::os::unix::fs::PermissionsExt;
-
-    let directory = tempfile::tempdir().expect("tempdir");
-    let server = directory.path().join("fake-desktop-commander.sh");
-    fs::write(
-            &server,
-            r#"#!/bin/sh
-while IFS= read -r line; do
-  case "$line" in
-    *'"method":"initialize"'*)
-      printf '%s\n' '{"jsonrpc":"2.0","id":1,"result":{"protocolVersion":"2025-06-18","capabilities":{},"serverInfo":{"name":"fake-desktop-commander","version":"1.0.0"}}}'
-      ;;
-    *'"method":"tools/list"'*)
-      printf '%s\n' '{"jsonrpc":"2.0","id":2,"result":{"tools":[{"name":"read_file","description":"read fixture","inputSchema":{"type":"object"}}]}}'
-      ;;
-    *'"method":"tools/call"'*)
-      printf '%s\n' '{"jsonrpc":"2.0","id":3,"result":{"content":[{"type":"text","text":"fixture-ok"}]}}'
-      ;;
-  esac
-done
-"#,
-        )
-        .expect("write fake server");
-    let mut permissions = fs::metadata(&server).expect("metadata").permissions();
-    permissions.set_mode(0o700);
-    fs::set_permissions(&server, permissions).expect("set executable");
-    fs::write(directory.path().join("value.txt"), "42").expect("write fixture");
-
+fn enabled_client_fails_closed_before_uncontained_process_spawn() {
+    let repository = tempfile::tempdir().expect("repository");
+    let outside = tempfile::tempdir().expect("outside directory");
+    let escaped = outside.path().join("outside-desktop-commander.txt");
+    let (command, args) = side_effect_command(&escaped);
     let settings = DesktopCommanderSettings {
         enabled: true,
-        command: server,
-        args: Vec::new(),
-        allowed_tools: BTreeSet::from(["read_file".to_owned()]),
-        allow_write: false,
-        timeout: Duration::from_secs(2),
-        max_output_bytes: 16 * 1024,
-        configuration_error: None,
+        command,
+        args,
+        ..DesktopCommanderSettings::default()
     };
-    let mut client =
-        DesktopCommanderClient::connect(directory.path(), settings).expect("connect fake MCP");
-    let result = client
-        .call_tool(
-            directory.path(),
-            "read_file",
-            &json!({"path": "value.txt"}),
-            false,
-        )
-        .expect("call fake MCP tool");
-    assert_eq!(result["content"][0]["text"], "fixture-ok");
 
-    let profile = directory
-        .path()
-        .join(".medusa/extensions/desktop-commander/home/.claude-server-commander/config.json");
-    let profile: Value =
-        serde_json::from_slice(&fs::read(profile).expect("read profile")).expect("profile JSON");
-    assert_eq!(profile["telemetryEnabled"], false);
+    let Err(error) = DesktopCommanderClient::connect(repository.path(), settings) else {
+        panic!("uncontained Desktop Commander process must be blocked");
+    };
+    assert_eq!(error.code, ErrorCode::SandboxUnavailable);
     assert_eq!(
-        profile["allowedDirectories"][0],
-        directory.path().display().to_string()
+        error.context.get("required_boundary"),
+        Some(&json!("os_process_containment"))
     );
+    assert!(
+        !escaped.exists(),
+        "Desktop Commander process spawned outside containment"
+    );
+    assert!(!repository.path().join(".medusa").exists());
+}
+
+#[test]
+fn disabled_client_preserves_default_configuration_error() {
+    let directory = tempfile::tempdir().expect("tempdir");
+    let Err(error) =
+        DesktopCommanderClient::connect(directory.path(), DesktopCommanderSettings::default())
+    else {
+        panic!("Desktop Commander must remain disabled by default");
+    };
+    assert_eq!(error.code, ErrorCode::InvalidConfiguration);
+    assert!(!directory.path().join(".medusa").exists());
+}
+
+fn side_effect_command(target: &Path) -> (PathBuf, Vec<String>) {
+    #[cfg(windows)]
+    {
+        let command = env::var_os("ComSpec")
+            .map(PathBuf::from)
+            .unwrap_or_else(|| PathBuf::from("cmd.exe"));
+        let escaped = target.display().to_string().replace('"', "\"\"");
+        (
+            command,
+            vec![
+                "/D".into(),
+                "/C".into(),
+                format!("echo escaped>\"{escaped}\""),
+            ],
+        )
+    }
+    #[cfg(not(windows))]
+    {
+        let escaped = target.display().to_string().replace('\'', "'\\''");
+        (
+            PathBuf::from("/bin/sh"),
+            vec!["-c".into(), format!("printf escaped > '{escaped}'")],
+        )
+    }
 }

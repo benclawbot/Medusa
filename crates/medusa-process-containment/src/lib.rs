@@ -9,6 +9,8 @@ mod base_container;
 mod flatbuffer_builder;
 #[cfg(windows)]
 mod windows;
+#[cfg(windows)]
+mod windows_acl;
 
 #[cfg(windows)]
 pub use base_container::{WindowsSandboxRestrictions, run_appcontainer};
@@ -16,3 +18,5 @@ pub use base_container::{WindowsSandboxRestrictions, run_appcontainer};
 pub(crate) use flatbuffer_builder::FlatBufferBuilder;
 #[cfg(windows)]
 pub use windows::{WindowsJob, process_is_alive};
+#[cfg(windows)]
+pub use windows_acl::{secure_current_user_only, verify_current_user_only};

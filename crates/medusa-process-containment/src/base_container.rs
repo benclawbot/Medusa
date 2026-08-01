@@ -41,6 +41,9 @@ const COMMAND_TIMEOUT: Duration = Duration::from_secs(120);
 const PROCESSMODEL_DLL: &str = "processmodel.dll";
 const SANDBOX_EXPORT: &[u8] = b"Experimental_CreateProcessInSandbox\0";
 const BROKEN_PIPE: u32 = 109;
+// Reserved by Experimental_CreateProcessInSandbox and required to be FALSE.
+// TRUE fails with ERROR_NOT_SUPPORTED before process creation.
+const INHERIT_HANDLES: i32 = 0;
 
 type CreateProcessInSandbox = unsafe extern "system" fn(
     *const u16,
@@ -143,7 +146,7 @@ unsafe fn launch(
             command_line.as_mut_ptr(),
             null(),
             null(),
-            1,
+            INHERIT_HANDLES,
             CREATE_SUSPENDED | CREATE_NO_WINDOW | CREATE_UNICODE_ENVIRONMENT,
             environment.as_mut_ptr().cast(),
             root_wide.as_ptr(),
@@ -511,5 +514,10 @@ mod tests {
         assert!(decoded.starts_with("\"C:\\Program Files\\tool.exe\""));
         assert!(decoded.contains("foo|bar"));
         assert!(decoded.contains("\"a b\""));
+    }
+
+    #[test]
+    fn sandbox_process_does_not_request_reserved_handle_inheritance() {
+        assert_eq!(INHERIT_HANDLES, 0);
     }
 }

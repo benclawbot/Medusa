@@ -33,6 +33,7 @@ fn repository(
     let repo = directory.path().join("repo");
     fs::create_dir(&repo).expect("repo");
     git(&repo, &["init", "-b", "main"]);
+    git(&repo, &["config", "core.autocrlf", "false"]);
     git(&repo, &["config", "user.name", "Medusa Test"]);
     git(&repo, &["config", "user.email", "medusa@example.invalid"]);
     fs::create_dir_all(repo.join("src")).expect("src");

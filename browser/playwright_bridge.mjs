@@ -34,30 +34,34 @@ async function ensurePage() {
   return page;
 }
 
-function snapshotFromElement(el, depth = 0) {
-  const tag = el.tagName().toLowerCase();
-  const role = el.getAttribute('role') ?? tag;
-  const name = el.getAttribute('aria-label') ?? el.textContent()?.trim().slice(0, 80) ?? '';
-  const id = el.getAttribute('data-medusa-ref');
+async function snapshotFromElement(el, depth = 0) {
+  const tag = (await el.evaluate((node) => node.tagName)).toLowerCase();
+  const role = (await el.getAttribute('role')) ?? tag;
+  const textContent = await el.textContent();
+  const name = (await el.getAttribute('aria-label')) ?? textContent?.trim().slice(0, 80) ?? '';
+  const id = await el.getAttribute('data-medusa-ref');
   let refId = null;
   if (id) {
     refId = Number.parseInt(id, 10);
   } else {
     refId = nextRefId++;
-    el.evaluate((node, value) => node.setAttribute('data-medusa-ref', String(value)), refId);
+    await el.evaluate((node, value) => node.setAttribute('data-medusa-ref', String(value)), refId);
   }
   refs.set(refId, el);
   const selector = `[data-medusa-ref="${refId}"]`;
-  const children = Array.from(el.children()).map((child) => snapshotFromElement(child, depth + 1));
+  const children = [];
+  for (const child of await el.locator(':scope > *').all()) {
+    children.push(await snapshotFromElement(child, depth + 1));
+  }
   return { refId, role, name, selector, children };
 }
 
 async function snapshot() {
   const p = await ensurePage();
   refs.clear();
-  const body = await p.$('body');
-  if (!body) return { text: '', refs: [] };
-  const tree = snapshotFromElement(body);
+  const body = p.locator('body').first();
+  if ((await body.count()) === 0) return { kind: 'snapshot', text: '', refs: [] };
+  const tree = await snapshotFromElement(body);
   const text = await p.evaluate(() => document.body.innerText);
   const flat = [];
   const flatten = (node) => {
@@ -65,7 +69,7 @@ async function snapshot() {
     node.children.forEach(flatten);
   };
   flatten(tree);
-  return { text, refs: flat };
+  return { kind: 'snapshot', text, refs: flat };
 }
 
 async function click(request) {

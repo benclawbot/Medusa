@@ -710,6 +710,7 @@ mod tests {
         let worktrees = directory.path().join("worktrees");
         fs::create_dir(&repo).expect("repo");
         git(&repo, &["init", "-b", "main"]);
+        git(&repo, &["config", "core.autocrlf", "false"]);
         git(&repo, &["config", "user.name", "Medusa Test"]);
         git(&repo, &["config", "user.email", "medusa@example.invalid"]);
         fs::write(repo.join("base.txt"), "base\n").expect("base");

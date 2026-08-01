@@ -147,6 +147,13 @@ mod tests {
     fn fixture_bug_fix_survives_restart_with_exact_evidence() {
         let directory = tempfile::tempdir().expect("tempdir");
         fs::write(directory.path().join("value.txt"), "41\n").expect("buggy fixture");
+        #[cfg(windows)]
+        fs::write(
+            directory.path().join("verify.ps1"),
+            "$ErrorActionPreference='Stop'\nif ((Get-Content -Raw value.txt).Trim() -ne '42') { exit 1 }\nWrite-Output 'verified-value-42'\n",
+        )
+        .expect("verification script");
+        #[cfg(not(windows))]
         fs::write(
             directory.path().join("verify.sh"),
             "#!/bin/sh\nset -eu\ntest \"$(cat value.txt)\" = \"42\"\necho verified-value-42\n",
@@ -630,10 +637,7 @@ mod tests {
         assert!(validate_shell_command("cargo", &["build".into()]).is_ok());
         assert!(validate_shell_command("cargo", &["fmt".into(), "--check".into()]).is_ok());
         assert!(validate_shell_command("cargo", &["test".into()]).is_ok());
-        #[cfg(target_os = "linux")]
         assert!(validate_shell_command("cargo", &["run".into()]).is_ok());
-        #[cfg(not(target_os = "linux"))]
-        assert!(validate_shell_command("cargo", &["run".into()]).is_err());
         assert!(validate_shell_command("rm", &["-rf".into(), "/".into()]).is_err());
     }
 
@@ -745,7 +749,7 @@ mod tests {
         assert!(write.is_err());
     }
 
-    #[cfg(not(target_os = "linux"))]
+    #[cfg(target_os = "macos")]
     #[test]
     fn shell_tool_runs_in_the_repository_without_linux_bubblewrap() {
         let directory = tempfile::tempdir().expect("temporary repository");
@@ -756,6 +760,26 @@ mod tests {
         )
         .expect("run allowed local command");
         assert!(output.contains("cargo"));
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn shell_tool_uses_windows_containment_or_fails_closed_when_unavailable() {
+        let directory = tempfile::tempdir().expect("temporary repository");
+        match execute_tool(
+            directory.path(),
+            "shell_run",
+            &json!({"program": "cargo", "args": ["--version"]}),
+        ) {
+            Ok(output) => assert!(output.contains("cargo")),
+            Err(error) => {
+                assert_eq!(error.code, medusa_core::ErrorCode::SandboxUnavailable);
+                assert_eq!(
+                    error.context.get("sandbox_backend"),
+                    Some(&serde_json::Value::String("windows_base_container".into()))
+                );
+            }
+        }
     }
 
     #[test]

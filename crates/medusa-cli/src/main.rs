@@ -773,8 +773,50 @@ fn shell(repo: &Path, program: &str, args: &[String]) -> MedusaResult<()> {
 }
 
 fn checkpoint(repo: &Path, message: &str) -> MedusaResult<()> {
+    ensure_git_root(repo)?;
     run_git(repo, &["add", "-A"])?;
     run_git(repo, &["commit", "-m", message])
+}
+
+fn ensure_git_root(repo: &Path) -> MedusaResult<()> {
+    let expected = repo.canonicalize().map_err(|error| {
+        MedusaError::new(
+            ErrorCode::ToolExecutionFailed,
+            ErrorCategory::Execution,
+            format!("git add -A failed to resolve repository path {}: {error}", repo.display()),
+        )
+    })?;
+    let output = Command::new("git")
+        .args(["rev-parse", "--show-toplevel"])
+        .current_dir(repo)
+        .output()?;
+    if !output.status.success() {
+        return Err(MedusaError::new(
+            ErrorCode::ToolExecutionFailed,
+            ErrorCategory::Execution,
+            format!("git add -A failed with {}", output.status),
+        ));
+    }
+    let discovered = String::from_utf8_lossy(&output.stdout);
+    let discovered = Path::new(discovered.trim()).canonicalize().map_err(|error| {
+        MedusaError::new(
+            ErrorCode::ToolExecutionFailed,
+            ErrorCategory::Execution,
+            format!("git add -A failed to resolve discovered repository root: {error}"),
+        )
+    })?;
+    if discovered != expected {
+        return Err(MedusaError::new(
+            ErrorCode::ToolExecutionFailed,
+            ErrorCategory::Execution,
+            format!(
+                "git add -A failed: repository root {} does not match requested path {}",
+                discovered.display(),
+                expected.display()
+            ),
+        ));
+    }
+    Ok(())
 }
 
 fn run_git(repo: &Path, args: &[&str]) -> MedusaResult<()> {
@@ -810,6 +852,98 @@ mod tests {
     #[test]
     fn clap_definition_is_valid() {
         Cli::command().debug_assert();
+    }
+
+    #[test]
+    fn repository_path_preserves_existing_and_missing_paths() {
+        let directory = tempfile::tempdir().expect("tempdir");
+        let existing = directory.path().join("nested");
+        std::fs::create_dir(&existing).expect("nested directory");
+        assert_eq!(repository_path(&existing), existing);
+
+        let missing = directory.path().join("does-not-exist");
+        assert_eq!(repository_path(&missing), missing);
+    }
+
+    #[test]
+    fn executable_and_writable_directory_checks_cover_path_edges() {
+        let directory = tempfile::tempdir().expect("tempdir");
+        let executable = directory.path().join("fixture.exe");
+        std::fs::write(&executable, b"fixture").expect("fixture");
+        assert!(executable_available(&executable));
+        assert!(!executable_available(&directory.path().join("missing.exe")));
+        assert!(executable_available(Path::new("git")));
+        assert!(!executable_available(Path::new("medusa-command-that-does-not-exist")));
+
+        assert!(writable_directory(&directory.path().join("writable")));
+        let file_path = directory.path().join("not-a-directory");
+        std::fs::write(&file_path, b"file").expect("file");
+        assert!(!writable_directory(&file_path));
+    }
+
+    fn init_test_repository(path: &Path) {
+        let status = Command::new("git")
+            .args(["init", "--quiet"])
+            .current_dir(path)
+            .status()
+            .expect("git init");
+        assert!(status.success());
+        for (key, value) in [("user.email", "medusa-tests@example.invalid"), ("user.name", "Medusa Tests")] {
+            let status = Command::new("git")
+                .args(["config", key, value])
+                .current_dir(path)
+                .status()
+                .expect("git config");
+            assert!(status.success());
+        }
+    }
+
+    #[test]
+    fn git_root_validation_accepts_exact_root_and_rejects_enclosing_root() {
+        let repository = tempfile::tempdir().expect("repository");
+        init_test_repository(repository.path());
+        ensure_git_root(repository.path()).expect("exact git root");
+
+        let child = repository.path().join("child");
+        std::fs::create_dir(&child).expect("child");
+        let error = ensure_git_root(&child).expect_err("nested path must not be treated as root");
+        assert!(error.to_string().contains("does not match requested path"));
+    }
+
+    #[test]
+    fn git_root_validation_reports_non_git_and_missing_paths() {
+        let directory = tempfile::tempdir().expect("directory");
+        let error = ensure_git_root(directory.path()).expect_err("non-git path");
+        assert_eq!(error.code, ErrorCode::ToolExecutionFailed);
+        assert!(error.to_string().contains("git add -A failed"));
+
+        let missing = directory.path().join("missing");
+        let error = ensure_git_root(&missing).expect_err("missing path");
+        assert!(error.to_string().contains("failed to resolve repository path"));
+    }
+
+    #[test]
+    fn checkpoint_commits_only_after_root_validation() {
+        let repository = tempfile::tempdir().expect("repository");
+        init_test_repository(repository.path());
+        std::fs::write(repository.path().join("value.txt"), b"checkpoint").expect("value");
+
+        checkpoint(repository.path(), "test checkpoint").expect("checkpoint");
+        let output = Command::new("git")
+            .args(["log", "-1", "--pretty=%s"])
+            .current_dir(repository.path())
+            .output()
+            .expect("git log");
+        assert!(output.status.success());
+        assert_eq!(String::from_utf8_lossy(&output.stdout).trim(), "test checkpoint");
+    }
+
+    #[test]
+    fn run_git_reports_nonzero_status() {
+        let directory = tempfile::tempdir().expect("directory");
+        let error = run_git(directory.path(), &["status", "--definitely-invalid"])
+            .expect_err("invalid git argument");
+        assert!(error.to_string().contains("git status --definitely-invalid failed"));
     }
 
     #[test]

@@ -13,7 +13,10 @@ use serde_json::Value;
 
 use crate::{
     redaction::{redact, redact_value},
-    support::{file_digest, internal, invalid, wait_with_timeout},
+    support::{
+        file_digest, internal, invalid, subprocess_containment_available,
+        subprocess_containment_error, wait_with_timeout,
+    },
 };
 
 /// Pinned MCP server registry entry.
@@ -58,6 +61,9 @@ pub fn call_mcp_stdio(
     timeout: Duration,
 ) -> MedusaResult<McpResponse> {
     validate_mcp_entry(entry, executable)?;
+    if !subprocess_containment_available() {
+        return Err(subprocess_containment_error("MCP stdio"));
+    }
     fs::create_dir_all(sandbox_directory)?;
     let mut command = Command::new(executable);
     command

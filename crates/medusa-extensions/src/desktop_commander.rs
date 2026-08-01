@@ -12,7 +12,11 @@ use std::{
 use medusa_core::{ErrorCategory, ErrorCode, MedusaError, MedusaResult};
 use serde_json::{Value, json};
 
-use crate::{mcp::validate_mcp_output, redaction::redact_value};
+use crate::{
+    mcp::validate_mcp_output,
+    redaction::redact_value,
+    support::{subprocess_containment_available, subprocess_containment_error},
+};
 
 const PINNED_PACKAGE: &str = "@wonderwhy-er/desktop-commander@0.2.46";
 const DEFAULT_READ_TOOLS: &[&str] = &[
@@ -142,7 +146,7 @@ impl DesktopCommanderSettings {
 
     #[must_use]
     pub fn enabled(&self) -> bool {
-        self.enabled && self.configuration_error.is_none()
+        self.enabled && self.configuration_error.is_none() && subprocess_containment_available()
     }
 
     #[must_use]
@@ -208,12 +212,15 @@ pub struct DesktopCommanderClient {
 
 impl DesktopCommanderClient {
     pub fn connect(repo: &Path, settings: DesktopCommanderSettings) -> MedusaResult<Self> {
-        if !settings.enabled() {
+        if !settings.requested() || settings.configuration_error().is_some() {
             return Err(invalid(
                 settings
                     .configuration_error()
                     .unwrap_or("Desktop Commander MCP is not enabled"),
             ));
+        }
+        if !subprocess_containment_available() {
+            return Err(subprocess_containment_error("Desktop Commander"));
         }
         let repo = repo.canonicalize()?;
         let state = repo.join(".medusa/extensions/desktop-commander");

@@ -105,6 +105,10 @@ impl TelegramMiniAppHttpServer {
         while !cancelled.load(Ordering::Acquire) {
             match self.listener.accept() {
                 Ok((mut stream, peer)) => {
+                    // BSD-family kernels can propagate O_NONBLOCK from the listener to the
+                    // accepted socket. Request handling is deliberately bounded by timeouts, so
+                    // normalize the connection to blocking mode before reading headers or bodies.
+                    stream.set_nonblocking(false)?;
                     if !peer.ip().is_loopback() {
                         write_response(&mut stream, 403, "text/plain", b"forbidden")?;
                         continue;
