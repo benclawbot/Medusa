@@ -8,8 +8,8 @@ use std::{
 };
 
 use super::types::{
-    TelegramBotParseMode, TelegramEditMessageOutcome, TelegramEditMessageText,
-    TelegramSendMessage, TelegramTransportUpdate, TelegramUpdate, TelegramUpdateCursor,
+    TelegramBotParseMode, TelegramEditMessageOutcome, TelegramEditMessageText, TelegramSendMessage,
+    TelegramTransportUpdate, TelegramUpdate, TelegramUpdateCursor,
 };
 use super::{
     TelegramBotApiClient, TelegramBotApiError, TelegramBotToken, TelegramChatAction,
@@ -169,15 +169,24 @@ fn bot_api_client_covers_success_retry_rejection_and_file_bounds() {
 
     let me = client.get_me().expect("getMe");
     assert_eq!(me.username.as_deref(), Some("medusa_bot"));
-    assert!(client.get_updates(Some(4), 1, 10).expect("getUpdates").is_empty());
+    assert!(
+        client
+            .get_updates(Some(4), 1, 10)
+            .expect("getUpdates")
+            .is_empty()
+    );
     let file = client.get_file("file-1").expect("getFile");
     assert_eq!(file.file_path.as_deref(), Some("voice/file.ogg"));
-    assert!(client
-        .send_chat_action(42, Some(3), TelegramChatAction::Typing)
-        .expect("send chat action"));
-    assert!(client
-        .set_message_reaction(42, 9, Some(TelegramReaction::Success))
-        .expect("set reaction"));
+    assert!(
+        client
+            .send_chat_action(42, Some(3), TelegramChatAction::Typing)
+            .expect("send chat action")
+    );
+    assert!(
+        client
+            .set_message_reaction(42, 9, Some(TelegramReaction::Success))
+            .expect("set reaction")
+    );
 
     let sent = client
         .send_message(&TelegramSendMessage {
@@ -205,9 +214,11 @@ fn bot_api_client_covers_success_retry_rejection_and_file_bounds() {
         TelegramEditMessageOutcome::Unchanged
     );
     assert!(client.delete_message(42, 9).expect("delete message"));
-    assert!(client
-        .answer_callback_query("callback-1", Some("done"))
-        .expect("answer callback"));
+    assert!(
+        client
+            .answer_callback_query("callback-1", Some("done"))
+            .expect("answer callback")
+    );
 
     assert_eq!(
         client
@@ -256,11 +267,13 @@ fn bot_api_client_covers_success_retry_rejection_and_file_bounds() {
     assert!(client.get_updates(None, 1, 0).is_err());
     assert!(client.download_file("../secret", 10).is_err());
     assert!(client.download_file("voice/file.ogg", 0).is_err());
-    assert!(TelegramBotApiClient::with_api_base(
-        TelegramBotToken::new(TOKEN).expect("valid token"),
-        "http://example.com"
-    )
-    .is_err());
+    assert!(
+        TelegramBotApiClient::with_api_base(
+            TelegramBotToken::new(TOKEN).expect("valid token"),
+            "http://example.com"
+        )
+        .is_err()
+    );
 
     server_thread.join().expect("mock server thread");
     let requests = requests.lock().expect("captured requests");
@@ -284,11 +297,7 @@ impl MockResponse {
         Self::bytes(status, &[("Content-Type", "application/json")], body)
     }
 
-    fn bytes(
-        status: u16,
-        headers: &[(&'static str, &'static str)],
-        body: &[u8],
-    ) -> Self {
+    fn bytes(status: u16, headers: &[(&'static str, &'static str)], body: &[u8]) -> Self {
         Self {
             status,
             headers: headers.to_vec(),
