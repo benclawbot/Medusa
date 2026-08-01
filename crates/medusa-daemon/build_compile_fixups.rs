@@ -9,14 +9,17 @@ pub fn run() {
 fn patch_runtime() {
     let path = Path::new("src/telegram/runtime.rs");
     let mut source = read(path);
-    replace_if_present(
-        &mut source,
-        "        TelegramBotApiClient, TelegramBotApiError, TelegramDocument,\n",
-        "        TelegramBotApiClient, TelegramBotApiError, TelegramDocument, TelegramUpdate,\n",
-    );
-    if !source.contains("fn queue_text_fragment(") {
+    if !source.contains("use super::bot_api::TelegramUpdate;") {
+        replace_required(
+            &mut source,
+            "use time::OffsetDateTime;\n",
+            "use time::OffsetDateTime;\n\nuse super::bot_api::TelegramUpdate;\n",
+        );
+    }
+    if !source.contains("// issue-568-text-fragment-methods") {
         let marker = "    fn stage_file(\n";
-        let methods = r#"    fn queue_text_fragment(
+        let methods = r#"    // issue-568-text-fragment-methods
+    fn queue_text_fragment(
         &mut self,
         update_id: i64,
         message: TelegramBotMessage,
@@ -91,24 +94,22 @@ fn patch_runtime() {
 fn patch_service() {
     let path = Path::new("src/telegram/service.rs");
     let mut source = read(path);
-    replace_if_present(
-        &mut source,
-        "        TelegramBotApiClient, TelegramUpdateCursor,",
-        "        TelegramBotApiClient, TelegramOutboundFile, TelegramUpdateCursor,",
-    );
-    if !source.contains("InvalidCommand(String)") {
-        replace_if_present(
+    if !source.contains("use super::bot_api::TelegramOutboundFile;") {
+        replace_required(
             &mut source,
-            "    #[error(\"Telegram binding is invalid\")]\n    InvalidBinding,\n",
-            "    #[error(\"Telegram binding is invalid\")]\n    InvalidBinding,\n    #[error(\"Telegram frontend command is invalid: {0}\")]\n    InvalidCommand(String),\n",
+            "use thiserror::Error;\n",
+            "use thiserror::Error;\n\nuse super::bot_api::TelegramOutboundFile;\n",
         );
     }
-    if !source.contains("MiniApp(#[from] super::TelegramMiniAppError)") {
-        replace_if_present(
-            &mut source,
-            "    #[error(transparent)]\n    Voice(#[from] super::TelegramVoiceError),\n",
-            "    #[error(transparent)]\n    Voice(#[from] super::TelegramVoiceError),\n    #[error(transparent)]\n    MiniApp(#[from] super::TelegramMiniAppError),\n",
-        );
+    if !source.contains("// issue-568-service-error-fixups") {
+        let marker = "    #[error(transparent)]\n    Gateway(#[from] TelegramGatewayError),\n";
+        let variants = r#"    // issue-568-service-error-fixups
+    #[error("Telegram frontend command is invalid: {0}")]
+    InvalidCommand(String),
+    #[error(transparent)]
+    MiniApp(#[from] super::TelegramMiniAppError),
+"#;
+        replace_required(&mut source, marker, &format!("{variants}{marker}"));
     }
     write(path, source);
 }
@@ -116,24 +117,22 @@ fn patch_service() {
 fn patch_mini_app_http() {
     let path = Path::new("src/telegram/mini_app_http.rs");
     let mut source = read(path);
-    replace_if_present(
-        &mut source,
-        "    TelegramIdentity, TelegramMiniAppBridge, TelegramMiniAppError, TelegramMiniAppRealtimeSession,\n",
-        "    TelegramIdentity, TelegramMiniAppBridge, TelegramMiniAppError,\n",
-    );
-    replace_if_present(
-        &mut source,
-        "    let path = target.split('?').next().ok_or(RequestRejection::Malformed)?;\n",
-        "    let path = target\n        .split('?')\n        .next()\n        .ok_or(RequestRejection::Malformed)?\n        .to_owned();\n",
-    );
-    replace_if_present(&mut source, "        path: path.to_owned(),\n", "        path,\n");
-    write(path, source);
-}
-
-fn replace_if_present(source: &mut String, old: &str, new: &str) {
-    if source.contains(old) {
-        *source = source.replacen(old, new, 1);
+    if source.contains("TelegramMiniAppRealtimeSession") {
+        replace_required(
+            &mut source,
+            "    TelegramIdentity, TelegramMiniAppBridge, TelegramMiniAppError, TelegramMiniAppRealtimeSession,\n",
+            "    TelegramIdentity, TelegramMiniAppBridge, TelegramMiniAppError,\n",
+        );
     }
+    if !source.contains("// issue-568-owned-request-path") {
+        replace_required(
+            &mut source,
+            "    let path = target.split('?').next().ok_or(RequestRejection::Malformed)?;\n",
+            "    // issue-568-owned-request-path\n    let path = target\n        .split('?')\n        .next()\n        .ok_or(RequestRejection::Malformed)?\n        .to_owned();\n",
+        );
+        replace_required(&mut source, "        path: path.to_owned(),\n", "        path,\n");
+    }
+    write(path, source);
 }
 
 fn replace_required(source: &mut String, old: &str, new: &str) {
