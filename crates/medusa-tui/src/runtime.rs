@@ -1,4 +1,12 @@
-use std::path::PathBuf;
+use std::{
+    path::PathBuf,
+    sync::{
+        Arc, Mutex, TryLockError,
+        atomic::{AtomicBool, Ordering},
+        mpsc::{self, Receiver, Sender, TryRecvError},
+    },
+    thread,
+};
 
 use crate::app::{
     QuestionOption, QuestionPrompt, TranscriptPlan, TranscriptPlanStep, TranscriptPlanStepState,
@@ -63,49 +71,168 @@ pub struct RuntimeQuestion {
 }
 
 pub struct RuntimeController {
-    inner: medusa_runtime::RuntimeController,
+    inner: Arc<Mutex<medusa_runtime::RuntimeController>>,
+    deferred_events: Receiver<RuntimeEvent>,
+    deferred_event_sender: Sender<RuntimeEvent>,
+    submission_in_flight: Arc<AtomicBool>,
 }
 
 impl RuntimeController {
     pub fn start(repo: PathBuf) -> Self {
+        Self::from_inner(medusa_runtime::RuntimeController::start(repo))
+    }
+
+    pub fn start_resumed(repo: PathBuf, session_id: &str) -> Result<Self, RuntimeError> {
+        medusa_runtime::RuntimeController::start_resumed(repo, session_id).map(Self::from_inner)
+    }
+
+    pub fn start_continue_latest(repo: PathBuf) -> Result<Self, RuntimeError> {
+        medusa_runtime::RuntimeController::start_continue_latest(repo).map(Self::from_inner)
+    }
+
+    fn from_inner(inner: medusa_runtime::RuntimeController) -> Self {
+        let (deferred_event_sender, deferred_events) = mpsc::channel();
         Self {
-            inner: medusa_runtime::RuntimeController::start(repo),
+            inner: Arc::new(Mutex::new(inner)),
+            deferred_events,
+            deferred_event_sender,
+            submission_in_flight: Arc::new(AtomicBool::new(false)),
         }
     }
-    pub fn start_resumed(repo: PathBuf, session_id: &str) -> Result<Self, RuntimeError> {
-        medusa_runtime::RuntimeController::start_resumed(repo, session_id)
-            .map(|inner| Self { inner })
-    }
-    pub fn start_continue_latest(repo: PathBuf) -> Result<Self, RuntimeError> {
-        medusa_runtime::RuntimeController::start_continue_latest(repo).map(|inner| Self { inner })
-    }
+
     pub fn submit(&self, draft: PromptDraft) -> Result<SubmitDisposition, RuntimeError> {
-        self.inner.submit(draft)
+        let inner = Arc::clone(&self.inner);
+        dispatch_submission(
+            Arc::clone(&self.submission_in_flight),
+            self.deferred_event_sender.clone(),
+            move || lock(&inner).submit(draft),
+        )
     }
+
     pub fn run_command(&self, command: SlashCommand) -> Result<(), RuntimeError> {
-        self.inner.run_command(command)
+        if self.submission_in_flight.load(Ordering::Acquire) {
+            return Err(RuntimeError::Busy);
+        }
+        try_lock(&self.inner)?.run_command(command)
     }
+
     pub fn configure_model(&self, configuration: ModelConfiguration) -> Result<(), RuntimeError> {
-        self.inner.configure_model(configuration)
+        if self.submission_in_flight.load(Ordering::Acquire) {
+            return Err(RuntimeError::Busy);
+        }
+        try_lock(&self.inner)?.configure_model(configuration)
     }
+
     pub fn execute_recovery(
         &self,
         view: RecoveryView,
         request: RecoveryActionRequest,
         preflight: RecoveryPreflightEvidence,
     ) -> Result<(), RuntimeError> {
-        self.inner.execute_recovery(view, request, preflight)
+        if self.submission_in_flight.load(Ordering::Acquire) {
+            return Err(RuntimeError::Busy);
+        }
+        try_lock(&self.inner)?.execute_recovery(view, request, preflight)
     }
+
     pub fn cancel(&self) -> bool {
-        self.inner.cancel()
+        match self.inner.try_lock() {
+            Ok(inner) => inner.cancel(),
+            Err(TryLockError::Poisoned(poisoned)) => poisoned.into_inner().cancel(),
+            Err(TryLockError::WouldBlock) => {
+                let inner = Arc::clone(&self.inner);
+                let _ = thread::Builder::new()
+                    .name("medusa-tui-deferred-cancel".to_owned())
+                    .spawn(move || {
+                        lock(&inner).cancel();
+                    });
+                true
+            }
+        }
     }
+
     #[must_use]
     pub fn is_busy(&self) -> bool {
-        self.inner.is_busy()
+        if self.submission_in_flight.load(Ordering::Acquire) {
+            return true;
+        }
+        match self.inner.try_lock() {
+            Ok(inner) => inner.is_busy(),
+            Err(TryLockError::Poisoned(poisoned)) => poisoned.into_inner().is_busy(),
+            Err(TryLockError::WouldBlock) => true,
+        }
     }
+
     pub fn try_event(&self) -> Result<Option<RuntimeEvent>, RuntimeError> {
-        self.inner.try_event().map(|event| event.map(map_event))
+        match self.deferred_events.try_recv() {
+            Ok(event) => return Ok(Some(event)),
+            Err(TryRecvError::Disconnected | TryRecvError::Empty) => {}
+        }
+        match self.inner.try_lock() {
+            Ok(inner) => inner.try_event().map(|event| event.map(map_event)),
+            Err(TryLockError::Poisoned(poisoned)) => poisoned
+                .into_inner()
+                .try_event()
+                .map(|event| event.map(map_event)),
+            Err(TryLockError::WouldBlock) => Ok(None),
+        }
     }
+}
+
+fn dispatch_submission<F>(
+    in_flight: Arc<AtomicBool>,
+    events: Sender<RuntimeEvent>,
+    operation: F,
+) -> Result<SubmitDisposition, RuntimeError>
+where
+    F: FnOnce() -> Result<SubmitDisposition, RuntimeError> + Send + 'static,
+{
+    if in_flight.swap(true, Ordering::AcqRel) {
+        return Err(RuntimeError::Busy);
+    }
+    let worker_flag = Arc::clone(&in_flight);
+    let spawn = thread::Builder::new()
+        .name("medusa-tui-submit".to_owned())
+        .spawn(move || {
+            match operation() {
+                Ok(SubmitDisposition::Started) => {}
+                Ok(SubmitDisposition::Queued) => {
+                    let _ = events.send(RuntimeEvent::Notice {
+                        title: "Follow-up queued".to_owned(),
+                        details: vec![
+                            "The prompt will run after the active agent turn.".to_owned(),
+                        ],
+                    });
+                }
+                Err(error) => {
+                    let _ = events.send(RuntimeEvent::Failed(format!(
+                        "submission rejected: {error}"
+                    )));
+                }
+            }
+            worker_flag.store(false, Ordering::Release);
+        });
+    if spawn.is_err() {
+        in_flight.store(false, Ordering::Release);
+        return Err(RuntimeError::WorkerStopped);
+    }
+    Ok(SubmitDisposition::Started)
+}
+
+fn try_lock(
+    inner: &Arc<Mutex<medusa_runtime::RuntimeController>>,
+) -> Result<std::sync::MutexGuard<'_, medusa_runtime::RuntimeController>, RuntimeError> {
+    match inner.try_lock() {
+        Ok(inner) => Ok(inner),
+        Err(TryLockError::Poisoned(poisoned)) => Ok(poisoned.into_inner()),
+        Err(TryLockError::WouldBlock) => Err(RuntimeError::Busy),
+    }
+}
+
+fn lock<T>(mutex: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
+    mutex
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
 }
 
 fn map_event(event: medusa_runtime::RuntimeEvent) -> RuntimeEvent {
@@ -221,6 +348,16 @@ fn map_event(event: medusa_runtime::RuntimeEvent) -> RuntimeEvent {
                 format!("Apply timing: {:?}", change.apply_timing),
             ],
         },
+        medusa_runtime::RuntimeEvent::Notice { title, details }
+            if title == "Runtime capabilities" =>
+        {
+            RuntimeEvent::Activity(RuntimeActivity {
+                id: Some("runtime-capabilities".to_owned()),
+                kind: RuntimeActivityKind::Done,
+                title,
+                details,
+            })
+        }
         medusa_runtime::RuntimeEvent::Notice { title, details } => {
             RuntimeEvent::Notice { title, details }
         }
@@ -297,5 +434,55 @@ fn tool_activity_label(title: &str) -> &'static str {
         "Read"
     } else {
         "Tool"
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::time::{Duration, Instant};
+
+    #[test]
+    fn submission_dispatch_returns_before_backend_acceptance() {
+        let in_flight = Arc::new(AtomicBool::new(false));
+        let (event_tx, _event_rx) = mpsc::channel();
+        let (release_tx, release_rx) = mpsc::channel();
+        let started = Instant::now();
+
+        let disposition = dispatch_submission(Arc::clone(&in_flight), event_tx, move || {
+            release_rx.recv().expect("release backend");
+            Ok(SubmitDisposition::Started)
+        })
+        .expect("dispatch submission");
+
+        assert_eq!(disposition, SubmitDisposition::Started);
+        assert!(started.elapsed() < Duration::from_millis(100));
+        assert!(in_flight.load(Ordering::Acquire));
+        release_tx.send(()).expect("release submission");
+        for _ in 0..100 {
+            if !in_flight.load(Ordering::Acquire) {
+                return;
+            }
+            thread::sleep(Duration::from_millis(5));
+        }
+        panic!("submission worker did not complete");
+    }
+
+    #[test]
+    fn submission_error_is_forwarded_without_blocking_dispatch() {
+        let in_flight = Arc::new(AtomicBool::new(false));
+        let (event_tx, event_rx) = mpsc::channel();
+        dispatch_submission(Arc::clone(&in_flight), event_tx, || {
+            Err(RuntimeError::WorkerStopped)
+        })
+        .expect("dispatch submission");
+
+        let event = event_rx
+            .recv_timeout(Duration::from_secs(1))
+            .expect("forwarded failure");
+        assert!(matches!(
+            event,
+            RuntimeEvent::Failed(error) if error.contains("submission rejected")
+        ));
     }
 }
