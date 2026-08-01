@@ -1,17 +1,25 @@
 import {
   Activity,
+  BarChart3,
   Bot,
+  Brain,
   CheckCircle2,
   ChevronRight,
   Circle,
   FilePlus2,
   FolderOpen,
   Gauge,
+  GitCompareArrows,
+  GraduationCap,
+  History,
   ImagePlus,
-  Maximize2,
+  Info,
   ListChecks,
+  Maximize2,
   MessageSquare,
   OctagonX,
+  PanelLeftClose,
+  PanelLeftOpen,
   Play,
   Plus,
   Send,
@@ -212,6 +220,8 @@ export function App() {
   const [sharedConfiguration, setSharedConfiguration] = useState<SharedConfiguration>();
   const [apiKey, setApiKey] = useState("");
   const [activePanel, setActivePanel] = useState<"chat" | "plan" | "settings">("chat");
+  const [railCollapsed, setRailCollapsed] = useState(false);
+  const [detailsOpen, setDetailsOpen] = useState(false);
   const pollBusy = useRef(false);
   const transcriptRef = useRef<HTMLDivElement>(null);
   const composerRef = useRef<HTMLTextAreaElement>(null);
@@ -628,57 +638,107 @@ export function App() {
   const credentiallessProvider = ["openai-oauth", "omniroute", "local"].includes(provider);
   const repoName = useMemo(() => basename(repo) || "General chat", [repo]);
   const totalTokens = usage.input + usage.output;
+  const openDesktopTool = (selector: string) => {
+    document.querySelector<HTMLButtonElement>(selector)?.click();
+  };
 
   return (
     <>
-    <main className="app-shell medusa-shell">
-      <aside className="sidebar">
+    <main className={`app-shell medusa-shell${railCollapsed ? " rail-collapsed" : ""}`}>
+      <aside className="sidebar" aria-label="Session rail">
         <div className="window-dots" aria-hidden="true">
           <span className="dot red" /><span className="dot yellow" /><span className="dot green" />
         </div>
         <div className="brand-row">
           <span className="brand-mark"><Bot size={17} /></span>
-          <div><h1>Medusa</h1><small>Desktop</small></div>
-          <span className="version">v1.0</span>
+          <div className="rail-label"><h1>Medusa</h1><small>Desktop</small></div>
+          <span className="version rail-label">v1.0</span>
         </div>
-        <button className="new-session" onClick={newSession} disabled={!runtimeId} aria-keyshortcuts={macPlatform ? "Meta+N" : "Control+N"}>
-          <span><Plus size={15} /> New session</span><kbd>{newSessionShortcut}</kbd>
+        <button className="new-session" onClick={newSession} disabled={!runtimeId} aria-keyshortcuts={macPlatform ? "Meta+N" : "Control+N"} title="New session">
+          <span><Plus size={16} /><span className="rail-label">New session</span></span><kbd className="rail-label">{newSessionShortcut}</kbd>
         </button>
         <nav className="nav-list" aria-label="Workspace views">
-          <button className={`nav-item ${activePanel === "chat" ? "active" : ""}`} onClick={() => setActivePanel("chat")}>
-            <MessageSquare size={16} /> Chat
+          <button className={`nav-item ${activePanel === "chat" ? "active" : ""}`} onClick={() => setActivePanel("chat")} title="Chat">
+            <MessageSquare size={17} /><span className="rail-label">Chat</span>
           </button>
-          <button className={`nav-item ${activePanel === "plan" ? "active" : ""}`} onClick={() => setActivePanel("plan")}>
-            <ListChecks size={16} /> Plan
+          <button className={`nav-item ${activePanel === "plan" ? "active" : ""}`} onClick={() => setActivePanel("plan")} title="Plan">
+            <ListChecks size={17} /><span className="rail-label">Plan</span>
           </button>
-          <button className={`nav-item ${activePanel === "settings" ? "active" : ""}`} onClick={() => setActivePanel("settings")}>
-            <Settings size={16} /> Settings
+          <button className={`nav-item ${activePanel === "settings" ? "active" : ""}`} onClick={() => setActivePanel("settings")} title="Settings">
+            <Settings size={17} /><span className="rail-label">Settings</span>
           </button>
         </nav>
         <section className="project-card">
-          <p className="section-label">Context</p>
-          <button className="project-picker" onClick={openProject}>
-            <FolderOpen size={16} />
-            <span><strong>{repoName}</strong><small>{repo || "No project attached"}</small></span>
-            <ChevronRight size={15} />
+          <p className="section-label rail-label">Context</p>
+          <button className="project-picker" onClick={openProject} title={`Open project: ${repoName}`}>
+            <FolderOpen size={17} />
+            <span className="rail-label"><strong>{repoName}</strong><small>{repo || "No project attached"}</small></span>
+            <ChevronRight className="rail-label" size={15} />
           </button>
-          {!!repo && <button className="projectless-action" onClick={openGeneralChat}>Switch to general chat</button>}
+          {!!repo && <button className="projectless-action rail-label" onClick={openGeneralChat}>Switch to general chat</button>}
+        </section>
+        <section className="rail-tools">
+          <p className="section-label rail-label">Tools</p>
+          <button className="nav-item" onClick={() => openDesktopTool(".session-dock-trigger")} title="Sessions"><History size={17} /><span className="rail-label">Sessions</span></button>
+          <button className="nav-item" onClick={() => openDesktopTool(".diff-dock-trigger")} title="Review changes"><GitCompareArrows size={17} /><span className="rail-label">Review changes</span></button>
+          <button className="nav-item" onClick={() => openDesktopTool(".memory-dock-trigger")} title="Memory"><Brain size={17} /><span className="rail-label">Memory</span></button>
+          <button className="nav-item" onClick={() => openDesktopTool(".learning-launcher")} title="Learning"><GraduationCap size={17} /><span className="rail-label">Learning</span></button>
+          <button className="nav-item" onClick={() => openDesktopTool(".engineering-menu-button")} title="Engineering"><BarChart3 size={17} /><span className="rail-label">Engineering</span></button>
         </section>
         <div className="sidebar-spacer" />
-        <div className="security-note"><ShieldCheck size={15} /> Medusa policy remains authoritative</div>
+        <div className="security-note"><ShieldCheck size={15} /><span className="rail-label">Medusa policy remains authoritative</span></div>
       </aside>
 
       <section className="workspace medusa-workspace">
         <header className="topbar">
-          <div>
-            <p className="eyebrow">{activePanel === "chat" ? "Interactive session" : activePanel}</p>
-            <h2>{repoName}</h2>
+          <div className="topbar-title">
+            <button className="rail-toggle" onClick={() => setRailCollapsed((current) => !current)} aria-label={railCollapsed ? "Expand session rail" : "Collapse session rail"} aria-expanded={!railCollapsed}>
+              {railCollapsed ? <PanelLeftOpen size={18} /> : <PanelLeftClose size={18} />}
+            </button>
+            <div>
+              <p className="eyebrow">{activePanel === "chat" ? "Interactive session" : activePanel}</p>
+              <h2>{repoName}</h2>
+            </div>
           </div>
-          <div className="runtime-state">
-            <span className={`status-dot ${busy ? "busy" : runtimeId ? "ready" : "offline"}`} />
-            {busy ? `Working · turn ${turn}` : runtimeId ? "Ready" : "Starting"}
+          <div className="topbar-actions">
+            <button className="details-button" onClick={() => setDetailsOpen((current) => !current)} aria-expanded={detailsOpen} aria-controls="session-details-panel">
+              <Info size={16} /> Session details
+            </button>
+            <div className="runtime-state" role="status">
+              <span className={`status-dot ${busy ? "busy" : runtimeId ? "ready" : "offline"}`} />
+              {busy ? `Working · turn ${turn}` : runtimeId ? "Ready" : "Starting"}
+            </div>
           </div>
         </header>
+
+        {detailsOpen && (
+          <aside id="session-details-panel" className="session-details-panel" role="complementary" aria-label="Session details">
+            <div className="session-details-heading"><div><p className="eyebrow">Progressive disclosure</p><h2>Session details</h2></div><button className="icon-button" onClick={() => setDetailsOpen(false)} aria-label="Close session details"><X size={17} /></button></div>
+            <section className="details-section">
+              <div className="panel-heading"><span><Gauge size={15} /> Runtime</span></div>
+              <dl className="metric-grid">
+                <div><dt>Model</dt><dd>{settings.model}</dd></div>
+                <div><dt>Effort</dt><dd>{settings.effort.replace("effort:", "")}</dd></div>
+                <div><dt>Mode</dt><dd>{settings.planMode ? "Plan" : "Full"}</dd></div>
+                <div><dt>Credential</dt><dd>{settings.credentialConfigured ? "Ready" : "Missing"}</dd></div>
+              </dl>
+            </section>
+            <section className="details-section">
+              <div className="panel-heading"><span><Activity size={15} /> Usage</span></div>
+              <dl className="metric-grid tokens">
+                <div><dt>Input</dt><dd>{usage.input.toLocaleString()}</dd></div>
+                <div><dt>Output</dt><dd>{usage.output.toLocaleString()}</dd></div>
+                <div><dt>Cached</dt><dd>{usage.cached.toLocaleString()}</dd></div>
+                <div><dt>Total</dt><dd>{totalTokens.toLocaleString()}</dd></div>
+              </dl>
+              <p className="metric-footnote">Model time: {(usage.elapsed / 1000).toFixed(1)}s</p>
+            </section>
+            <section className="details-section">
+              <div className="panel-heading"><span><ListChecks size={15} /> Plan</span><small>{plan.filter((step) => step.status === "completed").length}/{plan.length}</small></div>
+              <div className="mini-plan">{plan.length ? plan.map((step) => <div key={step.title} className={step.status}>{planIcon(step.status)}<span>{step.title}</span></div>) : <p>No active plan</p>}</div>
+            </section>
+          </aside>
+        )}
 
         {activePanel === "chat" && (
           <>
@@ -715,6 +775,17 @@ export function App() {
                   )}
                 </article>
               ))}
+              {!!activities.length && (
+                <section className="activity-summary" aria-label="Tool activity">
+                  <div className="activity-summary-heading"><span><Activity size={15} /> Activity</span><small>{activities.length} update{activities.length === 1 ? "" : "s"}</small></div>
+                  {activities.slice(-4).map((item, index) => (
+                    <details className={`activity-row ${item.kind}`} key={item.id ?? `${item.title}-${index}`}>
+                      <summary><span>{item.kind === "error" ? <OctagonX size={14} /> : item.kind === "done" ? <CheckCircle2 size={14} /> : <Activity size={14} />}</span><strong>{item.title}</strong><small>{item.kind === "done" ? "Done" : item.kind === "error" ? "Error" : "Working"}</small></summary>
+                      {!!item.details.length && <div className="activity-details">{item.details.map((detail) => <p key={detail}>{detail}</p>)}</div>}
+                    </details>
+                  ))}
+                </section>
+              )}
               <ApprovalCard
                 prompts={questions}
                 plan={plan}
@@ -728,7 +799,7 @@ export function App() {
             </div>
 
             <footer className="composer-wrap">
-              {!!error && <div className="error-banner"><OctagonX size={15} /> {error}</div>}
+              {!!error && <div className="error-banner" role="alert"><OctagonX size={15} /><span>{error}</span><button className="retry-button" onClick={() => { setError(undefined); composerRef.current?.focus(); }}>Retry</button></div>}
               {!!attachments.length && (
                 <>
                   <div className="attachment-strip" aria-label="Attached context">
@@ -750,9 +821,7 @@ export function App() {
                     ))}
                   </div>
                   {attachments.some((attachment) => attachment.kind === "image") && (
-                    <div className={`image-compatibility ${imageCompatibility.supported === false ? "unsupported" : imageCompatibility.supported ? "supported" : "unknown"}`} role="status">
-                      {imageCompatibility.text}
-                    </div>
+                    <div className={`image-compatibility ${imageCompatibility.supported === false ? "unsupported" : imageCompatibility.supported ? "supported" : "unknown"}`} role="status">{imageCompatibility.text}</div>
                   )}
                 </>
               )}
@@ -770,17 +839,8 @@ export function App() {
                 {!!slashSuggestions.length && (
                   <div className="slash-menu" role="listbox" aria-label="Slash commands">
                     {slashSuggestions.map((suggestion, index) => (
-                      <button
-                        className={`slash-row${index === slashSelection ? " active" : ""}`}
-                        key={suggestion.name}
-                        role="option"
-                        aria-selected={index === slashSelection}
-                        onMouseDown={(event) => event.preventDefault()}
-                        onClick={() => selectSlashSuggestion(suggestion)}
-                      >
-                        <span className="slash-row-label">{suggestion.usage}</span>
-                        <span className="slash-row-desc">{suggestion.description}</span>
-                        <span className="slash-row-kind">{prompt.startsWith("/skills ") ? "skill" : "command"}</span>
+                      <button className={`slash-row${index === slashSelection ? " active" : ""}`} key={suggestion.name} role="option" aria-selected={index === slashSelection} onMouseDown={(event) => event.preventDefault()} onClick={() => selectSlashSuggestion(suggestion)}>
+                        <span className="slash-row-label">{suggestion.usage}</span><span className="slash-row-desc">{suggestion.description}</span><span className="slash-row-kind">{prompt.startsWith("/skills ") ? "skill" : "command"}</span>
                       </button>
                     ))}
                   </div>
@@ -792,30 +852,10 @@ export function App() {
                   onChange={(event) => setPrompt(event.target.value)}
                   onPaste={onPaste}
                   onKeyDown={(event) => {
-                    if (slashSuggestions.length && (event.key === "ArrowDown" || event.key === "ArrowUp")) {
-                      event.preventDefault();
-                      const direction = event.key === "ArrowDown" ? 1 : -1;
-                      setSlashSelection((current) => (current + direction + slashSuggestions.length) % slashSuggestions.length);
-                      return;
-                    }
-                    if (slashSuggestions.length && event.key === "Tab" && !event.shiftKey) {
-                      event.preventDefault();
-                      selectSlashSuggestion(slashSuggestions[slashSelection]);
-                      return;
-                    }
-                    if (slashSuggestions.length && event.key === "Enter" && !event.shiftKey) {
-                      const selected = slashSuggestions[slashSelection];
-                      const exact = prompt.trim() === `/${selected.name}`;
-                      if (!exact || prompt.trim() === "/skills") {
-                        event.preventDefault();
-                        selectSlashSuggestion(selected);
-                        return;
-                      }
-                    }
-                    if (event.key === "Enter" && !event.shiftKey) {
-                      event.preventDefault();
-                      void submit();
-                    }
+                    if (slashSuggestions.length && (event.key === "ArrowDown" || event.key === "ArrowUp")) { event.preventDefault(); const direction = event.key === "ArrowDown" ? 1 : -1; setSlashSelection((current) => (current + direction + slashSuggestions.length) % slashSuggestions.length); return; }
+                    if (slashSuggestions.length && event.key === "Tab" && !event.shiftKey) { event.preventDefault(); selectSlashSuggestion(slashSuggestions[slashSelection]); return; }
+                    if (slashSuggestions.length && event.key === "Enter" && !event.shiftKey) { const selected = slashSuggestions[slashSelection]; const exact = prompt.trim() === `/${selected.name}`; if (!exact || prompt.trim() === "/skills") { event.preventDefault(); selectSlashSuggestion(selected); return; } }
+                    if (event.key === "Enter" && !event.shiftKey) { event.preventDefault(); void submit(); }
                   }}
                   placeholder={runtimeId ? busy ? "Add guidance for the next turn…" : repo ? "Describe a coding task…" : "Ask Medusa anything…" : "Starting Medusa…"}
                   rows={3}
@@ -823,13 +863,13 @@ export function App() {
                 <div className="composer-bottom">
                   <div className="composer-tools">
                     <input ref={imageInputRef} className="visually-hidden" type="file" accept="image/png,image/jpeg,image/webp,image/gif" multiple onChange={(event) => { void addImages(Array.from(event.target.files ?? [])); event.target.value = ""; }} />
-                    <button onClick={() => imageInputRef.current?.click()} disabled={!runtimeId} title="Attach images" aria-label="Attach images"><ImagePlus size={16} /></button>
-                    <button onClick={addFiles} disabled={!runtimeId || !repo} title="Attach repository files"><FilePlus2 size={16} /></button>
-                    <span>Paste, drop, or choose images · Shift+Enter for a new line</span>
+                    <button className="composer-icon-button" onClick={() => imageInputRef.current?.click()} disabled={!runtimeId} title="Add image" aria-label="Add image"><Plus size={21} /></button>
+                    <button className="composer-icon-button" onClick={addFiles} disabled={!runtimeId || !repo} title="Attach project files" aria-label="Attach project files"><FilePlus2 size={19} /></button>
+                    <span className="composer-hint">Shift+Enter for a new line</span>
                   </div>
                   <div className="composer-actions">
-                    {busy && <button className="cancel-button" onClick={cancel}><Square size={13} /> Cancel</button>}
-                    <button className="send-button" onClick={submit} disabled={!runtimeId || (!prompt.trim() && attachments.length === 0)} aria-label="Send message"><Send size={16} /></button>
+                    {busy && <button className="cancel-button" onClick={cancel} aria-label="Stop active turn"><Square size={13} /> Stop</button>}
+                    <button className="send-button" onClick={submit} disabled={!runtimeId || (!prompt.trim() && attachments.length === 0)} aria-label="Send"><Send size={18} /></button>
                   </div>
                 </div>
               </div>
@@ -840,9 +880,7 @@ export function App() {
         {activePanel === "plan" && (
           <div className="standalone-panel">
             <div className="panel-title"><ListChecks size={18} /><div><h2>Execution plan</h2><p>Live plan state from medusa-runtime</p></div></div>
-            {plan.length ? plan.map((step) => (
-              <div className={`plan-row ${step.status}`} key={step.title}>{planIcon(step.status)}<span>{step.title}</span></div>
-            )) : <p className="muted-copy">No plan has been created for this session.</p>}
+            {plan.length ? plan.map((step) => <div className={`plan-row ${step.status}`} key={step.title}>{planIcon(step.status)}<span>{step.title}</span></div>) : <p className="muted-copy">No plan has been created for this session.</p>}
             <button className="secondary-action" disabled={!runtimeId} onClick={() => void sendText("/plan", [])}>Enter plan mode</button>
           </div>
         )}
@@ -858,42 +896,6 @@ export function App() {
           </div>
         )}
       </section>
-
-      <aside className="inspector">
-        <section className="inspector-section">
-          <div className="panel-heading"><span><Gauge size={15} /> Session</span></div>
-          <dl className="metric-grid">
-            <div><dt>Model</dt><dd>{settings.model}</dd></div>
-            <div><dt>Effort</dt><dd>{settings.effort.replace("effort:", "")}</dd></div>
-            <div><dt>Mode</dt><dd>{settings.planMode ? "Plan" : "Full"}</dd></div>
-            <div><dt>Credential</dt><dd>{settings.credentialConfigured ? "Ready" : "Missing"}</dd></div>
-          </dl>
-        </section>
-        <section className="inspector-section">
-          <div className="panel-heading"><span><Activity size={15} /> Usage</span></div>
-          <dl className="metric-grid tokens">
-            <div><dt>Input</dt><dd>{usage.input.toLocaleString()}</dd></div>
-            <div><dt>Output</dt><dd>{usage.output.toLocaleString()}</dd></div>
-            <div><dt>Cached</dt><dd>{usage.cached.toLocaleString()}</dd></div>
-            <div><dt>Total</dt><dd>{totalTokens.toLocaleString()}</dd></div>
-          </dl>
-          <p className="metric-footnote">Model time: {(usage.elapsed / 1000).toFixed(1)}s</p>
-        </section>
-        <section className="inspector-section inspector-grow">
-          <div className="panel-heading"><span><ListChecks size={15} /> Plan</span><small>{plan.filter((step) => step.status === "completed").length}/{plan.length}</small></div>
-          <div className="mini-plan">
-            {plan.length ? plan.map((step) => <div key={step.title} className={step.status}>{planIcon(step.status)}<span>{step.title}</span></div>) : <p>No active plan</p>}
-          </div>
-        </section>
-        <section className="inspector-section inspector-grow">
-          <div className="panel-heading"><span><Activity size={15} /> Activity</span><small>{activities.length}</small></div>
-          <div className="activity-list">
-            {activities.length ? activities.slice(-12).reverse().map((item, index) => (
-              <div key={item.id ?? `${item.title}-${index}`} className={item.kind}><span>{item.kind === "error" ? <OctagonX size={14} /> : item.kind === "done" ? <CheckCircle2 size={14} /> : <Activity size={14} />}</span><div><strong>{item.title}</strong>{item.details.map((detail) => <small key={detail}>{detail}</small>)}</div></div>
-            )) : <p>No tool activity yet</p>}
-          </div>
-        </section>
-      </aside>
     </main>
       {previewImage && (
         <div className="image-preview-modal" role="dialog" aria-modal="true" aria-label={`Preview ${previewImage.name}`} onClick={() => setPreviewImage(undefined)}>
