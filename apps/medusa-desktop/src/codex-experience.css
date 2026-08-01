@@ -1,0 +1,543 @@
+/* Issue #615: conversation-first Codex-style desktop experience. */
+:root {
+  --medusa-font-sans: -apple-system, BlinkMacSystemFont, "Segoe UI Variable", "Segoe UI", ui-sans-serif, system-ui, sans-serif;
+  --medusa-font-mono: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+  --medusa-text-xs: 0.75rem;
+  --medusa-text-sm: 0.8125rem;
+  --medusa-text-md: 0.9375rem;
+  --medusa-text-lg: 1.0625rem;
+  --medusa-text-xl: 1.375rem;
+  --medusa-radius-xs: 8px;
+  --medusa-radius-sm: 12px;
+  --medusa-radius-md: 16px;
+  --medusa-radius-lg: 24px;
+  --medusa-radius-pill: 999px;
+  --medusa-control-height: 38px;
+  --medusa-blue: #2f7cf6;
+}
+
+html,
+body,
+button,
+input,
+textarea,
+select {
+  font-family: var(--medusa-font-sans);
+  font-size: 14px;
+  line-height: 1.45;
+  letter-spacing: -0.006em;
+}
+
+button,
+input,
+textarea,
+select {
+  border-radius: var(--medusa-radius-sm);
+}
+
+button {
+  min-height: var(--medusa-control-height);
+  font-weight: 540;
+}
+
+button:focus-visible,
+input:focus-visible,
+textarea:focus-visible,
+select:focus-visible,
+summary:focus-visible {
+  outline: 2px solid color-mix(in srgb, var(--medusa-blue) 72%, white);
+  outline-offset: 2px;
+}
+
+.app-shell.medusa-shell {
+  grid-template-columns: 228px minmax(0, 1fr);
+  transition: grid-template-columns 160ms ease;
+}
+
+.app-shell.medusa-shell.rail-collapsed {
+  grid-template-columns: 64px minmax(0, 1fr);
+}
+
+.sidebar {
+  gap: 10px;
+  padding: 14px 10px;
+  overflow-x: hidden;
+}
+
+.rail-collapsed .sidebar {
+  align-items: stretch;
+}
+
+.rail-collapsed .rail-label,
+.rail-collapsed .window-dots {
+  display: none !important;
+}
+
+.rail-collapsed .brand-row,
+.rail-collapsed .new-session,
+.rail-collapsed .nav-item,
+.rail-collapsed .project-picker,
+.rail-collapsed .security-note {
+  justify-content: center;
+}
+
+.rail-collapsed .new-session > span,
+.rail-collapsed .project-picker {
+  width: 100%;
+}
+
+.brand-row {
+  min-height: 40px;
+}
+
+.brand-row h1 {
+  font-size: var(--medusa-text-md);
+  font-weight: 650;
+}
+
+.brand-row small,
+.version,
+kbd,
+.eyebrow,
+.section-label,
+.message-heading,
+.metric-grid dt,
+.metric-footnote,
+.activity-summary small,
+.activity-row small,
+.composer-hint {
+  font-size: var(--medusa-text-xs);
+}
+
+.new-session,
+.nav-item,
+.project-picker,
+.projectless-action,
+.details-button,
+.rail-toggle,
+.icon-button,
+.composer-icon-button,
+.cancel-button,
+.retry-button,
+.primary-action,
+.secondary-action {
+  border-radius: var(--medusa-radius-sm);
+}
+
+.new-session {
+  min-height: 40px;
+  box-shadow: none;
+}
+
+.nav-list,
+.rail-tools {
+  display: grid;
+  gap: 3px;
+}
+
+.rail-tools {
+  border-top: 1px solid var(--medusa-border);
+  padding-top: 12px;
+}
+
+.nav-item {
+  min-height: 38px;
+  padding: 8px 10px;
+}
+
+.project-card {
+  padding-top: 12px;
+}
+
+.project-picker,
+.security-note {
+  border-radius: var(--medusa-radius-sm);
+}
+
+.topbar {
+  min-height: 60px;
+  padding: 0 18px;
+}
+
+.topbar-title,
+.topbar-actions,
+.session-details-heading,
+.activity-summary-heading,
+.error-banner {
+  display: flex;
+  align-items: center;
+}
+
+.topbar-title,
+.topbar-actions {
+  gap: 10px;
+}
+
+.topbar h2,
+.session-details-heading h2,
+.panel-title h2 {
+  font-size: var(--medusa-text-lg);
+  font-weight: 640;
+  letter-spacing: -0.018em;
+}
+
+.rail-toggle,
+.icon-button,
+.composer-icon-button {
+  display: inline-grid;
+  place-items: center;
+  width: 38px;
+  min-width: 38px;
+  height: 38px;
+  min-height: 38px;
+  border: 1px solid transparent;
+  padding: 0;
+  color: var(--medusa-ink);
+  background: transparent;
+}
+
+.rail-toggle:hover,
+.icon-button:hover,
+.composer-icon-button:hover:not(:disabled) {
+  border-color: var(--medusa-border);
+  background: #f5f5f6;
+}
+
+.details-button {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  min-height: 36px;
+  border: 1px solid var(--medusa-border);
+  padding: 0 11px;
+  color: var(--medusa-muted);
+  background: #fff;
+}
+
+.runtime-state {
+  min-height: 36px;
+  box-shadow: none;
+}
+
+.medusa-workspace {
+  position: relative;
+  min-width: 0;
+}
+
+.session-details-panel {
+  position: absolute;
+  z-index: 30;
+  top: 68px;
+  right: 16px;
+  width: min(360px, calc(100% - 32px));
+  max-height: calc(100% - 84px);
+  overflow: auto;
+  border: 1px solid var(--medusa-border);
+  border-radius: var(--medusa-radius-md);
+  background: rgba(255, 255, 255, 0.98);
+  padding: 14px;
+  box-shadow: var(--medusa-shadow);
+}
+
+.session-details-heading {
+  justify-content: space-between;
+  margin-bottom: 12px;
+}
+
+.details-section {
+  border-top: 1px solid var(--medusa-border);
+  padding: 12px 0 2px;
+}
+
+.details-section:first-of-type {
+  border-top: 0;
+}
+
+.transcript {
+  max-width: 820px;
+  gap: 16px;
+  padding: 26px 28px 20px;
+}
+
+.message-body,
+.empty-state p,
+.standalone-panel,
+.settings-form,
+.approval-card,
+.recovery-dock,
+.memory-dock-panel,
+.learning-shell,
+.engineering-shell,
+.diff-dock-panel,
+.session-dock-panel {
+  font-size: var(--medusa-text-md);
+}
+
+.message.assistant .message-body {
+  line-height: 1.62;
+}
+
+.activity-summary {
+  display: grid;
+  gap: 6px;
+  width: min(720px, 100%);
+  border: 1px solid var(--medusa-border);
+  border-radius: var(--medusa-radius-md);
+  background: #fafafa;
+  padding: 10px;
+}
+
+.activity-summary-heading {
+  justify-content: space-between;
+  color: var(--medusa-muted);
+  padding: 1px 4px 5px;
+}
+
+.activity-summary-heading > span {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  font-weight: 620;
+}
+
+.activity-row {
+  border: 1px solid transparent;
+  border-radius: var(--medusa-radius-sm);
+  background: #fff;
+}
+
+.activity-row[open] {
+  border-color: var(--medusa-border);
+}
+
+.activity-row summary {
+  display: grid;
+  grid-template-columns: 24px 1fr auto;
+  align-items: center;
+  gap: 8px;
+  min-height: 40px;
+  padding: 7px 10px;
+  cursor: pointer;
+  list-style: none;
+}
+
+.activity-row summary::-webkit-details-marker {
+  display: none;
+}
+
+.activity-row summary > span {
+  display: grid;
+  place-items: center;
+  color: var(--medusa-accent);
+}
+
+.activity-row.done summary > span { color: var(--medusa-success); }
+.activity-row.error summary > span { color: var(--medusa-danger); }
+
+.activity-row strong {
+  font-size: var(--medusa-text-sm);
+  font-weight: 610;
+}
+
+.activity-details {
+  border-top: 1px solid var(--medusa-border);
+  padding: 8px 12px 10px 42px;
+  color: var(--medusa-muted);
+  font-family: var(--medusa-font-mono);
+  font-size: var(--medusa-text-xs);
+}
+
+.activity-details p {
+  margin: 3px 0;
+}
+
+.composer-wrap {
+  padding: 10px 18px 18px;
+}
+
+.composer-card {
+  max-width: 820px;
+  border-radius: var(--medusa-radius-lg);
+  overflow: visible;
+}
+
+.composer-card textarea {
+  min-height: 76px;
+  padding: 15px 18px 7px;
+  font-size: var(--medusa-text-md);
+  line-height: 1.5;
+}
+
+.composer-bottom {
+  padding: 8px 10px 10px 12px;
+}
+
+.composer-tools,
+.composer-actions {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+}
+
+.composer-icon-button {
+  border-radius: 50%;
+  color: #e6e6e8;
+  background: #252527;
+}
+
+.composer-icon-button:hover:not(:disabled) {
+  border-color: #3a3a3d;
+  color: #fff;
+  background: #303033;
+}
+
+.composer-icon-button:disabled {
+  color: #85858b;
+  background: #eeeeef;
+}
+
+.composer-hint {
+  margin-left: 2px;
+  color: var(--medusa-muted);
+}
+
+.send-button {
+  display: grid;
+  place-items: center;
+  width: 42px;
+  min-width: 42px;
+  height: 42px;
+  min-height: 42px;
+  border: 0;
+  border-radius: 50%;
+  padding: 0;
+  color: #fff;
+  background: var(--medusa-blue);
+  box-shadow: none;
+}
+
+.send-button:hover:not(:disabled) {
+  background: #226de3;
+}
+
+.send-button:disabled {
+  color: #9999a0;
+  background: #ededee;
+}
+
+.cancel-button,
+.retry-button {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 36px;
+  border: 1px solid var(--medusa-border);
+  padding: 0 11px;
+  color: var(--medusa-danger);
+  background: #fff;
+}
+
+.error-banner {
+  gap: 8px;
+  border-radius: var(--medusa-radius-sm);
+}
+
+.error-banner > span {
+  flex: 1;
+}
+
+.retry-button {
+  color: var(--medusa-ink);
+}
+
+.standalone-panel,
+.slash-menu,
+.error-banner,
+.image-attachment-card,
+.image-preview-content,
+.approval-card,
+.recovery-dock-content,
+.memory-dock-panel,
+.learning-shell,
+.engineering-shell,
+.diff-dock-panel,
+.session-dock-panel,
+.desktop-update-card,
+.voice-controls {
+  border-radius: var(--medusa-radius-md) !important;
+}
+
+.primary-action,
+.secondary-action,
+.proposal-actions button,
+.dashboard-actions button,
+.learning-actions button,
+.learning-header-actions button,
+.desktop-update-actions button,
+.voice-actions button,
+.voice-devices button {
+  border-radius: var(--medusa-radius-sm) !important;
+}
+
+/* Launchers now live in the session rail. Their panels remain unchanged. */
+.session-dock-trigger,
+.diff-dock-trigger,
+.memory-dock-trigger,
+.learning-launcher,
+.engineering-menu-button {
+  display: none !important;
+}
+
+/* Match the reference's quiet circular microphone action. */
+.desktop-voice-dock {
+  right: 24px;
+  bottom: 22px;
+}
+
+.voice-entry {
+  display: grid;
+  place-items: center;
+  width: 48px;
+  min-width: 48px;
+  height: 48px;
+  min-height: 48px;
+  border: 0;
+  border-radius: 50%;
+  padding: 0;
+  overflow: hidden;
+  color: #fff;
+  background: var(--medusa-blue);
+  font-size: 0;
+  box-shadow: 0 8px 24px rgba(47, 124, 246, 0.28);
+}
+
+.voice-entry svg {
+  width: 21px;
+  height: 21px;
+}
+
+@media (max-width: 760px) {
+  .app-shell.medusa-shell,
+  .app-shell.medusa-shell.rail-collapsed {
+    grid-template-columns: 1fr;
+  }
+
+  .sidebar {
+    display: none;
+  }
+
+  .details-button {
+    width: 38px;
+    padding: 0;
+    font-size: 0;
+  }
+
+  .details-button svg {
+    width: 17px;
+    height: 17px;
+  }
+
+  .composer-hint {
+    display: none;
+  }
+}
