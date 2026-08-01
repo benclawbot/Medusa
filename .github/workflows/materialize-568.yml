@@ -1,38 +1,24 @@
 name: Materialize Issue 568 Source
 
-on:
-  push:
-    branches:
-      - agent/568-complete-telegram
-  workflow_dispatch:
+on: push
 
 permissions:
   contents: write
 
-concurrency:
-  group: materialize-568
-  cancel-in-progress: false
-
 jobs:
   materialize:
-    if: ${{ github.actor != 'github-actions[bot]' }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
-          ref: agent/568-complete-telegram
           fetch-depth: 0
       - uses: dtolnay/rust-toolchain@39b0b3842c7e8bbf6904c0bfc3d9006fdd4dc4e0
-      - name: Materialize generated Telegram source
+      - name: Materialize and commit source-only gateway
         shell: bash
         run: |
           set -euo pipefail
           cargo check -p medusa-daemon --all-features
           cargo fmt --all
-      - name: Remove one-time materialization layer
-        shell: bash
-        run: |
-          set -euo pipefail
           rm -f \
             crates/medusa-daemon/build.rs \
             crates/medusa-daemon/build_support.rs \
@@ -50,15 +36,10 @@ jobs:
           python3 - <<'PY'
           from pathlib import Path
           path = Path('crates/medusa-daemon/src/telegram/mod.rs')
-          text = path.read_text()
-          text = text.replace('#[cfg(test)]\nmod materialize_source;\n', '')
+          text = path.read_text().replace('#[cfg(test)]\nmod materialize_source;\n', '')
           path.write_text(text)
           PY
-          cargo fmt --all -- --check
-      - name: Commit source-only gateway
-        shell: bash
-        run: |
-          set -euo pipefail
+          cargo fmt --all
           git config user.name github-actions[bot]
           git config user.email 41898282+github-actions[bot]@users.noreply.github.com
           git add -A
