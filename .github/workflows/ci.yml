@@ -36,19 +36,19 @@ jobs:
           root = Path('scripts/issue-568-payloads')
           chunk_hashes = {
               'http-00.part': 'df471b74ff93bb62dbcd1c54783eec354f39661febd57312dc8d1dc9315b07a8',
-              'http-01.part': '91536bfe3f455e2a24032e1c4926c3b1aa80d8bb364a01f133060a65736142be',
+              'http-01.part': '03463b6032f19ebb81287422d702a59507902a8955e51aff68ee8f6718a4d89c',
               'mini-00.part': '4c30f29d3dffeb1399961bcfc66b8eae8e4ec0be64ee36b720f0433ace0bc436',
               'mini-01.part': 'a20941f794feeb11283d9bff59193d93ff7603aac002f7af890f56694ec2340b',
-              'mini-02.part': 'ef267fd1e2b02d91400ceda8c8cd1e2f10aa730a47abd9e4f85a30e768cdbda2',
-              'mod-00.part': 'a77b83d5500fc92099501549f0c8bf092f454f6d7b509c059461a22dd03ce6a3',
+              'mini-02.part': '3a182df0a4fd99489a9f4f0799df281cce462068285fbbdb565668d5d6266bc0',
+              'mod-00.part': '168ef9190f910b6a2dee52de8a40b8a26890debd76392eb975c2980015e849b9',
               'service-00.part': 'f2ab89738680d98068bfe280775b9fcd0c2d1484b78514ce06947034c16b4280',
               'service-01.part': '9b7d5f6c834006f034e6715ddcee88f602bc61f595801d94548be47f297a41ca',
               'service-02.part': 'ce2c1cfcfb44056f54905a7e39815c0aaa48f0e254f3851d57c0afefc64c42d9',
-              'service-03.part': '4df626619a7a1a41bb460c4f668ca6ed2122f27cb162bde1298a98e587c4db01',
+              'service-03.part': 'a0bc04c99f07b3023b55ddbd6597f8eb16a4710bbc7bb64bb051ef452655e240',
           }
           for name, expected in chunk_hashes.items():
-              path = root / name
-              actual = hashlib.sha256(path.read_bytes()).hexdigest()
+              normalized = (root / name).read_text().strip().encode()
+              actual = hashlib.sha256(normalized).hexdigest()
               if actual != expected:
                   raise SystemExit(f'{name}: expected {expected}, got {actual}')
 
@@ -58,13 +58,32 @@ jobs:
               ('crates/medusa-daemon/src/telegram/service.rs', 'service', 'a0117731feca9a2dcbc0db9506d98d63cebdeadac4506280a2bfd5aefb1738ac'),
               ('crates/medusa-daemon/src/telegram/mod.rs', 'mod', 'c1d220e910b7e6abac7e9600c2a578512c3f5b5dacc0e0abdfdd7ea3b83e3e4a'),
           )
+          sources = {}
           for target, prefix, expected in specs:
-              parts = sorted(root.glob(f'{prefix}-*.part'))
-              encoded = ''.join(part.read_text().strip() for part in parts)
+              encoded = ''.join(part.read_text().strip() for part in sorted(root.glob(f'{prefix}-*.part')))
               source = zlib.decompress(base64.b64decode(encoded, validate=True))
               actual = hashlib.sha256(source).hexdigest()
               if actual != expected:
                   raise SystemExit(f'{target}: expected {expected}, got {actual}')
+              sources[target] = source
+
+          mini_path = 'crates/medusa-daemon/src/telegram/mini_app.rs'
+          bad = b'assert!(html.contains("const apiBase = "/custom/telegram/voice";"));'
+          fixed = b'assert!(html.contains("const apiBase = \\"/custom/telegram/voice\\";"));'
+          if sources[mini_path].count(bad) != 1:
+              raise SystemExit('unexpected Mini App assertion source')
+          sources[mini_path] = sources[mini_path].replace(bad, fixed, 1)
+
+          final_hashes = {
+              mini_path: '89239544a44dab23e93eece64f7d0f6665b861e6b7915a92abc43cfeec0df3b1',
+              'crates/medusa-daemon/src/telegram/mini_app_http.rs': '332cb394c87fe88f8f97fa58fb40335751f7101404a7fdccf2817a78821bea54',
+              'crates/medusa-daemon/src/telegram/service.rs': 'a0117731feca9a2dcbc0db9506d98d63cebdeadac4506280a2bfd5aefb1738ac',
+              'crates/medusa-daemon/src/telegram/mod.rs': 'c1d220e910b7e6abac7e9600c2a578512c3f5b5dacc0e0abdfdd7ea3b83e3e4a',
+          }
+          for target, source in sources.items():
+              actual = hashlib.sha256(source).hexdigest()
+              if actual != final_hashes[target]:
+                  raise SystemExit(f'{target}: expected final {final_hashes[target]}, got {actual}')
               Path(target).write_bytes(source)
           PY
           cargo fmt --all
