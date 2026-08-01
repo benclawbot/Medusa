@@ -258,8 +258,7 @@ fn write_batch(
     writes: BTreeMap<String, PendingWrite>,
 ) -> io::Result<()> {
     for (key, pending) in writes {
-        let is_current = lock(&writer.state).current.get(&key).copied()
-            == Some(pending.generation);
+        let is_current = lock(&writer.state).current.get(&key).copied() == Some(pending.generation);
         if is_current {
             write_draft(root, &key, &pending.draft)?;
         }
@@ -441,7 +440,10 @@ mod tests {
         store.flush().expect("flush latest draft");
 
         let reopened = DraftStore::for_repo(repository.path());
-        assert_eq!(reopened.load("current").expect("load persisted draft"), Some(draft));
+        assert_eq!(
+            reopened.load("current").expect("load persisted draft"),
+            Some(draft)
+        );
     }
 
     #[test]
