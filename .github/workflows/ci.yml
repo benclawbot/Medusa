@@ -6,63 +6,13 @@ on:
   pull_request:
 
 permissions:
-  contents: write
+  contents: read
 
 concurrency:
   group: ci-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
-  materialize-568:
-    if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository && github.event.pull_request.head.ref == 'agent/568-complete-telegram'
-    name: Materialize Telegram source
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
-        with:
-          ref: ${{ github.event.pull_request.head.ref }}
-          fetch-depth: 0
-      - uses: dtolnay/rust-toolchain@39b0b3842c7e8bbf6904c0bfc3d9006fdd4dc4e0 # 1.88.0
-        with:
-          components: rustfmt
-      - name: Materialize and commit source-only gateway
-        shell: bash
-        run: |
-          set -euo pipefail
-          cargo check -p medusa-daemon --all-features
-          cargo fmt --all
-          rm -f \
-            crates/medusa-daemon/build.rs \
-            crates/medusa-daemon/build_support.rs \
-            crates/medusa-daemon/build_fixups.rs \
-            crates/medusa-daemon/build_native.rs \
-            crates/medusa-daemon/build_voice_integration.rs \
-            crates/medusa-daemon/build_mini_app_integration.rs \
-            crates/medusa-daemon/build_mini_app_client.rs \
-            crates/medusa-daemon/build_webhook_integration.rs \
-            crates/medusa-daemon/build_security.rs \
-            crates/medusa-daemon/build_compile_fixups.rs \
-            crates/medusa-daemon/src/telegram/materialize_source.rs \
-            crates/medusa-daemon/.issue-568-materialized \
-            .github/workflows/materialize-568.yml
-          python3 - <<'PY'
-          from pathlib import Path
-          path = Path('crates/medusa-daemon/src/telegram/mod.rs')
-          text = path.read_text().replace('#[cfg(test)]\nmod materialize_source;\n', '')
-          path.write_text(text)
-          PY
-          git checkout origin/main -- .github/workflows/ci.yml
-          cargo fmt --all
-          git config user.name github-actions[bot]
-          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
-          git add -A
-          git diff --cached --check
-          git commit -m 'Materialize Telegram gateway source'
-          EXPECTED_HEAD='${{ github.event.pull_request.head.sha }}'
-          REMOTE_HEAD="$(git ls-remote origin refs/heads/agent/568-complete-telegram | cut -f1)"
-          test "$REMOTE_HEAD" = "$EXPECTED_HEAD"
-          git push --force-with-lease=refs/heads/agent/568-complete-telegram:$EXPECTED_HEAD origin HEAD:refs/heads/agent/568-complete-telegram
-
   quality:
     name: Workspace quality
     runs-on: ubuntu-latest
