@@ -165,8 +165,7 @@ impl FrontendArtifactStore {
         let digest = parse_artifact_id(artifact_id)?;
         let metadata: FrontendArtifactMetadata =
             serde_json::from_slice(&fs::read(self.metadata_path(digest))?)?;
-        if metadata.schema_version != ARTIFACT_SCHEMA_VERSION
-            || metadata.artifact_id != artifact_id
+        if metadata.schema_version != ARTIFACT_SCHEMA_VERSION || metadata.artifact_id != artifact_id
         {
             return Err(FrontendArtifactStoreError::CorruptArtifact(
                 artifact_id.to_owned(),
