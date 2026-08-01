@@ -87,11 +87,14 @@ impl PendingTextFragmentState {
             return Err(TelegramRuntimeError::TooManyPendingTextFragments);
         }
         let now_ms = unix_millis(now)?;
-        let group = self.groups.entry(key).or_insert_with(|| PendingTextFragment {
-            highest_update_id: update_id,
-            updated_at_unix_ms: now_ms,
-            messages: Vec::new(),
-        });
+        let group = self
+            .groups
+            .entry(key)
+            .or_insert_with(|| PendingTextFragment {
+                highest_update_id: update_id,
+                updated_at_unix_ms: now_ms,
+                messages: Vec::new(),
+            });
         if let Some(first) = group.messages.first()
             && !same_conversation(first, &message)
         {
@@ -123,8 +126,7 @@ impl PendingTextFragmentState {
             .groups
             .iter()
             .filter(|(_, group)| {
-                now_ms.saturating_sub(group.updated_at_unix_ms)
-                    >= TEXT_FRAGMENT_QUIET_PERIOD_MS
+                now_ms.saturating_sub(group.updated_at_unix_ms) >= TEXT_FRAGMENT_QUIET_PERIOD_MS
             })
             .map(|(key, _)| key.clone())
             .collect())
@@ -185,12 +187,7 @@ impl PendingTextFragmentState {
         if self.schema_version != TEXT_FRAGMENT_SCHEMA_VERSION
             || self.groups.len() > MAX_PENDING_TEXT_GROUPS
             || self.groups.iter().any(|(key, group)| {
-                group
-                    .messages
-                    .first()
-                    .and_then(conversation_key)
-                    .as_deref()
-                    != Some(key.as_str())
+                group.messages.first().and_then(conversation_key).as_deref() != Some(key.as_str())
                     || validate_group(group).is_err()
             })
         {
@@ -205,15 +202,9 @@ pub(crate) fn is_text_fragment_candidate(message: &TelegramBotMessage) -> bool {
         && message.photo.is_empty()
         && message.document.is_none()
         && message.caption.is_none()
-        && message
-            .text
-            .as_deref()
-            .map(str::trim)
-            .is_some_and(|text| {
-                !text.is_empty()
-                    && !text.starts_with('/')
-                    && utf16_len(text) <= MAX_TEXT_FRAGMENT_UTF16
-            })
+        && message.text.as_deref().map(str::trim).is_some_and(|text| {
+            !text.is_empty() && !text.starts_with('/') && utf16_len(text) <= MAX_TEXT_FRAGMENT_UTF16
+        })
         && message.from.as_ref().is_some_and(|user| !user.is_bot)
 }
 
@@ -251,7 +242,10 @@ fn validate_group(group: &PendingTextFragment) -> Result<(), TelegramRuntimeErro
         || group.updated_at_unix_ms < 0
         || group.messages.is_empty()
         || group.messages.len() > MAX_TEXT_FRAGMENT_MESSAGES
-        || group.messages.iter().any(|message| !is_text_fragment_candidate(message))
+        || group
+            .messages
+            .iter()
+            .any(|message| !is_text_fragment_candidate(message))
     {
         return Err(TelegramRuntimeError::InvalidTextFragmentState);
     }
@@ -302,9 +296,7 @@ fn unix_millis(now: OffsetDateTime) -> Result<i64, TelegramRuntimeError> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::telegram::bot_api::{
-        TelegramBotChat, TelegramBotChatKind, TelegramBotUser,
-    };
+    use crate::telegram::bot_api::{TelegramBotChat, TelegramBotChatKind, TelegramBotUser};
     use time::{Duration, macros::datetime};
 
     fn message(id: i64, text: &str) -> TelegramBotMessage {
@@ -367,10 +359,12 @@ mod tests {
         let mut state = PendingTextFragmentState::in_memory();
         let now = datetime!(2026-08-01 00:00 UTC);
         state.insert(10, message(7, "hello"), now).expect("insert");
-        assert!(state
-            .due_keys(now + Duration::milliseconds(599))
-            .expect("due")
-            .is_empty());
+        assert!(
+            state
+                .due_keys(now + Duration::milliseconds(599))
+                .expect("due")
+                .is_empty()
+        );
         assert_eq!(
             state
                 .due_keys(now + Duration::milliseconds(600))
