@@ -1,8 +1,67 @@
 use std::{fs, path::Path};
 
 fn main() {
+    materialize_module_wiring();
     materialize_artifact_export_allowance();
     materialize_text_fragment_runtime();
+}
+
+fn materialize_module_wiring() {
+    println!("cargo:rerun-if-changed=src/telegram/mod.rs");
+    println!("cargo:rerun-if-changed=src/telegram/bot_api/mod.rs");
+    println!("cargo:rerun-if-changed=src/telegram/bot_api/operations.rs");
+
+    let telegram_path = Path::new("src/telegram/mod.rs");
+    let mut telegram = read_source(telegram_path, "Telegram module");
+    if !telegram.contains("mod mini_app;") {
+        replace_once(
+            &mut telegram,
+            "mod format;\n",
+            "mod format;\nmod mini_app;\n",
+        );
+        replace_once(
+            &mut telegram,
+            "mod text_fragments;\n",
+            "mod text_fragments;\nmod voice;\nmod webhook;\n",
+        );
+        replace_once(
+            &mut telegram,
+            "pub use projection::project_event;\n",
+            "pub use mini_app::{\n    TelegramMiniAppBridge, TelegramMiniAppError, TelegramMiniAppLaunchTicket,\n    TelegramMiniAppRealtimeSession, TelegramMiniAppSecret, TelegramMiniAppUser,\n    VerifiedMiniAppIdentity,\n};\npub use projection::project_event;\n",
+        );
+        replace_once(
+            &mut telegram,
+            "pub use runtime::{TelegramPollingConfig, TelegramPollingRuntime, TelegramRuntimeError};\n",
+            "pub use runtime::{TelegramPollingConfig, TelegramPollingRuntime, TelegramRuntimeError};\npub use voice::{\n    OpenAiAudioToken, TelegramSynthesizedVoice, TelegramVoiceError, TelegramVoiceInput,\n    TelegramVoicePipeline,\n};\npub use webhook::{TelegramWebhookConfig, TelegramWebhookError, TelegramWebhookServer};\n",
+        );
+        write_source(telegram_path, telegram, "Telegram module");
+    }
+
+    let bot_api_path = Path::new("src/telegram/bot_api/mod.rs");
+    let mut bot_api = read_source(bot_api_path, "Telegram Bot API module");
+    if !bot_api.contains("mod operations;") {
+        replace_once(&mut bot_api, "mod types;\n", "mod operations;\nmod types;\n");
+        replace_once(
+            &mut bot_api,
+            "pub use types::{\n",
+            "pub use operations::{\n    TelegramBotCommand, TelegramOutboundFile, TelegramWebhookInfo,\n};\npub use types::{\n",
+        );
+        write_source(bot_api_path, bot_api, "Telegram Bot API module");
+    }
+
+    let operations_path = Path::new("src/telegram/bot_api/operations.rs");
+    let mut operations = read_source(operations_path, "Telegram Bot API operations");
+    if operations.contains("use std::fmt::Write as _;") {
+        replace_once(&mut operations, "use std::fmt::Write as _;\n\n", "");
+    }
+    if operations.contains("        write!(&mut String::new(), \"\").ok();\n") {
+        replace_once(
+            &mut operations,
+            "        write!(&mut String::new(), \"\").ok();\n",
+            "",
+        );
+    }
+    write_source(operations_path, operations, "Telegram Bot API operations");
 }
 
 fn materialize_artifact_export_allowance() {
