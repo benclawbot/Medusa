@@ -6,6 +6,8 @@ mod build_native;
 mod build_support;
 #[rustfmt::skip]
 mod build_voice_integration;
+#[rustfmt::skip]
+mod build_webhook_integration;
 
 fn main() {
     build_fixups::run();
@@ -13,4 +15,5 @@ fn main() {
     build_native::run();
     build_voice_integration::run();
     build_mini_app_integration::run();
+    build_webhook_integration::run();
 }
