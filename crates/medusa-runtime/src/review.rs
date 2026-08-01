@@ -516,11 +516,26 @@ fn append_added_file_diff(
 }
 
 fn is_git_work_tree(repo: &Path) -> bool {
-    Command::new("git")
-        .args(["rev-parse", "--is-inside-work-tree"])
-        .current_dir(repo)
-        .output()
-        .is_ok_and(|output| output.status.success())
+    let Ok(repo) = repo.canonicalize() else {
+        return false;
+    };
+    let Ok(output) = Command::new("git")
+        .args(["rev-parse", "--show-toplevel"])
+        .current_dir(&repo)
+        .output() else {
+        return false;
+    };
+    if !output.status.success() {
+        return false;
+    }
+
+    let Ok(discovered_root) = String::from_utf8(output.stdout) else {
+        return false;
+    };
+    let Ok(discovered_root) = Path::new(discovered_root.trim()).canonicalize() else {
+        return false;
+    };
+    discovered_root == repo
 }
 
 fn git_has_head(repo: &Path) -> bool {
