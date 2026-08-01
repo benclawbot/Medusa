@@ -58,7 +58,10 @@ jobs:
           git add -A
           git diff --cached --check
           git commit -m 'Materialize Telegram gateway source'
-          git push origin HEAD:agent/568-complete-telegram
+          EXPECTED_HEAD='${{ github.event.pull_request.head.sha }}'
+          REMOTE_HEAD="$(git ls-remote origin refs/heads/agent/568-complete-telegram | cut -f1)"
+          test "$REMOTE_HEAD" = "$EXPECTED_HEAD"
+          git push --force-with-lease=refs/heads/agent/568-complete-telegram:$EXPECTED_HEAD origin HEAD:refs/heads/agent/568-complete-telegram
 
   quality:
     name: Workspace quality
