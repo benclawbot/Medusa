@@ -558,9 +558,7 @@ fn http_request(
         .expect("set read timeout");
     stream.write_all(request.as_bytes()).expect("write headers");
     stream.write_all(body).expect("write body");
-    let mut response = String::new();
-    stream.read_to_string(&mut response).expect("read response");
-    response
+    read_http_response(&mut stream)
 }
 
 fn raw_http_request(address: SocketAddr, request: &str) -> String {
@@ -571,11 +569,25 @@ fn raw_http_request(address: SocketAddr, request: &str) -> String {
     stream
         .write_all(request.as_bytes())
         .expect("write raw request");
-    let mut response = String::new();
-    stream
-        .read_to_string(&mut response)
-        .expect("read raw response");
-    response
+    read_http_response(&mut stream)
+}
+
+fn read_http_response(stream: &mut TcpStream) -> String {
+    let mut response = Vec::new();
+    let mut chunk = [0_u8; 4_096];
+    loop {
+        match stream.read(&mut chunk) {
+            Ok(0) => break,
+            Ok(read) => response.extend_from_slice(&chunk[..read]),
+            Err(error)
+                if error.kind() == std::io::ErrorKind::ConnectionReset && !response.is_empty() =>
+            {
+                break;
+            }
+            Err(error) => panic!("read HTTP response: {error}"),
+        }
+    }
+    String::from_utf8(response).expect("UTF-8 HTTP response")
 }
 
 fn assert_status(response: &str, status: u16) {
