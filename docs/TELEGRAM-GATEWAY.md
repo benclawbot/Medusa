@@ -111,7 +111,7 @@ Text remains the canonical accessible response. Voice modes:
 - `voice_only`: synthesize only when the current turn originated from Telegram voice/audio;
 - `all`: synthesize every final assistant response.
 
-The pending voice-reply marker is durable and is cleared only after the final voice bubble is accepted. Synthesis and `sendVoice` occur before the presentation cursor advances.
+The pending voice-reply marker is durable and command-aware, so a queued voice prompt cannot cause an unrelated active text turn to speak. It is cleared only after the corresponding final voice bubble is accepted. Synthesis and `sendVoice` occur before the presentation cursor advances.
 
 ## Mini App duplex voice
 
@@ -125,7 +125,9 @@ A normal Bot API chat cannot provide a continuous bidirectional call stream. The
 6. Final user transcripts are submitted to `/transcript` and placed on a bounded channel.
 7. The polling/runtime owner drains that channel into `TelegramSessionService`; no second runtime owner or competing repository mutation path is created.
 
-Mini App endpoints return `Cache-Control: no-store`, validate bounded JSON, require bearer launch tokens after authentication, and expose no long-lived OpenAI credential.
+After `/auth`, protected Mini App endpoints require a distinct authenticated session token rather than reusing the launch ticket. The client derives endpoint paths from its configured base URL, tears down media and peer-connection state deterministically, and exposes only sanitized duplex evidence.
+
+Mini App endpoints return `Cache-Control: no-store`, validate bounded JSON, require bearer session tokens after authentication, and expose no long-lived OpenAI credential.
 
 ## Durable state
 
