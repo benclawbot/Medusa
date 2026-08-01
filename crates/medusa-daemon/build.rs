@@ -38,7 +38,8 @@ fn main() {
         "        self.flush_due_media_groups(OffsetDateTime::now_utc(), &mut outcomes)?;\n        self.service\n",
         "        self.flush_due_media_groups(OffsetDateTime::now_utc(), &mut outcomes)?;\n        self.flush_due_text_fragments(OffsetDateTime::now_utc(), &mut outcomes)?;\n        self.service\n",
     );
-    let marker = "    fn inbound_batch(\n        &self,\n        messages: &[TelegramBotMessage],\n";
+    let marker =
+        "    fn inbound_batch(\n        &self,\n        messages: &[TelegramBotMessage],\n";
     let methods = r#"    fn queue_text_fragment(
         &mut self,
         update_id: i64,
