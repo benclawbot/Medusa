@@ -83,7 +83,15 @@ fn navigate_then_snapshot_round_trip() {
         other => panic!("expected snapshot, got {other:?}"),
     }
 
-    let _ = child.kill();
-    let _ = child.wait();
+    let req = BrowserRequest::Close;
+    line = serde_json::to_string(&req).unwrap();
+    line.push('\n');
+    stdin.write_all(line.as_bytes()).unwrap();
+    stdin.flush().unwrap();
+    response.clear();
+    reader.read_line(&mut response).unwrap();
+    let parsed: BrowserResponse = serde_json::from_str(response.trim()).unwrap();
+    assert!(parsed.is_ok(), "close should succeed: {parsed:?}");
+    child.wait().expect("sidecar shutdown");
     fixture_server.join().expect("fixture server");
 }
