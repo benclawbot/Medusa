@@ -1,4 +1,4 @@
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize};
 
 use super::TelegramBotApiError;
 use crate::telegram::TelegramReaction;
@@ -56,25 +56,106 @@ pub struct TelegramDocument {
     pub file_size: Option<u64>,
 }
 
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 pub struct TelegramBotMessage {
     pub message_id: i64,
     pub date: i64,
     pub chat: TelegramBotChat,
-    #[serde(default)]
     pub from: Option<TelegramBotUser>,
-    #[serde(default)]
     pub message_thread_id: Option<i64>,
-    #[serde(default)]
     pub media_group_id: Option<String>,
-    #[serde(default)]
     pub photo: Vec<TelegramPhotoSize>,
-    #[serde(default)]
     pub document: Option<TelegramDocument>,
-    #[serde(default)]
     pub text: Option<String>,
-    #[serde(default)]
     pub caption: Option<String>,
+}
+
+impl<'de> Deserialize<'de> for TelegramBotMessage {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let raw = TelegramBotMessageWire::deserialize(deserializer)?;
+        let document = match (raw.document, raw.voice, raw.audio) {
+            (Some(document), _, _) => Some(document),
+            (None, Some(voice), _) => Some(TelegramDocument {
+                file_id: voice.file_id,
+                file_unique_id: voice.file_unique_id,
+                file_name: Some(format!("voice-{}.ogg", raw.message_id)),
+                mime_type: Some(voice.mime_type.unwrap_or_else(|| "audio/ogg".to_owned())),
+                file_size: voice.file_size,
+            }),
+            (None, None, Some(audio)) => Some(TelegramDocument {
+                file_id: audio.file_id,
+                file_unique_id: audio.file_unique_id,
+                file_name: audio
+                    .file_name
+                    .or_else(|| Some(format!("audio-{}.bin", raw.message_id))),
+                mime_type: audio.mime_type,
+                file_size: audio.file_size,
+            }),
+            (None, None, None) => None,
+        };
+        Ok(Self {
+            message_id: raw.message_id,
+            date: raw.date,
+            chat: raw.chat,
+            from: raw.from,
+            message_thread_id: raw.message_thread_id,
+            media_group_id: raw.media_group_id,
+            photo: raw.photo,
+            document,
+            text: raw.text,
+            caption: raw.caption,
+        })
+    }
+}
+
+#[derive(Deserialize)]
+struct TelegramBotMessageWire {
+    message_id: i64,
+    date: i64,
+    chat: TelegramBotChat,
+    #[serde(default)]
+    from: Option<TelegramBotUser>,
+    #[serde(default)]
+    message_thread_id: Option<i64>,
+    #[serde(default)]
+    media_group_id: Option<String>,
+    #[serde(default)]
+    photo: Vec<TelegramPhotoSize>,
+    #[serde(default)]
+    document: Option<TelegramDocument>,
+    #[serde(default)]
+    voice: Option<TelegramVoiceWire>,
+    #[serde(default)]
+    audio: Option<TelegramAudioWire>,
+    #[serde(default)]
+    text: Option<String>,
+    #[serde(default)]
+    caption: Option<String>,
+}
+
+#[derive(Deserialize)]
+struct TelegramVoiceWire {
+    file_id: String,
+    file_unique_id: String,
+    #[serde(default)]
+    mime_type: Option<String>,
+    #[serde(default)]
+    file_size: Option<u64>,
+}
+
+#[derive(Deserialize)]
+struct TelegramAudioWire {
+    file_id: String,
+    file_unique_id: String,
+    #[serde(default)]
+    file_name: Option<String>,
+    #[serde(default)]
+    mime_type: Option<String>,
+    #[serde(default)]
+    file_size: Option<u64>,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
