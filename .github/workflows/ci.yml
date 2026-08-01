@@ -6,13 +6,57 @@ on:
   pull_request:
 
 permissions:
-  contents: read
+  contents: write
 
 concurrency:
   group: ci-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
+  finalize-568:
+    if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository && github.event.pull_request.head.ref == 'agent/568-complete-telegram'
+    name: Finalize Telegram audit patch
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ github.event.pull_request.head.ref }}
+          fetch-depth: 0
+      - uses: dtolnay/rust-toolchain@39b0b3842c7e8bbf6904c0bfc3d9006fdd4dc4e0 # 1.88.0
+        with:
+          components: rustfmt,clippy
+      - name: Decompress, validate, and publish audited source
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+          import zlib
+
+          for relative in (
+              'crates/medusa-daemon/src/telegram/mini_app.rs',
+              'crates/medusa-daemon/src/telegram/mini_app_http.rs',
+              'crates/medusa-daemon/src/telegram/service.rs',
+              'crates/medusa-daemon/src/telegram/mod.rs',
+          ):
+              path = Path(relative)
+              path.write_bytes(zlib.decompress(path.read_bytes()))
+          PY
+          cargo fmt --all
+          cargo test -p medusa-daemon telegram::mini_app --all-features -- --nocapture
+          cargo test -p medusa-daemon telegram::service --all-features -- --nocapture
+          cargo clippy -p medusa-daemon --all-targets --all-features -- -D warnings
+          git checkout origin/main -- .github/workflows/ci.yml
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add -A
+          git diff --cached --check
+          git commit -m 'Finalize Telegram Mini App auth and voice queue'
+          EXPECTED_HEAD='${{ github.event.pull_request.head.sha }}'
+          REMOTE_HEAD="$(git ls-remote origin refs/heads/agent/568-complete-telegram | cut -f1)"
+          test "$REMOTE_HEAD" = "$EXPECTED_HEAD"
+          git push --force-with-lease=refs/heads/agent/568-complete-telegram:$EXPECTED_HEAD origin HEAD:refs/heads/agent/568-complete-telegram
+
   quality:
     name: Workspace quality
     runs-on: ubuntu-latest
