@@ -4,6 +4,7 @@ pub fn run() {
     patch_runtime();
     patch_service();
     patch_mini_app_http();
+    patch_voice();
 }
 
 fn patch_runtime() {
@@ -131,6 +132,19 @@ fn patch_mini_app_http() {
             "    // issue-568-owned-request-path\n    let path = target\n        .split('?')\n        .next()\n        .ok_or(RequestRejection::Malformed)?\n        .to_owned();\n",
         );
         replace_required(&mut source, "        path: path.to_owned(),\n", "        path,\n");
+    }
+    write(path, source);
+}
+
+fn patch_voice() {
+    let path = Path::new("src/telegram/voice.rs");
+    let mut source = read(path);
+    if source.contains("std::mem::take(&mut response).take(limit.saturating_add(1))") {
+        replace_required(
+            &mut source,
+            "std::mem::take(&mut response).take(limit.saturating_add(1))",
+            "response.take(limit.saturating_add(1))",
+        );
     }
     write(path, source);
 }
