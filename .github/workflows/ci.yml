@@ -34,6 +34,24 @@ jobs:
           import zlib
 
           root = Path('scripts/issue-568-payloads')
+          chunk_hashes = {
+              'http-00.part': 'df471b74ff93bb62dbcd1c54783eec354f39661febd57312dc8d1dc9315b07a8',
+              'http-01.part': '91536bfe3f455e2a24032e1c4926c3b1aa80d8bb364a01f133060a65736142be',
+              'mini-00.part': '4c30f29d3dffeb1399961bcfc66b8eae8e4ec0be64ee36b720f0433ace0bc436',
+              'mini-01.part': 'a20941f794feeb11283d9bff59193d93ff7603aac002f7af890f56694ec2340b',
+              'mini-02.part': 'ef267fd1e2b02d91400ceda8c8cd1e2f10aa730a47abd9e4f85a30e768cdbda2',
+              'mod-00.part': 'a77b83d5500fc92099501549f0c8bf092f454f6d7b509c059461a22dd03ce6a3',
+              'service-00.part': 'f2ab89738680d98068bfe280775b9fcd0c2d1484b78514ce06947034c16b4280',
+              'service-01.part': '9b7d5f6c834006f034e6715ddcee88f602bc61f595801d94548be47f297a41ca',
+              'service-02.part': 'ce2c1cfcfb44056f54905a7e39815c0aaa48f0e254f3851d57c0afefc64c42d9',
+              'service-03.part': '4df626619a7a1a41bb460c4f668ca6ed2122f27cb162bde1298a98e587c4db01',
+          }
+          for name, expected in chunk_hashes.items():
+              path = root / name
+              actual = hashlib.sha256(path.read_bytes()).hexdigest()
+              if actual != expected:
+                  raise SystemExit(f'{name}: expected {expected}, got {actual}')
+
           specs = (
               ('crates/medusa-daemon/src/telegram/mini_app.rs', 'mini', 'fc4d250cccdf753307782c6cd77585d77d97544a0b9f2607a503b0eb47423d2e'),
               ('crates/medusa-daemon/src/telegram/mini_app_http.rs', 'http', '332cb394c87fe88f8f97fa58fb40335751f7101404a7fdccf2817a78821bea54'),
@@ -42,8 +60,6 @@ jobs:
           )
           for target, prefix, expected in specs:
               parts = sorted(root.glob(f'{prefix}-*.part'))
-              if not parts:
-                  raise SystemExit(f'missing payload chunks for {prefix}')
               encoded = ''.join(part.read_text().strip() for part in parts)
               source = zlib.decompress(base64.b64decode(encoded, validate=True))
               actual = hashlib.sha256(source).hexdigest()
