@@ -9,6 +9,8 @@ mod command;
 mod config;
 mod delivery;
 mod format;
+#[cfg(test)]
+mod materialize_source;
 mod projection;
 mod render;
 mod runtime;
