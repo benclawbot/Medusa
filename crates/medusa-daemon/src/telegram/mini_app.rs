@@ -240,7 +240,7 @@ impl TelegramMiniAppBridge {
                 chat_id: claims.chat_id,
                 topic_id: claims.topic_id,
                 user_id: claims.user_id,
-                chat_kind: TelegramChatKind::Private,
+                chat_kind: claims.chat_kind,
                 bot_mentioned: false,
             },
             session_id: claims.session_id,
@@ -575,6 +575,34 @@ mod tests {
                 .verify_launch_ticket(&ticket.token, &identity, now + Duration::minutes(6))
                 .is_err()
         );
+    }
+
+    #[test]
+    fn inspected_ticket_preserves_supergroup_identity() {
+        let bridge = TelegramMiniAppBridge::new(
+            TelegramMiniAppSecret::from_bot_token("123456:abcdefghijklmnopqrstuvwxyz")
+                .expect("secret"),
+        );
+        let identity = TelegramIdentity {
+            chat_id: -100_123,
+            topic_id: Some(42),
+            user_id: 11,
+            chat_kind: TelegramChatKind::Supergroup,
+            bot_mentioned: true,
+        };
+        let now = OffsetDateTime::from_unix_timestamp(1_700_000_000).expect("time");
+        let ticket = bridge
+            .issue_launch_ticket(&identity, "session-group", now)
+            .expect("ticket");
+
+        let binding = bridge
+            .inspect_launch_ticket(&ticket.token, now)
+            .expect("inspect");
+        assert_eq!(binding.identity.chat_id, identity.chat_id);
+        assert_eq!(binding.identity.topic_id, identity.topic_id);
+        assert_eq!(binding.identity.user_id, identity.user_id);
+        assert_eq!(binding.identity.chat_kind, TelegramChatKind::Supergroup);
+        assert_eq!(binding.session_id, "session-group");
     }
 
     #[test]
