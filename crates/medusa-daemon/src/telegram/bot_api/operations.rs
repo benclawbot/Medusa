@@ -1,7 +1,5 @@
 //! Telegram Bot API service operations and bounded native file delivery.
 
-use std::fmt::Write as _;
-
 use reqwest::header::CONTENT_TYPE;
 use serde::{Deserialize, Serialize};
 use ulid::Ulid;
@@ -122,13 +120,7 @@ impl TelegramBotApiClient {
                 "Telegram voice output is not an OGG stream".to_owned(),
             ));
         }
-        self.send_multipart_file(
-            "sendVoice",
-            "voice",
-            chat_id,
-            message_thread_id,
-            file,
-        )
+        self.send_multipart_file("sendVoice", "voice", chat_id, message_thread_id, file)
     }
 
     fn send_multipart_file(
@@ -155,21 +147,18 @@ impl TelegramBotApiClient {
             push_text_part(&mut body, &boundary, "caption", caption);
         }
         if let Some(message_id) = file.reply_to_message_id {
-            let value = serde_json::to_string(&TelegramReplyParameters { message_id })
-                .map_err(|_| TelegramBotApiError::InvalidRequest(
-                    "Telegram reply parameters are invalid".to_owned(),
-                ))?;
+            let value = serde_json::to_string(&TelegramReplyParameters { message_id }).map_err(
+                |_| {
+                    TelegramBotApiError::InvalidRequest(
+                        "Telegram reply parameters are invalid".to_owned(),
+                    )
+                },
+            )?;
             push_text_part(&mut body, &boundary, "reply_parameters", &value);
         }
         push_file_part(&mut body, &boundary, field_name, file);
-        write!(&mut String::new(), "").ok();
         body.extend_from_slice(format!("--{boundary}--\r\n").as_bytes());
-        let url = format!(
-            "{}/bot{}/{}",
-            self.api_base,
-            self.token.expose(),
-            method
-        );
+        let url = format!("{}/bot{}/{}", self.api_base, self.token.expose(), method);
         let response = self
             .client
             .post(url)
@@ -341,15 +330,19 @@ mod tests {
 
     #[test]
     fn command_contract_is_bounded() {
-        assert!(validate_commands(&[TelegramBotCommand {
-            command: "status".to_owned(),
-            description: "Show the current session".to_owned(),
-        }])
-        .is_ok());
-        assert!(validate_commands(&[TelegramBotCommand {
-            command: "Status".to_owned(),
-            description: "invalid".to_owned(),
-        }])
-        .is_err());
+        assert!(
+            validate_commands(&[TelegramBotCommand {
+                command: "status".to_owned(),
+                description: "Show the current session".to_owned(),
+            }])
+            .is_ok()
+        );
+        assert!(
+            validate_commands(&[TelegramBotCommand {
+                command: "Status".to_owned(),
+                description: "invalid".to_owned(),
+            }])
+            .is_err()
+        );
     }
 }
