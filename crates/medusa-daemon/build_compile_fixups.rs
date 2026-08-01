@@ -17,10 +17,9 @@ fn patch_runtime() {
             "use time::OffsetDateTime;\n\nuse super::bot_api::TelegramUpdate;\n",
         );
     }
-    if !source.contains("// issue-568-text-fragment-methods") {
+    if !source.contains("fn queue_text_fragment(") {
         let marker = "    fn stage_file(\n";
-        let methods = r#"    // issue-568-text-fragment-methods
-    fn queue_text_fragment(
+        let methods = r#"    fn queue_text_fragment(
         &mut self,
         update_id: i64,
         message: TelegramBotMessage,
@@ -102,15 +101,19 @@ fn patch_service() {
             "use thiserror::Error;\n\nuse super::bot_api::TelegramOutboundFile;\n",
         );
     }
-    if !source.contains("// issue-568-service-error-fixups") {
+    if !source.contains("InvalidCommand(String)") {
         let marker = "    #[error(transparent)]\n    Gateway(#[from] TelegramGatewayError),\n";
-        let variants = r#"    // issue-568-service-error-fixups
-    #[error("Telegram frontend command is invalid: {0}")]
+        let variant = r#"    #[error("Telegram frontend command is invalid: {0}")]
     InvalidCommand(String),
-    #[error(transparent)]
+"#;
+        replace_required(&mut source, marker, &format!("{variant}{marker}"));
+    }
+    if !source.contains("MiniApp(#[from] super::TelegramMiniAppError)") {
+        let marker = "    #[error(transparent)]\n    Gateway(#[from] TelegramGatewayError),\n";
+        let variant = r#"    #[error(transparent)]
     MiniApp(#[from] super::TelegramMiniAppError),
 "#;
-        replace_required(&mut source, marker, &format!("{variants}{marker}"));
+        replace_required(&mut source, marker, &format!("{variant}{marker}"));
     }
     write(path, source);
 }
@@ -125,13 +128,18 @@ fn patch_mini_app_http() {
             "    TelegramIdentity, TelegramMiniAppBridge, TelegramMiniAppError,\n",
         );
     }
-    if !source.contains("// issue-568-owned-request-path") {
+    let old_path = "    let path = target.split('?').next().ok_or(RequestRejection::Malformed)?;\n";
+    if source.contains(old_path) {
         replace_required(
             &mut source,
-            "    let path = target.split('?').next().ok_or(RequestRejection::Malformed)?;\n",
-            "    // issue-568-owned-request-path\n    let path = target\n        .split('?')\n        .next()\n        .ok_or(RequestRejection::Malformed)?\n        .to_owned();\n",
+            old_path,
+            "    let path = target\n        .split('?')\n        .next()\n        .ok_or(RequestRejection::Malformed)?\n        .to_owned();\n",
         );
         replace_required(&mut source, "        path: path.to_owned(),\n", "        path,\n");
+    } else if !source.contains("        .ok_or(RequestRejection::Malformed)?\n        .to_owned();\n")
+        || !source.contains("        path,\n")
+    {
+        fail("Telegram Mini App request path is neither legacy nor materialized");
     }
     write(path, source);
 }
