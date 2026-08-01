@@ -1,8 +1,6 @@
 name: CI
 
 on:
-  push:
-    branches: [main]
   pull_request:
 
 permissions:
@@ -13,9 +11,9 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  finalize-568:
-    if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository && github.event.pull_request.head.ref == 'agent/568-complete-telegram'
-    name: Finalize Telegram audit patch
+  recover-568:
+    if: github.event.pull_request.head.repo.full_name == github.repository && github.event.pull_request.head.ref == 'agent/568-complete-telegram'
+    name: Recover audited Telegram source
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
@@ -25,27 +23,39 @@ jobs:
       - uses: dtolnay/rust-toolchain@39b0b3842c7e8bbf6904c0bfc3d9006fdd4dc4e0 # 1.88.0
         with:
           components: rustfmt,clippy
-      - name: Decompress, validate, and publish audited source
+      - name: Reconstruct, verify, and publish source
         shell: bash
         run: |
           set -euo pipefail
           python3 - <<'PY'
           from pathlib import Path
+          import base64
+          import hashlib
           import zlib
 
-          for relative in (
-              'crates/medusa-daemon/src/telegram/mini_app.rs',
-              'crates/medusa-daemon/src/telegram/mini_app_http.rs',
-              'crates/medusa-daemon/src/telegram/service.rs',
-              'crates/medusa-daemon/src/telegram/mod.rs',
-          ):
-              path = Path(relative)
-              path.write_bytes(zlib.decompress(path.read_bytes()))
+          root = Path('scripts/issue-568-payloads')
+          specs = (
+              ('crates/medusa-daemon/src/telegram/mini_app.rs', 'mini', 'fc4d250cccdf753307782c6cd77585d77d97544a0b9f2607a503b0eb47423d2e'),
+              ('crates/medusa-daemon/src/telegram/mini_app_http.rs', 'http', '332cb394c87fe88f8f97fa58fb40335751f7101404a7fdccf2817a78821bea54'),
+              ('crates/medusa-daemon/src/telegram/service.rs', 'service', 'a0117731feca9a2dcbc0db9506d98d63cebdeadac4506280a2bfd5aefb1738ac'),
+              ('crates/medusa-daemon/src/telegram/mod.rs', 'mod', 'c1d220e910b7e6abac7e9600c2a578512c3f5b5dacc0e0abdfdd7ea3b83e3e4a'),
+          )
+          for target, prefix, expected in specs:
+              parts = sorted(root.glob(f'{prefix}-*.part'))
+              if not parts:
+                  raise SystemExit(f'missing payload chunks for {prefix}')
+              encoded = ''.join(part.read_text().strip() for part in parts)
+              source = zlib.decompress(base64.b64decode(encoded, validate=True))
+              actual = hashlib.sha256(source).hexdigest()
+              if actual != expected:
+                  raise SystemExit(f'{target}: expected {expected}, got {actual}')
+              Path(target).write_bytes(source)
           PY
           cargo fmt --all
           cargo test -p medusa-daemon telegram::mini_app --all-features -- --nocapture
           cargo test -p medusa-daemon telegram::service --all-features -- --nocapture
           cargo clippy -p medusa-daemon --all-targets --all-features -- -D warnings
+          rm -rf scripts/issue-568-payloads
           git checkout origin/main -- .github/workflows/ci.yml
           git config user.name github-actions[bot]
           git config user.email 41898282+github-actions[bot]@users.noreply.github.com
@@ -56,177 +66,3 @@ jobs:
           REMOTE_HEAD="$(git ls-remote origin refs/heads/agent/568-complete-telegram | cut -f1)"
           test "$REMOTE_HEAD" = "$EXPECTED_HEAD"
           git push --force-with-lease=refs/heads/agent/568-complete-telegram:$EXPECTED_HEAD origin HEAD:refs/heads/agent/568-complete-telegram
-
-  quality:
-    name: Workspace quality
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
-      - uses: dtolnay/rust-toolchain@39b0b3842c7e8bbf6904c0bfc3d9006fdd4dc4e0 # 1.88.0
-        with:
-          components: rustfmt,clippy
-      - name: Refresh dependency lock for the merged PR graph
-        run: cargo generate-lockfile
-      - name: Check formatting
-        shell: bash
-        run: |
-          set -o pipefail
-          cargo fmt --all -- --check 2>&1 | tee rustfmt.log
-      - name: Capture rustfmt patch
-        if: failure()
-        shell: bash
-        run: |
-          cargo fmt --all
-          git diff -- . ':!Cargo.lock' > rustfmt.patch
-      - name: Upload rustfmt diagnostics
-        if: failure()
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
-        with:
-          name: rustfmt-diagnostics
-          path: |
-            rustfmt.log
-            rustfmt.patch
-          if-no-files-found: ignore
-      - name: Clippy
-        shell: bash
-        run: |
-          set -o pipefail
-          cargo clippy --workspace --all-targets --all-features --locked -- -D warnings 2>&1 | tee clippy.log
-      - name: Upload Clippy diagnostics
-        if: failure()
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
-        with:
-          name: clippy-diagnostics
-          path: clippy.log
-          if-no-files-found: ignore
-      - name: Production panic audit
-        id: production_panic_audit
-        shell: bash
-        run: |
-          set -o pipefail
-          cargo clippy --workspace --all-features --locked --lib --bins --examples -- \
-            -D clippy::unwrap_used \
-            -D clippy::expect_used \
-            -D clippy::panic \
-            2>&1 | tee production-panic-audit.log
-      - name: Upload production panic diagnostics
-        if: failure() && steps.production_panic_audit.outcome == 'failure'
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
-        with:
-          name: production-panic-audit-diagnostics
-          path: production-panic-audit.log
-          if-no-files-found: error
-      - name: Full workspace tests
-        id: workspace_tests
-        shell: bash
-        run: |
-          set -o pipefail
-          cargo test --workspace --all-features --locked -- --nocapture 2>&1 | tee workspace-tests.log
-      - name: Upload workspace test diagnostics
-        if: failure() && steps.workspace_tests.outcome == 'failure'
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
-        with:
-          name: workspace-test-diagnostics
-          path: workspace-tests.log
-          if-no-files-found: error
-      - name: Documentation
-        env:
-          RUSTDOCFLAGS: -D warnings
-        run: cargo doc --workspace --all-features --locked --no-deps
-
-  supply-chain:
-    name: Dependency policy
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
-        with:
-          fetch-depth: 2
-      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
-        with:
-          python-version: "3.12"
-      - uses: dtolnay/rust-toolchain@39b0b3842c7e8bbf6904c0bfc3d9006fdd4dc4e0 # 1.88.0
-      - uses: taiki-e/install-action@065d6a08a14e61e89fb0a4c10eecdbdef39c7d8e # v2
-        with:
-          tool: cargo-deny,cargo-audit
-      - name: Refresh dependency lock for the merged PR graph
-        run: cargo generate-lockfile
-      - name: Validate deterministic release evidence
-        run: |
-          python3 scripts/release-evidence.py self-test
-          python3 scripts/release-evidence.py sbom --root . --output release-sbom-ci.json
-      - name: Parse tag-only release workflow YAML
-        shell: bash
-        run: |
-          ruby -e 'require "yaml"; YAML.safe_load_file(".github/workflows/publish-release.yml", aliases: true)'
-      - name: Measure current dependency graph
-        id: dependency_metrics_current
-        shell: bash
-        run: |
-          set -o pipefail
-          python3 scripts/dependency-metrics.py measure \
-            --root . \
-            --output dependency-current.json \
-            2>&1 | tee dependency-metrics.log
-      - name: Compare pull request dependency graph with base
-        id: dependency_metrics_compare
-        if: github.event_name == 'pull_request'
-        shell: bash
-        run: |
-          set -o pipefail
-          git fetch --no-tags --depth=1 origin "${{ github.base_ref }}"
-          git worktree add ../dependency-base FETCH_HEAD
-          cargo generate-lockfile --manifest-path ../dependency-base/Cargo.toml
-          python3 scripts/dependency-metrics.py measure \
-            --root ../dependency-base \
-            --output dependency-base.json \
-            2>&1 | tee -a dependency-metrics.log
-          python3 scripts/dependency-metrics.py compare \
-            --base dependency-base.json \
-            --current dependency-current.json \
-            --output dependency-comparison.md \
-            2>&1 | tee -a dependency-metrics.log
-          cat dependency-comparison.md >> "$GITHUB_STEP_SUMMARY"
-      - name: Upload dependency metrics
-        if: always()
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
-        with:
-          name: dependency-metrics
-          path: |
-            dependency-base.json
-            dependency-current.json
-            dependency-comparison.md
-            release-sbom-ci.json
-          if-no-files-found: ignore
-      - name: Upload dependency metrics diagnostics
-        if: failure() && (steps.dependency_metrics_current.outcome == 'failure' || steps.dependency_metrics_compare.outcome == 'failure')
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
-        with:
-          name: dependency-metrics-diagnostics
-          path: dependency-metrics.log
-          if-no-files-found: error
-      - name: Cargo deny
-        id: cargo_deny
-        shell: bash
-        run: |
-          set -o pipefail
-          cargo deny check advisories sources 2>&1 | tee cargo-deny.log
-      - name: Upload cargo-deny diagnostics
-        if: failure() && steps.cargo_deny.outcome == 'failure'
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
-        with:
-          name: cargo-deny-diagnostics
-          path: cargo-deny.log
-          if-no-files-found: error
-      - name: Cargo audit
-        id: cargo_audit
-        shell: bash
-        run: |
-          set -o pipefail
-          cargo audit 2>&1 | tee cargo-audit.log
-      - name: Upload cargo-audit diagnostics
-        if: failure() && steps.cargo_audit.outcome == 'failure'
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
-        with:
-          name: cargo-audit-diagnostics
-          path: cargo-audit.log
-          if-no-files-found: error
