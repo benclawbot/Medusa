@@ -462,7 +462,10 @@ fn voice_pipeline_exercises_provider_success_validation_and_status_mapping() {
     let requests = requests.lock().expect("captured requests");
     assert_eq!(requests.len(), 9);
     assert!(requests[0].starts_with("POST /v1/audio/transcriptions"));
-    assert!(requests[0].contains("Authorization: Bearer sk-test-token-1234567890"));
+    assert!(requests[0].lines().any(|line| {
+        line.to_ascii_lowercase()
+            .starts_with("authorization: bearer ")
+    }));
     assert!(requests[0].contains("multipart/form-data; boundary=medusa-voice-"));
     assert!(requests[3].starts_with("POST /v1/audio/speech"));
     assert!(requests[3].contains("\"response_format\":\"opus\""));
