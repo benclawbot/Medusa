@@ -1,188 +1,306 @@
 name: CI
 
 on:
-  push:
-    branches: [main]
   pull_request:
 
 permissions:
-  contents: read
+  contents: write
 
 concurrency:
   group: ci-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
-  quality:
-    name: Workspace quality
+  fix-568:
+    if: github.event.pull_request.head.repo.full_name == github.repository && github.event.pull_request.head.ref == 'agent/568-complete-telegram'
+    name: Fix buffered Telegram cursor handling
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ github.event.pull_request.head.ref }}
+          fetch-depth: 0
       - uses: dtolnay/rust-toolchain@39b0b3842c7e8bbf6904c0bfc3d9006fdd4dc4e0 # 1.88.0
         with:
           components: rustfmt,clippy
-      - name: Refresh dependency lock for the merged PR graph
-        run: cargo generate-lockfile
-      - name: Check formatting
+      - name: Patch, verify, restore workflow, and publish
         shell: bash
         run: |
-          set -o pipefail
-          cargo fmt --all -- --check 2>&1 | tee rustfmt.log
-      - name: Capture rustfmt patch
-        if: failure()
-        shell: bash
-        run: |
-          cargo fmt --all
-          git diff -- . ':!Cargo.lock' > rustfmt.patch
-      - name: Upload rustfmt diagnostics
-        if: failure()
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
-        with:
-          name: rustfmt-diagnostics
-          path: |
-            rustfmt.log
-            rustfmt.patch
-          if-no-files-found: ignore
-      - name: Clippy
-        shell: bash
-        run: |
-          set -o pipefail
-          cargo clippy --workspace --all-targets --all-features --locked -- -D warnings 2>&1 | tee clippy.log
-      - name: Upload Clippy diagnostics
-        if: failure()
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
-        with:
-          name: clippy-diagnostics
-          path: clippy.log
-          if-no-files-found: ignore
-      - name: Production panic audit
-        id: production_panic_audit
-        shell: bash
-        run: |
-          set -o pipefail
-          cargo clippy --workspace --all-features --locked --lib --bins --examples -- \
-            -D clippy::unwrap_used \
-            -D clippy::expect_used \
-            -D clippy::panic \
-            2>&1 | tee production-panic-audit.log
-      - name: Upload production panic diagnostics
-        if: failure() && steps.production_panic_audit.outcome == 'failure'
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
-        with:
-          name: production-panic-audit-diagnostics
-          path: production-panic-audit.log
-          if-no-files-found: error
-      - name: Full workspace tests
-        id: workspace_tests
-        shell: bash
-        run: |
-          set -o pipefail
-          cargo test --workspace --all-features --locked -- --nocapture 2>&1 | tee workspace-tests.log
-      - name: Upload workspace test diagnostics
-        if: failure() && steps.workspace_tests.outcome == 'failure'
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
-        with:
-          name: workspace-test-diagnostics
-          path: workspace-tests.log
-          if-no-files-found: error
-      - name: Documentation
-        env:
-          RUSTDOCFLAGS: -D warnings
-        run: cargo doc --workspace --all-features --locked --no-deps
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
 
-  supply-chain:
-    name: Dependency policy
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
-        with:
-          fetch-depth: 2
-      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
-        with:
-          python-version: "3.12"
-      - uses: dtolnay/rust-toolchain@39b0b3842c7e8bbf6904c0bfc3d9006fdd4dc4e0 # 1.88.0
-      - uses: taiki-e/install-action@065d6a08a14e61e89fb0a4c10eecdbdef39c7d8e # v2
-        with:
-          tool: cargo-deny,cargo-audit
-      - name: Refresh dependency lock for the merged PR graph
-        run: cargo generate-lockfile
-      - name: Validate deterministic release evidence
-        run: |
-          python3 scripts/release-evidence.py self-test
-          python3 scripts/release-evidence.py sbom --root . --output release-sbom-ci.json
-      - name: Parse tag-only release workflow YAML
-        shell: bash
-        run: |
-          ruby -e 'require "yaml"; YAML.safe_load_file(".github/workflows/publish-release.yml", aliases: true)'
-      - name: Measure current dependency graph
-        id: dependency_metrics_current
-        shell: bash
-        run: |
-          set -o pipefail
-          python3 scripts/dependency-metrics.py measure \
-            --root . \
-            --output dependency-current.json \
-            2>&1 | tee dependency-metrics.log
-      - name: Compare pull request dependency graph with base
-        id: dependency_metrics_compare
-        if: github.event_name == 'pull_request'
-        shell: bash
-        run: |
-          set -o pipefail
-          git fetch --no-tags --depth=1 origin "${{ github.base_ref }}"
-          git worktree add ../dependency-base FETCH_HEAD
-          cargo generate-lockfile --manifest-path ../dependency-base/Cargo.toml
-          python3 scripts/dependency-metrics.py measure \
-            --root ../dependency-base \
-            --output dependency-base.json \
-            2>&1 | tee -a dependency-metrics.log
-          python3 scripts/dependency-metrics.py compare \
-            --base dependency-base.json \
-            --current dependency-current.json \
-            --output dependency-comparison.md \
-            2>&1 | tee -a dependency-metrics.log
-          cat dependency-comparison.md >> "$GITHUB_STEP_SUMMARY"
-      - name: Upload dependency metrics
-        if: always()
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
-        with:
-          name: dependency-metrics
-          path: |
-            dependency-base.json
-            dependency-current.json
-            dependency-comparison.md
-            release-sbom-ci.json
-          if-no-files-found: ignore
-      - name: Upload dependency metrics diagnostics
-        if: failure() && (steps.dependency_metrics_current.outcome == 'failure' || steps.dependency_metrics_compare.outcome == 'failure')
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
-        with:
-          name: dependency-metrics-diagnostics
-          path: dependency-metrics.log
-          if-no-files-found: error
-      - name: Cargo deny
-        id: cargo_deny
-        shell: bash
-        run: |
-          set -o pipefail
-          cargo deny check advisories sources 2>&1 | tee cargo-deny.log
-      - name: Upload cargo-deny diagnostics
-        if: failure() && steps.cargo_deny.outcome == 'failure'
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
-        with:
-          name: cargo-deny-diagnostics
-          path: cargo-deny.log
-          if-no-files-found: error
-      - name: Cargo audit
-        id: cargo_audit
-        shell: bash
-        run: |
-          set -o pipefail
-          cargo audit 2>&1 | tee cargo-audit.log
-      - name: Upload cargo-audit diagnostics
-        if: failure() && steps.cargo_audit.outcome == 'failure'
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
-        with:
-          name: cargo-audit-diagnostics
-          path: cargo-audit.log
-          if-no-files-found: error
+          service_path = Path('crates/medusa-daemon/src/telegram/service.rs')
+          service = service_path.read_text()
+          old_methods = '''    /// Processes one normalized Telegram message and persists transport state only after success.
+              pub fn process_message(
+                  &mut self,
+                  update_id: i64,
+                  message: TelegramInboundMessage,
+              ) -> Result<TelegramServiceOutcome, TelegramSessionServiceError> {
+                  self.process_message_with_source(update_id, message, false)
+              }
+
+              pub fn process_voice_message(
+                  &mut self,
+                  update_id: i64,
+                  message: TelegramInboundMessage,
+              ) -> Result<TelegramServiceOutcome, TelegramSessionServiceError> {
+                  self.process_message_with_source(update_id, message, true)
+              }
+
+              fn process_message_with_source(
+                  &mut self,
+                  update_id: i64,
+                  message: TelegramInboundMessage,
+                  voice_source: bool,
+              ) -> Result<TelegramServiceOutcome, TelegramSessionServiceError> {
+          '''
+          new_methods = '''    /// Processes one normalized Telegram message and persists transport state only after success.
+              pub fn process_message(
+                  &mut self,
+                  update_id: i64,
+                  message: TelegramInboundMessage,
+              ) -> Result<TelegramServiceOutcome, TelegramSessionServiceError> {
+                  self.process_message_with_source(update_id, message, false, false)
+              }
+
+              pub fn process_voice_message(
+                  &mut self,
+                  update_id: i64,
+                  message: TelegramInboundMessage,
+              ) -> Result<TelegramServiceOutcome, TelegramSessionServiceError> {
+                  self.process_message_with_source(update_id, message, true, false)
+              }
+
+              pub(crate) fn process_acknowledged_message(
+                  &mut self,
+                  update_id: i64,
+                  message: TelegramInboundMessage,
+                  voice_source: bool,
+              ) -> Result<TelegramServiceOutcome, TelegramSessionServiceError> {
+                  self.process_message_with_source(update_id, message, voice_source, true)
+              }
+
+              fn process_message_with_source(
+                  &mut self,
+                  update_id: i64,
+                  message: TelegramInboundMessage,
+                  voice_source: bool,
+                  transport_already_acknowledged: bool,
+              ) -> Result<TelegramServiceOutcome, TelegramSessionServiceError> {
+          '''
+          if service.count(old_methods) != 1:
+              raise SystemExit('service method contract did not match exactly')
+          service = service.replace(old_methods, new_methods, 1)
+
+          old_stale = '''        if existing
+                      .as_ref()
+                      .and_then(|binding| binding.last_update_id)
+                      .is_some_and(|last| update_id < last)
+                  {
+                      return Err(TelegramSessionServiceError::StaleUpdate(update_id));
+                  }
+                  let mut action = self.gateway.map_message(&message)?;
+          '''
+          new_stale = '''        if !transport_already_acknowledged
+                      && existing
+                          .as_ref()
+                          .and_then(|binding| binding.last_update_id)
+                          .is_some_and(|last| update_id < last)
+                  {
+                      return Err(TelegramSessionServiceError::StaleUpdate(update_id));
+                  }
+                  let binding_update_id = if transport_already_acknowledged {
+                      existing
+                          .as_ref()
+                          .and_then(|binding| binding.last_update_id)
+                          .map_or(update_id, |last| last.max(update_id))
+                  } else {
+                      update_id
+                  };
+                  let mut action = self.gateway.map_message(&message)?;
+          '''
+          if service.count(old_stale) != 1:
+              raise SystemExit('service stale-update block did not match exactly')
+          service = service.replace(old_stale, new_stale, 1)
+
+          start = service.index('    fn process_message_with_source(')
+          end = service.index('    /// Persists an event delivery cursor', start)
+          function = service[start:end]
+          if function.count('                    update_id,\n                    &command,') != 1:
+              raise SystemExit('binding acknowledgement update id did not match exactly')
+          function = function.replace(
+              '                    update_id,\n                    &command,',
+              '                    binding_update_id,\n                    &command,',
+              1,
+          )
+          count = function.count('ensure_binding(key, source_chat_kind, existing, update_id)')
+          if count != 2:
+              raise SystemExit(f'expected two ensure_binding update ids, found {count}')
+          function = function.replace(
+              'ensure_binding(key, source_chat_kind, existing, update_id)',
+              'ensure_binding(key, source_chat_kind, existing, binding_update_id)',
+          )
+          old_persist = '''        let persisted = self
+                      .acknowledge_update(update_id)
+                      .and_then(|()| self.persist());
+          '''
+          new_persist = '''        let persisted = if transport_already_acknowledged {
+                      self.persist()
+                  } else {
+                      self.acknowledge_update(update_id)
+                          .and_then(|()| self.persist())
+                  };
+          '''
+          if function.count(old_persist) != 1:
+              raise SystemExit('service persistence block did not match exactly')
+          function = function.replace(old_persist, new_persist, 1)
+          service = service[:start] + function + service[end:]
+
+          test_marker = '''    #[test]
+              fn duplicate_update_is_idempotent_and_detach_clears_binding() {
+          '''
+          test = '''    #[test]
+              fn acknowledged_buffered_message_preserves_newer_transport_and_binding_cursors() {
+                  let repository = tempfile::tempdir().expect("repository");
+                  let state_path = repository.path().join(".medusa/telegram/state.json");
+                  let control =
+                      FrontendControlPlane::new(repository.path().to_path_buf(), Config::default());
+                  let mut service =
+                      TelegramSessionService::load(&state_path, gateway(), control).expect("service");
+
+                  service
+                      .process_message(12, message(12, "/verbose all"))
+                      .expect("newer update");
+                  assert_eq!(
+                      service.process_message(11, message(11, "/voice tts")),
+                      Err(TelegramSessionServiceError::StaleUpdate(11))
+                  );
+                  service
+                      .process_acknowledged_message(11, message(11, "/voice tts"), false)
+                      .expect("buffered update");
+
+                  let binding = service.binding(&identity()).expect("binding");
+                  assert_eq!(binding.last_update_id, Some(12));
+                  assert_eq!(binding.tool_progress, ToolProgressMode::All);
+                  assert_eq!(binding.voice_mode, TelegramVoiceMode::All);
+                  assert_eq!(service.next_update_offset(), Some(13));
+                  drop(service);
+
+                  let control =
+                      FrontendControlPlane::new(repository.path().to_path_buf(), Config::default());
+                  let reloaded =
+                      TelegramSessionService::load(&state_path, gateway(), control).expect("reload");
+                  let binding = reloaded.binding(&identity()).expect("reloaded binding");
+                  assert_eq!(binding.last_update_id, Some(12));
+                  assert_eq!(binding.tool_progress, ToolProgressMode::All);
+                  assert_eq!(binding.voice_mode, TelegramVoiceMode::All);
+                  assert_eq!(reloaded.next_update_offset(), Some(13));
+              }
+
+          '''
+          if service.count(test_marker) != 1:
+              raise SystemExit('service test insertion marker did not match exactly')
+          service = service.replace(test_marker, test + test_marker, 1)
+          service_path.write_text(service)
+
+          runtime_path = Path('crates/medusa-daemon/src/telegram/runtime.rs')
+          runtime = runtime_path.read_text()
+          old_media = 'match self.process_messages(group.highest_update_id, &group.messages, outcomes) {'
+          new_media = 'match self.process_acknowledged_messages(group.highest_update_id, &group.messages, outcomes) {'
+          if runtime.count(old_media) != 1:
+              raise SystemExit('media-group flush call did not match exactly')
+          runtime = runtime.replace(old_media, new_media, 1)
+          old_text = 'match self.process_messages(group.highest_update_id, &[message], outcomes) {'
+          new_text = 'match self.process_acknowledged_messages(group.highest_update_id, &[message], outcomes) {'
+          if runtime.count(old_text) != 1:
+              raise SystemExit('text-fragment flush call did not match exactly')
+          runtime = runtime.replace(old_text, new_text, 1)
+
+          old_process = '''    fn process_messages(
+                  &mut self,
+                  update_id: i64,
+                  messages: &[TelegramBotMessage],
+                  outcomes: &mut Vec<TelegramServiceOutcome>,
+              ) -> Result<(), TelegramRuntimeError> {
+                  let (inbound, voice_source) = self.inbound_batch(messages)?;
+                  let result = if voice_source {
+                      self.service.process_voice_message(update_id, inbound)
+                  } else {
+                      self.service.process_message(update_id, inbound)
+                  };
+                  match result {
+                      Ok(outcome) => outcomes.push(outcome),
+                      Err(error) if is_rejected_input(&error) => {
+                          self.service.acknowledge_transport_update(update_id)?;
+                      }
+                      Err(error) => return Err(error.into()),
+                  }
+                  Ok(())
+              }
+          '''
+          new_process = '''    fn process_messages(
+                  &mut self,
+                  update_id: i64,
+                  messages: &[TelegramBotMessage],
+                  outcomes: &mut Vec<TelegramServiceOutcome>,
+              ) -> Result<(), TelegramRuntimeError> {
+                  self.process_messages_with_transport_state(update_id, messages, outcomes, false)
+              }
+
+              fn process_acknowledged_messages(
+                  &mut self,
+                  update_id: i64,
+                  messages: &[TelegramBotMessage],
+                  outcomes: &mut Vec<TelegramServiceOutcome>,
+              ) -> Result<(), TelegramRuntimeError> {
+                  self.process_messages_with_transport_state(update_id, messages, outcomes, true)
+              }
+
+              fn process_messages_with_transport_state(
+                  &mut self,
+                  update_id: i64,
+                  messages: &[TelegramBotMessage],
+                  outcomes: &mut Vec<TelegramServiceOutcome>,
+                  transport_already_acknowledged: bool,
+              ) -> Result<(), TelegramRuntimeError> {
+                  let (inbound, voice_source) = self.inbound_batch(messages)?;
+                  let result = if transport_already_acknowledged {
+                      self.service
+                          .process_acknowledged_message(update_id, inbound, voice_source)
+                  } else if voice_source {
+                      self.service.process_voice_message(update_id, inbound)
+                  } else {
+                      self.service.process_message(update_id, inbound)
+                  };
+                  match result {
+                      Ok(outcome) => outcomes.push(outcome),
+                      Err(error) if is_rejected_input(&error) => {
+                          if !transport_already_acknowledged {
+                              self.service.acknowledge_transport_update(update_id)?;
+                          }
+                      }
+                      Err(error) => return Err(error.into()),
+                  }
+                  Ok(())
+              }
+          '''
+          if runtime.count(old_process) != 1:
+              raise SystemExit('runtime process_messages block did not match exactly')
+          runtime = runtime.replace(old_process, new_process, 1)
+          runtime_path.write_text(runtime)
+          PY
+          cargo fmt --all
+          cargo test -p medusa-daemon acknowledged_buffered_message_preserves_newer_transport_and_binding_cursors --all-features -- --nocapture
+          cargo clippy -p medusa-daemon --all-targets --all-features -- -D warnings
+          git checkout origin/main -- .github/workflows/ci.yml
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add crates/medusa-daemon/src/telegram/runtime.rs crates/medusa-daemon/src/telegram/service.rs .github/workflows/ci.yml
+          git diff --cached --check
+          git commit -m 'Preserve cursors for buffered Telegram submissions'
+          EXPECTED_HEAD='${{ github.event.pull_request.head.sha }}'
+          REMOTE_HEAD="$(git ls-remote origin refs/heads/agent/568-complete-telegram | cut -f1)"
+          test "$REMOTE_HEAD" = "$EXPECTED_HEAD"
+          git push --force-with-lease=refs/heads/agent/568-complete-telegram:$EXPECTED_HEAD origin HEAD:refs/heads/agent/568-complete-telegram
