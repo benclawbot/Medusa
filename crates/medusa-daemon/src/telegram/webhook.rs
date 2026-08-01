@@ -87,6 +87,10 @@ impl TelegramWebhookServer {
         while !cancelled.load(Ordering::Acquire) {
             match self.listener.accept() {
                 Ok((mut stream, peer)) => {
+                    // Accepted sockets can inherit the listener's nonblocking mode on BSD/macOS.
+                    // Request parsing is synchronous and timeout-bounded, so normalize every
+                    // connection back to blocking mode before reading any bytes.
+                    stream.set_nonblocking(false)?;
                     if !peer.ip().is_loopback() {
                         let _ = write_response(&mut stream, 403, "forbidden");
                         continue;
