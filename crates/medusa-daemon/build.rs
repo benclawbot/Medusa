@@ -1,6 +1,8 @@
 mod build_fixups;
+#[rustfmt::skip]
 mod build_native;
 mod build_support;
+#[rustfmt::skip]
 mod build_voice_integration;
 
 fn main() {
