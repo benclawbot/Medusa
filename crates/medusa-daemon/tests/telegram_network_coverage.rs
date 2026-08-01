@@ -20,7 +20,7 @@ use medusa_daemon::telegram::{
 };
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
-use time::{Duration, OffsetDateTime};
+use time::OffsetDateTime;
 
 const BOT_TOKEN: &str = "123456789:abcdefghijklmnopqrstuvwxyz";
 
