@@ -71,7 +71,6 @@ impl TelegramWebhookServer {
         Ok(Self { listener, config })
     }
 
-    #[must_use]
     pub fn local_addr(&self) -> Result<SocketAddr, TelegramWebhookError> {
         self.listener.local_addr().map_err(Into::into)
     }
@@ -280,13 +279,15 @@ mod tests {
 
     #[test]
     fn webhook_config_is_loopback_only() {
-        assert!(TelegramWebhookConfig {
-            bind: "127.0.0.1:0".parse().expect("address"),
-            path: "/telegram/webhook".to_owned(),
-            secret_token: "valid_secret-42".to_owned(),
-        }
-        .validate()
-        .is_ok());
+        assert!(
+            TelegramWebhookConfig {
+                bind: "127.0.0.1:0".parse().expect("address"),
+                path: "/telegram/webhook".to_owned(),
+                secret_token: "valid_secret-42".to_owned(),
+            }
+            .validate()
+            .is_ok()
+        );
         assert!(matches!(
             TelegramWebhookConfig {
                 bind: "0.0.0.0:8080".parse().expect("address"),
