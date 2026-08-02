@@ -1,10 +1,11 @@
 use std::{
     fs,
     path::{Path, PathBuf},
-    process::Command,
 };
 
 use serde::{Deserialize, Serialize};
+
+use crate::desktop_command::hidden_command;
 
 #[derive(Clone, Copy, Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -97,7 +98,7 @@ pub fn runtime_create_draft_pull_request(
         args.push("--reviewer".to_owned());
         args.push(reviewer.to_owned());
     }
-    let output = Command::new("gh")
+    let output = hidden_command("gh")
         .args(&args)
         .current_dir(&repo)
         .output()
@@ -210,7 +211,7 @@ fn require_upstream(repo: &Path, branch: &str) -> Result<(), String> {
 }
 
 fn git_stdout<const N: usize>(repo: &Path, args: [&str; N]) -> Result<String, String> {
-    let output = Command::new("git")
+    let output = hidden_command("git")
         .args(args)
         .current_dir(repo)
         .output()
