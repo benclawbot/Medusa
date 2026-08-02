@@ -5,7 +5,10 @@ use semver::Version;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
-use crate::manifest::{ArtifactKind, BuildSource, ManifestArtifact, Platform, VerifiedManifest};
+use crate::manifest::{
+    ArtifactKind, BuildSource, ManifestArtifact, Platform, ReleaseManifest, RolloutPolicy,
+    VerifiedManifest,
+};
 
 /// A release asset whose URL and integrity metadata came from a verified manifest.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
@@ -53,15 +56,32 @@ impl Release {
         verified: VerifiedManifest,
         artifacts: Vec<Artifact>,
     ) -> Self {
+        let VerifiedManifest {
+            manifest,
+            key_id,
+            manifest_sha256,
+        } = verified;
+        let ReleaseManifest {
+            version,
+            minimum_updater_version,
+            source,
+            rollout:
+                RolloutPolicy {
+                    sequence,
+                    percentage,
+                    ..
+                },
+            ..
+        } = manifest;
         Self {
-            version: verified.manifest.version,
+            version,
             repository,
-            source: verified.manifest.source,
-            minimum_updater_version: verified.manifest.minimum_updater_version,
-            rollout_sequence: verified.manifest.rollout.sequence,
-            rollout_percentage: verified.manifest.rollout.percentage,
-            signing_key_id: verified.key_id,
-            manifest_sha256: verified.manifest_sha256,
+            source,
+            minimum_updater_version,
+            rollout_sequence: sequence,
+            rollout_percentage: percentage,
+            signing_key_id: key_id,
+            manifest_sha256,
             artifacts,
         }
     }
