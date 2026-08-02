@@ -34,8 +34,8 @@ jobs:
           from pathlib import Path
           import re
 
-          path = Path("crates/medusa-capabilities/src/registry.rs")
-          text = path.read_text(encoding="utf-8")
+          registry_path = Path("crates/medusa-capabilities/src/registry.rs")
+          text = registry_path.read_text(encoding="utf-8")
           pattern = re.compile(r'(?P<call>tool_entry\(\n)(?P<arg>[ \t]*)states,\n(?P=arg)"(?P<name>[^"]+)",')
 
           def replace_call(match: re.Match[str]) -> str:
@@ -79,10 +79,35 @@ jobs:
           '''
           if text.count(old) != 1:
               raise RuntimeError("tool identity signature migration did not match exactly once")
-          path.write_text(text.replace(old, new, 1), encoding="utf-8")
+          registry_path.write_text(text.replace(old, new, 1), encoding="utf-8")
+
+          fixture_path = Path("crates/medusa-cli/src/github_operation.rs")
+          fixture = fixture_path.read_text(encoding="utf-8")
+          fixture_old = '''            capabilities: BTreeMap::from([(
+                          Capability::GitHub,
+                          CapabilityState {
+                              available: true,
+                              detail: "test GitHub backend".into(),
+                          },
+                      )]),
+                  };
+          '''
+          fixture_new = '''            capabilities: BTreeMap::from([(
+                          Capability::GitHub,
+                          CapabilityState {
+                              available: true,
+                              detail: "test GitHub backend".into(),
+                          },
+                      )]),
+                      entries: BTreeMap::new(),
+                  };
+          '''
+          if fixture.count(fixture_old) != 1:
+              raise RuntimeError("GitHub operation registry fixture migration did not match exactly once")
+          fixture_path.write_text(fixture.replace(fixture_old, fixture_new, 1), encoding="utf-8")
           PY
       - name: Refresh locked dependency graph
-        run: cargo check -p medusa-capabilities -p medusa-extensions -p medusa-agent -p medusa-cli
+        run: cargo check -p medusa-capabilities -p medusa-extensions -p medusa-agent -p medusa-cli --all-targets
       - name: Validate truthful registry
         shell: bash
         run: |
@@ -119,6 +144,7 @@ jobs:
             crates/medusa-agent/src/tools/mod.rs \
             crates/medusa-capabilities/src/registry.rs \
             crates/medusa-cli/src/capabilities.rs \
+            crates/medusa-cli/src/github_operation.rs \
             docs/architecture/INDEX.md \
             docs/architecture/baseline.json \
             scripts/architecture-conformance.py
