@@ -25,7 +25,11 @@ jobs:
         with:
           components: rustfmt, clippy
       - name: Apply per-check authority
-        run: python3 scripts/apply-650-per-check-authority.py
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 scripts/apply-650-per-check-authority.py
+          python3 scripts/fix-650-per-check-authority.py
       - name: Validate per-check authority
         shell: bash
         run: |
@@ -38,7 +42,7 @@ jobs:
           cargo check -p medusa-evidence -p medusa-agent -p medusa-runtime --all-targets
           cargo test -p medusa-evidence
           cargo test -p medusa-agent verification_authority --lib
-          cargo test -p medusa-agent browser_policy --lib
+          cargo test -p medusa-agent verification::tests --lib
           cargo test -p medusa-runtime mutation_transaction --lib
           cargo test -p medusa-runtime mutating_worker_coordinator --lib
           cargo clippy -p medusa-evidence -p medusa-agent -p medusa-runtime --all-targets -- -D warnings
