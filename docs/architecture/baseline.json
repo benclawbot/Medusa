@@ -1,0 +1,198 @@
+{
+  "schema_version": 1,
+  "baseline": {
+    "issue": 646,
+    "parent_issue": 645,
+    "phase": "architecture-v2-phase-0",
+    "authority": "Production code and executable tests describe legacy behavior; this manifest governs v2 migration and certification.",
+    "feature_freeze": {
+      "active": true,
+      "exceptions": [
+        "security-or-data-loss",
+        "architecture-v2-enablement",
+        "#653-unsafe-ffi",
+        "#655-prebuilt-updater"
+      ],
+      "release_rule": "No major capability is advertised as certified production without a v2 owner, versioned contract, dispatcher, permissions, conformance evidence, migration consumer, and legacy deletion target."
+    }
+  },
+  "deployment_modes": [
+    ["interactive-tui", "medusa", "crates/medusa-tui", "medusa-runtime::RuntimeController"],
+    ["headless-cli", "medusa run", "crates/medusa-cli", "medusa-runtime::RuntimeController"],
+    ["daemon", "medusa __daemon-serve", "crates/medusa-daemon", "medusa-runtime::RuntimeController"],
+    ["desktop", "apps/medusa-desktop", "apps/medusa-desktop", "medusa-runtime::RuntimeController"],
+    ["github-operations", "medusa github / medusa-capabilities", "crates/medusa-github", "typed guarded operation contract"],
+    ["self-update", "medusa update", "crates/medusa-update", "legacy source-build channel pending #655"]
+  ],
+  "components": {
+    "rust_crates": {
+      "medusa-core": "preserve",
+      "medusa-config": "preserve",
+      "medusa-protocol": "preserve",
+      "medusa-testkit": "preserve",
+      "medusa-provider": "adapt",
+      "medusa-openai-realtime": "adapt",
+      "medusa-intelligence": "adapt",
+      "medusa-world-model": "adapt",
+      "medusa-goal": "adapt",
+      "medusa-progress": "adapt",
+      "medusa-confidence": "adapt",
+      "medusa-failure": "adapt",
+      "medusa-continuation": "adapt",
+      "medusa-escalation": "adapt",
+      "medusa-process-registry": "preserve",
+      "medusa-wakeup": "adapt",
+      "medusa-prompt-cache": "adapt",
+      "medusa-mcp-cache": "adapt",
+      "medusa-markdown-memory": "adapt",
+      "medusa-memory-consolidation": "adapt",
+      "medusa-clearops": "adapt",
+      "medusa-agent": "replace",
+      "medusa-browser-client": "adapt",
+      "medusa-browserd": "adapt",
+      "medusa-process-containment": "preserve",
+      "medusa-daemon": "adapt",
+      "medusa-runtime": "replace",
+      "medusa-tui": "adapt",
+      "medusa-workers": "adapt",
+      "medusa-memory": "preserve",
+      "medusa-extensions": "adapt",
+      "medusa-improvement": "adapt",
+      "medusa-hardening": "adapt",
+      "medusa-update": "replace",
+      "medusa-github": "preserve",
+      "medusa-capabilities": "replace",
+      "medusa-cli": "adapt",
+      "medusa-context": "adapt",
+      "medusa-context-retrieval": "adapt",
+      "medusa-turn-assembly": "adapt",
+      "medusa-memory-writeback": "adapt",
+      "medusa-tool-policy": "adapt",
+      "medusa-tool-control": "adapt",
+      "medusa-multi-agent-scheduler": "replace",
+      "medusa-worker-leases": "adapt",
+      "medusa-execution-replay": "adapt",
+      "medusa-runtime-supervisor": "adapt",
+      "medusa-execution-checkpoint": "adapt",
+      "medusa-time-travel": "adapt",
+      "medusa-transaction-coordinator": "replace",
+      "medusa-recovery-coordinator": "adapt",
+      "medusa-review-model": "replace",
+      "medusa-session-continuity": "adapt"
+    },
+    "non_crate": [
+      ["medusa-desktop", "apps/medusa-desktop", "adapt"],
+      ["github-workflows", ".github/workflows", "adapt"],
+      ["architecture-governance", "docs/architecture", "preserve"]
+    ],
+    "owner_groups": {
+      "foundation": ["medusa-core", "medusa-config", "medusa-protocol", "medusa-testkit"],
+      "runtime": ["medusa-agent", "medusa-runtime", "medusa-cli", "medusa-tui", "medusa-daemon"],
+      "provider": ["medusa-provider", "medusa-openai-realtime"],
+      "coordination": ["medusa-workers", "medusa-multi-agent-scheduler", "medusa-worker-leases", "medusa-transaction-coordinator", "medusa-review-model"],
+      "safety": ["medusa-process-containment", "medusa-process-registry", "medusa-tool-policy", "medusa-tool-control", "medusa-hardening"],
+      "integrations": ["medusa-github", "medusa-capabilities", "medusa-extensions"],
+      "release": ["medusa-update"],
+      "state-and-recovery": ["medusa-failure", "medusa-continuation", "medusa-process-registry", "medusa-wakeup", "medusa-markdown-memory", "medusa-memory-consolidation", "medusa-memory", "medusa-memory-writeback", "medusa-worker-leases", "medusa-execution-replay", "medusa-runtime-supervisor", "medusa-execution-checkpoint", "medusa-time-travel", "medusa-recovery-coordinator", "medusa-session-continuity"],
+      "intelligence": ["medusa-intelligence", "medusa-world-model", "medusa-goal", "medusa-progress", "medusa-confidence", "medusa-escalation", "medusa-prompt-cache", "medusa-mcp-cache", "medusa-clearops", "medusa-improvement", "medusa-context", "medusa-context-retrieval", "medusa-turn-assembly"]
+    }
+  },
+  "capabilities": [
+    ["shared-runtime", "production", "legacy-uncertified", "replace", "medusa-runtime::RuntimeController", ["implicit authority and lifecycle contracts"]],
+    ["durable-sessions-memory", "production", "legacy-uncertified", "adapt", "medusa-agent session and memory stores", ["multiple projections require one declared source per concern"]],
+    ["github-service", "production", "legacy-uncertified", "adapt", "medusa-github typed operations", ["OAuth/backend parity remains under v2 integration governance"]],
+    ["provider-context-resilience", "production", "quarantined", "replace", "medusa-provider::ProviderManager", ["streaming may be claimed while wire requests force stream=false", "cancellation does not abort the blocking HTTP request", "fallback health lacks one durable authority"]],
+    ["identity-approval-transactions", "production", "legacy-uncertified", "adapt", "medusa-agent safety gates", ["mutation authority and receipts are split"]],
+    ["daemon", "production", "legacy-uncertified", "adapt", "medusa-daemon", ["daemon and remote contracts are not versioned"]],
+    ["release-trust", "production", "legacy-uncertified", "adapt", "publish-release workflow", ["updater consumes source until #655"]],
+    ["self-update", "production", "quarantined", "replace", "medusa update", ["default path compiles source and takes minutes"]],
+    ["multi-agent-research", "production", "quarantined", "replace", "medusa-runtime coordinated path", ["integration precedes parent review", "task/reviewer state is partly decorative", "isolated verification does not receive changed paths"]],
+    ["browser-tools", "advertised", "quarantined", "replace", "missing production execute_tool dispatch", ["browser actions are advertised but unreachable"]],
+    ["plugins-and-extensions", "structural", "design-only", "adapt", "no certified production dispatcher", ["manifest, permissions, lifecycle, and durable results are unversioned"]],
+    ["telegram-remote-frontend", "partial", "quarantined", "adapt", "daemon gateway", ["same-path and operator conformance are incomplete"]],
+    ["unsafe-ffi-boundary", "partial", "legacy-uncertified", "adapt", "medusa-process-containment", ["crate-local unsafe policy and audit completed by #653"]]
+  ],
+  "capability_paths": {
+    "shared-runtime": ["crates/medusa-runtime", "crates/medusa-tui", "apps/medusa-desktop"],
+    "durable-sessions-memory": ["crates/medusa-agent", "crates/medusa-memory"],
+    "github-service": ["crates/medusa-github"],
+    "provider-context-resilience": ["crates/medusa-provider", "crates/medusa-runtime", "crates/medusa-agent"],
+    "identity-approval-transactions": ["crates/medusa-agent", "crates/medusa-tool-policy", "crates/medusa-tool-control"],
+    "daemon": ["crates/medusa-daemon"],
+    "release-trust": [".github/workflows"],
+    "self-update": ["crates/medusa-update", "crates/medusa-cli"],
+    "multi-agent-research": ["crates/medusa-runtime", "crates/medusa-agent", "crates/medusa-workers"],
+    "browser-tools": ["crates/medusa-agent", "crates/medusa-browser-client", "crates/medusa-browserd"],
+    "plugins-and-extensions": ["crates/medusa-extensions"],
+    "telegram-remote-frontend": ["crates/medusa-daemon"],
+    "unsafe-ffi-boundary": ["crates/medusa-process-containment"]
+  },
+  "sources_of_truth": [
+    ["session identity and transcript", "medusa-agent durable session journal", ["frontend projections"], "versioned session aggregate", "presentations never create history"],
+    ["commands and runtime events", "medusa-protocol payloads plus session journal", ["process-local RuntimeEvent"], "versioned command/event envelope", "every mutation has a durable event or non-durable classification"],
+    ["plan and task graph", "session plan plus production orchestrator contracts", ["scheduler views", "UI plan state"], "one persisted plan aggregate", "execution binds to the active plan fingerprint"],
+    ["worker lifecycle", "WorkerExecutionController durable state", ["TeamRuntime", "TeamControlPlane", "scheduler labels"], "one durable worker aggregate", "displayed workers require dispatch and lease evidence"],
+    ["repository mutation", "worktree manager and transaction receipts", ["agent summaries"], "single mutation service", "no primary-tree mutation before accepted review"],
+    ["review and acceptance", "legacy parent AgentEngine after integration", ["review-model scaffolding"], "independent pre-integration review gate", "integration requires an accepted review receipt"],
+    ["verification", "repository gate plus targeted results", ["worker summaries", "CI prose"], "changed-path-aware verification receipt", "changed paths are carried end to end"],
+    ["provider route and readiness", "configuration profile plus ProviderManager process state", ["frontend readiness", "request capability flags"], "durable route health and exact capability contract", "advertised capability equals wire behavior"],
+    ["capability availability", "CAPABILITY-CLAIMS.json for legacy availability; this manifest for v2 certification", ["README and UI labels"], "generated capability registry", "no advertised action lacks dispatcher, permissions, tests, and owner"],
+    ["evidence and artifacts", "repository-local .medusa records and release evidence", ["human summaries"], "versioned evidence/artifact envelope", "reports derive from evidence"],
+    ["GitHub authentication and operations", "medusa-github guarded operation lifecycle", ["CLI-specific receipts"], "OAuth-backed transport-neutral service", "credentials never enter receipts"],
+    ["updates and releases", "publish workflows plus legacy source updater", ["package-manager state"], "Ed25519-verified prebuilt manifest", "updates never silently compile source"]
+  ],
+  "state_machines": [
+    ["execution-current", ["preflight", "implement", "verify-worktree", "integrate", "parent-review", "verify-primary", "complete-or-recover"], "integration precedes independent parent review"],
+    ["execution-v2", ["plan", "lease", "implement-isolated", "verify-changed-paths", "review-prepared-change", "integrate-accepted-change", "verify-primary", "complete-or-recover"], "review precedes integration and changed paths survive every transition"],
+    ["capability-v2", ["design-only", "experimental", "preview", "certified-production", "deprecated", "deleted"], "promotion requires owner, contract, dispatcher, permissions, conformance, observability, migration and deletion target"]
+  ],
+  "trust_boundaries": [
+    ["repository", "mutation service", ["path confinement", "symlink safety", "transactions", "review-before-integration"]],
+    ["process-containment", "medusa-process-containment", ["deny by default", "platform evidence", "#653 unsafe allowlist"]],
+    ["secrets", "configuration and integrations", ["OS keyring or process environment", "redacted evidence", "no model-visible secrets"]],
+    ["provider-network", "medusa-provider", ["exact route capabilities", "abortable requests", "bounded retries", "durable health"]],
+    ["github-oauth-api", "medusa-github", ["typed operations", "approval tiers", "host confinement", "auditable receipts"]],
+    ["browser-sidecar", "browser service", ["no advertisement before dispatcher and permission certification"]],
+    ["plugins", "extension service", ["versioned manifest", "least privilege", "isolation", "durable results"]],
+    ["release-update", "release maintainers", ["free Ed25519 verification", "immutable artifacts", "rollback-safe installation under #655"]]
+  ],
+  "known_failure_fixtures": [
+    ["browser-dispatch-unreachable", 631, false, "advertised browser tool names are absent from execute_tool", "remove after dispatcher, permissions and behavioral tests"],
+    ["integration-precedes-parent-review", 632, false, "run_implementation completes before the parent engine executes", "remove after durable review receipt gates integration"],
+    ["isolated-verification-drops-changed-paths", 633, false, "targeted_verification receives only the worktree path", "remove after changed paths are explicit input and evidence"],
+    ["provider-capability-mismatch", 636, false, "streaming can be true while request_body forces false and cancellation leaves request thread alive", "remove after route claims match wire/cancellation"]
+  ],
+  "migration": [
+    [646, "0", "freeze and baseline", "architecture", ["baseline schema", "conformance fixture schema"], ["all later phases"], "stale documents and unindexed authorities"],
+    [647, "1", "foundation contracts", "foundation", ["IDs", "errors", "time", "event/evidence envelopes"], ["runtime", "providers", "frontends"], "duplicated primitives"],
+    [648, "2", "single orchestration core", "runtime", ["session", "plan", "task", "worker", "review", "verification"], ["CLI", "daemon", "desktop"], "parallel orchestration authorities"],
+    [649, "3", "capability registry and dispatch", "capabilities", ["capability", "permissions", "dispatcher"], ["agent", "frontends"], "advertised but unreachable tools"],
+    [650, "4", "provider and OAuth routing", "provider", ["route", "health", "readiness", "auth"], ["runtime", "frontends"], "per-surface readiness logic"],
+    [651, "5", "frontends on shared core", "frontend", ["commands", "events", "artifacts"], ["TUI", "CLI", "daemon", "desktop", "remote"], "frontend-owned execution semantics"],
+    [652, "6", "state migration and v1 deletion", "architecture", ["migration receipts", "deprecation"], ["release"], "all superseded v1 paths"],
+    [653, "0-companion", "unsafe and FFI boundary", "safety", ["unsafe allowlist", "audit evidence"], ["containment", "CI"], "unscoped unsafe code"],
+    [654, "7", "certify production behavior and delete the legacy core", "architecture", ["production certification", "deletion receipts"], ["release", "parent #645"], "every remaining v1 authority and compatibility path"],
+    [655, "0-companion", "verified prebuilt updater", "release", ["signed manifest", "artifact selection", "rollback"], ["CLI", "desktop"], "source compilation updater"]
+  ],
+  "dependency_policy": {
+    "forbidden_edges": [
+      ["crates/medusa-core", "medusa-runtime"],
+      ["crates/medusa-core", "medusa-agent"],
+      ["crates/medusa-protocol", "medusa-runtime"],
+      ["crates/medusa-protocol", "medusa-agent"],
+      ["crates/medusa-provider", "medusa-runtime"],
+      ["crates/medusa-process-containment", "medusa-runtime"],
+      ["crates/medusa-process-containment", "medusa-agent"]
+    ]
+  },
+  "governance": {
+    "index": "docs/architecture/INDEX.md",
+    "decision": "docs/architecture/decisions/0001-architecture-v2-reset.md",
+    "pr_template": ".github/PULL_REQUEST_TEMPLATE.md",
+    "codeowners": ".github/CODEOWNERS",
+    "checker": "scripts/check-architecture-index.py",
+    "conformance": "scripts/architecture-conformance.py",
+    "release_policy": "docs/architecture/RELEASE-POLICY.md",
+    "deletion_checklist": "docs/architecture/LEGACY-DELETION.md"
+  }
+}
