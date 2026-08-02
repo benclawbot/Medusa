@@ -1,0 +1,151 @@
+name: Apply 648 Authoritative Scheduler
+
+on:
+  pull_request:
+    branches: [main]
+    types: [opened, synchronize, reopened]
+
+permissions:
+  contents: write
+
+concurrency:
+  group: apply-648-scheduler-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  apply:
+    if: github.event.pull_request.number == 661 && github.event.pull_request.head.repo.full_name == github.repository && github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ github.event.pull_request.head.ref }}
+          fetch-depth: 0
+      - uses: dtolnay/rust-toolchain@39b0b3842c7e8bbf6904c0bfc3d9006fdd4dc4e0 # 1.88.0
+        with:
+          components: rustfmt, clippy
+      - name: Apply scheduler migration
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+
+          path = Path("scripts/apply-648-scheduler.py")
+          text = path.read_text(encoding="utf-8")
+          old = 'replace_once(scheduler, "\\n}\\n", scheduler_tests + "\\n}\\n")'
+          new = '''text = scheduler.read_text(encoding="utf-8")
+          position = text.rfind("\\n}\\n")
+          if position < 0:
+              raise RuntimeError("scheduler test module closing brace was not found")
+          scheduler.write_text(text[:position] + scheduler_tests + text[position:], encoding="utf-8")'''
+          if text.count(old) != 1:
+              raise RuntimeError("scheduler test insertion repair did not match exactly once")
+          path.write_text(text.replace(old, new, 1), encoding="utf-8")
+          PY
+          python3 scripts/apply-648-scheduler.py
+          python3 - <<'PY'
+          from pathlib import Path
+
+          cargo = Path("crates/medusa-multi-agent-scheduler/Cargo.toml")
+          text = cargo.read_text(encoding="utf-8")
+          marker = "\n[lints]\nworkspace = true\n"
+          replacement = "\n[dev-dependencies]\ntempfile.workspace = true\n\n[lints]\nworkspace = true\n"
+          if text.count(marker) != 1:
+              raise RuntimeError("scheduler Cargo dev-dependency insertion did not match")
+          cargo.write_text(text.replace(marker, replacement, 1), encoding="utf-8")
+
+          scheduler = Path("crates/medusa-multi-agent-scheduler/src/lib.rs")
+          text = scheduler.read_text(encoding="utf-8")
+          text = text.replace(
+              "struct LedgerTaskDefinition {\n    id: String,",
+              "struct LedgerTaskDefinition {\n    order: u32,\n    id: String,",
+              1,
+          )
+          text = text.replace(
+              ".tasks\n            .iter()\n            .map(|planned| {",
+              ".tasks\n            .iter()\n            .enumerate()\n            .map(|(order, planned)| {",
+              1,
+          )
+          text = text.replace(
+              "LedgerTaskDefinition {\n                        id: planned.task.id.clone(),",
+              "LedgerTaskDefinition {\n                        order: u32::try_from(order).unwrap_or(u32::MAX),\n                        id: planned.task.id.clone(),",
+              1,
+          )
+          old_views = '''        self.state
+            .tasks
+            .values()
+            .filter_map(|definition| {
+                self.state.states.get(&definition.id).cloned().map(|state| {
+                    LedgerTaskView {
+                        id: definition.id.clone(),
+                        title: definition.title.clone(),
+                        kind: definition.kind,
+                        state,
+                    }
+                })
+            })
+            .collect()
+          '''
+          new_views = '''        let mut definitions = self.state.tasks.values().collect::<Vec<_>>();
+          definitions.sort_by_key(|definition| definition.order);
+          definitions
+              .into_iter()
+              .filter_map(|definition| {
+                  self.state.states.get(&definition.id).cloned().map(|state| {
+                      LedgerTaskView {
+                          id: definition.id.clone(),
+                          title: definition.title.clone(),
+                          kind: definition.kind,
+                          state,
+                      }
+                  })
+              })
+              .collect()
+          '''
+          if text.count(old_views) != 1:
+              raise RuntimeError("ordered ledger projection migration did not match")
+          scheduler.write_text(text.replace(old_views, new_views, 1), encoding="utf-8")
+          PY
+      - name: Compile all affected targets
+        run: cargo check -p medusa-multi-agent-scheduler -p medusa-agent -p medusa-runtime -p medusa-cli -p medusa-tui -p medusa-daemon --all-targets
+      - name: Validate scheduler authority
+        shell: bash
+        run: |
+          set -euo pipefail
+          {
+            cargo fmt --all
+            cargo fmt --all -- --check
+            cargo test -p medusa-multi-agent-scheduler --all-targets --locked
+            cargo test -p medusa-agent --lib --locked
+            cargo test -p medusa-runtime --lib --locked
+            cargo clippy -p medusa-multi-agent-scheduler -p medusa-agent -p medusa-runtime -p medusa-cli -p medusa-tui -p medusa-daemon --all-targets --locked -- -D warnings
+            python3 scripts/architecture-conformance.py --known-failures --json
+            python3 scripts/check-architecture-index.py
+          } 2>&1 | tee scheduler-validation.log
+      - name: Upload scheduler validation log
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: scheduler-validation-${{ github.sha }}
+          path: scheduler-validation.log
+          if-no-files-found: warn
+          retention-days: 2
+      - name: Commit validated scheduler migration
+        shell: bash
+        run: |
+          set -euo pipefail
+          git rm .github/workflows/apply-648-scheduler.yml scripts/apply-648-scheduler.py
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add \
+            Cargo.lock \
+            crates/medusa-multi-agent-scheduler/Cargo.toml \
+            crates/medusa-multi-agent-scheduler/src/lib.rs \
+            crates/medusa-runtime/src/lib.rs \
+            crates/medusa-runtime/src/production_orchestrator.rs \
+            crates/medusa-runtime/src/support.rs \
+            docs/architecture/INDEX.md
+          git commit -m "Make the durable scheduler authoritative"
+          git push origin HEAD:${{ github.event.pull_request.head.ref }}
