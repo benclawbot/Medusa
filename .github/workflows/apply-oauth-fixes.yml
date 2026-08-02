@@ -19,44 +19,65 @@ jobs:
         with:
           toolchain: stable
           components: rustfmt
-      - name: Apply exact compiler corrections
+      - name: Apply compiler corrections
         run: |
           python3 - <<'PY'
           from pathlib import Path
 
-          replacements = {
-              "crates/medusa-github/src/repository_creation/compatibility.rs": [
-                  ("#[derive(Clone, Debug, Eq, PartialEq)]\npub struct LegacyGitHubConversion", "#[derive(Clone, Debug, PartialEq)]\npub struct LegacyGitHubConversion"),
-              ],
-              "crates/medusa-github/src/repository_creation/typed_prepare.rs": [
-                  ("use serde_json::{Map, Value, json};", "use serde_json::{Value, json};"),
-                  ("} => reviewers(document, *number, reviewers, team_reviewers, false),", "} => prepare_reviewers(document, *number, reviewers, team_reviewers, false),"),
-                  ("} => reviewers(document, *number, reviewers, team_reviewers, true),", "} => prepare_reviewers(document, *number, reviewers, team_reviewers, true),"),
-                  ("fn reviewers(\n", "fn prepare_reviewers(\n"),
-              ],
-              "crates/medusa-github/src/repository_creation/coordinator.rs": [
-                  ("use std::{collections::BTreeMap, path::PathBuf};", "use std::collections::BTreeMap;"),
-                  ("use serde_json::{Map, Value, json};", "use serde_json::{Value, json};"),
-                  ("self.reconcile_existing(document, &prepared, attempt_id, request_digest)?", "self.reconcile_existing(\n                            document,\n                            &prepared,\n                            attempt_id.clone(),\n                            request_digest.clone(),\n                        )?"),
-              ],
-              "crates/medusa-github/src/repository_creation/direct.rs": [
-                  ("    Method, StatusCode, Url,", "    Method, Url,"),
-                  ("header::{ACCEPT, AUTHORIZATION, CONTENT_TYPE, ETAG, HeaderMap, LOCATION, USER_AGENT}", "header::{ACCEPT, AUTHORIZATION, CONTENT_TYPE, HeaderMap, LOCATION, USER_AGENT}"),
-              ],
-              "crates/medusa-cli/src/github_operation.rs": [
-                  ("ReqwestGitHubApiTransport, ReqwestOAuthTransport, SystemExecutor,", "ReqwestOAuthTransport, StreamingReqwestGitHubApiTransport, SystemExecutor,"),
-                  ("ReqwestGitHubApiTransport::new()?", "StreamingReqwestGitHubApiTransport::new()?"),
-              ],
-          }
-
-          for filename, edits in replacements.items():
-              path = Path(filename)
+          def replace(path, before, after, count=None):
               text = path.read_text()
-              for before, after in edits:
-                  if before not in text:
-                      raise SystemExit(f"expected text not found in {filename}: {before!r}")
-                  text = text.replace(before, after)
-              path.write_text(text)
+              found = text.count(before)
+              expected = count if count is not None else 1
+              if found != expected:
+                  raise SystemExit(f"expected {expected} occurrences in {path}, found {found}: {before!r}")
+              path.write_text(text.replace(before, after))
+
+          compatibility = Path("crates/medusa-github/src/repository_creation/compatibility.rs")
+          replace(
+              compatibility,
+              "#[derive(Clone, Debug, Eq, PartialEq)]\npub struct LegacyGitHubConversion",
+              "#[derive(Clone, Debug, PartialEq)]\npub struct LegacyGitHubConversion",
+          )
+
+          typed_prepare = Path("crates/medusa-github/src/repository_creation/typed_prepare.rs")
+          replace(typed_prepare, "use serde_json::{Map, Value, json};", "use serde_json::{Value, json};")
+          replace(
+              typed_prepare,
+              "} => reviewers(document, *number, reviewers, team_reviewers, false),",
+              "} => prepare_reviewers(document, *number, reviewers, team_reviewers, false),",
+          )
+          replace(
+              typed_prepare,
+              "} => reviewers(document, *number, reviewers, team_reviewers, true),",
+              "} => prepare_reviewers(document, *number, reviewers, team_reviewers, true),",
+          )
+          replace(typed_prepare, "fn reviewers(\n", "fn prepare_reviewers(\n")
+
+          coordinator = Path("crates/medusa-github/src/repository_creation/coordinator.rs")
+          replace(coordinator, "use std::{collections::BTreeMap, path::PathBuf};", "use std::collections::BTreeMap;")
+          replace(coordinator, "use serde_json::{Map, Value, json};", "use serde_json::{Value, json};")
+          replace(
+              coordinator,
+              "self.reconcile_existing(document, &prepared, attempt_id, request_digest)?",
+              "self.reconcile_existing(\n                            document,\n                            &prepared,\n                            attempt_id.clone(),\n                            request_digest.clone(),\n                        )?",
+          )
+
+          direct = Path("crates/medusa-github/src/repository_creation/direct.rs")
+          replace(direct, "Method, StatusCode, Url,", "Method, Url,")
+          replace(direct, "CONTENT_TYPE, ETAG, HeaderMap", "CONTENT_TYPE, HeaderMap")
+
+          cli = Path("crates/medusa-cli/src/github_operation.rs")
+          replace(
+              cli,
+              "ReqwestGitHubApiTransport, ReqwestOAuthTransport, SystemExecutor,",
+              "ReqwestOAuthTransport, StreamingReqwestGitHubApiTransport, SystemExecutor,",
+          )
+          replace(
+              cli,
+              "ReqwestGitHubApiTransport::new()?",
+              "StreamingReqwestGitHubApiTransport::new()?",
+              count=2,
+          )
           PY
           cargo fmt --all
           git config user.name "github-actions[bot]"
