@@ -78,55 +78,48 @@ jobs:
 
           scheduler = Path("crates/medusa-multi-agent-scheduler/src/lib.rs")
           text = scheduler.read_text(encoding="utf-8")
-          text = text.replace(
-              "struct LedgerTaskDefinition {\n    id: String,",
-              "struct LedgerTaskDefinition {\n    order: u32,\n    id: String,",
-              1,
-          )
-          text = text.replace(
-              ".tasks\n            .iter()\n            .map(|planned| {",
-              ".tasks\n            .iter()\n            .enumerate()\n            .map(|(order, planned)| {",
-              1,
-          )
-          text = text.replace(
-              "LedgerTaskDefinition {\n                        id: planned.task.id.clone(),",
-              "LedgerTaskDefinition {\n                        order: u32::try_from(order).unwrap_or(u32::MAX),\n                        id: planned.task.id.clone(),",
-              1,
-          )
-          old_views = '''        self.state
-            .tasks
-            .values()
-            .filter_map(|definition| {
-                self.state.states.get(&definition.id).cloned().map(|state| {
-                    LedgerTaskView {
-                        id: definition.id.clone(),
-                        title: definition.title.clone(),
-                        kind: definition.kind,
-                        state,
-                    }
-                })
-            })
-            .collect()
-          '''
-          new_views = '''        let mut definitions = self.state.tasks.values().collect::<Vec<_>>();
-          definitions.sort_by_key(|definition| definition.order);
-          definitions
-              .into_iter()
-              .filter_map(|definition| {
-                  self.state.states.get(&definition.id).cloned().map(|state| {
-                      LedgerTaskView {
-                          id: definition.id.clone(),
-                          title: definition.title.clone(),
-                          kind: definition.kind,
-                          state,
-                      }
+          field_before = "struct LedgerTaskDefinition {\n    id: String,"
+          field_after = "struct LedgerTaskDefinition {\n    order: u32,\n    id: String,"
+          iterator_before = ".tasks\n            .iter()\n            .map(|planned| {"
+          iterator_after = ".tasks\n            .iter()\n            .enumerate()\n            .map(|(order, planned)| {"
+          definition_before = "LedgerTaskDefinition {\n                        id: planned.task.id.clone(),"
+          definition_after = "LedgerTaskDefinition {\n                        order: u32::try_from(order).unwrap_or(u32::MAX),\n                        id: planned.task.id.clone(),"
+          for before, after, label in [
+              (field_before, field_after, "ledger order field"),
+              (iterator_before, iterator_after, "ledger ordered iterator"),
+              (definition_before, definition_after, "ledger order value"),
+          ]:
+              if text.count(before) != 1:
+                  raise RuntimeError(f"{label} migration did not match exactly once")
+              text = text.replace(before, after, 1)
+
+          start_marker = "    #[must_use]\n    pub fn views(&self) -> Vec<LedgerTaskView> {\n"
+          end_marker = "\n    #[must_use]\n    pub fn path(&self) -> &Path {"
+          start = text.find(start_marker)
+          end = text.find(end_marker, start + len(start_marker))
+          if start < 0 or end < 0:
+              raise RuntimeError("ledger projection function boundaries were not found")
+          views = '''    #[must_use]
+          pub fn views(&self) -> Vec<LedgerTaskView> {
+              let mut definitions = self.state.tasks.values().collect::<Vec<_>>();
+              definitions.sort_by_key(|definition| definition.order);
+              definitions
+                  .into_iter()
+                  .filter_map(|definition| {
+                      self.state.states.get(&definition.id).cloned().map(|state| {
+                          LedgerTaskView {
+                              id: definition.id.clone(),
+                              title: definition.title.clone(),
+                              kind: definition.kind,
+                              state,
+                          }
+                      })
                   })
-              })
-              .collect()
+                  .collect()
+          }
           '''
-          if text.count(old_views) != 1:
-              raise RuntimeError("ordered ledger projection migration did not match")
-          scheduler.write_text(text.replace(old_views, new_views, 1), encoding="utf-8")
+          text = text[:start] + views + text[end:]
+          scheduler.write_text(text, encoding="utf-8")
           PY
       - name: Compile all affected targets
         run: cargo check -p medusa-multi-agent-scheduler -p medusa-agent -p medusa-runtime -p medusa-cli -p medusa-tui -p medusa-daemon --all-targets
