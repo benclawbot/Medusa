@@ -23,17 +23,18 @@ flowchart LR
   R --> P[Production orchestrator]
   P --> RO[Read-only planner and risk reviewer]
   P --> MW[Mutating worktree coordinator]
-  MW --> WV[Worktree verification]
-  WV --> I[Primary-tree integration]
-  I --> PR[Parent read-only review]
-  PR --> RV[Repository verification]
-  R --> J[(Session journal and .medusa records)]
-  RO --> J
-  MW --> J
-  RV --> J
+  MW --> WC[Exact changed-component scope]
+  WC --> WV[Typed worktree verification receipt]
+  WV --> PR[Parent review of immutable prepared commit]
+  PR --> IV[Independent typed verification receipt]
+  IV --> I[Authorized primary-tree integration]
+  I --> RC[Reconciliation]
+  WV --> E[(EvidenceBundle / ArtifactStore)]
+  IV --> E
+  R --> J[(Session journal and transaction records)]
 ```
 
-This is an inventory, not the desired architecture. Known defects include integration before independent review, verification that does not receive changed paths, advertised browser tools without production dispatch, and provider capability claims that do not match wire or cancellation behavior.
+This is the current migration state. Transactional review-before-integration and authoritative evidence are production paths; remaining known defects are tracked in later phases, including provider wire/cancellation parity and shared frontend certification.
 
 ## Target v2 map
 
@@ -42,13 +43,16 @@ flowchart LR
   S[Versioned frontend commands] --> O[Single orchestration core]
   O --> PA[(Plan aggregate)]
   PA --> W[Leased isolated worker]
-  W --> V[Changed-path-aware verification]
-  V --> R[Independent prepared-change review]
+  W --> C[Exact ChangedComponent scope]
+  C --> VP[VerificationPlanner]
+  VP --> VR[(Typed VerificationReceipt)]
+  VR --> R[Independent prepared-change review]
   R -->|accepted receipt| I[Single mutation and integration service]
-  I --> PV[Primary repository verification]
-  PV --> E[(Versioned evidence and artifact envelope)]
-  O --> C[Generated capability registry]
-  C --> D[Certified dispatchers and permission gates]
+  I --> RC[Reconciliation]
+  VP --> A[(Content-addressed ArtifactStore)]
+  A --> EB[(Source-bound EvidenceBundle)]
+  O --> CR[Generated capability registry]
+  CR --> D[Certified dispatchers and permission gates]
   O --> H[Durable provider route health]
 ```
 
@@ -56,7 +60,8 @@ V2 invariants:
 
 - one authoritative owner for every mutable concern;
 - no primary-tree integration before an accepted independent review receipt;
-- changed paths remain explicit through implementation, verification, review, integration, and evidence;
+- additions, modifications, renames, deletions, generated files, ownership, and effective UI impact remain explicit through implementation, verification, review, integration, and evidence;
+- verified conclusions resolve typed sources and prove the artifact ranges actually read;
 - displayed tasks and workers require durable dispatch and lease evidence;
 - an advertised capability requires a dispatcher, permission contract, tests, owner, observability, migration consumer, and deletion target;
 - provider readiness and capability claims equal actual wire and cancellation behavior;
@@ -87,6 +92,7 @@ Runtime readiness distinguishes design, experimental, partial, and production be
 | GitHub service | production | legacy-uncertified | adapt | complete OAuth/backend contract migration |
 | Provider/context resilience | production | quarantined | replace | streaming, cancellation, fallback-health mismatches |
 | Identity, approvals, transactions | production | legacy-uncertified | adapt | centralize mutation receipts and authority |
+| Evidence, artifacts, verification | legacy-free-form | certified-production | preserve | typed source-bound receipts and content-addressed artifacts are authoritative |
 | Daemon | production | legacy-uncertified | adapt | version daemon/remote contracts |
 | Release trust | production | certified-production | preserve | signed manifest v2, protected signer, reviewed keyring, and CI artifacts |
 | Self-update | production | certified-production | preserve | verified prebuilt release is default; source compilation is explicit and never a fallback |
@@ -107,10 +113,10 @@ The complete machine-readable matrix is in `baseline.json`. The critical rows ar
 | Worker lifecycle | `WorkerExecutionController` state | one durable worker aggregate | visible workers require dispatch and lease proof |
 | Mutation | worktree manager and transaction receipts | one mutation service | accepted review precedes integration |
 | Review | parent review after integration | independent prepared-change review | integration requires an accepted receipt |
-| Verification | repository gate and targeted checks | changed-path-aware receipt | changed paths survive every transition |
+| Verification | `medusa-evidence::VerificationPlan` and `VerificationReceipt` | typed changed-component authority | every required check is bound to the exact commit, scope, command outputs, and artifacts |
 | Provider route/readiness | configuration plus process-local manager state | durable route health contract | claims equal wire behavior |
 | Capability availability | legacy claims plus UI/docs | generated registry | no advertised action without certified dispatch |
-| Evidence/artifacts | `.medusa` records and release evidence | versioned envelope | reports derive from evidence |
+| Evidence/artifacts | `EvidenceBundle` and content-addressed `ArtifactStore` | typed source-bound envelope | conclusions resolve exact sources and durable read receipts |
 | Updates/releases | workflows plus source updater | Ed25519-verified prebuilt manifest | no silent source compilation |
 
 ## Dataflows
@@ -118,7 +124,7 @@ The complete machine-readable matrix is in `baseline.json`. The critical rows ar
 - **Session:** frontend command → runtime command envelope → session journal → durable projection → frontend event.
 - **Execution:** plan aggregate → immutable task contract → lease → isolated implementation → changed-path verification → review receipt → integration receipt → repository verification.
 - **Provider:** selected route → exact capability preflight → abortable request → response/usage event → durable route-health update.
-- **Evidence:** command, worker, verification, review, integration, recovery, and artifact receipts → versioned evidence envelope → report/UI/release consumers.
+- **Evidence:** exact changed components → selected checks → raw command/browser/artifact outputs → content-addressed artifacts and read receipts → typed claims/decisions → review, scheduler, authorization, integration, report, and UI consumers.
 - **Persistence:** every mutable concern identifies one journal or aggregate; caches and UI projections are reconstructable and never authoritative.
 
 ## Trust boundaries
@@ -135,7 +141,6 @@ The architecture and state machine are defined in [`PREBUILT-UPDATES.md`](PREBUI
 
 The headless harness intentionally reproduces current defects as expected failures. They document what v1 does, not what v2 should preserve:
 
-- `isolated-verification-drops-changed-paths` (#633)
 - `provider-capability-mismatch` (#636)
 
 An unexpected pass fails the baseline job until the fixture, capability status, migration record, and deletion checklist are updated together.
@@ -161,7 +166,7 @@ A new crate, entrypoint, authority, capability, provider route, frontend, persis
 | 1 | #647 | foundation contracts |
 | 2 | #648 | one orchestration core and state ownership |
 | 3 | #649 | transactional mutation, review, verification, and integration lifecycle |
-| 4 | #650 | provider/OAuth route authority |
+| 4 | #650 | authoritative evidence, artifacts, and changed-component verification |
 | 5 | #651 | all frontends on the shared core |
 | 6 | #652 | state migration and staged v1 deletion |
 | 7 | #654 | certify every real entrypoint and delete the remaining legacy core |
@@ -175,6 +180,7 @@ Use [`LEGACY-DELETION.md`](LEGACY-DELETION.md) for deletion gates and [`RELEASE-
 - Decision: [`decisions/0003-truthful-capability-plugin-registry.md`](decisions/0003-truthful-capability-plugin-registry.md)
 - Decision: [`decisions/0004-authoritative-durable-scheduler.md`](decisions/0004-authoritative-durable-scheduler.md)
 - Decision: [`decisions/0005-transactional-mutation-lifecycle.md`](decisions/0005-transactional-mutation-lifecycle.md)
+- Decision: [`decisions/0006-authoritative-evidence-artifacts-and-verification.md`](decisions/0006-authoritative-evidence-artifacts-and-verification.md)
 - Verified update architecture: [`PREBUILT-UPDATES.md`](PREBUILT-UPDATES.md)
 - Machine-readable baseline: [`baseline.json`](baseline.json)
 - Primary component owners: [`owners.json`](owners.json)
