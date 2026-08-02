@@ -62,8 +62,8 @@ jobs:
               "Act immediately without planning or additional inspection. Use fs_write on the relative path "
               "src/lib.rs and replace the complete file with the exact fixture content required to set "
               "RESPONSE to {expected}, while preserving the existing response function and test unchanged. "
-              "Then use shell_run to run cargo test. Do not call update_plan, team tools, or git_checkpoint. "
-              "After the test passes, return exactly {expected}."
+              "Then use shell_run to run cargo fmt --all, followed by cargo test. Do not call update_plan, "
+              "team tools, or git_checkpoint. After formatting and tests pass, return exactly {expected}."
           )'''
           text, count = re.subn(r"PROMPT = \(.*?\n\)\nDEFAULT_TIMEOUT_SECONDS", prompt + "\nDEFAULT_TIMEOUT_SECONDS", text, flags=re.S)
           if count != 1:
