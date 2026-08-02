@@ -2,6 +2,9 @@ name: Apply GitHub OAuth Clippy fixes
 
 # One-shot branch utility. Removed after the correction commit.
 on:
+  push:
+    branches:
+      - agent/629-github-oauth-parity
   pull_request:
     branches:
       - main
@@ -11,7 +14,7 @@ permissions:
 
 jobs:
   fix:
-    if: github.head_ref == 'agent/629-github-oauth-parity'
+    if: github.event_name == 'push' || github.head_ref == 'agent/629-github-oauth-parity'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
@@ -21,9 +24,11 @@ jobs:
         with:
           toolchain: stable
           components: rustfmt
-      - name: Apply exact Clippy corrections
+      - name: Apply corrections or persist diagnostics
+        shell: bash
         run: |
-          python3 - <<'PY'
+          set +e
+          python3 - <<'PY' > /tmp/oauth-fix.log 2>&1
           from pathlib import Path
 
           def replace(filename, before, after, count=1):
@@ -86,21 +91,9 @@ jobs:
         receipt: Box<GitHubOperationReceiptV2>,
     },''',
           )
-          replace(
-              idempotency,
-              '    Replay(GitHubOperationReceiptV2),',
-              '    Replay(Box<GitHubOperationReceiptV2>),',
-          )
-          replace(
-              idempotency,
-              '                            receipt = Some(candidate);',
-              '                            receipt = Some(*candidate);',
-          )
-          replace(
-              idempotency,
-              '            Ok(IdempotencyLookup::Replay(receipt.replayed()))',
-              '            Ok(IdempotencyLookup::Replay(Box::new(receipt.replayed())))',
-          )
+          replace(idempotency, '    Replay(GitHubOperationReceiptV2),', '    Replay(Box<GitHubOperationReceiptV2>),')
+          replace(idempotency, '                            receipt = Some(candidate);', '                            receipt = Some(*candidate);')
+          replace(idempotency, '            Ok(IdempotencyLookup::Replay(receipt.replayed()))', '            Ok(IdempotencyLookup::Replay(Box::new(receipt.replayed())))')
           replace(
               idempotency,
               '''        self.append(&LedgerRecord::Receipt {
@@ -112,11 +105,7 @@ jobs:
           )
 
           coordinator = "crates/medusa-github/src/repository_creation/coordinator.rs"
-          replace(
-              coordinator,
-              '            IdempotencyLookup::Replay(receipt) => return Ok(receipt),',
-              '            IdempotencyLookup::Replay(receipt) => return Ok(*receipt),',
-          )
+          replace(coordinator, '            IdempotencyLookup::Replay(receipt) => return Ok(receipt),', '            IdempotencyLookup::Replay(receipt) => return Ok(*receipt),')
 
           typed_prepare = "crates/medusa-github/src/repository_creation/typed_prepare.rs"
           replace(
@@ -125,9 +114,27 @@ jobs:
               '#[expect(clippy::too_many_arguments, reason = "typed request construction keeps policy fields explicit at each call site")]\nfn api(\n',
           )
           PY
-          cargo fmt --all
+          status=$?
+          mkdir -p .github
+          if [ "$status" -eq 0 ]; then
+            cargo fmt --all >> /tmp/oauth-fix.log 2>&1
+            status=$?
+          fi
+          if [ "$status" -ne 0 ]; then
+            {
+              echo "GitHub OAuth correction utility failed with status $status"
+              sed -n '1,200p' /tmp/oauth-fix.log
+            } > .github/oauth-fix-diagnostics.txt
+          else
+            rm -f .github/oauth-fix-diagnostics.txt
+          fi
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add -- '*.rs'
+          git add -- '*.rs' .github/oauth-fix-diagnostics.txt
+          if git diff --cached --quiet; then
+            echo "No correction changes to commit"
+            exit "$status"
+          fi
           git commit -m "Resolve GitHub OAuth strict Clippy findings"
           git push origin HEAD:agent/629-github-oauth-parity
+          exit "$status"
