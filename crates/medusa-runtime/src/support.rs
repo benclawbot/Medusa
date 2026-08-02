@@ -330,6 +330,7 @@ pub(super) struct UpdateState {
     pending_tools: VecDeque<PendingTool>,
     model_started_at: Option<Instant>,
     pub(super) current_context_tokens: u64,
+    suppress_model_plan: bool,
 }
 
 impl UpdateState {
@@ -339,7 +340,12 @@ impl UpdateState {
             pending_tools: VecDeque::new(),
             model_started_at: None,
             current_context_tokens: 0,
+            suppress_model_plan: false,
         }
+    }
+
+    pub(super) fn suppress_model_plan(&mut self) {
+        self.suppress_model_plan = true;
     }
 }
 
@@ -458,7 +464,9 @@ pub(super) fn forward_update(
             }
         }
         AgentUpdate::Plan(steps) => {
-            let _ = events.send(RuntimeEvent::Plan(steps.clone()));
+            if !state.suppress_model_plan {
+                let _ = events.send(RuntimeEvent::Plan(steps.clone()));
+            }
         }
         AgentUpdate::Question(_) => {}
         AgentUpdate::ToolOutput {
