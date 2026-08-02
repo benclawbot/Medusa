@@ -1,0 +1,107 @@
+name: Apply 650 Runtime Evidence Authority
+
+on:
+  pull_request:
+    branches: [main]
+    types: [opened, synchronize, reopened]
+
+permissions:
+  contents: write
+
+concurrency:
+  group: apply-650-runtime-authority-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  apply:
+    if: github.event.pull_request.number == 663 && github.event.pull_request.head.repo.full_name == github.repository && github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    timeout-minutes: 50
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ github.event.pull_request.head.ref }}
+      - uses: dtolnay/rust-toolchain@39b0b3842c7e8bbf6904c0bfc3d9006fdd4dc4e0 # 1.88.0
+        with:
+          components: rustfmt, clippy
+      - name: Apply runtime authority migration
+        run: python3 scripts/apply-650-runtime-authority.py
+      - name: Validate complete authority path
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo fmt --all
+          changed="$(git diff --name-only | sort)"
+          unexpected="$(printf '%s\n' "$changed" | grep -Ev '^(Cargo.lock|crates/medusa-evidence/src/change.rs|crates/medusa-workers/(Cargo.toml|src/lib.rs)|crates/medusa-agent/src/verification_authority.rs|crates/medusa-runtime/(Cargo.toml|src/(mutating_worker_coordinator|mutating_worker_coordinator_support|mutation_transaction)\.rs)|crates/medusa-multi-agent-scheduler/(Cargo.toml|src/lib.rs))$' || true)"
+          test -z "$unexpected"
+          cargo fmt --all -- --check
+          cargo check -p medusa-evidence -p medusa-workers -p medusa-agent -p medusa-multi-agent-scheduler -p medusa-runtime --all-targets
+          cargo test -p medusa-evidence
+          cargo test -p medusa-workers
+          cargo test -p medusa-multi-agent-scheduler
+          cargo test -p medusa-agent verification_authority --lib
+          cargo test -p medusa-runtime mutation_transaction --lib
+          cargo test -p medusa-runtime mutating_worker_coordinator --lib
+          cargo clippy -p medusa-evidence -p medusa-workers -p medusa-agent -p medusa-multi-agent-scheduler -p medusa-runtime --all-targets -- -D warnings
+      - name: Publish validated runtime authority
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          HEAD_REF: ${{ github.event.pull_request.head.ref }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          node <<'NODE'
+          const fs = require('fs');
+          const [owner, repo] = process.env.GITHUB_REPOSITORY.split('/');
+          const branch = process.env.HEAD_REF;
+          const token = process.env.GITHUB_TOKEN;
+          const paths = [
+            'Cargo.lock',
+            'crates/medusa-evidence/src/change.rs',
+            'crates/medusa-workers/Cargo.toml',
+            'crates/medusa-workers/src/lib.rs',
+            'crates/medusa-agent/src/verification_authority.rs',
+            'crates/medusa-runtime/Cargo.toml',
+            'crates/medusa-runtime/src/mutating_worker_coordinator.rs',
+            'crates/medusa-runtime/src/mutating_worker_coordinator_support.rs',
+            'crates/medusa-runtime/src/mutation_transaction.rs',
+            'crates/medusa-multi-agent-scheduler/Cargo.toml',
+            'crates/medusa-multi-agent-scheduler/src/lib.rs',
+          ];
+          async function request(url, options = {}) {
+            const response = await fetch(`https://api.github.com${url}`, {
+              ...options,
+              headers: {
+                Accept: 'application/vnd.github+json',
+                Authorization: `Bearer ${token}`,
+                'X-GitHub-Api-Version': '2022-11-28',
+                'User-Agent': 'medusa-runtime-evidence-authority',
+              },
+            });
+            const text = await response.text();
+            const data = text ? JSON.parse(text) : {};
+            if (!response.ok) throw new Error(`${response.status} ${text}`);
+            return data;
+          }
+          (async () => {
+            for (const path of paths) {
+              const encoded = path.split('/').map(encodeURIComponent).join('/');
+              const current = await request(`/repos/${owner}/${repo}/contents/${encoded}?ref=${encodeURIComponent(branch)}`);
+              const desired = fs.readFileSync(path);
+              const existing = Buffer.from((current.content || '').replace(/\n/g, ''), 'base64');
+              if (existing.equals(desired)) continue;
+              await request(`/repos/${owner}/${repo}/contents/${encoded}`, {
+                method: 'PUT',
+                body: JSON.stringify({
+                  message: `Make evidence authority runtime-wide: ${path}`,
+                  content: desired.toString('base64'),
+                  sha: current.sha,
+                  branch,
+                }),
+              });
+            }
+          })().catch((error) => {
+            console.error(error.stack || String(error));
+            process.exit(1);
+          });
+          NODE
