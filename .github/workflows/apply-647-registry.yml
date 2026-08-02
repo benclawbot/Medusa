@@ -26,7 +26,61 @@ jobs:
         with:
           components: rustfmt, clippy
       - name: Apply registry migration
-        run: python3 scripts/apply-647-registry.py
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 scripts/apply-647-registry.py
+          python3 - <<'PY'
+          from pathlib import Path
+          import re
+
+          path = Path("crates/medusa-capabilities/src/registry.rs")
+          text = path.read_text(encoding="utf-8")
+          pattern = re.compile(r'(?m)^(?P<call>\s*)tool_entry\(\n(?P<arg>\s*)states,\n(?P=arg)"(?P<name>[^"]+)",')
+
+          def replace_call(match: re.Match[str]) -> str:
+              return (
+                  f'{match.group("call")}tool_entry(\n'
+                  f'{match.group("arg")}ToolIdentity {{ states, name: "{match.group("name")}" }},'
+              )
+
+          text, count = pattern.subn(replace_call, text)
+          if count == 0:
+              raise RuntimeError("tool identity migration found no registry calls")
+
+          old = '''fn tool_entry<const N: usize>(
+              states: &BTreeMap<Capability, CapabilityState>,
+              name: &str,
+              capability: Capability,
+              description: &str,
+              input_schema: Value,
+              handler: &str,
+              permissions: [RegistryPermission; N],
+              requires_approval: bool,
+          ) -> RegistryEntry {
+              let state = states.get(&capability).cloned().unwrap_or(CapabilityState {
+          '''
+          new = '''struct ToolIdentity<'a> {
+              states: &'a BTreeMap<Capability, CapabilityState>,
+              name: &'a str,
+          }
+
+          fn tool_entry<const N: usize>(
+              identity: ToolIdentity<'_>,
+              capability: Capability,
+              description: &str,
+              input_schema: Value,
+              handler: &str,
+              permissions: [RegistryPermission; N],
+              requires_approval: bool,
+          ) -> RegistryEntry {
+              let ToolIdentity { states, name } = identity;
+              let state = states.get(&capability).cloned().unwrap_or(CapabilityState {
+          '''
+          if text.count(old) != 1:
+              raise RuntimeError("tool identity signature migration did not match exactly once")
+          path.write_text(text.replace(old, new, 1), encoding="utf-8")
+          PY
       - name: Refresh locked dependency graph
         run: cargo check -p medusa-capabilities -p medusa-extensions -p medusa-agent -p medusa-cli
       - name: Validate truthful registry
@@ -63,6 +117,7 @@ jobs:
             crates/medusa-agent/src/engine.rs \
             crates/medusa-agent/src/engine_support.rs \
             crates/medusa-agent/src/tools/mod.rs \
+            crates/medusa-capabilities/src/registry.rs \
             crates/medusa-cli/src/capabilities.rs \
             docs/architecture/INDEX.md \
             docs/architecture/baseline.json \
