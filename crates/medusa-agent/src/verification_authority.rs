@@ -24,16 +24,12 @@ pub fn authoritative_verification_for_components(
     components: &[ChangedComponent],
 ) -> MedusaResult<AuthoritativeVerificationResult> {
     if repository_fingerprint.trim().is_empty() || commit.trim().is_empty() {
-        return Err(invalid("authoritative verification requires repository and commit identity"));
+        return Err(invalid(
+            "authoritative verification requires repository and commit identity",
+        ));
     }
-    let plan = VerificationPlanner::plan(
-        repo,
-        repository_fingerprint,
-        commit,
-        components,
-        &[],
-    )
-    .map_err(evidence_error)?;
+    let plan = VerificationPlanner::plan(repo, repository_fingerprint, commit, components, &[])
+        .map_err(evidence_error)?;
     let changed_paths = plan
         .components
         .iter()
@@ -51,13 +47,20 @@ pub fn authoritative_verification_for_components(
 
     let legacy_bytes = legacy.evidence.join("\n").into_bytes();
     let legacy_artifact = store
-        .put_bytes("text/plain; charset=utf-8", "medusa-agent-targeted-verification", &legacy_bytes)
+        .put_bytes(
+            "text/plain; charset=utf-8",
+            "medusa-agent-targeted-verification",
+            &legacy_bytes,
+        )
         .map_err(evidence_error)?;
+    if legacy_artifact.byte_len == 0 {
+        return Err(invalid("targeted verification produced no evidence bytes"));
+    }
     let (_, legacy_read) = store
         .read_range(
             &legacy_artifact.id,
             0,
-            legacy_artifact.byte_len.max(1).min(legacy_artifact.byte_len),
+            legacy_artifact.byte_len,
             "medusa-agent-verification-authority",
         )
         .map_err(evidence_error)?;
@@ -104,40 +107,49 @@ pub fn authoritative_verification_for_components(
         if path.is_file() {
             let bytes = fs::read(&path)?;
             let metadata = store
-                .put_bytes(media_type_for_path(&path), "medusa-agent-artifact-validator", &bytes)
+                .put_bytes(
+                    media_type_for_path(&path),
+                    "medusa-agent-artifact-validator",
+                    &bytes,
+                )
                 .map_err(evidence_error)?;
-            let (_, read) = store
-                .read_page(&metadata.id, 0, "medusa-agent-artifact-validator")
-                .map_err(evidence_error)?;
-            let record = EvidenceRecord::new(
-                EvidenceKind::Observation,
-                format!("semantic artifact validation for {}", component.path),
-                repository_fingerprint,
-                commit,
-                "medusa-agent-artifact-validator",
-                if result.passed {
-                    VerificationStatus::Verified
-                } else {
-                    VerificationStatus::Rejected
-                },
-                vec![EvidenceSource::ArtifactRange {
-                    artifact_id: metadata.id.clone(),
-                    read_receipt_id: read.id.clone(),
-                    offset: read.offset,
-                    length: read.length,
-                    content_hash: read.content_hash.clone(),
-                }],
-            )
-            .map_err(evidence_error)?;
-            semantic_ids.push(record.id.clone());
             semantic_artifacts.push(metadata.id.clone());
-            artifacts.insert(metadata.id.clone(), metadata);
-            reads.push(read);
-            records.push(record);
+            artifacts.insert(metadata.id.clone(), metadata.clone());
+            if metadata.byte_len > 0 {
+                let (_, read) = store
+                    .read_page(&metadata.id, 0, "medusa-agent-artifact-validator")
+                    .map_err(evidence_error)?;
+                let record = EvidenceRecord::new(
+                    EvidenceKind::Observation,
+                    format!("semantic artifact validation for {}", component.path),
+                    repository_fingerprint,
+                    commit,
+                    "medusa-agent-artifact-validator",
+                    if result.passed {
+                        VerificationStatus::Verified
+                    } else {
+                        VerificationStatus::Rejected
+                    },
+                    vec![EvidenceSource::ArtifactRange {
+                        artifact_id: metadata.id.clone(),
+                        read_receipt_id: read.id.clone(),
+                        offset: read.offset,
+                        length: read.length,
+                        content_hash: read.content_hash.clone(),
+                    }],
+                )
+                .map_err(evidence_error)?;
+                semantic_ids.push(record.id.clone());
+                reads.push(read);
+                records.push(record);
+            }
         }
     }
 
-    let browser_passed = !plan.components.iter().any(|component| component.effective_ui)
+    let browser_passed = !plan
+        .components
+        .iter()
+        .any(|component| component.effective_ui)
         || legacy
             .evidence
             .iter()
@@ -256,11 +268,10 @@ fn git_stdout(repo: &Path, args: &[&str]) -> Option<String> {
         .current_dir(repo)
         .output()
         .ok()?;
-    output.status.success().then(|| {
-        String::from_utf8_lossy(&output.stdout)
-            .trim()
-            .to_owned()
-    })
+    output
+        .status
+        .success()
+        .then(|| String::from_utf8_lossy(&output.stdout).trim().to_owned())
 }
 
 fn short_hash(value: &str) -> String {
