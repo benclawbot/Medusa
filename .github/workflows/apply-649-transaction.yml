@@ -96,6 +96,13 @@ jobs:
           if "verify_repository(" in text or "targeted_verification" in text:
               raise RuntimeError("obsolete post-integration verification path remains")
           multi.write_text(text, encoding="utf-8")
+
+          checker = Path("scripts/check-architecture-index.py")
+          text = checker.read_text(encoding="utf-8")
+          resolved = '    "integration-precedes-parent-review",\n'
+          if text.count(resolved) != 1:
+              raise RuntimeError("resolved integration fixture requirement did not match exactly once")
+          checker.write_text(text.replace(resolved, "", 1), encoding="utf-8")
           PY
       - name: Compile all affected targets
         run: cargo check -p medusa-workers -p medusa-runtime -p medusa-agent -p medusa-cli -p medusa-tui -p medusa-daemon --all-targets
@@ -141,6 +148,7 @@ jobs:
             docs/architecture/INDEX.md \
             docs/architecture/baseline.json \
             scripts/architecture-conformance.py \
+            scripts/check-architecture-index.py \
             scripts/check-mutation-lifecycle.py
           git commit -m "Enforce transactional review before integration"
           git push origin HEAD:${{ github.event.pull_request.head.ref }}
