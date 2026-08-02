@@ -4,6 +4,9 @@ on:
   push:
     branches:
       - agent/629-github-oauth-parity
+  pull_request:
+    branches:
+      - main
 
 permissions:
   contents: read
