@@ -1,0 +1,74 @@
+name: Apply 649 Transactional Mutation v2
+
+on:
+  pull_request:
+    branches: [main]
+    types: [opened, synchronize, reopened]
+
+permissions:
+  contents: write
+
+concurrency:
+  group: apply-649-transaction-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  apply:
+    if: github.event.pull_request.number == 662 && github.event.pull_request.head.repo.full_name == github.repository && github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    timeout-minutes: 50
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ github.event.pull_request.head.ref }}
+          fetch-depth: 0
+      - uses: dtolnay/rust-toolchain@39b0b3842c7e8bbf6904c0bfc3d9006fdd4dc4e0 # 1.88.0
+        with:
+          components: rustfmt, clippy
+      - name: Apply transaction migration
+        run: python3 scripts/run-649-migration.py
+      - name: Compile all affected targets
+        run: cargo check -p medusa-workers -p medusa-runtime -p medusa-agent -p medusa-cli -p medusa-tui -p medusa-daemon --all-targets
+      - name: Validate transactional lifecycle
+        shell: bash
+        run: |
+          set -euo pipefail
+          {
+            cargo fmt --all
+            cargo fmt --all -- --check
+            cargo test -p medusa-workers --all-targets --locked
+            cargo test -p medusa-runtime --lib --locked
+            cargo test -p medusa-agent --lib --locked
+            cargo clippy -p medusa-workers -p medusa-runtime -p medusa-agent -p medusa-cli -p medusa-tui -p medusa-daemon --all-targets --locked -- -D warnings
+            python3 scripts/check-mutation-lifecycle.py
+            python3 scripts/architecture-conformance.py --known-failures --json
+            python3 scripts/check-architecture-index.py
+          } 2>&1 | tee transaction-validation.log
+      - name: Upload transaction validation log
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: transaction-validation-${{ github.sha }}
+          path: transaction-validation.log
+          if-no-files-found: warn
+          retention-days: 2
+      - name: Commit validated transaction migration
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -f transaction-validation.log
+          git rm -f \
+            .github/workflows/apply-649-transaction.yml \
+            .github/workflows/apply-649-transaction-v2.yml \
+            scripts/apply-649-transaction.py \
+            scripts/run-649-migration.py
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add -A
+          git diff --cached --name-status
+          if git diff --cached --quiet; then
+            echo "validated transaction migration produced no staged source changes" >&2
+            exit 1
+          fi
+          git commit -m "Enforce transactional review before integration"
+          git push origin HEAD:${{ github.event.pull_request.head.ref }}
