@@ -198,8 +198,12 @@ fn validate_authority(receipt: &VerificationReceipt) -> Result<()> {
                     || command.check_id != check.id
                     || command.command_hash != check.input_fingerprint
                     || command.passed != check_receipt.passed
-                    || !check_receipt.artifact_ids.contains(&command.stdout_artifact)
-                    || !check_receipt.artifact_ids.contains(&command.stderr_artifact)
+                    || !check_receipt
+                        .artifact_ids
+                        .contains(&command.stdout_artifact)
+                    || !check_receipt
+                        .artifact_ids
+                        .contains(&command.stderr_artifact)
                     || !records.iter().any(|record| {
                         record.sources.iter().any(|source| {
                             matches!(
