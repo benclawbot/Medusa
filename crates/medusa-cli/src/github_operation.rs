@@ -19,7 +19,9 @@ use serde::Serialize;
 
 #[derive(Debug, Parser)]
 #[command(name = "medusa-github-operation")]
-#[command(about = "Execute one repository-confined GitHub operation through an interchangeable backend")]
+#[command(
+    about = "Execute one repository-confined GitHub operation through an interchangeable backend"
+)]
 struct Cli {
     /// JSON operation document path, or `-` to read from standard input.
     #[arg(long, value_name = "PATH")]
@@ -59,9 +61,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
     let request = read_request(&cli.request)?;
     request.validate()?;
 
-    let repository_directory = cli
-        .repository_directory
-        .unwrap_or(env::current_dir()?);
+    let repository_directory = cli.repository_directory.unwrap_or(env::current_dir()?);
     if !repository_directory.is_dir() {
         return Err(medusa_core::MedusaError::new(
             medusa_core::ErrorCode::InvalidInput,
@@ -298,22 +298,20 @@ mod tests {
         ])
         .expect("parse");
         let mut authorizer = authorizer();
-        assert!(authorize_operation(
-            &mut authorizer,
-            request(GitHubOperationRisk::Administration).risk(),
-            &cli,
-        )
-        .is_err());
+        assert!(
+            authorize_operation(
+                &mut authorizer,
+                request(GitHubOperationRisk::Administration).risk(),
+                &cli,
+            )
+            .is_err()
+        );
     }
 
     #[test]
     fn read_only_operation_requires_no_approval_flags() {
-        let cli = Cli::try_parse_from([
-            "medusa-github-operation",
-            "--request",
-            "operation.json",
-        ])
-        .expect("parse");
+        let cli = Cli::try_parse_from(["medusa-github-operation", "--request", "operation.json"])
+            .expect("parse");
         let mut authorizer = authorizer();
         authorize_operation(
             &mut authorizer,
