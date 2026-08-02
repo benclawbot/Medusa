@@ -313,6 +313,7 @@ fn platform_program(program: &str) -> &str {
         "bun" => "bun.exe",
         "python" => "python.exe",
         "cargo" => "cargo.exe",
+        "rustfmt" => "rustfmt.exe",
         "bash" => "bash.exe",
         "powershell" => "powershell.exe",
         _ => program,
