@@ -37,6 +37,7 @@ mod learning_retrieval;
 pub mod learning_review;
 mod multi_agent_coordinator;
 mod mutating_worker_coordinator;
+mod mutation_transaction;
 pub mod openai_realtime;
 pub mod prompt;
 pub mod review;
@@ -1132,7 +1133,7 @@ fn run_prompt(
                             ledger,
                             &execution_plan,
                             &[medusa_multi_agent_scheduler::TaskKind::Implementation],
-                            "isolated implementation integrated with verification evidence",
+                            "immutable isolated implementation prepared for parent review",
                         )
                         .map_err(RuntimeError::agent)?;
                         let _ = events.send(RuntimeEvent::Plan(
@@ -1161,13 +1162,13 @@ fn run_prompt(
         };
     if let Some(evidence) = implementation_evidence.as_ref() {
         let session = state.session.as_mut().ok_or_else(|| {
-            RuntimeError::agent("runtime session disappeared before integration receipt recording")
+            RuntimeError::agent("runtime session disappeared before prepared evidence recording")
         })?;
         medusa_agent::record_session_event(
             session,
             Actor::Coordinator,
-            EventPayload::IntegrationReceiptRecorded {
-                receipt: serde_json::to_value(evidence).map_err(RuntimeError::agent)?,
+            EventPayload::WorkerEvidenceRecorded {
+                evidence: serde_json::to_value(evidence).map_err(RuntimeError::agent)?,
             },
         )
         .map_err(RuntimeError::agent)?;
@@ -1398,8 +1399,113 @@ fn run_prompt(
         state.pending_skill = None;
     }
     let mut result = result;
+    let terminal_turn = matches!(
+        &result,
+        Ok(RuntimeEvent::Completed { .. } | RuntimeEvent::TurnFinished)
+    );
+    let mut verified = terminal_turn && !crate::production_orchestrator::requires_mutation(&execution_plan);
     if coordinated {
-        if let Some(ledger) = execution_ledger.as_mut() {
+        if let Some(evidence) = implementation_evidence.as_ref() {
+            match &result {
+                Ok(RuntimeEvent::Completed { .. } | RuntimeEvent::TurnFinished) => {
+                    match crate::mutation_transaction::complete_after_parent_review(
+                        &evidence.transaction_path,
+                        &state.repo,
+                        &session,
+                        events,
+                    ) {
+                        Ok(crate::mutation_transaction::TransactionCompletion::Reconciled(receipt)) => {
+                            verified = true;
+                            if let Some(ledger) = execution_ledger.as_mut() {
+                                crate::production_orchestrator::succeed_kinds(
+                                    ledger,
+                                    &execution_plan,
+                                    &[medusa_multi_agent_scheduler::TaskKind::Review],
+                                    "parent review accepted the immutable prepared commit",
+                                )
+                                .map_err(RuntimeError::agent)?;
+                                crate::production_orchestrator::begin_kinds(
+                                    ledger,
+                                    &execution_plan,
+                                    &[medusa_multi_agent_scheduler::TaskKind::Verification],
+                                    "independent-verification",
+                                )
+                                .map_err(RuntimeError::agent)?;
+                                crate::production_orchestrator::succeed_kinds(
+                                    ledger,
+                                    &execution_plan,
+                                    &[medusa_multi_agent_scheduler::TaskKind::Verification],
+                                    "independent verification, authorization, integration, and reconciliation completed",
+                                )
+                                .map_err(RuntimeError::agent)?;
+                            }
+                            medusa_agent::record_session_event(
+                                &mut session,
+                                Actor::Coordinator,
+                                EventPayload::IntegrationReceiptRecorded {
+                                    receipt: serde_json::to_value(&receipt)
+                                        .map_err(RuntimeError::agent)?,
+                                },
+                            )
+                            .map_err(RuntimeError::agent)?;
+                        }
+                        Ok(crate::mutation_transaction::TransactionCompletion::RevisionRequested(reason)) => {
+                            if let Some(ledger) = execution_ledger.as_mut() {
+                                let _ = crate::production_orchestrator::fail_kinds(
+                                    ledger,
+                                    &execution_plan,
+                                    &[medusa_multi_agent_scheduler::TaskKind::Review],
+                                    &reason,
+                                );
+                            }
+                            result = Err(RuntimeError::agent(format!(
+                                "parent review requested a bounded isolated revision: {reason}"
+                            )));
+                        }
+                        Err(error) => {
+                            if let Some(ledger) = execution_ledger.as_mut() {
+                                let _ = crate::production_orchestrator::fail_kinds(
+                                    ledger,
+                                    &execution_plan,
+                                    &[
+                                        medusa_multi_agent_scheduler::TaskKind::Review,
+                                        medusa_multi_agent_scheduler::TaskKind::Verification,
+                                    ],
+                                    &error,
+                                );
+                            }
+                            result = Err(RuntimeError::agent(error));
+                        }
+                    }
+                }
+                Ok(RuntimeEvent::Cancelled) => {
+                    let _ = crate::mutation_transaction::cancel_transaction(
+                        &evidence.transaction_path,
+                        "runtime cancellation completed",
+                        events,
+                    );
+                    if let Some(ledger) = execution_ledger.as_mut() {
+                        let _ = ledger.cancel_remaining("runtime cancellation completed");
+                    }
+                }
+                Err(error) => {
+                    let _ = crate::mutation_transaction::fail_transaction(
+                        &evidence.transaction_path,
+                        &error.to_string(),
+                        events,
+                    );
+                    if let Some(ledger) = execution_ledger.as_mut() {
+                        let _ = crate::production_orchestrator::fail_kinds(
+                            ledger,
+                            &execution_plan,
+                            &[medusa_multi_agent_scheduler::TaskKind::Review],
+                            &error.to_string(),
+                        );
+                    }
+                }
+                _ => {}
+            }
+        } else if let Some(ledger) = execution_ledger.as_mut() {
             match &result {
                 Ok(RuntimeEvent::Completed { .. } | RuntimeEvent::TurnFinished) => {
                     crate::production_orchestrator::succeed_kinds(
@@ -1422,63 +1528,6 @@ fn run_prompt(
                     );
                 }
                 _ => {}
-            }
-            let projected = crate::production_orchestrator::projection(ledger);
-            session.plan = projected.clone();
-            let _ = events.send(RuntimeEvent::Plan(projected));
-        }
-    }
-    let terminal_turn = matches!(
-        &result,
-        Ok(RuntimeEvent::Completed { .. } | RuntimeEvent::TurnFinished)
-    );
-    let mut verified = terminal_turn && !crate::production_orchestrator::requires_mutation(&execution_plan);
-    if execution_plan.mode == crate::production_orchestrator::ExecutionMode::Orchestrated
-        && terminal_turn
-        && execution_plan
-            .planning
-            .task(medusa_multi_agent_scheduler::TaskKind::Verification)
-            .is_some()
-    {
-        if let Some(ledger) = execution_ledger.as_mut() {
-            crate::production_orchestrator::begin_kinds(
-                ledger,
-                &execution_plan,
-                &[medusa_multi_agent_scheduler::TaskKind::Verification],
-                "repository-verification",
-            )
-            .map_err(RuntimeError::agent)?;
-            let _ = events.send(RuntimeEvent::Plan(
-                crate::production_orchestrator::projection(ledger),
-            ));
-        }
-        match crate::multi_agent_coordinator::verify_repository(
-            &state.repo,
-            &execution_plan,
-            events,
-        ) {
-            Ok(evidence) => {
-                verified = true;
-                if let Some(ledger) = execution_ledger.as_mut() {
-                    crate::production_orchestrator::succeed_kinds(
-                        ledger,
-                        &execution_plan,
-                        &[medusa_multi_agent_scheduler::TaskKind::Verification],
-                        &evidence.join(" | "),
-                    )
-                    .map_err(RuntimeError::agent)?;
-                }
-            }
-            Err(error) => {
-                if let Some(ledger) = execution_ledger.as_mut() {
-                    let _ = crate::production_orchestrator::fail_kinds(
-                        ledger,
-                        &execution_plan,
-                        &[medusa_multi_agent_scheduler::TaskKind::Verification],
-                        &error,
-                    );
-                }
-                result = Err(RuntimeError::agent(error));
             }
         }
         if let Some(ledger) = execution_ledger.as_ref() {
