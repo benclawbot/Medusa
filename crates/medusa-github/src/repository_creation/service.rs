@@ -66,22 +66,20 @@ impl<E: CommandExecutor> GitHubService<E> {
 
         if let Some(bootstrap) = &request.bootstrap {
             let prepared = self.prepare_local_repository(request, bootstrap, false)?;
-            let create_result = self.create_from_local(&qualified, request, &prepared);
-            if let Err(error) = create_result {
-                if let Some(receipt) = self.inspect_repository(&qualified, true)? {
-                    return Err(partial_failure(&receipt.web_url, error));
+            self.create_from_local(&qualified, request, &prepared)?;
+            let recovery_url = self.web_url_for(&full_name);
+            return (|| {
+                let mut receipt = self
+                    .inspect_repository(&qualified, true)?
+                    .ok_or_else(|| internal_error("created repository could not be inspected"))?;
+                receipt.local_path = Some(prepared.path.clone());
+                receipt.initial_commit = self.current_commit(&prepared.path).ok();
+                if prepared.push {
+                    receipt.default_branch = request.default_branch.trim().to_owned();
                 }
-                return Err(error);
-            }
-            let mut receipt = self
-                .inspect_repository(&qualified, true)?
-                .ok_or_else(|| internal_error("created repository could not be inspected"))?;
-            receipt.local_path = Some(prepared.path.clone());
-            receipt.initial_commit = self.current_commit(&prepared.path).ok();
-            if prepared.push {
-                receipt.default_branch = request.default_branch.trim().to_owned();
-            }
-            return Ok(receipt);
+                Ok(receipt)
+            })()
+            .map_err(|error| partial_failure(&recovery_url, error));
         }
 
         if request.template_repository.is_some()
@@ -90,14 +88,22 @@ impl<E: CommandExecutor> GitHubService<E> {
             || request.license_template.is_some()
         {
             self.create_remote_initialized(&qualified, request)?;
-            let mut receipt = self
-                .inspect_repository(&qualified, true)?
-                .ok_or_else(|| internal_error("created repository could not be inspected"))?;
-            self.rename_default_branch_if_needed(&full_name, request, &receipt.default_branch)?;
-            receipt = self
-                .inspect_repository(&qualified, true)?
-                .ok_or_else(|| internal_error("created repository could not be inspected"))?;
-            return Ok(receipt);
+            let recovery_url = self.web_url_for(&full_name);
+            return (|| {
+                let mut receipt = self
+                    .inspect_repository(&qualified, true)?
+                    .ok_or_else(|| internal_error("created repository could not be inspected"))?;
+                self.rename_default_branch_if_needed(
+                    &full_name,
+                    request,
+                    &receipt.default_branch,
+                )?;
+                receipt = self
+                    .inspect_repository(&qualified, true)?
+                    .ok_or_else(|| internal_error("created repository could not be inspected"))?;
+                Ok(receipt)
+            })()
+            .map_err(|error| partial_failure(&recovery_url, error));
         }
 
         let temporary = TemporaryRepository::new()?;
@@ -108,15 +114,11 @@ impl<E: CommandExecutor> GitHubService<E> {
             push: true,
         };
         let prepared = self.prepare_local_repository(request, &bootstrap, true)?;
-        let result = self.create_from_local(&qualified, request, &prepared);
-        if let Err(error) = result {
-            if let Some(receipt) = self.inspect_repository(&qualified, true)? {
-                return Err(partial_failure(&receipt.web_url, error));
-            }
-            return Err(error);
-        }
+        self.create_from_local(&qualified, request, &prepared)?;
+        let recovery_url = self.web_url_for(&full_name);
         self.inspect_repository(&qualified, true)?
             .ok_or_else(|| internal_error("created repository could not be inspected"))
+            .map_err(|error| partial_failure(&recovery_url, error))
     }
 
     fn create_remote_initialized(
@@ -149,7 +151,9 @@ impl<E: CommandExecutor> GitHubService<E> {
         self.append_repository_options(&mut args, request);
         let output = self.run("gh", args, None)?;
         let full_name = request.full_name()?;
-        self.attach_and_push_existing(&full_name, request, prepared)?;
+        let recovery_url = self.web_url_for(&full_name);
+        self.attach_and_push_existing(&full_name, request, prepared)
+            .map_err(|error| partial_failure(&recovery_url, error))?;
         Ok(output)
     }
 
@@ -216,6 +220,22 @@ impl<E: CommandExecutor> GitHubService<E> {
                 ));
             }
             self.run("git", strings(["init"]), Some(&path))?;
+        }
+
+        let requested_root = fs::canonicalize(&path).map_err(environment_error)?;
+        let discovered_root = self.run(
+            "git",
+            strings(["rev-parse", "--show-toplevel"]),
+            Some(&path),
+        )?;
+        let discovered_root =
+            fs::canonicalize(discovered_root.trim()).map_err(environment_error)?;
+        if requested_root != discovered_root {
+            return Err(policy_denied(format!(
+                "bootstrap path {} is nested inside Git worktree {}; select the exact worktree root",
+                requested_root.display(),
+                discovered_root.display()
+            )));
         }
 
         self.preflight_remote(
@@ -455,6 +475,10 @@ impl<E: CommandExecutor> GitHubService<E> {
         } else {
             format!("{}/{full_name}", self.hostname)
         }
+    }
+
+    fn web_url_for(&self, full_name: &str) -> String {
+        format!("https://{}/{full_name}", self.hostname)
     }
 
     pub(crate) fn clone_url_for(&self, full_name: &str) -> String {
