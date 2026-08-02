@@ -75,10 +75,7 @@ pub fn normalize_components(
     for source in components {
         let mut component = source.clone();
         component.path = normalize_path(component.path)?;
-        component.previous_path = component
-            .previous_path
-            .map(normalize_path)
-            .transpose()?;
+        component.previous_path = component.previous_path.map(normalize_path).transpose()?;
         component.generated = is_generated_path(&component.path);
         component.effective_ui = is_effective_ui_path(&component.path);
         component.package_owner = infer_package_owner(repo, &component.path);
@@ -128,7 +125,9 @@ pub fn is_effective_ui_path(path: &str) -> bool {
         || path.starts_with("frontend/")
         || path.starts_with("src-tauri/")
         || matches!(
-            Path::new(&path).extension().and_then(|value| value.to_str()),
+            Path::new(&path)
+                .extension()
+                .and_then(|value| value.to_str()),
             Some("html" | "css" | "scss" | "tsx" | "jsx" | "vue" | "svelte")
         )
 }
@@ -142,15 +141,7 @@ pub(crate) fn requires_artifact_semantics(component: &ChangedComponent) -> bool 
             .is_some_and(|extension| {
                 matches!(
                     extension.to_ascii_lowercase().as_str(),
-                    "html"
-                        | "json"
-                        | "png"
-                        | "pdf"
-                        | "zip"
-                        | "jar"
-                        | "docx"
-                        | "xlsx"
-                        | "pptx"
+                    "html" | "json" | "png" | "pdf" | "zip" | "jar" | "docx" | "xlsx" | "pptx"
                 )
             })
 }
@@ -242,7 +233,15 @@ mod tests {
         let normalized = normalize_components(repo, &components).unwrap();
         assert_eq!(normalized[0].package_owner.as_deref(), Some("apps/web"));
         assert!(normalized.iter().all(|component| component.effective_ui));
-        assert!(normalized.iter().any(|component| component.previous_path.is_some()));
-        assert!(normalized.iter().any(|component| component.kind == ChangeKind::Deleted));
+        assert!(
+            normalized
+                .iter()
+                .any(|component| component.previous_path.is_some())
+        );
+        assert!(
+            normalized
+                .iter()
+                .any(|component| component.kind == ChangeKind::Deleted)
+        );
     }
 }
