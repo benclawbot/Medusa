@@ -64,6 +64,33 @@ fn component_paths(components: &[ChangedComponent]) -> Vec<String> {
     paths
 }
 
+fn has_in_scope_repository_changes(
+    worker: &Worker,
+    allowed_write_paths: &[String],
+) -> Result<bool, String> {
+    if allowed_write_paths.is_empty() {
+        return Ok(false);
+    }
+    let output = std::process::Command::new("git")
+        .args(["status", "--porcelain=v1", "-z", "--untracked-files=all", "--"])
+        .args(allowed_write_paths)
+        .current_dir(&worker.worktree)
+        .output()
+        .map_err(|error| {
+            format!(
+                "failed to inspect bounded implementer worktree {}: {error}",
+                worker.worktree.display()
+            )
+        })?;
+    if !output.status.success() {
+        return Err(format!(
+            "git status failed while inspecting bounded implementer worktree: {}",
+            String::from_utf8_lossy(&output.stderr).trim()
+        ));
+    }
+    Ok(!output.stdout.is_empty())
+}
+
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
 enum ImplementationStatus {
@@ -991,13 +1018,25 @@ fn execute_production_implementer(
             }
         }
     }
+    let mut summary = summaries.join("\n").trim().to_owned();
     if !completed {
-        return Err(format!(
-            "worker {} exceeded its bounded turn budget",
-            request.worker.id
-        ));
+        if !has_in_scope_repository_changes(
+            &request.worker,
+            &request.contract.allowed_write_paths,
+        )? {
+            return Err(format!(
+                "worker {} exceeded its bounded turn budget without producing an in-scope repository change",
+                request.worker.id
+            ));
+        }
+        let fallback = "The model exhausted its bounded turn budget after producing an in-scope repository change. Runtime exact-scope validation and independent verification are authoritative; this narrative is advisory.";
+        if summary.is_empty() {
+            summary = fallback.to_owned();
+        } else {
+            summary.push_str("\n\n");
+            summary.push_str(fallback);
+        }
     }
-    let summary = summaries.join("\n").trim().to_owned();
     if summary.is_empty() {
         return Err(format!(
             "worker {} returned no implementation evidence",
