@@ -21,6 +21,10 @@ name = "medusa-capabilities"
 path = "src/capabilities.rs"
 
 [[bin]]
+name = "medusa-github-operation"
+path = "src/github_operation.rs"
+
+[[bin]]
 name = "medusa-clarity"
 path = "src/clarity.rs"
 
