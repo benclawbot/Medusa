@@ -22,7 +22,7 @@ jobs:
         with:
           components: rustfmt, clippy
       - name: Apply health-atomic lifecycle correction
-        run: python3 scripts/apply-655-lifecycle.py
+        run: python3 scripts/apply-655-lifecycle-v2.py
       - name: Validate focused updater lifecycle
         shell: bash
         run: |
@@ -45,7 +45,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          git rm scripts/apply-655-lifecycle.py
+          git rm scripts/apply-655-lifecycle.py scripts/apply-655-lifecycle-v2.py
           git config user.name github-actions[bot]
           git config user.email 41898282+github-actions[bot]@users.noreply.github.com
           git add crates/medusa-update/src/install.rs crates/medusa-cli/src/update_command.rs
