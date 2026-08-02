@@ -1,98 +1,130 @@
 # Medusa Release and Installation
 
-## Supported release build
+## Supported installation
 
-Medusa 1.0 targets Rust 1.88 or newer. A source installation requires Rust, Cargo, Git, and—when browser verification is used—Node.js 22 plus the pinned Playwright Chromium package.
+Normal installation and updates use prebuilt release artifacts; Rust and Cargo are not required. Source installation remains available for contributors:
 
 ```bash
 cargo install --path crates/medusa-cli --locked
 medusa doctor
 ```
 
-`medusa doctor` checks Git, Cargo, Node.js, repository access, writable state, provider credentials, configured model, and schema compatibility. A missing `MINIMAX_API_KEY` is reported as a failed live-provider capability rather than silently ignored.
+Medusa 1.0 source builds require Rust 1.88 or newer. Desktop and browser development additionally require Node.js 22 and the pinned browser package.
 
-## Draft release publication
+## Release artifacts
 
-The permanent `Publish Draft Release` workflow runs only when an existing `v*` tag is pushed. The workflow event SHA, checked-out commit, and remote tag target must remain identical throughout the run. Before packaging, it requires:
-
-- an exact `v<workspace-version>` tag;
-- synchronized version metadata across the Rust workspace, desktop Cargo package, desktop `package.json`, and Tauri configuration;
-- a tag commit contained in `main` history;
-- passing deterministic release-evidence self-tests.
-
-The workflow builds:
+`Publish Release` validates an exact `v<workspace-version>` tag bound to the workflow SHA and contained in `main`, then independently builds:
 
 - Linux CLI archive, Debian package, and AppImage;
 - macOS CLI archive, application archive, and DMG;
-- Windows CLI archive and NSIS installer.
+- Windows CLI archive and NSIS installer;
+- deterministic CycloneDX SBOM, checksums, compatibility notes, license, and release guide.
 
-The final publish job downloads the independently built platform artifacts, rejects missing, duplicate, symlinked, or path-escaping assets, and produces:
+The build workflow rejects missing, duplicate, symlinked, or path-escaping assets and attests the CI-produced bytes with GitHub/Sigstore provenance.
 
-- `medusa-release-manifest.json` with byte lengths and SHA-256 digests;
-- `SHA256SUMS`;
-- `medusa-sbom.cdx.json`, a deterministic CycloneDX 1.6 SBOM generated from `Cargo.lock` and the desktop `package-lock.json`;
-- `LICENSE`, this release guide, and `COMPATIBILITY.md`.
+A published release is not update-eligible until `Sign Release Manifest` completes. That protected workflow downloads the existing CI-produced release assets, regenerates a canonical `medusa-release-manifest-v2`, signs the exact manifest bytes with Ed25519, verifies the signature against the repository public key, attests the manifest authority, and uploads:
 
-`actions/attest@v4` generates GitHub/Sigstore provenance for every assembled asset with a short-lived OIDC identity. Only the final job receives `contents: write`, `id-token: write`, and `attestations: write`; build jobs remain read-only. The workflow creates a **draft** GitHub Release and refuses to overwrite an existing release. It never publishes automatically or pushes repository changes.
+- `medusa-release-manifest.json`;
+- `medusa-release-manifest.sig.json`;
+- `SHA256SUMS`.
 
-## Platform signing
+The updater fails closed while those assets are absent or invalid.
 
-The manually approved `Sign Draft Release` workflow operates only on an existing draft release whose tag resolves to `main`. It uses the protected `release-signing` environment and refuses incomplete signing output:
+## Manifest trust
 
-- Windows executable assets are Authenticode-signed, timestamped, and verified with `signtool`;
-- the macOS application is Developer ID signed, notarized, stapled, and assessed with Gatekeeper;
-- Linux package blobs receive keyless Sigstore signatures bound to the exact signing workflow identity.
+The signed manifest binds:
 
-Signing credentials remain encrypted environment secrets and are imported only into ephemeral runner stores. The workflow replaces assets on the draft release but never publishes it. See [Release signing](RELEASE-SIGNING.md) for secret names, environment protection, custody, verification, rotation, and revocation requirements.
+- semantic version and minimum updater version;
+- source repository and exact revision;
+- Rust toolchain and lockfile digests;
+- stable rollout sequence and percentage;
+- exact artifact name, kind, operating system, architecture, target triple, byte count, and SHA-256 digest.
 
-## Trust boundary
+The updater verifies the Ed25519 signature before parsing or trusting those fields. GitHub release metadata supplies only the fixed manifest and signature bootstrap URLs. The reviewed keyring is stored in `release/keys/keyring.json`; private signing material is never committed.
 
-Draft release provenance establishes the repository, workflow, commit, tag, and build identity associated with each asset. Platform signatures establish publisher identity and platform trust for the signed artifact. Checksums establish byte identity. Users should verify all three forms of evidence; none is a substitute for the others.
+## Update
 
-The Linux workflow signs distributed package blobs with Sigstore. Medusa does not currently claim operation of a signed APT, RPM, or other package repository.
+Check without modifying the installation:
 
-A maintainer must review installation behavior, checksums, SBOM, attestations, compatibility notes, platform signatures, and platform warnings before deciding whether to publish a draft. Certificate issuance, custody, expiry monitoring, rotation, revocation, and incident response remain maintainer responsibilities.
+```bash
+medusa update --check
+```
 
-See [Desktop distribution](DESKTOP-DISTRIBUTION.md), [Release compatibility](COMPATIBILITY.md), and [Release signing](RELEASE-SIGNING.md).
+Apply the latest eligible stable release:
 
-## Verification
+```bash
+medusa update
+```
 
-Verify a downloaded asset before execution:
+For unattended managed execution, approval must be explicit:
+
+```bash
+medusa update --automatic
+```
+
+The running session remains usable while the updater checks, downloads, verifies, and stages the release. The updater then requests daemon shutdown, exits, atomically replaces the binary, restarts with the same repository and `--continue`, and requires a startup health acknowledgement. The previous executable is retained until acknowledgement and is restored automatically on swap failure, timeout, or early exit.
+
+Package-managed installations are not silently replaced. Medusa reports the appropriate package-manager command and leaves execution to the operator.
+
+### Explicit source developer channel
+
+Source compilation is no longer the default and is never a fallback. Contributors may deliberately select it:
+
+```bash
+medusa update --channel source
+```
+
+That command warns that it invokes Cargo and follows the moving main branch.
+
+### Downgrades and rollout rollback
+
+A semantic-version downgrade or a release with a lower rollout sequence is rejected unless the operator explicitly passes:
+
+```bash
+medusa update --allow-downgrade
+```
+
+This flag does not bypass signature, platform, archive, size, or digest verification.
+
+## Failure behavior
+
+The current binary remains usable when release discovery, signature verification, platform selection, download, size or digest verification, extraction, staging, or restart fails. Partial downloads may resume, but they never exceed the signed byte count and are never promoted before full verification. Source compilation is not attempted after a release-channel failure.
+
+Path-free phase diagnostics are appended to `.medusa/update-diagnostics.jsonl`. Replacement state is written beside the executable so interrupted swaps and automatic rollback remain observable.
+
+## Platform signatures
+
+`Sign Draft Release` provides platform publisher signatures independently of the updater manifest:
+
+- Windows Authenticode signing and timestamp verification;
+- macOS Developer ID signing, notarization, stapling, and Gatekeeper assessment;
+- Linux keyless Sigstore signatures for distributed package blobs.
+
+The Ed25519 manifest proves the updater's release authority and exact artifact metadata. Platform signatures prove publisher/platform identity. GitHub attestations prove workflow provenance. SHA-256 proves byte identity. These controls are complementary.
+
+See [Release signing](RELEASE-SIGNING.md), [Desktop distribution](DESKTOP-DISTRIBUTION.md), [Release compatibility](COMPATIBILITY.md), and [Verified prebuilt update architecture](architecture/PREBUILT-UPDATES.md).
+
+## Manual verification
 
 ```bash
 sha256sum --check SHA256SUMS --ignore-missing
 gh attestation verify <asset> --repo benclawbot/Medusa
-```
-
-Then verify the platform signature using Authenticode, Gatekeeper/codesign, or the adjacent Linux Sigstore certificate and signature, as appropriate. Finally run:
-
-```bash
 medusa --version
 medusa doctor
 ```
 
-The manifest and checksums are evidence for the complete draft asset set. A successful checksum without matching provenance and platform-signature evidence is not sufficient release verification.
+Also verify Authenticode, Gatekeeper/codesign, or the adjacent Linux Sigstore evidence as appropriate.
 
-## Upgrade
+## State migration and rollback
 
-Back up the repository and run:
+Repository-state migration remains separate from binary replacement:
 
 ```bash
 medusa --repo /path/to/repository migrate
 ```
 
-Every migration creates a backup and a checksummed receipt before mutation. Unsupported downgrades are refused rather than guessed.
-
-## Rollback
-
-1. Stop the Medusa daemon.
-2. Restore the previous Medusa binary or package version.
-3. Use the migration receipt's backup directory to restore `.medusa` state.
-4. Verify the restored state digest and run `medusa doctor`.
-5. Re-run the repository's targeted verification before resuming a session.
-
-Reverting the publication or signing workflow prevents future automated drafts or signing runs but does not delete existing draft releases, signatures, or attestations. Existing evidence remains auditable and must be removed explicitly when invalidated.
+Each migration creates a backup and checksummed receipt before mutation. To roll back repository state, stop the daemon, restore the prior package or binary, restore the receipt backup, verify its digest, run `medusa doctor`, and run targeted repository verification before resuming.
 
 ## Live MiniMax canary
 
-A live canary is intentionally credential-gated. CI executes it only when `MINIMAX_API_KEY` is configured; absence of the secret cannot be represented as a successful live canary. Deterministic provider fixtures remain mandatory on every pull request.
+The live provider canary runs only when `MINIMAX_API_KEY` is configured. Missing credentials cannot be represented as a successful live canary; deterministic provider fixtures remain mandatory on every pull request.

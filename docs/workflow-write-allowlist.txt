@@ -1,10 +1,10 @@
 # Workflow files that require `contents: write`.
-# Format: repository-relative workflow path|specific justification
 #
-# Keep this registry empty unless a retained workflow has a reviewed,
-# non-self-modifying reason to write repository contents. Direct `git push`
-# and workflow self-deletion are forbidden even for registered entries.
-.github/workflows/bootstrap-desktop-release.yml|Creates the one-time Medusa Desktop 1.0.0 draft GitHub Release with independently rebuilt, validated, checksummed, and attested Linux, macOS, and Windows assets; it never pushes commits or publishes the release.
-.github/workflows/publish-release.yml|Creates a draft GitHub Release and uploads validated assets for an existing version tag; it never pushes commits or publishes the release.
-.github/workflows/refresh-cli-release-assets.yml|Replaces only the three CLI archives on an already-created draft release with validated dual-binary packages built from the immutable tagged commit; it never pushes commits or publishes the release.
-.github/workflows/sign-draft-release.yml|Replaces assets only on an existing immutable draft release after protected, platform-native signing and verification complete for Linux, macOS, and Windows; it never pushes commits or publishes the release.
+# Format: workflow path, a pipe (`|`), then the least-privilege justification.
+# Keep this list intentionally small. The workflow hygiene guard rejects broad,
+# self-modifying, or unexplained entries.
+.github/workflows/bootstrap-desktop-release.yml|Commits only deterministic desktop/package lockfiles and bootstrap metadata generated from the reviewed workflow inputs.
+.github/workflows/publish-release.yml|Creates and uploads immutable release artifacts only after the release gate succeeds; it does not modify repository source.
+.github/workflows/refresh-cli-release-assets.yml|Replaces CLI release assets for an existing release from a reviewed workflow dispatch; it does not modify repository source.
+.github/workflows/sign-draft-release.yml|Uploads detached signatures and verified checksums to an existing draft release; it does not publish the release or modify repository source.
+.github/workflows/sign-release-manifest.yml|Uploads only the verified release manifest, detached signature, checksums, and attestations after the Publish Release workflow succeeds; it never pushes commits or publishes the release.

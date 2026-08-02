@@ -1,45 +1,30 @@
-//! Secure, release-manifest-driven self-update primitives.
+//! Verified prebuilt-release self-update primitives.
 //!
-//! The CLI owns user interaction; this crate owns version selection, release
-//! discovery, integrity checks, archive extraction, and atomic installation.
+//! The CLI owns user interaction; this crate owns signed release discovery,
+//! exact artifact verification, confined extraction, diagnostics, and a
+//! health-checked atomic installation with rollback.
 
+mod diagnostics;
 mod github;
 mod install;
+pub mod manifest;
 mod model;
 mod source;
 
+pub use diagnostics::{PhaseTimer, UpdateDiagnostics, UpdatePhase, UpdatePhaseRecord};
 pub use github::{GithubReleaseClient, ReleaseClient};
-pub use install::{AtomicInstaller, InstallKind, InstallLocation, Restart};
+pub use install::{
+    AtomicInstaller, HEALTH_FILE_ENV, InstallKind, InstallLocation, Restart, ScheduledUpdate,
+    acknowledge_update_health,
+};
+pub use manifest::{
+    Architecture, ArtifactKind, BuildSource, DEFAULT_KEY_ID, KeyStatus, MANIFEST_NAME,
+    MANIFEST_SCHEMA, ManifestArtifact, ManifestError, ManifestSignature, OperatingSystem, Platform,
+    ReleaseEvidence, ReleaseManifest, RolloutPolicy, SIGNATURE_NAME, SIGNATURE_SCHEMA, TrustStore,
+    TrustedKey, VerifiedManifest,
+};
 pub use model::{
-    Artifact, AttestationVerifier, GithubAttestationVerifier, Platform, Release, UpdateCheck,
-    UpdatePolicy, verify_sha256,
+    Artifact, DownloadReport, Release, UpdateCheck, UpdatePolicy, copy_with_progress,
+    verify_artifact, verify_sha256,
 };
 pub use source::{MainBranchRevision, MainBranchUpdater};
-
-use std::{io::Read, path::Path};
-
-use medusa_core::MedusaResult;
-
-/// Streams a download while reporting cumulative bytes to a caller-owned UI.
-pub fn copy_with_progress(
-    reader: &mut impl Read,
-    destination: &Path,
-    total_bytes: Option<u64>,
-    mut progress: impl FnMut(u64, Option<u64>),
-) -> MedusaResult<u64> {
-    use std::{fs::File, io::Write};
-
-    let mut output = File::create(destination)?;
-    let mut buffer = [0_u8; 64 * 1024];
-    let mut copied = 0_u64;
-    loop {
-        let count = reader.read(&mut buffer)?;
-        if count == 0 {
-            output.flush()?;
-            return Ok(copied);
-        }
-        output.write_all(&buffer[..count])?;
-        copied += count as u64;
-        progress(copied, total_bytes);
-    }
-}

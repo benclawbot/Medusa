@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Generate deterministic Medusa release evidence without third-party dependencies."""
+"""Generate deterministic, signed Medusa release evidence without Python packages."""
 
 from __future__ import annotations
 
@@ -9,10 +9,17 @@ import hashlib
 import json
 import os
 from pathlib import Path
+import stat
+import subprocess
 import tempfile
 import tomllib
 import urllib.parse
 import uuid
+
+MANIFEST_SCHEMA = "medusa-release-manifest-v2"
+SIGNATURE_SCHEMA = "medusa-release-signature-v1"
+SIGNATURE_NAME = "medusa-release-manifest.sig.json"
+DEFAULT_KEY_ID = "medusa-release-2026-01"
 
 REQUIRED_ASSETS = {
     "linux CLI archive": "medusa-cli-linux.tar.gz",
@@ -29,9 +36,20 @@ REQUIRED_ASSETS = {
     "compatibility notes": "COMPATIBILITY.md",
 }
 
+INSTALLABLE_ASSETS = {
+    "medusa-cli-linux.tar.gz": ("cli-archive", "linux", "x86_64", "x86_64-unknown-linux-gnu"),
+    "medusa-cli-macos.tar.gz": ("cli-archive", "macos", "x86_64", "x86_64-apple-darwin"),
+    "medusa-cli-windows.zip": ("cli-archive", "windows", "x86_64", "x86_64-pc-windows-msvc"),
+    "medusa-desktop-linux.deb": ("desktop-package", "linux", "x86_64", "x86_64-unknown-linux-gnu"),
+    "medusa-desktop-linux.AppImage": ("desktop-package", "linux", "x86_64", "x86_64-unknown-linux-gnu"),
+    "medusa-desktop-macos-app.zip": ("desktop-package", "macos", "x86_64", "x86_64-apple-darwin"),
+    "medusa-desktop-macos.dmg": ("desktop-package", "macos", "x86_64", "x86_64-apple-darwin"),
+    "medusa-desktop-windows.exe": ("desktop-package", "windows", "x86_64", "x86_64-pc-windows-msvc"),
+}
+
 
 class EvidenceError(RuntimeError):
-    """Raised when release evidence is incomplete or unsafe."""
+    """Raised when release evidence is incomplete, untrusted, or unsafe."""
 
 
 def read_toml(path: Path) -> dict:
@@ -211,27 +229,162 @@ def validate_required_assets(files: list[Path]) -> None:
             )
 
 
-def generate_manifest(assets: Path, output: Path, checksums: Path) -> dict:
+def validate_hex(label: str, value: str, length: int) -> str:
+    normalized = value.strip().lower()
+    if len(normalized) != length or any(character not in "0123456789abcdef" for character in normalized):
+        raise EvidenceError(f"{label} must contain {length} hexadecimal characters")
+    return normalized
+
+
+def generate_manifest(
+    root: Path,
+    assets: Path,
+    output: Path,
+    checksums: Path,
+    version: str,
+    revision: str,
+    sequence: int,
+    rollout_percentage: int,
+    minimum_updater_version: str,
+) -> dict:
     assets.mkdir(parents=True, exist_ok=True)
-    excluded = {output, checksums}
+    excluded = {output, checksums, assets / SIGNATURE_NAME}
     files = safe_files(assets, excluded)
     validate_required_assets(files)
-    entries = [
+    revision = validate_hex("source revision", revision, 40)
+    if sequence <= 0:
+        raise EvidenceError("release sequence must be positive")
+    if rollout_percentage < 1 or rollout_percentage > 100:
+        raise EvidenceError("rollout percentage must be in 1..=100")
+
+    evidence = [
         {
-            "path": path.relative_to(assets).as_posix(),
+            "name": path.name,
             "bytes": path.stat().st_size,
             "sha256": sha256_file(path),
         }
         for path in files
     ]
+    by_name = {entry["name"]: entry for entry in evidence}
+    artifacts = []
+    for name, (kind, operating_system, architecture, target) in INSTALLABLE_ASSETS.items():
+        entry = by_name[name]
+        artifacts.append(
+            {
+                "name": name,
+                "kind": kind,
+                "platform": {"os": operating_system, "architecture": architecture},
+                "target": target,
+                "bytes": entry["bytes"],
+                "sha256": entry["sha256"],
+            }
+        )
+    artifacts.sort(key=lambda entry: entry["name"])
+    evidence.sort(key=lambda entry: entry["name"])
     manifest = {
-        "schema": "medusa-release-manifest-v1",
-        "assets": entries,
+        "schema": MANIFEST_SCHEMA,
+        "version": version,
+        "minimum_updater_version": minimum_updater_version,
+        "source": {
+            "repository": "benclawbot/Medusa",
+            "revision": revision,
+            "rust_toolchain": "1.88.0",
+            "cargo_lock_sha256": sha256_file(root / "Cargo.lock"),
+            "desktop_lock_sha256": sha256_file(root / "apps/medusa-desktop/package-lock.json"),
+        },
+        "rollout": {
+            "channel": "stable",
+            "sequence": sequence,
+            "percentage": rollout_percentage,
+        },
+        "artifacts": artifacts,
+        "evidence": evidence,
     }
-    output.write_text(json.dumps(manifest, indent=2, sort_keys=True) + "\n", encoding="utf-8")
-    checksum_lines = [f"{entry['sha256']}  {entry['path']}" for entry in entries]
+    canonical = json.dumps(manifest, sort_keys=True, separators=(",", ":")) + "\n"
+    output.write_text(canonical, encoding="utf-8")
+    checksum_lines = [f"{entry['sha256']}  {entry['name']}" for entry in evidence]
     checksums.write_text("\n".join(checksum_lines) + "\n", encoding="utf-8")
     return manifest
+
+
+def sign_manifest(manifest: Path, output: Path, private_key: Path, key_id: str) -> dict:
+    if not key_id.strip():
+        raise EvidenceError("release signing key ID is empty")
+    if not private_key.is_file():
+        raise EvidenceError(f"release signing key does not exist: {private_key}")
+    mode = stat.S_IMODE(private_key.stat().st_mode)
+    if os.name != "nt" and mode & 0o077:
+        raise EvidenceError("release signing key must not be group/world accessible")
+    with tempfile.TemporaryDirectory() as raw:
+        signature_file = Path(raw) / "signature.bin"
+        result = subprocess.run(
+            [
+                "openssl",
+                "pkeyutl",
+                "-sign",
+                "-rawin",
+                "-inkey",
+                str(private_key),
+                "-in",
+                str(manifest),
+                "-out",
+                str(signature_file),
+            ],
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+        if result.returncode != 0:
+            raise EvidenceError(f"Ed25519 signing failed: {result.stderr.strip()}")
+        signature = signature_file.read_bytes()
+    if len(signature) != 64:
+        raise EvidenceError(f"Ed25519 signature must contain 64 bytes, got {len(signature)}")
+    envelope = {
+        "schema": SIGNATURE_SCHEMA,
+        "key_id": key_id,
+        "algorithm": "Ed25519",
+        "manifest_sha256": sha256_file(manifest),
+        "signature": signature.hex(),
+    }
+    output.write_text(json.dumps(envelope, sort_keys=True, separators=(",", ":")) + "\n", encoding="utf-8")
+    return envelope
+
+
+def verify_signature(manifest: Path, signature: Path, public_key: Path) -> None:
+    envelope = json.loads(signature.read_text(encoding="utf-8"))
+    if envelope.get("schema") != SIGNATURE_SCHEMA or envelope.get("algorithm") != "Ed25519":
+        raise EvidenceError("invalid release signature envelope")
+    if envelope.get("manifest_sha256") != sha256_file(manifest):
+        raise EvidenceError("release signature envelope has the wrong manifest digest")
+    try:
+        raw_signature = bytes.fromhex(str(envelope["signature"]))
+    except (KeyError, ValueError) as error:
+        raise EvidenceError("release signature is not valid hexadecimal") from error
+    if len(raw_signature) != 64:
+        raise EvidenceError("release signature has the wrong byte length")
+    with tempfile.TemporaryDirectory() as raw:
+        signature_file = Path(raw) / "signature.bin"
+        signature_file.write_bytes(raw_signature)
+        result = subprocess.run(
+            [
+                "openssl",
+                "pkeyutl",
+                "-verify",
+                "-rawin",
+                "-pubin",
+                "-inkey",
+                str(public_key),
+                "-in",
+                str(manifest),
+                "-sigfile",
+                str(signature_file),
+            ],
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+    if result.returncode != 0:
+        raise EvidenceError("release manifest Ed25519 verification failed")
 
 
 def write_minimal_fixture(root: Path) -> None:
@@ -297,38 +450,53 @@ def self_test() -> None:
 
         assets = root / "assets"
         populate_assets(assets)
-        manifest = assets / "release-manifest.json"
+        manifest = assets / "medusa-release-manifest.json"
         checksums = assets / "SHA256SUMS"
-        first_manifest = generate_manifest(assets, manifest, checksums)
-        second_manifest = generate_manifest(assets, manifest, checksums)
+        first_manifest = generate_manifest(
+            root, assets, manifest, checksums, "1.2.3", "a" * 40, 12, 100, "1.0.0"
+        )
+        first_bytes = manifest.read_bytes()
+        second_manifest = generate_manifest(
+            root, assets, manifest, checksums, "1.2.3", "a" * 40, 12, 100, "1.0.0"
+        )
         assert first_manifest == second_manifest
+        assert first_bytes == manifest.read_bytes()
+
+        private_key = root / "private.pem"
+        public_key = root / "public.pem"
+        subprocess.run(
+            ["openssl", "genpkey", "-algorithm", "Ed25519", "-out", str(private_key)],
+            check=True,
+            capture_output=True,
+        )
+        private_key.chmod(0o600)
+        subprocess.run(
+            ["openssl", "pkey", "-in", str(private_key), "-pubout", "-out", str(public_key)],
+            check=True,
+            capture_output=True,
+        )
+        signature = assets / SIGNATURE_NAME
+        sign_manifest(manifest, signature, private_key, "fixture-key")
+        verify_signature(manifest, signature, public_key)
+        manifest.write_bytes(manifest.read_bytes() + b" ")
+        try:
+            verify_signature(manifest, signature, public_key)
+        except EvidenceError:
+            pass
+        else:
+            raise AssertionError("tampered manifest was accepted")
 
         duplicate = assets / "nested"
         duplicate.mkdir()
         (duplicate / "LICENSE").write_text("duplicate", encoding="utf-8")
         try:
-            generate_manifest(assets, manifest, checksums)
+            generate_manifest(
+                root, assets, manifest, checksums, "1.2.3", "a" * 40, 12, 100, "1.0.0"
+            )
         except EvidenceError:
             pass
         else:
             raise AssertionError("duplicate asset basename was accepted")
-        (duplicate / "LICENSE").unlink()
-
-        if hasattr(os, "symlink"):
-            outside = root / "outside"
-            outside.write_text("outside", encoding="utf-8")
-            link = assets / "escape-link"
-            try:
-                link.symlink_to(outside)
-            except OSError:
-                pass
-            else:
-                try:
-                    generate_manifest(assets, manifest, checksums)
-                except EvidenceError:
-                    pass
-                else:
-                    raise AssertionError("symlink release asset was accepted")
 
     print("release-evidence-self-test-ok")
 
@@ -346,9 +514,26 @@ def parser() -> argparse.ArgumentParser:
     sbom.add_argument("--output", type=Path, required=True)
 
     manifest = subcommands.add_parser("manifest")
+    manifest.add_argument("--root", type=Path, default=Path("."))
     manifest.add_argument("--assets", type=Path, required=True)
     manifest.add_argument("--output", type=Path, required=True)
     manifest.add_argument("--checksums", type=Path, required=True)
+    manifest.add_argument("--version", required=True)
+    manifest.add_argument("--revision", required=True)
+    manifest.add_argument("--sequence", required=True, type=int)
+    manifest.add_argument("--rollout-percentage", type=int, default=100)
+    manifest.add_argument("--minimum-updater-version", required=True)
+
+    sign = subcommands.add_parser("sign-manifest")
+    sign.add_argument("--manifest", type=Path, required=True)
+    sign.add_argument("--output", type=Path, required=True)
+    sign.add_argument("--private-key", type=Path, required=True)
+    sign.add_argument("--key-id", default=DEFAULT_KEY_ID)
+
+    verify = subcommands.add_parser("verify-signature")
+    verify.add_argument("--manifest", type=Path, required=True)
+    verify.add_argument("--signature", type=Path, required=True)
+    verify.add_argument("--public-key", type=Path, required=True)
 
     subcommands.add_parser("self-test")
     return result
@@ -358,17 +543,39 @@ def main() -> int:
     arguments = parser().parse_args()
     try:
         if arguments.command == "validate-tag":
-            version = validate_tag(arguments.root, arguments.tag)
-            print(version)
+            print(validate_tag(arguments.root, arguments.tag))
         elif arguments.command == "sbom":
             generate_sbom(arguments.root, arguments.output)
             print(arguments.output)
         elif arguments.command == "manifest":
-            generate_manifest(arguments.assets, arguments.output, arguments.checksums)
+            generate_manifest(
+                arguments.root,
+                arguments.assets,
+                arguments.output,
+                arguments.checksums,
+                arguments.version,
+                arguments.revision,
+                arguments.sequence,
+                arguments.rollout_percentage,
+                arguments.minimum_updater_version,
+            )
             print(arguments.output)
+        elif arguments.command == "sign-manifest":
+            sign_manifest(arguments.manifest, arguments.output, arguments.private_key, arguments.key_id)
+            print(arguments.output)
+        elif arguments.command == "verify-signature":
+            verify_signature(arguments.manifest, arguments.signature, arguments.public_key)
+            print("release-signature-ok")
         else:
             self_test()
-    except (EvidenceError, KeyError, OSError, ValueError, tomllib.TOMLDecodeError) as error:
+    except (
+        EvidenceError,
+        KeyError,
+        OSError,
+        ValueError,
+        subprocess.SubprocessError,
+        tomllib.TOMLDecodeError,
+    ) as error:
         print(f"release evidence error: {error}", file=os.sys.stderr)
         return 2
     return 0

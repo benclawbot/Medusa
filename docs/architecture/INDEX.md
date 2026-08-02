@@ -72,7 +72,7 @@ V2 invariants:
 | Daemon service | `medusa __daemon-serve` | `crates/medusa-daemon` | `medusa-runtime::RuntimeController` |
 | Desktop | `apps/medusa-desktop` | React/Tauri application | `medusa-runtime::RuntimeController` |
 | GitHub operations | `medusa github` / capability entrypoints | `crates/medusa-github` | guarded typed operation contract |
-| Update | `medusa update` | `crates/medusa-update` | legacy source-build path pending #655 |
+| Update | `medusa update` | `crates/medusa-update` | Ed25519-verified prebuilt release; explicit `--channel source` developer path |
 
 ## Capability certification
 
@@ -86,8 +86,8 @@ The legacy capability ledger remains in [`../CAPABILITY-CLAIMS.json`](../CAPABIL
 | Provider/context resilience | production | quarantined | replace | streaming, cancellation, fallback-health mismatches |
 | Identity, approvals, transactions | production | legacy-uncertified | adapt | centralize mutation receipts and authority |
 | Daemon | production | legacy-uncertified | adapt | version daemon/remote contracts |
-| Release trust | production | legacy-uncertified | adapt | connect #655 verified artifacts to updater |
-| Self-update | production | quarantined | replace | source compilation is the default channel |
+| Release trust | production | certified-production | preserve | signed manifest v2, protected signer, reviewed keyring, and CI artifacts |
+| Self-update | production | certified-production | preserve | verified prebuilt release is default; source compilation is explicit and never a fallback |
 | Multi-agent research | production | quarantined | replace | review ordering, decorative state, changed-path loss |
 | Browser tools | advertised | quarantined | replace | no production `execute_tool` dispatch |
 | Plugins/extensions | structural | design-only | adapt | no certified manifest/permissions/lifecycle |
@@ -121,7 +121,13 @@ The complete machine-readable matrix is in `baseline.json`. The critical rows ar
 
 ## Trust boundaries
 
-The indexed boundaries are repository mutation, platform containment, unsafe/FFI, secrets, provider network, GitHub OAuth/API, browser sidecar, plugins, and release/update artifacts. #653 and #655 are phase-0 companions and remain allowed during the freeze because they close trust and distribution boundaries rather than expand product scope.
+The indexed boundaries are repository mutation, platform containment, unsafe/FFI, secrets, provider network, GitHub OAuth/API, browser sidecar, plugins, and release/update artifacts. #653 and #655 are phase-0 companions: #653 closes the native FFI boundary and #655 closes the signed distribution and rollback boundary without expanding product scope.
+
+## Verified release and update authority
+
+The architecture and state machine are defined in [`PREBUILT-UPDATES.md`](PREBUILT-UPDATES.md) and ADR [`0002-verified-prebuilt-updates.md`](decisions/0002-verified-prebuilt-updates.md). The stable updater verifies an embedded Ed25519 key before trusting manifest metadata, selects one exact OS/architecture archive, verifies signed size and SHA-256, confines extraction, stages beside the running executable, and retains the previous binary until startup acknowledgement. The protected signer consumes only artifacts already produced by release CI. Unsigned releases, unknown or revoked keys, wrong-platform assets, traversal, tampering, truncation, version or rollout rollback, and startup failure fail closed.
+
+`medusa update --channel source` is the sole source-build path. It is an explicit developer exception and is never selected automatically or used as a fallback.
 
 ## Known-failure compatibility fixtures
 
@@ -165,6 +171,8 @@ Use [`LEGACY-DELETION.md`](LEGACY-DELETION.md) for deletion gates and [`RELEASE-
 ## Decisions, schemas, tests, and runbooks
 
 - Decision: [`decisions/0001-architecture-v2-reset.md`](decisions/0001-architecture-v2-reset.md)
+- Decision: [`decisions/0002-verified-prebuilt-updates.md`](decisions/0002-verified-prebuilt-updates.md)
+- Verified update architecture: [`PREBUILT-UPDATES.md`](PREBUILT-UPDATES.md)
 - Machine-readable baseline: [`baseline.json`](baseline.json)
 - Primary component owners: [`owners.json`](owners.json)
 - Legacy product map: [`../ARCHITECTURE.md`](../ARCHITECTURE.md)

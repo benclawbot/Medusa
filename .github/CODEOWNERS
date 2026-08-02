@@ -17,6 +17,16 @@
 /scripts/test-unsafe-boundary.py @benclawbot
 /.github/workflows/unsafe-rust-boundary.yml @benclawbot
 
+# Verified release and update authority
+/release/keys/ @benclawbot
+/docs/architecture/PREBUILT-UPDATES.md @benclawbot
+/docs/architecture/decisions/0002-verified-prebuilt-updates.md @benclawbot
+/docs/RELEASE.md @benclawbot
+/docs/RELEASE-SIGNING.md @benclawbot
+/scripts/release-evidence.py @benclawbot
+/.github/workflows/verified-prebuilt-update.yml @benclawbot
+/.github/workflows/sign-release-manifest.yml @benclawbot
+
 # Foundational and production authority boundaries
 /Cargo.toml @benclawbot
 /crates/medusa-core/ @benclawbot

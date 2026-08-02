@@ -65,9 +65,11 @@ medusa-tui = { path = "../medusa-tui" }
 medusa-update = { path = "../medusa-update" }
 reqwest.workspace = true
 rusqlite = { version = "0.32", features = ["bundled"] }
+semver.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 sha2.workspace = true
+tempfile.workspace = true
 toml.workspace = true
 walkdir = "2.5"
 
