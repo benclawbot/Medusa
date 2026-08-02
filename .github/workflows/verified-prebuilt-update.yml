@@ -1,0 +1,54 @@
+name: Verified Prebuilt Update
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  release:
+    types: [published, prereleased]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: verified-prebuilt-update-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  updater:
+    name: Verified updater (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: "3.12"
+      - uses: dtolnay/rust-toolchain@39b0b3842c7e8bbf6904c0bfc3d9006fdd4dc4e0 # 1.88.0
+        with:
+          components: clippy, rustfmt
+      - name: Refresh dependency lock for the branch graph
+        run: cargo generate-lockfile
+      - name: Verify canonical release evidence and Ed25519 fixtures
+        run: python scripts/release-evidence.py self-test
+      - name: Test signed manifest, download, confinement, and rollback contracts
+        run: cargo test -p medusa-update --all-targets --locked
+      - name: Test CLI release and explicit source channels
+        run: cargo test -p medusa-cli --bin medusa --locked update_command
+      - name: Check updater formatting
+        run: cargo fmt --all -- --check
+      - name: Lint update crates
+        run: cargo clippy -p medusa-update -p medusa-cli --all-targets --locked -- -D warnings
+      - name: Preserve refreshed Cargo.lock
+        if: matrix.os == 'ubuntu-latest'
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: verified-updater-cargo-lock-${{ github.sha }}
+          path: Cargo.lock
+          if-no-files-found: error
+          retention-days: 7
