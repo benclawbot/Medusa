@@ -154,7 +154,9 @@ pub(super) fn validate_state(
         || state.session_id.trim().is_empty()
         || state.summary.trim().is_empty()
         || state.changed_paths.is_empty()
-        || state.verification_evidence.is_empty())
+        || state.changed_components.is_empty()
+        || state.verification_evidence.is_empty()
+        || state.verification_receipt.is_none())
     {
         return Err("durable prepared implementation evidence is incomplete".to_owned());
     }
@@ -185,7 +187,12 @@ pub(super) fn evidence_from_state(
         turns: state.turns,
         summary: state.summary.clone(),
         changed_paths: state.changed_paths.clone(),
+        changed_components: state.changed_components.clone(),
         verification_evidence: state.verification_evidence.clone(),
+        verification_receipt: state
+            .verification_receipt
+            .clone()
+            .ok_or_else(|| "prepared implementation has no typed verification receipt".to_owned())?,
         base_head: snapshot.base_head.clone(),
         prepared_commit: snapshot.prepared_commit.clone(),
         prepared_tree: snapshot.prepared_tree.clone(),
