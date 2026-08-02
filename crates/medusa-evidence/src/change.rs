@@ -93,7 +93,11 @@ pub fn normalize_components(
 }
 
 pub fn changed_scope_fingerprint(components: &[ChangedComponent]) -> String {
-    fingerprint(&components)
+    let mut scope = components.to_vec();
+    for component in &mut scope {
+        component.content_hash = None;
+    }
+    fingerprint(&scope)
 }
 
 pub fn is_generated_path(path: &str) -> bool {
