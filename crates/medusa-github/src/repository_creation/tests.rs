@@ -98,11 +98,17 @@ fn service(executor: ScriptedExecutor) -> GitHubService<ScriptedExecutor> {
 fn validates_repository_creation_inputs_and_incompatible_options() {
     let mut value = request();
     value.owner = "bad owner".into();
-    assert_eq!(value.validate().expect_err("owner").code, ErrorCode::InvalidInput);
+    assert_eq!(
+        value.validate().expect_err("owner").code,
+        ErrorCode::InvalidInput
+    );
     value.owner = "acme".into();
     for branch in ["../main", "main.lock", "/main", "foo//bar", "foo/.bar", "@"] {
         value.default_branch = branch.into();
-        assert!(value.validate().is_err(), "accepted invalid branch {branch}");
+        assert!(
+            value.validate().is_err(),
+            "accepted invalid branch {branch}"
+        );
     }
     value.default_branch = "main".into();
     value.template_repository = Some("acme/template".into());
@@ -131,14 +137,25 @@ fn creates_initialized_enterprise_repository_with_typed_arguments() {
     let calls = executor.calls.lock().expect("calls");
     let create = calls
         .iter()
-        .find(|call| call.arguments.starts_with(&["repo".into(), "create".into()]))
+        .find(|call| {
+            call.arguments
+                .starts_with(&["repo".into(), "create".into()])
+        })
         .expect("create call");
     assert_eq!(create.program, "gh");
-    assert!(create.arguments.contains(&"github.example/acme/project".into()));
+    assert!(
+        create
+            .arguments
+            .contains(&"github.example/acme/project".into())
+    );
     assert!(create.arguments.contains(&"--private".into()));
     assert!(create.arguments.contains(&"--add-readme".into()));
     assert!(create.arguments.contains(&"--disable-wiki".into()));
-    assert!(calls.iter().all(|call| call.program != "sh" && call.program != "cmd"));
+    assert!(
+        calls
+            .iter()
+            .all(|call| call.program != "sh" && call.program != "cmd")
+    );
 }
 
 #[test]
@@ -152,7 +169,11 @@ fn initialized_repository_post_create_failure_reports_recovery_url() {
     let error = service(executor)
         .create_repository(&request())
         .expect_err("post-create inspection must retain recovery details");
-    assert!(error.message.contains("https://github.example/acme/project"));
+    assert!(
+        error
+            .message
+            .contains("https://github.example/acme/project")
+    );
     assert!(error.message.contains("reuse_existing=true"));
     assert!(error.retryable);
 }
@@ -196,7 +217,10 @@ fn local_creation_preserves_an_expected_origin_and_pushes_after_remote_creation(
     let calls = executor.calls.lock().expect("calls");
     let create = calls
         .iter()
-        .find(|call| call.arguments.starts_with(&["repo".into(), "create".into()]))
+        .find(|call| {
+            call.arguments
+                .starts_with(&["repo".into(), "create".into()])
+        })
         .expect("create call");
     assert!(!create.arguments.contains(&"--source".into()));
     assert!(!create.arguments.contains(&"--remote".into()));
@@ -239,7 +263,9 @@ fn nested_worktree_source_is_rejected_before_branch_or_remote_mutation() {
     let calls = executor.calls.lock().expect("calls");
     assert!(!calls.iter().any(|call| {
         call.arguments.starts_with(&["branch".into(), "-M".into()])
-            || call.arguments.starts_with(&["repo".into(), "create".into()])
+            || call
+                .arguments
+                .starts_with(&["repo".into(), "create".into()])
     }));
 }
 
@@ -276,7 +302,10 @@ fn repository_clone_uses_enterprise_url_without_shell_interpolation() {
         .expect("clone");
     let calls = executor.calls.lock().expect("calls");
     assert_eq!(calls[0].program, "git");
-    assert_eq!(calls[0].arguments[1], "https://github.example/acme/project.git");
+    assert_eq!(
+        calls[0].arguments[1],
+        "https://github.example/acme/project.git"
+    );
 }
 
 #[test]
@@ -307,9 +336,21 @@ fn existing_operations_remain_typed_and_available() {
     github.watch_workflow(99).expect("watch");
     github.download_workflow_logs(99).expect("logs");
     let calls = executor.calls.lock().expect("calls");
-    assert!(calls.iter().any(|call| call.arguments.contains(&"--head".into())));
-    assert!(calls.iter().any(|call| call.arguments.contains(&"--squash".into())));
-    assert!(calls.iter().any(|call| call.arguments.contains(&"--exit-status".into())));
+    assert!(
+        calls
+            .iter()
+            .any(|call| call.arguments.contains(&"--head".into()))
+    );
+    assert!(
+        calls
+            .iter()
+            .any(|call| call.arguments.contains(&"--squash".into()))
+    );
+    assert!(
+        calls
+            .iter()
+            .any(|call| call.arguments.contains(&"--exit-status".into()))
+    );
 }
 
 #[test]
