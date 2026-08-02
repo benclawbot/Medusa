@@ -209,9 +209,30 @@ def update_cli() -> None:
     path.write_text(text, encoding="utf-8")
 
 
+def update_cli_main() -> None:
+    path = Path("crates/medusa-cli/src/main.rs")
+    text = path.read_text(encoding="utf-8")
+    text = replace_once(text, "    io::IsTerminal,\n", "", "stale terminal import")
+    text = replace_once(
+        text,
+        '''            Some(CommandKind::Update {
+                check: true,
+                automatic: false
+            })''',
+        '''            Some(CommandKind::Update {
+                check: true,
+                automatic: false,
+                ..
+            })''',
+        "update parser compatibility assertion",
+    )
+    path.write_text(text, encoding="utf-8")
+
+
 if __name__ == "__main__":
     update_manifest()
     update_github()
     update_model()
     update_exports()
     update_cli()
+    update_cli_main()
