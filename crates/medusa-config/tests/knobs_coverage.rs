@@ -5,6 +5,7 @@ use medusa_config::env::{
 };
 
 const CHILD_MARKER: &str = "MEDUSA_KNOBS_COVERAGE_CHILD";
+const CHILD_SUCCESS: &str = "MEDUSA_KNOBS_COVERAGE_CHILD_OK";
 const CONFIG_KEYS: &[&str] = &[
     "MEDUSA_BROWSER_ENABLED",
     "MEDUSA_BROWSER_PATH",
@@ -25,11 +26,11 @@ fn run_child(test: &str, values: &[(&str, &str)], removed: &[&str]) {
         command.env(key, value);
     }
     let output = command.output().expect("run isolated environment test");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(
-        output.status.success(),
-        "isolated test {test} failed\nstdout:\n{}\nstderr:\n{}",
-        String::from_utf8_lossy(&output.stdout),
-        String::from_utf8_lossy(&output.stderr),
+        output.status.success() && stdout.contains(CHILD_SUCCESS),
+        "isolated test {test} failed or did not execute its assertions\nstdout:\n{stdout}\nstderr:\n{stderr}",
     );
 }
 
@@ -48,6 +49,7 @@ fn defaults_when_env_is_unset_child() {
     assert_eq!(envelope_head_bytes(), 4_096);
     assert_eq!(envelope_tail_bytes(), 4_096);
     assert!(browser_path().is_none());
+    println!("{CHILD_SUCCESS}");
 }
 
 #[test]
@@ -78,4 +80,5 @@ fn overrides_when_env_is_set_child() {
     assert_eq!(browser_timeout_ms(), 15_000);
     assert_eq!(envelope_head_bytes(), 2_048);
     assert_eq!(envelope_tail_bytes(), 4_096);
+    println!("{CHILD_SUCCESS}");
 }
