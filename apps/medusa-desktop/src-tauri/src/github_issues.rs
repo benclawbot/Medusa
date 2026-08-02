@@ -1,6 +1,6 @@
-use std::process::Command;
-
 use serde::{Deserialize, Serialize};
+
+use crate::desktop_command::hidden_command;
 
 #[derive(Debug, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
@@ -62,7 +62,7 @@ pub fn runtime_github_issues(
     }
 
     let endpoint = format!("repos/{repository}/issues?state={state}&per_page=100");
-    let output = Command::new("gh")
+    let output = hidden_command("gh")
         .args(["api", "--hostname", hostname.as_str(), endpoint.as_str()])
         .output()
         .map_err(|error| {

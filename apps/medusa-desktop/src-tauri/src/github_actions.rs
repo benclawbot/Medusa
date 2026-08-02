@@ -1,6 +1,8 @@
-use std::process::{Command, Output};
+use std::process::Output;
 
 use serde::{Deserialize, Serialize};
+
+use crate::desktop_command::hidden_command;
 
 #[derive(Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -141,7 +143,7 @@ pub fn runtime_retry_github_actions_job(
 }
 
 fn run_gh_api(hostname: &str, method: &str, endpoint: &str) -> Result<Output, String> {
-    let output = Command::new("gh")
+    let output = hidden_command("gh")
         .args(["api", "--method", method, "--hostname", hostname, endpoint])
         .output()
         .map_err(|error| {

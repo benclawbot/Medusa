@@ -1,7 +1,7 @@
-use std::process::Command;
-
 use serde::Serialize;
 use serde_json::Value;
+
+use crate::desktop_command::hidden_command;
 
 const REQUIRED_SCOPES: [&str; 3] = ["repo", "read:org", "workflow"];
 
@@ -49,7 +49,7 @@ pub fn runtime_github_auth_status(hostname: Option<String>) -> GithubAuthStatus 
         );
     }
 
-    let output = match Command::new("gh")
+    let output = match hidden_command("gh")
         .args([
             "auth",
             "status",

@@ -1,10 +1,12 @@
 use std::{
     fs,
     path::{Path, PathBuf},
-    process::{Command, Output},
+    process::Output,
 };
 
 use serde::Serialize;
+
+use crate::desktop_command::hidden_command;
 
 #[derive(Debug, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
@@ -67,7 +69,7 @@ pub fn runtime_clone_github_repository(
         );
     }
 
-    let output = match Command::new("gh")
+    let output = match hidden_command("gh")
         .args([
             "repo",
             "clone",
@@ -169,7 +171,7 @@ pub fn runtime_fetch_github_repository(
         );
     }
 
-    let output = match Command::new("git")
+    let output = match hidden_command("git")
         .current_dir(&local_path)
         .args(["fetch", "--prune", "--no-tags", "origin"])
         .output()
@@ -213,7 +215,7 @@ fn normalize_hostname(hostname: Option<String>) -> String {
 }
 
 fn verify_access(repository: &str, hostname: &str) -> Result<(), GithubRepositoryTransferState> {
-    let output = Command::new("gh")
+    let output = hidden_command("gh")
         .args([
             "repo",
             "view",
@@ -288,7 +290,7 @@ fn canonical_repository(path: &Path) -> Result<PathBuf, String> {
     if !path.is_dir() {
         return Err("local repository path is not a directory".to_owned());
     }
-    let output = Command::new("git")
+    let output = hidden_command("git")
         .current_dir(&path)
         .args(["rev-parse", "--is-inside-work-tree"])
         .output()
@@ -300,7 +302,7 @@ fn canonical_repository(path: &Path) -> Result<PathBuf, String> {
 }
 
 fn has_in_progress_git_operation(path: &Path) -> bool {
-    let git_dir = Command::new("git")
+    let git_dir = hidden_command("git")
         .current_dir(path)
         .args(["rev-parse", "--git-dir"])
         .output()
