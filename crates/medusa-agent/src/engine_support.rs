@@ -92,12 +92,15 @@ pub(crate) fn system_prompt_with_context(
 
 pub(crate) fn available_tools(
     mode: Mode,
+    repo: &Path,
     desktop_commander: &DesktopCommanderSettings,
-) -> Vec<medusa_provider::ToolDefinition> {
-    built_in_tools(desktop_commander, mode == Mode::ReadOnly)
-        .into_iter()
-        .filter(|tool| tool_allowed(mode, &tool.name))
-        .collect()
+) -> MedusaResult<Vec<medusa_provider::ToolDefinition>> {
+    built_in_tools(repo, desktop_commander, mode == Mode::ReadOnly).map(|tools| {
+        tools
+            .into_iter()
+            .filter(|tool| tool_allowed(mode, &tool.name))
+            .collect()
+    })
 }
 
 pub(crate) fn tool_allowed(mode: Mode, tool: &str) -> bool {
@@ -829,10 +832,13 @@ mod tests {
     #[test]
     fn web_tools_are_available_in_standard_and_planning_modes() {
         for mode in [Mode::Yolo, Mode::ReadOnly] {
-            let tools = available_tools(mode, &DesktopCommanderSettings::default())
-                .into_iter()
-                .map(|tool| tool.name)
-                .collect::<Vec<_>>();
+            let directory = tempfile::tempdir().expect("tempdir");
+            let tools =
+                available_tools(mode, directory.path(), &DesktopCommanderSettings::default())
+                    .expect("available tools")
+                    .into_iter()
+                    .map(|tool| tool.name)
+                    .collect::<Vec<_>>();
             assert!(tools.contains(&"web_search".to_owned()));
             assert!(tools.contains(&"web_fetch".to_owned()));
             assert!(tools.contains(&"skill_read".to_owned()));

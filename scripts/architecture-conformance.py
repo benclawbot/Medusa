@@ -62,18 +62,6 @@ def function_bodies(text: str, function_name: str) -> list[str]:
     return bodies
 
 
-def browser_dispatch_unreachable(root: Path) -> tuple[bool, str]:
-    agent = read_tree(root, "crates/medusa-agent/src")
-    browser_names = ("browser_navigate", "browser_click", "browser_screenshot")
-    advertised = [name for name in browser_names if name in agent]
-    dispatcher_bodies = function_bodies(agent, "execute_tool")
-    dispatched = sorted(
-        name for name in browser_names if any(name in body for body in dispatcher_bodies)
-    )
-    observed = bool(advertised) and not dispatched
-    return observed, f"advertised={advertised}; dispatched={dispatched}; execute_tool_bodies={len(dispatcher_bodies)}"
-
-
 def integration_precedes_parent_review(root: Path) -> tuple[bool, str]:
     runtime = read_tree(root, "crates/medusa-runtime/src/lib.rs")
     integration = runtime.find("mutating_worker_coordinator::run_implementation")
@@ -106,7 +94,6 @@ def provider_capability_mismatch(root: Path) -> tuple[bool, str]:
 
 
 PROBES: dict[str, Callable[[Path], tuple[bool, str]]] = {
-    "browser-dispatch-unreachable": browser_dispatch_unreachable,
     "integration-precedes-parent-review": integration_precedes_parent_review,
     "isolated-verification-drops-changed-paths": verification_drops_changed_paths,
     "provider-capability-mismatch": provider_capability_mismatch,

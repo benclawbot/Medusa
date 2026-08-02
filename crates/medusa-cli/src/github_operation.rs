@@ -277,6 +277,7 @@ mod tests {
                     detail: "test GitHub backend".into(),
                 },
             )]),
+            entries: BTreeMap::new(),
         };
         CapabilityAuthorizer::new(
             registry,

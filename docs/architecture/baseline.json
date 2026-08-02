@@ -294,22 +294,22 @@
     ],
     [
       "browser-tools",
-      "advertised",
+      "withheld",
       "quarantined",
-      "replace",
-      "missing production execute_tool dispatch",
+      "adapt",
+      "v2 registry protocol/documentation record; no executable projection",
       [
-        "browser actions are advertised but unreachable"
+        "production dispatcher and behavioral certification remain required"
       ]
     ],
     [
       "plugins-and-extensions",
-      "structural",
-      "design-only",
+      "managed",
+      "preview",
       "adapt",
-      "no certified production dispatcher",
+      "managed plugin manifest plus instruction-only SKILL.md compatibility",
       [
-        "manifest, permissions, lifecycle, and durable results are unversioned"
+        "executable plugin dispatchers require later certification"
       ]
     ],
     [
@@ -470,11 +470,11 @@
     ],
     [
       "capability availability",
-      "CAPABILITY-CLAIMS.json for legacy availability; this manifest for v2 certification",
+      "medusa-capabilities versioned registry snapshot",
       [
-        "README and UI labels"
+        "generated CLI, model, UI, protocol and documentation projections"
       ],
-      "generated capability registry",
+      "versioned capability registry",
       "no advertised action lacks dispatcher, permissions, tests, and owner"
     ],
     [
@@ -642,13 +642,6 @@
     ]
   ],
   "known_failure_fixtures": [
-    [
-      "browser-dispatch-unreachable",
-      631,
-      false,
-      "advertised browser tool names are absent from execute_tool",
-      "remove after dispatcher, permissions and behavioral tests"
-    ],
     [
       "integration-precedes-parent-review",
       632,
@@ -882,5 +875,13 @@
     "conformance": "scripts/architecture-conformance.py",
     "release_policy": "docs/architecture/RELEASE-POLICY.md",
     "deletion_checklist": "docs/architecture/LEGACY-DELETION.md"
+  },
+  "capability_registry": {
+    "schema_version": 2,
+    "authority": "crates/medusa-capabilities",
+    "plugin_authority": "crates/medusa-extensions/src/plugins.rs",
+    "model_projection": "medusa-capabilities::CapabilityRegistry::model_tools",
+    "protocol_projection": "medusa-capabilities::CapabilityRegistry::protocol_report",
+    "browser_policy": "withheld from executable surfaces until a certified handler is registered"
   }
 }

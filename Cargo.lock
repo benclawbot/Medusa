@@ -1161,6 +1161,7 @@ dependencies = [
  "medusa-extensions",
  "medusa-github",
  "medusa-improvement",
+ "medusa-provider",
  "medusa-transaction-coordinator",
  "serde",
  "serde_json",
