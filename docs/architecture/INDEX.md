@@ -69,7 +69,7 @@ V2 invariants:
 |---|---|---|---|
 | Interactive terminal | `medusa` | `crates/medusa-tui` | `medusa-runtime::RuntimeController` |
 | Headless | `medusa run` | `crates/medusa-cli` | `medusa-runtime::RuntimeController` |
-| Daemon | `medusa daemon` | `crates/medusa-daemon` | `medusa-runtime::RuntimeController` |
+| Daemon service | `medusa __daemon-serve` | `crates/medusa-daemon` | `medusa-runtime::RuntimeController` |
 | Desktop | `apps/medusa-desktop` | React/Tauri application | `medusa-runtime::RuntimeController` |
 | GitHub operations | `medusa github` / capability entrypoints | `crates/medusa-github` | guarded typed operation contract |
 | Update | `medusa update` | `crates/medusa-update` | legacy source-build path pending #655 |
