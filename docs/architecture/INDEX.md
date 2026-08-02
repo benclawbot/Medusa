@@ -135,7 +135,6 @@ The architecture and state machine are defined in [`PREBUILT-UPDATES.md`](PREBUI
 
 The headless harness intentionally reproduces current defects as expected failures. They document what v1 does, not what v2 should preserve:
 
-- `integration-precedes-parent-review` (#632)
 - `isolated-verification-drops-changed-paths` (#633)
 - `provider-capability-mismatch` (#636)
 
@@ -161,7 +160,7 @@ A new crate, entrypoint, authority, capability, provider route, frontend, persis
 | 0 | #646, #653, #655 | freeze, inventory, governance, unsafe boundary, verified updater |
 | 1 | #647 | foundation contracts |
 | 2 | #648 | one orchestration core and state ownership |
-| 3 | #649 | capability registry, permissions, and dispatch |
+| 3 | #649 | transactional mutation, review, verification, and integration lifecycle |
 | 4 | #650 | provider/OAuth route authority |
 | 5 | #651 | all frontends on the shared core |
 | 6 | #652 | state migration and staged v1 deletion |
@@ -175,6 +174,7 @@ Use [`LEGACY-DELETION.md`](LEGACY-DELETION.md) for deletion gates and [`RELEASE-
 - Decision: [`decisions/0002-verified-prebuilt-updates.md`](decisions/0002-verified-prebuilt-updates.md)
 - Decision: [`decisions/0003-truthful-capability-plugin-registry.md`](decisions/0003-truthful-capability-plugin-registry.md)
 - Decision: [`decisions/0004-authoritative-durable-scheduler.md`](decisions/0004-authoritative-durable-scheduler.md)
+- Decision: [`decisions/0005-transactional-mutation-lifecycle.md`](decisions/0005-transactional-mutation-lifecycle.md)
 - Verified update architecture: [`PREBUILT-UPDATES.md`](PREBUILT-UPDATES.md)
 - Machine-readable baseline: [`baseline.json`](baseline.json)
 - Primary component owners: [`owners.json`](owners.json)

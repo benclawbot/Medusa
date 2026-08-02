@@ -12,6 +12,7 @@ use serde::Serialize;
 
 use crate::{
     multi_agent_coordinator::CoordinatorEvidence,
+    mutation_transaction::MutationTransaction,
     production_orchestrator::{AgentContract, AgentRole, ContextPacket, ProductionExecutionPlan},
 };
 
@@ -165,10 +166,16 @@ pub(super) fn evidence_from_state(
     task_id: &str,
     state: &DurableImplementationState,
 ) -> Result<ImplementationEvidence, String> {
-    let integration = state
-        .integration
-        .clone()
-        .ok_or_else(|| "integrated implementation state has no receipt".to_owned())?;
+    let transaction_path = if state.transaction_path.as_os_str().is_empty() {
+        state_path
+            .parent()
+            .ok_or_else(|| "implementation state path has no execution root".to_owned())?
+            .join("mutation-transaction.json")
+    } else {
+        state.transaction_path.clone()
+    };
+    let transaction = MutationTransaction::open(&transaction_path)?;
+    let snapshot = transaction.snapshot();
     Ok(ImplementationEvidence {
         plan_fingerprint: state.plan_fingerprint.clone(),
         repository_fingerprint: state.repository_fingerprint.clone(),
@@ -179,7 +186,12 @@ pub(super) fn evidence_from_state(
         summary: state.summary.clone(),
         changed_paths: state.changed_paths.clone(),
         verification_evidence: state.verification_evidence.clone(),
-        integration,
+        base_head: snapshot.base_head.clone(),
+        prepared_commit: snapshot.prepared_commit.clone(),
+        prepared_tree: snapshot.prepared_tree.clone(),
+        patch_fingerprint: snapshot.patch_fingerprint.clone(),
+        review_context: transaction.review_context()?,
+        transaction_path,
         state_path: state_path.to_path_buf(),
     })
 }

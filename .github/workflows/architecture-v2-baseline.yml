@@ -11,6 +11,7 @@ on:
       - 'scripts/check-architecture-index.py'
       - 'scripts/test-architecture-index.py'
       - 'scripts/architecture-conformance.py'
+      - 'scripts/check-mutation-lifecycle.py'
       - '.github/CODEOWNERS'
       - '.github/PULL_REQUEST_TEMPLATE.md'
       - '.github/workflows/**'
@@ -25,6 +26,7 @@ on:
       - 'scripts/check-architecture-index.py'
       - 'scripts/test-architecture-index.py'
       - 'scripts/architecture-conformance.py'
+      - 'scripts/check-mutation-lifecycle.py'
       - '.github/CODEOWNERS'
       - '.github/PULL_REQUEST_TEMPLATE.md'
       - '.github/workflows/**'
@@ -56,6 +58,8 @@ jobs:
         run: python scripts/test-architecture-index.py
       - name: Validate living architecture index
         run: python scripts/check-architecture-index.py
+      - name: Validate transactional mutation ordering
+        run: python scripts/check-mutation-lifecycle.py
       - name: Build real production CLI entrypoint
         run: cargo build --bin medusa
       - name: Run production entrypoint and known-failure conformance

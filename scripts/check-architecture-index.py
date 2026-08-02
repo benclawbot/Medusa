@@ -24,7 +24,6 @@ VALID_CERTIFICATIONS = {
 }
 REQUIRED_MIGRATION_ISSUES = set(range(646, 656))
 REQUIRED_FIXTURES = {
-    "integration-precedes-parent-review",
     "isolated-verification-drops-changed-paths",
     "provider-capability-mismatch",
 }
