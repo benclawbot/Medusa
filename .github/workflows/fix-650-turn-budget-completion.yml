@@ -1,0 +1,237 @@
+name: Fix 650 Turn Budget Completion
+
+on:
+  pull_request:
+    branches: [main]
+    types: [opened, synchronize, reopened]
+
+permissions:
+  contents: write
+
+concurrency:
+  group: fix-650-turn-budget-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  fix:
+    if: github.event.pull_request.number == 663 && github.event.pull_request.head.repo.full_name == github.repository && github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ github.event.pull_request.head.ref }}
+      - uses: dtolnay/rust-toolchain@39b0b3842c7e8bbf6904c0bfc3d9006fdd4dc4e0 # 1.88.0
+        with:
+          components: rustfmt, clippy
+      - name: Apply state-authoritative completion fallback
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+
+          coordinator = Path('crates/medusa-runtime/src/mutating_worker_coordinator.rs')
+          text = coordinator.read_text(encoding='utf-8')
+          anchor = '''fn component_paths(components: &[ChangedComponent]) -> Vec<String> {
+              let mut paths = components
+                  .iter()
+                  .flat_map(ChangedComponent::all_paths)
+                  .map(str::to_owned)
+                  .collect::<Vec<_>>();
+              paths.sort();
+              paths.dedup();
+              paths
+          }
+          '''
+          helper = anchor + '''
+          fn has_in_scope_repository_changes(
+              worker: &Worker,
+              allowed_write_paths: &[String],
+          ) -> Result<bool, String> {
+              if allowed_write_paths.is_empty() {
+                  return Ok(false);
+              }
+              let mut command = std::process::Command::new("git");
+              command
+                  .args(["status", "--porcelain=v1", "-z", "--untracked-files=all", "--"])
+                  .args(allowed_write_paths)
+                  .current_dir(&worker.worktree);
+              let output = command.output().map_err(|error| {
+                  format!(
+                      "failed to inspect bounded implementer worktree {}: {error}",
+                      worker.worktree.display()
+                  )
+              })?;
+              if !output.status.success() {
+                  return Err(format!(
+                      "git status failed while inspecting bounded implementer worktree: {}",
+                      String::from_utf8_lossy(&output.stderr).trim()
+                  ));
+              }
+              Ok(!output.stdout.is_empty())
+          }
+          '''
+          if text.count(anchor) != 1:
+              raise SystemExit(f'component helper anchor count={text.count(anchor)}')
+          text = text.replace(anchor, helper, 1)
+
+          old = '''    if !completed {
+              return Err(format!(
+                  "worker {} exceeded its bounded turn budget",
+                  request.worker.id
+              ));
+          }
+          let summary = summaries.join("\\n").trim().to_owned();
+          if summary.is_empty() {
+              return Err(format!(
+                  "worker {} returned no implementation evidence",
+                  request.worker.id
+              ));
+          }
+          Ok(WorkerRun {
+              session_id: session.id.to_string(),
+              turns: session.turn,
+              summary,
+          })
+          '''
+          new = '''    let mut summary = summaries.join("\\n").trim().to_owned();
+          if !completed {
+              if !has_in_scope_repository_changes(
+                  &request.worker,
+                  &request.contract.allowed_write_paths,
+              )? {
+                  return Err(format!(
+                      "worker {} exceeded its bounded turn budget without producing an in-scope repository change",
+                      request.worker.id
+                  ));
+              }
+              let fallback = "The model exhausted its bounded turn budget after producing an in-scope repository change. Runtime exact-scope validation and independent verification are authoritative; this narrative is advisory.";
+              if summary.is_empty() {
+                  summary = fallback.to_owned();
+              } else {
+                  summary.push_str("\\n\\n");
+                  summary.push_str(fallback);
+              }
+          }
+          if summary.is_empty() {
+              return Err(format!(
+                  "worker {} returned no implementation evidence",
+                  request.worker.id
+              ));
+          }
+          Ok(WorkerRun {
+              session_id: session.id.to_string(),
+              turns: session.turn,
+              summary,
+          })
+          '''
+          if text.count(old) != 1:
+              raise SystemExit(f'completion block count={text.count(old)}')
+          coordinator.write_text(text.replace(old, new, 1), encoding='utf-8')
+
+          tests = Path('crates/medusa-runtime/src/mutating_worker_coordinator_tests.rs')
+          text = tests.read_text(encoding='utf-8')
+          anchor = '''#[test]
+          fn implementer_turn_budget_is_bounded_without_truncating_smaller_limits() {
+          '''
+          new_test = '''#[test]
+          fn turn_budget_fallback_requires_an_in_scope_repository_change() {
+              let (_directory, repo, _plan, _preflight) = repository("src/");
+              let manager = WorkerManager::new(
+                  &repo,
+                  repo.join(".medusa/executions/turn-budget/worktrees"),
+              )
+              .expect("manager");
+              let worker = manager
+                  .open_or_create_worker("turn-budget", "worker-turn-budget")
+                  .expect("worker");
+              fs::write(
+                  worker.worktree.join("src/lib.rs"),
+                  "pub fn value() -> u32 { 2 }\\n",
+              )
+              .expect("change");
+              assert!(
+                  has_in_scope_repository_changes(&worker, &["src/".to_owned()])
+                      .expect("in-scope inspection")
+              );
+              assert!(
+                  !has_in_scope_repository_changes(&worker, &["docs/".to_owned()])
+                      .expect("out-of-scope inspection")
+              );
+              manager.cleanup(&[worker]).expect("cleanup");
+          }
+
+          ''' + anchor
+          if text.count(anchor) != 1:
+              raise SystemExit(f'test anchor count={text.count(anchor)}')
+          tests.write_text(text.replace(anchor, new_test, 1), encoding='utf-8')
+          PY
+          cargo fmt --all
+          changed="$(git diff --name-only | sort)"
+          expected="$(printf '%s\n' crates/medusa-runtime/src/mutating_worker_coordinator.rs crates/medusa-runtime/src/mutating_worker_coordinator_tests.rs | sort)"
+          test "$changed" = "$expected"
+          git diff --check
+      - name: Validate completion fallback
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo test -p medusa-runtime turn_budget_fallback_requires_an_in_scope_repository_change --lib --locked
+          cargo test -p medusa-runtime mutating_worker_coordinator --lib --locked
+          cargo test -p medusa-runtime mutation_transaction --lib --locked
+          cargo clippy -p medusa-runtime --all-targets --locked -- -D warnings
+          python3 scripts/check-mutation-lifecycle.py
+          python3 scripts/check-evidence-authority.py
+      - name: Publish validated completion fallback
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          HEAD_REF: ${{ github.event.pull_request.head.ref }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          node <<'NODE'
+          const fs = require('fs');
+          const [owner, repo] = process.env.GITHUB_REPOSITORY.split('/');
+          const branch = process.env.HEAD_REF;
+          const token = process.env.GITHUB_TOKEN;
+          const paths = [
+            'crates/medusa-runtime/src/mutating_worker_coordinator.rs',
+            'crates/medusa-runtime/src/mutating_worker_coordinator_tests.rs',
+          ];
+          async function request(url, options = {}) {
+            const response = await fetch(`https://api.github.com${url}`, {
+              ...options,
+              headers: {
+                Accept: 'application/vnd.github+json',
+                Authorization: `Bearer ${token}`,
+                'X-GitHub-Api-Version': '2022-11-28',
+                'User-Agent': 'medusa-turn-budget-completion',
+              },
+            });
+            const text = await response.text();
+            const data = text ? JSON.parse(text) : {};
+            if (!response.ok) throw new Error(`${response.status} ${text}`);
+            return data;
+          }
+          (async () => {
+            for (const path of paths) {
+              const encoded = path.split('/').map(encodeURIComponent).join('/');
+              const current = await request(`/repos/${owner}/${repo}/contents/${encoded}?ref=${encodeURIComponent(branch)}`);
+              const desired = fs.readFileSync(path);
+              const existing = Buffer.from((current.content || '').replace(/\n/g, ''), 'base64');
+              if (existing.equals(desired)) continue;
+              await request(`/repos/${owner}/${repo}/contents/${encoded}`, {
+                method: 'PUT',
+                body: JSON.stringify({
+                  message: `Accept verified state after bounded model turns: ${path}`,
+                  content: desired.toString('base64'),
+                  sha: current.sha,
+                  branch,
+                }),
+              });
+            }
+          })().catch((error) => {
+            console.error(error.stack || String(error));
+            process.exit(1);
+          });
+          NODE
