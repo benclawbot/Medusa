@@ -167,7 +167,11 @@ impl RegistryEntry {
             || self.owner.trim().is_empty()
             || self.lifecycle_owner.trim().is_empty()
             || self.readiness.detail.trim().is_empty()
-            || self.readiness.evidence.iter().any(|item| item.trim().is_empty())
+            || self
+                .readiness
+                .evidence
+                .iter()
+                .any(|item| item.trim().is_empty())
         {
             return Err(invalid("capability registry entry is incomplete"));
         }
@@ -177,10 +181,7 @@ impl RegistryEntry {
                 self.id
             )));
         }
-        if !self
-            .explicit_approval
-            .is_subset(&self.permissions)
-        {
+        if !self.explicit_approval.is_subset(&self.permissions) {
             return Err(invalid(format!(
                 "{} requires approval for undeclared permissions",
                 self.id
@@ -257,11 +258,7 @@ impl CapabilityRegistry {
     }
 
     pub fn discover_with(repository: PathBuf, probe: &impl CommandProbe) -> MedusaResult<Self> {
-        Self::discover_with_desktop(
-            repository,
-            probe,
-            DesktopCommanderSettings::from_env(),
-        )
+        Self::discover_with_desktop(repository, probe, DesktopCommanderSettings::from_env())
     }
 
     pub fn discover_with_desktop(
@@ -519,18 +516,16 @@ fn build_entries(
                 CapabilitySurface::Protocol,
                 CapabilitySurface::Documentation,
             ]),
-            permissions: BTreeSet::from([
-                RegistryPermission::Read,
-                RegistryPermission::Network,
-            ]),
+            permissions: BTreeSet::from([RegistryPermission::Read, RegistryPermission::Network]),
             explicit_approval: BTreeSet::new(),
             dependencies: vec!["browser sidecar".into()],
             supported_platforms: supported_platforms(),
             readiness: ReadinessContract {
                 ready: false,
-                detail: states
-                    .get(&Capability::Browser)
-                    .map_or_else(|| "browser was not discovered".into(), |state| state.detail.clone()),
+                detail: states.get(&Capability::Browser).map_or_else(
+                    || "browser was not discovered".into(),
+                    |state| state.detail.clone(),
+                ),
                 evidence: vec!["no registered medusa-agent production handler".into()],
             },
             handler: None,
@@ -548,8 +543,10 @@ fn builtin_tool_entries(
 ) -> Vec<RegistryEntry> {
     let mut entries = vec![
         tool_entry(
-            states,
-            "fs_read",
+            ToolIdentity {
+                states,
+                name: "fs_read",
+            },
             Capability::Filesystem,
             "Read a UTF-8 file inside the repository. Use path `.` to list repository files.",
             json!({"type":"object","properties":{"path":{"type":"string"}},"required":["path"],"additionalProperties":false}),
@@ -558,28 +555,40 @@ fn builtin_tool_entries(
             false,
         ),
         tool_entry(
-            states,
-            "fs_create_dir",
+            ToolIdentity {
+                states,
+                name: "fs_create_dir",
+            },
             Capability::Filesystem,
             "Create a directory and missing parents inside the repository.",
             json!({"type":"object","properties":{"path":{"type":"string"}},"required":["path"],"additionalProperties":false}),
             "medusa-agent::tools::filesystem::create_dir",
-            [RegistryPermission::Write, RegistryPermission::RepositoryMutation],
+            [
+                RegistryPermission::Write,
+                RegistryPermission::RepositoryMutation,
+            ],
             true,
         ),
         tool_entry(
-            states,
-            "fs_write",
+            ToolIdentity {
+                states,
+                name: "fs_write",
+            },
             Capability::Filesystem,
             "Atomically write a UTF-8 file inside the repository.",
             json!({"type":"object","properties":{"path":{"type":"string"},"content":{"type":"string"}},"required":["path","content"],"additionalProperties":false}),
             "medusa-agent::tools::filesystem::write",
-            [RegistryPermission::Write, RegistryPermission::RepositoryMutation],
+            [
+                RegistryPermission::Write,
+                RegistryPermission::RepositoryMutation,
+            ],
             true,
         ),
         tool_entry(
-            states,
-            "search_text",
+            ToolIdentity {
+                states,
+                name: "search_text",
+            },
             Capability::Filesystem,
             "Search UTF-8 repository files for an exact text fragment.",
             json!({"type":"object","properties":{"query":{"type":"string"}},"required":["query"],"additionalProperties":false}),
@@ -588,8 +597,10 @@ fn builtin_tool_entries(
             false,
         ),
         tool_entry(
-            states,
-            "code_index",
+            ToolIdentity {
+                states,
+                name: "code_index",
+            },
             Capability::Filesystem,
             "Build the Rust symbol/reference index and optionally query one identifier.",
             json!({"type":"object","properties":{"name":{"type":"string"}},"additionalProperties":false}),
@@ -598,28 +609,40 @@ fn builtin_tool_entries(
             false,
         ),
         tool_entry(
-            states,
-            "patch_apply",
+            ToolIdentity {
+                states,
+                name: "patch_apply",
+            },
             Capability::Filesystem,
             "Apply a guarded atomic multi-file byte-range patch transaction.",
             json!({"type":"object","properties":{"edits":{"type":"array","items":{"type":"object","properties":{"path":{"type":"string"},"start_byte":{"type":"integer","minimum":0},"end_byte":{"type":"integer","minimum":0},"expected":{"type":"string"},"replacement":{"type":"string"}},"required":["path","start_byte","end_byte","expected","replacement"],"additionalProperties":false}}},"required":["edits"],"additionalProperties":false}),
             "medusa-agent::tools::intelligence::patch_apply",
-            [RegistryPermission::Write, RegistryPermission::RepositoryMutation],
+            [
+                RegistryPermission::Write,
+                RegistryPermission::RepositoryMutation,
+            ],
             true,
         ),
         tool_entry(
-            states,
-            "symbol_rename",
+            ToolIdentity {
+                states,
+                name: "symbol_rename",
+            },
             Capability::Filesystem,
             "Rename one Rust identifier across indexed definitions and references.",
             json!({"type":"object","properties":{"old_name":{"type":"string"},"new_name":{"type":"string"}},"required":["old_name","new_name"],"additionalProperties":false}),
             "medusa-agent::tools::intelligence::symbol_rename",
-            [RegistryPermission::Write, RegistryPermission::RepositoryMutation],
+            [
+                RegistryPermission::Write,
+                RegistryPermission::RepositoryMutation,
+            ],
             true,
         ),
         tool_entry(
-            states,
-            "shell_run",
+            ToolIdentity {
+                states,
+                name: "shell_run",
+            },
             Capability::Shell,
             "Run an approved executable directly in the repository and capture output.",
             json!({"type":"object","properties":{"program":{"type":"string"},"args":{"type":"array","items":{"type":"string"}},"output_mode":{"type":"string","enum":["compact","normal","verbatim"],"default":"compact"}},"required":["program","args"],"additionalProperties":false}),
@@ -628,8 +651,10 @@ fn builtin_tool_entries(
             false,
         ),
         tool_entry(
-            states,
-            "web_search",
+            ToolIdentity {
+                states,
+                name: "web_search",
+            },
             Capability::Network,
             "Search the public web for current information.",
             json!({"type":"object","properties":{"query":{"type":"string"},"allowed_domains":{"type":"array","items":{"type":"string"}},"blocked_domains":{"type":"array","items":{"type":"string"}}},"required":["query"],"additionalProperties":false}),
@@ -638,8 +663,10 @@ fn builtin_tool_entries(
             false,
         ),
         tool_entry(
-            states,
-            "web_fetch",
+            ToolIdentity {
+                states,
+                name: "web_fetch",
+            },
             Capability::Network,
             "Fetch a public HTTP(S) page and return readable text.",
             json!({"type":"object","properties":{"url":{"type":"string"},"prompt":{"type":"string"}},"required":["url"],"additionalProperties":false}),
@@ -648,8 +675,10 @@ fn builtin_tool_entries(
             false,
         ),
         tool_entry(
-            states,
-            "skill_read",
+            ToolIdentity {
+                states,
+                name: "skill_read",
+            },
             Capability::Filesystem,
             "Read an available instruction-only plugin before applying it.",
             json!({"type":"object","properties":{"name":{"type":"string"},"scope":{"type":"string","enum":["project","user"]}},"required":["name"],"additionalProperties":false}),
@@ -658,8 +687,10 @@ fn builtin_tool_entries(
             false,
         ),
         tool_entry(
-            states,
-            "update_plan",
+            ToolIdentity {
+                states,
+                name: "update_plan",
+            },
             Capability::Memory,
             "Create or update the visible task plan without modifying repository files.",
             json!({"type":"object","properties":{"steps":{"type":"array","minItems":1,"maxItems":8,"items":{"type":"object","properties":{"title":{"type":"string"},"status":{"type":"string","enum":["pending","in_progress","completed","failed"]}},"required":["title","status"],"additionalProperties":false}}},"required":["steps"],"additionalProperties":false}),
@@ -668,8 +699,10 @@ fn builtin_tool_entries(
             false,
         ),
         tool_entry(
-            states,
-            "ask_user_question",
+            ToolIdentity {
+                states,
+                name: "ask_user_question",
+            },
             Capability::Memory,
             "Ask one to four blocking multiple-choice clarification questions.",
             json!({"type":"object","properties":{"questions":{"type":"array","minItems":1,"maxItems":4,"items":{"type":"object","properties":{"header":{"type":"string","maxLength":12},"question":{"type":"string"},"options":{"type":"array","minItems":2,"maxItems":4,"items":{"type":"object","properties":{"label":{"type":"string"},"description":{"type":"string"}},"required":["label","description"],"additionalProperties":false}},"multiSelect":{"type":"boolean"}},"required":["header","question","options"],"additionalProperties":false}}},"required":["questions"],"additionalProperties":false}),
@@ -678,13 +711,18 @@ fn builtin_tool_entries(
             false,
         ),
         tool_entry(
-            states,
-            "git_checkpoint",
+            ToolIdentity {
+                states,
+                name: "git_checkpoint",
+            },
             Capability::Git,
             "Stage all changes and create a Git checkpoint commit.",
             json!({"type":"object","properties":{"message":{"type":"string"}},"required":["message"],"additionalProperties":false}),
             "medusa-agent::tools::git::checkpoint",
-            [RegistryPermission::Write, RegistryPermission::RepositoryMutation],
+            [
+                RegistryPermission::Write,
+                RegistryPermission::RepositoryMutation,
+            ],
             true,
         ),
     ];
@@ -695,8 +733,7 @@ fn builtin_tool_entries(
             .map(Value::String)
             .collect::<Vec<_>>();
         entries.push(tool_entry(
-            states,
-            "desktop_commander",
+            ToolIdentity { states, name: "desktop_commander" },
             Capability::DesktopMcp,
             "Call one policy-approved Desktop Commander MCP file or search tool.",
             json!({"type":"object","properties":{"tool":{"type":"string","enum":allowed},"arguments":{"type":"object"}},"required":["tool","arguments"],"additionalProperties":false}),
@@ -708,9 +745,13 @@ fn builtin_tool_entries(
     entries
 }
 
+struct ToolIdentity<'a> {
+    states: &'a BTreeMap<Capability, CapabilityState>,
+    name: &'a str,
+}
+
 fn tool_entry<const N: usize>(
-    states: &BTreeMap<Capability, CapabilityState>,
-    name: &str,
+    identity: ToolIdentity<'_>,
     capability: Capability,
     description: &str,
     input_schema: Value,
@@ -718,6 +759,7 @@ fn tool_entry<const N: usize>(
     permissions: [RegistryPermission; N],
     requires_approval: bool,
 ) -> RegistryEntry {
+    let ToolIdentity { states, name } = identity;
     let state = states.get(&capability).cloned().unwrap_or(CapabilityState {
         available: false,
         detail: "capability was not discovered".into(),
@@ -818,9 +860,7 @@ fn writable_state_directory(repository: &Path) -> MedusaResult<bool> {
 
 fn valid_id(id: &str) -> bool {
     id.bytes().all(|byte| {
-        byte.is_ascii_lowercase()
-            || byte.is_ascii_digit()
-            || matches!(byte, b'.' | b'-' | b'_')
+        byte.is_ascii_lowercase() || byte.is_ascii_digit() || matches!(byte, b'.' | b'-' | b'_')
     })
 }
 
@@ -861,7 +901,11 @@ mod tests {
                 "git".into(),
                 "gh".into(),
                 "node".into(),
-                if cfg!(windows) { "cmd".into() } else { "sh".into() },
+                if cfg!(windows) {
+                    "cmd".into()
+                } else {
+                    "sh".into()
+                },
             ])),
         )
         .expect("registry")
@@ -876,7 +920,12 @@ mod tests {
             let entry = registry
                 .entries
                 .values()
-                .find(|entry| entry.tool.as_ref().is_some_and(|item| item.name == tool.name))
+                .find(|entry| {
+                    entry
+                        .tool
+                        .as_ref()
+                        .is_some_and(|item| item.name == tool.name)
+                })
                 .expect("registry entry");
             assert!(entry.readiness.ready);
             assert!(entry.handler.is_some());
@@ -892,11 +941,13 @@ mod tests {
                 .iter()
                 .all(|tool| !tool.name.starts_with("browser_"))
         );
-        assert!(registry
-            .entries
-            .values()
-            .filter(|entry| entry.capability == Capability::Browser)
-            .all(|entry| !entry.readiness.ready && entry.handler.is_none()));
+        assert!(
+            registry
+                .entries
+                .values()
+                .filter(|entry| entry.capability == Capability::Browser)
+                .all(|entry| !entry.readiness.ready && entry.handler.is_none())
+        );
     }
 
     #[test]
@@ -906,31 +957,29 @@ mod tests {
         let mut duplicate = entries[0].clone();
         duplicate.id = "tool.duplicate".into();
         entries.push(duplicate);
-        assert!(CapabilityRegistry::from_entries(
-            registry.repository.clone(),
-            registry.capabilities.clone(),
-            entries
-        )
-        .is_err());
+        assert!(
+            CapabilityRegistry::from_entries(
+                registry.repository.clone(),
+                registry.capabilities.clone(),
+                entries
+            )
+            .is_err()
+        );
 
         let mut broken = registry.entries.values().cloned().collect::<Vec<_>>();
         broken[0].handler = None;
-        assert!(CapabilityRegistry::from_entries(
-            registry.repository,
-            registry.capabilities,
-            broken
-        )
-        .is_err());
+        assert!(
+            CapabilityRegistry::from_entries(registry.repository, registry.capabilities, broken)
+                .is_err()
+        );
     }
 
     #[test]
     fn unavailable_dependencies_remove_tools_from_all_executable_projections() {
         let directory = tempfile::tempdir().expect("tempdir");
-        let registry = CapabilityRegistry::discover_with(
-            directory.path().into(),
-            &FakeProbe(BTreeSet::new()),
-        )
-        .expect("registry");
+        let registry =
+            CapabilityRegistry::discover_with(directory.path().into(), &FakeProbe(BTreeSet::new()))
+                .expect("registry");
         let names = registry
             .model_tools(false)
             .into_iter()

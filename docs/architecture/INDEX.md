@@ -76,7 +76,7 @@ V2 invariants:
 
 ## Capability certification
 
-The legacy capability ledger remains in [`../CAPABILITY-CLAIMS.json`](../CAPABILITY-CLAIMS.json) and [`../CAPABILITY-EVIDENCE.md`](../CAPABILITY-EVIDENCE.md). Its `production` value means a current entrypoint exists; it does **not** mean architecture-v2 certification.
+The versioned runtime authority is `medusa-capabilities::CapabilityRegistry`. Model tools, prompt availability, CLI diagnostics, protocol reports, and generated documentation are projections of one validated snapshot. Historical claim documents are migration evidence only and no longer grant runtime availability.
 
 | Capability | Legacy claim | V2 status | Decision | Blocking evidence |
 |---|---|---|---|---|
@@ -89,8 +89,8 @@ The legacy capability ledger remains in [`../CAPABILITY-CLAIMS.json`](../CAPABIL
 | Release trust | production | certified-production | preserve | signed manifest v2, protected signer, reviewed keyring, and CI artifacts |
 | Self-update | production | certified-production | preserve | verified prebuilt release is default; source compilation is explicit and never a fallback |
 | Multi-agent research | production | quarantined | replace | review ordering, decorative state, changed-path loss |
-| Browser tools | advertised | quarantined | replace | no production `execute_tool` dispatch |
-| Plugins/extensions | structural | design-only | adapt | no certified manifest/permissions/lifecycle |
+| Browser tools | withheld | quarantined | adapt | registry records remain non-executable until a production handler is certified |
+| Plugins/extensions | managed | preview | adapt | versioned manifests and instruction-only `SKILL.md`; executable handlers still require certification |
 | Telegram remote frontend | partial | quarantined | adapt | shared-path and operator conformance incomplete |
 | Unsafe/FFI boundary | partial | legacy-uncertified | adapt | #653 audit and allowlist |
 
@@ -133,7 +133,6 @@ The architecture and state machine are defined in [`PREBUILT-UPDATES.md`](PREBUI
 
 The headless harness intentionally reproduces current defects as expected failures. They document what v1 does, not what v2 should preserve:
 
-- `browser-dispatch-unreachable` (#631)
 - `integration-precedes-parent-review` (#632)
 - `isolated-verification-drops-changed-paths` (#633)
 - `provider-capability-mismatch` (#636)
@@ -172,6 +171,7 @@ Use [`LEGACY-DELETION.md`](LEGACY-DELETION.md) for deletion gates and [`RELEASE-
 
 - Decision: [`decisions/0001-architecture-v2-reset.md`](decisions/0001-architecture-v2-reset.md)
 - Decision: [`decisions/0002-verified-prebuilt-updates.md`](decisions/0002-verified-prebuilt-updates.md)
+- Decision: [`decisions/0003-truthful-capability-plugin-registry.md`](decisions/0003-truthful-capability-plugin-registry.md)
 - Verified update architecture: [`PREBUILT-UPDATES.md`](PREBUILT-UPDATES.md)
 - Machine-readable baseline: [`baseline.json`](baseline.json)
 - Primary component owners: [`owners.json`](owners.json)

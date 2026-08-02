@@ -601,7 +601,11 @@ impl<P: ModelProvider> AgentEngine<P> {
             system.push_str("\n\n");
             system.push_str(&team.prompt_context()?);
         }
-        let mut tools = available_tools(self.config.agent.mode, &self.desktop_commander_settings);
+        let mut tools = available_tools(
+            self.config.agent.mode,
+            &session.repo,
+            &self.desktop_commander_settings,
+        )?;
         if let Some(team) = &self.team_context {
             tools.extend(team.definitions());
         }

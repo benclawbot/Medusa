@@ -9,7 +9,7 @@ use std::{
 use clap::{Args, Parser, Subcommand, ValueEnum};
 use medusa_capabilities::{
     Capability, CapabilityAuthorizer, CapabilityGrant, CapabilityPermission, CapabilityRegistry,
-    ExplicitCapabilityRuntime, github_descriptor,
+    github_descriptor,
 };
 use medusa_github::{
     GitHubService, RepositoryBootstrap, RepositoryCreateRequest, RepositoryCreationReceipt,
@@ -122,22 +122,11 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
 }
 
 fn diagnostics(repository_path: PathBuf) -> Result<(), Box<dyn std::error::Error>> {
-    let repository_name =
-        env::var("MEDUSA_GITHUB_REPOSITORY").unwrap_or_else(|_| "local/repository".into());
     let registry = CapabilityRegistry::discover(&repository_path)?;
-    let grants = vec![
-        CapabilityGrant {
-            capability: Capability::GitHub,
-            permissions: BTreeSet::from([CapabilityPermission::Read]),
-        },
-        CapabilityGrant {
-            capability: Capability::SelfImprovement,
-            permissions: BTreeSet::from([CapabilityPermission::Read]),
-        },
-    ];
-    let runtime =
-        ExplicitCapabilityRuntime::new(registry, grants, GitHubService::new(repository_name));
-    println!("{}", serde_json::to_string_pretty(&runtime.diagnostics())?);
+    println!(
+        "{}",
+        serde_json::to_string_pretty(&registry.protocol_report())?
+    );
     Ok(())
 }
 
