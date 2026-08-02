@@ -77,9 +77,12 @@ def browser_dispatch_unreachable(root: Path) -> tuple[bool, str]:
 def integration_precedes_parent_review(root: Path) -> tuple[bool, str]:
     runtime = read_tree(root, "crates/medusa-runtime/src/lib.rs")
     integration = runtime.find("mutating_worker_coordinator::run_implementation")
-    parent = runtime.find("AgentEngine::new_with_cancellation", integration + 1)
-    observed = integration >= 0 and parent > integration
-    return observed, f"run_implementation_offset={integration}; parent_engine_offset={parent}"
+    parent_execution = runtime.find("engine.step_with_observer_and_context", integration + 1)
+    observed = integration >= 0 and parent_execution > integration
+    return (
+        observed,
+        f"run_implementation_offset={integration}; parent_execution_offset={parent_execution}",
+    )
 
 
 def verification_drops_changed_paths(root: Path) -> tuple[bool, str]:
@@ -173,7 +176,7 @@ def run_production_smoke(binary: Path, timeout: int) -> list[Result]:
     commands = {
         "entrypoint-cli": [str(binary), "--help"],
         "entrypoint-headless": [str(binary), "run", "--help"],
-        "entrypoint-daemon": [str(binary), "daemon", "--help"],
+        "entrypoint-daemon": [str(binary), "__daemon-serve", "--help"],
         "entrypoint-update": [str(binary), "update", "--help"],
     }
     results: list[Result] = []
