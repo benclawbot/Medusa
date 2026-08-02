@@ -4,9 +4,7 @@ use std::{
 };
 
 use medusa_core::{ErrorCode, MedusaResult};
-use medusa_github::{
-    CommandExecutor, CommandOutput, GitHubService, MergeStrategy,
-};
+use medusa_github::{CommandExecutor, CommandOutput, GitHubService, MergeStrategy};
 
 type RecordedCommands = Arc<Mutex<Vec<(String, Vec<String>)>>>;
 
@@ -108,7 +106,11 @@ fn every_repository_pr_issue_and_actions_operation_routes_through_the_service() 
     github.watch_workflow(99).expect("watch workflow");
     github.download_workflow_logs(99).expect("logs");
     let calls = fake.0.lock().expect("lock");
-    assert!(calls.iter().any(|(_, args)| args.contains(&"--head".into())));
+    assert!(
+        calls
+            .iter()
+            .any(|(_, args)| args.contains(&"--head".into()))
+    );
     assert!(
         calls
             .iter()
