@@ -1,0 +1,82 @@
+name: Validate 650 Evidence Core
+
+on:
+  pull_request:
+    branches: [main]
+    types: [opened, synchronize, reopened]
+
+permissions:
+  contents: write
+
+concurrency:
+  group: validate-650-evidence-core-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  validate:
+    if: github.event.pull_request.number == 663 && github.event.pull_request.head.repo.full_name == github.repository && github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ github.event.pull_request.head.ref }}
+      - uses: dtolnay/rust-toolchain@39b0b3842c7e8bbf6904c0bfc3d9006fdd4dc4e0 # 1.88.0
+        with:
+          components: rustfmt, clippy
+      - name: Validate evidence authority crate
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo fmt --all -- --check
+          cargo check -p medusa-evidence --all-targets
+          cargo test -p medusa-evidence
+          cargo clippy -p medusa-evidence --all-targets -- -D warnings
+      - name: Publish updated lockfile
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          HEAD_REF: ${{ github.event.pull_request.head.ref }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if git diff --quiet -- Cargo.lock; then
+            echo 'Cargo.lock unchanged'
+            exit 0
+          fi
+          node <<'NODE'
+          const fs = require('fs');
+          const [owner, repo] = process.env.GITHUB_REPOSITORY.split('/');
+          const branch = process.env.HEAD_REF;
+          const token = process.env.GITHUB_TOKEN;
+          async function request(url, options = {}) {
+            const response = await fetch(`https://api.github.com${url}`, {
+              ...options,
+              headers: {
+                Accept: 'application/vnd.github+json',
+                Authorization: `Bearer ${token}`,
+                'X-GitHub-Api-Version': '2022-11-28',
+                'User-Agent': 'medusa-evidence-core',
+              },
+            });
+            const text = await response.text();
+            const data = text ? JSON.parse(text) : {};
+            if (!response.ok) throw new Error(`${response.status} ${text}`);
+            return data;
+          }
+          (async () => {
+            const current = await request(`/repos/${owner}/${repo}/contents/Cargo.lock?ref=${encodeURIComponent(branch)}`);
+            const updated = await request(`/repos/${owner}/${repo}/contents/Cargo.lock`, {
+              method: 'PUT',
+              body: JSON.stringify({
+                message: 'Register medusa-evidence in Cargo.lock',
+                content: fs.readFileSync('Cargo.lock').toString('base64'),
+                sha: current.sha,
+                branch,
+              }),
+            });
+            console.log(`published ${updated.commit.sha}`);
+          })().catch((error) => {
+            console.error(error.stack || String(error));
+            process.exit(1);
+          });
+          NODE
