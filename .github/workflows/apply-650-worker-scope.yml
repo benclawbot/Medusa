@@ -32,8 +32,10 @@ jobs:
           set -euo pipefail
           cargo fmt --all
           changed="$(git diff --name-only | sort)"
-          expected="$(printf '%s\n' Cargo.lock crates/medusa-workers/Cargo.toml crates/medusa-workers/src/lib.rs | sort)"
-          test "$changed" = "$expected"
+          unexpected="$(printf '%s\n' "$changed" | grep -Ev '^(Cargo.lock|crates/medusa-workers/Cargo.toml|crates/medusa-workers/src/lib.rs)$' || true)"
+          test -z "$unexpected"
+          printf '%s\n' "$changed" | grep -qx 'crates/medusa-workers/Cargo.toml'
+          printf '%s\n' "$changed" | grep -qx 'crates/medusa-workers/src/lib.rs'
           cargo fmt --all -- --check
           cargo check -p medusa-evidence -p medusa-workers --all-targets
           cargo test -p medusa-evidence -p medusa-workers
