@@ -19,7 +19,7 @@
   "deployment_modes": [
     ["interactive-tui", "medusa", "crates/medusa-tui", "medusa-runtime::RuntimeController"],
     ["headless-cli", "medusa run", "crates/medusa-cli", "medusa-runtime::RuntimeController"],
-    ["daemon", "medusa daemon", "crates/medusa-daemon", "medusa-runtime::RuntimeController"],
+    ["daemon", "medusa __daemon-serve", "crates/medusa-daemon", "medusa-runtime::RuntimeController"],
     ["desktop", "apps/medusa-desktop", "apps/medusa-desktop", "medusa-runtime::RuntimeController"],
     ["github-operations", "medusa github / medusa-capabilities", "crates/medusa-github", "typed guarded operation contract"],
     ["self-update", "medusa update", "crates/medusa-update", "legacy source-build channel pending #655"]
@@ -158,7 +158,7 @@
   ],
   "known_failure_fixtures": [
     ["browser-dispatch-unreachable", 631, false, "advertised browser tool names are absent from execute_tool", "remove after dispatcher, permissions and behavioral tests"],
-    ["integration-precedes-parent-review", 632, false, "run_implementation integrates before parent AgentEngine review", "remove after durable review receipt gates integration"],
+    ["integration-precedes-parent-review", 632, false, "run_implementation completes before the parent engine executes", "remove after durable review receipt gates integration"],
     ["isolated-verification-drops-changed-paths", 633, false, "targeted_verification receives only the worktree path", "remove after changed paths are explicit input and evidence"],
     ["provider-capability-mismatch", 636, false, "streaming can be true while request_body forces false and cancellation leaves request thread alive", "remove after route claims match wire/cancellation"]
   ],
