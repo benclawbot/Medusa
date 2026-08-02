@@ -7,10 +7,7 @@ use medusa_core::{ErrorCategory, ErrorCode, MedusaError, MedusaResult};
 use serde_json::{Map, Value};
 
 use super::*;
-use crate::{
-    CommandOutput, execution_error,
-    repository_creation::sanitize_external_error,
-};
+use crate::{CommandOutput, execution_error, repository_creation::sanitize_external_error};
 
 pub(super) fn receipt_from_output(
     request: &GitHubOperationRequest,
@@ -36,15 +33,17 @@ pub(super) fn receipt_from_output(
     let resource_identity = payload_identity(&canonical)
         .or_else(|| payload_identity(&payload))
         .or_else(|| endpoint_identity(request));
-    let resource_url = payload_url(&canonical).or_else(|| payload_url(&payload)).or_else(|| {
-        Some(format!(
-            "https://{}/{}/{}",
-            request.hostname,
-            request.repository,
-            request.endpoint.trim_start_matches('/')
-        ))
-        .filter(|_| !request.endpoint.is_empty())
-    });
+    let resource_url = payload_url(&canonical)
+        .or_else(|| payload_url(&payload))
+        .or_else(|| {
+            Some(format!(
+                "https://{}/{}/{}",
+                request.hostname,
+                request.repository,
+                request.endpoint.trim_start_matches('/')
+            ))
+            .filter(|_| !request.endpoint.is_empty())
+        });
     Ok(GitHubOperationReceipt {
         operation_id: operation_id(request),
         repository: request.repository.clone(),
@@ -236,9 +235,13 @@ pub(super) fn validate_hostname(hostname: &str) -> MedusaResult<()> {
         || hostname.contains('/')
         || hostname.contains(':')
         || hostname.contains('\\')
-        || hostname.split('.').any(|part| part.is_empty() || !valid_slug(part))
+        || hostname
+            .split('.')
+            .any(|part| part.is_empty() || !valid_slug(part))
     {
-        return Err(invalid_input("hostname must be a DNS hostname without a URL scheme"));
+        return Err(invalid_input(
+            "hostname must be a DNS hostname without a URL scheme",
+        ));
     }
     Ok(())
 }
@@ -255,7 +258,9 @@ pub(super) fn validate_endpoint(resource: GitHubResource, endpoint: &str) -> Med
         || endpoint.contains('?')
         || endpoint.contains('#')
         || endpoint.contains(':')
-        || endpoint.bytes().any(|byte| byte == 0 || byte.is_ascii_control())
+        || endpoint
+            .bytes()
+            .any(|byte| byte == 0 || byte.is_ascii_control())
     {
         return Err(invalid_input(
             "endpoint must be a repository-relative GitHub API path",
