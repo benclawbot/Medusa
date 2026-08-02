@@ -32,6 +32,15 @@ fn main() {
         );
         return;
     }
+    if let Some(github_args) = subcommand_arguments(&args, "github") {
+        finish(
+            run_sibling("medusa-github-operation", &github_arguments(&github_args)),
+            Some(
+                "usage: medusa github execute --request PATH [--approve] [--approve-high-risk]\n       medusa github auth login|status|refresh|logout --client-id CLIENT_ID\n       medusa github capabilities --request PATH",
+            ),
+        );
+        return;
+    }
     if let Some(report_args) = subcommand_arguments(&args, "report") {
         let command_args = strip_repository_argument(&report_args);
         finish(
@@ -147,6 +156,27 @@ fn strip_repository_argument(args: &[String]) -> Vec<String> {
     stripped
 }
 
+fn github_arguments(args: &[String]) -> Vec<String> {
+    let mut forwarded = Vec::with_capacity(args.len());
+    let mut index = 0;
+    while index < args.len() {
+        if args[index] == "--repo" {
+            forwarded.push("--repository-directory".into());
+            if let Some(path) = args.get(index + 1) {
+                forwarded.push(path.clone());
+            }
+            index += 2;
+        } else if let Some(path) = args[index].strip_prefix("--repo=") {
+            forwarded.push(format!("--repository-directory={path}"));
+            index += 1;
+        } else {
+            forwarded.push(args[index].clone());
+            index += 1;
+        }
+    }
+    forwarded
+}
+
 fn takes_value(value: &str) -> bool {
     matches!(
         value,
@@ -206,6 +236,32 @@ mod tests {
     }
 
     #[test]
+    fn github_router_translates_global_repository_to_confined_directory() {
+        let routed = subcommand_arguments(
+            &strings(&[
+                "--repo",
+                "/workspace/project",
+                "github",
+                "execute",
+                "--request",
+                "operation.json",
+            ]),
+            "github",
+        )
+        .expect("route");
+        assert_eq!(
+            github_arguments(&routed),
+            strings(&[
+                "--repository-directory",
+                "/workspace/project",
+                "execute",
+                "--request",
+                "operation.json",
+            ])
+        );
+    }
+
+    #[test]
     fn report_router_preserves_global_repository() {
         let args = strings(&[
             "--repo",
@@ -255,6 +311,10 @@ mod tests {
         );
         assert_eq!(
             subcommand_arguments(&strings(&["run", "quickstart"]), "quickstart"),
+            None
+        );
+        assert_eq!(
+            subcommand_arguments(&strings(&["run", "github"]), "github"),
             None
         );
     }
