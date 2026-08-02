@@ -91,7 +91,7 @@ serial_test = "3.0"
 semver = { version = "1.0", features = ["serde"] }
 reqwest = { version = "0.12", default-features = false, features = ["blocking", "json", "rustls-tls"] }
 tungstenite = { version = "0.30", default-features = false, features = ["handshake", "rustls-tls-webpki-roots"] }
-keyring = "4.1"
+keyring = { version = "3.6.3", default-features = false, features = ["apple-native", "windows-native", "linux-native-sync-persistent", "crypto-rust"] }
 
 [workspace.lints.rust]
 unsafe_code = "forbid"
