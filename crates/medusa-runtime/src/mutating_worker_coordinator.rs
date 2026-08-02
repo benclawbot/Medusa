@@ -13,6 +13,7 @@ use std::{
 use medusa_agent::{
     AgentEngine, AgentExecutionPolicy, AgentUpdate, StepOutcome, TeamMemberContext, TeamRole,
     TeamRuntime, WorkerExecutionController, authoritative_verification_for_components_at,
+    prepare_components_for_verification,
 };
 use medusa_evidence::{ChangedComponent, VerificationReceipt, changed_scope_fingerprint};
 use medusa_config::{Config, Mode};
@@ -614,6 +615,93 @@ where
             }
             return Err(recorded);
         }
+        if let Err(error) =
+            prepare_components_for_verification(&worker.worktree, &changed_components)
+        {
+            let retryable = attempt < MAX_ATTEMPTS;
+            let recorded = record_attempt_failure(
+                &mut controller,
+                team,
+                events,
+                control,
+                manager,
+                state_path,
+                &assignment,
+                &worker,
+                running,
+                Some(&run),
+                changed_paths,
+                Vec::new(),
+                format!("trusted preparation failed: {error}"),
+                retryable,
+                false,
+            )?;
+            last_error = Some(recorded.clone());
+            if retryable {
+                continue;
+            }
+            return Err(recorded);
+        }
+        let prepared_components = match manager.changed_components_since(&worker, &base_head) {
+            Ok(components) => components,
+            Err(error) => {
+                let retryable = attempt < MAX_ATTEMPTS;
+                let recorded = record_attempt_failure(
+                    &mut controller,
+                    team,
+                    events,
+                    control,
+                    manager,
+                    state_path,
+                    &assignment,
+                    &worker,
+                    running,
+                    Some(&run),
+                    changed_paths,
+                    Vec::new(),
+                    format!("failed to inspect prepared changes: {error}"),
+                    retryable,
+                    false,
+                )?;
+                last_error = Some(recorded.clone());
+                if retryable {
+                    continue;
+                }
+                return Err(recorded);
+            }
+        };
+        if changed_scope_fingerprint(&prepared_components)
+            != changed_scope_fingerprint(&changed_components)
+        {
+            let error = format!(
+                "trusted preparation changed repository scope: before={changed_components:?}; after={prepared_components:?}"
+            );
+            let retryable = attempt < MAX_ATTEMPTS;
+            let recorded = record_attempt_failure(
+                &mut controller,
+                team,
+                events,
+                control,
+                manager,
+                state_path,
+                &assignment,
+                &worker,
+                running,
+                Some(&run),
+                component_paths(&prepared_components),
+                Vec::new(),
+                error,
+                retryable,
+                false,
+            )?;
+            last_error = Some(recorded.clone());
+            if retryable {
+                continue;
+            }
+            return Err(recorded);
+        }
+        let changed_components = prepared_components;
+        let changed_paths = component_paths(&changed_components);
         let worktree_identity = format!(
             "worktree:{}:{}",
             base_head,
