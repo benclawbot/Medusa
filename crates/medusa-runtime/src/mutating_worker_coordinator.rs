@@ -12,7 +12,7 @@ use std::{
 
 use medusa_agent::{
     AgentEngine, AgentExecutionPolicy, AgentUpdate, StepOutcome, TeamMemberContext, TeamRole,
-    TeamRuntime, WorkerExecutionController, authoritative_verification_for_components,
+    TeamRuntime, WorkerExecutionController, authoritative_verification_for_components_at,
 };
 use medusa_evidence::{ChangedComponent, VerificationReceipt, changed_scope_fingerprint};
 use medusa_config::{Config, Mode};
@@ -592,8 +592,13 @@ where
             base_head,
             changed_scope_fingerprint(&changed_components)
         );
-        let verification = match authoritative_verification_for_components(
+        let evidence_root = state_path
+            .parent()
+            .ok_or_else(|| "implementation state path has no execution root".to_owned())?
+            .join("evidence/worktree");
+        let verification = match authoritative_verification_for_components_at(
             &worker.worktree,
+            &evidence_root,
             &preflight.repository_fingerprint,
             &worktree_identity,
             &changed_components,
