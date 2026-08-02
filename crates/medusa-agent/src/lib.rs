@@ -13,6 +13,7 @@ pub mod team;
 pub mod tools;
 mod transaction;
 mod verification;
+mod verification_authority;
 mod worker_execution;
 pub mod world_model_session;
 
@@ -38,6 +39,9 @@ pub use transaction::{
     FileMutation, TransactionOutcome, TransactionPreview, apply_atomic, preview,
 };
 pub use verification::{VerificationResult, targeted_verification};
+pub use verification_authority::{
+    AuthoritativeVerificationResult, authoritative_verification_for_components,
+};
 pub use worker_execution::{
     LeasedAssignment, TeamTaskView, WorkerCompletion, WorkerExecutionController,
     WorkerProgressSummary,
