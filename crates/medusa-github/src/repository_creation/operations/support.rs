@@ -22,28 +22,19 @@ pub(super) fn receipt_from_output(
                 request.method.as_str(),
                 api_endpoint(request)
             ),
-            sanitize_external_error(&output.stderr),
+            sanitize_operation_error(request, &output.stderr),
         ));
     }
     let (bounded, truncated) = bounded_output(&output.stdout, request.max_response_bytes);
     let mut payload = parse_payload(&bounded);
     normalize_payload(request, &mut payload);
+    redact_request_values(request, &mut payload);
     redact_json(&mut payload, request.secret_operation());
     let canonical = canonical_payload(&payload);
     let resource_identity = payload_identity(&canonical)
         .or_else(|| payload_identity(&payload))
         .or_else(|| endpoint_identity(request));
-    let resource_url = payload_url(&canonical)
-        .or_else(|| payload_url(&payload))
-        .or_else(|| {
-            Some(format!(
-                "https://{}/{}/{}",
-                request.hostname,
-                request.repository,
-                request.endpoint.trim_start_matches('/')
-            ))
-            .filter(|_| !request.endpoint.is_empty())
-        });
+    let resource_url = payload_url(&canonical).or_else(|| payload_url(&payload));
     Ok(GitHubOperationReceipt {
         operation_id: operation_id(request),
         repository: request.repository.clone(),
@@ -212,12 +203,21 @@ pub(super) fn api_endpoint(request: &GitHubOperationRequest) -> String {
     }
 }
 
+pub(super) fn valid_action(action: &str) -> bool {
+    !action.is_empty()
+        && action.len() <= 80
+        && action.trim() == action
+        && action.chars().all(|character| !character.is_control())
+}
+
 pub(super) fn validate_repository(repository: &str) -> MedusaResult<()> {
     let mut parts = repository.split('/');
     let owner = parts.next().unwrap_or_default();
     let name = parts.next().unwrap_or_default();
     if owner.is_empty()
         || name.is_empty()
+        || matches!(owner, "." | "..")
+        || matches!(name, "." | "..")
         || parts.next().is_some()
         || !valid_slug(owner)
         || !valid_slug(name)
@@ -247,6 +247,7 @@ pub(super) fn validate_hostname(hostname: &str) -> MedusaResult<()> {
 }
 
 pub(super) fn validate_endpoint(resource: GitHubResource, endpoint: &str) -> MedusaResult<()> {
+    let encoded = endpoint.to_ascii_lowercase();
     if endpoint.len() > 1_024
         || endpoint.starts_with('/')
         || endpoint.ends_with('/')
@@ -258,6 +259,10 @@ pub(super) fn validate_endpoint(resource: GitHubResource, endpoint: &str) -> Med
         || endpoint.contains('?')
         || endpoint.contains('#')
         || endpoint.contains(':')
+        || encoded.contains("%2e")
+        || encoded.contains("%2f")
+        || encoded.contains("%5c")
+        || encoded.contains("%25")
         || endpoint
             .bytes()
             .any(|byte| byte == 0 || byte.is_ascii_control())
@@ -309,6 +314,63 @@ pub(super) fn validate_endpoint(resource: GitHubResource, endpoint: &str) -> Med
     Ok(())
 }
 
+pub(super) fn validate_search_scope(query: &str, repository: &str) -> MedusaResult<()> {
+    let expected = format!("repo:{repository}").to_ascii_lowercase();
+    let mut repository_scopes = 0_usize;
+    for token in query.split(|character: char| character.is_whitespace() || "()".contains(character)) {
+        let qualifier = token
+            .trim_matches(|character| matches!(character, '"' | '\''))
+            .trim_start_matches(['+', '-'])
+            .to_ascii_lowercase();
+        if qualifier.starts_with("repo:") {
+            repository_scopes += 1;
+            if qualifier != expected {
+                return Err(invalid_input(
+                    "repository search cannot include another repository scope",
+                ));
+            }
+        }
+        if qualifier.starts_with("org:") || qualifier.starts_with("user:") {
+            return Err(invalid_input(
+                "repository search cannot include organization or user scopes",
+            ));
+        }
+    }
+    if repository_scopes != 1 {
+        return Err(invalid_input(
+            "repository search q must include exactly one configured repo:owner/name scope",
+        ));
+    }
+    Ok(())
+}
+
+pub(super) fn validate_body_credentials(value: &Value) -> MedusaResult<()> {
+    match value {
+        Value::Object(object) => {
+            for (key, value) in object {
+                if credential_name(key) {
+                    return Err(invalid_input(
+                        "raw GitHub credentials cannot be supplied in an operation body",
+                    ));
+                }
+                validate_body_credentials(value)?;
+            }
+        }
+        Value::Array(values) => {
+            for value in values {
+                validate_body_credentials(value)?;
+            }
+        }
+        Value::String(text) if looks_sensitive(text) => {
+            return Err(invalid_input(
+                "raw GitHub credentials cannot be supplied in an operation body",
+            ));
+        }
+        _ => {}
+    }
+    Ok(())
+}
+
 pub(super) fn valid_slug(value: &str) -> bool {
     !value.is_empty()
         && value.len() <= 100
@@ -350,6 +412,80 @@ pub(super) fn redact_json(value: &mut Value, redact_values: bool) {
     }
 }
 
+pub(super) fn redact_request_values(request: &GitHubOperationRequest, value: &mut Value) {
+    let Some(body) = request.body.as_ref() else {
+        return;
+    };
+    let mut sensitive_values = Vec::new();
+    collect_sensitive_values(body, request.secret_operation(), false, &mut sensitive_values);
+    sensitive_values.sort_by_key(|candidate| std::cmp::Reverse(candidate.len()));
+    replace_values(value, &sensitive_values);
+}
+
+pub(super) fn sanitize_operation_error(request: &GitHubOperationRequest, detail: &str) -> String {
+    let mut sanitized = sanitize_external_error(detail);
+    if let Some(body) = request.body.as_ref() {
+        let mut sensitive_values = Vec::new();
+        collect_sensitive_values(body, request.secret_operation(), false, &mut sensitive_values);
+        sensitive_values.sort_by_key(|candidate| std::cmp::Reverse(candidate.len()));
+        for candidate in sensitive_values {
+            if !candidate.is_empty() {
+                sanitized = sanitized.replace(&candidate, "[REDACTED]");
+            }
+        }
+    }
+    sanitized
+}
+
+fn collect_sensitive_values(
+    value: &Value,
+    secret_operation: bool,
+    inherited_sensitive: bool,
+    output: &mut Vec<String>,
+) {
+    match value {
+        Value::Object(object) => {
+            for (key, value) in object {
+                let key_lower = key.to_ascii_lowercase();
+                let sensitive = inherited_sensitive
+                    || sensitive_name(key)
+                    || (secret_operation && key_lower.contains("value"));
+                collect_sensitive_values(value, secret_operation, sensitive, output);
+            }
+        }
+        Value::Array(values) => {
+            for value in values {
+                collect_sensitive_values(value, secret_operation, inherited_sensitive, output);
+            }
+        }
+        Value::String(text) if inherited_sensitive && !text.is_empty() => output.push(text.clone()),
+        _ => {}
+    }
+}
+
+fn replace_values(value: &mut Value, sensitive_values: &[String]) {
+    match value {
+        Value::Object(object) => {
+            for value in object.values_mut() {
+                replace_values(value, sensitive_values);
+            }
+        }
+        Value::Array(values) => {
+            for value in values {
+                replace_values(value, sensitive_values);
+            }
+        }
+        Value::String(text) => {
+            for candidate in sensitive_values {
+                if !candidate.is_empty() {
+                    *text = text.replace(candidate, "[REDACTED]");
+                }
+            }
+        }
+        _ => {}
+    }
+}
+
 pub(super) fn sensitive_name(value: &str) -> bool {
     let normalized = value.to_ascii_lowercase();
     [
@@ -360,6 +496,19 @@ pub(super) fn sensitive_name(value: &str) -> bool {
         "private_key",
         "client_secret",
         "access_key",
+    ]
+    .iter()
+    .any(|needle| normalized.contains(needle))
+}
+
+pub(super) fn credential_name(value: &str) -> bool {
+    let normalized = value.to_ascii_lowercase();
+    [
+        "token",
+        "authorization",
+        "client_secret",
+        "access_key",
+        "github_pat",
     ]
     .iter()
     .any(|needle| normalized.contains(needle))
