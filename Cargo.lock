@@ -1313,6 +1313,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "medusa-evidence"
+version = "1.0.0"
+dependencies = [
+ "hex",
+ "serde",
+ "serde_json",
+ "sha2",
+ "tempfile",
+ "thiserror",
+ "time",
+ "ulid",
+]
+
+[[package]]
 name = "medusa-execution-checkpoint"
 version = "1.0.0"
 dependencies = [
