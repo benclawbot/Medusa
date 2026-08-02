@@ -6,7 +6,7 @@ on:
     types: [opened, synchronize, reopened]
 
 permissions:
-  contents: read
+  contents: write
 
 concurrency:
   group: apply-649-transaction-${{ github.event.pull_request.number }}
@@ -44,6 +44,91 @@ jobs:
             python3 scripts/architecture-conformance.py --known-failures --json
             python3 scripts/check-architecture-index.py
           } 2>&1 | tee transaction-validation.log
+      - name: Publish validated source atomically
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          HEAD_REF: ${{ github.event.pull_request.head.ref }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          node <<'NODE'
+          const fs = require('fs');
+          const [owner, repo] = process.env.GITHUB_REPOSITORY.split('/');
+          const branch = process.env.HEAD_REF;
+          const token = process.env.GITHUB_TOKEN;
+          const paths = [
+            '.github/workflows/architecture-v2-baseline.yml',
+            'crates/medusa-workers/src/lib.rs',
+            'crates/medusa-runtime/src/lib.rs',
+            'crates/medusa-runtime/src/multi_agent_coordinator.rs',
+            'crates/medusa-runtime/src/mutation_transaction.rs',
+            'crates/medusa-runtime/src/mutating_worker_coordinator.rs',
+            'crates/medusa-runtime/src/mutating_worker_coordinator_support.rs',
+            'crates/medusa-runtime/src/mutating_worker_coordinator_tests.rs',
+            'docs/architecture/INDEX.md',
+            'docs/architecture/baseline.json',
+            'scripts/architecture-conformance.py',
+            'scripts/check-architecture-index.py',
+            'scripts/check-mutation-lifecycle.py',
+          ];
+
+          async function api(path, options = {}) {
+            const response = await fetch(`https://api.github.com${path}`, {
+              ...options,
+              headers: {
+                Accept: 'application/vnd.github+json',
+                Authorization: `Bearer ${token}`,
+                'X-GitHub-Api-Version': '2022-11-28',
+                'User-Agent': 'medusa-transaction-migration',
+                ...(options.headers || {}),
+              },
+            });
+            const text = await response.text();
+            const data = text ? JSON.parse(text) : {};
+            if (!response.ok) {
+              throw new Error(`${options.method || 'GET'} ${path}: ${response.status} ${text}`);
+            }
+            return data;
+          }
+
+          (async () => {
+            const encodedBranch = encodeURIComponent(`heads/${branch}`);
+            const ref = await api(`/repos/${owner}/${repo}/git/ref/${encodedBranch}`);
+            const parent = ref.object.sha;
+            const commit = await api(`/repos/${owner}/${repo}/git/commits/${parent}`);
+            const entries = [];
+            for (const path of paths) {
+              const blob = await api(`/repos/${owner}/${repo}/git/blobs`, {
+                method: 'POST',
+                body: JSON.stringify({
+                  content: fs.readFileSync(path).toString('base64'),
+                  encoding: 'base64',
+                }),
+              });
+              entries.push({ path, mode: '100644', type: 'blob', sha: blob.sha });
+            }
+            const tree = await api(`/repos/${owner}/${repo}/git/trees`, {
+              method: 'POST',
+              body: JSON.stringify({ base_tree: commit.tree.sha, tree: entries }),
+            });
+            const created = await api(`/repos/${owner}/${repo}/git/commits`, {
+              method: 'POST',
+              body: JSON.stringify({
+                message: 'Enforce transactional review before integration',
+                tree: tree.sha,
+                parents: [parent],
+              }),
+            });
+            await api(`/repos/${owner}/${repo}/git/refs/${encodedBranch}`, {
+              method: 'PATCH',
+              body: JSON.stringify({ sha: created.sha, force: false }),
+            });
+            console.log(`published validated source commit ${created.sha}`);
+          })().catch((error) => {
+            console.error(error.stack || error.message || String(error));
+            process.exit(1);
+          });
+          NODE
       - name: Package validated source
         shell: bash
         run: |
