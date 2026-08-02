@@ -317,7 +317,9 @@ pub(super) fn validate_endpoint(resource: GitHubResource, endpoint: &str) -> Med
 pub(super) fn validate_search_scope(query: &str, repository: &str) -> MedusaResult<()> {
     let expected = format!("repo:{repository}").to_ascii_lowercase();
     let mut repository_scopes = 0_usize;
-    for token in query.split(|character: char| character.is_whitespace() || "()".contains(character)) {
+    for token in
+        query.split(|character: char| character.is_whitespace() || "()".contains(character))
+    {
         let qualifier = token
             .trim_matches(|character| matches!(character, '"' | '\''))
             .trim_start_matches(['+', '-'])
@@ -417,7 +419,12 @@ pub(super) fn redact_request_values(request: &GitHubOperationRequest, value: &mu
         return;
     };
     let mut sensitive_values = Vec::new();
-    collect_sensitive_values(body, request.secret_operation(), false, &mut sensitive_values);
+    collect_sensitive_values(
+        body,
+        request.secret_operation(),
+        false,
+        &mut sensitive_values,
+    );
     sensitive_values.sort_by_key(|candidate| std::cmp::Reverse(candidate.len()));
     replace_values(value, &sensitive_values);
 }
@@ -426,7 +433,12 @@ pub(super) fn sanitize_operation_error(request: &GitHubOperationRequest, detail:
     let mut sanitized = sanitize_external_error(detail);
     if let Some(body) = request.body.as_ref() {
         let mut sensitive_values = Vec::new();
-        collect_sensitive_values(body, request.secret_operation(), false, &mut sensitive_values);
+        collect_sensitive_values(
+            body,
+            request.secret_operation(),
+            false,
+            &mut sensitive_values,
+        );
         sensitive_values.sort_by_key(|candidate| std::cmp::Reverse(candidate.len()));
         for candidate in sensitive_values {
             if !candidate.is_empty() {
