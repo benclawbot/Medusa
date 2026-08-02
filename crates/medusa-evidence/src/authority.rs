@@ -48,19 +48,7 @@ impl VerificationReceipt {
 
     #[must_use]
     pub fn summary_lines(&self) -> Vec<String> {
-        let mut lines = vec![
-            format!("verification_plan={}", self.plan.fingerprint),
-            format!("verification_passed={}", self.passed),
-            format!("verification_coverage={}", self.coverage.join(",")),
-        ];
-        for check in &self.checks {
-            lines.push(format!(
-                "verification_check={:?}:{}:{}",
-                check.kind, check.check_id, check.passed
-            ));
-            lines.extend(check.details.iter().cloned());
-        }
-        lines
+        self.as_inner().summary_lines()
     }
 
     fn from_inner(receipt: InnerVerificationReceipt) -> Self {
