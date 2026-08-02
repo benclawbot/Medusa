@@ -92,8 +92,8 @@ jobs:
           }
 
           (async () => {
-            const encodedBranch = encodeURIComponent(`heads/${branch}`);
-            const ref = await api(`/repos/${owner}/${repo}/git/ref/${encodedBranch}`);
+            const encodedBranch = branch.split('/').map(encodeURIComponent).join('/');
+            const ref = await api(`/repos/${owner}/${repo}/git/ref/heads/${encodedBranch}`);
             const parent = ref.object.sha;
             const commit = await api(`/repos/${owner}/${repo}/git/commits/${parent}`);
             const entries = [];
@@ -119,7 +119,7 @@ jobs:
                 parents: [parent],
               }),
             });
-            await api(`/repos/${owner}/${repo}/git/refs/${encodedBranch}`, {
+            await api(`/repos/${owner}/${repo}/git/refs/heads/${encodedBranch}`, {
               method: 'PATCH',
               body: JSON.stringify({ sha: created.sha, force: false }),
             });
