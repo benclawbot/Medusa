@@ -1,7 +1,4 @@
-use std::{
-    io::Read,
-    process::Stdio,
-};
+use std::{io::Read, process::Stdio};
 
 use serde::Serialize;
 
