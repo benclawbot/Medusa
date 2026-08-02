@@ -21,6 +21,12 @@ def update_tools() -> None:
         "use std::path::{Path, PathBuf};\n\nuse medusa_capabilities::{CapabilityRegistry, SystemProbe};\nuse medusa_core",
         "tool registry imports",
     )
+    text = replace_once(
+        text,
+        "use serde_json::{Value, json};",
+        "use serde_json::Value;",
+        "remove hard-coded schema import",
+    )
     start = text.index("/// Single policy-aware registry")
     end = text.index("pub(crate) fn execute_tool", start)
     prefix = '''/// Single policy-aware registry for built-in tools shared by every agent frontend.
@@ -156,6 +162,12 @@ def update_engine() -> None:
 def update_cli() -> None:
     path = Path("crates/medusa-cli/src/capabilities.rs")
     text = path.read_text(encoding="utf-8")
+    text = replace_once(
+        text,
+        "    ExplicitCapabilityRuntime, github_descriptor,",
+        "    github_descriptor,",
+        "remove legacy diagnostics runtime import",
+    )
     old = '''fn diagnostics(repository_path: PathBuf) -> Result<(), Box<dyn std::error::Error>> {
     let repository_name =
         env::var("MEDUSA_GITHUB_REPOSITORY").unwrap_or_else(|_| "local/repository".into());
