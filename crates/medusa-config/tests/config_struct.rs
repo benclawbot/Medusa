@@ -3,6 +3,7 @@ use std::process::Command;
 use medusa_config::MedusaConfig;
 
 const CHILD_MARKER: &str = "MEDUSA_CONFIG_STRUCT_CHILD";
+const CHILD_SUCCESS: &str = "MEDUSA_CONFIG_STRUCT_CHILD_OK";
 const CONFIG_KEYS: &[&str] = &[
     "MEDUSA_BROWSER_ENABLED",
     "MEDUSA_BROWSER_PATH",
@@ -24,11 +25,11 @@ fn run_child(test: &str, values: &[(&str, &str)], removed: &[&str]) {
         command.env(key, value);
     }
     let output = command.output().expect("run isolated configuration test");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(
-        output.status.success(),
-        "isolated test {test} failed\nstdout:\n{}\nstderr:\n{}",
-        String::from_utf8_lossy(&output.stdout),
-        String::from_utf8_lossy(&output.stderr),
+        output.status.success() && stdout.contains(CHILD_SUCCESS),
+        "isolated test {test} failed or did not execute its assertions\nstdout:\n{stdout}\nstderr:\n{stderr}",
     );
 }
 
@@ -63,6 +64,7 @@ fn from_env_reads_all_knobs_child() {
     assert_eq!(cfg.envelope.head_bytes, 1_024);
     assert_eq!(cfg.envelope.tail_bytes, 2_048);
     assert_eq!(cfg.daemon_max_artifact_bytes, 1_048_576);
+    println!("{CHILD_SUCCESS}");
 }
 
 #[test]
@@ -86,4 +88,5 @@ fn from_env_uses_sensible_defaults_child() {
     assert_eq!(cfg.envelope.head_bytes, 4_096);
     assert_eq!(cfg.envelope.tail_bytes, 4_096);
     assert_eq!(cfg.daemon_max_artifact_bytes, 256 * 1024 * 1024);
+    println!("{CHILD_SUCCESS}");
 }
