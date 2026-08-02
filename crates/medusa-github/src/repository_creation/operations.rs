@@ -114,9 +114,9 @@ impl GitHubOperationRequest {
     pub fn validate(&self) -> MedusaResult<()> {
         validate_repository(&self.repository)?;
         validate_hostname(&self.hostname)?;
-        if self.action.trim().is_empty() || self.action.len() > 80 {
+        if !valid_action(&self.action) {
             return Err(invalid_input(
-                "GitHub operation action must contain 1 to 80 characters",
+                "GitHub operation action must contain 1 to 80 printable characters",
             ));
         }
         validate_endpoint(self.resource, &self.endpoint)?;
@@ -124,12 +124,7 @@ impl GitHubOperationRequest {
             let query = self.query.get("q").ok_or_else(|| {
                 invalid_input("repository search operations require a q query parameter")
             })?;
-            let scope = format!("repo:{}", self.repository);
-            if !query.split_whitespace().any(|term| term == scope) {
-                return Err(invalid_input(
-                    "repository search q must include the exact configured repo:owner/name scope",
-                ));
-            }
+            validate_search_scope(query, &self.repository)?;
         }
         if self.paginate && !matches!(self.method, GitHubHttpMethod::Get) {
             return Err(invalid_input("pagination is only valid for GET operations"));
@@ -159,6 +154,7 @@ impl GitHubOperationRequest {
             if encoded.len() > 1_048_576 {
                 return Err(invalid_input("GitHub operation body exceeds 1 MiB"));
             }
+            validate_body_credentials(body)?;
         }
         Ok(())
     }
