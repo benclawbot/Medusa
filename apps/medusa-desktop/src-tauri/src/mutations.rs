@@ -1,10 +1,12 @@
 use std::{
     fs,
     path::{Path, PathBuf},
-    process::{Command, Output},
+    process::Output,
 };
 
 use serde::{Deserialize, Serialize};
+
+use crate::desktop_command::hidden_command;
 
 #[derive(Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -308,7 +310,7 @@ fn run_git<const N: usize>(repo: &Path, args: [&str; N]) -> Result<Output, Strin
 }
 
 fn run_git_vec(repo: &Path, args: &[String]) -> Result<Output, String> {
-    let output = Command::new("git")
+    let output = hidden_command("git")
         .args(args)
         .current_dir(repo)
         .output()
