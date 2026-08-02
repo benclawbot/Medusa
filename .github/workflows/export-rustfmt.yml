@@ -1,0 +1,47 @@
+name: Export rustfmt source
+
+on:
+  push:
+    branches:
+      - agent/629-github-oauth-parity
+
+permissions:
+  contents: read
+
+jobs:
+  export:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      - uses: dtolnay/rust-toolchain@39b0b3842c7e8bbf6904c0bfc3d9006fdd4dc4e0
+        with:
+          toolchain: stable
+          components: rustfmt
+      - name: Normalize Rust source
+        run: cargo fmt --all
+      - name: Collect normalized files
+        run: |
+          mkdir -p formatted
+          while IFS= read -r path; do
+            mkdir -p "formatted/$(dirname "$path")"
+            cp "$path" "formatted/$path"
+          done <<'EOF'
+          crates/medusa-cli/src/github_operation.rs
+          crates/medusa-cli/src/wrapper.rs
+          crates/medusa-github/src/repository_creation.rs
+          crates/medusa-github/src/repository_creation/compatibility.rs
+          crates/medusa-github/src/repository_creation/coordinator.rs
+          crates/medusa-github/src/repository_creation/direct.rs
+          crates/medusa-github/src/repository_creation/idempotency.rs
+          crates/medusa-github/src/repository_creation/oauth.rs
+          crates/medusa-github/src/repository_creation/operations/backend.rs
+          crates/medusa-github/src/repository_creation/streaming_transport.rs
+          crates/medusa-github/src/repository_creation/typed.rs
+          crates/medusa-github/src/repository_creation/typed_prepare.rs
+          EOF
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: rustfmt-source
+          path: formatted
+          if-no-files-found: error
+          retention-days: 1
