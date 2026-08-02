@@ -16,6 +16,7 @@ medusa-config = { path = "../medusa-config" }
 medusa-confidence = { path = "../medusa-confidence" }
 medusa-continuation = { path = "../medusa-continuation" }
 medusa-core.workspace = true
+medusa-evidence.workspace = true
 medusa-escalation = { path = "../medusa-escalation" }
 medusa-failure = { path = "../medusa-failure" }
 medusa-extensions = { path = "../medusa-extensions" }
