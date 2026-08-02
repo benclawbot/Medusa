@@ -41,7 +41,7 @@ pub use transaction::{
 pub use verification::VerificationResult;
 pub use verification_authority::{
     AuthoritativeVerificationResult, authoritative_verification_for_components,
-    authoritative_verification_for_components_at,
+    authoritative_verification_for_components_at, prepare_components_for_verification,
 };
 pub use worker_execution::{
     LeasedAssignment, TeamTaskView, WorkerCompletion, WorkerExecutionController,
