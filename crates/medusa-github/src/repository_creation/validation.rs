@@ -2,7 +2,7 @@ use crate::*;
 
 use super::RepositoryVisibility;
 
-pub(super) fn validate_owner(value: &str) -> MedusaResult<()> {
+pub(crate) fn validate_owner(value: &str) -> MedusaResult<()> {
     if value.is_empty() || value.len() > 100 {
         return Err(invalid_input(
             "repository owner must contain 1 to 100 characters",
@@ -21,7 +21,7 @@ pub(super) fn validate_owner(value: &str) -> MedusaResult<()> {
     Ok(())
 }
 
-pub(super) fn validate_repository_name(value: &str) -> MedusaResult<()> {
+pub(crate) fn validate_repository_name(value: &str) -> MedusaResult<()> {
     if value.is_empty() || value.len() > 100 || value == "." || value == ".." {
         return Err(invalid_input(
             "repository name must contain 1 to 100 characters",
@@ -38,7 +38,7 @@ pub(super) fn validate_repository_name(value: &str) -> MedusaResult<()> {
     Ok(())
 }
 
-pub(super) fn validate_repository_identity(value: &str) -> MedusaResult<()> {
+pub(crate) fn validate_repository_identity(value: &str) -> MedusaResult<()> {
     let mut parts = value.split('/');
     let owner = parts.next().unwrap_or_default();
     let name = parts.next().unwrap_or_default();
@@ -51,10 +51,10 @@ pub(super) fn validate_repository_identity(value: &str) -> MedusaResult<()> {
     validate_repository_name(name)
 }
 
-pub(super) fn validate_branch(value: &str) -> MedusaResult<()> {
-    let invalid_component = value
-        .split('/')
-        .any(|component| component.is_empty() || component.starts_with('.') || component.ends_with(".lock"));
+pub(crate) fn validate_branch(value: &str) -> MedusaResult<()> {
+    let invalid_component = value.split('/').any(|component| {
+        component.is_empty() || component.starts_with('.') || component.ends_with(".lock")
+    });
     if value.is_empty()
         || value.len() > 255
         || value == "@"
@@ -79,7 +79,7 @@ pub(super) fn validate_branch(value: &str) -> MedusaResult<()> {
     Ok(())
 }
 
-pub(super) fn validate_optional_text(
+pub(crate) fn validate_optional_text(
     field: &str,
     value: Option<&str>,
     maximum: usize,
@@ -98,7 +98,7 @@ pub(super) fn validate_optional_text(
     Ok(())
 }
 
-pub(super) fn validate_optional_template(field: &str, value: Option<&str>) -> MedusaResult<()> {
+pub(crate) fn validate_optional_template(field: &str, value: Option<&str>) -> MedusaResult<()> {
     let Some(value) = value else {
         return Ok(());
     };
@@ -114,7 +114,7 @@ pub(super) fn validate_optional_template(field: &str, value: Option<&str>) -> Me
     Ok(())
 }
 
-pub(super) fn validate_optional_url(value: Option<&str>) -> MedusaResult<()> {
+pub(crate) fn validate_optional_url(value: Option<&str>) -> MedusaResult<()> {
     let Some(value) = value else {
         return Ok(());
     };
@@ -130,7 +130,7 @@ pub(super) fn validate_optional_url(value: Option<&str>) -> MedusaResult<()> {
     Ok(())
 }
 
-pub(super) fn parse_visibility(value: &str) -> MedusaResult<RepositoryVisibility> {
+pub(crate) fn parse_visibility(value: &str) -> MedusaResult<RepositoryVisibility> {
     match value.trim().to_ascii_lowercase().as_str() {
         "public" => Ok(RepositoryVisibility::Public),
         "private" => Ok(RepositoryVisibility::Private),
@@ -141,14 +141,14 @@ pub(super) fn parse_visibility(value: &str) -> MedusaResult<RepositoryVisibility
     }
 }
 
-pub(super) fn repository_missing(stderr: &str) -> bool {
+pub(crate) fn repository_missing(stderr: &str) -> bool {
     let value = stderr.to_ascii_lowercase();
     value.contains("could not resolve to a repository")
         || value.contains("not found")
         || value.contains("404")
 }
 
-pub(super) fn sanitize_external_error(stderr: &str) -> String {
+pub(crate) fn sanitize_external_error(stderr: &str) -> String {
     let value = stderr.trim();
     if value.contains("ghp_")
         || value.contains("github_pat_")
@@ -162,7 +162,7 @@ pub(super) fn sanitize_external_error(stderr: &str) -> String {
     }
 }
 
-pub(super) fn percent_encode_path_segment(value: &str) -> String {
+pub(crate) fn percent_encode_path_segment(value: &str) -> String {
     let mut encoded = String::new();
     for byte in value.bytes() {
         if byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.' | b'~') {
