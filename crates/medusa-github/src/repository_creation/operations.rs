@@ -1,9 +1,9 @@
 use std::collections::BTreeMap;
 
+use crate::invalid_input;
 use medusa_core::MedusaResult;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use crate::invalid_input;
 
 const DEFAULT_MAX_RESPONSE_BYTES: usize = 1_048_576;
 const MAX_RESPONSE_BYTES: usize = 4_194_304;
@@ -141,7 +141,9 @@ impl GitHubOperationRequest {
         }
         for (key, value) in &self.query {
             if !valid_query_key(key) || value.len() > 4_096 {
-                return Err(invalid_input("GitHub operation query is invalid or too large"));
+                return Err(invalid_input(
+                    "GitHub operation query is invalid or too large",
+                ));
             }
             if sensitive_name(key) || looks_sensitive(value) {
                 return Err(invalid_input(
