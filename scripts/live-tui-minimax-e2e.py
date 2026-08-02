@@ -22,7 +22,7 @@ EXPECTED = "MEDUSA_TUI_MINIMAX_OK"
 PROMPT = (
     "Modify src/lib.rs so the public constant RESPONSE has the exact value "
     f"{EXPECTED}. Keep the existing test unchanged. Run cargo test to verify the change. "
-    f"When the task is complete, finish your final response with exactly {EXPECTED}."
+    f"When complete, finish your final response with exactly {EXPECTED}."
 )
 DEFAULT_TIMEOUT_SECONDS = 600
 
@@ -40,12 +40,15 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
-def configure_terminal(fd: int, rows: int = 40, columns: int = 140) -> None:
-    fcntl.ioctl(fd, termios.TIOCSWINSZ, struct.pack("HHHH", rows, columns, 0, 0))
-
-
-def sanitize(value: str, secret: str) -> str:
-    return value.replace(secret, "[REDACTED]") if secret else value
+def run(command: list[str], cwd: Path, timeout: int = 120) -> subprocess.CompletedProcess[bytes]:
+    return subprocess.run(
+        command,
+        cwd=cwd,
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        timeout=timeout,
+    )
 
 
 def write_profile(config_home: Path) -> None:
@@ -69,14 +72,14 @@ def write_profile(config_home: Path) -> None:
 
 
 def initialize_repository(repo: Path) -> None:
-    repo.mkdir(parents=True, exist_ok=True)
-    (repo / "src").mkdir()
+    (repo / "src").mkdir(parents=True)
+    (repo / ".medusa").mkdir()
     (repo / "Cargo.toml").write_text(
-        "[package]\nname = \"minimax-tui-fixture\"\nversion = \"0.1.0\"\nedition = \"2021\"\n",
+        '[package]\nname = "minimax-tui-fixture"\nversion = "0.1.0"\nedition = "2021"\n',
         encoding="utf-8",
     )
     (repo / "src" / "lib.rs").write_text(
-        "pub const RESPONSE: &str = \"TODO\";\n\n"
+        'pub const RESPONSE: &str = "TODO";\n\n'
         "pub fn response() -> &'static str {\n    RESPONSE\n}\n\n"
         "#[cfg(test)]\nmod tests {\n    use super::*;\n\n"
         "    #[test]\n    fn response_is_not_empty() {\n"
@@ -84,120 +87,101 @@ def initialize_repository(repo: Path) -> None:
         "    }\n}\n",
         encoding="utf-8",
     )
-    subprocess.run(["git", "init", "-q", "-b", "main"], cwd=repo, check=True)
-    subprocess.run(["git", "config", "user.name", "Medusa TUI E2E"], cwd=repo, check=True)
-    subprocess.run(
-        ["git", "config", "user.email", "medusa-tui-e2e@example.invalid"],
-        cwd=repo,
-        check=True,
+    # TUI RuntimeController::start loads repository configuration. Keeping the fixture limits here
+    # proves the actual interactive path and prevents this acceptance task from reserving the
+    # production default output budget for every orchestration role.
+    (repo / ".medusa" / "config.toml").write_text(
+        "[agent]\nmax_turns = 8\nparallel_workers = 1\n\n"
+        "[model]\nmax_output_tokens = 2048\n",
+        encoding="utf-8",
     )
-    subprocess.run(["git", "add", "Cargo.toml", "src/lib.rs"], cwd=repo, check=True)
-    subprocess.run(["git", "commit", "-q", "-m", "baseline"], cwd=repo, check=True)
+    for command in (
+        ["git", "init", "-q", "-b", "main"],
+        ["git", "config", "user.name", "Medusa TUI E2E"],
+        ["git", "config", "user.email", "medusa-tui-e2e@example.invalid"],
+        ["git", "add", "Cargo.toml", "src/lib.rs", ".medusa/config.toml"],
+        ["git", "commit", "-q", "-m", "baseline"],
+    ):
+        result = run(command, repo)
+        if result.returncode != 0:
+            raise RuntimeError(result.stdout.decode("utf-8", errors="replace"))
 
 
 def launch_tui(binary: Path, repo: Path, env: dict[str, str]) -> tuple[int, int]:
     pid, fd = pty.fork()
     if pid == 0:
         os.chdir(repo)
-        argv = [
+        os.execve(
             str(binary),
-            "--repo",
-            str(repo),
-            "--set",
-            "agent.max_turns=8",
-            "--set",
-            "agent.parallel_workers=1",
-            "--prompt",
-            PROMPT,
-        ]
-        os.execve(str(binary), argv, env)
-    configure_terminal(fd)
+            [str(binary), "--repo", str(repo), "--prompt", PROMPT],
+            env,
+        )
+    fcntl.ioctl(fd, termios.TIOCSWINSZ, struct.pack("HHHH", 40, 140, 0, 0))
     os.set_blocking(fd, False)
     return pid, fd
 
 
 def process_exited(pid: int) -> tuple[bool, int | None]:
     waited, status = os.waitpid(pid, os.WNOHANG)
-    if waited == 0:
-        return False, None
-    return True, os.waitstatus_to_exitcode(status)
+    return (False, None) if waited == 0 else (True, os.waitstatus_to_exitcode(status))
 
 
 def terminate(pid: int, fd: int) -> int | None:
-    try:
-        os.write(fd, b"\x03")
-        time.sleep(0.15)
-        os.write(fd, b"\x03")
-    except OSError:
-        pass
-    deadline = time.monotonic() + 5
-    while time.monotonic() < deadline:
-        exited, code = process_exited(pid)
-        if exited:
-            return code
-        time.sleep(0.05)
-    try:
-        os.kill(pid, signal.SIGTERM)
-    except ProcessLookupError:
-        pass
-    deadline = time.monotonic() + 5
-    while time.monotonic() < deadline:
-        exited, code = process_exited(pid)
-        if exited:
-            return code
-        time.sleep(0.05)
-    try:
-        os.kill(pid, signal.SIGKILL)
-    except ProcessLookupError:
-        pass
+    for payload in (b"\x03", b"\x03"):
+        try:
+            os.write(fd, payload)
+            time.sleep(0.15)
+        except OSError:
+            break
+    for sig in (signal.SIGTERM, signal.SIGKILL):
+        deadline = time.monotonic() + 5
+        while time.monotonic() < deadline:
+            exited, code = process_exited(pid)
+            if exited:
+                return code
+            time.sleep(0.05)
+        try:
+            os.kill(pid, sig)
+        except ProcessLookupError:
+            break
     _, status = os.waitpid(pid, 0)
     return os.waitstatus_to_exitcode(status)
 
 
-def assistant_text_contains(messages: object, marker: str) -> bool:
+def assistant_contains(messages: object) -> bool:
     if not isinstance(messages, list):
         return False
-    for message in messages:
-        if not isinstance(message, dict) or message.get("role") != "assistant":
-            continue
-        content = message.get("content", [])
-        if not isinstance(content, list):
-            continue
-        for block in content:
-            if (
-                isinstance(block, dict)
-                and block.get("type") == "text"
-                and marker in str(block.get("text", ""))
-            ):
-                return True
-    return False
+    return any(
+        isinstance(block, dict)
+        and block.get("type") == "text"
+        and EXPECTED in str(block.get("text", ""))
+        for message in messages
+        if isinstance(message, dict) and message.get("role") == "assistant"
+        for block in (message.get("content") if isinstance(message.get("content"), list) else [])
+    )
 
 
 def session_evidence(repo: Path) -> tuple[list[Path], list[Path]]:
-    medusa = repo / ".medusa"
-    if not medusa.is_dir():
-        return [], []
-    response_paths: list[Path] = []
-    assistant_marker_paths: list[Path] = []
-    for path in medusa.rglob("*.json"):
+    responses: list[Path] = []
+    assistants: list[Path] = []
+    for path in (repo / ".medusa").rglob("*.json"):
         try:
             data = json.loads(path.read_text(encoding="utf-8"))
         except (OSError, json.JSONDecodeError):
             continue
         if not isinstance(data, dict):
             continue
-        events = data.get("events", [])
-        response_seen = isinstance(events, list) and any(
+        events = data.get("events")
+        if isinstance(events, list) and any(
             isinstance(event, dict)
             and isinstance(event.get("payload"), dict)
             and event["payload"].get("type") == "model_response_received"
             for event in events
-        )
-        if response_seen:
-            response_paths.append(path)
-        if assistant_text_contains(data.get("messages"), EXPECTED):
-            assistant_marker_paths.append(path)
-    return response_paths, assistant_marker_paths
+        ):
+            responses.append(path)
+        if assistant_contains(data.get("messages")):
+            assistants.append(path)
+    return responses, assistants
 
 
 def source_is_correct(repo: Path) -> bool:
@@ -206,18 +190,6 @@ def source_is_correct(repo: Path) -> bool:
     except OSError:
         return False
     return f'pub const RESPONSE: &str = "{EXPECTED}";' in source
-
-
-def cargo_test_passes(repo: Path) -> bool:
-    result = subprocess.run(
-        ["cargo", "test", "--quiet"],
-        cwd=repo,
-        check=False,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.STDOUT,
-        timeout=120,
-    )
-    return result.returncode == 0
 
 
 def copy_regular_tree(source: Path, destination: Path) -> None:
@@ -233,93 +205,75 @@ def copy_regular_tree(source: Path, destination: Path) -> None:
         shutil.copy2(path, target)
 
 
-def capture_repository_evidence(repo: Path, output_dir: Path) -> list[str]:
+def capture_evidence(repo: Path, output_dir: Path) -> tuple[bool, list[str]]:
     errors: list[str] = []
+    tests_passed = False
     for name, command in (
         ("git-status.txt", ["git", "status", "--short"]),
         ("change.patch", ["git", "diff", "--binary"]),
         ("cargo-test.txt", ["cargo", "test", "--quiet"]),
     ):
         try:
-            result = subprocess.run(
-                command,
-                cwd=repo,
-                check=False,
-                text=True,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.STDOUT,
-                timeout=120,
-            )
-            (output_dir / name).write_text(result.stdout, encoding="utf-8")
-        except Exception as error:
+            result = run(command, repo)
+            (output_dir / name).write_bytes(result.stdout)
+            if name == "cargo-test.txt":
+                tests_passed = result.returncode == 0
+        except Exception as error:  # evidence collection must preserve the primary failure
             errors.append(f"{name}: {error}")
-    medusa = repo / ".medusa"
-    if medusa.is_dir():
-        try:
-            copy_regular_tree(medusa, output_dir / "medusa-state")
-        except Exception as error:
-            errors.append(f"medusa-state: {error}")
-    return errors
+    try:
+        copy_regular_tree(repo / ".medusa", output_dir / "medusa-state")
+    except Exception as error:
+        errors.append(f"medusa-state: {error}")
+    return tests_passed, errors
 
 
-def assert_secret_not_persisted(roots: list[Path], secret: str) -> None:
-    needle = secret.encode("utf-8")
+def assert_secret_absent(roots: list[Path], secret: str) -> None:
+    needle = secret.encode()
     for root in roots:
         if not root.exists():
             continue
         for path in root.rglob("*"):
             try:
-                mode = path.lstat().st_mode
+                if stat.S_ISREG(path.lstat().st_mode) and needle in path.read_bytes():
+                    raise RuntimeError(f"MiniMax credential was persisted in {path}")
             except OSError:
                 continue
-            if stat.S_ISREG(mode) and needle in path.read_bytes():
-                raise RuntimeError(f"MiniMax credential was persisted in {path}")
 
 
 def main() -> int:
     args = parse_args()
-    if args.timeout_seconds <= 0:
-        raise SystemExit("timeout must be positive")
     binary = args.binary.resolve()
-    if not binary.is_file():
-        raise SystemExit(f"Medusa binary not found: {binary}")
     api_key = os.environ.get("MINIMAX_API_KEY", "")
-    if not api_key:
-        raise SystemExit("MINIMAX_API_KEY is required")
+    if args.timeout_seconds <= 0 or not binary.is_file() or not api_key:
+        raise SystemExit("positive timeout, Medusa binary, and MINIMAX_API_KEY are required")
 
     work_root = args.work_root.resolve()
     output_dir = args.output_dir.resolve()
     shutil.rmtree(work_root, ignore_errors=True)
     shutil.rmtree(output_dir, ignore_errors=True)
-    output_dir.mkdir(parents=True, exist_ok=True)
-    repo = work_root / "repo"
-    home = work_root / "home"
-    config_home = home / ".config"
-    home.mkdir(parents=True, exist_ok=True)
+    output_dir.mkdir(parents=True)
+    repo, home = work_root / "repo", work_root / "home"
+    home.mkdir(parents=True)
     initialize_repository(repo)
-    write_profile(config_home)
+    write_profile(home / ".config")
 
     env = os.environ.copy()
     env.update(
-        {
-            "HOME": str(home),
-            "XDG_CONFIG_HOME": str(config_home),
-            "XDG_CACHE_HOME": str(home / ".cache"),
-            "MINIMAX_API_KEY": api_key,
-            "PYTHONUTF8": "1",
-            "TERM": "xterm-256color",
-        }
+        HOME=str(home),
+        XDG_CONFIG_HOME=str(home / ".config"),
+        XDG_CACHE_HOME=str(home / ".cache"),
+        MINIMAX_API_KEY=api_key,
+        PYTHONUTF8="1",
+        TERM="xterm-256color",
     )
 
     started = time.monotonic()
     pid, fd = launch_tui(binary, repo, env)
     transcript = bytearray()
-    submitted = False
-    rendered = False
+    submitted = rendered = False
     exit_code: int | None = None
     error: str | None = None
-    source_change_offset: int | None = None
-    latest_chunk_start = 0
+    change_offset: int | None = None
     try:
         while time.monotonic() - started < args.timeout_seconds:
             exited, code = process_exited(pid)
@@ -327,48 +281,39 @@ def main() -> int:
                 exit_code = code
                 break
             ready, _, _ = select.select([fd], [], [], 0.1)
+            chunk_start = len(transcript)
             if ready:
                 try:
-                    latest_chunk_start = len(transcript)
                     transcript.extend(os.read(fd, 65536))
-                except BlockingIOError:
+                except (BlockingIOError, OSError):
                     pass
-                except OSError:
-                    break
-            elapsed = time.monotonic() - started
-            if not submitted and elapsed >= 2:
-                os.write(fd, b"\r")
+            if not submitted and time.monotonic() - started >= 2:
+                os.write(fd, b"\r")  # dismiss welcome
                 time.sleep(0.2)
-                os.write(fd, b"\r")
+                os.write(fd, b"\r")  # submit initial prompt
                 submitted = True
 
             text = transcript.decode("utf-8", errors="replace")
             if "Task failed" in text:
                 error = "TUI rendered a task failure before a durable MiniMax completion"
                 break
-            if source_change_offset is None and source_is_correct(repo):
-                source_change_offset = latest_chunk_start
-
-            response_paths, assistant_paths = session_evidence(repo)
-            post_change_text = (
-                transcript[source_change_offset:].decode("utf-8", errors="replace")
-                if source_change_offset is not None
+            if change_offset is None and source_is_correct(repo):
+                change_offset = chunk_start
+            responses, assistants = session_evidence(repo)
+            post_change = (
+                transcript[change_offset:].decode("utf-8", errors="replace")
+                if change_offset is not None
                 else ""
             )
-            if (
-                submitted
-                and source_change_offset is not None
-                and EXPECTED in post_change_text
-                and response_paths
-                and assistant_paths
-            ):
+            if submitted and change_offset is not None and EXPECTED in post_change and responses and assistants:
                 rendered = True
                 break
         if not rendered and error is None:
-            if exit_code is not None:
-                error = f"TUI exited before rendering the MiniMax response (exit={exit_code})"
-            else:
-                error = f"TUI did not complete the verified MiniMax task within {args.timeout_seconds}s"
+            error = (
+                f"TUI exited before verified completion (exit={exit_code})"
+                if exit_code is not None
+                else f"TUI did not complete within {args.timeout_seconds}s"
+            )
     finally:
         if exit_code is None:
             exit_code = terminate(pid, fd)
@@ -377,30 +322,31 @@ def main() -> int:
         except OSError:
             pass
 
-    text = sanitize(transcript.decode("utf-8", errors="replace"), api_key)
+    text = transcript.decode("utf-8", errors="replace").replace(api_key, "[REDACTED]")
     (output_dir / "terminal.log").write_text(text, encoding="utf-8")
-    response_paths, assistant_paths = session_evidence(repo)
+    responses, assistants = session_evidence(repo)
     source_correct = source_is_correct(repo)
-    tests_passed = cargo_test_passes(repo) if source_correct else False
-    evidence_errors = capture_repository_evidence(repo, output_dir)
+    tests_passed, evidence_errors = capture_evidence(repo, output_dir)
+    passed = rendered and source_correct and tests_passed and error is None
     if rendered and not tests_passed:
-        rendered = False
         error = "MiniMax changed the file but cargo test did not pass"
+        passed = False
 
     summary = {
-        "schema_version": 3,
-        "result": "pass" if rendered and error is None and tests_passed else "fail",
+        "schema_version": 4,
+        "result": "pass" if passed else "fail",
         "provider": "minimax",
         "model": "MiniMax-M3",
         "route": "saved-profile-to-interactive-tui",
+        "fixture_max_output_tokens": 2048,
         "prompt_submitted": submitted,
         "post_change_marker_rendered": rendered,
-        "assistant_marker_persisted": bool(assistant_paths),
+        "assistant_marker_persisted": bool(assistants),
         "source_change_verified": source_correct,
         "cargo_test_passed": tests_passed,
-        "durable_response_observed": bool(response_paths),
-        "durable_response_files": [str(path.relative_to(repo)) for path in response_paths],
-        "assistant_marker_files": [str(path.relative_to(repo)) for path in assistant_paths],
+        "durable_response_observed": bool(responses),
+        "durable_response_files": [str(path.relative_to(repo)) for path in responses],
+        "assistant_marker_files": [str(path.relative_to(repo)) for path in assistants],
         "elapsed_seconds": int(time.monotonic() - started),
         "exit_code": exit_code,
         "evidence_errors": evidence_errors,
@@ -409,10 +355,9 @@ def main() -> int:
     (output_dir / "summary.json").write_text(
         json.dumps(summary, indent=2, sort_keys=True) + "\n", encoding="utf-8"
     )
-
-    assert_secret_not_persisted([home, repo, output_dir], api_key)
+    assert_secret_absent([home, repo, output_dir], api_key)
     print(json.dumps(summary, sort_keys=True))
-    return 0 if summary["result"] == "pass" else 1
+    return 0 if passed else 1
 
 
 if __name__ == "__main__":
