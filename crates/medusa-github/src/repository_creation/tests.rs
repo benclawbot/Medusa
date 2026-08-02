@@ -310,8 +310,10 @@ fn repository_clone_uses_enterprise_url_without_shell_interpolation() {
 
 #[test]
 fn existing_operations_remain_typed_and_available() {
-    let executor =
-        ScriptedExecutor::new(std::iter::repeat(ScriptedExecutor::successful()).take(18));
+    let executor = ScriptedExecutor::new(std::iter::repeat_n(
+        ScriptedExecutor::successful(),
+        18,
+    ));
     let github = service(executor.clone());
     github.fetch().expect("fetch");
     github.pull().expect("pull");
