@@ -1189,12 +1189,14 @@ fn run_prompt(
         tool_policy_context,
         verification_context,
     ];
+    if implementation_evidence.is_none() {
     if let Some(evidence) = coordinator_evidence.as_ref() {
         task_context.push(evidence.parent_context());
     }
-    if let Some(evidence) = implementation_evidence.as_ref() {
-        task_context.push(evidence.parent_context());
-    }
+}
+if let Some(evidence) = implementation_evidence.as_ref() {
+    task_context.push(evidence.parent_context());
+}
     if let Some(learning) = learning_context.prompt_context {
         task_context.push(learning);
     }
