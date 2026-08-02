@@ -33,6 +33,14 @@ impl ScriptedExecutor {
         }
     }
 
+    fn stdout(value: impl Into<String>) -> CommandOutput {
+        CommandOutput {
+            success: true,
+            stdout: value.into(),
+            stderr: String::new(),
+        }
+    }
+
     fn failed(stderr: &str) -> CommandOutput {
         CommandOutput {
             success: false,
@@ -92,8 +100,10 @@ fn validates_repository_creation_inputs_and_incompatible_options() {
     value.owner = "bad owner".into();
     assert_eq!(value.validate().expect_err("owner").code, ErrorCode::InvalidInput);
     value.owner = "acme".into();
-    value.default_branch = "../main".into();
-    assert!(value.validate().is_err());
+    for branch in ["../main", "main.lock", "/main", "foo//bar", "foo/.bar", "@"] {
+        value.default_branch = branch.into();
+        assert!(value.validate().is_err(), "accepted invalid branch {branch}");
+    }
     value.default_branch = "main".into();
     value.template_repository = Some("acme/template".into());
     assert!(value.validate().is_err());
@@ -105,17 +115,13 @@ fn creates_initialized_enterprise_repository_with_typed_arguments() {
         ScriptedExecutor::successful(),
         ScriptedExecutor::failed("HTTP 404: Not Found"),
         ScriptedExecutor::successful(),
-        CommandOutput {
-            success: true,
-            stdout: "acme/project\thttps://github.example/acme/project\tPRIVATE\tmain".into(),
-            stderr: String::new(),
-        },
+        ScriptedExecutor::stdout(
+            "acme/project\thttps://github.example/acme/project\tPRIVATE\tmain",
+        ),
         ScriptedExecutor::successful(),
-        CommandOutput {
-            success: true,
-            stdout: "acme/project\thttps://github.example/acme/project\tPRIVATE\tmain".into(),
-            stderr: String::new(),
-        },
+        ScriptedExecutor::stdout(
+            "acme/project\thttps://github.example/acme/project\tPRIVATE\tmain",
+        ),
     ]);
     let github = service(executor.clone());
     let receipt = github.create_repository(&request()).expect("create");
@@ -136,38 +142,42 @@ fn creates_initialized_enterprise_repository_with_typed_arguments() {
 }
 
 #[test]
+fn initialized_repository_post_create_failure_reports_recovery_url() {
+    let executor = ScriptedExecutor::new([
+        ScriptedExecutor::successful(),
+        ScriptedExecutor::failed("HTTP 404: Not Found"),
+        ScriptedExecutor::successful(),
+        ScriptedExecutor::failed("temporary API timeout"),
+    ]);
+    let error = service(executor)
+        .create_repository(&request())
+        .expect_err("post-create inspection must retain recovery details");
+    assert!(error.message.contains("https://github.example/acme/project"));
+    assert!(error.message.contains("reuse_existing=true"));
+    assert!(error.retryable);
+}
+
+#[test]
 fn local_creation_preserves_an_expected_origin_and_pushes_after_remote_creation() {
     let directory = tempfile::tempdir().expect("tempdir");
+    let root = directory.path().canonicalize().expect("canonical root");
     let remote = "https://github.example/acme/project.git";
     let executor = ScriptedExecutor::new([
         ScriptedExecutor::successful(),
         ScriptedExecutor::failed("HTTP 404: Not Found"),
         ScriptedExecutor::successful(),
-        CommandOutput {
-            success: true,
-            stdout: remote.into(),
-            stderr: String::new(),
-        },
+        ScriptedExecutor::stdout(root.to_string_lossy()),
+        ScriptedExecutor::stdout(remote),
         ScriptedExecutor::successful(),
         ScriptedExecutor::successful(),
         ScriptedExecutor::successful(),
-        CommandOutput {
-            success: true,
-            stdout: remote.into(),
-            stderr: String::new(),
-        },
+        ScriptedExecutor::stdout(remote),
         ScriptedExecutor::successful(),
         ScriptedExecutor::successful(),
-        CommandOutput {
-            success: true,
-            stdout: "acme/project\thttps://github.example/acme/project\tPRIVATE\tmain".into(),
-            stderr: String::new(),
-        },
-        CommandOutput {
-            success: true,
-            stdout: "abc123".into(),
-            stderr: String::new(),
-        },
+        ScriptedExecutor::stdout(
+            "acme/project\thttps://github.example/acme/project\tPRIVATE\tmain",
+        ),
+        ScriptedExecutor::stdout("abc123"),
     ]);
     let mut value = request();
     value.add_readme = false;
@@ -201,14 +211,45 @@ fn local_creation_preserves_an_expected_origin_and_pushes_after_remote_creation(
 }
 
 #[test]
+fn nested_worktree_source_is_rejected_before_branch_or_remote_mutation() {
+    let parent = tempfile::tempdir().expect("parent");
+    let child = parent.path().join("child");
+    std::fs::create_dir(&child).expect("child");
+    let parent_root = parent.path().canonicalize().expect("parent root");
+    let executor = ScriptedExecutor::new([
+        ScriptedExecutor::successful(),
+        ScriptedExecutor::failed("HTTP 404: Not Found"),
+        ScriptedExecutor::successful(),
+        ScriptedExecutor::stdout(parent_root.to_string_lossy()),
+    ]);
+    let mut value = request();
+    value.add_readme = false;
+    value.gitignore_template = None;
+    value.license_template = None;
+    value.bootstrap = Some(RepositoryBootstrap {
+        path: child,
+        initialize_git: false,
+        initial_commit_message: None,
+        push: true,
+    });
+    let error = service(executor.clone())
+        .create_repository(&value)
+        .expect_err("nested source");
+    assert_eq!(error.code, ErrorCode::PolicyDenied);
+    let calls = executor.calls.lock().expect("calls");
+    assert!(!calls.iter().any(|call| {
+        call.arguments.starts_with(&["branch".into(), "-M".into()])
+            || call.arguments.starts_with(&["repo".into(), "create".into()])
+    }));
+}
+
+#[test]
 fn existing_repository_requires_explicit_reuse() {
     let executor = ScriptedExecutor::new([
         ScriptedExecutor::successful(),
-        CommandOutput {
-            success: true,
-            stdout: "acme/project\thttps://github.example/acme/project\tPRIVATE\tmain".into(),
-            stderr: String::new(),
-        },
+        ScriptedExecutor::stdout(
+            "acme/project\thttps://github.example/acme/project\tPRIVATE\tmain",
+        ),
     ]);
     let error = service(executor)
         .create_repository(&request())
