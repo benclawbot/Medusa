@@ -1,4 +1,4 @@
-name: Format PR 659
+name: Finalize PR 659 Formatting
 
 on:
   pull_request:
@@ -25,6 +25,24 @@ jobs:
       - uses: dtolnay/rust-toolchain@39b0b3842c7e8bbf6904c0bfc3d9006fdd4dc4e0 # 1.88.0
         with:
           components: rustfmt, clippy
+      - name: Migrate coverage assertions
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+
+          path = Path("crates/medusa-update/tests/update_manager_coverage.rs")
+          text = path.read_text(encoding="utf-8")
+          replacements = {
+              'assert_eq!(OperatingSystem::from("linux"), OperatingSystem::Linux);': 'assert_eq!(OperatingSystem::try_from("linux").expect("linux"), OperatingSystem::Linux);',
+              'assert_eq!(Architecture::from("x86_64"), Architecture::X86_64);': 'assert_eq!(Architecture::try_from("x86_64").expect("x86_64"), Architecture::X86_64);',
+          }
+          for old, new in replacements.items():
+              if text.count(old) != 1:
+                  raise SystemExit(f"expected exactly one occurrence of {old!r}")
+              text = text.replace(old, new)
+          path.write_text(text, encoding="utf-8")
+          PY
       - name: Format and validate updater
         shell: bash
         run: |
@@ -34,13 +52,15 @@ jobs:
           cargo test -p medusa-update --all-targets --locked
           cargo test -p medusa-cli --bin medusa --locked update_command
           cargo clippy -p medusa-update -p medusa-cli --all-targets --locked -- -D warnings
-      - name: Commit validated formatting
+      - name: Commit validated compatibility fix
         shell: bash
         run: |
           set -euo pipefail
           git rm .github/workflows/format-659.yml
           git config user.name github-actions[bot]
           git config user.email 41898282+github-actions[bot]@users.noreply.github.com
-          git add crates/medusa-update/src/manifest.rs
-          git commit -m "Format verified updater manifest"
+          git add \
+            crates/medusa-update/src/manifest.rs \
+            crates/medusa-update/tests/update_manager_coverage.rs
+          git commit -m "Finalize fallible updater platform parsing"
           git push origin HEAD:${{ github.event.pull_request.head.ref }}
