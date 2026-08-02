@@ -1,6 +1,6 @@
-use std::process::Command;
-
 use serde::{Deserialize, Serialize};
+
+use crate::desktop_command::hidden_command;
 
 #[derive(Debug, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
@@ -50,7 +50,7 @@ pub fn runtime_github_commit_checks(
     }
 
     let endpoint = format!("repos/{repository}/commits/{commit_sha}/check-runs");
-    let output = Command::new("gh")
+    let output = hidden_command("gh")
         .args([
             "api",
             "--hostname",
