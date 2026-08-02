@@ -119,6 +119,7 @@ pub struct RepositoryCreationReceipt {
     pub initial_commit: Option<String>,
 }
 
+mod compatibility;
 mod coordinator;
 mod direct;
 mod idempotency;
@@ -129,6 +130,7 @@ mod typed;
 mod typed_prepare;
 mod validation;
 
+pub use compatibility::*;
 pub use coordinator::*;
 pub use direct::*;
 pub use idempotency::*;
