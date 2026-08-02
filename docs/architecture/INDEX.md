@@ -1,18 +1,19 @@
 # Medusa Architecture v2 Living Index
 
-This is the change-governance root for Medusa architecture v2. It distinguishes **legacy availability** from **v2 certification**. Production code and executable tests remain the authority for what v1 currently does; [`baseline.json`](baseline.json) is the authority for migration ownership, certification status, state ownership, trust boundaries, and deletion targets.
+This is the change-governance root for Medusa architecture v2. It distinguishes **legacy availability** from **v2 certification**. Production code and executable tests remain the authority for what v1 currently does; [`baseline.json`](baseline.json) is the authority for migration ownership, certification status, state ownership, trust boundaries, and deletion targets. [`owners.json`](owners.json) assigns exactly one primary owner to every workspace crate.
 
 ## Phase 0 feature freeze
 
-Major feature expansion is frozen while issues #646–#652 rebuild the core. Exceptions are limited to security or data-loss corrections, work required to enable architecture v2, the unsafe/FFI boundary in #653, and the verified prebuilt updater in #655. A release must not advertise a major capability as v2 production unless its owner, versioned contract, dispatcher, permissions, conformance evidence, migration consumer, and legacy deletion target are recorded in `baseline.json`.
+Major feature expansion is frozen while issues #646–#654 rebuild, migrate, certify, and retire the legacy core. Exceptions are limited to security or data-loss corrections, work required to enable architecture v2, the unsafe/FFI boundary in #653, and the verified prebuilt updater in #655. A release must not advertise a major capability as v2 production unless its owner, versioned contract, dispatcher, permissions, conformance evidence, migration consumer, and legacy deletion target are recorded in `baseline.json`.
 
 ## How to use this index
 
 1. Find the capability or deployment mode in `baseline.json`.
-2. Follow its dispatcher and implementation path to the real production entrypoint.
-3. Find the related source-of-truth row, state machine, trust boundary, and known-failure fixture.
-4. Record any authority, contract, dependency, persistence, lifecycle, entrypoint, capability, or trust-boundary change in this index and an ADR before merge.
-5. Remove the corresponding legacy path only after migration consumers and rollback evidence are complete.
+2. Resolve its primary component owner in `owners.json`.
+3. Follow its dispatcher and implementation path to the real production entrypoint.
+4. Find the related source-of-truth row, state machine, trust boundary, and known-failure fixture.
+5. Record any authority, contract, dependency, persistence, lifecycle, entrypoint, capability, or trust-boundary change in this index and an ADR before merge.
+6. Remove the corresponding legacy path only after migration consumers and rollback evidence are complete.
 
 ## Current v1 map
 
@@ -138,12 +139,13 @@ An unexpected pass fails the baseline job until the fixture, capability status, 
 A new crate, entrypoint, authority, capability, provider route, frontend, persistence record, trust boundary, or dependency edge requires:
 
 1. a baseline entry with owner and preserve/adapt/replace/quarantine/delete disposition;
-2. a versioned contract or an ADR explaining why no contract is needed;
-3. dispatcher and least-privilege permission mapping;
-4. black-box conformance and platform coverage;
-5. observability and recovery semantics;
-6. migration consumers and an explicit v1 deletion target;
-7. architecture-impact declaration in the pull request.
+2. an exact primary owner in `owners.json`;
+3. a versioned contract or an ADR explaining why no contract is needed;
+4. dispatcher and least-privilege permission mapping;
+5. black-box conformance and platform coverage;
+6. observability and recovery semantics;
+7. migration consumers and an explicit v1 deletion target;
+8. architecture-impact declaration in the pull request.
 
 ## Migration and deletion
 
@@ -155,7 +157,8 @@ A new crate, entrypoint, authority, capability, provider route, frontend, persis
 | 3 | #649 | capability registry, permissions, and dispatch |
 | 4 | #650 | provider/OAuth route authority |
 | 5 | #651 | all frontends on the shared core |
-| 6 | #652 | state migration and v1 deletion |
+| 6 | #652 | state migration and staged v1 deletion |
+| 7 | #654 | certify every real entrypoint and delete the remaining legacy core |
 
 Use [`LEGACY-DELETION.md`](LEGACY-DELETION.md) for deletion gates and [`RELEASE-POLICY.md`](RELEASE-POLICY.md) for freeze and release rules.
 
@@ -163,11 +166,12 @@ Use [`LEGACY-DELETION.md`](LEGACY-DELETION.md) for deletion gates and [`RELEASE-
 
 - Decision: [`decisions/0001-architecture-v2-reset.md`](decisions/0001-architecture-v2-reset.md)
 - Machine-readable baseline: [`baseline.json`](baseline.json)
+- Primary component owners: [`owners.json`](owners.json)
 - Legacy product map: [`../ARCHITECTURE.md`](../ARCHITECTURE.md)
 - Contributor crate map: [`../CONTRIBUTOR-ARCHITECTURE.md`](../CONTRIBUTOR-ARCHITECTURE.md)
 - Capability evidence: [`../CAPABILITY-EVIDENCE.md`](../CAPABILITY-EVIDENCE.md)
 - Architecture checker: `python scripts/check-architecture-index.py`
 - Adversarial checker fixtures: `python scripts/test-architecture-index.py`
-- Headless compatibility harness: `python scripts/architecture-conformance.py --all --json`
+- Headless compatibility harness: `python scripts/architecture-conformance.py --all --binary <medusa> --json`
 
 The architecture baseline workflow runs these checks on Linux, macOS, and Windows.
