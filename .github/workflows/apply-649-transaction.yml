@@ -68,15 +68,15 @@ jobs:
 
           coordinator = Path("crates/medusa-runtime/src/mutating_worker_coordinator.rs")
           text = coordinator.read_text(encoding="utf-8")
-          import_before = "use medusa_workers::{Worker, WorkerManager, WorkerState};\n"
-          if text.count(import_before) != 1:
-              raise RuntimeError("generated worker import did not match exactly once")
-          text = text.replace(import_before, "use medusa_workers::{Worker, WorkerManager};\n", 1)
-          stale = "            legacy_integration: None,\n"
-          count = text.count(stale)
-          if count != 2:
-              raise RuntimeError(f"expected two stale legacy integration fields, found {count}")
-          coordinator.write_text(text.replace(stale, ""), encoding="utf-8")
+          for before in (
+              "use medusa_workers::{Worker, WorkerManager, WorkerState};\n",
+              "use medusa_workers::{IntegrationReceipt, Worker, WorkerManager, WorkerState};\n",
+          ):
+              text = text.replace(before, "use medusa_workers::{Worker, WorkerManager};\n")
+          text = text.replace("            legacy_integration: None,\n", "")
+          if "WorkerState" in text or "legacy_integration" in text:
+              raise RuntimeError("generated coordinator still contains removed legacy transaction symbols")
+          coordinator.write_text(text, encoding="utf-8")
           PY
       - name: Compile all affected targets
         run: cargo check -p medusa-workers -p medusa-runtime -p medusa-agent -p medusa-cli -p medusa-tui -p medusa-daemon --all-targets
