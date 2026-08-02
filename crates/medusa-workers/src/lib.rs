@@ -70,6 +70,12 @@ impl WorkerManager {
         Ok(manager)
     }
 
+    /// Returns the primary repository managed by this coordinator.
+    #[must_use]
+    pub fn repository_path(&self) -> &Path {
+        &self.repo
+    }
+
     /// Returns the primary repository HEAD used as a worktree integration boundary.
     pub fn repository_head(&self) -> MedusaResult<String> {
         git_stdout(&self.repo, &["rev-parse", "HEAD"])
@@ -382,6 +388,105 @@ impl WorkerManager {
         let commit_tree = git_stdout(&self.repo, &["rev-parse", &format!("{commit}^{{tree}}")])?;
         let head_tree = git_stdout(&self.repo, &["rev-parse", "HEAD^{tree}"])?;
         Ok(commit_tree == head_tree)
+    }
+
+
+
+    /// Returns the immutable tree identifier for a prepared commit.
+    pub fn commit_tree(&self, commit: &str) -> MedusaResult<String> {
+        if commit.trim().is_empty() {
+            return Err(invalid("worker commit cannot be empty"));
+        }
+        git_stdout(&self.repo, &["rev-parse", &format!("{commit}^{{tree}}")])
+    }
+
+    /// Returns the full binary-safe patch reviewed for a prepared commit.
+    pub fn commit_patch(&self, base_commit: &str, commit: &str) -> MedusaResult<String> {
+        if base_commit.trim().is_empty() || commit.trim().is_empty() {
+            return Err(invalid("commit patch requires base and prepared commit"));
+        }
+        git_stdout(
+            &self.repo,
+            &["diff", "--binary", "--full-index", base_commit, commit, "--"],
+        )
+    }
+
+    /// Returns the exact changed paths encoded by a prepared commit.
+    pub fn commit_changed_paths(&self, commit: &str) -> MedusaResult<Vec<String>> {
+        if commit.trim().is_empty() {
+            return Err(invalid("worker commit cannot be empty"));
+        }
+        changed_paths_for_commit(&self.repo, commit)
+    }
+
+    /// Materializes an immutable prepared commit in a detached verification worktree.
+    pub fn materialize_detached_commit(&self, commit: &str, path: &Path) -> MedusaResult<()> {
+        if commit.trim().is_empty() || path.as_os_str().is_empty() || path.exists() {
+            return Err(invalid("detached verification worktree requires a new path and commit"));
+        }
+        if let Some(parent) = path.parent() {
+            fs::create_dir_all(parent)?;
+        }
+        run_git(
+            &self.repo,
+            &["worktree", "add", "--detach", path_text(path)?, commit],
+        )
+    }
+
+    /// Removes a detached verification worktree without touching implementation resources.
+    pub fn remove_detached_worktree(&self, path: &Path) -> MedusaResult<()> {
+        if path.exists() {
+            run_git(
+                &self.repo,
+                &["worktree", "remove", "--force", path_text(path)?],
+            )?;
+        }
+        run_git(&self.repo, &["worktree", "prune"])
+    }
+
+    /// Integrates exactly one commit that has a durable review and verification authorization.
+    pub fn integrate_authorized(
+        &self,
+        worker: &Worker,
+        expected_base: &str,
+        authorized_commit: &str,
+    ) -> MedusaResult<IntegrationReceipt> {
+        if expected_base.trim().is_empty() || authorized_commit.trim().is_empty() {
+            return Err(invalid("authorized integration requires base and commit"));
+        }
+        if worker.commit.as_deref() != Some(authorized_commit) {
+            return Err(MedusaError::new(
+                ErrorCode::PolicyDenied,
+                ErrorCategory::Policy,
+                "worker commit does not match durable integration authorization",
+            ));
+        }
+        if self.commit_is_integrated(authorized_commit)?
+            || self.commit_tree_matches_head(authorized_commit)?
+        {
+            return Ok(IntegrationReceipt {
+                worker_id: worker.id.clone(),
+                branch: worker.branch.clone(),
+                commit: authorized_commit.to_owned(),
+                base_head: expected_base.to_owned(),
+                integrated_head: self.repository_head()?,
+                changed_paths: self.commit_changed_paths(authorized_commit)?,
+            });
+        }
+        let actual_head = self.repository_head()?;
+        if actual_head != expected_base {
+            return Err(MedusaError::new(
+                ErrorCode::PolicyDenied,
+                ErrorCategory::Policy,
+                format!(
+                    "primary repository drifted before authorized integration: expected {expected_base}, got {actual_head}"
+                ),
+            ));
+        }
+        self.integrate_successful(std::slice::from_ref(worker))?
+            .into_iter()
+            .next()
+            .ok_or_else(|| invalid("authorized worker produced no integration receipt"))
     }
 
     /// Removes per-session runtime state and generated interpreter caches from a worktree.
