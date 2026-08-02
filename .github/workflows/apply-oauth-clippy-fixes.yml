@@ -2,15 +2,16 @@ name: Apply GitHub OAuth Clippy fixes
 
 # One-shot branch utility. Removed after the correction commit.
 on:
-  push:
+  pull_request:
     branches:
-      - agent/629-github-oauth-parity
+      - main
 
 permissions:
   contents: write
 
 jobs:
   fix:
+    if: github.head_ref == 'agent/629-github-oauth-parity'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
