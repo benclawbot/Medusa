@@ -36,6 +36,7 @@ jobs:
         id: release
         shell: bash
         env:
+          GH_TOKEN: ${{ github.token }}
           RELEASE_SHA: ${{ github.sha }}
           REF_NAME: ${{ github.ref_name }}
           REF_TYPE: ${{ github.ref_type }}
@@ -52,8 +53,11 @@ jobs:
                 exit 2
               fi
             else
-              git tag "$RELEASE_TAG" "$RELEASE_SHA"
-              git push origin "refs/tags/$RELEASE_TAG"
+              gh api \
+                --method POST \
+                "repos/${GITHUB_REPOSITORY}/git/refs" \
+                -f ref="refs/tags/$RELEASE_TAG" \
+                -f sha="$RELEASE_SHA" >/dev/null
             fi
           fi
           version=$(python3 scripts/release-evidence.py validate-tag --root . --tag "$RELEASE_TAG")
