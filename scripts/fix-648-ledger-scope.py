@@ -8,6 +8,34 @@ def replace_once(path: Path, before: str, after: str, label: str) -> None:
     path.write_text(text.replace(before, after, 1), encoding="utf-8")
 
 
+scheduler = Path("crates/medusa-multi-agent-scheduler/src/lib.rs")
+replace_once(
+    scheduler,
+    "    let tasks = planned_tasks(&input.objective, strategy, &scope);\n",
+    "    let tasks = planned_tasks(strategy, &scope);\n",
+    "typed planner task construction call",
+)
+replace_once(
+    scheduler,
+    "fn planned_tasks(objective: &str, strategy: ExecutionStrategy, scope: &RepositoryScope) -> Vec<PlannedTask> {\n",
+    "fn planned_tasks(strategy: ExecutionStrategy, scope: &RepositoryScope) -> Vec<PlannedTask> {\n",
+    "typed planner task construction signature",
+)
+text = scheduler.read_text(encoding="utf-8")
+inline_before = ", objective, Vec::new(),"
+if text.count(inline_before) != 2:
+    raise RuntimeError("inline planned task objective arguments did not match exactly twice")
+text = text.replace(inline_before, ", Vec::new(),")
+multiline_before = "            objective,\n"
+if text.count(multiline_before) != 4:
+    raise RuntimeError("multiline planned task objective arguments did not match exactly four times")
+text = text.replace(multiline_before, "")
+signature_before = "    objective: &str,\n    dependencies: Vec<String>,\n"
+if text.count(signature_before) != 1:
+    raise RuntimeError("planned task objective parameter did not match exactly once")
+text = text.replace(signature_before, "    dependencies: Vec<String>,\n", 1)
+scheduler.write_text(text, encoding="utf-8")
+
 orchestrator = Path("crates/medusa-runtime/src/production_orchestrator.rs")
 replace_once(
     orchestrator,
