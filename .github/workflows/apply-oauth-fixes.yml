@@ -1,0 +1,66 @@
+name: Apply GitHub OAuth compiler fixes
+
+on:
+  push:
+    branches:
+      - agent/629-github-oauth-parity
+
+permissions:
+  contents: write
+
+jobs:
+  fix:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          ref: agent/629-github-oauth-parity
+      - uses: dtolnay/rust-toolchain@39b0b3842c7e8bbf6904c0bfc3d9006fdd4dc4e0
+        with:
+          toolchain: stable
+          components: rustfmt
+      - name: Apply exact compiler corrections
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+
+          replacements = {
+              "crates/medusa-github/src/repository_creation/compatibility.rs": [
+                  ("#[derive(Clone, Debug, Eq, PartialEq)]\npub struct LegacyGitHubConversion", "#[derive(Clone, Debug, PartialEq)]\npub struct LegacyGitHubConversion"),
+              ],
+              "crates/medusa-github/src/repository_creation/typed_prepare.rs": [
+                  ("use serde_json::{Map, Value, json};", "use serde_json::{Value, json};"),
+                  ("} => reviewers(document, *number, reviewers, team_reviewers, false),", "} => prepare_reviewers(document, *number, reviewers, team_reviewers, false),"),
+                  ("} => reviewers(document, *number, reviewers, team_reviewers, true),", "} => prepare_reviewers(document, *number, reviewers, team_reviewers, true),"),
+                  ("fn reviewers(\n", "fn prepare_reviewers(\n"),
+              ],
+              "crates/medusa-github/src/repository_creation/coordinator.rs": [
+                  ("use std::{collections::BTreeMap, path::PathBuf};", "use std::collections::BTreeMap;"),
+                  ("use serde_json::{Map, Value, json};", "use serde_json::{Value, json};"),
+                  ("self.reconcile_existing(document, &prepared, attempt_id, request_digest)?", "self.reconcile_existing(\n                            document,\n                            &prepared,\n                            attempt_id.clone(),\n                            request_digest.clone(),\n                        )?"),
+              ],
+              "crates/medusa-github/src/repository_creation/direct.rs": [
+                  ("    Method, StatusCode, Url,", "    Method, Url,"),
+                  ("header::{ACCEPT, AUTHORIZATION, CONTENT_TYPE, ETAG, HeaderMap, LOCATION, USER_AGENT}", "header::{ACCEPT, AUTHORIZATION, CONTENT_TYPE, HeaderMap, LOCATION, USER_AGENT}"),
+              ],
+              "crates/medusa-cli/src/github_operation.rs": [
+                  ("ReqwestGitHubApiTransport, ReqwestOAuthTransport, SystemExecutor,", "ReqwestOAuthTransport, StreamingReqwestGitHubApiTransport, SystemExecutor,"),
+                  ("ReqwestGitHubApiTransport::new()?", "StreamingReqwestGitHubApiTransport::new()?"),
+              ],
+          }
+
+          for filename, edits in replacements.items():
+              path = Path(filename)
+              text = path.read_text()
+              for before, after in edits:
+                  if before not in text:
+                      raise SystemExit(f"expected text not found in {filename}: {before!r}")
+                  text = text.replace(before, after)
+              path.write_text(text)
+          PY
+          cargo fmt --all
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -- '*.rs'
+          git commit -m "Fix GitHub OAuth compiler diagnostics and stream uploads"
+          git push origin HEAD:agent/629-github-oauth-parity
