@@ -20,7 +20,7 @@ use std::{
 
 use medusa_agent::{
     AgentEngine, AgentExecutionPolicy, AgentUpdate, StepOutcome, TeamMemberContext, TeamRole,
-    TeamRuntime, WorkerExecutionController, targeted_verification,
+    TeamRuntime, WorkerExecutionController,
 };
 use medusa_config::{Config, Mode};
 use medusa_multi_agent_scheduler::{Task, TaskState, Worker as ScheduledWorker};
@@ -127,33 +127,6 @@ where
         events,
         executor,
     )
-}
-
-pub fn verify_repository(
-    repo: &Path,
-    plan: &ProductionExecutionPlan,
-    events: &Sender<RuntimeEvent>,
-) -> Result<Vec<String>, String> {
-    let _ = events.send(RuntimeEvent::Activity(RuntimeActivity {
-        id: Some(plan.fingerprint.clone()),
-        kind: RuntimeActivityKind::Verification,
-        title: "Coordinated repository verification started".to_owned(),
-        details: vec!["The parent cannot report success before this gate passes.".to_owned()],
-    }));
-    let result = targeted_verification(repo).map_err(|error| error.to_string())?;
-    if !result.passed {
-        return Err(format!(
-            "coordinated repository verification failed: {}",
-            result.evidence.join(" | ")
-        ));
-    }
-    let _ = events.send(RuntimeEvent::Activity(RuntimeActivity {
-        id: Some(plan.fingerprint.clone()),
-        kind: RuntimeActivityKind::Done,
-        title: "Coordinated repository verification passed".to_owned(),
-        details: result.evidence.clone(),
-    }));
-    Ok(result.evidence)
 }
 
 fn coordinate_with_control<F>(
