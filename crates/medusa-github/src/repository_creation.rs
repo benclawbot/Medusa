@@ -119,11 +119,20 @@ pub struct RepositoryCreationReceipt {
     pub initial_commit: Option<String>,
 }
 
+mod direct;
+mod idempotency;
+mod oauth;
 mod operations;
 mod service;
+mod typed;
+mod typed_prepare;
 mod validation;
 
+pub use direct::*;
+pub use idempotency::*;
+pub use oauth::*;
 pub use operations::*;
+pub use typed::*;
 pub(crate) use validation::*;
 
 #[cfg(test)]
