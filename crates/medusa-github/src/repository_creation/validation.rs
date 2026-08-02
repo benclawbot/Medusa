@@ -52,14 +52,20 @@ pub(super) fn validate_repository_identity(value: &str) -> MedusaResult<()> {
 }
 
 pub(super) fn validate_branch(value: &str) -> MedusaResult<()> {
+    let invalid_component = value
+        .split('/')
+        .any(|component| component.is_empty() || component.starts_with('.') || component.ends_with(".lock"));
     if value.is_empty()
         || value.len() > 255
+        || value == "@"
         || value.starts_with('-')
-        || value.starts_with('.')
+        || value.starts_with('/')
         || value.ends_with('.')
         || value.ends_with('/')
         || value.contains("..")
+        || value.contains("//")
         || value.contains("@{")
+        || invalid_component
         || value.bytes().any(|byte| {
             byte.is_ascii_control()
                 || byte.is_ascii_whitespace()
@@ -67,7 +73,7 @@ pub(super) fn validate_branch(value: &str) -> MedusaResult<()> {
         })
     {
         return Err(invalid_input(
-            "default branch name is not a safe Git reference",
+            "default branch name is not a safe Git branch reference",
         ));
     }
     Ok(())
