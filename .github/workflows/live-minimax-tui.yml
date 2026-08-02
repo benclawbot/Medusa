@@ -1,0 +1,58 @@
+name: Live MiniMax TUI
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: live-minimax-tui-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  interactive-tui:
+    if: ${{ github.event_name == 'workflow_dispatch' || github.event.pull_request.head.repo.full_name == github.repository }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      MINIMAX_API_KEY: ${{ secrets.MINIMAX_API_KEY }}
+      LIVE_TUI_TIMEOUT_SECONDS: '600'
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: dtolnay/rust-toolchain@39b0b3842c7e8bbf6904c0bfc3d9006fdd4dc4e0 # 1.88.0
+      - name: Refresh dependency lock for the merged PR graph
+        run: cargo generate-lockfile
+      - name: Install terminal and containment prerequisites
+        shell: bash
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y bubblewrap
+          if [[ -e /proc/sys/kernel/apparmor_restrict_unprivileged_userns ]]; then
+            echo 0 | sudo tee /proc/sys/kernel/apparmor_restrict_unprivileged_userns
+          fi
+      - name: Require configured live-test secret
+        shell: bash
+        run: |
+          if [[ -z "${MINIMAX_API_KEY:-}" ]]; then
+            echo 'MINIMAX_API_KEY repository secret is required for the live TUI gate.' >&2
+            exit 2
+          fi
+          echo "::add-mask::$MINIMAX_API_KEY"
+      - name: Build the packaged Medusa entry point
+        run: cargo build --release --locked --bin medusa
+      - name: Submit and render one MiniMax answer through the real TUI
+        shell: bash
+        run: |
+          python3 scripts/live-tui-minimax-e2e.py \
+            --binary target/release/medusa \
+            --work-root target/live-tui-minimax-work \
+            --output-dir live-tui-minimax-evidence
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        if: always()
+        with:
+          name: live-minimax-tui-evidence
+          path: live-tui-minimax-evidence
+          if-no-files-found: warn
