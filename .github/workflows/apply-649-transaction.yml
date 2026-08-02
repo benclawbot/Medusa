@@ -1,0 +1,112 @@
+name: Apply 649 Transactional Mutation
+
+on:
+  pull_request:
+    branches: [main]
+    types: [opened, synchronize, reopened]
+
+permissions:
+  contents: write
+
+concurrency:
+  group: apply-649-transaction-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  apply:
+    if: github.event.pull_request.number == 662 && github.event.pull_request.head.repo.full_name == github.repository && github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    timeout-minutes: 50
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ github.event.pull_request.head.ref }}
+          fetch-depth: 0
+      - uses: dtolnay/rust-toolchain@39b0b3842c7e8bbf6904c0bfc3d9006fdd4dc4e0 # 1.88.0
+        with:
+          components: rustfmt, clippy
+      - name: Apply transaction migration
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+
+          path = Path("scripts/apply-649-transaction.py")
+          text = path.read_text(encoding="utf-8")
+          global_rewrite = '''text = coordinator.read_text(encoding="utf-8")
+          text = text.replace("            integration: None,\\n", "            transaction_path: root.join(\\\"mutation-transaction.json\\\"),\\n            legacy_integration: None,\\n")
+          text = text.replace("            integration: None,\\n", "            transaction_path: root.join(\\\"mutation-transaction.json\\\"),\\n            legacy_integration: None,\\n")
+          coordinator.write_text(text, encoding="utf-8")
+          '''
+          if text.count(global_rewrite) != 1:
+              raise RuntimeError("ambiguous global integration initializer rewrite was not found")
+          text = text.replace(global_rewrite, "", 1)
+          text = text.replace(
+              '"use medusa_workers::{IntegrationReceipt, Worker, WorkerManager, WorkerState};\\n",\n    "use medusa_workers::{IntegrationReceipt, Worker, WorkerManager, WorkerState};\\n",',
+              '"use medusa_workers::{IntegrationReceipt, Worker, WorkerManager, WorkerState};\\n",\n    "use medusa_workers::{Worker, WorkerManager, WorkerState};\\n",',
+              1,
+          )
+          text = text.replace(
+              '''    #[serde(default)]
+              transaction_path: PathBuf,
+              #[serde(default)]
+              legacy_integration: Option<IntegrationReceipt>,
+              last_error: Option<String>,
+          ''',
+              '''    #[serde(default)]
+              transaction_path: PathBuf,
+              last_error: Option<String>,
+          ''',
+              1,
+          )
+          text = text.replace("            legacy_integration: None,\\n", "")
+          path.write_text(text, encoding="utf-8")
+          PY
+          python3 scripts/apply-649-transaction.py
+      - name: Compile all affected targets
+        run: cargo check -p medusa-workers -p medusa-runtime -p medusa-agent -p medusa-cli -p medusa-tui -p medusa-daemon --all-targets
+      - name: Validate transactional lifecycle
+        shell: bash
+        run: |
+          set -euo pipefail
+          {
+            cargo fmt --all
+            cargo fmt --all -- --check
+            cargo test -p medusa-workers --all-targets --locked
+            cargo test -p medusa-runtime --lib --locked
+            cargo test -p medusa-agent --lib --locked
+            cargo clippy -p medusa-workers -p medusa-runtime -p medusa-agent -p medusa-cli -p medusa-tui -p medusa-daemon --all-targets --locked -- -D warnings
+            python3 scripts/check-mutation-lifecycle.py
+            python3 scripts/architecture-conformance.py --known-failures --json
+            python3 scripts/check-architecture-index.py
+          } 2>&1 | tee transaction-validation.log
+      - name: Upload transaction validation log
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: transaction-validation-${{ github.sha }}
+          path: transaction-validation.log
+          if-no-files-found: warn
+          retention-days: 2
+      - name: Commit validated transaction migration
+        shell: bash
+        run: |
+          set -euo pipefail
+          git rm -f .github/workflows/apply-649-transaction.yml scripts/apply-649-transaction.py
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add \
+            .github/workflows/architecture-v2-baseline.yml \
+            crates/medusa-workers/src/lib.rs \
+            crates/medusa-runtime/src/lib.rs \
+            crates/medusa-runtime/src/mutation_transaction.rs \
+            crates/medusa-runtime/src/mutating_worker_coordinator.rs \
+            crates/medusa-runtime/src/mutating_worker_coordinator_support.rs \
+            crates/medusa-runtime/src/mutating_worker_coordinator_tests.rs \
+            docs/architecture/INDEX.md \
+            docs/architecture/baseline.json \
+            scripts/architecture-conformance.py \
+            scripts/check-mutation-lifecycle.py
+          git commit -m "Enforce transactional review before integration"
+          git push origin HEAD:${{ github.event.pull_request.head.ref }}
