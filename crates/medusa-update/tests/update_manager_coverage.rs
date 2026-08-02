@@ -257,6 +257,12 @@ fn interrupted_swap_restores_previous_binary() {
 
 #[test]
 fn platform_literal_conversions_remain_compatible() {
-    assert_eq!(OperatingSystem::from("linux"), OperatingSystem::Linux);
-    assert_eq!(Architecture::from("x86_64"), Architecture::X86_64);
+    assert_eq!(
+        OperatingSystem::try_from("linux").expect("linux"),
+        OperatingSystem::Linux
+    );
+    assert_eq!(
+        Architecture::try_from("x86_64").expect("x86_64"),
+        Architecture::X86_64
+    );
 }
