@@ -11,6 +11,7 @@ repository.workspace = true
 path = "src/lib_wrapper.rs"
 
 [dependencies]
+medusa-evidence.workspace = true
 base64 = "0.22"
 hex.workspace = true
 medusa-agent = { path = "../medusa-agent" }
