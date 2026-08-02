@@ -4,6 +4,8 @@ use std::{
     sync::{Arc, Mutex},
 };
 
+use medusa_core::ErrorCode;
+
 use super::*;
 use crate::{CommandExecutor, CommandOutput, GitHubService};
 
@@ -29,11 +31,10 @@ impl CommandExecutor for FakeExecutor {
         arguments: &[String],
         _: Option<&Path>,
     ) -> MedusaResult<CommandOutput> {
-        self.calls.lock().expect("calls").push((
-            program.into(),
-            arguments.to_vec(),
-            Vec::new(),
-        ));
+        self.calls
+            .lock()
+            .expect("calls")
+            .push((program.into(), arguments.to_vec(), Vec::new()));
         self.outputs
             .lock()
             .expect("outputs")
@@ -79,14 +80,21 @@ fn rest_backend_sends_json_without_shell_or_token_arguments() {
         .execute_operation(&request())
         .expect("execute");
     assert_eq!(receipt.resource_identity.as_deref(), Some("7"));
-    assert!(!serde_json::to_string(&receipt)
-        .expect("receipt")
-        .contains("hidden"));
+    assert!(
+        !serde_json::to_string(&receipt)
+            .expect("receipt")
+            .contains("hidden")
+    );
     let calls = executor.calls.lock().expect("calls");
     assert_eq!(calls[0].0, "gh");
     assert!(calls[0].1.contains(&"--input".into()));
     assert!(!calls[0].1.iter().any(|value| value.contains("hidden")));
-    assert!(!calls[0].1.iter().any(|value| value == "sh" || value == "cmd"));
+    assert!(
+        !calls[0]
+            .1
+            .iter()
+            .any(|value| value == "sh" || value == "cmd")
+    );
     assert!(calls[0].2.is_empty());
 }
 
@@ -109,11 +117,12 @@ fn native_and_rest_backends_produce_the_same_canonical_repository_payload() {
         .execute_operation(&operation)
         .expect("native");
     operation.backend = GitHubBackendKind::RestApi;
-    let rest_receipt = service(rest)
-        .execute_operation(&operation)
-        .expect("rest");
+    let rest_receipt = service(rest).execute_operation(&operation).expect("rest");
     assert_eq!(native_receipt.canonical, rest_receipt.canonical);
-    assert_eq!(native_receipt.resource_identity, rest_receipt.resource_identity);
+    assert_eq!(
+        native_receipt.resource_identity,
+        rest_receipt.resource_identity
+    );
 }
 
 #[test]
@@ -154,13 +163,17 @@ fn search_requires_exact_repository_scope_and_uses_global_search_endpoint() {
     operation.method = GitHubHttpMethod::Get;
     operation.endpoint = "issues".into();
     operation.body = None;
-    operation.query.insert("q".into(), "bug repo:acme/project".into());
+    operation
+        .query
+        .insert("q".into(), "bug repo:acme/project".into());
     service(executor.clone())
         .execute_operation(&operation)
         .expect("search");
     let calls = executor.calls.lock().expect("calls");
     assert!(calls[0].1.contains(&"/search/issues".into()));
-    operation.query.insert("q".into(), "bug repo:other/project".into());
+    operation
+        .query
+        .insert("q".into(), "bug repo:other/project".into());
     assert!(operation.validate().is_err());
 }
 
