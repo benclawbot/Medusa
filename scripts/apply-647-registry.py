@@ -24,8 +24,8 @@ def update_tools() -> None:
     text = replace_once(
         text,
         "use serde_json::{Value, json};",
-        "use serde_json::Value;",
-        "remove hard-coded schema import",
+        "use serde_json::Value;\n#[cfg(test)]\nuse serde_json::json;",
+        "scope hard-coded schema macro to tests",
     )
     start = text.index("/// Single policy-aware registry")
     end = text.index("pub(crate) fn execute_tool", start)
@@ -144,6 +144,24 @@ def update_engine_support() -> None:
     })
 }'''
     text = replace_once(text, old, new, "agent tool projection")
+    text = replace_once(
+        text,
+        '''            let tools = available_tools(mode, &DesktopCommanderSettings::default())
+                .into_iter()
+                .map(|tool| tool.name)
+                .collect::<Vec<_>>();''',
+        '''            let directory = tempfile::tempdir().expect("tempdir");
+            let tools = available_tools(
+                mode,
+                directory.path(),
+                &DesktopCommanderSettings::default(),
+            )
+            .expect("available tools")
+            .into_iter()
+            .map(|tool| tool.name)
+            .collect::<Vec<_>>();''',
+        "repo-aware agent tool projection test",
+    )
     path.write_text(text, encoding="utf-8")
 
 
