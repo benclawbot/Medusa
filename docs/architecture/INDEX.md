@@ -78,6 +78,8 @@ V2 invariants:
 
 The versioned runtime authority is `medusa-capabilities::CapabilityRegistry`. Model tools, prompt availability, CLI diagnostics, protocol reports, and generated documentation are projections of one validated snapshot. Historical claim documents are migration evidence only and no longer grant runtime availability.
 
+Runtime readiness distinguishes design, experimental, partial, and production behavior. The V2 status below separately records architecture certification, so withheld browser tools remain `quarantined` while managed non-executable plugin support is `preview`.
+
 | Capability | Legacy claim | V2 status | Decision | Blocking evidence |
 |---|---|---|---|---|
 | Shared runtime | production | legacy-uncertified | replace authority contracts | lifecycle and ownership remain implicit |
