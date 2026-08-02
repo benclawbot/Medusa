@@ -16,8 +16,8 @@ use medusa_github::{
     GitHubCapabilityReport, GitHubExecutionBackend, GitHubOAuthClient, GitHubOAuthConfig,
     GitHubOAuthStatus, GitHubOperationCoordinator, GitHubOperationDocument,
     GitHubOperationReceiptV2, GitHubOperationRequest, GitHubOperationRisk, GitHubService,
-    KeyringGitHubCredentialStore, NoDirectGitHubBackend, ReqwestGitHubApiTransport,
-    ReqwestOAuthTransport, SystemExecutor, convert_legacy_github_operation,
+    KeyringGitHubCredentialStore, NoDirectGitHubBackend, ReqwestOAuthTransport,
+    StreamingReqwestGitHubApiTransport, SystemExecutor, convert_legacy_github_operation,
 };
 use serde::Serialize;
 
@@ -214,7 +214,7 @@ fn execute(args: ExecuteArgs) -> Result<(), Box<dyn std::error::Error>> {
         let oauth = oauth_client(oauth_config_for_document(&document, args.client_id)?)?;
         let direct = DirectGitHubBackend::new(
             oauth,
-            ReqwestGitHubApiTransport::new()?,
+            StreamingReqwestGitHubApiTransport::new()?,
             repository_directory,
         )?;
         execute_with_backend(service, direct, ledger, &document)?
@@ -263,7 +263,7 @@ fn capabilities(args: CapabilitiesArgs) -> Result<(), Box<dyn std::error::Error>
         let oauth = oauth_client(oauth_config_for_document(&document, args.client_id)?)?;
         let direct = DirectGitHubBackend::new(
             oauth,
-            ReqwestGitHubApiTransport::new()?,
+            StreamingReqwestGitHubApiTransport::new()?,
             repository_directory,
         )?;
         capabilities_with_backend(service, direct, ledger, &document)?

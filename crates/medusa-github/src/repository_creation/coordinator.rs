@@ -1,7 +1,7 @@
-use std::{collections::BTreeMap, path::PathBuf};
+use std::collections::BTreeMap;
 
 use medusa_core::{ErrorCategory, ErrorCode, MedusaError, MedusaResult};
-use serde_json::{Map, Value, json};
+use serde_json::{Value, json};
 
 use super::*;
 use crate::CommandExecutor;
@@ -176,9 +176,12 @@ impl<E: CommandExecutor, D: DirectGitHubOperationExecutor> GitHubOperationCoordi
                         GitHubOperationLifecycleStatus::Uncertain,
                         Some(error.message.clone()),
                     )?;
-                    if let Some(receipt) =
-                        self.reconcile_existing(document, &prepared, attempt_id, request_digest)?
-                    {
+                    if let Some(receipt) = self.reconcile_existing(
+                        document,
+                        &prepared,
+                        attempt_id.clone(),
+                        request_digest.clone(),
+                    )? {
                         return Ok(receipt);
                     }
                 }

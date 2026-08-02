@@ -3,7 +3,7 @@ use serde_json::Value;
 
 use super::*;
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct LegacyGitHubConversion {
     pub document: GitHubOperationDocument,
     pub warning: String,

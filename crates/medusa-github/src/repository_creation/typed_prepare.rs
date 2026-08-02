@@ -1,7 +1,7 @@
 use std::collections::BTreeMap;
 
 use medusa_core::{ErrorCategory, ErrorCode, MedusaError, MedusaResult};
-use serde_json::{Map, Value, json};
+use serde_json::{Value, json};
 
 use super::*;
 
@@ -724,16 +724,16 @@ fn prepare_pull_requests(
             number,
             reviewers,
             team_reviewers,
-        } => reviewers(document, *number, reviewers, team_reviewers, false),
+        } => prepare_reviewers(document, *number, reviewers, team_reviewers, false),
         PullRequestsOperation::RemoveReviewers {
             number,
             reviewers,
             team_reviewers,
-        } => reviewers(document, *number, reviewers, team_reviewers, true),
+        } => prepare_reviewers(document, *number, reviewers, team_reviewers, true),
     }
 }
 
-fn reviewers(
+fn prepare_reviewers(
     document: &GitHubOperationDocument,
     number: u64,
     reviewers: &[String],

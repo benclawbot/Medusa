@@ -9,9 +9,9 @@ use std::{
 
 use medusa_core::{ErrorCategory, ErrorCode, MedusaError, MedusaResult};
 use reqwest::{
-    Method, StatusCode, Url,
+    Method, Url,
     blocking::{Client, RequestBuilder, Response},
-    header::{ACCEPT, AUTHORIZATION, CONTENT_TYPE, ETAG, HeaderMap, LOCATION, USER_AGENT},
+    header::{ACCEPT, AUTHORIZATION, CONTENT_TYPE, HeaderMap, LOCATION, USER_AGENT},
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
