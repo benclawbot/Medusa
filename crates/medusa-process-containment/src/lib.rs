@@ -4,12 +4,18 @@
 extern crate self as flatbuffers;
 
 #[cfg(windows)]
+// SAFETY: reviewed Windows composable-sandbox FFI; see the checked allowlist.
+#[allow(unsafe_code)]
 mod base_container;
 #[cfg(windows)]
 mod flatbuffer_builder;
 #[cfg(windows)]
+// SAFETY: reviewed Windows Job Object/process FFI; see the checked allowlist.
+#[allow(unsafe_code)]
 mod windows;
 #[cfg(windows)]
+// SAFETY: reviewed Windows token and ACL FFI; see the checked allowlist.
+#[allow(unsafe_code)]
 mod windows_acl;
 
 #[cfg(windows)]
