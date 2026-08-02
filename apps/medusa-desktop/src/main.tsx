@@ -23,6 +23,7 @@ import "./desktop-timeline.css";
 import "./structured-timeline.css";
 import "./desktop-update.css";
 import "./codex-experience.css";
+import "./neutral-light.css";
 
 const liveEvidenceEnabled =
   import.meta.env.VITE_MEDUSA_OPENAI_REALTIME_EVIDENCE === "1" ||
