@@ -95,6 +95,31 @@ def update_cli() -> None:
     path.write_text(text, encoding="utf-8")
 
 
+def update_main_health_acknowledgement() -> None:
+    path = Path("crates/medusa-cli/src/main.rs")
+    text = path.read_text(encoding="utf-8")
+    text = replace_once(
+        text,
+        '''fn run() -> MedusaResult<()> {
+    medusa_update::acknowledge_update_health()?;
+    let cli = Cli::parse();''',
+        '''fn run() -> MedusaResult<()> {
+    let cli = Cli::parse();''',
+        "remove premature health acknowledgement",
+    )
+    text = replace_once(
+        text,
+        '''        oauth_preflight::run_if_needed(&config)?;
+        let mut options = TuiOptions::for_repo(repo);''',
+        '''        oauth_preflight::run_if_needed(&config)?;
+        medusa_update::acknowledge_update_health()?;
+        let mut options = TuiOptions::for_repo(repo);''',
+        "acknowledge only after interactive startup prerequisites",
+    )
+    path.write_text(text, encoding="utf-8")
+
+
 if __name__ == "__main__":
     LEGACY.update_install()
     update_cli()
+    update_main_health_acknowledgement()
