@@ -49,13 +49,8 @@ impl GitHubApiTransport for StreamingReqwestGitHubApiTransport {
         destination: &Path,
         max_bytes: u64,
     ) -> MedusaResult<(GitHubApiResponse, GitHubArtifactReceipt)> {
-        self.reads.download(
-            request,
-            token,
-            destination_root,
-            destination,
-            max_bytes,
-        )
+        self.reads
+            .download(request, token, destination_root, destination, max_bytes)
     }
 
     fn upload(

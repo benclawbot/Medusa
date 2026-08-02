@@ -86,11 +86,7 @@ pub struct GitHubOperationCoordinator<E, D> {
 
 impl<E: CommandExecutor, D: DirectGitHubOperationExecutor> GitHubOperationCoordinator<E, D> {
     #[must_use]
-    pub fn new(
-        service: GitHubService<E>,
-        direct: D,
-        ledger: FileGitHubOperationLedger,
-    ) -> Self {
+    pub fn new(service: GitHubService<E>, direct: D, ledger: FileGitHubOperationLedger) -> Self {
         Self {
             service,
             direct,
@@ -180,12 +176,9 @@ impl<E: CommandExecutor, D: DirectGitHubOperationExecutor> GitHubOperationCoordi
                         GitHubOperationLifecycleStatus::Uncertain,
                         Some(error.message.clone()),
                     )?;
-                    if let Some(receipt) = self.reconcile_existing(
-                        document,
-                        &prepared,
-                        attempt_id,
-                        request_digest,
-                    )? {
+                    if let Some(receipt) =
+                        self.reconcile_existing(document, &prepared, attempt_id, request_digest)?
+                    {
                         return Ok(receipt);
                     }
                 }
@@ -531,18 +524,32 @@ fn legacy_check_operation(endpoint: &str) -> MedusaResult<GitHubTypedOperation> 
         return Ok(GitHubTypedOperation::Repository(RepositoryOperation::Get));
     }
     if let Some(value) = endpoint.strip_prefix("issues/comments/") {
-        let comment_id = value.parse().map_err(|_| invalid("invalid comment reconciliation ID"))?;
-        return Ok(GitHubTypedOperation::Issues(IssuesOperation::Get { number: comment_id }));
+        let comment_id = value
+            .parse()
+            .map_err(|_| invalid("invalid comment reconciliation ID"))?;
+        return Ok(GitHubTypedOperation::Issues(IssuesOperation::Get {
+            number: comment_id,
+        }));
     }
     if let Some(value) = endpoint.strip_prefix("releases/assets/") {
-        let asset_id = value.parse().map_err(|_| invalid("invalid asset reconciliation ID"))?;
-        return Ok(GitHubTypedOperation::Releases(ReleasesOperation::Get { release_id: asset_id }));
+        let asset_id = value
+            .parse()
+            .map_err(|_| invalid("invalid asset reconciliation ID"))?;
+        return Ok(GitHubTypedOperation::Releases(ReleasesOperation::Get {
+            release_id: asset_id,
+        }));
     }
     if let Some(value) = endpoint.strip_prefix("releases/") {
-        let release_id = value.parse().map_err(|_| invalid("invalid release reconciliation ID"))?;
-        return Ok(GitHubTypedOperation::Releases(ReleasesOperation::Get { release_id }));
+        let release_id = value
+            .parse()
+            .map_err(|_| invalid("invalid release reconciliation ID"))?;
+        return Ok(GitHubTypedOperation::Releases(ReleasesOperation::Get {
+            release_id,
+        }));
     }
-    Err(invalid("unsupported resource-absence reconciliation endpoint"))
+    Err(invalid(
+        "unsupported resource-absence reconciliation endpoint",
+    ))
 }
 
 fn reconciliation_matches(rule: &GitHubReconciliation, payload: &Value) -> bool {
@@ -563,8 +570,9 @@ fn reconciliation_matches(rule: &GitHubReconciliation, payload: &Value) -> bool 
             .or_else(|| payload.get("sha"))
             .and_then(Value::as_str)
             .is_some_and(|value| value == sha),
-        GitHubReconciliation::ContentMatches { .. }
-        | GitHubReconciliation::ReleaseTag { .. } => true,
+        GitHubReconciliation::ContentMatches { .. } | GitHubReconciliation::ReleaseTag { .. } => {
+            true
+        }
         GitHubReconciliation::ContentAbsent { .. }
         | GitHubReconciliation::ResourceAbsent { .. } => false,
     }
@@ -593,7 +601,10 @@ fn absent_execution(rule: &GitHubReconciliation) -> GitHubBackendExecution {
 fn absent_error(error: &MedusaError) -> bool {
     error.message.contains("HTTP 404")
         || error.message.to_ascii_lowercase().contains("not found")
-        || error.message.to_ascii_lowercase().contains("could not resolve")
+        || error
+            .message
+            .to_ascii_lowercase()
+            .contains("could not resolve")
 }
 
 fn supported_operation_groups() -> Vec<String> {
@@ -676,7 +687,7 @@ mod tests {
     };
 
     use super::*;
-    use crate::{CommandOutput, CommandExecutor};
+    use crate::{CommandExecutor, CommandOutput};
 
     #[derive(Clone, Default)]
     struct FakeExecutor {
@@ -694,10 +705,7 @@ mod tests {
                 .lock()
                 .expect("commands")
                 .push((program.into(), arguments.to_vec()));
-            let output = if arguments.starts_with(&[
-                "auth".into(),
-                "status".into(),
-            ]) {
+            let output = if arguments.starts_with(&["auth".into(), "status".into()]) {
                 CommandOutput {
                     success: true,
                     stdout: String::new(),

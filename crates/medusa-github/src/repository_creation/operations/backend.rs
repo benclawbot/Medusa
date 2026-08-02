@@ -132,14 +132,25 @@ fn native_arguments(request: &GitHubOperationRequest) -> Option<(Vec<String>, &'
         (GitHubResource::Issues, "list", GitHubHttpMethod::Get, "issues") => {
             let limit = page_limit(request);
             Some(strings([
-                "issue", "list", "--repo", &target, "--limit", &limit, "--json",
+                "issue",
+                "list",
+                "--repo",
+                &target,
+                "--limit",
+                &limit,
+                "--json",
                 "id,number,title,state,url",
             ]))
         }
         (GitHubResource::Issues, "get", GitHubHttpMethod::Get, endpoint) => {
             exact_number(endpoint, "issues").map(|number| {
                 strings([
-                    "issue", "view", &number, "--repo", &target, "--json",
+                    "issue",
+                    "view",
+                    &number,
+                    "--repo",
+                    &target,
+                    "--json",
                     "id,number,title,state,url",
                 ])
             })
@@ -147,14 +158,25 @@ fn native_arguments(request: &GitHubOperationRequest) -> Option<(Vec<String>, &'
         (GitHubResource::PullRequests, "list", GitHubHttpMethod::Get, "pulls") => {
             let limit = page_limit(request);
             Some(strings([
-                "pr", "list", "--repo", &target, "--limit", &limit, "--json",
+                "pr",
+                "list",
+                "--repo",
+                &target,
+                "--limit",
+                &limit,
+                "--json",
                 "id,number,title,state,url,headRefName,baseRefName",
             ]))
         }
         (GitHubResource::PullRequests, "get", GitHubHttpMethod::Get, endpoint) => {
             exact_number(endpoint, "pulls").map(|number| {
                 strings([
-                    "pr", "view", &number, "--repo", &target, "--json",
+                    "pr",
+                    "view",
+                    &number,
+                    "--repo",
+                    &target,
+                    "--json",
                     "id,number,title,state,url,headRefName,baseRefName,mergeStateStatus",
                 ])
             })
@@ -185,14 +207,25 @@ fn native_arguments(request: &GitHubOperationRequest) -> Option<(Vec<String>, &'
         (GitHubResource::Actions, "list_runs", GitHubHttpMethod::Get, "actions/runs") => {
             let limit = page_limit(request);
             Some(strings([
-                "run", "list", "--repo", &target, "--limit", &limit, "--json",
+                "run",
+                "list",
+                "--repo",
+                &target,
+                "--limit",
+                &limit,
+                "--json",
                 "databaseId,workflowDatabaseId,status,conclusion,url",
             ]))
         }
         (GitHubResource::Actions, "get_run", GitHubHttpMethod::Get, endpoint) => {
             exact_number(endpoint, "actions/runs").map(|number| {
                 strings([
-                    "run", "view", &number, "--repo", &target, "--json",
+                    "run",
+                    "view",
+                    &number,
+                    "--repo",
+                    &target,
+                    "--json",
                     "databaseId,workflowDatabaseId,status,conclusion,url",
                 ])
             })
@@ -202,11 +235,8 @@ fn native_arguments(request: &GitHubOperationRequest) -> Option<(Vec<String>, &'
                 .map(|number| strings(["run", "rerun", &number, "--repo", &target]))
         }
         (GitHubResource::Actions, "rerun_failed", GitHubHttpMethod::Post, endpoint) => {
-            suffix_number(endpoint, "actions/runs", "rerun-failed-jobs").map(|number| {
-                strings([
-                    "run", "rerun", &number, "--failed", "--repo", &target,
-                ])
-            })
+            suffix_number(endpoint, "actions/runs", "rerun-failed-jobs")
+                .map(|number| strings(["run", "rerun", &number, "--failed", "--repo", &target]))
         }
         (GitHubResource::Actions, "cancel", GitHubHttpMethod::Post, endpoint) => {
             suffix_number(endpoint, "actions/runs", "cancel")
@@ -215,7 +245,13 @@ fn native_arguments(request: &GitHubOperationRequest) -> Option<(Vec<String>, &'
         (GitHubResource::Releases, "list", GitHubHttpMethod::Get, "releases") => {
             let limit = page_limit(request);
             Some(strings([
-                "release", "list", "--repo", &target, "--limit", &limit, "--json",
+                "release",
+                "list",
+                "--repo",
+                &target,
+                "--limit",
+                &limit,
+                "--json",
                 "tagName,name,isDraft,isPrerelease,publishedAt",
             ]))
         }
@@ -223,7 +259,12 @@ fn native_arguments(request: &GitHubOperationRequest) -> Option<(Vec<String>, &'
             endpoint.strip_prefix("releases/tags/").and_then(|tag| {
                 (!tag.is_empty() && !tag.contains('/')).then(|| {
                     strings([
-                        "release", "view", tag, "--repo", &target, "--json",
+                        "release",
+                        "view",
+                        tag,
+                        "--repo",
+                        &target,
+                        "--json",
                         "tagName,name,isDraft,isPrerelease,publishedAt,url",
                     ])
                 })

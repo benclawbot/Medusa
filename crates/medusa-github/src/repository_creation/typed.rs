@@ -184,8 +184,12 @@ pub enum RepositoryOperation {
     },
     Delete,
     GetTopics,
-    ReplaceTopics { names: Vec<String> },
-    Create { request: RepositoryCreateRequest },
+    ReplaceTopics {
+        names: Vec<String>,
+    },
+    Create {
+        request: RepositoryCreateRequest,
+    },
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
@@ -223,16 +227,25 @@ pub enum GitDataOperation {
         #[serde(default = "default_page_size")]
         per_page: u16,
     },
-    GetBranch { branch: String },
-    CreateReference { reference: String, sha: String },
+    GetBranch {
+        branch: String,
+    },
+    CreateReference {
+        reference: String,
+        sha: String,
+    },
     UpdateReference {
         reference: String,
         sha: String,
         #[serde(default)]
         force: bool,
     },
-    DeleteReference { reference: String },
-    GetCommit { sha: String },
+    DeleteReference {
+        reference: String,
+    },
+    GetCommit {
+        sha: String,
+    },
     ListCommits {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         sha: Option<String>,
@@ -256,7 +269,9 @@ pub enum IssuesOperation {
         #[serde(default = "default_page_size")]
         per_page: u16,
     },
-    Get { number: u64 },
+    Get {
+        number: u64,
+    },
     Create {
         title: String,
         #[serde(default)]
@@ -279,17 +294,33 @@ pub enum IssuesOperation {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         state_reason: Option<String>,
     },
-    Comment { number: u64, body: String },
-    AddLabels { number: u64, labels: Vec<String> },
-    SetAssignees { number: u64, assignees: Vec<String> },
+    Comment {
+        number: u64,
+        body: String,
+    },
+    AddLabels {
+        number: u64,
+        labels: Vec<String>,
+    },
+    SetAssignees {
+        number: u64,
+        assignees: Vec<String>,
+    },
     Lock {
         number: u64,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         reason: Option<String>,
     },
-    Unlock { number: u64 },
-    DeleteComment { comment_id: u64 },
-    ReactToComment { comment_id: u64, content: String },
+    Unlock {
+        number: u64,
+    },
+    DeleteComment {
+        comment_id: u64,
+    },
+    ReactToComment {
+        comment_id: u64,
+        content: String,
+    },
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -313,7 +344,9 @@ pub enum PullRequestsOperation {
         #[serde(default = "default_page_size")]
         per_page: u16,
     },
-    Get { number: u64 },
+    Get {
+        number: u64,
+    },
     Create {
         title: String,
         body: String,
@@ -349,7 +382,9 @@ pub enum PullRequestsOperation {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         expected_head_sha: Option<String>,
     },
-    Close { number: u64 },
+    Close {
+        number: u64,
+    },
     RequestReviewers {
         number: u64,
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -379,12 +414,24 @@ pub enum ActionsOperation {
         #[serde(default = "default_page_size")]
         per_page: u16,
     },
-    GetRun { run_id: u64 },
-    ListJobs { run_id: u64 },
-    GetJob { job_id: u64 },
-    Rerun { run_id: u64 },
-    RerunFailed { run_id: u64 },
-    Cancel { run_id: u64 },
+    GetRun {
+        run_id: u64,
+    },
+    ListJobs {
+        run_id: u64,
+    },
+    GetJob {
+        job_id: u64,
+    },
+    Rerun {
+        run_id: u64,
+    },
+    RerunFailed {
+        run_id: u64,
+    },
+    Cancel {
+        run_id: u64,
+    },
     DownloadArtifact {
         artifact_id: u64,
         destination: PathBuf,
@@ -396,9 +443,16 @@ pub enum ActionsOperation {
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
 #[serde(tag = "action", rename_all = "snake_case")]
 pub enum ReleasesOperation {
-    List { #[serde(default = "default_page_size")] per_page: u16 },
-    Get { release_id: u64 },
-    GetByTag { tag: String },
+    List {
+        #[serde(default = "default_page_size")]
+        per_page: u16,
+    },
+    Get {
+        release_id: u64,
+    },
+    GetByTag {
+        tag: String,
+    },
     Create {
         tag: String,
         #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -425,7 +479,9 @@ pub enum ReleasesOperation {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         prerelease: Option<bool>,
     },
-    Delete { release_id: u64 },
+    Delete {
+        release_id: u64,
+    },
     UploadAsset {
         release_id: u64,
         path: PathBuf,
@@ -442,23 +498,40 @@ pub enum ReleasesOperation {
         #[serde(default = "default_artifact_limit")]
         max_bytes: u64,
     },
-    DeleteAsset { asset_id: u64 },
+    DeleteAsset {
+        asset_id: u64,
+    },
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
 #[serde(tag = "action", rename_all = "snake_case")]
 pub enum CollaboratorsOperation {
-    List { #[serde(default = "default_page_size")] per_page: u16 },
-    GetPermission { username: String },
-    Add { username: String, permission: String },
-    Remove { username: String },
+    List {
+        #[serde(default = "default_page_size")]
+        per_page: u16,
+    },
+    GetPermission {
+        username: String,
+    },
+    Add {
+        username: String,
+        permission: String,
+    },
+    Remove {
+        username: String,
+    },
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
 #[serde(tag = "action", rename_all = "snake_case")]
 pub enum EnvironmentsOperation {
-    List { #[serde(default = "default_page_size")] per_page: u16 },
-    Get { name: String },
+    List {
+        #[serde(default = "default_page_size")]
+        per_page: u16,
+    },
+    Get {
+        name: String,
+    },
     Put {
         name: String,
         #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -466,53 +539,94 @@ pub enum EnvironmentsOperation {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         prevent_self_review: Option<bool>,
     },
-    Delete { name: String },
+    Delete {
+        name: String,
+    },
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
 #[serde(tag = "action", rename_all = "snake_case")]
 pub enum VariablesOperation {
-    ListActions { #[serde(default = "default_page_size")] per_page: u16 },
-    GetActions { name: String },
-    PutActions { name: String, value: String },
-    DeleteActions { name: String },
+    ListActions {
+        #[serde(default = "default_page_size")]
+        per_page: u16,
+    },
+    GetActions {
+        name: String,
+    },
+    PutActions {
+        name: String,
+        value: String,
+    },
+    DeleteActions {
+        name: String,
+    },
     ListEnvironment {
         environment: String,
         #[serde(default = "default_page_size")]
         per_page: u16,
     },
-    GetEnvironment { environment: String, name: String },
-    PutEnvironment { environment: String, name: String, value: String },
-    DeleteEnvironment { environment: String, name: String },
+    GetEnvironment {
+        environment: String,
+        name: String,
+    },
+    PutEnvironment {
+        environment: String,
+        name: String,
+        value: String,
+    },
+    DeleteEnvironment {
+        environment: String,
+        name: String,
+    },
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
 #[serde(tag = "action", rename_all = "snake_case")]
 pub enum SecretsOperation {
-    ListActions { #[serde(default = "default_page_size")] per_page: u16 },
+    ListActions {
+        #[serde(default = "default_page_size")]
+        per_page: u16,
+    },
     GetActionsPublicKey,
-    PutActions { name: String, encrypted_value: String, key_id: String },
-    DeleteActions { name: String },
+    PutActions {
+        name: String,
+        encrypted_value: String,
+        key_id: String,
+    },
+    DeleteActions {
+        name: String,
+    },
     ListEnvironment {
         environment: String,
         #[serde(default = "default_page_size")]
         per_page: u16,
     },
-    GetEnvironmentPublicKey { environment: String },
+    GetEnvironmentPublicKey {
+        environment: String,
+    },
     PutEnvironment {
         environment: String,
         name: String,
         encrypted_value: String,
         key_id: String,
     },
-    DeleteEnvironment { environment: String, name: String },
+    DeleteEnvironment {
+        environment: String,
+        name: String,
+    },
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
 #[serde(tag = "action", rename_all = "snake_case")]
 pub enum WebhooksOperation {
-    List { #[serde(default = "default_page_size")] per_page: u16 },
-    Get { hook_id: u64 },
+    List {
+        #[serde(default = "default_page_size")]
+        per_page: u16,
+    },
+    Get {
+        hook_id: u64,
+    },
     Create {
         name: String,
         #[serde(default = "default_true")]
@@ -529,8 +643,12 @@ pub enum WebhooksOperation {
         #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
         config: BTreeMap<String, String>,
     },
-    Delete { hook_id: u64 },
-    Ping { hook_id: u64 },
+    Delete {
+        hook_id: u64,
+    },
+    Ping {
+        hook_id: u64,
+    },
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
@@ -599,22 +717,50 @@ pub struct RulesetInput {
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
 #[serde(tag = "action", rename_all = "snake_case")]
 pub enum BranchProtectionOperation {
-    Get { branch: String },
-    Put { branch: String, settings: ProtectionSettings },
-    Delete { branch: String },
-    ListRulesets { #[serde(default = "default_page_size")] per_page: u16 },
-    GetRuleset { ruleset_id: u64 },
-    CreateRuleset { ruleset: RulesetInput },
-    UpdateRuleset { ruleset_id: u64, ruleset: RulesetInput },
-    DeleteRuleset { ruleset_id: u64 },
+    Get {
+        branch: String,
+    },
+    Put {
+        branch: String,
+        settings: ProtectionSettings,
+    },
+    Delete {
+        branch: String,
+    },
+    ListRulesets {
+        #[serde(default = "default_page_size")]
+        per_page: u16,
+    },
+    GetRuleset {
+        ruleset_id: u64,
+    },
+    CreateRuleset {
+        ruleset: RulesetInput,
+    },
+    UpdateRuleset {
+        ruleset_id: u64,
+        ruleset: RulesetInput,
+    },
+    DeleteRuleset {
+        ruleset_id: u64,
+    },
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
 #[serde(tag = "action", rename_all = "snake_case")]
 pub enum ProjectsOperation {
-    List { #[serde(default = "default_page_size")] per_page: u16 },
-    Get { project_id: u64 },
-    Create { name: String, #[serde(default)] body: String },
+    List {
+        #[serde(default = "default_page_size")]
+        per_page: u16,
+    },
+    Get {
+        project_id: u64,
+    },
+    Create {
+        name: String,
+        #[serde(default)]
+        body: String,
+    },
     Update {
         project_id: u64,
         #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -624,7 +770,9 @@ pub enum ProjectsOperation {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         state: Option<String>,
     },
-    Delete { project_id: u64 },
+    Delete {
+        project_id: u64,
+    },
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
@@ -679,13 +827,30 @@ pub enum PreparedExecution {
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum GitHubReconciliation {
-    IssueMarker { marker: String },
-    PullRequestMarker { marker: String },
-    BranchExists { reference: String, sha: String },
-    ContentMatches { path: String, branch: Option<String> },
-    ContentAbsent { path: String, branch: Option<String> },
-    ReleaseTag { tag: String },
-    ResourceAbsent { endpoint: String },
+    IssueMarker {
+        marker: String,
+    },
+    PullRequestMarker {
+        marker: String,
+    },
+    BranchExists {
+        reference: String,
+        sha: String,
+    },
+    ContentMatches {
+        path: String,
+        branch: Option<String>,
+    },
+    ContentAbsent {
+        path: String,
+        branch: Option<String>,
+    },
+    ReleaseTag {
+        tag: String,
+    },
+    ResourceAbsent {
+        endpoint: String,
+    },
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -714,7 +879,10 @@ pub struct ReleaseAssetUpload {
 
 impl ReleaseAssetUpload {
     pub fn validate(&self) -> MedusaResult<()> {
-        if self.release_id == 0 || self.name.trim().is_empty() || self.content_type.trim().is_empty() {
+        if self.release_id == 0
+            || self.name.trim().is_empty()
+            || self.content_type.trim().is_empty()
+        {
             return Err(invalid("release asset upload metadata is incomplete"));
         }
         validate_artifact_path(&self.path, self.max_bytes)
@@ -795,7 +963,14 @@ fn validate_base_url(label: &str, value: Option<&str>) -> MedusaResult<()> {
 
 fn validate_api_version(value: &str) -> MedusaResult<()> {
     let bytes = value.as_bytes();
-    if bytes.len() != 10 || bytes[4] != b'-' || bytes[7] != b'-' || bytes.iter().enumerate().any(|(index, byte)| !matches!(index, 4 | 7) && !byte.is_ascii_digit()) {
+    if bytes.len() != 10
+        || bytes[4] != b'-'
+        || bytes[7] != b'-'
+        || bytes
+            .iter()
+            .enumerate()
+            .any(|(index, byte)| !matches!(index, 4 | 7) && !byte.is_ascii_digit())
+    {
         return Err(invalid("api_version must use YYYY-MM-DD format"));
     }
     Ok(())
@@ -831,11 +1006,7 @@ fn redact_preview(value: &mut Value, inherited_secret: bool) {
 }
 
 fn invalid(message: impl Into<String>) -> MedusaError {
-    MedusaError::new(
-        ErrorCode::InvalidInput,
-        ErrorCategory::Validation,
-        message,
-    )
+    MedusaError::new(ErrorCode::InvalidInput, ErrorCategory::Validation, message)
 }
 
 fn json_error(error: serde_json::Error) -> MedusaError {
@@ -882,20 +1053,34 @@ mod tests {
             assignees: vec![],
             milestone: None,
         });
-        assert_ne!(first.request_digest().expect("first"), second.request_digest().expect("second"));
+        assert_ne!(
+            first.request_digest().expect("first"),
+            second.request_digest().expect("second")
+        );
         first.backend = GitHubExecutionBackend::GhApi;
-        assert_eq!(first.request_digest().expect("transport-neutral"), document(GitHubTypedOperation::Issues(IssuesOperation::Create {
-            title: "first".into(), body: "body".into(), labels: vec![], assignees: vec![], milestone: None
-        })).request_digest().expect("same"));
+        assert_eq!(
+            first.request_digest().expect("transport-neutral"),
+            document(GitHubTypedOperation::Issues(IssuesOperation::Create {
+                title: "first".into(),
+                body: "body".into(),
+                labels: vec![],
+                assignees: vec![],
+                milestone: None
+            }))
+            .request_digest()
+            .expect("same")
+        );
     }
 
     #[test]
     fn preview_redacts_secret_and_file_content() {
-        let document = document(GitHubTypedOperation::Secrets(SecretsOperation::PutActions {
-            name: "DEPLOY".into(),
-            encrypted_value: "ciphertext".into(),
-            key_id: "key".into(),
-        }));
+        let document = document(GitHubTypedOperation::Secrets(
+            SecretsOperation::PutActions {
+                name: "DEPLOY".into(),
+                encrypted_value: "ciphertext".into(),
+                key_id: "key".into(),
+            },
+        ));
         let preview = document.redacted_preview().expect("preview").to_string();
         assert!(!preview.contains("ciphertext"));
     }

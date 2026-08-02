@@ -12,7 +12,7 @@ use medusa_capabilities::{
     github_descriptor,
 };
 use medusa_github::{
-    DirectGitHubOperationExecutor, DirectGitHubBackend, FileGitHubOperationLedger,
+    DirectGitHubBackend, DirectGitHubOperationExecutor, FileGitHubOperationLedger,
     GitHubCapabilityReport, GitHubExecutionBackend, GitHubOAuthClient, GitHubOAuthConfig,
     GitHubOAuthStatus, GitHubOperationCoordinator, GitHubOperationDocument,
     GitHubOperationReceiptV2, GitHubOperationRequest, GitHubOperationRisk, GitHubService,
@@ -200,11 +200,7 @@ fn execute(args: ExecuteArgs) -> Result<(), Box<dyn std::error::Error>> {
     let state_root = state_root(&repository_directory)?;
     let authorization_audit_path = prepare_authorization_audit(&state_root)?;
     let authorization_events = authorizer.events().to_vec();
-    append_authorization_audit(
-        &authorization_audit_path,
-        &document,
-        &authorization_events,
-    )?;
+    append_authorization_audit(&authorization_audit_path, &document, &authorization_events)?;
     let ledger = FileGitHubOperationLedger::at(&state_root)?;
     let ledger_path = ledger.path().to_path_buf();
     let service = GitHubService::enterprise(
@@ -342,9 +338,8 @@ fn auth(args: AuthArgs) -> Result<(), Box<dyn std::error::Error>> {
 
 fn oauth_client(
     config: GitHubOAuthConfig,
-) -> medusa_core::MedusaResult<
-    GitHubOAuthClient<KeyringGitHubCredentialStore, ReqwestOAuthTransport>,
-> {
+) -> medusa_core::MedusaResult<GitHubOAuthClient<KeyringGitHubCredentialStore, ReqwestOAuthTransport>>
+{
     GitHubOAuthClient::new(
         config,
         KeyringGitHubCredentialStore::default(),
@@ -442,7 +437,9 @@ fn state_root(repository_directory: &Path) -> Result<PathBuf, Box<dyn std::error
 }
 
 fn prepare_authorization_audit(root: &Path) -> Result<PathBuf, Box<dyn std::error::Error>> {
-    let path = root.join("audit").join("github-operation-authorizations.jsonl");
+    let path = root
+        .join("audit")
+        .join("github-operation-authorizations.jsonl");
     let parent = path.parent().ok_or_else(|| {
         medusa_core::MedusaError::new(
             medusa_core::ErrorCode::PersistenceFailed,
@@ -538,12 +535,8 @@ mod tests {
         };
         let mut authorizer = authorizer();
         assert!(
-            authorize_operation(
-                &mut authorizer,
-                GitHubOperationRisk::Administration,
-                &args,
-            )
-            .is_err()
+            authorize_operation(&mut authorizer, GitHubOperationRisk::Administration, &args,)
+                .is_err()
         );
     }
 
@@ -551,7 +544,11 @@ mod tests {
     fn typed_document_round_trips_without_warning() {
         let directory = tempfile::tempdir().expect("tempdir");
         let path = directory.path().join("request.json");
-        fs::write(&path, serde_json::to_vec(&typed_document()).expect("encode")).expect("write");
+        fs::write(
+            &path,
+            serde_json::to_vec(&typed_document()).expect("encode"),
+        )
+        .expect("write");
         let (parsed, warning) = read_document(&path).expect("read");
         assert_eq!(parsed, typed_document());
         assert!(warning.is_none());
@@ -581,13 +578,15 @@ mod tests {
 
     #[test]
     fn client_secret_is_not_a_supported_argument() {
-        assert!(Cli::try_parse_from([
-            "medusa-github-operation",
-            "auth",
-            "--client-secret",
-            "secret",
-            "status",
-        ])
-        .is_err());
+        assert!(
+            Cli::try_parse_from([
+                "medusa-github-operation",
+                "auth",
+                "--client-secret",
+                "secret",
+                "status",
+            ])
+            .is_err()
+        );
     }
 }

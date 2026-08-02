@@ -41,9 +41,10 @@ impl GitHubOAuthConfig {
     pub fn validate(&self) -> MedusaResult<()> {
         if self.client_id.is_empty()
             || self.client_id.len() > 200
-            || !self.client_id.bytes().all(|byte| {
-                byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.')
-            })
+            || !self
+                .client_id
+                .bytes()
+                .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.'))
         {
             return Err(validation_error(
                 "GitHub OAuth client_id must contain 1 to 200 public client identifier characters",
@@ -112,10 +113,7 @@ impl fmt::Debug for GitHubOAuthCredential {
 }
 
 pub trait GitHubCredentialStore: Send + Sync {
-    fn load(
-        &self,
-        config: &GitHubOAuthConfig,
-    ) -> MedusaResult<Option<GitHubOAuthCredential>>;
+    fn load(&self, config: &GitHubOAuthConfig) -> MedusaResult<Option<GitHubOAuthCredential>>;
     fn save(
         &self,
         config: &GitHubOAuthConfig,
@@ -145,10 +143,7 @@ impl KeyringGitHubCredentialStore {
 }
 
 impl GitHubCredentialStore for KeyringGitHubCredentialStore {
-    fn load(
-        &self,
-        config: &GitHubOAuthConfig,
-    ) -> MedusaResult<Option<GitHubOAuthCredential>> {
+    fn load(&self, config: &GitHubOAuthConfig) -> MedusaResult<Option<GitHubOAuthCredential>> {
         let entry = self.entry(config)?;
         match entry.get_password() {
             Ok(encoded) => serde_json::from_str(&encoded)
@@ -190,10 +185,7 @@ pub struct MemoryGitHubCredentialStore {
 }
 
 impl GitHubCredentialStore for MemoryGitHubCredentialStore {
-    fn load(
-        &self,
-        config: &GitHubOAuthConfig,
-    ) -> MedusaResult<Option<GitHubOAuthCredential>> {
+    fn load(&self, config: &GitHubOAuthConfig) -> MedusaResult<Option<GitHubOAuthCredential>> {
         Ok(self
             .values
             .lock()
@@ -446,8 +438,9 @@ impl<S: GitHubCredentialStore, T: GitHubOAuthTransport> GitHubOAuthClient<S, T> 
                 ]),
                 MAX_OAUTH_RESPONSE_BYTES,
             )?;
-            let payload: TokenResponse = serde_json::from_str(&response.body)
-                .map_err(|error| protocol_error(format!("decode GitHub OAuth response: {error}")))?;
+            let payload: TokenResponse = serde_json::from_str(&response.body).map_err(|error| {
+                protocol_error(format!("decode GitHub OAuth response: {error}"))
+            })?;
             if let Some(error) = payload.error.as_deref() {
                 match error {
                     "authorization_pending" => {
@@ -565,7 +558,9 @@ impl<S: GitHubCredentialStore, T: GitHubOAuthTransport> GitHubOAuthClient<S, T> 
             ));
         }
         let mut credential = credential_from_token_response(payload)?;
-        credential.login = current.login.or_else(|| self.fetch_login(&credential.access_token).ok());
+        credential.login = current
+            .login
+            .or_else(|| self.fetch_login(&credential.access_token).ok());
         self.store.save(&self.config, &credential)?;
         self.status()
     }
@@ -577,10 +572,9 @@ impl<S: GitHubCredentialStore, T: GitHubOAuthTransport> GitHubOAuthClient<S, T> 
             .ok_or_else(|| authentication_error("GitHub OAuth login is not configured", false))?;
         if needs_refresh(credential.expires_at) {
             self.refresh()?;
-            credential = self
-                .store
-                .load(&self.config)?
-                .ok_or_else(|| authentication_error("refreshed GitHub credential is missing", false))?;
+            credential = self.store.load(&self.config)?.ok_or_else(|| {
+                authentication_error("refreshed GitHub credential is missing", false)
+            })?;
         }
         if expired(credential.expires_at) {
             return Err(authentication_error(
@@ -604,10 +598,13 @@ impl<S: GitHubCredentialStore, T: GitHubOAuthTransport> GitHubOAuthClient<S, T> 
             MAX_OAUTH_RESPONSE_BYTES,
         )?;
         require_success(&response, "read authenticated GitHub user")?;
-        let payload: AuthenticatedUser = serde_json::from_str(&response.body)
-            .map_err(|error| protocol_error(format!("decode authenticated GitHub user: {error}")))?;
+        let payload: AuthenticatedUser = serde_json::from_str(&response.body).map_err(|error| {
+            protocol_error(format!("decode authenticated GitHub user: {error}"))
+        })?;
         if payload.login.trim().is_empty() {
-            return Err(protocol_error("GitHub authenticated user response had no login"));
+            return Err(protocol_error(
+                "GitHub authenticated user response had no login",
+            ));
         }
         Ok(payload.login)
     }
@@ -654,7 +651,9 @@ fn credential_from_token_response(payload: TokenResponse) -> MedusaResult<GitHub
         .ok_or_else(|| protocol_error("GitHub OAuth response contained no access token"))?;
     let token_type = payload.token_type.unwrap_or_else(|| "bearer".into());
     if !token_type.eq_ignore_ascii_case("bearer") {
-        return Err(protocol_error("GitHub OAuth returned an unsupported token type"));
+        return Err(protocol_error(
+            "GitHub OAuth returned an unsupported token type",
+        ));
     }
     let obtained_at = now();
     Ok(GitHubOAuthCredential {
@@ -693,7 +692,9 @@ fn read_response(
         retained.extend_from_slice(&buffer[..read.min(remaining)]);
     }
     if retained.len() > max_bytes {
-        return Err(protocol_error("GitHub OAuth response exceeded its bounded limit"));
+        return Err(protocol_error(
+            "GitHub OAuth response exceeded its bounded limit",
+        ));
     }
     Ok(OAuthHttpResponse {
         status,
@@ -749,9 +750,12 @@ fn validate_hostname(hostname: &str) -> MedusaResult<()> {
         || hostname.contains('/')
         || hostname.contains(':')
         || hostname.contains('\\')
-        || hostname
-            .split('.')
-            .any(|part| part.is_empty() || !part.bytes().all(|byte| byte.is_ascii_alphanumeric() || byte == b'-'))
+        || hostname.split('.').any(|part| {
+            part.is_empty()
+                || !part
+                    .bytes()
+                    .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-')
+        })
     {
         return Err(validation_error("GitHub hostname is invalid"));
     }
@@ -783,9 +787,10 @@ fn validate_api_version(value: &str) -> MedusaResult<()> {
     if bytes.len() != 10
         || bytes[4] != b'-'
         || bytes[7] != b'-'
-        || bytes.iter().enumerate().any(|(index, byte)| {
-            !matches!(index, 4 | 7) && !byte.is_ascii_digit()
-        })
+        || bytes
+            .iter()
+            .enumerate()
+            .any(|(index, byte)| !matches!(index, 4 | 7) && !byte.is_ascii_digit())
     {
         return Err(validation_error("GitHub API version must use YYYY-MM-DD"));
     }
@@ -935,10 +940,14 @@ mod tests {
     #[test]
     fn device_flow_handles_pending_and_slow_down_without_client_secret() {
         let transport = FakeTransport::with(vec![
-            response(r#"{"device_code":"device-secret","user_code":"ABCD-EFGH","verification_uri":"https://github.com/login/device","expires_in":900,"interval":1}"#),
+            response(
+                r#"{"device_code":"device-secret","user_code":"ABCD-EFGH","verification_uri":"https://github.com/login/device","expires_in":900,"interval":1}"#,
+            ),
             response(r#"{"error":"authorization_pending"}"#),
             response(r#"{"error":"slow_down"}"#),
-            response(r#"{"access_token":"ghu_secret","token_type":"bearer","expires_in":28800,"refresh_token":"ghr_secret","refresh_token_expires_in":15897600,"scope":""}"#),
+            response(
+                r#"{"access_token":"ghu_secret","token_type":"bearer","expires_in":28800,"refresh_token":"ghr_secret","refresh_token_expires_in":15897600,"scope":""}"#,
+            ),
         ]);
         let store = MemoryGitHubCredentialStore::default();
         let client = GitHubOAuthClient::new(config(), store.clone(), transport).expect("client");
@@ -950,7 +959,10 @@ mod tests {
         assert!(status.authenticated);
         assert_eq!(status.login.as_deref(), Some("octocat"));
         assert_eq!(sleeps, vec![1, 6]);
-        let stored = store.load(client.config()).expect("load").expect("credential");
+        let stored = store
+            .load(client.config())
+            .expect("load")
+            .expect("credential");
         assert_eq!(stored.access_token, "ghu_secret");
     }
 
@@ -979,7 +991,10 @@ mod tests {
         )
         .expect("client");
         client.refresh().expect("refresh");
-        let stored = store.load(client.config()).expect("load").expect("credential");
+        let stored = store
+            .load(client.config())
+            .expect("load")
+            .expect("credential");
         assert_eq!(stored.access_token, "new");
         assert_eq!(stored.refresh_token.as_deref(), Some("refresh-new"));
     }

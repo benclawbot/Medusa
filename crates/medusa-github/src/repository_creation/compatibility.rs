@@ -138,9 +138,15 @@ pub fn convert_legacy_github_operation(
             GitHubTypedOperation::PullRequests(PullRequestsOperation::Merge {
                 number: pull_merge_number(endpoint).expect("guarded"),
                 strategy,
-                commit_title: body.and_then(|body| string(body, "commit_title").transpose()).transpose()?,
-                commit_message: body.and_then(|body| string(body, "commit_message").transpose()).transpose()?,
-                expected_head_sha: body.and_then(|body| string(body, "sha").transpose()).transpose()?,
+                commit_title: body
+                    .and_then(|body| string(body, "commit_title").transpose())
+                    .transpose()?,
+                commit_message: body
+                    .and_then(|body| string(body, "commit_message").transpose())
+                    .transpose()?,
+                expected_head_sha: body
+                    .and_then(|body| string(body, "sha").transpose())
+                    .transpose()?,
             })
         }
         (GitHubResource::Actions, GitHubHttpMethod::Get, "actions/runs", _) => {
@@ -200,8 +206,7 @@ pub fn convert_legacy_github_operation(
                 body: string(body, "body")?.unwrap_or_default(),
                 draft: boolean(body, "draft")?.unwrap_or(false),
                 prerelease: boolean(body, "prerelease")?.unwrap_or(false),
-                generate_release_notes: boolean(body, "generate_release_notes")?
-                    .unwrap_or(false),
+                generate_release_notes: boolean(body, "generate_release_notes")?.unwrap_or(false),
             })
         }
         _ => {
@@ -259,10 +264,7 @@ fn object_body_optional(
     }
 }
 
-fn required_string(
-    body: &serde_json::Map<String, Value>,
-    key: &str,
-) -> MedusaResult<String> {
+fn required_string(body: &serde_json::Map<String, Value>, key: &str) -> MedusaResult<String> {
     string(body, key)?.ok_or_else(|| legacy_error(format!("legacy body requires `{key}`")))
 }
 
@@ -297,10 +299,7 @@ fn unsigned(body: &serde_json::Map<String, Value>, key: &str) -> MedusaResult<Op
         .transpose()
 }
 
-fn string_array(
-    body: &serde_json::Map<String, Value>,
-    key: &str,
-) -> MedusaResult<Vec<String>> {
+fn string_array(body: &serde_json::Map<String, Value>, key: &str) -> MedusaResult<Vec<String>> {
     let Some(value) = body.get(key) else {
         return Ok(Vec::new());
     };
@@ -364,7 +363,9 @@ fn parse_exact_number(endpoint: &str, prefix: &str) -> Option<u64> {
 fn parse_suffix_number(endpoint: &str, prefix: &str, suffix: &str) -> Option<u64> {
     let rest = endpoint.strip_prefix(&format!("{prefix}/"))?;
     let number = rest.strip_suffix(&format!("/{suffix}"))?;
-    (!number.contains('/')).then(|| number.parse().ok()).flatten()
+    (!number.contains('/'))
+        .then(|| number.parse().ok())
+        .flatten()
 }
 
 fn method_name(method: GitHubHttpMethod) -> &'static str {

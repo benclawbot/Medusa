@@ -139,8 +139,12 @@ pub struct GitHubOperationLifecycleEvent {
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
 #[serde(tag = "recordType", rename_all = "snake_case")]
 enum LedgerRecord {
-    Lifecycle { event: GitHubOperationLifecycleEvent },
-    Receipt { receipt: GitHubOperationReceiptV2 },
+    Lifecycle {
+        event: GitHubOperationLifecycleEvent,
+    },
+    Receipt {
+        receipt: GitHubOperationReceiptV2,
+    },
 }
 
 #[derive(Clone, Debug)]
@@ -452,7 +456,10 @@ mod tests {
         }
     }
 
-    fn receipt(document: &GitHubOperationDocument, prepared: &PreparedGitHubOperation) -> GitHubOperationReceiptV2 {
+    fn receipt(
+        document: &GitHubOperationDocument,
+        prepared: &PreparedGitHubOperation,
+    ) -> GitHubOperationReceiptV2 {
         GitHubOperationReceiptV2::from_backend(
             document,
             prepared,
@@ -498,7 +505,11 @@ mod tests {
         let prepared = document.prepare().expect("prepare");
         let receipt = receipt(&document, &prepared);
         ledger.append_receipt(&receipt).expect("append");
-        assert!(ledger.lookup(document.idempotency_key_hash().as_deref(), "different").is_err());
+        assert!(
+            ledger
+                .lookup(document.idempotency_key_hash().as_deref(), "different")
+                .is_err()
+        );
     }
 
     #[test]
@@ -508,8 +519,22 @@ mod tests {
         let document = document();
         let prepared = document.prepare().expect("prepare");
         let digest = document.request_digest().expect("digest");
-        ledger.append_lifecycle(&document, &prepared, "attempt", &digest, GitHubOperationLifecycleStatus::Uncertain, None).expect("append");
-        assert_eq!(ledger.lookup(document.idempotency_key_hash().as_deref(), &digest).expect("lookup"), IdempotencyLookup::ResumeUncertain);
+        ledger
+            .append_lifecycle(
+                &document,
+                &prepared,
+                "attempt",
+                &digest,
+                GitHubOperationLifecycleStatus::Uncertain,
+                None,
+            )
+            .expect("append");
+        assert_eq!(
+            ledger
+                .lookup(document.idempotency_key_hash().as_deref(), &digest)
+                .expect("lookup"),
+            IdempotencyLookup::ResumeUncertain
+        );
     }
 
     #[test]

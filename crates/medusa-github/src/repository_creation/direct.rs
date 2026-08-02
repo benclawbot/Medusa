@@ -169,7 +169,10 @@ impl ReqwestGitHubApiTransport {
 
 impl GitHubApiTransport for ReqwestGitHubApiTransport {
     fn execute(&self, request: &GitHubApiRequest, token: &str) -> MedusaResult<GitHubApiResponse> {
-        let response = self.builder(request, Some(token)).send().map_err(http_error)?;
+        let response = self
+            .builder(request, Some(token))
+            .send()
+            .map_err(http_error)?;
         read_api_response(response, request.response_limit)
     }
 
@@ -186,7 +189,10 @@ impl GitHubApiTransport for ReqwestGitHubApiTransport {
             .parent()
             .ok_or_else(|| validation_error("artifact destination has no parent"))?;
         fs::create_dir_all(parent).map_err(persistence_error)?;
-        let mut response = self.builder(request, Some(token)).send().map_err(http_error)?;
+        let mut response = self
+            .builder(request, Some(token))
+            .send()
+            .map_err(http_error)?;
         for _ in 0..MAX_REDIRECTS {
             if !response.status().is_redirection() {
                 break;
@@ -212,7 +218,9 @@ impl GitHubApiTransport for ReqwestGitHubApiTransport {
                 .map_err(http_error)?;
         }
         if response.status().is_redirection() {
-            return Err(protocol_error("GitHub artifact redirect limit was exceeded"));
+            return Err(protocol_error(
+                "GitHub artifact redirect limit was exceeded",
+            ));
         }
         let status = response.status().as_u16();
         let headers = header_map(response.headers());
@@ -241,7 +249,10 @@ impl GitHubApiTransport for ReqwestGitHubApiTransport {
                 .write_all(&buffer[..read])
                 .map_err(persistence_error)?;
         }
-        temporary.as_file_mut().sync_all().map_err(persistence_error)?;
+        temporary
+            .as_file_mut()
+            .sync_all()
+            .map_err(persistence_error)?;
         temporary
             .persist(&destination)
             .map_err(|error| persistence_error(error.error))?;
@@ -293,7 +304,10 @@ impl GitHubApiTransport for ReqwestGitHubApiTransport {
             body: Some(body),
             response_limit: request.response_limit,
         };
-        let response = self.builder(&upload, Some(token)).send().map_err(http_error)?;
+        let response = self
+            .builder(&upload, Some(token))
+            .send()
+            .map_err(http_error)?;
         upload.body = None;
         read_api_response(response, request.response_limit)
     }
@@ -316,9 +330,7 @@ where
         transport: H,
         repository_root: PathBuf,
     ) -> MedusaResult<Self> {
-        let repository_root = repository_root
-            .canonicalize()
-            .map_err(persistence_error)?;
+        let repository_root = repository_root.canonicalize().map_err(persistence_error)?;
         if !repository_root.is_dir() {
             return Err(validation_error("repository root must be a directory"));
         }
@@ -373,8 +385,11 @@ where
                 &response.headers,
             ));
         }
-        let payload: Value = serde_json::from_slice(&response.body)
-            .map_err(|error| protocol_error(format!("decode GitHub repository capability response: {error}")))?;
+        let payload: Value = serde_json::from_slice(&response.body).map_err(|error| {
+            protocol_error(format!(
+                "decode GitHub repository capability response: {error}"
+            ))
+        })?;
         let permissions = payload
             .get("permissions")
             .and_then(Value::as_object)
@@ -667,7 +682,11 @@ fn repository_url(document: &GitHubOperationDocument, endpoint: &str) -> MedusaR
     let path = if endpoint.is_empty() {
         format!("repos/{}", document.repository)
     } else {
-        format!("repos/{}/{}", document.repository, endpoint.trim_start_matches('/'))
+        format!(
+            "repos/{}/{}",
+            document.repository,
+            endpoint.trim_start_matches('/')
+        )
     };
     api_url(document, &path)
 }
@@ -703,7 +722,8 @@ fn release_upload_url(
 }
 
 fn join_url(base: &str, path: &str) -> MedusaResult<Url> {
-    let mut base = Url::parse(base).map_err(|_| validation_error("GitHub API base URL is invalid"))?;
+    let mut base =
+        Url::parse(base).map_err(|_| validation_error("GitHub API base URL is invalid"))?;
     if !base.path().ends_with('/') {
         let normalized = format!("{}/", base.path().trim_end_matches('/'));
         base.set_path(&normalized);
@@ -734,7 +754,10 @@ fn metadata(response: &GitHubApiResponse) -> GitHubHttpMetadata {
             reset: header_i64(&response.headers, "x-ratelimit-reset"),
             resource: response.headers.get("x-ratelimit-resource").cloned(),
         },
-        api_version: response.headers.get("x-github-api-version-selected").cloned(),
+        api_version: response
+            .headers
+            .get("x-github-api-version-selected")
+            .cloned(),
         deprecation: response.headers.get("deprecation").cloned(),
         sunset: response.headers.get("sunset").cloned(),
         etag: response.headers.get("etag").cloned(),
@@ -744,7 +767,12 @@ fn metadata(response: &GitHubApiResponse) -> GitHubHttpMetadata {
 fn header_map(headers: &HeaderMap) -> BTreeMap<String, String> {
     headers
         .iter()
-        .filter_map(|(name, value)| value.to_str().ok().map(|value| (name.as_str().to_ascii_lowercase(), value.to_owned())))
+        .filter_map(|(name, value)| {
+            value
+                .to_str()
+                .ok()
+                .map(|value| (name.as_str().to_ascii_lowercase(), value.to_owned()))
+        })
         .collect()
 }
 
@@ -774,12 +802,23 @@ fn sleep_retry(digest: &str, attempt: u8, headers: &BTreeMap<String, String>) {
         .map(u64::from)
         .unwrap_or(0)
         % 251;
-    thread::sleep(Duration::from_millis(retry_after.unwrap_or(base + jitter).min(30_000)));
+    thread::sleep(Duration::from_millis(
+        retry_after.unwrap_or(base + jitter).min(30_000),
+    ));
 }
 
 fn confined_destination(root: &Path, destination: &Path) -> MedusaResult<PathBuf> {
-    if destination.is_absolute() || destination.components().any(|component| matches!(component, Component::ParentDir | Component::RootDir | Component::Prefix(_))) {
-        return Err(policy_error("artifact destination must be repository-relative"));
+    if destination.is_absolute()
+        || destination.components().any(|component| {
+            matches!(
+                component,
+                Component::ParentDir | Component::RootDir | Component::Prefix(_)
+            )
+        })
+    {
+        return Err(policy_error(
+            "artifact destination must be repository-relative",
+        ));
     }
     let filename = destination
         .file_name()
@@ -790,10 +829,16 @@ fn confined_destination(root: &Path, destination: &Path) -> MedusaResult<PathBuf
 }
 
 fn confined_source(root: &Path, source: &Path) -> MedusaResult<PathBuf> {
-    let joined = if source.is_absolute() { source.to_path_buf() } else { root.join(source) };
+    let joined = if source.is_absolute() {
+        source.to_path_buf()
+    } else {
+        root.join(source)
+    };
     let canonical = joined.canonicalize().map_err(persistence_error)?;
     if !canonical.starts_with(root) {
-        return Err(policy_error("release asset source must remain inside the repository root"));
+        return Err(policy_error(
+            "release asset source must remain inside the repository root",
+        ));
     }
     let filename = canonical
         .file_name()
@@ -804,7 +849,14 @@ fn confined_source(root: &Path, source: &Path) -> MedusaResult<PathBuf> {
 }
 
 fn validate_filename(filename: &str) -> MedusaResult<()> {
-    if filename.is_empty() || filename.len() > 255 || filename == "." || filename == ".." || filename.chars().any(|character| character.is_control() || matches!(character, '/' | '\\')) {
+    if filename.is_empty()
+        || filename.len() > 255
+        || filename == "."
+        || filename == ".."
+        || filename
+            .chars()
+            .any(|character| character.is_control() || matches!(character, '/' | '\\'))
+    {
         return Err(validation_error("artifact filename is unsafe"));
     }
     Ok(())
@@ -824,7 +876,9 @@ fn parse_payload(body: &[u8]) -> Value {
 }
 
 fn normalize_payload(resource: GitHubResource, payload: &mut Value) {
-    let Value::Object(object) = payload else { return; };
+    let Value::Object(object) = payload else {
+        return;
+    };
     if matches!(resource, GitHubResource::Repository) {
         rename_key(object, "nameWithOwner", "full_name");
         rename_key(object, "url", "html_url");
@@ -835,27 +889,64 @@ fn normalize_payload(resource: GitHubResource, payload: &mut Value) {
 }
 
 fn canonical_payload(payload: &Value) -> Value {
-    let Value::Object(object) = payload else { return Value::Object(Map::new()); };
+    let Value::Object(object) = payload else {
+        return Value::Object(Map::new());
+    };
     let allowed = [
-        "id", "node_id", "name", "full_name", "number", "title", "state", "merged",
-        "html_url", "url", "download_url", "sha", "ref", "status", "conclusion",
-        "workflow_id", "run_number", "visibility", "default_branch", "login", "output",
+        "id",
+        "node_id",
+        "name",
+        "full_name",
+        "number",
+        "title",
+        "state",
+        "merged",
+        "html_url",
+        "url",
+        "download_url",
+        "sha",
+        "ref",
+        "status",
+        "conclusion",
+        "workflow_id",
+        "run_number",
+        "visibility",
+        "default_branch",
+        "login",
+        "output",
     ];
-    Value::Object(object.iter().filter(|(key, _)| allowed.contains(&key.as_str())).map(|(key, value)| (key.clone(), value.clone())).collect())
+    Value::Object(
+        object
+            .iter()
+            .filter(|(key, _)| allowed.contains(&key.as_str()))
+            .map(|(key, value)| (key.clone(), value.clone()))
+            .collect(),
+    )
 }
 
 fn payload_identity(payload: &Value) -> Option<String> {
     ["number", "id", "sha", "ref", "full_name", "name"]
         .into_iter()
-        .find_map(|key| payload.get(key).and_then(|value| value.as_str().map(str::to_owned).or_else(|| value.is_number().then(|| value.to_string()))))
+        .find_map(|key| {
+            payload.get(key).and_then(|value| {
+                value
+                    .as_str()
+                    .map(str::to_owned)
+                    .or_else(|| value.is_number().then(|| value.to_string()))
+            })
+        })
 }
 
 fn payload_url(payload: &Value) -> Option<String> {
-    ["html_url", "download_url", "url"].into_iter().find_map(|key| payload.get(key).and_then(Value::as_str).map(str::to_owned))
+    ["html_url", "download_url", "url"]
+        .into_iter()
+        .find_map(|key| payload.get(key).and_then(Value::as_str).map(str::to_owned))
 }
 
 fn rename_key(object: &mut Map<String, Value>, from: &str, to: &str) {
-    if let Some(value) = object.remove(from) { object.insert(to.into(), value); }
+    if let Some(value) = object.remove(from) {
+        object.insert(to.into(), value);
+    }
 }
 
 fn redact_payload(document: &GitHubOperationDocument, payload: &mut Value) -> bool {
@@ -870,7 +961,13 @@ fn redact_value(value: &mut Value, inherited_secret: bool, redacted: &mut bool) 
         Value::Object(object) => {
             for (key, value) in object {
                 let lower = key.to_ascii_lowercase();
-                let secret = inherited_secret || lower.contains("token") || lower.contains("secret") || lower.contains("password") || lower.contains("authorization") || lower.contains("encrypted_value") || (inherited_secret && lower.contains("value"));
+                let secret = inherited_secret
+                    || lower.contains("token")
+                    || lower.contains("secret")
+                    || lower.contains("password")
+                    || lower.contains("authorization")
+                    || lower.contains("encrypted_value")
+                    || (inherited_secret && lower.contains("value"));
                 if secret {
                     *value = Value::String("[REDACTED]".into());
                     *redacted = true;
@@ -879,7 +976,11 @@ fn redact_value(value: &mut Value, inherited_secret: bool, redacted: &mut bool) 
                 }
             }
         }
-        Value::Array(values) => for value in values { redact_value(value, inherited_secret, redacted); },
+        Value::Array(values) => {
+            for value in values {
+                redact_value(value, inherited_secret, redacted);
+            }
+        }
         Value::String(text) if looks_like_token(text) => {
             *text = "[REDACTED]".into();
             *redacted = true;
@@ -890,21 +991,38 @@ fn redact_value(value: &mut Value, inherited_secret: bool, redacted: &mut bool) 
 
 fn looks_like_token(value: &str) -> bool {
     let lower = value.to_ascii_lowercase();
-    ["ghp_", "gho_", "ghu_", "ghs_", "ghr_", "github_pat_", "bearer "].iter().any(|prefix| lower.contains(prefix))
+    [
+        "ghp_",
+        "gho_",
+        "ghu_",
+        "ghs_",
+        "ghr_",
+        "github_pat_",
+        "bearer ",
+    ]
+    .iter()
+    .any(|prefix| lower.contains(prefix))
 }
 
 fn required_repository_permission(risk: GitHubOperationRisk) -> &'static str {
     match risk {
         GitHubOperationRisk::ReadOnly => "pull",
         GitHubOperationRisk::Mutation => "push",
-        GitHubOperationRisk::Administration | GitHubOperationRisk::Secret | GitHubOperationRisk::Destructive => "admin",
+        GitHubOperationRisk::Administration
+        | GitHubOperationRisk::Secret
+        | GitHubOperationRisk::Destructive => "admin",
     }
 }
 
 fn has_permission(permissions: &BTreeMap<String, bool>, required: &str) -> bool {
     match required {
-        "pull" => permissions.get("pull").copied().unwrap_or(false) || has_permission(permissions, "push"),
-        "push" => permissions.get("push").copied().unwrap_or(false) || has_permission(permissions, "admin"),
+        "pull" => {
+            permissions.get("pull").copied().unwrap_or(false) || has_permission(permissions, "push")
+        }
+        "push" => {
+            permissions.get("push").copied().unwrap_or(false)
+                || has_permission(permissions, "admin")
+        }
         "admin" => permissions.get("admin").copied().unwrap_or(false),
         _ => false,
     }
@@ -912,25 +1030,59 @@ fn has_permission(permissions: &BTreeMap<String, bool>, required: &str) -> bool 
 
 fn supported_operations() -> Vec<String> {
     [
-        "repository", "contents", "git_data", "issues", "pull_requests", "actions",
-        "releases", "collaborators", "environments", "variables", "secrets", "webhooks",
-        "branch_protection", "projects", "search",
-    ].into_iter().map(str::to_owned).collect()
+        "repository",
+        "contents",
+        "git_data",
+        "issues",
+        "pull_requests",
+        "actions",
+        "releases",
+        "collaborators",
+        "environments",
+        "variables",
+        "secrets",
+        "webhooks",
+        "branch_protection",
+        "projects",
+        "search",
+    ]
+    .into_iter()
+    .map(str::to_owned)
+    .collect()
 }
 
 fn api_status_error(status: u16, body: &[u8], headers: &BTreeMap<String, String>) -> MedusaError {
     let message = serde_json::from_slice::<Value>(body)
         .ok()
-        .and_then(|value| value.get("message").and_then(Value::as_str).map(str::to_owned))
+        .and_then(|value| {
+            value
+                .get("message")
+                .and_then(Value::as_str)
+                .map(str::to_owned)
+        })
         .unwrap_or_else(|| String::from_utf8_lossy(body).chars().take(512).collect());
-    let request_id = headers.get("x-github-request-id").cloned().unwrap_or_default();
+    let request_id = headers
+        .get("x-github-request-id")
+        .cloned()
+        .unwrap_or_default();
     let retryable = retryable_status(status);
-    let category = if status == 401 || status == 403 { ErrorCategory::Policy } else if retryable { ErrorCategory::Transient } else { ErrorCategory::Execution };
+    let category = if status == 401 || status == 403 {
+        ErrorCategory::Policy
+    } else if retryable {
+        ErrorCategory::Transient
+    } else {
+        ErrorCategory::Execution
+    };
     MedusaError::new(
-        if status == 401 || status == 403 { ErrorCode::PolicyDenied } else { ErrorCode::ToolExecutionFailed },
+        if status == 401 || status == 403 {
+            ErrorCode::PolicyDenied
+        } else {
+            ErrorCode::ToolExecutionFailed
+        },
         category,
         format!("GitHub API HTTP {status}: {message}; request_id={request_id}"),
-    ).with_retryable(retryable)
+    )
+    .with_retryable(retryable)
 }
 
 fn header_error_text(body: &[u8]) -> String {
@@ -939,22 +1091,39 @@ fn header_error_text(body: &[u8]) -> String {
 
 fn sync_parent(path: &Path) {
     #[cfg(unix)]
-    if let Some(parent) = path.parent() && let Ok(directory) = fs::File::open(parent) { let _ = directory.sync_all(); }
+    if let Some(parent) = path.parent()
+        && let Ok(directory) = fs::File::open(parent)
+    {
+        let _ = directory.sync_all();
+    }
     #[cfg(not(unix))]
     let _ = path;
 }
 
 fn http_error(error: reqwest::Error) -> MedusaError {
-    MedusaError::new(ErrorCode::DependencyUnavailable, ErrorCategory::Transient, format!("GitHub HTTPS transport: {error}"))
-        .with_retryable(error.is_timeout() || error.is_connect())
+    MedusaError::new(
+        ErrorCode::DependencyUnavailable,
+        ErrorCategory::Transient,
+        format!("GitHub HTTPS transport: {error}"),
+    )
+    .with_retryable(error.is_timeout() || error.is_connect())
 }
 
 fn http_io_error(error: std::io::Error) -> MedusaError {
-    MedusaError::new(ErrorCode::DependencyUnavailable, ErrorCategory::Transient, format!("read GitHub HTTPS response: {error}")).with_retryable(true)
+    MedusaError::new(
+        ErrorCode::DependencyUnavailable,
+        ErrorCategory::Transient,
+        format!("read GitHub HTTPS response: {error}"),
+    )
+    .with_retryable(true)
 }
 
 fn persistence_error(error: std::io::Error) -> MedusaError {
-    MedusaError::new(ErrorCode::PersistenceFailed, ErrorCategory::Persistence, error.to_string())
+    MedusaError::new(
+        ErrorCode::PersistenceFailed,
+        ErrorCategory::Persistence,
+        error.to_string(),
+    )
 }
 
 fn validation_error(message: impl Into<String>) -> MedusaError {
@@ -966,7 +1135,11 @@ fn policy_error(message: impl Into<String>) -> MedusaError {
 }
 
 fn protocol_error(message: impl Into<String>) -> MedusaError {
-    MedusaError::new(ErrorCode::IncompatibleProtocol, ErrorCategory::Execution, message)
+    MedusaError::new(
+        ErrorCode::IncompatibleProtocol,
+        ErrorCategory::Execution,
+        message,
+    )
 }
 
 #[cfg(test)]
@@ -983,59 +1156,135 @@ mod tests {
 
     impl FakeApiTransport {
         fn with(responses: Vec<GitHubApiResponse>) -> Self {
-            Self { responses: Mutex::new(responses.into()), requests: Mutex::new(Vec::new()) }
+            Self {
+                responses: Mutex::new(responses.into()),
+                requests: Mutex::new(Vec::new()),
+            }
         }
     }
 
     impl GitHubApiTransport for FakeApiTransport {
-        fn execute(&self, request: &GitHubApiRequest, token: &str) -> MedusaResult<GitHubApiResponse> {
+        fn execute(
+            &self,
+            request: &GitHubApiRequest,
+            token: &str,
+        ) -> MedusaResult<GitHubApiResponse> {
             assert_eq!(token, "token");
-            self.requests.lock().expect("requests").push((request.method.to_string(), request.url.to_string()));
-            self.responses.lock().expect("responses").pop_front().ok_or_else(|| protocol_error("missing response"))
+            self.requests
+                .lock()
+                .expect("requests")
+                .push((request.method.to_string(), request.url.to_string()));
+            self.responses
+                .lock()
+                .expect("responses")
+                .pop_front()
+                .ok_or_else(|| protocol_error("missing response"))
         }
 
-        fn download(&self, _request: &GitHubApiRequest, _token: &str, _destination_root: &Path, _destination: &Path, _max_bytes: u64) -> MedusaResult<(GitHubApiResponse, GitHubArtifactReceipt)> {
+        fn download(
+            &self,
+            _request: &GitHubApiRequest,
+            _token: &str,
+            _destination_root: &Path,
+            _destination: &Path,
+            _max_bytes: u64,
+        ) -> MedusaResult<(GitHubApiResponse, GitHubArtifactReceipt)> {
             Err(protocol_error("not used"))
         }
 
-        fn upload(&self, _request: &GitHubApiRequest, _token: &str, _source_root: &Path, _source: &Path, _max_bytes: u64) -> MedusaResult<GitHubApiResponse> {
+        fn upload(
+            &self,
+            _request: &GitHubApiRequest,
+            _token: &str,
+            _source_root: &Path,
+            _source: &Path,
+            _max_bytes: u64,
+        ) -> MedusaResult<GitHubApiResponse> {
             Err(protocol_error("not used"))
         }
     }
 
     struct StaticOAuthTransport;
     impl GitHubOAuthTransport for StaticOAuthTransport {
-        fn post_form(&self, _url: &str, _form: &BTreeMap<String, String>, _max_bytes: usize) -> MedusaResult<OAuthHttpResponse> { Err(protocol_error("unused")) }
-        fn get_bearer(&self, _url: &str, _token: &str, _api_version: &str, _max_bytes: usize) -> MedusaResult<OAuthHttpResponse> { Err(protocol_error("unused")) }
+        fn post_form(
+            &self,
+            _url: &str,
+            _form: &BTreeMap<String, String>,
+            _max_bytes: usize,
+        ) -> MedusaResult<OAuthHttpResponse> {
+            Err(protocol_error("unused"))
+        }
+        fn get_bearer(
+            &self,
+            _url: &str,
+            _token: &str,
+            _api_version: &str,
+            _max_bytes: usize,
+        ) -> MedusaResult<OAuthHttpResponse> {
+            Err(protocol_error("unused"))
+        }
     }
 
     fn document() -> GitHubOperationDocument {
         GitHubOperationDocument {
             schema_version: GITHUB_OPERATION_SCHEMA_VERSION,
-            repository: "acme/project".into(), hostname: "github.com".into(), api_base_url: None, oauth_base_url: None,
-            api_version: DEFAULT_GITHUB_API_VERSION.into(), backend: GitHubExecutionBackend::DirectOauth,
-            idempotency_key: None, max_response_bytes: 1024,
+            repository: "acme/project".into(),
+            hostname: "github.com".into(),
+            api_base_url: None,
+            oauth_base_url: None,
+            api_version: DEFAULT_GITHUB_API_VERSION.into(),
+            backend: GitHubExecutionBackend::DirectOauth,
+            idempotency_key: None,
+            max_response_bytes: 1024,
             operation: GitHubTypedOperation::Repository(RepositoryOperation::Get),
         }
     }
 
     fn oauth_store() -> MemoryGitHubCredentialStore {
         let store = MemoryGitHubCredentialStore::default();
-        let config = GitHubOAuthConfig { client_id: "client".into(), hostname: "github.com".into(), oauth_base_url: None, api_base_url: None, api_version: DEFAULT_GITHUB_API_VERSION.into() };
-        store.save(&config, &GitHubOAuthCredential { access_token: "token".into(), token_type: "bearer".into(), expires_at: None, refresh_token: None, refresh_expires_at: None, scope: String::new(), login: Some("octocat".into()), obtained_at: 1 }).expect("save");
+        let config = GitHubOAuthConfig {
+            client_id: "client".into(),
+            hostname: "github.com".into(),
+            oauth_base_url: None,
+            api_base_url: None,
+            api_version: DEFAULT_GITHUB_API_VERSION.into(),
+        };
+        store
+            .save(
+                &config,
+                &GitHubOAuthCredential {
+                    access_token: "token".into(),
+                    token_type: "bearer".into(),
+                    expires_at: None,
+                    refresh_token: None,
+                    refresh_expires_at: None,
+                    scope: String::new(),
+                    login: Some("octocat".into()),
+                    obtained_at: 1,
+                },
+            )
+            .expect("save");
         store
     }
 
     #[test]
     fn direct_backend_sends_versioned_bearer_request_and_normalizes_receipt() {
         let directory = tempfile::tempdir().expect("tempdir");
-        let config = GitHubOAuthConfig { client_id: "client".into(), hostname: "github.com".into(), oauth_base_url: None, api_base_url: None, api_version: DEFAULT_GITHUB_API_VERSION.into() };
-        let oauth = GitHubOAuthClient::new(config, oauth_store(), StaticOAuthTransport).expect("oauth");
+        let config = GitHubOAuthConfig {
+            client_id: "client".into(),
+            hostname: "github.com".into(),
+            oauth_base_url: None,
+            api_base_url: None,
+            api_version: DEFAULT_GITHUB_API_VERSION.into(),
+        };
+        let oauth =
+            GitHubOAuthClient::new(config, oauth_store(), StaticOAuthTransport).expect("oauth");
         let transport = FakeApiTransport::with(vec![
             GitHubApiResponse { status: 200, headers: BTreeMap::new(), body: br#"{"full_name":"acme/project","html_url":"https://github.com/acme/project","permissions":{"pull":true,"push":true,"admin":true}}"#.to_vec(), truncated: false },
             GitHubApiResponse { status: 200, headers: BTreeMap::from([("x-github-request-id".into(), "REQ".into())]), body: br#"{"full_name":"acme/project","html_url":"https://github.com/acme/project"}"#.to_vec(), truncated: false },
         ]);
-        let backend = DirectGitHubBackend::new(oauth, transport, directory.path().to_path_buf()).expect("backend");
+        let backend = DirectGitHubBackend::new(oauth, transport, directory.path().to_path_buf())
+            .expect("backend");
         let document = document();
         let prepared = document.prepare().expect("prepare");
         let result = backend.execute(&document, &prepared).expect("execute");

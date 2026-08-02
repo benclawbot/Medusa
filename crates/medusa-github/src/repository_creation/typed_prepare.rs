@@ -20,9 +20,7 @@ pub(super) fn prepare(document: &GitHubOperationDocument) -> MedusaResult<Prepar
         GitHubTypedOperation::Collaborators(operation) => {
             prepare_collaborators(document, operation)
         }
-        GitHubTypedOperation::Environments(operation) => {
-            prepare_environments(document, operation)
-        }
+        GitHubTypedOperation::Environments(operation) => prepare_environments(document, operation),
         GitHubTypedOperation::Variables(operation) => prepare_variables(document, operation),
         GitHubTypedOperation::Secrets(operation) => prepare_secrets(document, operation),
         GitHubTypedOperation::Webhooks(operation) => prepare_webhooks(document, operation),
@@ -63,7 +61,9 @@ fn prepare_repository(
             if let Some(visibility) = visibility.as_deref()
                 && !matches!(visibility, "public" | "private" | "internal")
             {
-                return Err(invalid("repository visibility must be public, private, or internal"));
+                return Err(invalid(
+                    "repository visibility must be public, private, or internal",
+                ));
             }
             let body = object([
                 optional("description", description.clone()),
@@ -392,7 +392,9 @@ fn prepare_issues(
                 None,
             )
         }
-        IssuesOperation::Get { number } => numbered_get(document, GitHubResource::Issues, "get", "issues", *number),
+        IssuesOperation::Get { number } => {
+            numbered_get(document, GitHubResource::Issues, "get", "issues", *number)
+        }
         IssuesOperation::Create {
             title,
             body,
@@ -544,7 +546,10 @@ fn prepare_issues(
                 }),
             )
         }
-        IssuesOperation::ReactToComment { comment_id, content } => {
+        IssuesOperation::ReactToComment {
+            comment_id,
+            content,
+        } => {
             require_number(*comment_id)?;
             validate_reaction(content)?;
             api(
@@ -578,10 +583,32 @@ fn prepare_pull_requests(
             insert_query(&mut query, "state", state.as_deref());
             insert_query(&mut query, "head", head.as_deref());
             insert_query(&mut query, "base", base.as_deref());
-            api(document, GitHubResource::PullRequests, "list", GitHubHttpMethod::Get, "pulls", query, None, true, None)
+            api(
+                document,
+                GitHubResource::PullRequests,
+                "list",
+                GitHubHttpMethod::Get,
+                "pulls",
+                query,
+                None,
+                true,
+                None,
+            )
         }
-        PullRequestsOperation::Get { number } => numbered_get(document, GitHubResource::PullRequests, "get", "pulls", *number),
-        PullRequestsOperation::Create { title, body, head, base, draft } => {
+        PullRequestsOperation::Get { number } => numbered_get(
+            document,
+            GitHubResource::PullRequests,
+            "get",
+            "pulls",
+            *number,
+        ),
+        PullRequestsOperation::Create {
+            title,
+            body,
+            head,
+            base,
+            draft,
+        } => {
             require_text("pull request title", title, 1, 256)?;
             require_text("pull request head", head, 1, 255)?;
             require_text("pull request base", base, 1, 255)?;
@@ -594,12 +621,20 @@ fn prepare_pull_requests(
                 GitHubHttpMethod::Post,
                 "pulls",
                 BTreeMap::new(),
-                Some(json!({"title": title, "body": body, "head": head, "base": base, "draft": draft})),
+                Some(
+                    json!({"title": title, "body": body, "head": head, "base": base, "draft": draft}),
+                ),
                 true,
                 Some(GitHubReconciliation::PullRequestMarker { marker }),
             )
         }
-        PullRequestsOperation::Update { number, title, body, state, base } => {
+        PullRequestsOperation::Update {
+            number,
+            title,
+            body,
+            state,
+            base,
+        } => {
             require_number(*number)?;
             api(
                 document,
@@ -618,7 +653,11 @@ fn prepare_pull_requests(
                 None,
             )
         }
-        PullRequestsOperation::Review { number, event, body } => {
+        PullRequestsOperation::Review {
+            number,
+            event,
+            body,
+        } => {
             require_number(*number)?;
             let event = match event {
                 PullRequestReviewEvent::Approve => "APPROVE",
@@ -637,7 +676,13 @@ fn prepare_pull_requests(
                 None,
             )
         }
-        PullRequestsOperation::Merge { number, strategy, commit_title, commit_message, expected_head_sha } => {
+        PullRequestsOperation::Merge {
+            number,
+            strategy,
+            commit_title,
+            commit_message,
+            expected_head_sha,
+        } => {
             require_number(*number)?;
             let strategy = match strategy {
                 MergeStrategy::Merge => "merge",
@@ -663,10 +708,28 @@ fn prepare_pull_requests(
         }
         PullRequestsOperation::Close { number } => {
             require_number(*number)?;
-            api(document, GitHubResource::PullRequests, "close", GitHubHttpMethod::Patch, &format!("pulls/{number}"), BTreeMap::new(), Some(json!({"state":"closed"})), true, None)
+            api(
+                document,
+                GitHubResource::PullRequests,
+                "close",
+                GitHubHttpMethod::Patch,
+                &format!("pulls/{number}"),
+                BTreeMap::new(),
+                Some(json!({"state":"closed"})),
+                true,
+                None,
+            )
         }
-        PullRequestsOperation::RequestReviewers { number, reviewers, team_reviewers } => reviewers(document, *number, reviewers, team_reviewers, false),
-        PullRequestsOperation::RemoveReviewers { number, reviewers, team_reviewers } => reviewers(document, *number, reviewers, team_reviewers, true),
+        PullRequestsOperation::RequestReviewers {
+            number,
+            reviewers,
+            team_reviewers,
+        } => reviewers(document, *number, reviewers, team_reviewers, false),
+        PullRequestsOperation::RemoveReviewers {
+            number,
+            reviewers,
+            team_reviewers,
+        } => reviewers(document, *number, reviewers, team_reviewers, true),
     }
 }
 
@@ -683,8 +746,16 @@ fn reviewers(
     api(
         document,
         GitHubResource::PullRequests,
-        if remove { "remove_reviewers" } else { "request_reviewers" },
-        if remove { GitHubHttpMethod::Delete } else { GitHubHttpMethod::Post },
+        if remove {
+            "remove_reviewers"
+        } else {
+            "request_reviewers"
+        },
+        if remove {
+            GitHubHttpMethod::Delete
+        } else {
+            GitHubHttpMethod::Post
+        },
         &format!("pulls/{number}/requested_reviewers"),
         BTreeMap::new(),
         Some(json!({"reviewers": reviewers, "team_reviewers": team_reviewers})),
@@ -698,23 +769,87 @@ fn prepare_actions(
     operation: &ActionsOperation,
 ) -> MedusaResult<PreparedGitHubOperation> {
     match operation {
-        ActionsOperation::ListRuns { workflow_id, branch, status, per_page } => {
+        ActionsOperation::ListRuns {
+            workflow_id,
+            branch,
+            status,
+            per_page,
+        } => {
             let mut query = page_query(*per_page)?;
             insert_query(&mut query, "branch", branch.as_deref());
             insert_query(&mut query, "status", status.as_deref());
-            let endpoint = workflow_id.as_ref().map_or_else(|| "actions/runs".into(), |id| format!("actions/workflows/{}/runs", safe_component("workflow_id", id).unwrap_or_else(|_| id.clone())));
-            api(document, GitHubResource::Actions, "list_runs", GitHubHttpMethod::Get, &endpoint, query, None, true, None)
+            let endpoint = workflow_id.as_ref().map_or_else(
+                || "actions/runs".into(),
+                |id| {
+                    format!(
+                        "actions/workflows/{}/runs",
+                        safe_component("workflow_id", id).unwrap_or_else(|_| id.clone())
+                    )
+                },
+            );
+            api(
+                document,
+                GitHubResource::Actions,
+                "list_runs",
+                GitHubHttpMethod::Get,
+                &endpoint,
+                query,
+                None,
+                true,
+                None,
+            )
         }
-        ActionsOperation::GetRun { run_id } => numbered_get(document, GitHubResource::Actions, "get_run", "actions/runs", *run_id),
+        ActionsOperation::GetRun { run_id } => numbered_get(
+            document,
+            GitHubResource::Actions,
+            "get_run",
+            "actions/runs",
+            *run_id,
+        ),
         ActionsOperation::ListJobs { run_id } => {
             require_number(*run_id)?;
-            api(document, GitHubResource::Actions, "list_jobs", GitHubHttpMethod::Get, &format!("actions/runs/{run_id}/jobs"), BTreeMap::new(), None, true, None)
+            api(
+                document,
+                GitHubResource::Actions,
+                "list_jobs",
+                GitHubHttpMethod::Get,
+                &format!("actions/runs/{run_id}/jobs"),
+                BTreeMap::new(),
+                None,
+                true,
+                None,
+            )
         }
-        ActionsOperation::GetJob { job_id } => numbered_get(document, GitHubResource::Actions, "get_job", "actions/jobs", *job_id),
-        ActionsOperation::Rerun { run_id } => action_post(document, "rerun", &format!("actions/runs/{run_id}/rerun"), *run_id),
-        ActionsOperation::RerunFailed { run_id } => action_post(document, "rerun_failed", &format!("actions/runs/{run_id}/rerun-failed-jobs"), *run_id),
-        ActionsOperation::Cancel { run_id } => action_post(document, "cancel", &format!("actions/runs/{run_id}/cancel"), *run_id),
-        ActionsOperation::DownloadArtifact { artifact_id, destination, max_bytes } => {
+        ActionsOperation::GetJob { job_id } => numbered_get(
+            document,
+            GitHubResource::Actions,
+            "get_job",
+            "actions/jobs",
+            *job_id,
+        ),
+        ActionsOperation::Rerun { run_id } => action_post(
+            document,
+            "rerun",
+            &format!("actions/runs/{run_id}/rerun"),
+            *run_id,
+        ),
+        ActionsOperation::RerunFailed { run_id } => action_post(
+            document,
+            "rerun_failed",
+            &format!("actions/runs/{run_id}/rerun-failed-jobs"),
+            *run_id,
+        ),
+        ActionsOperation::Cancel { run_id } => action_post(
+            document,
+            "cancel",
+            &format!("actions/runs/{run_id}/cancel"),
+            *run_id,
+        ),
+        ActionsOperation::DownloadArtifact {
+            artifact_id,
+            destination,
+            max_bytes,
+        } => {
             require_number(*artifact_id)?;
             Ok(PreparedGitHubOperation {
                 operation_kind: "actions.download_artifact".into(),
@@ -737,10 +872,44 @@ fn prepare_releases(
     operation: &ReleasesOperation,
 ) -> MedusaResult<PreparedGitHubOperation> {
     match operation {
-        ReleasesOperation::List { per_page } => api(document, GitHubResource::Releases, "list", GitHubHttpMethod::Get, "releases", page_query(*per_page)?, None, true, None),
-        ReleasesOperation::Get { release_id } => numbered_get(document, GitHubResource::Releases, "get", "releases", *release_id),
-        ReleasesOperation::GetByTag { tag } => api(document, GitHubResource::Releases, "get_by_tag", GitHubHttpMethod::Get, &format!("releases/tags/{}", path_component("tag", tag)?), BTreeMap::new(), None, true, None),
-        ReleasesOperation::Create { tag, target_commitish, name, body, draft, prerelease, generate_release_notes } => {
+        ReleasesOperation::List { per_page } => api(
+            document,
+            GitHubResource::Releases,
+            "list",
+            GitHubHttpMethod::Get,
+            "releases",
+            page_query(*per_page)?,
+            None,
+            true,
+            None,
+        ),
+        ReleasesOperation::Get { release_id } => numbered_get(
+            document,
+            GitHubResource::Releases,
+            "get",
+            "releases",
+            *release_id,
+        ),
+        ReleasesOperation::GetByTag { tag } => api(
+            document,
+            GitHubResource::Releases,
+            "get_by_tag",
+            GitHubHttpMethod::Get,
+            &format!("releases/tags/{}", path_component("tag", tag)?),
+            BTreeMap::new(),
+            None,
+            true,
+            None,
+        ),
+        ReleasesOperation::Create {
+            tag,
+            target_commitish,
+            name,
+            body,
+            draft,
+            prerelease,
+            generate_release_notes,
+        } => {
             let tag = path_component("tag", tag)?;
             require_text("release name", name, 1, 256)?;
             api(
@@ -763,17 +932,57 @@ fn prepare_releases(
                 Some(GitHubReconciliation::ReleaseTag { tag }),
             )
         }
-        ReleasesOperation::Update { release_id, tag, name, body, draft, prerelease } => {
+        ReleasesOperation::Update {
+            release_id,
+            tag,
+            name,
+            body,
+            draft,
+            prerelease,
+        } => {
             require_number(*release_id)?;
-            api(document, GitHubResource::Releases, "update", GitHubHttpMethod::Patch, &format!("releases/{release_id}"), BTreeMap::new(), Some(object([
-                optional("tag_name", tag.clone()), optional("name", name.clone()), optional("body", body.clone()), optional("draft", *draft), optional("prerelease", *prerelease)
-            ])), true, None)
+            api(
+                document,
+                GitHubResource::Releases,
+                "update",
+                GitHubHttpMethod::Patch,
+                &format!("releases/{release_id}"),
+                BTreeMap::new(),
+                Some(object([
+                    optional("tag_name", tag.clone()),
+                    optional("name", name.clone()),
+                    optional("body", body.clone()),
+                    optional("draft", *draft),
+                    optional("prerelease", *prerelease),
+                ])),
+                true,
+                None,
+            )
         }
         ReleasesOperation::Delete { release_id } => {
             require_number(*release_id)?;
-            api(document, GitHubResource::Releases, "delete", GitHubHttpMethod::Delete, &format!("releases/{release_id}"), BTreeMap::new(), None, true, Some(GitHubReconciliation::ResourceAbsent { endpoint: format!("releases/{release_id}") }))
+            api(
+                document,
+                GitHubResource::Releases,
+                "delete",
+                GitHubHttpMethod::Delete,
+                &format!("releases/{release_id}"),
+                BTreeMap::new(),
+                None,
+                true,
+                Some(GitHubReconciliation::ResourceAbsent {
+                    endpoint: format!("releases/{release_id}"),
+                }),
+            )
         }
-        ReleasesOperation::UploadAsset { release_id, path, name, label, content_type, max_bytes } => {
+        ReleasesOperation::UploadAsset {
+            release_id,
+            path,
+            name,
+            label,
+            content_type,
+            max_bytes,
+        } => {
             require_number(*release_id)?;
             Ok(PreparedGitHubOperation {
                 operation_kind: "releases.upload_asset".into(),
@@ -790,7 +999,11 @@ fn prepare_releases(
                 }),
             })
         }
-        ReleasesOperation::DownloadAsset { asset_id, destination, max_bytes } => {
+        ReleasesOperation::DownloadAsset {
+            asset_id,
+            destination,
+            max_bytes,
+        } => {
             require_number(*asset_id)?;
             Ok(PreparedGitHubOperation {
                 operation_kind: "releases.download_asset".into(),
@@ -807,126 +1020,616 @@ fn prepare_releases(
         }
         ReleasesOperation::DeleteAsset { asset_id } => {
             require_number(*asset_id)?;
-            api(document, GitHubResource::Releases, "delete_asset", GitHubHttpMethod::Delete, &format!("releases/assets/{asset_id}"), BTreeMap::new(), None, true, Some(GitHubReconciliation::ResourceAbsent { endpoint: format!("releases/assets/{asset_id}") }))
+            api(
+                document,
+                GitHubResource::Releases,
+                "delete_asset",
+                GitHubHttpMethod::Delete,
+                &format!("releases/assets/{asset_id}"),
+                BTreeMap::new(),
+                None,
+                true,
+                Some(GitHubReconciliation::ResourceAbsent {
+                    endpoint: format!("releases/assets/{asset_id}"),
+                }),
+            )
         }
     }
 }
 
-fn prepare_collaborators(document: &GitHubOperationDocument, operation: &CollaboratorsOperation) -> MedusaResult<PreparedGitHubOperation> {
+fn prepare_collaborators(
+    document: &GitHubOperationDocument,
+    operation: &CollaboratorsOperation,
+) -> MedusaResult<PreparedGitHubOperation> {
     match operation {
-        CollaboratorsOperation::List { per_page } => api(document, GitHubResource::Collaborators, "list", GitHubHttpMethod::Get, "collaborators", page_query(*per_page)?, None, true, None),
-        CollaboratorsOperation::GetPermission { username } => api(document, GitHubResource::Collaborators, "get_permission", GitHubHttpMethod::Get, &format!("collaborators/{}/permission", path_component("username", username)?), BTreeMap::new(), None, true, None),
-        CollaboratorsOperation::Add { username, permission } => {
-            if !matches!(permission.as_str(), "pull" | "triage" | "push" | "maintain" | "admin") { return Err(invalid("collaborator permission is unsupported")); }
-            api(document, GitHubResource::Collaborators, "add", GitHubHttpMethod::Put, &format!("collaborators/{}", path_component("username", username)?), BTreeMap::new(), Some(json!({"permission":permission})), true, None)
+        CollaboratorsOperation::List { per_page } => api(
+            document,
+            GitHubResource::Collaborators,
+            "list",
+            GitHubHttpMethod::Get,
+            "collaborators",
+            page_query(*per_page)?,
+            None,
+            true,
+            None,
+        ),
+        CollaboratorsOperation::GetPermission { username } => api(
+            document,
+            GitHubResource::Collaborators,
+            "get_permission",
+            GitHubHttpMethod::Get,
+            &format!(
+                "collaborators/{}/permission",
+                path_component("username", username)?
+            ),
+            BTreeMap::new(),
+            None,
+            true,
+            None,
+        ),
+        CollaboratorsOperation::Add {
+            username,
+            permission,
+        } => {
+            if !matches!(
+                permission.as_str(),
+                "pull" | "triage" | "push" | "maintain" | "admin"
+            ) {
+                return Err(invalid("collaborator permission is unsupported"));
+            }
+            api(
+                document,
+                GitHubResource::Collaborators,
+                "add",
+                GitHubHttpMethod::Put,
+                &format!("collaborators/{}", path_component("username", username)?),
+                BTreeMap::new(),
+                Some(json!({"permission":permission})),
+                true,
+                None,
+            )
         }
-        CollaboratorsOperation::Remove { username } => api(document, GitHubResource::Collaborators, "remove", GitHubHttpMethod::Delete, &format!("collaborators/{}", path_component("username", username)?), BTreeMap::new(), None, true, None),
+        CollaboratorsOperation::Remove { username } => api(
+            document,
+            GitHubResource::Collaborators,
+            "remove",
+            GitHubHttpMethod::Delete,
+            &format!("collaborators/{}", path_component("username", username)?),
+            BTreeMap::new(),
+            None,
+            true,
+            None,
+        ),
     }
 }
 
-fn prepare_environments(document: &GitHubOperationDocument, operation: &EnvironmentsOperation) -> MedusaResult<PreparedGitHubOperation> {
+fn prepare_environments(
+    document: &GitHubOperationDocument,
+    operation: &EnvironmentsOperation,
+) -> MedusaResult<PreparedGitHubOperation> {
     match operation {
-        EnvironmentsOperation::List { per_page } => api(document, GitHubResource::Environments, "list", GitHubHttpMethod::Get, "environments", page_query(*per_page)?, None, true, None),
-        EnvironmentsOperation::Get { name } => api(document, GitHubResource::Environments, "get", GitHubHttpMethod::Get, &format!("environments/{}", path_component("environment", name)?), BTreeMap::new(), None, true, None),
-        EnvironmentsOperation::Put { name, wait_timer, prevent_self_review } => api(document, GitHubResource::Environments, "put", GitHubHttpMethod::Put, &format!("environments/{}", path_component("environment", name)?), BTreeMap::new(), Some(object([
-            optional("wait_timer", *wait_timer), optional("prevent_self_review", *prevent_self_review)
-        ])), true, None),
-        EnvironmentsOperation::Delete { name } => api(document, GitHubResource::Environments, "delete", GitHubHttpMethod::Delete, &format!("environments/{}", path_component("environment", name)?), BTreeMap::new(), None, true, None),
+        EnvironmentsOperation::List { per_page } => api(
+            document,
+            GitHubResource::Environments,
+            "list",
+            GitHubHttpMethod::Get,
+            "environments",
+            page_query(*per_page)?,
+            None,
+            true,
+            None,
+        ),
+        EnvironmentsOperation::Get { name } => api(
+            document,
+            GitHubResource::Environments,
+            "get",
+            GitHubHttpMethod::Get,
+            &format!("environments/{}", path_component("environment", name)?),
+            BTreeMap::new(),
+            None,
+            true,
+            None,
+        ),
+        EnvironmentsOperation::Put {
+            name,
+            wait_timer,
+            prevent_self_review,
+        } => api(
+            document,
+            GitHubResource::Environments,
+            "put",
+            GitHubHttpMethod::Put,
+            &format!("environments/{}", path_component("environment", name)?),
+            BTreeMap::new(),
+            Some(object([
+                optional("wait_timer", *wait_timer),
+                optional("prevent_self_review", *prevent_self_review),
+            ])),
+            true,
+            None,
+        ),
+        EnvironmentsOperation::Delete { name } => api(
+            document,
+            GitHubResource::Environments,
+            "delete",
+            GitHubHttpMethod::Delete,
+            &format!("environments/{}", path_component("environment", name)?),
+            BTreeMap::new(),
+            None,
+            true,
+            None,
+        ),
     }
 }
 
-fn prepare_variables(document: &GitHubOperationDocument, operation: &VariablesOperation) -> MedusaResult<PreparedGitHubOperation> {
+fn prepare_variables(
+    document: &GitHubOperationDocument,
+    operation: &VariablesOperation,
+) -> MedusaResult<PreparedGitHubOperation> {
     match operation {
-        VariablesOperation::ListActions { per_page } => api(document, GitHubResource::Variables, "list_actions", GitHubHttpMethod::Get, "actions/variables", page_query(*per_page)?, None, true, None),
-        VariablesOperation::GetActions { name } => api(document, GitHubResource::Variables, "get_actions", GitHubHttpMethod::Get, &format!("actions/variables/{}", path_component("variable", name)?), BTreeMap::new(), None, true, None),
-        VariablesOperation::PutActions { name, value } => api(document, GitHubResource::Variables, "put_actions", GitHubHttpMethod::Patch, &format!("actions/variables/{}", path_component("variable", name)?), BTreeMap::new(), Some(json!({"name":name,"value":value})), true, None),
-        VariablesOperation::DeleteActions { name } => api(document, GitHubResource::Variables, "delete_actions", GitHubHttpMethod::Delete, &format!("actions/variables/{}", path_component("variable", name)?), BTreeMap::new(), None, true, None),
-        VariablesOperation::ListEnvironment { environment, per_page } => api(document, GitHubResource::Variables, "list_environment", GitHubHttpMethod::Get, &format!("environments/{}/variables", path_component("environment", environment)?), page_query(*per_page)?, None, true, None),
-        VariablesOperation::GetEnvironment { environment, name } => api(document, GitHubResource::Variables, "get_environment", GitHubHttpMethod::Get, &format!("environments/{}/variables/{}", path_component("environment", environment)?, path_component("variable", name)?), BTreeMap::new(), None, true, None),
-        VariablesOperation::PutEnvironment { environment, name, value } => api(document, GitHubResource::Variables, "put_environment", GitHubHttpMethod::Patch, &format!("environments/{}/variables/{}", path_component("environment", environment)?, path_component("variable", name)?), BTreeMap::new(), Some(json!({"name":name,"value":value})), true, None),
-        VariablesOperation::DeleteEnvironment { environment, name } => api(document, GitHubResource::Variables, "delete_environment", GitHubHttpMethod::Delete, &format!("environments/{}/variables/{}", path_component("environment", environment)?, path_component("variable", name)?), BTreeMap::new(), None, true, None),
+        VariablesOperation::ListActions { per_page } => api(
+            document,
+            GitHubResource::Variables,
+            "list_actions",
+            GitHubHttpMethod::Get,
+            "actions/variables",
+            page_query(*per_page)?,
+            None,
+            true,
+            None,
+        ),
+        VariablesOperation::GetActions { name } => api(
+            document,
+            GitHubResource::Variables,
+            "get_actions",
+            GitHubHttpMethod::Get,
+            &format!("actions/variables/{}", path_component("variable", name)?),
+            BTreeMap::new(),
+            None,
+            true,
+            None,
+        ),
+        VariablesOperation::PutActions { name, value } => api(
+            document,
+            GitHubResource::Variables,
+            "put_actions",
+            GitHubHttpMethod::Patch,
+            &format!("actions/variables/{}", path_component("variable", name)?),
+            BTreeMap::new(),
+            Some(json!({"name":name,"value":value})),
+            true,
+            None,
+        ),
+        VariablesOperation::DeleteActions { name } => api(
+            document,
+            GitHubResource::Variables,
+            "delete_actions",
+            GitHubHttpMethod::Delete,
+            &format!("actions/variables/{}", path_component("variable", name)?),
+            BTreeMap::new(),
+            None,
+            true,
+            None,
+        ),
+        VariablesOperation::ListEnvironment {
+            environment,
+            per_page,
+        } => api(
+            document,
+            GitHubResource::Variables,
+            "list_environment",
+            GitHubHttpMethod::Get,
+            &format!(
+                "environments/{}/variables",
+                path_component("environment", environment)?
+            ),
+            page_query(*per_page)?,
+            None,
+            true,
+            None,
+        ),
+        VariablesOperation::GetEnvironment { environment, name } => api(
+            document,
+            GitHubResource::Variables,
+            "get_environment",
+            GitHubHttpMethod::Get,
+            &format!(
+                "environments/{}/variables/{}",
+                path_component("environment", environment)?,
+                path_component("variable", name)?
+            ),
+            BTreeMap::new(),
+            None,
+            true,
+            None,
+        ),
+        VariablesOperation::PutEnvironment {
+            environment,
+            name,
+            value,
+        } => api(
+            document,
+            GitHubResource::Variables,
+            "put_environment",
+            GitHubHttpMethod::Patch,
+            &format!(
+                "environments/{}/variables/{}",
+                path_component("environment", environment)?,
+                path_component("variable", name)?
+            ),
+            BTreeMap::new(),
+            Some(json!({"name":name,"value":value})),
+            true,
+            None,
+        ),
+        VariablesOperation::DeleteEnvironment { environment, name } => api(
+            document,
+            GitHubResource::Variables,
+            "delete_environment",
+            GitHubHttpMethod::Delete,
+            &format!(
+                "environments/{}/variables/{}",
+                path_component("environment", environment)?,
+                path_component("variable", name)?
+            ),
+            BTreeMap::new(),
+            None,
+            true,
+            None,
+        ),
     }
 }
 
-fn prepare_secrets(document: &GitHubOperationDocument, operation: &SecretsOperation) -> MedusaResult<PreparedGitHubOperation> {
+fn prepare_secrets(
+    document: &GitHubOperationDocument,
+    operation: &SecretsOperation,
+) -> MedusaResult<PreparedGitHubOperation> {
     match operation {
-        SecretsOperation::ListActions { per_page } => api(document, GitHubResource::Secrets, "list_actions", GitHubHttpMethod::Get, "actions/secrets", page_query(*per_page)?, None, true, None),
-        SecretsOperation::GetActionsPublicKey => api(document, GitHubResource::Secrets, "get_actions_public_key", GitHubHttpMethod::Get, "actions/secrets/public-key", BTreeMap::new(), None, true, None),
-        SecretsOperation::PutActions { name, encrypted_value, key_id } => api(document, GitHubResource::Secrets, "put_actions", GitHubHttpMethod::Put, &format!("actions/secrets/{}", path_component("secret", name)?), BTreeMap::new(), Some(json!({"encrypted_value":encrypted_value,"key_id":key_id})), true, None),
-        SecretsOperation::DeleteActions { name } => api(document, GitHubResource::Secrets, "delete_actions", GitHubHttpMethod::Delete, &format!("actions/secrets/{}", path_component("secret", name)?), BTreeMap::new(), None, true, None),
-        SecretsOperation::ListEnvironment { environment, per_page } => api(document, GitHubResource::Secrets, "list_environment", GitHubHttpMethod::Get, &format!("environments/{}/secrets", path_component("environment", environment)?), page_query(*per_page)?, None, true, None),
-        SecretsOperation::GetEnvironmentPublicKey { environment } => api(document, GitHubResource::Secrets, "get_environment_public_key", GitHubHttpMethod::Get, &format!("environments/{}/secrets/public-key", path_component("environment", environment)?), BTreeMap::new(), None, true, None),
-        SecretsOperation::PutEnvironment { environment, name, encrypted_value, key_id } => api(document, GitHubResource::Secrets, "put_environment", GitHubHttpMethod::Put, &format!("environments/{}/secrets/{}", path_component("environment", environment)?, path_component("secret", name)?), BTreeMap::new(), Some(json!({"encrypted_value":encrypted_value,"key_id":key_id})), true, None),
-        SecretsOperation::DeleteEnvironment { environment, name } => api(document, GitHubResource::Secrets, "delete_environment", GitHubHttpMethod::Delete, &format!("environments/{}/secrets/{}", path_component("environment", environment)?, path_component("secret", name)?), BTreeMap::new(), None, true, None),
+        SecretsOperation::ListActions { per_page } => api(
+            document,
+            GitHubResource::Secrets,
+            "list_actions",
+            GitHubHttpMethod::Get,
+            "actions/secrets",
+            page_query(*per_page)?,
+            None,
+            true,
+            None,
+        ),
+        SecretsOperation::GetActionsPublicKey => api(
+            document,
+            GitHubResource::Secrets,
+            "get_actions_public_key",
+            GitHubHttpMethod::Get,
+            "actions/secrets/public-key",
+            BTreeMap::new(),
+            None,
+            true,
+            None,
+        ),
+        SecretsOperation::PutActions {
+            name,
+            encrypted_value,
+            key_id,
+        } => api(
+            document,
+            GitHubResource::Secrets,
+            "put_actions",
+            GitHubHttpMethod::Put,
+            &format!("actions/secrets/{}", path_component("secret", name)?),
+            BTreeMap::new(),
+            Some(json!({"encrypted_value":encrypted_value,"key_id":key_id})),
+            true,
+            None,
+        ),
+        SecretsOperation::DeleteActions { name } => api(
+            document,
+            GitHubResource::Secrets,
+            "delete_actions",
+            GitHubHttpMethod::Delete,
+            &format!("actions/secrets/{}", path_component("secret", name)?),
+            BTreeMap::new(),
+            None,
+            true,
+            None,
+        ),
+        SecretsOperation::ListEnvironment {
+            environment,
+            per_page,
+        } => api(
+            document,
+            GitHubResource::Secrets,
+            "list_environment",
+            GitHubHttpMethod::Get,
+            &format!(
+                "environments/{}/secrets",
+                path_component("environment", environment)?
+            ),
+            page_query(*per_page)?,
+            None,
+            true,
+            None,
+        ),
+        SecretsOperation::GetEnvironmentPublicKey { environment } => api(
+            document,
+            GitHubResource::Secrets,
+            "get_environment_public_key",
+            GitHubHttpMethod::Get,
+            &format!(
+                "environments/{}/secrets/public-key",
+                path_component("environment", environment)?
+            ),
+            BTreeMap::new(),
+            None,
+            true,
+            None,
+        ),
+        SecretsOperation::PutEnvironment {
+            environment,
+            name,
+            encrypted_value,
+            key_id,
+        } => api(
+            document,
+            GitHubResource::Secrets,
+            "put_environment",
+            GitHubHttpMethod::Put,
+            &format!(
+                "environments/{}/secrets/{}",
+                path_component("environment", environment)?,
+                path_component("secret", name)?
+            ),
+            BTreeMap::new(),
+            Some(json!({"encrypted_value":encrypted_value,"key_id":key_id})),
+            true,
+            None,
+        ),
+        SecretsOperation::DeleteEnvironment { environment, name } => api(
+            document,
+            GitHubResource::Secrets,
+            "delete_environment",
+            GitHubHttpMethod::Delete,
+            &format!(
+                "environments/{}/secrets/{}",
+                path_component("environment", environment)?,
+                path_component("secret", name)?
+            ),
+            BTreeMap::new(),
+            None,
+            true,
+            None,
+        ),
     }
 }
 
-fn prepare_webhooks(document: &GitHubOperationDocument, operation: &WebhooksOperation) -> MedusaResult<PreparedGitHubOperation> {
+fn prepare_webhooks(
+    document: &GitHubOperationDocument,
+    operation: &WebhooksOperation,
+) -> MedusaResult<PreparedGitHubOperation> {
     match operation {
-        WebhooksOperation::List { per_page } => api(document, GitHubResource::Webhooks, "list", GitHubHttpMethod::Get, "hooks", page_query(*per_page)?, None, true, None),
-        WebhooksOperation::Get { hook_id } => numbered_get(document, GitHubResource::Webhooks, "get", "hooks", *hook_id),
-        WebhooksOperation::Create { name, active, events, config } => {
+        WebhooksOperation::List { per_page } => api(
+            document,
+            GitHubResource::Webhooks,
+            "list",
+            GitHubHttpMethod::Get,
+            "hooks",
+            page_query(*per_page)?,
+            None,
+            true,
+            None,
+        ),
+        WebhooksOperation::Get { hook_id } => {
+            numbered_get(document, GitHubResource::Webhooks, "get", "hooks", *hook_id)
+        }
+        WebhooksOperation::Create {
+            name,
+            active,
+            events,
+            config,
+        } => {
             validate_string_list("webhook event", events, 100, 100)?;
-            api(document, GitHubResource::Webhooks, "create", GitHubHttpMethod::Post, "hooks", BTreeMap::new(), Some(json!({"name":name,"active":active,"events":events,"config":config})), false, None)
+            api(
+                document,
+                GitHubResource::Webhooks,
+                "create",
+                GitHubHttpMethod::Post,
+                "hooks",
+                BTreeMap::new(),
+                Some(json!({"name":name,"active":active,"events":events,"config":config})),
+                false,
+                None,
+            )
         }
-        WebhooksOperation::Update { hook_id, active, events, config } => {
+        WebhooksOperation::Update {
+            hook_id,
+            active,
+            events,
+            config,
+        } => {
             require_number(*hook_id)?;
             validate_string_list("webhook event", events, 100, 100)?;
-            api(document, GitHubResource::Webhooks, "update", GitHubHttpMethod::Patch, &format!("hooks/{hook_id}"), BTreeMap::new(), Some(object([
-                optional("active", *active), optional_nonempty("events", events), optional_nonempty_map("config", config)
-            ])), true, None)
+            api(
+                document,
+                GitHubResource::Webhooks,
+                "update",
+                GitHubHttpMethod::Patch,
+                &format!("hooks/{hook_id}"),
+                BTreeMap::new(),
+                Some(object([
+                    optional("active", *active),
+                    optional_nonempty("events", events),
+                    optional_nonempty_map("config", config),
+                ])),
+                true,
+                None,
+            )
         }
         WebhooksOperation::Delete { hook_id } => {
             require_number(*hook_id)?;
-            api(document, GitHubResource::Webhooks, "delete", GitHubHttpMethod::Delete, &format!("hooks/{hook_id}"), BTreeMap::new(), None, true, None)
+            api(
+                document,
+                GitHubResource::Webhooks,
+                "delete",
+                GitHubHttpMethod::Delete,
+                &format!("hooks/{hook_id}"),
+                BTreeMap::new(),
+                None,
+                true,
+                None,
+            )
         }
         WebhooksOperation::Ping { hook_id } => {
             require_number(*hook_id)?;
-            api(document, GitHubResource::Webhooks, "ping", GitHubHttpMethod::Post, &format!("hooks/{hook_id}/pings"), BTreeMap::new(), None, true, None)
+            api(
+                document,
+                GitHubResource::Webhooks,
+                "ping",
+                GitHubHttpMethod::Post,
+                &format!("hooks/{hook_id}/pings"),
+                BTreeMap::new(),
+                None,
+                true,
+                None,
+            )
         }
     }
 }
 
-fn prepare_branch_protection(document: &GitHubOperationDocument, operation: &BranchProtectionOperation) -> MedusaResult<PreparedGitHubOperation> {
+fn prepare_branch_protection(
+    document: &GitHubOperationDocument,
+    operation: &BranchProtectionOperation,
+) -> MedusaResult<PreparedGitHubOperation> {
     match operation {
-        BranchProtectionOperation::Get { branch } => api(document, GitHubResource::BranchProtection, "get", GitHubHttpMethod::Get, &format!("branches/{}/protection", path_component("branch", branch)?), BTreeMap::new(), None, true, None),
+        BranchProtectionOperation::Get { branch } => api(
+            document,
+            GitHubResource::BranchProtection,
+            "get",
+            GitHubHttpMethod::Get,
+            &format!("branches/{}/protection", path_component("branch", branch)?),
+            BTreeMap::new(),
+            None,
+            true,
+            None,
+        ),
         BranchProtectionOperation::Put { branch, settings } => {
-            if settings.required_approving_review_count > 6 { return Err(invalid("required_approving_review_count must be at most 6")); }
-            let required_status_checks = if settings.required_status_checks.is_empty() { Value::Null } else { json!({"strict":settings.strict_status_checks,"contexts":settings.required_status_checks}) };
+            if settings.required_approving_review_count > 6 {
+                return Err(invalid("required_approving_review_count must be at most 6"));
+            }
+            let required_status_checks = if settings.required_status_checks.is_empty() {
+                Value::Null
+            } else {
+                json!({"strict":settings.strict_status_checks,"contexts":settings.required_status_checks})
+            };
             let review = json!({
                 "dismiss_stale_reviews": settings.dismiss_stale_reviews,
                 "require_code_owner_reviews": settings.require_code_owner_reviews,
                 "required_approving_review_count": settings.required_approving_review_count,
             });
-            api(document, GitHubResource::BranchProtection, "put", GitHubHttpMethod::Put, &format!("branches/{}/protection", path_component("branch", branch)?), BTreeMap::new(), Some(json!({
-                "required_status_checks":required_status_checks,
-                "enforce_admins":settings.enforce_admins,
-                "required_pull_request_reviews":review,
-                "restrictions":Value::Null,
-                "required_conversation_resolution":settings.require_conversation_resolution,
-                "allow_force_pushes":settings.allow_force_pushes,
-                "allow_deletions":settings.allow_deletions,
-            })), true, None)
+            api(
+                document,
+                GitHubResource::BranchProtection,
+                "put",
+                GitHubHttpMethod::Put,
+                &format!("branches/{}/protection", path_component("branch", branch)?),
+                BTreeMap::new(),
+                Some(json!({
+                    "required_status_checks":required_status_checks,
+                    "enforce_admins":settings.enforce_admins,
+                    "required_pull_request_reviews":review,
+                    "restrictions":Value::Null,
+                    "required_conversation_resolution":settings.require_conversation_resolution,
+                    "allow_force_pushes":settings.allow_force_pushes,
+                    "allow_deletions":settings.allow_deletions,
+                })),
+                true,
+                None,
+            )
         }
-        BranchProtectionOperation::Delete { branch } => api(document, GitHubResource::BranchProtection, "delete", GitHubHttpMethod::Delete, &format!("branches/{}/protection", path_component("branch", branch)?), BTreeMap::new(), None, true, None),
-        BranchProtectionOperation::ListRulesets { per_page } => api(document, GitHubResource::Repository, "list_rulesets", GitHubHttpMethod::Get, "rulesets", page_query(*per_page)?, None, true, None),
-        BranchProtectionOperation::GetRuleset { ruleset_id } => numbered_get(document, GitHubResource::Repository, "get_ruleset", "rulesets", *ruleset_id),
-        BranchProtectionOperation::CreateRuleset { ruleset } => api(document, GitHubResource::Repository, "create_ruleset", GitHubHttpMethod::Post, "rulesets", BTreeMap::new(), Some(ruleset_body(ruleset)?), true, None),
-        BranchProtectionOperation::UpdateRuleset { ruleset_id, ruleset } => {
+        BranchProtectionOperation::Delete { branch } => api(
+            document,
+            GitHubResource::BranchProtection,
+            "delete",
+            GitHubHttpMethod::Delete,
+            &format!("branches/{}/protection", path_component("branch", branch)?),
+            BTreeMap::new(),
+            None,
+            true,
+            None,
+        ),
+        BranchProtectionOperation::ListRulesets { per_page } => api(
+            document,
+            GitHubResource::Repository,
+            "list_rulesets",
+            GitHubHttpMethod::Get,
+            "rulesets",
+            page_query(*per_page)?,
+            None,
+            true,
+            None,
+        ),
+        BranchProtectionOperation::GetRuleset { ruleset_id } => numbered_get(
+            document,
+            GitHubResource::Repository,
+            "get_ruleset",
+            "rulesets",
+            *ruleset_id,
+        ),
+        BranchProtectionOperation::CreateRuleset { ruleset } => api(
+            document,
+            GitHubResource::Repository,
+            "create_ruleset",
+            GitHubHttpMethod::Post,
+            "rulesets",
+            BTreeMap::new(),
+            Some(ruleset_body(ruleset)?),
+            true,
+            None,
+        ),
+        BranchProtectionOperation::UpdateRuleset {
+            ruleset_id,
+            ruleset,
+        } => {
             require_number(*ruleset_id)?;
-            api(document, GitHubResource::Repository, "update_ruleset", GitHubHttpMethod::Put, &format!("rulesets/{ruleset_id}"), BTreeMap::new(), Some(ruleset_body(ruleset)?), true, None)
+            api(
+                document,
+                GitHubResource::Repository,
+                "update_ruleset",
+                GitHubHttpMethod::Put,
+                &format!("rulesets/{ruleset_id}"),
+                BTreeMap::new(),
+                Some(ruleset_body(ruleset)?),
+                true,
+                None,
+            )
         }
         BranchProtectionOperation::DeleteRuleset { ruleset_id } => {
             require_number(*ruleset_id)?;
-            api(document, GitHubResource::Repository, "delete_ruleset", GitHubHttpMethod::Delete, &format!("rulesets/{ruleset_id}"), BTreeMap::new(), None, true, None)
+            api(
+                document,
+                GitHubResource::Repository,
+                "delete_ruleset",
+                GitHubHttpMethod::Delete,
+                &format!("rulesets/{ruleset_id}"),
+                BTreeMap::new(),
+                None,
+                true,
+                None,
+            )
         }
     }
 }
 
 fn ruleset_body(input: &RulesetInput) -> MedusaResult<Value> {
     require_text("ruleset name", &input.name, 1, 100)?;
-    if !matches!(input.enforcement.as_str(), "disabled" | "active" | "evaluate") { return Err(invalid("ruleset enforcement is unsupported")); }
-    if input.target != "branch" { return Err(invalid("only branch rulesets are supported")); }
+    if !matches!(
+        input.enforcement.as_str(),
+        "disabled" | "active" | "evaluate"
+    ) {
+        return Err(invalid("ruleset enforcement is unsupported"));
+    }
+    if input.target != "branch" {
+        return Err(invalid("only branch rulesets are supported"));
+    }
     let rules = input.rules.iter().map(|rule| match rule {
         RulesetRule::RequiredSignatures => json!({"type":"required_signatures"}),
         RulesetRule::NonFastForward => json!({"type":"non_fast_forward"}),
@@ -954,36 +1657,123 @@ fn ruleset_body(input: &RulesetInput) -> MedusaResult<Value> {
     }))
 }
 
-fn prepare_projects(document: &GitHubOperationDocument, operation: &ProjectsOperation) -> MedusaResult<PreparedGitHubOperation> {
+fn prepare_projects(
+    document: &GitHubOperationDocument,
+    operation: &ProjectsOperation,
+) -> MedusaResult<PreparedGitHubOperation> {
     match operation {
-        ProjectsOperation::List { per_page } => api(document, GitHubResource::Projects, "list", GitHubHttpMethod::Get, "projects", page_query(*per_page)?, None, true, None),
-        ProjectsOperation::Get { project_id } => numbered_get(document, GitHubResource::Projects, "get", "projects", *project_id),
-        ProjectsOperation::Create { name, body } => api(document, GitHubResource::Projects, "create", GitHubHttpMethod::Post, "projects", BTreeMap::new(), Some(json!({"name":name,"body":body})), false, None),
-        ProjectsOperation::Update { project_id, name, body, state } => {
+        ProjectsOperation::List { per_page } => api(
+            document,
+            GitHubResource::Projects,
+            "list",
+            GitHubHttpMethod::Get,
+            "projects",
+            page_query(*per_page)?,
+            None,
+            true,
+            None,
+        ),
+        ProjectsOperation::Get { project_id } => numbered_get(
+            document,
+            GitHubResource::Projects,
+            "get",
+            "projects",
+            *project_id,
+        ),
+        ProjectsOperation::Create { name, body } => api(
+            document,
+            GitHubResource::Projects,
+            "create",
+            GitHubHttpMethod::Post,
+            "projects",
+            BTreeMap::new(),
+            Some(json!({"name":name,"body":body})),
+            false,
+            None,
+        ),
+        ProjectsOperation::Update {
+            project_id,
+            name,
+            body,
+            state,
+        } => {
             require_number(*project_id)?;
-            api(document, GitHubResource::Projects, "update", GitHubHttpMethod::Patch, &format!("projects/{project_id}"), BTreeMap::new(), Some(object([
-                optional("name", name.clone()), optional("body", body.clone()), optional("state", state.clone())
-            ])), true, None)
+            api(
+                document,
+                GitHubResource::Projects,
+                "update",
+                GitHubHttpMethod::Patch,
+                &format!("projects/{project_id}"),
+                BTreeMap::new(),
+                Some(object([
+                    optional("name", name.clone()),
+                    optional("body", body.clone()),
+                    optional("state", state.clone()),
+                ])),
+                true,
+                None,
+            )
         }
         ProjectsOperation::Delete { project_id } => {
             require_number(*project_id)?;
-            api(document, GitHubResource::Projects, "delete", GitHubHttpMethod::Delete, &format!("projects/{project_id}"), BTreeMap::new(), None, true, None)
+            api(
+                document,
+                GitHubResource::Projects,
+                "delete",
+                GitHubHttpMethod::Delete,
+                &format!("projects/{project_id}"),
+                BTreeMap::new(),
+                None,
+                true,
+                None,
+            )
         }
     }
 }
 
-fn prepare_search(document: &GitHubOperationDocument, operation: &SearchOperation) -> MedusaResult<PreparedGitHubOperation> {
+fn prepare_search(
+    document: &GitHubOperationDocument,
+    operation: &SearchOperation,
+) -> MedusaResult<PreparedGitHubOperation> {
     let (endpoint, query_text, sort, order, per_page) = match operation {
-        SearchOperation::Issues { query, sort, order, per_page } => ("issues", query, sort, order, *per_page),
-        SearchOperation::Commits { query, sort, order, per_page } => ("commits", query, sort, order, *per_page),
-        SearchOperation::Code { query, sort, order, per_page } => ("code", query, sort, order, *per_page),
+        SearchOperation::Issues {
+            query,
+            sort,
+            order,
+            per_page,
+        } => ("issues", query, sort, order, *per_page),
+        SearchOperation::Commits {
+            query,
+            sort,
+            order,
+            per_page,
+        } => ("commits", query, sort, order, *per_page),
+        SearchOperation::Code {
+            query,
+            sort,
+            order,
+            per_page,
+        } => ("code", query, sort, order, *per_page),
     };
     validate_search_text(query_text)?;
     let mut query = page_query(per_page)?;
-    query.insert("q".into(), format!("{} repo:{}", query_text.trim(), document.repository));
+    query.insert(
+        "q".into(),
+        format!("{} repo:{}", query_text.trim(), document.repository),
+    );
     insert_query(&mut query, "sort", sort.as_deref());
     insert_query(&mut query, "order", order.as_deref());
-    api(document, GitHubResource::Search, &format!("search_{endpoint}"), GitHubHttpMethod::Get, endpoint, query, None, true, None)
+    api(
+        document,
+        GitHubResource::Search,
+        &format!("search_{endpoint}"),
+        GitHubHttpMethod::Get,
+        endpoint,
+        query,
+        None,
+        true,
+        None,
+    )
 }
 
 fn api(
@@ -999,7 +1789,9 @@ fn api(
 ) -> MedusaResult<PreparedGitHubOperation> {
     let backend = match document.backend {
         GitHubExecutionBackend::NativeCli => GitHubBackendKind::NativeCli,
-        GitHubExecutionBackend::GhApi | GitHubExecutionBackend::DirectOauth => GitHubBackendKind::RestApi,
+        GitHubExecutionBackend::GhApi | GitHubExecutionBackend::DirectOauth => {
+            GitHubBackendKind::RestApi
+        }
     };
     let request = GitHubOperationRequest {
         repository: document.repository.clone(),
@@ -1024,14 +1816,45 @@ fn api(
     })
 }
 
-fn numbered_get(document: &GitHubOperationDocument, resource: GitHubResource, action: &str, prefix: &str, number: u64) -> MedusaResult<PreparedGitHubOperation> {
+fn numbered_get(
+    document: &GitHubOperationDocument,
+    resource: GitHubResource,
+    action: &str,
+    prefix: &str,
+    number: u64,
+) -> MedusaResult<PreparedGitHubOperation> {
     require_number(number)?;
-    api(document, resource, action, GitHubHttpMethod::Get, &format!("{prefix}/{number}"), BTreeMap::new(), None, true, None)
+    api(
+        document,
+        resource,
+        action,
+        GitHubHttpMethod::Get,
+        &format!("{prefix}/{number}"),
+        BTreeMap::new(),
+        None,
+        true,
+        None,
+    )
 }
 
-fn action_post(document: &GitHubOperationDocument, action: &str, endpoint: &str, id: u64) -> MedusaResult<PreparedGitHubOperation> {
+fn action_post(
+    document: &GitHubOperationDocument,
+    action: &str,
+    endpoint: &str,
+    id: u64,
+) -> MedusaResult<PreparedGitHubOperation> {
     require_number(id)?;
-    api(document, GitHubResource::Actions, action, GitHubHttpMethod::Post, endpoint, BTreeMap::new(), None, true, None)
+    api(
+        document,
+        GitHubResource::Actions,
+        action,
+        GitHubHttpMethod::Post,
+        endpoint,
+        BTreeMap::new(),
+        None,
+        true,
+        None,
+    )
 }
 
 fn object<const N: usize>(pairs: [Option<(String, Value)>; N]) -> Value {
@@ -1039,89 +1862,184 @@ fn object<const N: usize>(pairs: [Option<(String, Value)>; N]) -> Value {
 }
 
 fn required<T: serde::Serialize>(key: &str, value: T) -> Option<(String, Value)> {
-    Some((key.into(), serde_json::to_value(value).unwrap_or(Value::Null)))
+    Some((
+        key.into(),
+        serde_json::to_value(value).unwrap_or(Value::Null),
+    ))
 }
 
 fn optional<T: serde::Serialize>(key: &str, value: Option<T>) -> Option<(String, Value)> {
-    value.map(|value| (key.into(), serde_json::to_value(value).unwrap_or(Value::Null)))
+    value.map(|value| {
+        (
+            key.into(),
+            serde_json::to_value(value).unwrap_or(Value::Null),
+        )
+    })
 }
 
 fn optional_nonempty<T: serde::Serialize>(key: &str, values: &[T]) -> Option<(String, Value)> {
-    (!values.is_empty()).then(|| (key.into(), serde_json::to_value(values).unwrap_or(Value::Null)))
+    (!values.is_empty()).then(|| {
+        (
+            key.into(),
+            serde_json::to_value(values).unwrap_or(Value::Null),
+        )
+    })
 }
 
-fn optional_nonempty_map<T: serde::Serialize>(key: &str, values: &BTreeMap<String, T>) -> Option<(String, Value)> {
-    (!values.is_empty()).then(|| (key.into(), serde_json::to_value(values).unwrap_or(Value::Null)))
+fn optional_nonempty_map<T: serde::Serialize>(
+    key: &str,
+    values: &BTreeMap<String, T>,
+) -> Option<(String, Value)> {
+    (!values.is_empty()).then(|| {
+        (
+            key.into(),
+            serde_json::to_value(values).unwrap_or(Value::Null),
+        )
+    })
 }
 
 fn page_query(per_page: u16) -> MedusaResult<BTreeMap<String, String>> {
-    if !(1..=100).contains(&per_page) { return Err(invalid("per_page must be between 1 and 100")); }
+    if !(1..=100).contains(&per_page) {
+        return Err(invalid("per_page must be between 1 and 100"));
+    }
     Ok(BTreeMap::from([("per_page".into(), per_page.to_string())]))
 }
 
 fn insert_query(query: &mut BTreeMap<String, String>, key: &str, value: Option<&str>) {
-    if let Some(value) = value { query.insert(key.into(), value.into()); }
+    if let Some(value) = value {
+        query.insert(key.into(), value.into());
+    }
 }
 
 fn repository_path(value: &str) -> MedusaResult<String> {
-    if value.is_empty() || value.len() > 1024 || value.starts_with('/') || value.ends_with('/') || value.contains('\\') || value.split('/').any(|part| part.is_empty() || matches!(part, "." | "..")) || value.chars().any(char::is_control) {
-        return Err(invalid("repository path must be relative and cannot traverse parents"));
+    if value.is_empty()
+        || value.len() > 1024
+        || value.starts_with('/')
+        || value.ends_with('/')
+        || value.contains('\\')
+        || value
+            .split('/')
+            .any(|part| part.is_empty() || matches!(part, "." | ".."))
+        || value.chars().any(char::is_control)
+    {
+        return Err(invalid(
+            "repository path must be relative and cannot traverse parents",
+        ));
     }
     Ok(value.into())
 }
 
-fn path_component(label: &str, value: &str) -> MedusaResult<String> { safe_component(label, value) }
+fn path_component(label: &str, value: &str) -> MedusaResult<String> {
+    safe_component(label, value)
+}
 
 fn safe_component(label: &str, value: &str) -> MedusaResult<String> {
-    if value.is_empty() || value.len() > 255 || value.trim() != value || value.contains('/') || value.contains('\\') || matches!(value, "." | "..") || value.chars().any(char::is_control) {
-        return Err(invalid(format!("{label} is not a safe GitHub path component")));
+    if value.is_empty()
+        || value.len() > 255
+        || value.trim() != value
+        || value.contains('/')
+        || value.contains('\\')
+        || matches!(value, "." | "..")
+        || value.chars().any(char::is_control)
+    {
+        return Err(invalid(format!(
+            "{label} is not a safe GitHub path component"
+        )));
     }
     Ok(value.into())
 }
 
 fn git_reference(value: &str) -> MedusaResult<String> {
-    if !value.starts_with("refs/") || value.len() > 512 || value.contains("..") || value.contains("@{") || value.ends_with('.') || value.ends_with('/') || value.contains('\\') || value.chars().any(char::is_control) {
+    if !value.starts_with("refs/")
+        || value.len() > 512
+        || value.contains("..")
+        || value.contains("@{")
+        || value.ends_with('.')
+        || value.ends_with('/')
+        || value.contains('\\')
+        || value.chars().any(char::is_control)
+    {
         return Err(invalid("Git reference must be a valid refs/... name"));
     }
     Ok(value.into())
 }
 
 fn require_sha(value: &str) -> MedusaResult<()> {
-    if !(7..=128).contains(&value.len()) || !value.bytes().all(|byte| byte.is_ascii_hexdigit()) { return Err(invalid("Git SHA is malformed")); }
+    if !(7..=128).contains(&value.len()) || !value.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+        return Err(invalid("Git SHA is malformed"));
+    }
     Ok(())
 }
 
 fn require_number(value: u64) -> MedusaResult<()> {
-    if value == 0 { return Err(invalid("GitHub numeric identifiers must be greater than zero")); }
+    if value == 0 {
+        return Err(invalid(
+            "GitHub numeric identifiers must be greater than zero",
+        ));
+    }
     Ok(())
 }
 
 fn require_text(label: &str, value: &str, minimum: usize, maximum: usize) -> MedusaResult<()> {
-    if value.len() < minimum || value.len() > maximum || value.chars().any(|character| character == '\0') { return Err(invalid(format!("{label} length is invalid"))); }
+    if value.len() < minimum
+        || value.len() > maximum
+        || value.chars().any(|character| character == '\0')
+    {
+        return Err(invalid(format!("{label} length is invalid")));
+    }
     Ok(())
 }
 
-fn validate_string_list(label: &str, values: &[String], maximum_items: usize, maximum_length: usize) -> MedusaResult<()> {
-    if values.len() > maximum_items { return Err(invalid(format!("too many {label} values"))); }
-    for value in values { require_text(label, value, 1, maximum_length)?; }
+fn validate_string_list(
+    label: &str,
+    values: &[String],
+    maximum_items: usize,
+    maximum_length: usize,
+) -> MedusaResult<()> {
+    if values.len() > maximum_items {
+        return Err(invalid(format!("too many {label} values")));
+    }
+    for value in values {
+        require_text(label, value, 1, maximum_length)?;
+    }
     Ok(())
 }
 
 fn validate_reaction(content: &str) -> MedusaResult<()> {
-    if !matches!(content, "+1" | "-1" | "laugh" | "confused" | "heart" | "hooray" | "rocket" | "eyes") { return Err(invalid("reaction content is unsupported")); }
+    if !matches!(
+        content,
+        "+1" | "-1" | "laugh" | "confused" | "heart" | "hooray" | "rocket" | "eyes"
+    ) {
+        return Err(invalid("reaction content is unsupported"));
+    }
     Ok(())
 }
 
 fn validate_search_text(value: &str) -> MedusaResult<()> {
     let lower = value.to_ascii_lowercase();
-    if value.trim().is_empty() || value.len() > 1024 || lower.split_whitespace().any(|part| part.starts_with("repo:") || part.starts_with("org:") || part.starts_with("user:")) { return Err(invalid("search query cannot contain repository, organization, or user scopes")); }
+    if value.trim().is_empty()
+        || value.len() > 1024
+        || lower.split_whitespace().any(|part| {
+            part.starts_with("repo:") || part.starts_with("org:") || part.starts_with("user:")
+        })
+    {
+        return Err(invalid(
+            "search query cannot contain repository, organization, or user scopes",
+        ));
+    }
     Ok(())
 }
 
-fn marker(digest: &str) -> String { format!("<!-- medusa-request:{digest} -->") }
+fn marker(digest: &str) -> String {
+    format!("<!-- medusa-request:{digest} -->")
+}
 
 fn append_marker(body: &str, marker: &str) -> String {
-    if body.is_empty() { marker.into() } else { format!("{body}\n\n{marker}") }
+    if body.is_empty() {
+        marker.into()
+    } else {
+        format!("{body}\n\n{marker}")
+    }
 }
 
 fn resource_name(resource: GitHubResource) -> &'static str {
@@ -1169,27 +2087,64 @@ mod tests {
 
     #[test]
     fn issue_create_adds_reconciliation_marker() {
-        let prepared = prepare(&document(GitHubTypedOperation::Issues(IssuesOperation::Create {
-            title: "title".into(), body: "body".into(), labels: vec![], assignees: vec![], milestone: None
-        }))).expect("prepare");
-        assert!(matches!(prepared.reconciliation, Some(GitHubReconciliation::IssueMarker { .. })));
-        let PreparedExecution::Api(request) = prepared.execution else { panic!("api") };
-        assert!(request.body.expect("body").to_string().contains("medusa-request"));
+        let prepared = prepare(&document(GitHubTypedOperation::Issues(
+            IssuesOperation::Create {
+                title: "title".into(),
+                body: "body".into(),
+                labels: vec![],
+                assignees: vec![],
+                milestone: None,
+            },
+        )))
+        .expect("prepare");
+        assert!(matches!(
+            prepared.reconciliation,
+            Some(GitHubReconciliation::IssueMarker { .. })
+        ));
+        let PreparedExecution::Api(request) = prepared.execution else {
+            panic!("api")
+        };
+        assert!(
+            request
+                .body
+                .expect("body")
+                .to_string()
+                .contains("medusa-request")
+        );
     }
 
     #[test]
     fn search_scope_is_added_internally() {
-        let prepared = prepare(&document(GitHubTypedOperation::Search(SearchOperation::Issues {
-            query: "is:open bug".into(), sort: None, order: None, per_page: 30
-        }))).expect("prepare");
-        let PreparedExecution::Api(request) = prepared.execution else { panic!("api") };
-        assert_eq!(request.query.get("q").expect("q"), "is:open bug repo:acme/project");
+        let prepared = prepare(&document(GitHubTypedOperation::Search(
+            SearchOperation::Issues {
+                query: "is:open bug".into(),
+                sort: None,
+                order: None,
+                per_page: 30,
+            },
+        )))
+        .expect("prepare");
+        let PreparedExecution::Api(request) = prepared.execution else {
+            panic!("api")
+        };
+        assert_eq!(
+            request.query.get("q").expect("q"),
+            "is:open bug repo:acme/project"
+        );
     }
 
     #[test]
     fn arbitrary_search_scope_is_rejected() {
-        assert!(prepare(&document(GitHubTypedOperation::Search(SearchOperation::Code {
-            query: "repo:other/project token".into(), sort: None, order: None, per_page: 30
-        }))).is_err());
+        assert!(
+            prepare(&document(GitHubTypedOperation::Search(
+                SearchOperation::Code {
+                    query: "repo:other/project token".into(),
+                    sort: None,
+                    order: None,
+                    per_page: 30
+                }
+            )))
+            .is_err()
+        );
     }
 }
