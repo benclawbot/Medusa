@@ -18,7 +18,7 @@ use serde::Deserialize;
 
 use crate::{
     Artifact, DownloadReport, Release,
-    manifest::{MANIFEST_NAME, SIGNATURE_NAME, Platform, TrustStore},
+    manifest::{MANIFEST_NAME, Platform, SIGNATURE_NAME, TrustStore},
     model::{invalid, verify_artifact},
 };
 
@@ -51,10 +51,14 @@ pub struct GithubReleaseClient {
 
 impl GithubReleaseClient {
     pub fn public() -> MedusaResult<Self> {
-        Self::new("benclawbot/Medusa", GITHUB_API, TrustStore::production())
+        Self::new("benclawbot/Medusa", GITHUB_API)
     }
 
-    pub fn new(
+    pub fn new(repository: impl Into<String>, api_base: impl Into<String>) -> MedusaResult<Self> {
+        Self::with_trust_store(repository, api_base, TrustStore::production())
+    }
+
+    pub fn with_trust_store(
         repository: impl Into<String>,
         api_base: impl Into<String>,
         trust_store: TrustStore,
@@ -81,7 +85,10 @@ impl GithubReleaseClient {
     }
 
     fn response(&self, url: &str, range_start: Option<u64>) -> MedusaResult<Response> {
-        let mut request = self.client.get(url).header(ACCEPT, "application/octet-stream");
+        let mut request = self
+            .client
+            .get(url)
+            .header(ACCEPT, "application/octet-stream");
         if let Some(start) = range_start {
             request = request.header(RANGE, format!("bytes={start}-"));
         }
@@ -151,7 +158,9 @@ impl GithubReleaseClient {
         if manifest_asset.size as usize > MAX_MANIFEST
             || signature_asset.size as usize > MAX_SIGNATURE
         {
-            return Err(invalid("release manifest or signature exceeds its size limit"));
+            return Err(invalid(
+                "release manifest or signature exceeds its size limit",
+            ));
         }
         let manifest = read_bounded(
             self.response(&manifest_asset.browser_download_url, None)?,
@@ -274,14 +283,14 @@ impl ReleaseClient for GithubReleaseClient {
         }
 
         let mut retries = 0_u32;
-        while retries < DOWNLOAD_ATTEMPTS {
+        for attempt in 0..DOWNLOAD_ATTEMPTS {
             let offset = fs::metadata(&partial).map(|meta| meta.len()).unwrap_or(0);
             if offset == artifact.bytes {
                 break;
             }
             let response = match self.response(&artifact.browser_download_url, Some(offset)) {
                 Ok(response) => response,
-                Err(error) if retries + 1 < DOWNLOAD_ATTEMPTS => {
+                Err(error) if attempt + 1 < DOWNLOAD_ATTEMPTS => {
                     retries += 1;
                     thread::sleep(Duration::from_millis(250 * u64::from(retries)));
                     let _ = error;
@@ -291,7 +300,10 @@ impl ReleaseClient for GithubReleaseClient {
             };
             let append = offset > 0 && response.status() == StatusCode::PARTIAL_CONTENT;
             let mut file = if append {
-                OpenOptions::new().create(true).append(true).open(&partial)?
+                OpenOptions::new()
+                    .create(true)
+                    .append(true)
+                    .open(&partial)?
             } else {
                 let mut file = OpenOptions::new()
                     .create(true)
@@ -307,8 +319,7 @@ impl ReleaseClient for GithubReleaseClient {
             loop {
                 let read = match response.read(&mut buffer) {
                     Ok(read) => read,
-                    Err(error) if retries + 1 < DOWNLOAD_ATTEMPTS => {
-                        retries += 1;
+                    Err(error) if attempt + 1 < DOWNLOAD_ATTEMPTS => {
                         let _ = error;
                         break;
                     }
@@ -333,7 +344,14 @@ impl ReleaseClient for GithubReleaseClient {
             if downloaded == artifact.bytes {
                 break;
             }
-            thread::sleep(Duration::from_millis(250 * u64::from(retries.max(1))));
+            if attempt + 1 == DOWNLOAD_ATTEMPTS {
+                return Err(invalid(format!(
+                    "download remained incomplete after {DOWNLOAD_ATTEMPTS} attempts for {}",
+                    artifact.name
+                )));
+            }
+            retries += 1;
+            thread::sleep(Duration::from_millis(250 * u64::from(retries)));
         }
 
         verify_artifact(&partial, artifact.bytes, &artifact.sha256)?;
@@ -414,7 +432,7 @@ mod tests {
 
     #[test]
     fn github_enterprise_api_base_is_preserved() {
-        let client = GithubReleaseClient::new(
+        let client = GithubReleaseClient::with_trust_store(
             "octo/medusa",
             "https://github.example/api/v3",
             TrustStore::production(),

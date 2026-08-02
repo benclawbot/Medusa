@@ -1,4 +1,10 @@
-use std::{fs::File, io::Read, path::Path, time::Duration};
+use std::{
+    fs,
+    fs::File,
+    io::{Read, Write},
+    path::Path,
+    time::Duration,
+};
 
 use medusa_core::{ErrorCategory, ErrorCode, MedusaError, MedusaResult};
 use semver::Version;
@@ -86,12 +92,12 @@ impl Release {
         }
     }
 
-    pub fn artifact_for(&self, platform: Platform) -> MedusaResult<&Artifact> {
+    pub fn artifact_for(&self, platform: &Platform) -> MedusaResult<&Artifact> {
         let matches = self
             .artifacts
             .iter()
             .filter(|artifact| {
-                artifact.kind == ArtifactKind::CliArchive && artifact.platform == platform
+                artifact.kind == ArtifactKind::CliArchive && artifact.platform == *platform
             })
             .collect::<Vec<_>>();
         match matches.as_slice() {
@@ -177,8 +183,49 @@ impl DownloadReport {
     }
 }
 
+/// Streams a reader to a durable file while reporting bounded progress.
+pub fn copy_with_progress(
+    reader: &mut impl Read,
+    destination: &Path,
+    expected_bytes: Option<u64>,
+    mut progress: impl FnMut(u64, Option<u64>),
+) -> MedusaResult<u64> {
+    if let Some(parent) = destination.parent() {
+        fs::create_dir_all(parent)?;
+    }
+    let mut output = File::create(destination)?;
+    let mut buffer = [0_u8; 64 * 1024];
+    let mut written = 0_u64;
+    loop {
+        let read = reader.read(&mut buffer)?;
+        if read == 0 {
+            break;
+        }
+        written = written
+            .checked_add(read as u64)
+            .ok_or_else(|| invalid("copy byte count overflow"))?;
+        if expected_bytes.is_some_and(|expected| written > expected) {
+            return Err(invalid("copy exceeded expected byte count"));
+        }
+        output.write_all(&buffer[..read])?;
+        progress(written, expected_bytes);
+    }
+    output.sync_all()?;
+    if expected_bytes.is_some_and(|expected| written != expected) {
+        return Err(invalid(format!(
+            "copy byte count mismatch: expected {}, got {written}",
+            expected_bytes.unwrap_or_default()
+        )));
+    }
+    Ok(written)
+}
+
 /// Validates byte count and SHA-256 without reading the whole artifact into memory.
-pub fn verify_artifact(path: &Path, expected_bytes: u64, expected_sha256: &str) -> MedusaResult<()> {
+pub fn verify_artifact(
+    path: &Path,
+    expected_bytes: u64,
+    expected_sha256: &str,
+) -> MedusaResult<()> {
     let mut file = File::open(path)?;
     let mut digest = Sha256::new();
     let mut buffer = [0_u8; 64 * 1024];

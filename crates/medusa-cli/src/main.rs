@@ -6,7 +6,6 @@ mod update_command;
 use std::{
     collections::BTreeMap,
     fs,
-    io::IsTerminal,
     path::{Path, PathBuf},
     process::Command,
 };
@@ -982,7 +981,8 @@ mod tests {
             cli.command,
             Some(CommandKind::Update {
                 check: true,
-                automatic: false
+                automatic: false,
+                ..
             })
         ));
     }

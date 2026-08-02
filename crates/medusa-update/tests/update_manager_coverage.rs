@@ -3,15 +3,16 @@ use std::{
     io::{Read, Write},
     net::TcpListener,
     path::Path,
+    sync::{Arc, Mutex},
     thread,
 };
 
 use flate2::{Compression, write::GzEncoder};
 use medusa_update::{
     Architecture, ArtifactKind, AtomicInstaller, BuildSource, GithubReleaseClient, KeyStatus,
-    ManifestArtifact, ManifestSignature, OperatingSystem, Platform, ReleaseClient, ReleaseEvidence,
-    ReleaseManifest, RolloutPolicy, TrustStore, TrustedKey, UpdateCheck, copy_with_progress,
-    verify_sha256, MANIFEST_NAME, MANIFEST_SCHEMA, SIGNATURE_NAME, SIGNATURE_SCHEMA,
+    MANIFEST_NAME, MANIFEST_SCHEMA, ManifestArtifact, ManifestSignature, OperatingSystem, Platform,
+    ReleaseClient, ReleaseEvidence, ReleaseManifest, RolloutPolicy, SIGNATURE_NAME,
+    SIGNATURE_SCHEMA, TrustStore, TrustedKey, UpdateCheck, copy_with_progress, verify_sha256,
 };
 use ring::signature::{Ed25519KeyPair, KeyPair};
 use semver::Version;
@@ -136,11 +137,13 @@ fn signed_release(base: &str, payload: &[u8]) -> (TrustStore, Vec<u8>, Vec<u8>, 
 #[test]
 fn discovers_verified_release_and_streams_platform_asset() {
     let payload = b"payload".to_vec();
+    let trust_store_slot = Arc::new(Mutex::new(None));
     let (base, worker) = server({
         let payload = payload.clone();
+        let trust_store_slot = Arc::clone(&trust_store_slot);
         move |base| {
             let (trust_store, release, manifest, signature) = signed_release(base, &payload);
-            TRUST_STORE.with(|slot| *slot.borrow_mut() = Some(trust_store));
+            *trust_store_slot.lock().expect("trust store lock") = Some(trust_store);
             vec![
                 (200, "application/json".into(), release),
                 (200, "application/json".into(), manifest),
@@ -149,11 +152,13 @@ fn discovers_verified_release_and_streams_platform_asset() {
             ]
         }
     });
-    let trust_store = TRUST_STORE
-        .with(|slot| slot.borrow_mut().take())
+    let trust_store = trust_store_slot
+        .lock()
+        .expect("trust store lock")
+        .take()
         .expect("trust store");
-    let client = GithubReleaseClient::with_trust_store("acme/medusa", &base, trust_store)
-        .expect("client");
+    let client =
+        GithubReleaseClient::with_trust_store("acme/medusa", &base, trust_store).expect("client");
     let release = client
         .latest()
         .expect("release request")
@@ -177,19 +182,9 @@ fn discovers_verified_release_and_streams_platform_asset() {
     worker.join().expect("server");
 }
 
-thread_local! {
-    static TRUST_STORE: std::cell::RefCell<Option<TrustStore>> = const { std::cell::RefCell::new(None) };
-}
-
 #[test]
 fn absent_latest_release_is_not_an_updater_failure() {
-    let (address, worker) = server(|_| {
-        vec![(
-            404,
-            "application/json".into(),
-            Vec::new(),
-        )]
-    });
+    let (address, worker) = server(|_| vec![(404, "application/json".into(), Vec::new())]);
     let client = GithubReleaseClient::new("acme/medusa", address).expect("client");
     assert!(client.latest().expect("request").is_none());
     worker.join().expect("server");
@@ -244,7 +239,11 @@ fn tar_archives_extract_only_medusa_binary() {
 #[test]
 fn interrupted_swap_restores_previous_binary() {
     let directory = tempfile::tempdir().expect("tempdir");
-    let target = directory.path().join(if cfg!(windows) { "medusa.exe" } else { "medusa" });
+    let target = directory.path().join(if cfg!(windows) {
+        "medusa.exe"
+    } else {
+        "medusa"
+    });
     let backup = if cfg!(windows) {
         target.with_extension("previous.exe")
     } else {

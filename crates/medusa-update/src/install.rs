@@ -143,16 +143,31 @@ impl AtomicInstaller {
                 fs::remove_file(&staged)?;
             }
             fs::copy(candidate, &staged)?;
+            OpenOptions::new().read(true).open(&staged)?.sync_all()?;
             validate_candidate(&staged)?;
             #[cfg(unix)]
             set_executable(&staged)?;
             let script = if cfg!(windows) {
                 windows_replace_script(
-                    parent_pid, &backup, &self.target, &staged, &state, &health, &lock, restart,
+                    parent_pid,
+                    &backup,
+                    &self.target,
+                    &staged,
+                    &state,
+                    &health,
+                    &lock,
+                    restart,
                 )
             } else {
                 unix_replace_script(
-                    parent_pid, &backup, &self.target, &staged, &state, &health, &lock, restart,
+                    parent_pid,
+                    &backup,
+                    &self.target,
+                    &staged,
+                    &state,
+                    &health,
+                    &lock,
+                    restart,
                 )
             };
             atomic_write(&helper, script.as_bytes())?;
@@ -301,7 +316,9 @@ fn extract_tar_gz(archive: &Path, workspace: &Path) -> MedusaResult<PathBuf> {
             return Err(invalid("Medusa archive entry is not a regular file"));
         }
         if candidate.is_some() {
-            return Err(invalid("update archive contains multiple Medusa executables"));
+            return Err(invalid(
+                "update archive contains multiple Medusa executables",
+            ));
         }
         let target = workspace.join(name);
         copy_entry(&mut entry, &target)?;
@@ -316,10 +333,7 @@ fn validate_archive_path(path: &Path) -> MedusaResult<()> {
             .components()
             .any(|component| !matches!(component, Component::Normal(_) | Component::CurDir))
     {
-        return Err(invalid(format!(
-            "unsafe archive path {}",
-            path.display()
-        )));
+        return Err(invalid(format!("unsafe archive path {}", path.display())));
     }
     Ok(())
 }
@@ -461,7 +475,11 @@ mod tests {
     #[test]
     fn concurrent_update_is_refused() {
         let directory = tempfile::tempdir().expect("tempdir");
-        let target = directory.path().join(if cfg!(windows) { "medusa.exe" } else { "medusa" });
+        let target = directory.path().join(if cfg!(windows) {
+            "medusa.exe"
+        } else {
+            "medusa"
+        });
         let candidate = directory.path().join("candidate");
         fs::write(&target, b"old").expect("target");
         fs::write(&candidate, b"new").expect("candidate");

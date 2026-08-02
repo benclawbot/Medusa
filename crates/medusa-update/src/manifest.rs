@@ -1,4 +1,4 @@
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::path::{Component, Path};
 
 use ring::signature::{ED25519, UnparsedPublicKey};
@@ -22,6 +22,17 @@ pub enum OperatingSystem {
     Windows,
 }
 
+impl From<&str> for OperatingSystem {
+    fn from(value: &str) -> Self {
+        match value {
+            "linux" => Self::Linux,
+            "macos" => Self::Macos,
+            "windows" => Self::Windows,
+            other => panic!("unsupported operating system literal {other}"),
+        }
+    }
+}
+
 impl OperatingSystem {
     pub fn current() -> Result<Self, ManifestError> {
         match std::env::consts::OS {
@@ -42,6 +53,16 @@ pub enum Architecture {
     Aarch64,
 }
 
+impl From<&str> for Architecture {
+    fn from(value: &str) -> Self {
+        match value {
+            "x86_64" => Self::X86_64,
+            "aarch64" => Self::Aarch64,
+            other => panic!("unsupported architecture literal {other}"),
+        }
+    }
+}
+
 impl Architecture {
     pub fn current() -> Result<Self, ManifestError> {
         match std::env::consts::ARCH {
@@ -55,6 +76,7 @@ impl Architecture {
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
 pub struct Platform {
     pub os: OperatingSystem,
     pub architecture: Architecture,
@@ -77,6 +99,7 @@ pub enum ArtifactKind {
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
 pub struct ManifestArtifact {
     pub name: String,
     pub kind: ArtifactKind,
@@ -87,6 +110,15 @@ pub struct ManifestArtifact {
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct ReleaseEvidence {
+    pub name: String,
+    pub bytes: u64,
+    pub sha256: String,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
 pub struct BuildSource {
     pub repository: String,
     pub revision: String,
@@ -96,6 +128,7 @@ pub struct BuildSource {
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
 pub struct RolloutPolicy {
     pub channel: String,
     pub sequence: u64,
@@ -103,6 +136,7 @@ pub struct RolloutPolicy {
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
 pub struct ReleaseManifest {
     pub schema: String,
     pub version: Version,
@@ -110,6 +144,7 @@ pub struct ReleaseManifest {
     pub source: BuildSource,
     pub rollout: RolloutPolicy,
     pub artifacts: Vec<ManifestArtifact>,
+    pub evidence: Vec<ReleaseEvidence>,
 }
 
 impl ReleaseManifest {
@@ -164,6 +199,40 @@ impl ReleaseManifest {
             if !names.insert(artifact.name.as_str()) {
                 return Err(ManifestError::InvalidField(format!(
                     "duplicate artifact {}",
+                    artifact.name
+                )));
+            }
+        }
+        if self.evidence.is_empty() {
+            return Err(ManifestError::InvalidField(
+                "manifest contains no release evidence".to_owned(),
+            ));
+        }
+        let mut evidence_by_name = HashMap::new();
+        for evidence in &self.evidence {
+            validate_evidence(evidence)?;
+            if evidence_by_name
+                .insert(evidence.name.as_str(), evidence)
+                .is_some()
+            {
+                return Err(ManifestError::InvalidField(format!(
+                    "duplicate evidence {}",
+                    evidence.name
+                )));
+            }
+        }
+        for artifact in &self.artifacts {
+            let evidence = evidence_by_name
+                .get(artifact.name.as_str())
+                .ok_or_else(|| {
+                    ManifestError::InvalidField(format!(
+                        "artifact {} is missing release evidence",
+                        artifact.name
+                    ))
+                })?;
+            if evidence.bytes != artifact.bytes || evidence.sha256 != artifact.sha256 {
+                return Err(ManifestError::InvalidField(format!(
+                    "artifact {} disagrees with release evidence",
                     artifact.name
                 )));
             }
@@ -224,6 +293,7 @@ impl ReleaseManifest {
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
 pub struct ManifestSignature {
     pub schema: String,
     pub key_id: String,
@@ -316,8 +386,8 @@ impl TrustStore {
         if envelope.manifest_sha256 != digest {
             return Err(ManifestError::ManifestDigest);
         }
-        let signature = hex::decode(&envelope.signature)
-            .map_err(|_| ManifestError::SignatureEnvelope)?;
+        let signature =
+            hex::decode(&envelope.signature).map_err(|_| ManifestError::SignatureEnvelope)?;
         if signature.len() != 64 {
             return Err(ManifestError::SignatureEnvelope);
         }
@@ -403,6 +473,11 @@ fn validate_hex(name: &str, value: &str, length: usize) -> Result<(), ManifestEr
 }
 
 fn validate_artifact(artifact: &ManifestArtifact) -> Result<(), ManifestError> {
+    validate_evidence(&ReleaseEvidence {
+        name: artifact.name.clone(),
+        bytes: artifact.bytes,
+        sha256: artifact.sha256.clone(),
+    })?;
     let path = Path::new(&artifact.name);
     if artifact.name.is_empty()
         || path.is_absolute()
@@ -428,6 +503,27 @@ fn validate_artifact(artifact: &ManifestArtifact) -> Result<(), ManifestError> {
         )));
     }
     Ok(())
+}
+
+fn validate_evidence(evidence: &ReleaseEvidence) -> Result<(), ManifestError> {
+    let path = Path::new(&evidence.name);
+    if evidence.name.is_empty()
+        || path.is_absolute()
+        || path.components().count() != 1
+        || !matches!(path.components().next(), Some(Component::Normal(_)))
+    {
+        return Err(ManifestError::InvalidField(format!(
+            "unsafe evidence name {}",
+            evidence.name
+        )));
+    }
+    if evidence.bytes == 0 {
+        return Err(ManifestError::InvalidField(format!(
+            "evidence {} has zero bytes",
+            evidence.name
+        )));
+    }
+    validate_hex("evidence.sha256", &evidence.sha256, 64)
 }
 
 #[cfg(test)]
@@ -466,6 +562,11 @@ mod tests {
                     architecture: Architecture::X86_64,
                 },
                 target: "x86_64-unknown-linux-gnu".to_owned(),
+                bytes: 12,
+                sha256: "d".repeat(64),
+            }],
+            evidence: vec![ReleaseEvidence {
+                name: "medusa-cli-linux-x86_64.tar.gz".to_owned(),
                 bytes: 12,
                 sha256: "d".repeat(64),
             }],
@@ -513,6 +614,16 @@ mod tests {
             store.verify(&tampered, &signature),
             Err(ManifestError::ManifestDigest)
         ));
+    }
+
+    #[test]
+    fn rejects_unknown_manifest_fields() {
+        let mut value = serde_json::to_value(fixture_manifest(1)).expect("manifest value");
+        value
+            .as_object_mut()
+            .expect("manifest object")
+            .insert("unexpected".to_owned(), serde_json::Value::Bool(true));
+        assert!(serde_json::from_value::<ReleaseManifest>(value).is_err());
     }
 
     #[test]
@@ -564,12 +675,14 @@ mod tests {
     #[test]
     fn rejects_wrong_platform_and_traversal() {
         let manifest = fixture_manifest(1);
-        assert!(manifest
-            .select_cli(Platform {
-                os: OperatingSystem::Windows,
-                architecture: Architecture::X86_64,
-            })
-            .is_err());
+        assert!(
+            manifest
+                .select_cli(Platform {
+                    os: OperatingSystem::Windows,
+                    architecture: Architecture::X86_64,
+                })
+                .is_err()
+        );
         let mut unsafe_manifest = manifest;
         unsafe_manifest.artifacts[0].name = "../medusa".to_owned();
         assert!(unsafe_manifest.validate().is_err());

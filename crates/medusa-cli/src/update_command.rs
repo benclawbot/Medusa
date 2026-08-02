@@ -119,7 +119,7 @@ fn release_channel(
 
     let platform = Platform::current()
         .map_err(|error| invalid(format!("cannot select release artifact: {error}")))?;
-    let artifact = release.artifact_for(platform)?;
+    let artifact = release.artifact_for(&platform)?;
     let update_root = repo.join(".medusa/update-work");
     fs::create_dir_all(&update_root)?;
     let workspace = tempfile::Builder::new()
