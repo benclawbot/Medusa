@@ -159,6 +159,7 @@ jobs:
           text = text[:start] + views + text[end:]
           scheduler.write_text(text, encoding="utf-8")
           PY
+          python3 scripts/fix-648-ledger-scope.py
       - name: Compile all affected targets
         run: cargo check -p medusa-multi-agent-scheduler -p medusa-agent -p medusa-runtime -p medusa-cli -p medusa-tui -p medusa-daemon --all-targets
       - name: Validate scheduler authority
@@ -187,7 +188,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          git rm .github/workflows/apply-648-scheduler.yml scripts/apply-648-scheduler.py
+          git rm .github/workflows/apply-648-scheduler.yml scripts/apply-648-scheduler.py scripts/fix-648-ledger-scope.py
           git config user.name github-actions[bot]
           git config user.email 41898282+github-actions[bot]@users.noreply.github.com
           git add \
