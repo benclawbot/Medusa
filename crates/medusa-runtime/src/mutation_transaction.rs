@@ -6,7 +6,7 @@ use std::{
     sync::mpsc::Sender,
 };
 
-use medusa_agent::{AgentSession, authoritative_verification_for_components};
+use medusa_agent::{AgentSession, authoritative_verification_for_components_at};
 use medusa_evidence::{ChangedComponent, VerificationReceipt, changed_scope_fingerprint};
 use medusa_provider::{MessageBlock, Role};
 use medusa_workers::{IntegrationReceipt, Worker, WorkerManager};
@@ -347,8 +347,9 @@ Decision rules: accept when the exact patch implements the scoped request, chang
         manager
             .materialize_detached_commit(&self.state.prepared_commit, &verification_root)
             .map_err(|error| error.to_string())?;
-        let verification = authoritative_verification_for_components(
+        let verification = authoritative_verification_for_components_at(
             &verification_root,
+            &self.root.join("evidence/independent"),
             &self.state.repository_fingerprint,
             &self.state.prepared_commit,
             &components,
@@ -1024,8 +1025,9 @@ mod tests {
         let changed_components = manager
             .commit_changed_components(&commit)
             .expect("components");
-        let worktree_verification = authoritative_verification_for_components(
+        let worktree_verification = authoritative_verification_for_components_at(
             &worker.worktree,
+            &root.join("evidence/test-worktree"),
             "repo",
             &format!("worktree:{}", changed_scope_fingerprint(&changed_components)),
             &changed_components,
