@@ -104,7 +104,7 @@ fn implementer_turn_budget_is_bounded_without_truncating_smaller_limits() {
 }
 
 #[test]
-fn isolated_implementation_is_verified_integrated_and_cleaned() {
+fn isolated_implementation_is_verified_prepared_and_preserved() {
     let (_directory, repo, plan, preflight) = repository("src/");
     let cancel = Arc::new(AtomicBool::new(false));
     let (events, _) = mpsc::channel();
@@ -124,11 +124,13 @@ fn isolated_implementation_is_verified_integrated_and_cleaned() {
         .expect("implementation");
     assert_eq!(
         fs::read_to_string(repo.join("src/lib.rs")).unwrap(),
-        "pub fn value() -> u32 { 2 }\n"
+        "pub fn value() -> u32 { 1 }\n"
     );
     assert_eq!(evidence.changed_paths, vec!["src/lib.rs"]);
-    assert!(!evidence.integration.branch.is_empty());
-    assert!(!repo.join(".medusa/executions/test/worktrees").exists());
+    assert!(!evidence.prepared_commit.is_empty());
+    assert!(!evidence.prepared_tree.is_empty());
+    assert!(evidence.transaction_path.is_file());
+    assert!(repo.join(".medusa/executions/test/worktrees").exists());
 }
 
 #[test]
