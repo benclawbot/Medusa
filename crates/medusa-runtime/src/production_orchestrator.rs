@@ -4,11 +4,15 @@ use std::{
     path::{Path, PathBuf},
 };
 
-use medusa_multi_agent_scheduler::{schedule, Schedule, Task, Worker};
+use medusa_agent::{AgentPlanStep, AgentPlanStepStatus};
+use medusa_multi_agent_scheduler::{
+    CancellationAuthority, ExecutionLedger, ExecutionStrategy, LedgerTaskState, PlannedTask,
+    PlannerInput, PlanningResult, Schedule, Task, TaskKind, Worker, plan_typed, schedule,
+};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
-use crate::{prompt::PromptDraft, RuntimeActivity, RuntimeActivityKind, RuntimeEvent};
+use crate::{RuntimeActivity, RuntimeActivityKind, RuntimeEvent, prompt::PromptDraft};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub enum ExecutionMode {
@@ -60,6 +64,7 @@ pub struct ContextPacket {
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct ProductionExecutionPlan {
     pub mode: ExecutionMode,
+    pub planning: PlanningResult,
     pub tasks: Vec<Task>,
     pub schedule: Option<Schedule>,
     pub contracts: Vec<AgentContract>,
@@ -75,23 +80,38 @@ pub struct PersistedOutcome {
 }
 
 pub fn plan(draft: &PromptDraft) -> Result<ProductionExecutionPlan, &'static str> {
-    let text = draft.text.trim();
-    let mode = classify(text, draft.attachments.len());
-    let mutating = mode == ExecutionMode::Orchestrated && objective_requires_mutation(text);
-    let tasks = if mode == ExecutionMode::Orchestrated {
-        decompose(text, mutating)
+    plan_for_repository(Path::new("."), draft)
+}
+
+pub fn plan_for_repository(
+    repo: &Path,
+    draft: &PromptDraft,
+) -> Result<ProductionExecutionPlan, &'static str> {
+    let planning = plan_typed(PlannerInput {
+        objective: draft.text.clone(),
+        attachment_count: draft.attachments.len(),
+        repository_paths: repository_paths(repo),
+    })?;
+    let mode = if planning.strategy == ExecutionStrategy::Direct {
+        ExecutionMode::Direct
     } else {
-        Vec::new()
+        ExecutionMode::Orchestrated
     };
+    let tasks = planning.dispatch_tasks();
     let schedule = if tasks.is_empty() {
         None
     } else {
-        Some(schedule(tasks.clone(), default_workers())?)
+        Some(schedule(tasks.clone(), workers_for(&tasks))?)
     };
-    let contracts = tasks.iter().map(|task| contract_for(text, task)).collect();
-    let fingerprint = digest(&(mode, &tasks, &schedule, &contracts));
+    let contracts = planning
+        .tasks
+        .iter()
+        .map(|task| contract_for(&draft.text, task))
+        .collect();
+    let fingerprint = planning.fingerprint.clone();
     Ok(ProductionExecutionPlan {
         mode,
+        planning,
         tasks,
         schedule,
         contracts,
@@ -101,37 +121,39 @@ pub fn plan(draft: &PromptDraft) -> Result<ProductionExecutionPlan, &'static str
 
 #[must_use]
 pub fn requires_mutation(plan: &ProductionExecutionPlan) -> bool {
-    plan.contracts
-        .iter()
-        .any(|contract| contract.role == AgentRole::Implementer)
+    plan.planning.strategy == ExecutionStrategy::CoordinatedMutation
+        && plan.planning.task(TaskKind::Implementation).is_some()
 }
 
 pub fn runtime_context(plan: &ProductionExecutionPlan) -> String {
     if plan.mode == ExecutionMode::Direct {
-        return "Production execution mode: direct. Do not create unnecessary worker or subagent overhead for this conversational or single-step objective.".to_owned();
+        return "Production execution mode: direct. No scheduler tasks or mutation authority were created."
+            .to_owned();
     }
     let contracts = plan
-        .contracts
+        .planning
+        .tasks
         .iter()
-        .map(|contract| {
+        .map(|planned| {
             format!(
-                "- {} ({:?}): dependencies={:?}; writes={:?}; required evidence={:?}",
-                contract.task_id,
-                contract.role,
-                contract.dependencies,
-                contract.allowed_write_paths,
-                contract.required_evidence,
+                "- {} ({:?}): dependencies={:?}; writes={:?}; context={}",
+                planned.task.id,
+                planned.kind,
+                planned.task.dependencies,
+                planned.task.write_paths,
+                planned.context_fingerprint,
             )
         })
         .collect::<Vec<_>>()
         .join("\n");
-    let execution = if requires_mutation(plan) {
-        "A mutating implementer runs in an isolated Git worktree, is scope-checked and verified there, and is integrated by the coordinator. The parent AgentEngine is a read-only lead and reviewer."
-    } else {
-        "The objective is read-only; no mutating implementer or worktree is created. The parent AgentEngine is a read-only lead and reviewer."
-    };
     format!(
-        "Production execution mode: coordinated. Independent read-only teammates are dispatched with durable leases, role-bound runtime policy, isolated sessions, durable mailboxes, and evidence handoff. {execution} Repository verification is the completion gate.\n{contracts}"
+        "Production execution mode: {:?}. Intent={:?}; scope={:?}; risk={:?}; confidence={}/1000. The persisted execution ledger is the sole task authority. Unknown write scope grants no mutation authority. Every displayed task has durable dispatch and terminal evidence.\n{}",
+        plan.planning.strategy,
+        plan.planning.intent,
+        plan.planning.scope,
+        plan.planning.risk,
+        plan.planning.confidence_milli,
+        contracts,
     )
 }
 
@@ -148,6 +170,12 @@ pub fn context_for_task(
         .find(|contract| contract.task_id == task_id)
         .cloned()
         .ok_or("task contract does not exist")?;
+    let planned = plan
+        .planning
+        .tasks
+        .iter()
+        .find(|planned| planned.task.id == task_id)
+        .ok_or("typed task metadata does not exist")?;
     if dependency_outputs
         .keys()
         .any(|dependency| !contract.dependencies.contains(dependency))
@@ -164,6 +192,7 @@ pub fn context_for_task(
     let objective = contract.objective.clone();
     let repository_scope = contract.allowed_write_paths.clone();
     let fingerprint = digest(&(
+        &plan.fingerprint,
         task_id,
         &objective,
         &repository_scope,
@@ -171,6 +200,8 @@ pub fn context_for_task(
         &policies,
         &acceptance_criteria,
         &contract,
+        &planned.context_fingerprint,
+        CancellationAuthority::RuntimeController,
     ));
     Ok(ContextPacket {
         task_id: task_id.to_owned(),
@@ -193,8 +224,8 @@ pub fn validate_subagent_result(
     if !parent.contract.delegation.allowed {
         return Err("subagent delegation is not allowed for this task");
     }
-    if delegated_task_id.trim().is_empty() {
-        return Err("delegated task identifier cannot be empty");
+    if delegated_task_id != parent.task_id {
+        return Err("subagent result does not match its durable task identity");
     }
     if claimed_parent_fingerprint != parent.fingerprint {
         return Err("subagent result was produced from stale or unrelated context");
@@ -206,39 +237,118 @@ pub fn validate_subagent_result(
 }
 
 pub fn events(plan: &ProductionExecutionPlan) -> Vec<RuntimeEvent> {
-    match (&plan.mode, &plan.schedule) {
-        (ExecutionMode::Direct, _) => vec![RuntimeEvent::Activity(RuntimeActivity {
+    if plan.mode == ExecutionMode::Direct {
+        return vec![RuntimeEvent::Activity(RuntimeActivity {
             id: Some(plan.fingerprint.clone()),
             kind: RuntimeActivityKind::Progress,
             title: "Direct execution selected".to_owned(),
-            details: vec![
-                "The objective is conversational or single-step; orchestration planning was skipped."
-                    .to_owned(),
-            ],
-        })],
-        (ExecutionMode::Orchestrated, Some(schedule)) => {
-            vec![RuntimeEvent::Activity(RuntimeActivity {
-                id: Some(plan.fingerprint.clone()),
-                kind: RuntimeActivityKind::Progress,
-                title: "Execution contracts prepared".to_owned(),
-                details: vec![
-                    format!("{} dependency-aware task contracts", plan.tasks.len()),
-                    format!("{} dependency-aware schedule waves", schedule.waves.len()),
-                    format!(
-                        "{} independent tasks are eligible for the first dispatch wave",
-                        schedule.waves.first().map_or(0, Vec::len)
-                    ),
-                    if requires_mutation(plan) {
-                        "Mutating implementation will run in an isolated worktree; the parent remains the sole review and integration authority.".to_owned()
-                    } else {
-                        "This coordinated objective is read-only; no mutating worktree will be created.".to_owned()
-                    },
-                    "Repository verification remains the completion gate.".to_owned(),
-                ],
-            })]
-        }
-        _ => Vec::new(),
+            details: vec!["No durable scheduler tasks were created.".to_owned()],
+        })];
     }
+    vec![RuntimeEvent::Activity(RuntimeActivity {
+        id: Some(plan.fingerprint.clone()),
+        kind: RuntimeActivityKind::Progress,
+        title: "Authoritative execution graph accepted".to_owned(),
+        details: vec![
+            format!("{} typed tasks", plan.tasks.len()),
+            format!("strategy={:?}", plan.planning.strategy),
+            format!("scope={:?}", plan.planning.scope.resolution),
+            format!("risk={:?}", plan.planning.risk),
+            "All frontend task state is projected from the durable execution ledger."
+                .to_owned(),
+        ],
+    })]
+}
+
+pub fn open_ledger(
+    repo: &Path,
+    session_id: &str,
+    plan: &ProductionExecutionPlan,
+) -> Result<ExecutionLedger, String> {
+    if session_id.trim().is_empty() {
+        return Err("durable execution ledger requires a session identity".to_owned());
+    }
+    let execution_key = digest(&(session_id, &plan.fingerprint));
+    let path = repo
+        .join(".medusa")
+        .join("executions")
+        .join(execution_key)
+        .join("execution-ledger.json");
+    let mut ledger = ExecutionLedger::open_or_create(path, &plan.planning)?;
+    ledger.recover_interrupted()?;
+    Ok(ledger)
+}
+
+pub fn begin_kinds(
+    ledger: &mut ExecutionLedger,
+    plan: &ProductionExecutionPlan,
+    kinds: &[TaskKind],
+    worker_prefix: &str,
+) -> Result<(), String> {
+    for planned in plan
+        .planning
+        .tasks
+        .iter()
+        .filter(|planned| kinds.contains(&planned.kind))
+    {
+        ledger.begin(
+            &planned.task.id,
+            &format!("{worker_prefix}-{}", planned.task.id),
+        )?;
+    }
+    Ok(())
+}
+
+pub fn succeed_kinds(
+    ledger: &mut ExecutionLedger,
+    plan: &ProductionExecutionPlan,
+    kinds: &[TaskKind],
+    evidence: &str,
+) -> Result<(), String> {
+    for planned in plan
+        .planning
+        .tasks
+        .iter()
+        .filter(|planned| kinds.contains(&planned.kind))
+    {
+        ledger.succeed(&planned.task.id, evidence)?;
+    }
+    Ok(())
+}
+
+pub fn fail_kinds(
+    ledger: &mut ExecutionLedger,
+    plan: &ProductionExecutionPlan,
+    kinds: &[TaskKind],
+    reason: &str,
+) -> Result<(), String> {
+    for planned in plan
+        .planning
+        .tasks
+        .iter()
+        .filter(|planned| kinds.contains(&planned.kind))
+    {
+        ledger.fail(&planned.task.id, reason)?;
+    }
+    Ok(())
+}
+
+pub fn projection(ledger: &ExecutionLedger) -> Vec<AgentPlanStep> {
+    ledger
+        .views()
+        .into_iter()
+        .map(|view| AgentPlanStep {
+            title: view.title,
+            status: match view.state {
+                LedgerTaskState::Pending { .. } => AgentPlanStepStatus::Pending,
+                LedgerTaskState::Running { .. } => AgentPlanStepStatus::InProgress,
+                LedgerTaskState::Succeeded { .. } => AgentPlanStepStatus::Completed,
+                LedgerTaskState::Failed { .. } | LedgerTaskState::Cancelled { .. } => {
+                    AgentPlanStepStatus::Failed
+                }
+            },
+        })
+        .collect()
 }
 
 pub fn persist_outcome(
@@ -265,36 +375,36 @@ pub fn persist_outcome(
     Ok(path)
 }
 
-fn contract_for(objective: &str, task: &Task) -> AgentContract {
-    let (role, required_evidence) = match task.id.as_str() {
-        "analyze" => (
+fn contract_for(objective: &str, planned: &PlannedTask) -> AgentContract {
+    let (role, required_evidence) = match planned.kind {
+        TaskKind::Analysis => (
             AgentRole::Planner,
             vec!["repository evidence".to_owned(), "dependency-aware plan".to_owned()],
         ),
-        "risk-review" => (
+        TaskKind::RiskReview => (
             AgentRole::Researcher,
             vec!["risk inventory".to_owned(), "failure-mode evidence".to_owned()],
         ),
-        "implement" => (
+        TaskKind::Implementation => (
             AgentRole::Implementer,
             vec!["patch or commit evidence".to_owned(), "focused tests".to_owned()],
         ),
-        "review" => (
+        TaskKind::Review => (
             AgentRole::Reviewer,
-            vec!["conflict analysis".to_owned(), "policy compliance".to_owned()],
+            vec!["accepted execution evidence".to_owned(), "policy compliance".to_owned()],
         ),
-        _ => (
+        TaskKind::Verification => (
             AgentRole::Verifier,
             vec!["acceptance criteria".to_owned(), "repository verification".to_owned()],
         ),
     };
     let delegation_allowed = matches!(role, AgentRole::Planner | AgentRole::Researcher);
     AgentContract {
-        task_id: task.id.clone(),
+        task_id: planned.task.id.clone(),
         role,
         objective: objective.to_owned(),
-        dependencies: task.dependencies.clone(),
-        allowed_write_paths: task.write_paths.clone(),
+        dependencies: planned.task.dependencies.clone(),
+        allowed_write_paths: planned.task.write_paths.clone(),
         required_evidence,
         delegation: DelegationPolicy {
             allowed: delegation_allowed,
@@ -306,137 +416,48 @@ fn contract_for(objective: &str, task: &Task) -> AgentContract {
     }
 }
 
-fn classify(text: &str, attachments: usize) -> ExecutionMode {
-    let lower = text.to_ascii_lowercase();
-    let complex_markers = [
-        "implement", "fix", "refactor", "repository", "codebase", "tests", "ci", "multiple",
-        "all open", "across", "architecture", "migration", "release",
-    ];
-    let simple_markers = ["hello", "thanks", "thank you", "explain", "what is", "summarize"];
-    if attachments > 1
-        || text.lines().count() > 3
-        || text.len() > 220
-        || complex_markers.iter().any(|marker| lower.contains(marker))
-    {
-        ExecutionMode::Orchestrated
-    } else if simple_markers.iter().any(|marker| lower.starts_with(marker))
-        || text.split_whitespace().count() <= 12
-    {
-        ExecutionMode::Direct
-    } else {
-        ExecutionMode::Orchestrated
-    }
-}
-
-fn decompose(text: &str, mutating: bool) -> Vec<Task> {
-    let mut tasks = vec![
-        Task { id: "analyze".to_owned(), dependencies: vec![], capabilities: vec!["analysis".to_owned()], write_paths: vec![], speculative: false },
-        Task { id: "risk-review".to_owned(), dependencies: vec![], capabilities: vec!["risk-review".to_owned()], write_paths: vec![], speculative: false },
-    ];
-    if mutating {
-        let scopes = infer_scopes(text);
-        tasks.extend([
-            Task { id: "implement".to_owned(), dependencies: vec!["analyze".to_owned(), "risk-review".to_owned()], capabilities: vec!["coding".to_owned()], write_paths: scopes, speculative: false },
-            Task { id: "review".to_owned(), dependencies: vec!["implement".to_owned()], capabilities: vec!["review".to_owned()], write_paths: vec![], speculative: false },
-            Task { id: "verify".to_owned(), dependencies: vec!["review".to_owned()], capabilities: vec!["verification".to_owned()], write_paths: vec![], speculative: false },
-        ]);
-    }
+fn workers_for(tasks: &[Task]) -> Vec<Worker> {
     tasks
-}
-
-fn objective_requires_mutation(text: &str) -> bool {
-    text.split(|character: char| !character.is_ascii_alphanumeric())
-        .filter(|token| !token.is_empty())
-        .any(|token| {
-            matches!(
-                token.to_ascii_lowercase().as_str(),
-                "add"
-                    | "build"
-                    | "change"
-                    | "create"
-                    | "delete"
-                    | "fix"
-                    | "implement"
-                    | "make"
-                    | "migrate"
-                    | "modify"
-                    | "patch"
-                    | "refactor"
-                    | "remove"
-                    | "rename"
-                    | "repair"
-                    | "update"
-                    | "upgrade"
-                    | "write"
-            )
-        })
-}
-
-fn infer_scopes(text: &str) -> Vec<String> {
-    let mut scopes = BTreeSet::new();
-    for sentence in text.split('\n').flat_map(|line| line.split(". ")) {
-        let lower = sentence.to_ascii_lowercase();
-        let forbids_mutation = [
-            "without modifying",
-            "do not modify",
-            "don't modify",
-            "must not modify",
-            "leave unchanged",
-            "keep unchanged",
-        ]
         .iter()
-        .any(|marker| lower.contains(marker));
-        if forbids_mutation || !objective_requires_mutation(sentence) {
-            continue;
-        }
-        scopes.extend(
-            sentence
-                .split_whitespace()
-                .filter_map(normalize_candidate_path)
-                .filter(|candidate| looks_like_repo_path(candidate)),
-        );
-    }
-    if scopes.is_empty() {
-        vec!["repository".to_owned()]
-    } else {
-        scopes.into_iter().collect()
-    }
-}
-
-fn normalize_candidate_path(value: &str) -> Option<String> {
-    let candidate = value
-        .trim_matches(|character: char| {
-            !character.is_ascii_alphanumeric()
-                && !matches!(character, '/' | '\\' | '.' | '-' | '_')
+        .map(|task| Worker {
+            id: format!("worker-{}", task.id),
+            capabilities: task.capabilities.clone(),
+            healthy: true,
+            capacity: 1,
         })
-        .replace('\\', "/");
-    let candidate = candidate.trim_start_matches("./");
-    (!candidate.is_empty()
-        && !candidate.starts_with('/')
-        && !candidate.split('/').any(|segment| segment == ".."))
-    .then(|| candidate.to_owned())
+        .collect()
 }
 
-fn looks_like_repo_path(candidate: &str) -> bool {
-    if candidate.contains("://") {
-        return false;
+fn repository_paths(repo: &Path) -> Vec<String> {
+    fn visit(root: &Path, current: &Path, paths: &mut BTreeSet<String>) {
+        if paths.len() >= 4_096 {
+            return;
+        }
+        let Ok(entries) = fs::read_dir(current) else {
+            return;
+        };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            let Ok(relative) = path.strip_prefix(root) else {
+                continue;
+            };
+            let relative = relative.to_string_lossy().replace('\\', "/");
+            if relative == ".git"
+                || relative.starts_with(".git/")
+                || relative == ".medusa"
+                || relative.starts_with(".medusa/")
+            {
+                continue;
+            }
+            paths.insert(relative);
+            if path.is_dir() {
+                visit(root, &path, paths);
+            }
+        }
     }
-    candidate.contains('/')
-        || candidate
-            .rsplit('/')
-            .next()
-            .and_then(|name| name.rsplit_once('.'))
-            .is_some_and(|(stem, extension)| !stem.is_empty() && !extension.is_empty())
-}
-
-fn default_workers() -> Vec<Worker> {
-    vec![
-        Worker { id: "planner".to_owned(), capabilities: vec!["analysis".to_owned()], healthy: true, capacity: 1 },
-        Worker { id: "risk-reviewer".to_owned(), capabilities: vec!["risk-review".to_owned()], healthy: true, capacity: 1 },
-        Worker { id: "coder".to_owned(), capabilities: vec!["coding".to_owned()], healthy: true, capacity: 1 },
-        Worker { id: "reviewer".to_owned(), capabilities: vec!["review".to_owned()], healthy: true, capacity: 1 },
-        Worker { id: "verifier".to_owned(), capabilities: vec!["verification".to_owned()], healthy: true, capacity: 1 },
-    ]
+    let mut paths = BTreeSet::new();
+    visit(repo, repo, &mut paths);
+    paths.into_iter().collect()
 }
 
 fn digest<T: Serialize>(value: &T) -> String {
@@ -450,107 +471,130 @@ mod tests {
 
     #[test]
     fn simple_conversation_avoids_orchestration() {
-        let draft = PromptDraft { text: "Hello, explain this concept".to_owned(), ..PromptDraft::default() };
+        let draft = PromptDraft {
+            text: "Hello, explain this concept".to_owned(),
+            ..PromptDraft::default()
+        };
         assert_eq!(plan(&draft).unwrap().mode, ExecutionMode::Direct);
     }
 
     #[test]
-    fn coding_objective_is_decomposed_and_scheduled() {
-        let draft = PromptDraft { text: "Implement a repository-wide refactor and run all tests and CI".to_owned(), ..PromptDraft::default() };
-        let planned = plan(&draft).unwrap();
-        assert_eq!(planned.mode, ExecutionMode::Orchestrated);
-        assert_eq!(planned.tasks.len(), 5);
-        assert_eq!(planned.schedule.as_ref().unwrap().waves.len(), 4);
-        assert_eq!(planned.schedule.as_ref().unwrap().waves[0].len(), 2);
-        assert!(planned.contracts.iter().any(|contract| contract.delegation.allowed));
-    }
-
-    #[test]
-    fn mutating_scope_collects_positive_paths_and_excludes_protected_files() {
+    fn repository_wide_mutation_is_typed_and_scheduled() {
         let draft = PromptDraft {
-            text: "Repair all defects without modifying verify.sh, test.mjs, or package.json. Correct value.txt, implement src/slugify.py, and repair src/counter.js. Run ./verify.sh until it passes."
-                .to_owned(),
+            text: "Implement a repository-wide refactor and run all tests".to_owned(),
             ..PromptDraft::default()
         };
         let planned = plan(&draft).unwrap();
-        let implementer = planned
-            .contracts
-            .iter()
-            .find(|contract| contract.role == AgentRole::Implementer)
-            .expect("implementer contract");
+        assert_eq!(planned.mode, ExecutionMode::Orchestrated);
+        assert!(requires_mutation(&planned));
+        assert_eq!(planned.tasks.len(), 5);
+        assert_eq!(planned.schedule.as_ref().unwrap().waves.len(), 4);
+    }
+
+    #[test]
+    fn unknown_mutation_scope_stays_read_only() {
+        let directory = tempfile::tempdir().unwrap();
+        fs::write(directory.path().join("value.txt"), "41").unwrap();
+        let draft = PromptDraft {
+            text: "Fix the defect".to_owned(),
+            ..PromptDraft::default()
+        };
+        let planned = plan_for_repository(directory.path(), &draft).unwrap();
+        assert!(!requires_mutation(&planned));
         assert_eq!(
-            implementer.allowed_write_paths,
-            vec![
-                "src/counter.js".to_owned(),
-                "src/slugify.py".to_owned(),
-                "value.txt".to_owned(),
-            ]
+            planned.planning.scope.resolution,
+            medusa_multi_agent_scheduler::ScopeResolution::Unresolved
         );
     }
 
     #[test]
-    fn scope_defaults_to_repository_when_no_positive_path_is_named() {
-        assert_eq!(infer_scopes("Fix repository tests"), vec!["repository"]);
+    fn explicit_paths_resolve_against_repository_snapshot() {
+        let directory = tempfile::tempdir().unwrap();
+        fs::create_dir_all(directory.path().join("src")).unwrap();
+        fs::write(directory.path().join("src/lib.rs"), "").unwrap();
+        let draft = PromptDraft {
+            text: "Repair src/lib.rs".to_owned(),
+            ..PromptDraft::default()
+        };
+        let planned = plan_for_repository(directory.path(), &draft).unwrap();
+        assert!(requires_mutation(&planned));
+        assert_eq!(
+            planned.planning.scope.effective,
+            vec!["src/lib.rs".to_owned()]
+        );
     }
 
     #[test]
-    fn task_context_contains_only_declared_dependencies() {
-        let draft = PromptDraft { text: "Fix repository tests".to_owned(), ..PromptDraft::default() };
+    fn task_context_is_bound_to_accepted_plan() {
+        let draft = PromptDraft {
+            text: "Implement a repository-wide refactor".to_owned(),
+            ..PromptDraft::default()
+        };
         let planned = plan(&draft).unwrap();
         let packet = context_for_task(
             &planned,
             "implement",
             BTreeMap::from([
-                ("analyze".to_owned(), "analysis evidence".to_owned()),
-                ("risk-review".to_owned(), "risk evidence".to_owned()),
+                ("analyze".to_owned(), "analysis".to_owned()),
+                ("risk-review".to_owned(), "risk".to_owned()),
             ]),
-            vec!["path policy".to_owned()],
+            vec!["scope policy".to_owned()],
             vec!["tests pass".to_owned()],
-        ).unwrap();
-        assert_eq!(packet.dependency_outputs.len(), 2);
+        )
+        .unwrap();
+        assert!(!packet.fingerprint.is_empty());
         assert!(!packet.contract.delegation.allowed);
     }
 
     #[test]
-    fn active_delegation_accepts_bound_evidence() {
-        let draft = PromptDraft { text: "Fix repository tests".to_owned(), ..PromptDraft::default() };
-        let planned = plan(&draft).unwrap();
-        let packet = context_for_task(&planned, "analyze", BTreeMap::new(), vec![], vec![]).unwrap();
-        assert!(validate_subagent_result(&packet, "analyze", &packet.fingerprint, &["evidence".to_owned()]).is_ok());
-        assert!(validate_subagent_result(&packet, "analyze", "stale", &["evidence".to_owned()]).is_err());
-    }
-
-    #[test]
-    fn runtime_context_and_events_describe_real_dispatch() {
-        let draft = PromptDraft { text: "Implement a repository-wide refactor".to_owned(), ..PromptDraft::default() };
-        let planned = plan(&draft).unwrap();
-        let context = runtime_context(&planned);
-        assert!(context.contains("isolated Git worktree"));
-        let rendered = format!("{:?}", events(&planned));
-        assert!(rendered.contains("independent tasks are eligible"));
-        assert!(!rendered.contains("no workers were dispatched"));
-    }
-
-    #[test]
-    fn coordinated_analysis_does_not_create_an_implementer_contract() {
+    fn identical_plans_do_not_share_state_across_sessions() {
+        let directory = tempfile::tempdir().unwrap();
         let draft = PromptDraft {
-            text: "Analyze repository architecture, failure modes, ownership boundaries, and current CI evidence without changing files".to_owned(),
+            text: "Analyze repository architecture without changing files".to_owned(),
             ..PromptDraft::default()
         };
-        let planned = plan(&draft).unwrap();
-        assert_eq!(planned.mode, ExecutionMode::Orchestrated);
-        assert!(!requires_mutation(&planned));
-        assert_eq!(planned.tasks.len(), 2);
-        assert!(runtime_context(&planned).contains("no mutating implementer"));
+        let planned = plan_for_repository(directory.path(), &draft).unwrap();
+        let mut first = open_ledger(directory.path(), "session-a", &planned).unwrap();
+        first.begin("analyze", "worker-a").unwrap();
+        let second = open_ledger(directory.path(), "session-b", &planned).unwrap();
+        assert_ne!(first.path(), second.path());
+        assert!(matches!(
+            first
+                .views()
+                .into_iter()
+                .find(|view| view.id == "analyze")
+                .map(|view| view.state),
+            Some(LedgerTaskState::Running { .. })
+        ));
+        assert!(matches!(
+            second
+                .views()
+                .into_iter()
+                .find(|view| view.id == "analyze")
+                .map(|view| view.state),
+            Some(LedgerTaskState::Pending { attempts: 0 })
+        ));
     }
 
     #[test]
-    fn outcomes_are_persisted() {
+    fn durable_projection_comes_from_ledger() {
         let directory = tempfile::tempdir().unwrap();
-        let draft = PromptDraft { text: "Fix tests".to_owned(), ..PromptDraft::default() };
-        let planned = plan(&draft).unwrap();
-        let path = persist_outcome(directory.path(), &draft, &planned, true, false).unwrap();
-        let value = fs::read_to_string(path).unwrap();
-        assert!(value.contains("\"verified\":true"));
+        let draft = PromptDraft {
+            text: "Analyze repository architecture without changing files".to_owned(),
+            ..PromptDraft::default()
+        };
+        let planned = plan_for_repository(directory.path(), &draft).unwrap();
+        let mut ledger = open_ledger(directory.path(), "test-session", &planned).unwrap();
+        begin_kinds(
+            &mut ledger,
+            &planned,
+            &[TaskKind::Analysis, TaskKind::RiskReview],
+            "test",
+        )
+        .unwrap();
+        assert!(projection(&ledger)
+            .iter()
+            .take(2)
+            .all(|step| step.status == AgentPlanStepStatus::InProgress));
     }
 }

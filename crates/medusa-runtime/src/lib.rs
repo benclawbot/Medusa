@@ -948,7 +948,8 @@ fn run_prompt(
     }
     let selected_skill = state.pending_skill.clone();
     let execution_plan =
-        crate::production_orchestrator::plan(&draft).map_err(RuntimeError::agent)?;
+        crate::production_orchestrator::plan_for_repository(&state.repo, &draft)
+            .map_err(RuntimeError::agent)?;
     let coordinated =
         execution_plan.mode == crate::production_orchestrator::ExecutionMode::Orchestrated;
     let engine = AgentEngine::new_with_cancellation(provider, config.clone(), Arc::clone(cancel));
@@ -1000,6 +1001,20 @@ fn run_prompt(
     )
     .map_err(RuntimeError::agent)?;
 
+    let mut execution_ledger = if coordinated {
+        let ledger = crate::production_orchestrator::open_ledger(
+            &state.repo,
+            session.id.as_str(),
+            &execution_plan,
+        )
+        .map_err(RuntimeError::agent)?;
+        let projected = crate::production_orchestrator::projection(&ledger);
+        session.plan = projected.clone();
+        let _ = events.send(RuntimeEvent::Plan(projected));
+        Some(ledger)
+    } else {
+        None
+    };
     if execution_plan.mode == crate::production_orchestrator::ExecutionMode::Direct {
         let _ = events.send(RuntimeEvent::Team(state.team_control.clear()));
     } else {
@@ -1009,18 +1024,66 @@ fn run_prompt(
         let _ = events.send(event);
     }
     let coordinator_evidence = if !resuming_pending_question && coordinated {
-        Some(
-            crate::multi_agent_coordinator::run_preflight(
-                &state.repo,
-                &config,
-                state.session_api_key.clone(),
+        if let Some(ledger) = execution_ledger.as_mut() {
+            crate::production_orchestrator::begin_kinds(
+                ledger,
                 &execution_plan,
-                cancel,
-                &state.team_control,
-                events,
+                &[
+                    medusa_multi_agent_scheduler::TaskKind::Analysis,
+                    medusa_multi_agent_scheduler::TaskKind::RiskReview,
+                ],
+                "preflight",
             )
-            .map_err(RuntimeError::agent)?,
-        )
+            .map_err(RuntimeError::agent)?;
+            let _ = events.send(RuntimeEvent::Plan(
+                crate::production_orchestrator::projection(ledger),
+            ));
+        }
+        match crate::multi_agent_coordinator::run_preflight(
+            &state.repo,
+            &config,
+            state.session_api_key.clone(),
+            &execution_plan,
+            cancel,
+            &state.team_control,
+            events,
+        ) {
+            Ok(evidence) => {
+                if let Some(ledger) = execution_ledger.as_mut() {
+                    crate::production_orchestrator::succeed_kinds(
+                        ledger,
+                        &execution_plan,
+                        &[
+                            medusa_multi_agent_scheduler::TaskKind::Analysis,
+                            medusa_multi_agent_scheduler::TaskKind::RiskReview,
+                        ],
+                        "durable preflight worker evidence recorded",
+                    )
+                    .map_err(RuntimeError::agent)?;
+                    let _ = events.send(RuntimeEvent::Plan(
+                        crate::production_orchestrator::projection(ledger),
+                    ));
+                }
+                Some(evidence)
+            }
+            Err(error) => {
+                if let Some(ledger) = execution_ledger.as_mut() {
+                    let _ = crate::production_orchestrator::fail_kinds(
+                        ledger,
+                        &execution_plan,
+                        &[
+                            medusa_multi_agent_scheduler::TaskKind::Analysis,
+                            medusa_multi_agent_scheduler::TaskKind::RiskReview,
+                        ],
+                        &error,
+                    );
+                    let _ = events.send(RuntimeEvent::Plan(
+                        crate::production_orchestrator::projection(ledger),
+                    ));
+                }
+                return Err(RuntimeError::agent(error));
+            }
+        }
     } else {
         None
     };
@@ -1042,18 +1105,57 @@ fn run_prompt(
             let preflight = coordinator_evidence.as_ref().ok_or_else(|| {
                 RuntimeError::agent("mutating execution requires coordinator preflight evidence")
             })?;
-            Some(
-                crate::mutating_worker_coordinator::run_implementation(
-                    &state.repo,
-                    &config,
-                    state.session_api_key.clone(),
+            if let Some(ledger) = execution_ledger.as_mut() {
+                crate::production_orchestrator::begin_kinds(
+                    ledger,
                     &execution_plan,
-                    preflight,
-                    cancel,
-                    (&state.team_control, events),
+                    &[medusa_multi_agent_scheduler::TaskKind::Implementation],
+                    "implementation",
                 )
-                .map_err(RuntimeError::agent)?,
-            )
+                .map_err(RuntimeError::agent)?;
+                let _ = events.send(RuntimeEvent::Plan(
+                    crate::production_orchestrator::projection(ledger),
+                ));
+            }
+            match crate::mutating_worker_coordinator::run_implementation(
+                &state.repo,
+                &config,
+                state.session_api_key.clone(),
+                &execution_plan,
+                preflight,
+                cancel,
+                (&state.team_control, events),
+            ) {
+                Ok(evidence) => {
+                    if let Some(ledger) = execution_ledger.as_mut() {
+                        crate::production_orchestrator::succeed_kinds(
+                            ledger,
+                            &execution_plan,
+                            &[medusa_multi_agent_scheduler::TaskKind::Implementation],
+                            "isolated implementation integrated with verification evidence",
+                        )
+                        .map_err(RuntimeError::agent)?;
+                        let _ = events.send(RuntimeEvent::Plan(
+                            crate::production_orchestrator::projection(ledger),
+                        ));
+                    }
+                    Some(evidence)
+                }
+                Err(error) => {
+                    if let Some(ledger) = execution_ledger.as_mut() {
+                        let _ = crate::production_orchestrator::fail_kinds(
+                            ledger,
+                            &execution_plan,
+                            &[medusa_multi_agent_scheduler::TaskKind::Implementation],
+                            &error,
+                        );
+                        let _ = events.send(RuntimeEvent::Plan(
+                            crate::production_orchestrator::projection(ledger),
+                        ));
+                    }
+                    return Err(RuntimeError::agent(error));
+                }
+            }
         } else {
             None
         };
@@ -1103,14 +1205,37 @@ fn run_prompt(
         .session
         .take()
         .ok_or_else(|| RuntimeError::agent("runtime session disappeared before execution"))?;
+    if coordinated {
+        if let Some(ledger) = execution_ledger.as_mut() {
+            crate::production_orchestrator::begin_kinds(
+                ledger,
+                &execution_plan,
+                &[medusa_multi_agent_scheduler::TaskKind::Review],
+                "parent-review",
+            )
+            .map_err(RuntimeError::agent)?;
+            let _ = events.send(RuntimeEvent::Plan(
+                crate::production_orchestrator::projection(ledger),
+            ));
+        }
+    }
     let mut updates = UpdateState::new();
-    if !session.plan.is_empty() {
+    if coordinated {
+        updates.suppress_model_plan();
+    }
+    if !coordinated && !session.plan.is_empty() {
         let _ = events.send(RuntimeEvent::Plan(session.plan.clone()));
     }
 
     let result = (|| {
         loop {
             if cancel_requested(cancel, submission) {
+                if let Some(ledger) = execution_ledger.as_mut() {
+                    let _ = ledger.cancel_remaining("runtime cancellation requested");
+                    let projected = crate::production_orchestrator::projection(ledger);
+                    session.plan = projected.clone();
+                    let _ = events.send(RuntimeEvent::Plan(projected));
+                }
                 return Ok(RuntimeEvent::Cancelled);
             }
             append_followups(&engine, &mut session, take_followups(submission))?;
@@ -1225,6 +1350,12 @@ fn run_prompt(
             }
 
             if cancel_requested(cancel, submission) {
+                if let Some(ledger) = execution_ledger.as_mut() {
+                    let _ = ledger.cancel_remaining("runtime cancellation requested");
+                    let projected = crate::production_orchestrator::projection(ledger);
+                    session.plan = projected.clone();
+                    let _ = events.send(RuntimeEvent::Plan(projected));
+                }
                 return Ok(RuntimeEvent::Cancelled);
             }
 
@@ -1267,17 +1398,93 @@ fn run_prompt(
         state.pending_skill = None;
     }
     let mut result = result;
-    let mut verified = matches!(&result, Ok(RuntimeEvent::Completed { .. }));
+    if coordinated {
+        if let Some(ledger) = execution_ledger.as_mut() {
+            match &result {
+                Ok(RuntimeEvent::Completed { .. } | RuntimeEvent::TurnFinished) => {
+                    crate::production_orchestrator::succeed_kinds(
+                        ledger,
+                        &execution_plan,
+                        &[medusa_multi_agent_scheduler::TaskKind::Review],
+                        "parent review completed from durable execution evidence",
+                    )
+                    .map_err(RuntimeError::agent)?;
+                }
+                Ok(RuntimeEvent::Cancelled) => {
+                    let _ = ledger.cancel_remaining("runtime cancellation completed");
+                }
+                Err(error) => {
+                    let _ = crate::production_orchestrator::fail_kinds(
+                        ledger,
+                        &execution_plan,
+                        &[medusa_multi_agent_scheduler::TaskKind::Review],
+                        &error.to_string(),
+                    );
+                }
+                _ => {}
+            }
+            let projected = crate::production_orchestrator::projection(ledger);
+            session.plan = projected.clone();
+            let _ = events.send(RuntimeEvent::Plan(projected));
+        }
+    }
+    let terminal_turn = matches!(
+        &result,
+        Ok(RuntimeEvent::Completed { .. } | RuntimeEvent::TurnFinished)
+    );
+    let mut verified = terminal_turn && !crate::production_orchestrator::requires_mutation(&execution_plan);
     if execution_plan.mode == crate::production_orchestrator::ExecutionMode::Orchestrated
-        && matches!(&result, Ok(RuntimeEvent::Completed { .. }))
+        && terminal_turn
+        && execution_plan
+            .planning
+            .task(medusa_multi_agent_scheduler::TaskKind::Verification)
+            .is_some()
     {
+        if let Some(ledger) = execution_ledger.as_mut() {
+            crate::production_orchestrator::begin_kinds(
+                ledger,
+                &execution_plan,
+                &[medusa_multi_agent_scheduler::TaskKind::Verification],
+                "repository-verification",
+            )
+            .map_err(RuntimeError::agent)?;
+            let _ = events.send(RuntimeEvent::Plan(
+                crate::production_orchestrator::projection(ledger),
+            ));
+        }
         match crate::multi_agent_coordinator::verify_repository(
             &state.repo,
             &execution_plan,
             events,
         ) {
-            Ok(_) => verified = true,
-            Err(error) => result = Err(RuntimeError::agent(error)),
+            Ok(evidence) => {
+                verified = true;
+                if let Some(ledger) = execution_ledger.as_mut() {
+                    crate::production_orchestrator::succeed_kinds(
+                        ledger,
+                        &execution_plan,
+                        &[medusa_multi_agent_scheduler::TaskKind::Verification],
+                        &evidence.join(" | "),
+                    )
+                    .map_err(RuntimeError::agent)?;
+                }
+            }
+            Err(error) => {
+                if let Some(ledger) = execution_ledger.as_mut() {
+                    let _ = crate::production_orchestrator::fail_kinds(
+                        ledger,
+                        &execution_plan,
+                        &[medusa_multi_agent_scheduler::TaskKind::Verification],
+                        &error,
+                    );
+                }
+                result = Err(RuntimeError::agent(error));
+            }
+        }
+        if let Some(ledger) = execution_ledger.as_ref() {
+            let projected = crate::production_orchestrator::projection(ledger);
+            session.plan = projected.clone();
+            let _ = events.send(RuntimeEvent::Plan(projected));
         }
     }
     let failed = result.is_err();

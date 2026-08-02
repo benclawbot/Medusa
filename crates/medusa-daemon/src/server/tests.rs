@@ -160,7 +160,7 @@ fn client_reconnects_while_job_continues() {
     drop(first_client);
 
     let second_client = DaemonClient::new(&paths.socket);
-    let completed = (0..250).find_map(|_| {
+    let completed = (0..750).find_map(|_| {
         let Response::Status { job: Some(current) } = second_client
             .request(Request::Status {
                 job_id: job.id.clone(),

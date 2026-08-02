@@ -174,6 +174,7 @@ Use [`LEGACY-DELETION.md`](LEGACY-DELETION.md) for deletion gates and [`RELEASE-
 - Decision: [`decisions/0001-architecture-v2-reset.md`](decisions/0001-architecture-v2-reset.md)
 - Decision: [`decisions/0002-verified-prebuilt-updates.md`](decisions/0002-verified-prebuilt-updates.md)
 - Decision: [`decisions/0003-truthful-capability-plugin-registry.md`](decisions/0003-truthful-capability-plugin-registry.md)
+- Decision: [`decisions/0004-authoritative-durable-scheduler.md`](decisions/0004-authoritative-durable-scheduler.md)
 - Verified update architecture: [`PREBUILT-UPDATES.md`](PREBUILT-UPDATES.md)
 - Machine-readable baseline: [`baseline.json`](baseline.json)
 - Primary component owners: [`owners.json`](owners.json)
