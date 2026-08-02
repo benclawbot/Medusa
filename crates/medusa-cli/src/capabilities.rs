@@ -3,7 +3,7 @@ use std::{
     env,
     fs::{self, OpenOptions},
     io::Write,
-    path::PathBuf,
+    path::{Path, PathBuf},
 };
 
 use clap::{Args, Parser, Subcommand, ValueEnum};
@@ -102,6 +102,7 @@ struct CreateRepositoryArgs {
 struct RepositoryCreationOutput {
     receipt: RepositoryCreationReceipt,
     audit_path: PathBuf,
+    audit_error: Option<String>,
     authorization_events: Vec<medusa_capabilities::CapabilityAuditEvent>,
 }
 
@@ -221,27 +222,53 @@ fn create_repository(arguments: CreateRepositoryArgs) -> Result<(), Box<dyn std:
         approve,
     )?;
 
+    let audit_path = prepare_repository_creation_audit(
+        request.bootstrap.as_ref().map(|bootstrap| bootstrap.path.as_path()),
+    )?;
     let full_name = format!("{}/{}", request.owner.trim(), request.name.trim());
     let service = GitHubService::enterprise(full_name, hostname, None, SystemExecutor);
     let receipt = service.create_repository(&request)?;
     let authorization_events = authorizer.events().to_vec();
-    let audit_path = persist_repository_creation(&receipt, &authorization_events)?;
-    let output = RepositoryCreationOutput {
-        receipt,
-        audit_path,
-        authorization_events,
-    };
-    println!("{}", serde_json::to_string_pretty(&output)?);
-    Ok(())
+    match append_repository_creation_audit(&audit_path, &receipt, &authorization_events) {
+        Ok(()) => {
+            let output = RepositoryCreationOutput {
+                receipt,
+                audit_path,
+                audit_error: None,
+                authorization_events,
+            };
+            println!("{}", serde_json::to_string_pretty(&output)?);
+            Ok(())
+        }
+        Err(error) => {
+            let output = RepositoryCreationOutput {
+                receipt: receipt.clone(),
+                audit_path: audit_path.clone(),
+                audit_error: Some(error.to_string()),
+                authorization_events,
+            };
+            println!("{}", serde_json::to_string_pretty(&output)?);
+            Err(medusa_core::MedusaError::new(
+                medusa_core::ErrorCode::PersistenceFailed,
+                medusa_core::ErrorCategory::Persistence,
+                format!(
+                    "repository {} was created, but its audit receipt could not be persisted at {}: {error}; retain the printed receipt and retry with --reuse-existing after repairing the audit destination",
+                    receipt.repository,
+                    audit_path.display()
+                ),
+            )
+            .with_retryable(true)
+            .into())
+        }
+    }
 }
 
-fn persist_repository_creation(
-    receipt: &RepositoryCreationReceipt,
-    authorization_events: &[medusa_capabilities::CapabilityAuditEvent],
+fn prepare_repository_creation_audit(
+    local_path: Option<&Path>,
 ) -> Result<PathBuf, Box<dyn std::error::Error>> {
     let root = if let Some(value) = env::var_os("MEDUSA_HOME") {
         PathBuf::from(value)
-    } else if let Some(local_path) = receipt.local_path.as_deref() {
+    } else if let Some(local_path) = local_path {
         local_path.join(".medusa")
     } else {
         env::current_dir()?.join(".medusa")
@@ -255,16 +282,26 @@ fn persist_repository_creation(
         )
     })?;
     fs::create_dir_all(parent)?;
+    let file = OpenOptions::new().create(true).append(true).open(&path)?;
+    file.sync_all()?;
+    Ok(path)
+}
+
+fn append_repository_creation_audit(
+    path: &Path,
+    receipt: &RepositoryCreationReceipt,
+    authorization_events: &[medusa_capabilities::CapabilityAuditEvent],
+) -> Result<(), Box<dyn std::error::Error>> {
     let record = serde_json::json!({
         "receipt": receipt,
         "authorizationEvents": authorization_events,
     });
     let mut encoded = serde_json::to_vec(&record)?;
     encoded.push(b'\n');
-    let mut file = OpenOptions::new().create(true).append(true).open(&path)?;
+    let mut file = OpenOptions::new().create(true).append(true).open(path)?;
     file.write_all(&encoded)?;
     file.sync_all()?;
-    Ok(path)
+    Ok(())
 }
 
 #[cfg(test)]
@@ -297,7 +334,7 @@ mod tests {
     }
 
     #[test]
-    fn persists_one_line_redacted_repository_creation_evidence() {
+    fn preflights_and_persists_one_line_redacted_repository_creation_evidence() {
         let directory = tempfile::tempdir().expect("tempdir");
         let receipt = RepositoryCreationReceipt {
             repository: "acme/project".into(),
@@ -309,7 +346,9 @@ mod tests {
             local_path: Some(directory.path().to_path_buf()),
             initial_commit: Some("abc123".into()),
         };
-        let path = persist_repository_creation(&receipt, &[]).expect("persist");
+        let path = prepare_repository_creation_audit(Some(directory.path())).expect("preflight");
+        assert!(path.is_file());
+        append_repository_creation_audit(&path, &receipt, &[]).expect("persist");
         let content = fs::read_to_string(path).expect("read");
         assert_eq!(content.lines().count(), 1);
         assert!(!content.contains("token"));
