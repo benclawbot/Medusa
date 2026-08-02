@@ -36,8 +36,12 @@ jobs:
           set -euo pipefail
           cargo fmt --all
           changed="$(git diff --name-only | sort)"
-          unexpected="$(printf '%s\n' "$changed" | grep -Ev '^(Cargo.lock|crates/medusa-evidence/src/change.rs|crates/medusa-workers/(Cargo.toml|src/lib.rs)|crates/medusa-agent/src/verification_authority.rs|crates/medusa-runtime/(Cargo.toml|src/(mutating_worker_coordinator|mutating_worker_coordinator_support|mutation_transaction)\.rs)|crates/medusa-multi-agent-scheduler/(Cargo.toml|src/lib.rs))$' || true)"
-          test -z "$unexpected"
+          printf 'Generated files:\n%s\n' "$changed"
+          unexpected="$(printf '%s\n' "$changed" | grep -Ev '^(Cargo.lock|scripts/apply-650-runtime-authority.py|crates/medusa-evidence/src/change.rs|crates/medusa-workers/(Cargo.toml|src/lib.rs)|crates/medusa-agent/src/verification_authority.rs|crates/medusa-runtime/(Cargo.toml|src/(mutating_worker_coordinator|mutating_worker_coordinator_support|mutation_transaction)\.rs)|crates/medusa-multi-agent-scheduler/(Cargo.toml|src/lib.rs))$' || true)"
+          if test -n "$unexpected"; then
+            printf 'Unexpected generated files:\n%s\n' "$unexpected"
+            exit 1
+          fi
           cargo fmt --all -- --check
           cargo check -p medusa-evidence -p medusa-workers -p medusa-agent -p medusa-multi-agent-scheduler -p medusa-runtime --all-targets
           cargo test -p medusa-evidence
