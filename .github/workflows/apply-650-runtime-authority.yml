@@ -25,7 +25,11 @@ jobs:
         with:
           components: rustfmt, clippy
       - name: Apply runtime authority migration
-        run: python3 scripts/apply-650-runtime-authority.py
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 scripts/fix-650-runtime-generator.py
+          python3 scripts/apply-650-runtime-authority.py
       - name: Validate complete authority path
         shell: bash
         run: |
