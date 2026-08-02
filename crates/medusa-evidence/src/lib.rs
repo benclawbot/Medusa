@@ -1,6 +1,7 @@
 //! Typed source-bound evidence, durable artifacts, exact change scope, and verification authority.
 
 mod artifact;
+mod authority;
 mod change;
 mod evidence;
 mod verification;
@@ -8,6 +9,7 @@ mod verification;
 pub use artifact::{
     ArtifactId, ArtifactMetadata, ArtifactReadReceipt, ArtifactSearchHit, ArtifactStore,
 };
+pub use authority::VerificationReceipt;
 pub use change::{
     ChangeKind, ChangedComponent, changed_scope_fingerprint, is_effective_ui_path,
     is_generated_path, normalize_components,
@@ -19,7 +21,7 @@ pub use evidence::{
 pub use verification::{
     ArtifactSemanticClass, ArtifactSemanticResult, CommandReceipt, VerificationCheck,
     VerificationCheckKind, VerificationCheckReceipt, VerificationExemption, VerificationPlan,
-    VerificationPlanner, VerificationReceipt, validate_artifact_semantics,
+    VerificationPlanner, validate_artifact_semantics,
 };
 
 use serde::Serialize;
