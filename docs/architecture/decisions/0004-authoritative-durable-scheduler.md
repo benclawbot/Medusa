@@ -18,6 +18,8 @@ Every task has a supported task kind, explicit dependencies, capabilities, repos
 
 Runtime coordinators may provide specialized execution mechanisms, such as isolated worktrees, but they may not create independent task authority or display workers absent from the accepted graph. Cancellation, restart recovery, revision loops, and retries update the same ledger deterministically.
 
+Execution ledgers are namespaced by durable session identity and accepted plan fingerprint. Identical plans in unrelated sessions therefore cannot share task state, recovery decisions, cancellation state, or terminal evidence.
+
 ## Consequences
 
 - Changing the accepted DAG changes dispatch order and executable work.
