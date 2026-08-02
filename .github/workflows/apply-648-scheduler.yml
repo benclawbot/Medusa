@@ -34,6 +34,26 @@ jobs:
 
           path = Path("scripts/apply-648-scheduler.py")
           text = path.read_text(encoding="utf-8")
+          old_helper = '''def replace_once(path: Path, before: str, after: str) -> None:
+              text = path.read_text(encoding="utf-8")
+              if text.count(before) != 1:
+                  raise RuntimeError(f"{path}: expected exactly one match for replacement")
+              path.write_text(text.replace(before, after, 1), encoding="utf-8")
+          '''
+          new_helper = '''def replace_once(path: Path, before: str, after: str) -> None:
+              text = path.read_text(encoding="utf-8")
+              count = text.count(before)
+              allow_all_cancellation_checkpoints = "cancel_requested(cancel, submission)" in before
+              if count == 0 or (count != 1 and not allow_all_cancellation_checkpoints):
+                  raise RuntimeError(
+                      f"{path}: expected one match, or all cancellation checkpoints; found {count}"
+                  )
+              path.write_text(text.replace(before, after), encoding="utf-8")
+          '''
+          if text.count(old_helper) != 1:
+              raise RuntimeError("generator replacement helper did not match exactly once")
+          text = text.replace(old_helper, new_helper, 1)
+
           old = 'replace_once(scheduler, "\\n}\\n", scheduler_tests + "\\n}\\n")'
           new = '''text = scheduler.read_text(encoding="utf-8")
           position = text.rfind("\\n}\\n")
