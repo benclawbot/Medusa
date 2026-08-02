@@ -10,6 +10,13 @@
 /scripts/test-architecture-index.py @benclawbot
 /scripts/architecture-conformance.py @benclawbot
 
+# Explicit unsafe Rust and native FFI boundary
+/docs/architecture/unsafe-rust-policy.json @benclawbot
+/docs/architecture/UNSAFE-RUST-BOUNDARY.md @benclawbot
+/scripts/check-unsafe-boundary.py @benclawbot
+/scripts/test-unsafe-boundary.py @benclawbot
+/.github/workflows/unsafe-rust-boundary.yml @benclawbot
+
 # Foundational and production authority boundaries
 /Cargo.toml @benclawbot
 /crates/medusa-core/ @benclawbot
