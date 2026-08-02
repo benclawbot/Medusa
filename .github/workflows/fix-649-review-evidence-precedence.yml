@@ -126,14 +126,7 @@ jobs:
 
           runtime_path = Path('crates/medusa-runtime/src/lib.rs')
           runtime = runtime_path.read_text(encoding='utf-8')
-          old = '''    if let Some(evidence) = coordinator_evidence.as_ref() {
-              task_context.push(evidence.parent_context());
-          }
-          if let Some(evidence) = implementation_evidence.as_ref() {
-              task_context.push(evidence.parent_context());
-          }
-          '''
-          new = '''    if implementation_evidence.is_none() {
+          runtime_replacement = '''    if implementation_evidence.is_none() {
               if let Some(evidence) = coordinator_evidence.as_ref() {
                   task_context.push(evidence.parent_context());
               }
@@ -142,9 +135,15 @@ jobs:
               task_context.push(evidence.parent_context());
           }
           '''
-          if runtime.count(old) != 1:
-              raise SystemExit(f'expected one task-context block, found {runtime.count(old)}')
-          runtime_path.write_text(runtime.replace(old, new, 1), encoding='utf-8')
+          runtime, count = re.subn(
+              r'    if let Some\(evidence\) = coordinator_evidence\.as_ref\(\) \{\n\s+task_context\.push\(evidence\.parent_context\(\)\);\n\s+\}\n\s+if let Some\(evidence\) = implementation_evidence\.as_ref\(\) \{\n\s+task_context\.push\(evidence\.parent_context\(\)\);\n\s+\}\n',
+              runtime_replacement,
+              runtime,
+              count=1,
+          )
+          if count != 1:
+              raise SystemExit(f'expected one task-context block, found {count}')
+          runtime_path.write_text(runtime, encoding='utf-8')
           PY
           cargo fmt --all
           changed="$(git diff --name-only | sort)"
