@@ -22,7 +22,7 @@ UNSAFE_PATTERNS = (
     re.compile(r"\bunsafe\s+trait\b"),
     re.compile(r"\bunsafe\s+extern\b"),
 )
-ALLOW_ATTRIBUTE = re.compile(r"#\s*\[\s*allow\s*\(\s*unsafe_code\s*\)\s*\]")
+ALLOW_ATTRIBUTE = re.compile(r"#\s*!?\s*\[\s*allow\s*\(\s*unsafe_code\s*\)\s*\]")
 
 
 class UnsafeBoundaryError(RuntimeError):
@@ -291,6 +291,13 @@ def validate_policy_inventory(root: Path, policy: dict[str, Any]) -> set[str]:
             raise UnsafeBoundaryError(
                 f"safe module has an unsafe-code exception: {module}"
             )
+    exception_count = len(ALLOW_ATTRIBUTE.findall(lib))
+    if exception_count != len(unsafe_modules):
+        raise UnsafeBoundaryError(
+            "containment lib.rs must declare exactly one local unsafe-code "
+            f"exception for each reviewed unsafe module; expected={len(unsafe_modules)}, "
+            f"actual={exception_count}"
+        )
     return {path for path, classification in classified.items() if classification == "unsafe-ffi"}
 
 
