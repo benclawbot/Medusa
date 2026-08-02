@@ -374,10 +374,7 @@ fn bundle_fingerprint(bundle: &EvidenceBundle) -> String {
 }
 
 fn dependency_fingerprint(dependency: &EvidenceDependency) -> String {
-    fingerprint(&(
-        &dependency.bundle_fingerprint,
-        &dependency.decision_ids,
-    ))
+    fingerprint(&(&dependency.bundle_fingerprint, &dependency.decision_ids))
 }
 
 #[cfg(test)]
