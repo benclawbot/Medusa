@@ -302,19 +302,23 @@ def validate_policy_inventory(root: Path, policy: dict[str, Any]) -> set[str]:
 
 
 def validate_unsafe_locations(root: Path, allowed_paths: set[str]) -> None:
+    violations: list[str] = []
+    containment_root = (CONTAINMENT_CRATE / "src/lib.rs").as_posix()
     for relative in sorted(rust_sources(root)):
         text = read_text(root, relative)
         lines = unsafe_occurrences(text)
         if lines and relative not in allowed_paths:
-            raise UnsafeBoundaryError(
+            violations.append(
                 f"unsafe Rust outside reviewed allowlist: {relative}:{','.join(map(str, lines))}"
             )
         if not lines and relative in allowed_paths:
-            raise UnsafeBoundaryError(f"stale unsafe allowlist entry: {relative}")
-        if relative != (CONTAINMENT_CRATE / "src/lib.rs").as_posix() and ALLOW_ATTRIBUTE.search(text):
-            raise UnsafeBoundaryError(
+            violations.append(f"stale unsafe allowlist entry: {relative}")
+        if relative != containment_root and ALLOW_ATTRIBUTE.search(text):
+            violations.append(
                 f"unsafe_code lint exception must be declared only in containment lib.rs: {relative}"
             )
+    if violations:
+        raise UnsafeBoundaryError("\n".join(violations))
 
 
 def validate(root: Path) -> None:
