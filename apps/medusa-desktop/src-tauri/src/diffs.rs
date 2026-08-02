@@ -1,10 +1,11 @@
 use std::{
     fs,
     path::{Path, PathBuf},
-    process::Command,
 };
 
 use serde::Serialize;
+
+use crate::desktop_command::hidden_command;
 
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -89,7 +90,7 @@ fn diff_output(repo: &Path) -> Result<String, String> {
 }
 
 fn run_git_diff(repo: &Path, include_head: bool) -> Result<std::process::Output, String> {
-    let mut command = Command::new("git");
+    let mut command = hidden_command("git");
     command.args(["diff", "--no-ext-diff", "--find-renames", "--unified=3"]);
     if include_head {
         command.arg("HEAD");
