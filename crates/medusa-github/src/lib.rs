@@ -506,9 +506,7 @@ fn read_and_drain<R: Read>(mut reader: R, retain_limit: usize) -> std::io::Resul
     Ok(retained)
 }
 
-fn join_bounded_reader(
-    reader: JoinHandle<std::io::Result<Vec<u8>>>,
-) -> MedusaResult<Vec<u8>> {
+fn join_bounded_reader(reader: JoinHandle<std::io::Result<Vec<u8>>>) -> MedusaResult<Vec<u8>> {
     reader
         .join()
         .map_err(|_| internal_error("bounded command output reader panicked"))?
