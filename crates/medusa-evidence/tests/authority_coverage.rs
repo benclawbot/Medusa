@@ -15,8 +15,7 @@ fn command_plan(repo: &Path) -> VerificationPlan {
     )
     .unwrap();
     fs::write(repo.join("notes.custom"), "changed\n").unwrap();
-    let components =
-        vec![ChangedComponent::new(ChangeKind::Modified, "notes.custom").unwrap()];
+    let components = vec![ChangedComponent::new(ChangeKind::Modified, "notes.custom").unwrap()];
     VerificationPlanner::plan(repo, "repo", "commit", &components, &[]).unwrap()
 }
 
@@ -89,15 +88,14 @@ fn valid_artifact_receipt(
     let plan = VerificationPlanner::plan(repo, "repo", "commit", &components, &[]).unwrap();
     let store = ArtifactStore::open(repo.join("artifacts")).unwrap();
     let artifact = store
-        .put_bytes("application/octet-stream", "authority-coverage", artifact_bytes)
+        .put_bytes(
+            "application/octet-stream",
+            "authority-coverage",
+            artifact_bytes,
+        )
         .unwrap();
     let (_, read) = store
-        .read_range(
-            &artifact.id,
-            0,
-            artifact.byte_len,
-            "authority-coverage",
-        )
+        .read_range(&artifact.id, 0, artifact.byte_len, "authority-coverage")
         .unwrap();
     let record = EvidenceRecord::new(
         EvidenceKind::Observation,
@@ -176,14 +174,26 @@ fn behavior_and_semantic_checks_accept_durable_artifact_reads() {
 fn semantic_validator_classifies_supported_artifact_formats() {
     let directory = tempfile::tempdir().unwrap();
     let cases: [(&str, &[u8], ArtifactSemanticClass); 7] = [
-        ("report.json", br#"{"ok":true}"#, ArtifactSemanticClass::Json),
+        (
+            "report.json",
+            br#"{"ok":true}"#,
+            ArtifactSemanticClass::Json,
+        ),
         (
             "page.html",
             b"<html><body>ok</body></html>",
             ArtifactSemanticClass::Html,
         ),
-        ("image.png", b"\x89PNG\r\n\x1a\nbody", ArtifactSemanticClass::Png),
-        ("document.pdf", b"%PDF-1.7\nbody", ArtifactSemanticClass::Pdf),
+        (
+            "image.png",
+            b"\x89PNG\r\n\x1a\nbody",
+            ArtifactSemanticClass::Png,
+        ),
+        (
+            "document.pdf",
+            b"%PDF-1.7\nbody",
+            ArtifactSemanticClass::Pdf,
+        ),
         ("archive.zip", b"PK\x03\x04body", ArtifactSemanticClass::Zip),
         ("notes.md", b"covered text\n", ArtifactSemanticClass::Text),
         ("payload.bin", b"\0binary", ArtifactSemanticClass::Binary),
