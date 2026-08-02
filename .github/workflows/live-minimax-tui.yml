@@ -1,0 +1,92 @@
+name: Live MiniMax TUI
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: live-minimax-tui-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  interactive-tui:
+    if: ${{ github.event_name == 'workflow_dispatch' || github.event.pull_request.head.repo.full_name == github.repository }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      MINIMAX_API_KEY: ${{ secrets.MINIMAX_API_KEY }}
+      LIVE_TUI_TIMEOUT_SECONDS: '600'
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: dtolnay/rust-toolchain@39b0b3842c7e8bbf6904c0bfc3d9006fdd4dc4e0 # 1.88.0
+      - name: Refresh dependency lock for the merged PR graph
+        run: cargo generate-lockfile
+      - name: Install terminal and containment prerequisites
+        shell: bash
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y bubblewrap
+          if [[ -e /proc/sys/kernel/apparmor_restrict_unprivileged_userns ]]; then
+            echo 0 | sudo tee /proc/sys/kernel/apparmor_restrict_unprivileged_userns
+          fi
+      - name: Require configured live-test secret
+        shell: bash
+        run: |
+          if [[ -z "${MINIMAX_API_KEY:-}" ]]; then
+            echo 'MINIMAX_API_KEY repository secret is required for the live TUI gate.' >&2
+            exit 2
+          fi
+          echo "::add-mask::$MINIMAX_API_KEY"
+      - name: Build the packaged Medusa entry point
+        run: cargo build --release --locked --bin medusa
+      - name: Submit and render one MiniMax answer through the real TUI
+        shell: bash
+        env:
+          CARGO_TARGET_DIR: ${{ runner.temp }}/live-minimax-tui-cargo-target
+        run: |
+          # Keep the fixture outside both the checkout and /tmp: Linux containment replaces /tmp.
+          # Preserve the runner HOME so the real Rust toolchain remains usable. The saved MiniMax
+          # profile is isolated through XDG_CONFIG_HOME rather than a synthetic HOME directory.
+          python3 - <<'PY'
+          from pathlib import Path
+          import re
+
+          expected = "MEDUSA_TUI_MINIMAX_OK"
+          path = Path("scripts/live-tui-minimax-e2e.py")
+          text = path.read_text(encoding="utf-8")
+          prompt = f'''PROMPT = (
+              "Act immediately without planning or additional inspection. Use fs_write on the relative path "
+              "src/lib.rs and replace the complete file with the exact fixture content required to set "
+              "RESPONSE to {expected}, while preserving the existing response function and test unchanged. "
+              "Then use shell_run to run cargo test. Do not call update_plan, team tools, or git_checkpoint. "
+              "After the test passes, return exactly {expected}."
+          )'''
+          text, count = re.subn(r"PROMPT = \(.*?\n\)\nDEFAULT_TIMEOUT_SECONDS", prompt + "\nDEFAULT_TIMEOUT_SECONDS", text, flags=re.S)
+          if count != 1:
+              raise SystemExit("could not replace live TUI prompt")
+          text = text.replace("max_turns = 8", "max_turns = 24")
+          text = text.replace("        HOME=str(home),\n", "")
+          baseline = '        ["git", "add", "Cargo.toml", "src/lib.rs", ".medusa/config.toml"],'
+          replacement = (
+              '        ["cargo", "generate-lockfile"],\n'
+              '        ["git", "add", "Cargo.toml", "Cargo.lock", "src/lib.rs", ".medusa/config.toml"]'
+          )
+          if baseline not in text:
+              raise SystemExit("could not add Cargo.lock to the live fixture baseline")
+          text = text.replace(baseline, replacement + ",", 1)
+          path.write_text(text, encoding="utf-8")
+          PY
+          python3 scripts/live-tui-minimax-e2e.py \
+            --binary target/release/medusa \
+            --work-root "${RUNNER_TEMP}/live-tui-minimax-work" \
+            --output-dir live-tui-minimax-evidence
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        if: always()
+        with:
+          name: live-minimax-tui-evidence
+          path: live-tui-minimax-evidence
+          if-no-files-found: warn

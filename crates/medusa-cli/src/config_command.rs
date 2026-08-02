@@ -38,6 +38,11 @@ pub(crate) fn configure_interactive() -> MedusaResult<()> {
     let snapshot = catalog.snapshot()?;
     let store = catalog.active_store()?;
     let mut profile = snapshot.profile;
+
+    println!("Medusa model setup");
+    println!("Use Up/Down to move, Enter to select, and Esc to cancel menu steps.");
+    println!("Text fields keep their current value when you press Enter.\n");
+
     profile.connection = choose(
         "Connection type",
         &[
@@ -122,6 +127,28 @@ pub(crate) fn configure_interactive() -> MedusaResult<()> {
         )?;
     }
     profile.configured = true;
+    Config::load_layers_with_provider_profile(
+        &profile,
+        None,
+        None,
+        &BTreeMap::new(),
+        &BTreeMap::new(),
+    )?;
+
+    print_profile_summary(&profile);
+    let decision = choose(
+        "Save configuration",
+        &[
+            ("save", "Save and continue"),
+            ("cancel", "Cancel without saving"),
+        ],
+        "save",
+    )?;
+    if decision != "save" {
+        println!("Configuration unchanged.");
+        return Ok(());
+    }
+
     let change = catalog.save_active_profile(
         &profile,
         snapshot.revision,
@@ -138,6 +165,26 @@ pub(crate) fn configure_interactive() -> MedusaResult<()> {
     );
     print_auth_guidance(&profile);
     Ok(())
+}
+
+fn print_profile_summary(profile: &ProviderProfile) {
+    println!("\nConfiguration summary");
+    println!("  Connection: {}", profile.connection);
+    println!("  Provider:   {}", profile.provider);
+    println!("  Model:      {}", profile.model);
+    println!("  Protocol:   {}", profile.protocol());
+    println!("  Speed:      {}", profile.speed);
+    println!("  Thinking:   {}", profile.reasoning);
+    println!("  Auth:       {}", profile.auth);
+    if let Some(base_url) = profile.base_url.as_deref() {
+        println!("  Base URL:   {base_url}");
+    }
+    if let Some(variable) = credential_environment(&profile.provider)
+        && profile.auth == "api-key"
+    {
+        println!("  Credential: {variable} (environment only)");
+    }
+    println!();
 }
 
 #[derive(Debug, Serialize)]
@@ -650,16 +697,43 @@ pub(crate) fn reset() -> MedusaResult<()> {
 }
 
 fn choose(title: &str, choices: &[(&str, &str)], current: &str) -> MedusaResult<String> {
-    println!("{title}:");
-    for (index, (value, label)) in choices.iter().enumerate() {
-        let marker = if *value == current { "*" } else { " " };
-        println!("  {}. [{marker}] {label}", index + 1);
+    if choices.is_empty() {
+        return Err(config_error(format!("{title} has no available choices")));
     }
-    let default_selection = choices
+    let initial = current_choice_index(choices, current);
+    if io::stdin().is_terminal() && io::stdout().is_terminal() {
+        let labels = choices
+            .iter()
+            .map(|(_, label)| *label)
+            .collect::<Vec<_>>();
+        let selection = medusa_tui::input::select_menu(title, &labels, initial)
+            .map_err(|error| config_error(format!("interactive menu failed: {error}")))?;
+        return selection
+            .and_then(|index| choices.get(index))
+            .map(|(value, _)| (*value).to_owned())
+            .ok_or_else(|| config_error("configuration cancelled"));
+    }
+    choose_line(title, choices, initial)
+}
+
+fn current_choice_index(choices: &[(&str, &str)], current: &str) -> usize {
+    choices
         .iter()
         .position(|(value, _)| *value == current)
-        .map(|index| (index + 1).to_string())
-        .unwrap_or_else(|| "1".to_owned());
+        .unwrap_or(0)
+}
+
+fn choose_line(
+    title: &str,
+    choices: &[(&str, &str)],
+    default_index: usize,
+) -> MedusaResult<String> {
+    println!("{title}:");
+    for (index, (_, label)) in choices.iter().enumerate() {
+        let marker = if index == default_index { "*" } else { " " };
+        println!("  {}. [{marker}] {label}", index + 1);
+    }
+    let default_selection = (default_index + 1).to_string();
     let raw = prompt("Selection", &default_selection)?;
     let index = raw
         .parse::<usize>()
@@ -715,6 +789,33 @@ pub(crate) fn ensure_selected_runtime() -> MedusaResult<()> {
     let profile = load_profile()?;
     if profile.configured {
         ensure_runtime_for_profile(&profile)?;
+        ensure_profile_ready(&profile)?;
+    }
+    Ok(())
+}
+
+fn ensure_profile_ready(profile: &ProviderProfile) -> MedusaResult<()> {
+    if profile.auth == "api-key" {
+        let variable = credential_environment(&profile.provider).ok_or_else(|| {
+            config_error(format!(
+                "provider `{}` has no registered API-key environment variable; run `medusa config doctor`",
+                profile.provider
+            ))
+        })?;
+        if env::var_os(variable).is_none() {
+            return Err(config_error(format!(
+                "{variable} is not present in the Medusa process environment. Set it before opening the TUI (PowerShell: `$env:{variable} = \"...\"`) and run `medusa config doctor`."
+            )));
+        }
+    }
+
+    if let Some(base_url) = profile.base_url.as_deref()
+        && let Some(address) = loopback_socket(base_url)
+        && TcpStream::connect_timeout(&address, Duration::from_millis(500)).is_err()
+    {
+        return Err(config_error(format!(
+            "the configured local provider endpoint {base_url} is not reachable; start the gateway/runtime and run `medusa config doctor`"
+        )));
     }
     Ok(())
 }
@@ -839,15 +940,7 @@ mod tests {
         store.save(&previous).expect("save previous");
         fs::write(
             store.path(),
-            "connection = 'direct'
-provider = 'minimax'
-model = 'MiniMax-M3'
-speed = 'balanced'
-reasoning = 'medium'
-auth = 'api-key'
-configured = true
-token = 'super-secret-value'
-",
+            "connection = 'direct'\nprovider = 'minimax'\nmodel = 'MiniMax-M3'\nspeed = 'balanced'\nreasoning = 'medium'\nauth = 'api-key'\nconfigured = true\ntoken = 'super-secret-value'\n",
         )
         .expect("write invalid edit");
 
@@ -864,11 +957,17 @@ token = 'super-secret-value'
     fn doctor_report_redacts_malformed_profile_contents() {
         let directory = tempfile::tempdir().expect("tempdir");
         let store = ProviderProfileStore::at(directory.path().join("provider.toml"));
-        fs::write(store.path(), "token = 'super-secret-value'
-").expect("malformed profile");
+        fs::write(store.path(), "token = 'super-secret-value'\n").expect("malformed profile");
         let report = diagnose_store(&store, 0, "default".to_owned());
         let encoded = serde_json::to_string(&report).expect("doctor json");
         assert!(!report.healthy);
         assert!(!encoded.contains("super-secret-value"));
+    }
+
+    #[test]
+    fn current_choice_is_highlighted_and_unknown_values_use_first_option() {
+        let choices = [("one", "One"), ("two", "Two"), ("three", "Three")];
+        assert_eq!(current_choice_index(&choices, "two"), 1);
+        assert_eq!(current_choice_index(&choices, "missing"), 0);
     }
 }

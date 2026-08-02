@@ -1,4 +1,12 @@
-use crossterm::event::{Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
+use std::io::{self, IsTerminal, Write};
+
+use crossterm::{
+    cursor::{Hide, MoveUp, Show},
+    event::{self, Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers},
+    execute, queue,
+    style::{Attribute, Print, SetAttribute},
+    terminal::{Clear, ClearType, disable_raw_mode, enable_raw_mode},
+};
 
 use crate::clipboard::{ClipboardError, PromptDraft};
 
@@ -107,6 +115,165 @@ impl ComposerState {
         self.draft.insert_pasted_text(self.cursor, text)?;
         self.cursor += text.len();
         Ok(ComposerAction::Changed)
+    }
+}
+
+/// Runs a compact keyboard-first terminal picker.
+///
+/// The caller must provide an interactive terminal. `None` means the user cancelled with Escape
+/// or Ctrl+C. Raw mode and cursor visibility are restored before this function returns.
+pub fn select_menu(title: &str, choices: &[&str], initial: usize) -> io::Result<Option<usize>> {
+    if choices.is_empty() {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "terminal menu requires at least one choice",
+        ));
+    }
+    if !io::stdin().is_terminal() || !io::stdout().is_terminal() {
+        return Err(io::Error::new(
+            io::ErrorKind::Unsupported,
+            "terminal menu requires interactive stdin and stdout",
+        ));
+    }
+
+    let mut terminal = MenuTerminal::enter()?;
+    let mut selected = initial.min(choices.len() - 1);
+    loop {
+        terminal.render(title, choices, selected)?;
+        let Event::Key(key) = event::read()? else {
+            continue;
+        };
+        if key.kind == KeyEventKind::Release {
+            continue;
+        }
+        match menu_action(key, selected, choices.len()) {
+            MenuAction::Move(next) => selected = next,
+            MenuAction::Select => {
+                terminal.complete(title, choices[selected])?;
+                return Ok(Some(selected));
+            }
+            MenuAction::Cancel => {
+                terminal.cancel(title)?;
+                return Ok(None);
+            }
+            MenuAction::Ignore => {}
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum MenuAction {
+    Move(usize),
+    Select,
+    Cancel,
+    Ignore,
+}
+
+fn menu_action(key: KeyEvent, selected: usize, count: usize) -> MenuAction {
+    if count == 0 {
+        return MenuAction::Ignore;
+    }
+    match key.code {
+        KeyCode::Up => MenuAction::Move(if selected == 0 {
+            count - 1
+        } else {
+            selected - 1
+        }),
+        KeyCode::Down => MenuAction::Move((selected + 1) % count),
+        KeyCode::Home => MenuAction::Move(0),
+        KeyCode::End => MenuAction::Move(count - 1),
+        KeyCode::Enter => MenuAction::Select,
+        KeyCode::Esc => MenuAction::Cancel,
+        KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => MenuAction::Cancel,
+        _ => MenuAction::Ignore,
+    }
+}
+
+struct MenuTerminal {
+    rendered_rows: u16,
+    restored: bool,
+}
+
+impl MenuTerminal {
+    fn enter() -> io::Result<Self> {
+        enable_raw_mode()?;
+        let mut stdout = io::stdout();
+        if let Err(error) = execute!(stdout, Hide) {
+            let _ = disable_raw_mode();
+            return Err(error);
+        }
+        Ok(Self {
+            rendered_rows: 0,
+            restored: false,
+        })
+    }
+
+    fn render(&mut self, title: &str, choices: &[&str], selected: usize) -> io::Result<()> {
+        let mut stdout = io::stdout();
+        self.clear_rendered(&mut stdout)?;
+        queue!(
+            stdout,
+            Print(title),
+            Print(":\r\n"),
+            Print("  Up/Down move  Enter select  Esc cancel\r\n")
+        )?;
+        for (index, label) in choices.iter().enumerate() {
+            let marker = if index == selected { ">" } else { " " };
+            if index == selected {
+                queue!(stdout, SetAttribute(Attribute::Bold))?;
+            }
+            queue!(stdout, Print(format!("  {marker} {label}\r\n")))?;
+            if index == selected {
+                queue!(stdout, SetAttribute(Attribute::Reset))?;
+            }
+        }
+        stdout.flush()?;
+        self.rendered_rows = u16::try_from(choices.len().saturating_add(2)).unwrap_or(u16::MAX);
+        Ok(())
+    }
+
+    fn complete(&mut self, title: &str, selected: &str) -> io::Result<()> {
+        let mut stdout = io::stdout();
+        self.clear_rendered(&mut stdout)?;
+        queue!(stdout, Print(format!("{title}: {selected}\r\n")))?;
+        stdout.flush()?;
+        self.restore()
+    }
+
+    fn cancel(&mut self, title: &str) -> io::Result<()> {
+        let mut stdout = io::stdout();
+        self.clear_rendered(&mut stdout)?;
+        queue!(stdout, Print(format!("{title}: cancelled\r\n")))?;
+        stdout.flush()?;
+        self.restore()
+    }
+
+    fn clear_rendered(&mut self, stdout: &mut io::Stdout) -> io::Result<()> {
+        if self.rendered_rows > 0 {
+            queue!(
+                stdout,
+                MoveUp(self.rendered_rows),
+                Clear(ClearType::FromCursorDown)
+            )?;
+        }
+        Ok(())
+    }
+
+    fn restore(&mut self) -> io::Result<()> {
+        if self.restored {
+            return Ok(());
+        }
+        let raw_result = disable_raw_mode();
+        let mut stdout = io::stdout();
+        let cursor_result = execute!(stdout, SetAttribute(Attribute::Reset), Show);
+        self.restored = true;
+        raw_result.and(cursor_result)
+    }
+}
+
+impl Drop for MenuTerminal {
+    fn drop(&mut self) {
+        let _ = self.restore();
     }
 }
 
@@ -328,5 +495,45 @@ mod tests {
             )))
             .expect("word");
         assert_eq!(composer.draft.text, "hello w");
+    }
+
+    #[test]
+    fn menu_navigation_wraps_and_supports_home_end() {
+        assert_eq!(
+            menu_action(KeyEvent::new(KeyCode::Up, KeyModifiers::NONE), 0, 4),
+            MenuAction::Move(3)
+        );
+        assert_eq!(
+            menu_action(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE), 3, 4),
+            MenuAction::Move(0)
+        );
+        assert_eq!(
+            menu_action(KeyEvent::new(KeyCode::Home, KeyModifiers::NONE), 2, 4),
+            MenuAction::Move(0)
+        );
+        assert_eq!(
+            menu_action(KeyEvent::new(KeyCode::End, KeyModifiers::NONE), 1, 4),
+            MenuAction::Move(3)
+        );
+    }
+
+    #[test]
+    fn menu_enter_selects_and_escape_or_ctrl_c_cancel() {
+        assert_eq!(
+            menu_action(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE), 1, 3),
+            MenuAction::Select
+        );
+        assert_eq!(
+            menu_action(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE), 1, 3),
+            MenuAction::Cancel
+        );
+        assert_eq!(
+            menu_action(
+                KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL),
+                1,
+                3
+            ),
+            MenuAction::Cancel
+        );
     }
 }
