@@ -13,6 +13,8 @@ The updater verifies the Ed25519 signature over the exact manifest bytes before 
 
 The embedded public key and the reviewed key lifecycle are recorded in `release/keys/keyring.json`. The private key is not stored in the repository. It is provided only to the protected `release-signing` environment through `MEDUSA_RELEASE_ED25519_PRIVATE_KEY_PEM`.
 
+The embedded trust root is compiled as a fixed 32-byte value. Platform discovery is fallible, so an unsupported operating system or architecture fails closed instead of panicking.
+
 ## Distribution lifecycle
 
 ```mermaid
