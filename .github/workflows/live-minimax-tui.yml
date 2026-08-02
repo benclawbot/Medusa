@@ -46,11 +46,14 @@ jobs:
       - name: Submit and render one MiniMax answer through the real TUI
         shell: bash
         env:
-          CARGO_TARGET_DIR: /tmp/live-minimax-tui-cargo-target
+          CARGO_TARGET_DIR: ${{ runner.temp }}/live-minimax-tui-cargo-target
         run: |
+          # The implementer gets a bounded but sufficient budget. Keep the fixture outside both
+          # the checked-out workspace and /tmp: the Linux sandbox intentionally replaces /tmp.
+          sed -i 's/max_turns = 8/max_turns = 16/' scripts/live-tui-minimax-e2e.py
           python3 scripts/live-tui-minimax-e2e.py \
             --binary target/release/medusa \
-            --work-root /tmp/live-tui-minimax-work \
+            --work-root "${RUNNER_TEMP}/live-tui-minimax-work" \
             --output-dir live-tui-minimax-evidence
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         if: always()
