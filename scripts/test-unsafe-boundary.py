@@ -187,6 +187,22 @@ mod windows;
         ):
             self.validate()
 
+    def test_crate_wide_exception_fails(self) -> None:
+        self.fixture.write(
+            "crates/medusa-process-containment/src/lib.rs",
+            """
+#![allow(unsafe_code)]
+mod safe_module;
+#[cfg(windows)]
+#[allow(unsafe_code)]
+mod windows;
+""".lstrip(),
+        )
+        with self.assertRaisesRegex(
+            CHECKER.UnsafeBoundaryError, "exactly one local"
+        ):
+            self.validate()
+
     def test_workspace_crate_cannot_drop_lint_inheritance(self) -> None:
         self.fixture.write(
             "crates/safe/Cargo.toml",
