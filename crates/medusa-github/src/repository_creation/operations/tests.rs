@@ -53,6 +53,14 @@ fn output(stdout: &str) -> CommandOutput {
     }
 }
 
+fn failed(stderr: &str) -> CommandOutput {
+    CommandOutput {
+        success: false,
+        stdout: String::new(),
+        stderr: stderr.into(),
+    }
+}
+
 fn request() -> GitHubOperationRequest {
     GitHubOperationRequest {
         repository: "acme/project".into(),
@@ -156,7 +164,19 @@ fn validation_rejects_cross_host_absolute_and_mismatched_resource_paths() {
 }
 
 #[test]
-fn search_requires_exact_repository_scope_and_uses_global_search_endpoint() {
+fn validation_rejects_dot_repositories_and_encoded_path_escapes() {
+    let mut operation = request();
+    operation.repository = "acme/..".into();
+    assert!(operation.validate().is_err());
+    operation.repository = "acme/project".into();
+    operation.endpoint = "issues/%2e%2e/hooks".into();
+    assert!(operation.validate().is_err());
+    operation.endpoint = "issues/%252e%252e/hooks".into();
+    assert!(operation.validate().is_err());
+}
+
+#[test]
+fn search_requires_one_exact_repository_scope_and_uses_global_search_endpoint() {
     let executor = FakeExecutor::with_outputs(vec![output(r#"{"total_count":0,"items":[]}"#)]);
     let mut operation = request();
     operation.resource = GitHubResource::Search;
@@ -172,9 +192,18 @@ fn search_requires_exact_repository_scope_and_uses_global_search_endpoint() {
         .expect("search");
     let calls = executor.calls.lock().expect("calls");
     assert!(calls[0].1.contains(&"/search/issues".into()));
+    drop(calls);
+
+    operation.query.insert(
+        "q".into(),
+        "bug repo:acme/project OR repo:other/project".into(),
+    );
+    assert!(operation.validate().is_err());
     operation
         .query
-        .insert("q".into(), "bug repo:other/project".into());
+        .insert("q".into(), "bug repo:acme/project org:other".into());
+    assert!(operation.validate().is_err());
+    operation.query.insert("q".into(), "bug".into());
     assert!(operation.validate().is_err());
 }
 
@@ -212,9 +241,28 @@ fn administration_secrets_and_delete_are_high_risk() {
 }
 
 #[test]
-fn secret_preview_and_receipt_never_echo_secret_values() {
+fn raw_github_tokens_are_rejected_from_nested_request_bodies() {
+    let mut operation = request();
+    operation.body = Some(serde_json::json!({"config":{"credential":"ghp_not_allowed"}}));
+    assert!(operation.validate().is_err());
+    operation.body = Some(serde_json::json!({"access_token":"ordinary-text"}));
+    assert!(operation.validate().is_err());
+}
+
+#[test]
+fn webhook_shared_secret_is_allowed_but_redacted_from_preview() {
+    let mut operation = request();
+    operation.resource = GitHubResource::Webhooks;
+    operation.endpoint = "hooks".into();
+    operation.body = Some(serde_json::json!({"config":{"secret":"shared-hook-secret"}}));
+    operation.validate().expect("webhook secret");
+    assert!(!operation.redacted_preview().to_string().contains("shared-hook-secret"));
+}
+
+#[test]
+fn secret_preview_receipt_and_failure_never_echo_request_values() {
     let executor = FakeExecutor::with_outputs(vec![output(
-        r#"{"name":"DEPLOY_TOKEN","value":"super-secret","authorization":"Bearer ghp_bad"}"#,
+        r#"{"name":"DEPLOY_TOKEN","message":"accepted super-secret","authorization":"Bearer ghp_bad"}"#,
     )]);
     let mut operation = request();
     operation.resource = GitHubResource::Secrets;
@@ -230,6 +278,18 @@ fn secret_preview_and_receipt_never_echo_secret_values() {
     let encoded = serde_json::to_string(&receipt).expect("receipt");
     assert!(!encoded.contains("super-secret"));
     assert!(!encoded.contains("ghp_bad"));
+
+    operation.body = Some(serde_json::json!({
+        "encrypted_value":"arbitrary-secret-value",
+        "key_id":"7"
+    }));
+    let error = service(FakeExecutor::with_outputs(vec![failed(
+        "invalid encrypted value arbitrary-secret-value",
+    )]))
+    .execute_operation(&operation)
+    .expect_err("failure");
+    assert!(!error.message.contains("arbitrary-secret-value"));
+    assert!(error.message.contains("[REDACTED]"));
 }
 
 #[test]
@@ -242,6 +302,19 @@ fn response_is_bounded_and_marked_truncated() {
         .expect("bounded");
     assert!(receipt.truncated);
     assert!(receipt.payload.to_string().len() < 128);
+}
+
+#[test]
+fn empty_mutation_response_does_not_invent_a_resource_url() {
+    let mut operation = request();
+    operation.method = GitHubHttpMethod::Delete;
+    operation.endpoint = "issues/7".into();
+    operation.body = None;
+    let receipt = service(FakeExecutor::with_outputs(vec![output("")]))
+        .execute_operation(&operation)
+        .expect("delete");
+    assert_eq!(receipt.resource_identity.as_deref(), Some("7"));
+    assert!(receipt.resource_url.is_none());
 }
 
 #[test]
