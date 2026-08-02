@@ -216,26 +216,31 @@ impl MutationTransaction {
     }
 
     pub fn review_context(&self) -> Result<String, String> {
-        if self.state.lifecycle != MutationLifecycle::ReviewPending {
-            return Err(format!(
-                "parent review requires review_pending state, found {:?}",
-                self.state.lifecycle
-            ));
-        }
-        let patch = fs::read_to_string(self.root.join("prepared.patch"))
-            .map_err(|error| error.to_string())?;
-        Ok(format!(
-            "Transactional parent review packet. The primary repository is still at base HEAD `{}` and has not been mutated. Review immutable prepared commit `{}` (tree `{}`), exact changed-path scope {:?}, patch fingerprint `{}`, implementation evidence fingerprint `{}`, and isolated verification evidence {:?}.\n\nPrepared patch:\n{}\n\nAct only as the read-only parent reviewer. End the final response with exactly one machine-readable line: `MEDUSA_REVIEW_ACCEPTED: <rationale>` to accept this exact commit, or `MEDUSA_REVISION_REQUESTED: <rationale>` to reject it and preserve the isolated worktree. Any other ending fails closed and cannot authorize integration.",
-            self.state.base_head,
-            self.state.prepared_commit,
-            self.state.prepared_tree,
-            self.state.changed_paths,
-            self.state.patch_fingerprint,
-            self.state.implementation_evidence_fingerprint,
-            self.state.worktree_verification_evidence,
-            patch,
-        ))
+    if self.state.lifecycle != MutationLifecycle::ReviewPending {
+        return Err(format!(
+            "parent review requires review_pending state, found {:?}",
+            self.state.lifecycle
+        ));
     }
+    let patch = fs::read_to_string(self.root.join("prepared.patch"))
+        .map_err(|error| error.to_string())?;
+    Ok(format!(
+        "Transactional parent review packet. This packet is the authoritative input for the review decision. The original user request has already been admitted, scoped, and executed by an isolated implementer; do not execute it again or reject the prepared commit merely because this read-only reviewer lacks mutation tools. The primary repository intentionally remains at base HEAD `{}` until authorization, so repository retrieval from the primary tree is stale with respect to prepared commit `{}` and must not be used to claim the patch is absent. Review immutable tree `{}`, exact changed-path scope {:?}, patch fingerprint `{}`, implementation evidence fingerprint `{}`, and runtime worktree verification evidence {:?}. Runtime verification evidence and the immutable patch are authoritative. Implementer narratives and earlier planning or risk summaries are advisory only; ignore any statement that conflicts with the patch or runtime evidence.
+
+Prepared patch:
+{}
+
+Decision rules: accept when the exact patch implements the scoped request, changed paths match the scope, and runtime verification evidence passes. Request revision only for a concrete defect in the prepared patch, scope, or runtime evidence. Do not request revision merely because the original request uses direct-action wording or a completion token, because the parent role is read-only, or because the primary tree still contains base content. You are not being asked to write files, run tests, or claim integration already completed. End the final response with exactly one machine-readable line: `MEDUSA_REVIEW_ACCEPTED: <rationale>` to accept this exact commit, or `MEDUSA_REVISION_REQUESTED: <rationale>` to reject it and preserve the isolated worktree. Any other ending fails closed and cannot authorize integration.",
+        self.state.base_head,
+        self.state.prepared_commit,
+        self.state.prepared_tree,
+        self.state.changed_paths,
+        self.state.patch_fingerprint,
+        self.state.implementation_evidence_fingerprint,
+        self.state.worktree_verification_evidence,
+        patch,
+    ))
+}
 
     pub fn record_parent_review(
         &mut self,
@@ -964,6 +969,26 @@ mod tests {
             worktree_verification_evidence: vec!["worktree verified".to_owned()],
         };
         (directory, repo, manager, input)
+    }
+
+    #[test]
+    fn review_context_prioritizes_prepared_artifact_and_runtime_evidence() {
+        let (_directory, repo, _manager, mut input) = fixture();
+        input.implementation_summary =
+            "reviewer lacks write tools and the primary tree is unchanged".to_owned();
+        input.worktree_verification_evidence = vec![
+            "test result: ok. 1 passed; 0 failed".to_owned(),
+        ];
+        let root = repo.join(".medusa/executions/test");
+        let transaction =
+            MutationTransaction::open_or_prepare(&root, &repo, input).expect("transaction");
+        let context = transaction.review_context().expect("review context");
+        assert!(context.contains("authoritative input for the review decision"));
+        assert!(context.contains("primary repository intentionally remains at base HEAD"));
+        assert!(context.contains("repository retrieval from the primary tree is stale"));
+        assert!(context.contains("test result: ok. 1 passed; 0 failed"));
+        assert!(context.contains("Implementer narratives and earlier planning or risk summaries are advisory only"));
+        assert!(context.contains("Do not request revision merely because"));
     }
 
     #[test]
