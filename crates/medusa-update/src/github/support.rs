@@ -1,3 +1,5 @@
+//! Bounded GitHub wire-format and persistence helpers for the verified updater.
+
 use std::{
     fs::{self, File},
     io::{Read, Write},
