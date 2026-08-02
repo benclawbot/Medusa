@@ -1,9 +1,11 @@
 use std::{
     io::Read,
-    process::{Command, Stdio},
+    process::Stdio,
 };
 
 use serde::Serialize;
+
+use crate::desktop_command::hidden_command;
 
 const MAX_LOG_BYTES: usize = 256 * 1024;
 const READ_LIMIT_BYTES: u64 = (MAX_LOG_BYTES + 1) as u64;
@@ -42,7 +44,7 @@ pub fn runtime_github_actions_job_log(
 }
 
 fn run_gh_api(hostname: &str, endpoint: &str) -> Result<(Vec<u8>, bool), String> {
-    let mut child = Command::new("gh")
+    let mut child = hidden_command("gh")
         .args(["api", "--hostname", hostname, endpoint])
         .stdout(Stdio::piped())
         .stderr(Stdio::null())
