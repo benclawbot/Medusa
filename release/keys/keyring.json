@@ -1,0 +1,18 @@
+{
+  "schema": "medusa-release-keyring-v1",
+  "keys": [
+    {
+      "key_id": "medusa-release-2026-01",
+      "public_key_hex": "2ea016f00f8187453c6631644a9b472a9e1b6e6b281fe6cba862578a2b852f44",
+      "status": "active",
+      "first_sequence": 1,
+      "last_sequence": null,
+      "public_key_file": "release/keys/medusa-release-2026-01.pem"
+    }
+  ],
+  "rotation_policy": {
+    "minimum_overlap_releases": 2,
+    "revocation_requires_release_withdrawal_review": true,
+    "downgrades_require_explicit_local_approval": true
+  }
+}
