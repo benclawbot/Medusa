@@ -1,5 +1,6 @@
 name: Apply GitHub OAuth Clippy fixes
 
+# One-shot branch utility. Removed after the correction commit.
 on:
   push:
     branches:
