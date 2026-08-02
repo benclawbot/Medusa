@@ -1,0 +1,51 @@
+name: Package 649 Validated Source
+
+on:
+  pull_request:
+    branches: [main]
+    types: [opened, synchronize, reopened]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: package-649-validated-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  package:
+    if: github.event.pull_request.number == 662 && github.event.pull_request.head.repo.full_name == github.repository && github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ github.event.pull_request.head.ref }}
+      - name: Regenerate validated source
+        run: python3 scripts/run-649-migration.py
+      - name: Package exact source tree
+        shell: bash
+        run: |
+          set -euo pipefail
+          tar -czf validated-transaction-source.tar.gz \
+            .github/workflows/architecture-v2-baseline.yml \
+            crates/medusa-workers/src/lib.rs \
+            crates/medusa-runtime/src/lib.rs \
+            crates/medusa-runtime/src/multi_agent_coordinator.rs \
+            crates/medusa-runtime/src/mutation_transaction.rs \
+            crates/medusa-runtime/src/mutating_worker_coordinator.rs \
+            crates/medusa-runtime/src/mutating_worker_coordinator_support.rs \
+            crates/medusa-runtime/src/mutating_worker_coordinator_tests.rs \
+            docs/architecture/INDEX.md \
+            docs/architecture/baseline.json \
+            scripts/architecture-conformance.py \
+            scripts/check-architecture-index.py \
+            scripts/check-mutation-lifecycle.py
+          tar -tzf validated-transaction-source.tar.gz
+      - name: Upload validated source
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: validated-transaction-source-${{ github.sha }}
+          path: validated-transaction-source.tar.gz
+          if-no-files-found: error
+          retention-days: 2
