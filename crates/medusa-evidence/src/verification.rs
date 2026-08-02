@@ -618,12 +618,33 @@ fn repository_defined_checks(repo: &Path) -> Result<Vec<VerificationCheck>> {
     fn dot() -> String {
         ".".to_owned()
     }
+    let mut checks = Vec::new();
+    #[cfg(windows)]
+    if repo.join("verify.ps1").is_file() {
+        checks.push(VerificationCheck::command(
+            VerificationCheckKind::RepositoryDefined,
+            "powershell",
+            &["-NoProfile", "-File", "verify.ps1"],
+            ".",
+            "repository verification script",
+        ));
+    }
+    #[cfg(not(windows))]
+    if repo.join("verify.sh").is_file() {
+        checks.push(VerificationCheck::command(
+            VerificationCheckKind::RepositoryDefined,
+            "bash",
+            &["verify.sh"],
+            ".",
+            "repository verification script",
+        ));
+    }
     let path = repo.join(".medusa/verification.json");
     if !path.is_file() {
-        return Ok(Vec::new());
+        return Ok(checks);
     }
     let definition: Definition = serde_json::from_slice(&fs::read(path)?)?;
-    definition
+    let configured = definition
         .checks
         .into_iter()
         .map(|check| {
@@ -641,7 +662,9 @@ fn repository_defined_checks(repo: &Path) -> Result<Vec<VerificationCheck>> {
                 check.reason,
             ))
         })
-        .collect()
+        .collect::<Result<Vec<_>>>()?;
+    checks.extend(configured);
+    Ok(checks)
 }
 
 fn add_manifest_checks(
