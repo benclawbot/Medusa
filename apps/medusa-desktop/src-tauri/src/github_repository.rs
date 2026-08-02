@@ -1,6 +1,6 @@
-use std::process::Command;
-
 use serde::{Deserialize, Serialize};
+
+use crate::desktop_command::hidden_command;
 
 #[derive(Debug, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
@@ -68,7 +68,7 @@ pub fn runtime_github_repository_access(
     }
 
     let endpoint = format!("repos/{repository}");
-    let output = match Command::new("gh")
+    let output = match hidden_command("gh")
         .args(["api", "--hostname", hostname.as_str(), endpoint.as_str()])
         .output()
     {
