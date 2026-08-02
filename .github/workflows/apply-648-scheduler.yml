@@ -78,6 +78,44 @@ jobs:
 
           scheduler = Path("crates/medusa-multi-agent-scheduler/src/lib.rs")
           text = scheduler.read_text(encoding="utf-8")
+          mutation_start = "    let mutation_requested = !explicitly_read_only\n"
+          mutation_end = "        });\n    let repository_relevant ="
+          start = text.find(mutation_start)
+          end = text.find(mutation_end, start + len(mutation_start))
+          if start < 0 or end < 0:
+              raise RuntimeError("mutation intent expression boundaries were not found")
+          text = (
+              text[:start]
+              + "    let mutation_requested = !explicitly_read_only && contains_mutation_verb(&words);\n"
+              + "    let repository_relevant ="
+              + text[end + len(mutation_end):]
+          )
+          vocabulary_marker = "fn contains_phrase(value: &str, phrases: &[&str]) -> bool {\n"
+          vocabulary = '''fn contains_mutation_verb(words: &BTreeSet<String>) -> bool {
+              const VERBS: &[&str] = &[
+                  "add", "build", "change", "correct", "create", "delete", "edit", "fix",
+                  "implement", "make", "migrate", "modify", "patch", "refactor", "remove",
+                  "rename", "repair", "replace", "rewrite", "update", "upgrade", "write",
+              ];
+              VERBS.iter().any(|verb| words.contains(*verb))
+          }
+
+          '''
+          if text.count(vocabulary_marker) != 1:
+              raise RuntimeError("mutation vocabulary insertion point did not match exactly once")
+          text = text.replace(vocabulary_marker, vocabulary + vocabulary_marker, 1)
+          test_marker = "    #[test]\n    fn typed_planner_fails_closed_when_mutation_scope_is_unknown() {\n"
+          vocabulary_test = '''    #[test]
+              fn mutation_vocabulary_recognizes_fix() {
+                  let words = lexical_words("fix the failing tests");
+                  assert!(contains_mutation_verb(&words));
+              }
+
+          '''
+          if text.count(test_marker) != 1:
+              raise RuntimeError("mutation vocabulary regression test insertion did not match")
+          text = text.replace(test_marker, vocabulary_test + test_marker, 1)
+
           field_before = "struct LedgerTaskDefinition {\n    id: String,"
           field_after = "struct LedgerTaskDefinition {\n    order: u32,\n    id: String,"
           iterator_before = ".tasks\n            .iter()\n            .map(|planned| {"
