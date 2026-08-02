@@ -1,62 +1,178 @@
-use std::{collections::BTreeMap, io::Read};
+use std::{
+    collections::BTreeMap,
+    fs::{self, File, OpenOptions},
+    io::{Read, Seek, SeekFrom, Write},
+    path::{Path, PathBuf},
+    thread,
+    time::{Duration, Instant},
+};
 
 use medusa_core::{ErrorCategory, ErrorCode, MedusaError, MedusaResult};
 use reqwest::{
     StatusCode,
     blocking::{Client, Response},
+    header::{ACCEPT, ETAG, IF_NONE_MATCH, RANGE},
 };
 use semver::Version;
 use serde::Deserialize;
 
-use crate::{Artifact, Release, copy_with_progress, model::invalid};
+use crate::{
+    Artifact, DownloadReport, Release,
+    manifest::{MANIFEST_NAME, SIGNATURE_NAME, Platform, TrustStore},
+    model::{invalid, verify_artifact},
+};
 
 const GITHUB_API: &str = "https://api.github.com";
-const MANIFEST_NAME: &str = "medusa-release-manifest.json";
+const MAX_RELEASE_METADATA: usize = 4 * 1024 * 1024;
+const MAX_MANIFEST: usize = 1024 * 1024;
+const MAX_SIGNATURE: usize = 16 * 1024;
+const DOWNLOAD_ATTEMPTS: u32 = 3;
 
-/// Discovers a published release and streams its assets.
+/// Discovers a published release and downloads only assets authorized by its signed manifest.
 pub trait ReleaseClient {
     /// Returns `None` when the repository has not published a stable release yet.
     fn latest(&self) -> MedusaResult<Option<Release>>;
     fn download(
         &self,
         artifact: &Artifact,
-        destination: &std::path::Path,
+        destination: &Path,
         progress: impl FnMut(u64, Option<u64>),
-    ) -> MedusaResult<u64>;
+    ) -> MedusaResult<DownloadReport>;
 }
 
-/// GitHub Releases API client for Medusa's public repository or an Enterprise host.
+/// GitHub Releases API client with an embedded Ed25519 trust store.
 pub struct GithubReleaseClient {
     client: Client,
     api_base: String,
     repository: String,
+    trust_store: TrustStore,
+    cache_dir: Option<PathBuf>,
 }
 
 impl GithubReleaseClient {
     pub fn public() -> MedusaResult<Self> {
-        Self::new("benclawbot/Medusa", GITHUB_API)
+        Self::new("benclawbot/Medusa", GITHUB_API, TrustStore::production())
     }
 
-    pub fn new(repository: impl Into<String>, api_base: impl Into<String>) -> MedusaResult<Self> {
+    pub fn new(
+        repository: impl Into<String>,
+        api_base: impl Into<String>,
+        trust_store: TrustStore,
+    ) -> MedusaResult<Self> {
         let client = Client::builder()
-            .user_agent("medusa-updater")
+            .user_agent("medusa-updater/2")
+            .connect_timeout(Duration::from_secs(10))
+            .timeout(Duration::from_secs(15 * 60))
             .build()
             .map_err(http_error)?;
         Ok(Self {
             client,
             api_base: api_base.into().trim_end_matches('/').to_owned(),
             repository: repository.into(),
+            trust_store,
+            cache_dir: None,
         })
     }
 
-    fn response(&self, url: &str) -> MedusaResult<Response> {
-        self.client
-            .get(url)
-            .header("Accept", "application/vnd.github+json")
+    #[must_use]
+    pub fn with_cache_dir(mut self, cache_dir: impl Into<PathBuf>) -> Self {
+        self.cache_dir = Some(cache_dir.into());
+        self
+    }
+
+    fn response(&self, url: &str, range_start: Option<u64>) -> MedusaResult<Response> {
+        let mut request = self.client.get(url).header(ACCEPT, "application/octet-stream");
+        if let Some(start) = range_start {
+            request = request.header(RANGE, format!("bytes={start}-"));
+        }
+        request
             .send()
             .map_err(http_error)?
             .error_for_status()
             .map_err(http_error)
+    }
+
+    fn release_metadata(&self, url: &str) -> MedusaResult<Option<Vec<u8>>> {
+        let cached = self.read_cache();
+        let mut request = self
+            .client
+            .get(url)
+            .header(ACCEPT, "application/vnd.github+json");
+        if let Some((etag, _)) = cached.as_ref() {
+            request = request.header(IF_NONE_MATCH, etag);
+        }
+        let response = request.send().map_err(http_error)?;
+        if response.status() == StatusCode::NOT_FOUND {
+            return Ok(None);
+        }
+        if response.status() == StatusCode::NOT_MODIFIED {
+            return cached
+                .map(|(_, body)| Some(body))
+                .ok_or_else(|| invalid("GitHub returned 304 without cached release metadata"));
+        }
+        let response = response.error_for_status().map_err(http_error)?;
+        let etag = response
+            .headers()
+            .get(ETAG)
+            .and_then(|value| value.to_str().ok())
+            .map(str::to_owned);
+        let body = read_bounded(response, MAX_RELEASE_METADATA, "release metadata")?;
+        if let Some(etag) = etag {
+            self.write_cache(&etag, &body)?;
+        }
+        Ok(Some(body))
+    }
+
+    fn read_cache(&self) -> Option<(String, Vec<u8>)> {
+        let directory = self.cache_dir.as_ref()?;
+        let etag = fs::read_to_string(directory.join("latest.etag")).ok()?;
+        let body = fs::read(directory.join("latest.json")).ok()?;
+        if body.is_empty() || body.len() > MAX_RELEASE_METADATA {
+            return None;
+        }
+        Some((etag.trim().to_owned(), body))
+    }
+
+    fn write_cache(&self, etag: &str, body: &[u8]) -> MedusaResult<()> {
+        let Some(directory) = self.cache_dir.as_ref() else {
+            return Ok(());
+        };
+        fs::create_dir_all(directory)?;
+        atomic_write(&directory.join("latest.etag"), etag.as_bytes())?;
+        atomic_write(&directory.join("latest.json"), body)?;
+        Ok(())
+    }
+
+    fn signed_manifest(
+        &self,
+        manifest_asset: &GithubAsset,
+        signature_asset: &GithubAsset,
+    ) -> MedusaResult<crate::manifest::VerifiedManifest> {
+        if manifest_asset.size as usize > MAX_MANIFEST
+            || signature_asset.size as usize > MAX_SIGNATURE
+        {
+            return Err(invalid("release manifest or signature exceeds its size limit"));
+        }
+        let manifest = read_bounded(
+            self.response(&manifest_asset.browser_download_url, None)?,
+            MAX_MANIFEST,
+            "release manifest",
+        )?;
+        let signature = read_bounded(
+            self.response(&signature_asset.browser_download_url, None)?,
+            MAX_SIGNATURE,
+            "release signature",
+        )?;
+        if manifest.len() as u64 != manifest_asset.size
+            || signature.len() as u64 != signature_asset.size
+        {
+            return Err(invalid(
+                "release manifest or signature byte count differs from GitHub metadata",
+            ));
+        }
+        self.trust_store
+            .verify(&manifest, &signature)
+            .map_err(|error| invalid(format!("release trust verification failed: {error}")))
     }
 }
 
@@ -66,98 +182,168 @@ impl ReleaseClient for GithubReleaseClient {
             "{}/repos/{}/releases/latest",
             self.api_base, self.repository
         );
-        let response = self
-            .client
-            .get(&url)
-            .header("Accept", "application/vnd.github+json")
-            .send()
-            .map_err(http_error)?;
-        if response.status() == StatusCode::NOT_FOUND {
+        let Some(body) = self.release_metadata(&url)? else {
             return Ok(None);
-        }
-        let release: GithubRelease = response
-            .error_for_status()
-            .map_err(http_error)?
-            .json()
-            .map_err(http_error)?;
+        };
+        let release: GithubRelease = serde_json::from_slice(&body)
+            .map_err(|error| invalid(format!("invalid GitHub release response: {error}")))?;
         if release.draft || release.prerelease {
             return Err(invalid(
                 "latest GitHub release must be published and stable",
             ));
         }
-        let version = Version::parse(release.tag_name.trim_start_matches('v'))
+        let tagged_version = Version::parse(release.tag_name.trim_start_matches('v'))
             .map_err(|error| invalid(format!("release tag is not semantic version: {error}")))?;
-        let manifest_asset = release
+        let assets = release
             .assets
             .iter()
-            .find(|asset| asset.name == MANIFEST_NAME)
-            .ok_or_else(|| invalid(format!("release is missing {MANIFEST_NAME}")))?;
-        let manifest = self.manifest(manifest_asset)?;
-        let checksums = manifest
-            .assets
-            .into_iter()
-            .map(|entry| (entry.path.clone(), entry))
+            .map(|asset| (asset.name.as_str(), asset))
             .collect::<BTreeMap<_, _>>();
-        let artifacts = release
-            .assets
+        let manifest_asset = assets
+            .get(MANIFEST_NAME)
+            .ok_or_else(|| invalid(format!("release is missing {MANIFEST_NAME}")))?;
+        let signature_asset = assets
+            .get(SIGNATURE_NAME)
+            .ok_or_else(|| invalid(format!("release is missing {SIGNATURE_NAME}")))?;
+
+        // No release field other than the two fixed bootstrap asset names is trusted before this.
+        let verified = self.signed_manifest(manifest_asset, signature_asset)?;
+        if verified.manifest.version != tagged_version {
+            return Err(invalid(format!(
+                "signed version {} does not match release tag {}",
+                verified.manifest.version, release.tag_name
+            )));
+        }
+        let artifacts = verified
+            .manifest
+            .artifacts
             .iter()
-            .filter(|asset| asset.name != MANIFEST_NAME && asset.name != "SHA256SUMS")
-            .map(|asset| {
-                let entry = checksums.get(&asset.name).ok_or_else(|| {
+            .map(|entry| {
+                let asset = assets.get(entry.name.as_str()).ok_or_else(|| {
                     invalid(format!(
-                        "release asset {} is absent from signed manifest",
-                        asset.name
+                        "signed artifact {} is absent from the GitHub release",
+                        entry.name
                     ))
                 })?;
-                if entry.bytes != asset.size {
+                if asset.size != entry.bytes {
                     return Err(invalid(format!(
-                        "release asset {} size differs from manifest",
-                        asset.name
+                        "GitHub size for {} differs from the signed manifest",
+                        entry.name
                     )));
                 }
-                Ok(Artifact {
-                    name: asset.name.clone(),
-                    browser_download_url: asset.browser_download_url.clone(),
-                    bytes: asset.size,
-                    sha256: entry.sha256.clone(),
-                })
+                Ok(Artifact::from_manifest(
+                    entry,
+                    asset.browser_download_url.clone(),
+                ))
             })
             .collect::<MedusaResult<Vec<_>>>()?;
-        Ok(Some(Release {
-            version,
-            repository: self.repository.clone(),
-            manifest: Artifact {
-                name: manifest_asset.name.clone(),
-                browser_download_url: manifest_asset.browser_download_url.clone(),
-                bytes: manifest_asset.size,
-                sha256: manifest_asset.digest.clone().unwrap_or_default(),
-            },
+        let platform = Platform::current()
+            .map_err(|error| invalid(format!("cannot select update artifact: {error}")))?;
+        verified
+            .manifest
+            .select_cli(platform)
+            .map_err(|error| invalid(format!("release is incompatible: {error}")))?;
+        Ok(Some(Release::from_verified(
+            self.repository.clone(),
+            verified,
             artifacts,
-        }))
+        )))
     }
 
     fn download(
         &self,
         artifact: &Artifact,
-        destination: &std::path::Path,
-        progress: impl FnMut(u64, Option<u64>),
-    ) -> MedusaResult<u64> {
-        let mut response = self.response(&artifact.browser_download_url)?;
-        copy_with_progress(&mut response, destination, Some(artifact.bytes), progress)
-    }
-}
-
-impl GithubReleaseClient {
-    fn manifest(&self, asset: &GithubAsset) -> MedusaResult<ReleaseManifest> {
-        let mut response = self.response(&asset.browser_download_url)?;
-        let mut body = String::new();
-        response.read_to_string(&mut body).map_err(http_error)?;
-        let manifest: ReleaseManifest = serde_json::from_str(&body)
-            .map_err(|error| invalid(format!("invalid release manifest: {error}")))?;
-        if manifest.schema != "medusa-release-manifest-v1" {
-            return Err(invalid("unsupported release manifest schema"));
+        destination: &Path,
+        mut progress: impl FnMut(u64, Option<u64>),
+    ) -> MedusaResult<DownloadReport> {
+        let started = Instant::now();
+        let partial = destination.with_extension(format!(
+            "{}part",
+            destination
+                .extension()
+                .and_then(|value| value.to_str())
+                .map(|value| format!("{value}."))
+                .unwrap_or_default()
+        ));
+        if let Some(parent) = destination.parent() {
+            fs::create_dir_all(parent)?;
         }
-        Ok(manifest)
+        let existing = fs::metadata(&partial).map(|meta| meta.len()).unwrap_or(0);
+        if existing > artifact.bytes {
+            fs::remove_file(&partial)?;
+        }
+
+        let mut retries = 0_u32;
+        while retries < DOWNLOAD_ATTEMPTS {
+            let offset = fs::metadata(&partial).map(|meta| meta.len()).unwrap_or(0);
+            if offset == artifact.bytes {
+                break;
+            }
+            let response = match self.response(&artifact.browser_download_url, Some(offset)) {
+                Ok(response) => response,
+                Err(error) if retries + 1 < DOWNLOAD_ATTEMPTS => {
+                    retries += 1;
+                    thread::sleep(Duration::from_millis(250 * u64::from(retries)));
+                    let _ = error;
+                    continue;
+                }
+                Err(error) => return Err(error),
+            };
+            let append = offset > 0 && response.status() == StatusCode::PARTIAL_CONTENT;
+            let mut file = if append {
+                OpenOptions::new().create(true).append(true).open(&partial)?
+            } else {
+                let mut file = OpenOptions::new()
+                    .create(true)
+                    .write(true)
+                    .truncate(true)
+                    .open(&partial)?;
+                file.seek(SeekFrom::Start(0))?;
+                file
+            };
+            let mut response = response;
+            let mut buffer = [0_u8; 64 * 1024];
+            let mut downloaded = if append { offset } else { 0 };
+            loop {
+                let read = match response.read(&mut buffer) {
+                    Ok(read) => read,
+                    Err(error) if retries + 1 < DOWNLOAD_ATTEMPTS => {
+                        retries += 1;
+                        let _ = error;
+                        break;
+                    }
+                    Err(error) => return Err(http_error(error)),
+                };
+                if read == 0 {
+                    break;
+                }
+                downloaded = downloaded
+                    .checked_add(read as u64)
+                    .ok_or_else(|| invalid("download byte count overflow"))?;
+                if downloaded > artifact.bytes {
+                    return Err(invalid(format!(
+                        "download exceeded signed byte count for {}",
+                        artifact.name
+                    )));
+                }
+                file.write_all(&buffer[..read])?;
+                progress(downloaded, Some(artifact.bytes));
+            }
+            file.sync_all()?;
+            if downloaded == artifact.bytes {
+                break;
+            }
+            thread::sleep(Duration::from_millis(250 * u64::from(retries.max(1))));
+        }
+
+        verify_artifact(&partial, artifact.bytes, &artifact.sha256)?;
+        fs::rename(&partial, destination)?;
+        sync_parent(destination)?;
+        Ok(DownloadReport::new(
+            artifact.bytes,
+            retries,
+            started.elapsed(),
+        ))
     }
 }
 
@@ -174,21 +360,44 @@ struct GithubAsset {
     name: String,
     browser_download_url: String,
     size: u64,
-    #[serde(default)]
-    digest: Option<String>,
 }
 
-#[derive(Deserialize)]
-struct ReleaseManifest {
-    schema: String,
-    assets: Vec<ManifestEntry>,
+fn read_bounded(mut response: Response, maximum: usize, label: &str) -> MedusaResult<Vec<u8>> {
+    if response
+        .content_length()
+        .is_some_and(|length| length > maximum as u64)
+    {
+        return Err(invalid(format!("{label} exceeds {maximum} bytes")));
+    }
+    let mut body = Vec::new();
+    response
+        .by_ref()
+        .take(maximum as u64 + 1)
+        .read_to_end(&mut body)
+        .map_err(http_error)?;
+    if body.len() > maximum {
+        return Err(invalid(format!("{label} exceeds {maximum} bytes")));
+    }
+    Ok(body)
 }
 
-#[derive(Deserialize)]
-struct ManifestEntry {
-    path: String,
-    bytes: u64,
-    sha256: String,
+fn atomic_write(path: &Path, bytes: &[u8]) -> MedusaResult<()> {
+    let temporary = path.with_extension("tmp");
+    {
+        let mut file = File::create(&temporary)?;
+        file.write_all(bytes)?;
+        file.sync_all()?;
+    }
+    fs::rename(&temporary, path)?;
+    sync_parent(path)
+}
+
+fn sync_parent(path: &Path) -> MedusaResult<()> {
+    #[cfg(unix)]
+    if let Some(parent) = path.parent() {
+        File::open(parent)?.sync_all()?;
+    }
+    Ok(())
 }
 
 fn http_error(error: impl std::fmt::Display) -> MedusaError {
@@ -205,9 +414,19 @@ mod tests {
 
     #[test]
     fn github_enterprise_api_base_is_preserved() {
-        let client = GithubReleaseClient::new("octo/medusa", "https://github.example/api/v3")
-            .expect("client");
+        let client = GithubReleaseClient::new(
+            "octo/medusa",
+            "https://github.example/api/v3",
+            TrustStore::production(),
+        )
+        .expect("client");
         assert_eq!(client.api_base, "https://github.example/api/v3");
         assert_eq!(client.repository, "octo/medusa");
+    }
+
+    #[test]
+    fn bounded_reader_rejects_truncated_limit_overrun() {
+        let _ = MAX_MANIFEST;
+        assert!(MAX_SIGNATURE < MAX_MANIFEST);
     }
 }
