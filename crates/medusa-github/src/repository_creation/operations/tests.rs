@@ -256,7 +256,12 @@ fn webhook_shared_secret_is_allowed_but_redacted_from_preview() {
     operation.endpoint = "hooks".into();
     operation.body = Some(serde_json::json!({"config":{"secret":"shared-hook-secret"}}));
     operation.validate().expect("webhook secret");
-    assert!(!operation.redacted_preview().to_string().contains("shared-hook-secret"));
+    assert!(
+        !operation
+            .redacted_preview()
+            .to_string()
+            .contains("shared-hook-secret")
+    );
 }
 
 #[test]
