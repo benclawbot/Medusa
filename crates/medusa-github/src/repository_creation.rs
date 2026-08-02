@@ -126,6 +126,7 @@ mod idempotency;
 mod oauth;
 mod operations;
 mod service;
+mod streaming_transport;
 mod typed;
 mod typed_prepare;
 mod validation;
@@ -136,6 +137,7 @@ pub use direct::*;
 pub use idempotency::*;
 pub use oauth::*;
 pub use operations::*;
+pub use streaming_transport::*;
 pub use typed::*;
 pub(crate) use validation::*;
 
