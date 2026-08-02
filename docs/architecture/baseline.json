@@ -112,6 +112,21 @@
     ["telegram-remote-frontend", "partial", "quarantined", "adapt", "daemon gateway", ["same-path and operator conformance are incomplete"]],
     ["unsafe-ffi-boundary", "partial", "legacy-uncertified", "adapt", "medusa-process-containment", ["crate-local unsafe policy and audit completed by #653"]]
   ],
+  "capability_paths": {
+    "shared-runtime": ["crates/medusa-runtime", "crates/medusa-tui", "apps/medusa-desktop"],
+    "durable-sessions-memory": ["crates/medusa-agent", "crates/medusa-memory"],
+    "github-service": ["crates/medusa-github"],
+    "provider-context-resilience": ["crates/medusa-provider", "crates/medusa-runtime", "crates/medusa-agent"],
+    "identity-approval-transactions": ["crates/medusa-agent", "crates/medusa-tool-policy", "crates/medusa-tool-control"],
+    "daemon": ["crates/medusa-daemon"],
+    "release-trust": [".github/workflows"],
+    "self-update": ["crates/medusa-update", "crates/medusa-cli"],
+    "multi-agent-research": ["crates/medusa-runtime", "crates/medusa-agent", "crates/medusa-workers"],
+    "browser-tools": ["crates/medusa-agent", "crates/medusa-browser-client", "crates/medusa-browserd"],
+    "plugins-and-extensions": ["crates/medusa-extensions"],
+    "telegram-remote-frontend": ["crates/medusa-daemon"],
+    "unsafe-ffi-boundary": ["crates/medusa-process-containment"]
+  },
   "sources_of_truth": [
     ["session identity and transcript", "medusa-agent durable session journal", ["frontend projections"], "versioned session aggregate", "presentations never create history"],
     ["commands and runtime events", "medusa-protocol payloads plus session journal", ["process-local RuntimeEvent"], "versioned command/event envelope", "every mutation has a durable event or non-durable classification"],
@@ -156,6 +171,7 @@
     [651, "5", "frontends on shared core", "frontend", ["commands", "events", "artifacts"], ["TUI", "CLI", "daemon", "desktop", "remote"], "frontend-owned execution semantics"],
     [652, "6", "state migration and v1 deletion", "architecture", ["migration receipts", "deprecation"], ["release"], "all superseded v1 paths"],
     [653, "0-companion", "unsafe and FFI boundary", "safety", ["unsafe allowlist", "audit evidence"], ["containment", "CI"], "unscoped unsafe code"],
+    [654, "7", "certify production behavior and delete the legacy core", "architecture", ["production certification", "deletion receipts"], ["release", "parent #645"], "every remaining v1 authority and compatibility path"],
     [655, "0-companion", "verified prebuilt updater", "release", ["signed manifest", "artifact selection", "rollback"], ["CLI", "desktop"], "source compilation updater"]
   ],
   "dependency_policy": {
