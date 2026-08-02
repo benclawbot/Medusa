@@ -1,0 +1,71 @@
+name: Apply 647 Capability Registry
+
+on:
+  pull_request:
+    branches: [main]
+    types: [opened, synchronize, reopened]
+
+permissions:
+  contents: write
+
+concurrency:
+  group: apply-647-registry-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  apply:
+    if: github.event.pull_request.number == 660 && github.event.pull_request.head.repo.full_name == github.repository && github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ github.event.pull_request.head.ref }}
+          fetch-depth: 0
+      - uses: dtolnay/rust-toolchain@39b0b3842c7e8bbf6904c0bfc3d9006fdd4dc4e0 # 1.88.0
+        with:
+          components: rustfmt, clippy
+      - name: Apply registry migration
+        run: python3 scripts/apply-647-registry.py
+      - name: Refresh locked dependency graph
+        run: cargo check -p medusa-capabilities -p medusa-extensions -p medusa-agent -p medusa-cli
+      - name: Validate truthful registry
+        shell: bash
+        run: |
+          set -o pipefail
+          {
+            cargo fmt --all
+            cargo fmt --all -- --check
+            cargo test -p medusa-capabilities -p medusa-extensions --all-targets --locked
+            cargo test -p medusa-agent --lib --locked
+            cargo test -p medusa-cli --bin medusa-capabilities --locked
+            cargo clippy -p medusa-capabilities -p medusa-extensions -p medusa-agent -p medusa-cli --all-targets --locked -- -D warnings
+            python3 scripts/architecture-conformance.py --known-failures --json
+            python3 scripts/check-architecture-index.py
+          } 2>&1 | tee registry-validation.log
+      - name: Upload registry validation log
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: registry-validation-${{ github.sha }}
+          path: registry-validation.log
+          if-no-files-found: error
+          retention-days: 2
+      - name: Commit validated registry migration
+        shell: bash
+        run: |
+          set -euo pipefail
+          git rm .github/workflows/apply-647-registry.yml scripts/apply-647-registry.py
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add \
+            Cargo.lock \
+            crates/medusa-agent/src/engine.rs \
+            crates/medusa-agent/src/engine_support.rs \
+            crates/medusa-agent/src/tools/mod.rs \
+            crates/medusa-cli/src/capabilities.rs \
+            docs/architecture/INDEX.md \
+            docs/architecture/baseline.json \
+            scripts/architecture-conformance.py
+          git commit -m "Migrate production surfaces to the truthful capability registry"
+          git push origin HEAD:${{ github.event.pull_request.head.ref }}
