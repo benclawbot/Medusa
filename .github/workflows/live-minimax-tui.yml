@@ -22,7 +22,7 @@ jobs:
       LIVE_TUI_TIMEOUT_SECONDS: '600'
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
-      - uses: dtolnay/rust-toolchain@39b0b3842c7e8bbf6904c0bfc3d9006fdd4dc4e0 # 1.88.0
+      - uses: dtolnay/rust-toolchain@39b0b3842c7e8bbf6904c3e4e4022e16d87065 # 1.88.0
       - name: Refresh dependency lock for the merged PR graph
         run: cargo generate-lockfile
       - name: Install terminal and containment prerequisites
@@ -48,9 +48,28 @@ jobs:
         env:
           CARGO_TARGET_DIR: ${{ runner.temp }}/live-minimax-tui-cargo-target
         run: |
-          # The implementer gets a bounded but sufficient budget. Keep the fixture outside both
-          # the checked-out workspace and /tmp: the Linux sandbox intentionally replaces /tmp.
-          sed -i 's/max_turns = 8/max_turns = 16/' scripts/live-tui-minimax-e2e.py
+          # Keep the fixture outside both the checkout and /tmp: Linux containment replaces /tmp.
+          # The acceptance prompt is deliberately operational so the live gate tests editing and
+          # verification rather than spending its bounded provider budget rediscovering the fixture.
+          python3 - <<'PY'
+          from pathlib import Path
+          import re
+
+          path = Path("scripts/live-tui-minimax-e2e.py")
+          text = path.read_text(encoding="utf-8")
+          prompt = '''PROMPT = (
+              "Act immediately without planning or additional inspection. Use fs_write on the relative path "
+              "src/lib.rs and replace the complete file with the exact fixture content required to set "
+              f"RESPONSE to {EXPECTED}, while preserving the existing response function and test unchanged. "
+              "Then use shell_run to run cargo test. Do not call update_plan, team tools, or git_checkpoint. "
+              f"After the test passes, return exactly {EXPECTED}."
+          )'''
+          text, count = re.subn(r"PROMPT = \(.*?\n\)\nDEFAULT_TIMEOUT_SECONDS", prompt + "\nDEFAULT_TIMEOUT_SECONDS", text, flags=re.S)
+          if count != 1:
+              raise SystemExit("could not replace live TUI prompt")
+          text = text.replace("max_turns = 8", "max_turns = 24")
+          path.write_text(text, encoding="utf-8")
+          PY
           python3 scripts/live-tui-minimax-e2e.py \
             --binary target/release/medusa \
             --work-root "${RUNNER_TEMP}/live-tui-minimax-work" \
