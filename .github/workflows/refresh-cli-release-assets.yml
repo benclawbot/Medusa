@@ -78,7 +78,7 @@ jobs:
           Compress-Archive -Path cli-package/* -DestinationPath "release-assets/${{ matrix.archive }}"
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
-          name: cli-${{ matrix.platform }}-${{ github.event.workflow_run.head_sha }}
+          name: dual-cli-${{ matrix.platform }}-${{ github.event.workflow_run.head_sha }}
           path: release-assets/${{ matrix.archive }}
           if-no-files-found: error
           retention-days: 30
@@ -96,7 +96,7 @@ jobs:
           fetch-depth: 0
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
-          pattern: cli-*-${{ github.event.workflow_run.head_sha }}
+          pattern: dual-cli-*-${{ github.event.workflow_run.head_sha }}
           path: release-assets
           merge-multiple: true
       - name: Resolve immutable release tag
