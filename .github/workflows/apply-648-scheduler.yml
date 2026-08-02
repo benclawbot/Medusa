@@ -26,140 +26,7 @@ jobs:
         with:
           components: rustfmt, clippy
       - name: Apply scheduler migration
-        shell: bash
-        run: |
-          set -euo pipefail
-          python3 - <<'PY'
-          from pathlib import Path
-
-          path = Path("scripts/apply-648-scheduler.py")
-          text = path.read_text(encoding="utf-8")
-          old_helper = '''def replace_once(path: Path, before: str, after: str) -> None:
-              text = path.read_text(encoding="utf-8")
-              if text.count(before) != 1:
-                  raise RuntimeError(f"{path}: expected exactly one match for replacement")
-              path.write_text(text.replace(before, after, 1), encoding="utf-8")
-          '''
-          new_helper = '''def replace_once(path: Path, before: str, after: str) -> None:
-              text = path.read_text(encoding="utf-8")
-              count = text.count(before)
-              allow_all_cancellation_checkpoints = "cancel_requested(cancel, submission)" in before
-              if count == 0 or (count != 1 and not allow_all_cancellation_checkpoints):
-                  raise RuntimeError(
-                      f"{path}: expected one match, or all cancellation checkpoints; found {count}"
-                  )
-              path.write_text(text.replace(before, after), encoding="utf-8")
-          '''
-          if text.count(old_helper) != 1:
-              raise RuntimeError("generator replacement helper did not match exactly once")
-          text = text.replace(old_helper, new_helper, 1)
-
-          old = 'replace_once(scheduler, "\\n}\\n", scheduler_tests + "\\n}\\n")'
-          new = '''text = scheduler.read_text(encoding="utf-8")
-          position = text.rfind("\\n}\\n")
-          if position < 0:
-              raise RuntimeError("scheduler test module closing brace was not found")
-          scheduler.write_text(text[:position] + scheduler_tests + text[position:], encoding="utf-8")'''
-          if text.count(old) != 1:
-              raise RuntimeError("scheduler test insertion repair did not match exactly once")
-          path.write_text(text.replace(old, new, 1), encoding="utf-8")
-          PY
-          python3 scripts/apply-648-scheduler.py
-          python3 - <<'PY'
-          from pathlib import Path
-
-          cargo = Path("crates/medusa-multi-agent-scheduler/Cargo.toml")
-          text = cargo.read_text(encoding="utf-8")
-          marker = "\n[lints]\nworkspace = true\n"
-          replacement = "\n[dev-dependencies]\ntempfile.workspace = true\n\n[lints]\nworkspace = true\n"
-          if text.count(marker) != 1:
-              raise RuntimeError("scheduler Cargo dev-dependency insertion did not match")
-          cargo.write_text(text.replace(marker, replacement, 1), encoding="utf-8")
-
-          scheduler = Path("crates/medusa-multi-agent-scheduler/src/lib.rs")
-          text = scheduler.read_text(encoding="utf-8")
-          mutation_start = "    let mutation_requested = !explicitly_read_only\n"
-          mutation_end = "        });\n    let repository_relevant ="
-          start = text.find(mutation_start)
-          end = text.find(mutation_end, start + len(mutation_start))
-          if start < 0 or end < 0:
-              raise RuntimeError("mutation intent expression boundaries were not found")
-          text = (
-              text[:start]
-              + "    let mutation_requested = !explicitly_read_only && contains_mutation_verb(&words);\n"
-              + "    let repository_relevant ="
-              + text[end + len(mutation_end):]
-          )
-          vocabulary_marker = "fn contains_phrase(value: &str, phrases: &[&str]) -> bool {\n"
-          vocabulary = '''fn contains_mutation_verb(words: &BTreeSet<String>) -> bool {
-              const VERBS: &[&str] = &[
-                  "add", "build", "change", "correct", "create", "delete", "edit", "fix",
-                  "implement", "make", "migrate", "modify", "patch", "refactor", "remove",
-                  "rename", "repair", "replace", "rewrite", "update", "upgrade", "write",
-              ];
-              VERBS.iter().any(|verb| words.contains(*verb))
-          }
-
-          '''
-          if text.count(vocabulary_marker) != 1:
-              raise RuntimeError("mutation vocabulary insertion point did not match exactly once")
-          text = text.replace(vocabulary_marker, vocabulary + vocabulary_marker, 1)
-          test_marker = "    #[test]\n    fn typed_planner_fails_closed_when_mutation_scope_is_unknown() {\n"
-          vocabulary_test = '''    #[test]
-              fn mutation_vocabulary_recognizes_fix() {
-                  let words = lexical_words("fix the failing tests");
-                  assert!(contains_mutation_verb(&words));
-              }
-
-          '''
-          if text.count(test_marker) != 1:
-              raise RuntimeError("mutation vocabulary regression test insertion did not match")
-          text = text.replace(test_marker, vocabulary_test + test_marker, 1)
-
-          field_before = "struct LedgerTaskDefinition {\n    id: String,"
-          field_after = "struct LedgerTaskDefinition {\n    order: u32,\n    id: String,"
-          iterator_before = ".tasks\n            .iter()\n            .map(|planned| {"
-          iterator_after = ".tasks\n            .iter()\n            .enumerate()\n            .map(|(order, planned)| {"
-          definition_before = "LedgerTaskDefinition {\n                        id: planned.task.id.clone(),"
-          definition_after = "LedgerTaskDefinition {\n                        order: u32::try_from(order).unwrap_or(u32::MAX),\n                        id: planned.task.id.clone(),"
-          for before, after, label in [
-              (field_before, field_after, "ledger order field"),
-              (iterator_before, iterator_after, "ledger ordered iterator"),
-              (definition_before, definition_after, "ledger order value"),
-          ]:
-              if text.count(before) != 1:
-                  raise RuntimeError(f"{label} migration did not match exactly once")
-              text = text.replace(before, after, 1)
-
-          start_marker = "    #[must_use]\n    pub fn views(&self) -> Vec<LedgerTaskView> {\n"
-          end_marker = "\n    #[must_use]\n    pub fn path(&self) -> &Path {"
-          start = text.find(start_marker)
-          end = text.find(end_marker, start + len(start_marker))
-          if start < 0 or end < 0:
-              raise RuntimeError("ledger projection function boundaries were not found")
-          views = '''    #[must_use]
-          pub fn views(&self) -> Vec<LedgerTaskView> {
-              let mut definitions = self.state.tasks.values().collect::<Vec<_>>();
-              definitions.sort_by_key(|definition| definition.order);
-              definitions
-                  .into_iter()
-                  .filter_map(|definition| {
-                      self.state.states.get(&definition.id).cloned().map(|state| {
-                          LedgerTaskView {
-                              id: definition.id.clone(),
-                              title: definition.title.clone(),
-                              kind: definition.kind,
-                              state,
-                          }
-                      })
-                  })
-                  .collect()
-          }
-          '''
-          text = text[:start] + views + text[end:]
-          scheduler.write_text(text, encoding="utf-8")
-          PY
-          python3 scripts/fix-648-ledger-scope.py
+        run: python3 scripts/run-648-migration.py
       - name: Compile all affected targets
         run: cargo check -p medusa-multi-agent-scheduler -p medusa-agent -p medusa-runtime -p medusa-cli -p medusa-tui -p medusa-daemon --all-targets
       - name: Validate scheduler authority
@@ -188,7 +55,11 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          git rm .github/workflows/apply-648-scheduler.yml scripts/apply-648-scheduler.py scripts/fix-648-ledger-scope.py
+          git rm -f \
+            .github/workflows/apply-648-scheduler.yml \
+            scripts/apply-648-scheduler.py \
+            scripts/fix-648-ledger-scope.py \
+            scripts/run-648-migration.py
           git config user.name github-actions[bot]
           git config user.email 41898282+github-actions[bot]@users.noreply.github.com
           git add \
