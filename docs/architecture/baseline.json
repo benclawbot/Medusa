@@ -643,13 +643,6 @@
   ],
   "known_failure_fixtures": [
     [
-      "integration-precedes-parent-review",
-      632,
-      false,
-      "run_implementation completes before the parent engine executes",
-      "remove after durable review receipt gates integration"
-    ],
-    [
       "isolated-verification-drops-changed-paths",
       633,
       false,
@@ -720,18 +713,20 @@
     [
       649,
       "3",
-      "capability registry and dispatch",
-      "capabilities",
+      "transactional mutation lifecycle",
+      "runtime",
       [
-        "capability",
-        "permissions",
-        "dispatcher"
+        "prepared commit",
+        "review receipt",
+        "verification receipt",
+        "integration authorization"
       ],
       [
-        "agent",
-        "frontends"
+        "runtime",
+        "workers",
+        "all mutation entrypoints"
       ],
-      "advertised but unreachable tools"
+      "integrate-before-review mutation path"
     ],
     [
       650,
