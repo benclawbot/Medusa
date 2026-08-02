@@ -45,16 +45,12 @@ impl<E: CommandExecutor> GitHubOperationBackend for RestApiBackend<'_, E> {
             })
             .transpose()?;
         if let Some(file) = input.as_ref() {
-            arguments.extend([
-                "--input".to_owned(),
-                file.path().display().to_string(),
-            ]);
+            arguments.extend(["--input".to_owned(), file.path().display().to_string()]);
         }
-        let output = self.service.executor.run(
-            "gh",
-            &arguments,
-            self.service.directory.as_deref(),
-        )?;
+        let output =
+            self.service
+                .executor
+                .run("gh", &arguments, self.service.directory.as_deref())?;
         receipt_from_output(request, self.kind(), self.transport, &output)
     }
 }
@@ -70,11 +66,10 @@ impl<E: CommandExecutor> GitHubOperationBackend for NativeCliBackend<'_, E> {
 
     fn execute(&self, request: &GitHubOperationRequest) -> MedusaResult<GitHubOperationReceipt> {
         if let Some((arguments, transport)) = native_arguments(request) {
-            let output = self.service.executor.run(
-                "gh",
-                &arguments,
-                self.service.directory.as_deref(),
-            )?;
+            let output =
+                self.service
+                    .executor
+                    .run("gh", &arguments, self.service.directory.as_deref())?;
             return receipt_from_output(request, self.kind(), transport, &output);
         }
         RestApiBackend {
@@ -111,9 +106,7 @@ impl<E: CommandExecutor> GitHubService<E> {
     }
 }
 
-fn native_arguments(
-    request: &GitHubOperationRequest,
-) -> Option<(Vec<String>, &'static str)> {
+fn native_arguments(request: &GitHubOperationRequest) -> Option<(Vec<String>, &'static str)> {
     let repository = &request.repository;
     let target = format!("{}/{}", request.hostname, repository);
     let arguments = match (
