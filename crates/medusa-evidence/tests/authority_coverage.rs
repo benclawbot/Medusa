@@ -1,10 +1,10 @@
 use std::{fs, path::Path};
 
 use medusa_evidence::{
-    ArtifactId, ArtifactSemanticClass, ArtifactStore, ChangeKind, ChangedComponent,
-    CommandReceipt, EvidenceBundle, EvidenceKind, EvidenceRecord, EvidenceSource,
-    VerificationCheckReceipt, VerificationPlan, VerificationPlanner, VerificationReceipt,
-    VerificationStatus, validate_artifact_semantics,
+    ArtifactId, ArtifactSemanticClass, ArtifactStore, ChangeKind, ChangedComponent, CommandReceipt,
+    EvidenceBundle, EvidenceKind, EvidenceRecord, EvidenceSource, VerificationCheckReceipt,
+    VerificationPlan, VerificationPlanner, VerificationReceipt, VerificationStatus,
+    validate_artifact_semantics,
 };
 
 fn command_plan(repo: &Path) -> VerificationPlan {
@@ -176,14 +176,26 @@ fn artifact_store_covers_invalid_ranges_pages_and_searches() {
     let store = ArtifactStore::open(directory.path().join("artifacts")).unwrap();
     assert!(store.root().ends_with("artifacts"));
     assert!(store.put_bytes("", "producer", b"bad").is_err());
-    assert!(store.metadata(&ArtifactId("artifact-missing".to_owned())).is_err());
+    assert!(
+        store
+            .metadata(&ArtifactId("artifact-missing".to_owned()))
+            .is_err()
+    );
 
     let text = store
         .put_bytes("text/plain", "authority-coverage", b"alpha beta alpha\n")
         .unwrap();
     assert!(store.read_range(&text.id, 0, 0, "reader").is_err());
-    assert!(store.read_range(&text.id, text.byte_len, 1, "reader").is_err());
-    assert!(store.read_page(&text.id, text.page_count, "reader").is_err());
+    assert!(
+        store
+            .read_range(&text.id, text.byte_len, 1, "reader")
+            .is_err()
+    );
+    assert!(
+        store
+            .read_page(&text.id, text.page_count, "reader")
+            .is_err()
+    );
     assert!(store.search_text(&text.id, "", "reader").is_err());
     let (hits, receipt) = store.search_text(&text.id, "alpha", "reader").unwrap();
     assert_eq!(hits.len(), 2);
