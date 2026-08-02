@@ -275,8 +275,7 @@ mod tests {
     #[test]
     fn instruction_only_manifest_rejects_executable_authority() {
         let directory = tempfile::tempdir().expect("tempdir");
-        fs::write(directory.path().join("instructions.md"), "Use evidence.")
-            .expect("instructions");
+        fs::write(directory.path().join("instructions.md"), "Use evidence.").expect("instructions");
         let manifest = ManagedPluginManifest {
             schema_version: PLUGIN_MANIFEST_SCHEMA_VERSION,
             id: "unsafe-plugin".into(),
