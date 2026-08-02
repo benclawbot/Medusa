@@ -1,4 +1,8 @@
-use std::{collections::BTreeSet, fs, path::{Path, PathBuf}};
+use std::{
+    collections::BTreeSet,
+    fs,
+    path::{Path, PathBuf},
+};
 
 use medusa_core::{ErrorCategory, ErrorCode, MedusaError, MedusaResult};
 use serde::{Deserialize, Serialize};
@@ -160,12 +164,7 @@ pub fn validate_manifest(root: &Path, manifest: &ManagedPluginManifest) -> Medus
         || manifest.description.trim().is_empty()
         || manifest.compatibility.trim().is_empty()
         || manifest.integrity.algorithm != "sha256-directory-v1"
-        || manifest.integrity.digest.len() != 64
-        || !manifest
-            .integrity
-            .digest
-            .bytes()
-            .all(|byte| byte.is_ascii_hexdigit())
+        || !valid_directory_digest(&manifest.integrity.digest)
         || manifest.integrity.origin.trim().is_empty()
     {
         return Err(invalid("managed plugin manifest is incomplete"));
@@ -190,7 +189,9 @@ pub fn validate_manifest(root: &Path, manifest: &ManagedPluginManifest) -> Medus
         && manifest.scripts.is_empty()
         && manifest.mcp_servers.is_empty()
     {
-        return Err(invalid("executable plugin declares no executable component"));
+        return Err(invalid(
+            "executable plugin declares no executable component",
+        ));
     }
     for relative in manifest
         .instructions
@@ -206,6 +207,12 @@ pub fn validate_manifest(root: &Path, manifest: &ManagedPluginManifest) -> Medus
         ));
     }
     Ok(())
+}
+
+fn valid_directory_digest(digest: &str) -> bool {
+    digest
+        .strip_prefix("sha256:")
+        .is_some_and(|hex| hex.len() == 64 && hex.bytes().all(|byte| byte.is_ascii_hexdigit()))
 }
 
 fn validate_relative(root: &Path, relative: &str) -> MedusaResult<()> {
@@ -268,7 +275,8 @@ mod tests {
     #[test]
     fn instruction_only_manifest_rejects_executable_authority() {
         let directory = tempfile::tempdir().expect("tempdir");
-        fs::write(directory.path().join("instructions.md"), "Use evidence.").expect("instructions");
+        fs::write(directory.path().join("instructions.md"), "Use evidence.")
+            .expect("instructions");
         let manifest = ManagedPluginManifest {
             schema_version: PLUGIN_MANIFEST_SCHEMA_VERSION,
             id: "unsafe-plugin".into(),
@@ -286,7 +294,7 @@ mod tests {
             compatibility: ">=1.0.0".into(),
             integrity: PluginIntegrity {
                 algorithm: "sha256-directory-v1".into(),
-                digest: "a".repeat(64),
+                digest: format!("sha256:{}", "a".repeat(64)),
                 origin: "fixture".into(),
             },
         };
