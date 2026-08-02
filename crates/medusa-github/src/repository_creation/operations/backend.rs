@@ -6,6 +6,8 @@ use tempfile::NamedTempFile;
 use super::*;
 use crate::{CommandExecutor, GitHubService, strings};
 
+const MAX_ERROR_BYTES: usize = 65_536;
+
 struct RestApiBackend<'a, E> {
     service: &'a GitHubService<E>,
     reported_kind: GitHubBackendKind,
@@ -47,10 +49,13 @@ impl<E: CommandExecutor> GitHubOperationBackend for RestApiBackend<'_, E> {
         if let Some(file) = input.as_ref() {
             arguments.extend(["--input".to_owned(), file.path().display().to_string()]);
         }
-        let output =
-            self.service
-                .executor
-                .run("gh", &arguments, self.service.directory.as_deref())?;
+        let output = self.service.executor.run_bounded(
+            "gh",
+            &arguments,
+            self.service.directory.as_deref(),
+            request.max_response_bytes,
+            MAX_ERROR_BYTES,
+        )?;
         receipt_from_output(request, self.kind(), self.transport, &output)
     }
 }
@@ -66,10 +71,13 @@ impl<E: CommandExecutor> GitHubOperationBackend for NativeCliBackend<'_, E> {
 
     fn execute(&self, request: &GitHubOperationRequest) -> MedusaResult<GitHubOperationReceipt> {
         if let Some((arguments, transport)) = native_arguments(request) {
-            let output =
-                self.service
-                    .executor
-                    .run("gh", &arguments, self.service.directory.as_deref())?;
+            let output = self.service.executor.run_bounded(
+                "gh",
+                &arguments,
+                self.service.directory.as_deref(),
+                request.max_response_bytes,
+                MAX_ERROR_BYTES,
+            )?;
             return receipt_from_output(request, self.kind(), transport, &output);
         }
         RestApiBackend {
