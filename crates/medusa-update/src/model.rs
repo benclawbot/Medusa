@@ -1,70 +1,94 @@
-use std::{fs, path::Path, process::Command};
+use std::{fs::File, io::Read, path::Path, time::Duration};
 
 use medusa_core::{ErrorCategory, ErrorCode, MedusaError, MedusaResult};
 use semver::Version;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
-/// Installation target selected from the host OS and CPU architecture.
+use crate::manifest::{ArtifactKind, BuildSource, ManifestArtifact, Platform, VerifiedManifest};
+
+/// A release asset whose URL and integrity metadata came from a verified manifest.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
-pub struct Platform {
-    pub os: String,
-    pub architecture: String,
-}
-
-impl Platform {
-    #[must_use]
-    pub fn current() -> Self {
-        Self {
-            os: std::env::consts::OS.to_owned(),
-            architecture: std::env::consts::ARCH.to_owned(),
-        }
-    }
-
-    #[must_use]
-    pub fn cli_asset_name(&self) -> &'static str {
-        match self.os.as_str() {
-            "windows" => "medusa-cli-windows.zip",
-            "macos" => "medusa-cli-macos.tar.gz",
-            _ => "medusa-cli-linux.tar.gz",
-        }
-    }
-}
-
-/// A file published in a GitHub release and recorded in its integrity manifest.
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct Artifact {
     pub name: String,
     pub browser_download_url: String,
     pub bytes: u64,
     pub sha256: String,
+    pub kind: ArtifactKind,
+    pub platform: Platform,
+    pub target: String,
 }
 
-/// A verified, non-draft GitHub release.
+impl Artifact {
+    pub(crate) fn from_manifest(entry: &ManifestArtifact, browser_download_url: String) -> Self {
+        Self {
+            name: entry.name.clone(),
+            browser_download_url,
+            bytes: entry.bytes,
+            sha256: entry.sha256.clone(),
+            kind: entry.kind,
+            platform: entry.platform,
+            target: entry.target.clone(),
+        }
+    }
+}
+
+/// A stable GitHub release authorized by an embedded Medusa Ed25519 key.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 pub struct Release {
     pub version: Version,
     pub repository: String,
-    pub manifest: Artifact,
+    pub source: BuildSource,
+    pub minimum_updater_version: Version,
+    pub rollout_sequence: u64,
+    pub rollout_percentage: u8,
+    pub signing_key_id: String,
+    pub manifest_sha256: String,
     pub artifacts: Vec<Artifact>,
 }
 
 impl Release {
-    pub fn artifact_for(&self, platform: &Platform) -> MedusaResult<&Artifact> {
-        let expected = platform.cli_asset_name();
-        self.artifacts
+    pub(crate) fn from_verified(
+        repository: String,
+        verified: VerifiedManifest,
+        artifacts: Vec<Artifact>,
+    ) -> Self {
+        Self {
+            version: verified.manifest.version,
+            repository,
+            source: verified.manifest.source,
+            minimum_updater_version: verified.manifest.minimum_updater_version,
+            rollout_sequence: verified.manifest.rollout.sequence,
+            rollout_percentage: verified.manifest.rollout.percentage,
+            signing_key_id: verified.key_id,
+            manifest_sha256: verified.manifest_sha256,
+            artifacts,
+        }
+    }
+
+    pub fn artifact_for(&self, platform: Platform) -> MedusaResult<&Artifact> {
+        let matches = self
+            .artifacts
             .iter()
-            .find(|artifact| artifact.name == expected)
-            .ok_or_else(|| {
-                invalid(format!(
-                    "release {} does not include {expected}",
-                    self.version
-                ))
+            .filter(|artifact| {
+                artifact.kind == ArtifactKind::CliArchive && artifact.platform == platform
             })
+            .collect::<Vec<_>>();
+        match matches.as_slice() {
+            [artifact] => Ok(*artifact),
+            [] => Err(invalid(format!(
+                "release {} has no CLI artifact for {:?}/{:?}",
+                self.version, platform.os, platform.architecture
+            ))),
+            _ => Err(invalid(format!(
+                "release {} has multiple CLI artifacts for {:?}/{:?}",
+                self.version, platform.os, platform.architecture
+            ))),
+        }
     }
 }
 
-/// The updater's explicit policy. Automatic updates still verify every release.
+/// The updater's explicit policy. Automatic updates still verify every byte.
 #[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum UpdatePolicy {
@@ -115,47 +139,63 @@ impl UpdateCheck {
     }
 }
 
-/// Verifies the signed release manifest before a release asset is trusted.
-pub trait AttestationVerifier {
-    fn verify_manifest(&self, manifest: &Path, repository: &str) -> MedusaResult<()>;
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct DownloadReport {
+    pub bytes: u64,
+    pub retries: u32,
+    pub elapsed_ms: u64,
 }
 
-/// Uses GitHub's Sigstore-backed artifact attestation verifier when available.
-pub struct GithubAttestationVerifier;
-
-impl AttestationVerifier for GithubAttestationVerifier {
-    fn verify_manifest(&self, manifest: &Path, repository: &str) -> MedusaResult<()> {
-        let status = Command::new("gh")
-            .args(["attestation", "verify", "--repo", repository])
-            .arg(manifest)
-            .status()
-            .map_err(|error| {
-                MedusaError::new(
-                    ErrorCode::DependencyUnavailable,
-                    ErrorCategory::Environment,
-                    format!("GitHub CLI attestation verifier is unavailable: {error}"),
-                )
-            })?;
-        if status.success() {
-            Ok(())
-        } else {
-            Err(invalid("GitHub artifact attestation verification failed"))
+impl DownloadReport {
+    #[must_use]
+    pub fn new(bytes: u64, retries: u32, elapsed: Duration) -> Self {
+        Self {
+            bytes,
+            retries,
+            elapsed_ms: elapsed.as_millis().try_into().unwrap_or(u64::MAX),
         }
     }
 }
 
-/// Computes and validates an artifact digest before it is extracted or installed.
-pub fn verify_sha256(path: &Path, expected: &str) -> MedusaResult<()> {
-    let bytes = fs::read(path)?;
-    let actual = format!("{:x}", Sha256::digest(bytes));
-    if actual.eq_ignore_ascii_case(expected.trim()) {
-        Ok(())
-    } else {
-        Err(invalid(format!(
-            "SHA-256 mismatch for {}: expected {expected}, got {actual}",
-            path.display()
-        )))
+/// Validates byte count and SHA-256 without reading the whole artifact into memory.
+pub fn verify_artifact(path: &Path, expected_bytes: u64, expected_sha256: &str) -> MedusaResult<()> {
+    let mut file = File::open(path)?;
+    let mut digest = Sha256::new();
+    let mut buffer = [0_u8; 64 * 1024];
+    let mut bytes = 0_u64;
+    loop {
+        let read = file.read(&mut buffer)?;
+        if read == 0 {
+            break;
+        }
+        bytes = bytes
+            .checked_add(read as u64)
+            .ok_or_else(|| invalid("artifact byte count overflow"))?;
+        if bytes > expected_bytes {
+            return Err(invalid(format!(
+                "artifact is larger than the signed byte count {expected_bytes}"
+            )));
+        }
+        digest.update(&buffer[..read]);
     }
+    if bytes != expected_bytes {
+        return Err(invalid(format!(
+            "artifact byte count mismatch: expected {expected_bytes}, got {bytes}"
+        )));
+    }
+    let actual = hex::encode(digest.finalize());
+    if !actual.eq_ignore_ascii_case(expected_sha256.trim()) {
+        return Err(invalid(format!(
+            "artifact SHA-256 mismatch: expected {expected_sha256}, got {actual}"
+        )));
+    }
+    Ok(())
+}
+
+/// Compatibility wrapper retained for callers that only have a digest.
+pub fn verify_sha256(path: &Path, expected: &str) -> MedusaResult<()> {
+    let bytes = std::fs::metadata(path)?.len();
+    verify_artifact(path, bytes, expected)
 }
 
 pub(crate) fn invalid(message: impl Into<String>) -> MedusaError {
@@ -168,6 +208,8 @@ pub(crate) fn invalid(message: impl Into<String>) -> MedusaError {
 
 #[cfg(test)]
 mod tests {
+    use std::fs;
+
     use super::*;
 
     #[test]
@@ -183,10 +225,11 @@ mod tests {
     }
 
     #[test]
-    fn digest_mismatch_fails_before_installation() {
+    fn truncated_or_tampered_artifact_fails() {
         let directory = tempfile::tempdir().expect("tempdir");
         let artifact = directory.path().join("artifact");
         fs::write(&artifact, b"safe release").expect("artifact");
-        assert!(verify_sha256(&artifact, "00").is_err());
+        assert!(verify_artifact(&artifact, 100, "00").is_err());
+        assert!(verify_artifact(&artifact, 12, &"00".repeat(32)).is_err());
     }
 }
