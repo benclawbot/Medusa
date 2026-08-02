@@ -28,11 +28,22 @@ jobs:
           python3 scripts/apply-655-compatibility.py
           python3 scripts/apply-655-integration-fix.py
       - name: Format and validate focused crates
+        shell: bash
         run: |
-          set -euo pipefail
-          cargo fmt --all
-          cargo test -p medusa-update --all-targets --locked
-          cargo test -p medusa-cli --bin medusa --locked update_command
+          set -o pipefail
+          {
+            cargo fmt --all
+            cargo test -p medusa-update --all-targets --locked
+            cargo test -p medusa-cli --bin medusa --locked update_command
+          } 2>&1 | tee focused-updater-tests.log
+      - name: Upload focused test log
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: focused-updater-tests-${{ github.sha }}
+          path: focused-updater-tests.log
+          if-no-files-found: error
+          retention-days: 2
       - name: Commit hardened updater
         shell: bash
         run: |
