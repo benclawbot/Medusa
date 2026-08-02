@@ -35,4 +35,4 @@ jobs:
       - name: Audit workspace lint and unsafe source boundaries
         run: python scripts/check-unsafe-boundary.py
       - name: Compile containment crate with explicit lint policy
-        run: cargo check -p medusa-process-containment --all-targets --locked
+        run: cargo check -p medusa-process-containment --all-targets
