@@ -1,12 +1,13 @@
 use std::{
     env, fs,
     path::{Path, PathBuf},
-    process::Command,
 };
 
 use medusa_core::{ErrorCategory, ErrorCode, MedusaError, MedusaResult};
 use medusa_update::MainBranchUpdater;
 use serde::Serialize;
+
+use crate::desktop_command::hidden_command;
 
 const REPOSITORY_URL: &str = "https://github.com/benclawbot/Medusa.git";
 const BRANCH: &str = "main";
@@ -63,7 +64,7 @@ fn schedule_update(app: &tauri::AppHandle) -> MedusaResult<()> {
     #[cfg(windows)]
     {
         fs::write(&helper, windows_update_script(parent_pid, &executable))?;
-        Command::new("powershell")
+        hidden_command("powershell")
             .args(["-NoProfile", "-ExecutionPolicy", "Bypass", "-File"])
             .arg(&helper)
             .spawn()
@@ -73,7 +74,7 @@ fn schedule_update(app: &tauri::AppHandle) -> MedusaResult<()> {
     #[cfg(not(windows))]
     {
         fs::write(&helper, unix_update_script(parent_pid, &executable))?;
-        Command::new("sh")
+        hidden_command("sh")
             .arg(&helper)
             .spawn()
             .map_err(command_error)?;
@@ -98,7 +99,7 @@ fn command_available(program: &str) -> bool {
 }
 
 fn command_succeeds(program: &Path) -> bool {
-    Command::new(program)
+    hidden_command(program)
         .arg("--version")
         .output()
         .map(|output| output.status.success())
