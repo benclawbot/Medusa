@@ -44,6 +44,9 @@ impl InstallLocation {
 #[derive(Clone, Debug, Default)]
 pub struct Restart {
     pub arguments: Vec<String>,
+    /// Commit this rollout sequence only after the replacement acknowledges startup.
+    pub sequence_file: Option<PathBuf>,
+    pub rollout_sequence: Option<u64>,
 }
 
 /// Paths retained by the detached replacement helper.
@@ -113,6 +116,14 @@ impl AtomicInstaller {
         parent_pid: u32,
     ) -> MedusaResult<ScheduledUpdate> {
         validate_candidate(candidate)?;
+        if restart.sequence_file.is_some() != restart.rollout_sequence.is_some() {
+            return Err(invalid(
+                "restart sequence file and rollout sequence must be configured together",
+            ));
+        }
+        if restart.rollout_sequence == Some(0) {
+            return Err(invalid("rollout sequence must be positive"));
+        }
         self.recover_interrupted()?;
         let directory = self
             .target
@@ -218,6 +229,8 @@ fn helper_command(script: &Path) -> Command {
     }
 }
 
+// Atomic replacement scripts intentionally receive every persisted path explicitly.
+#[allow(clippy::too_many_arguments)]
 fn unix_replace_script(
     parent_pid: u32,
     backup: &Path,
@@ -234,8 +247,68 @@ fn unix_replace_script(
         .map(|argument| shell_quote(argument))
         .collect::<Vec<_>>()
         .join(" ");
+    let sequence_file = restart
+        .sequence_file
+        .as_deref()
+        .map(shell_quote_path)
+        .unwrap_or_else(|| shell_quote(""));
+    let sequence_value = restart
+        .rollout_sequence
+        .map(|value| shell_quote(&value.to_string()))
+        .unwrap_or_else(|| shell_quote(""));
     format!(
-        "#!/bin/sh\nset -eu\nparent={parent_pid}\nbackup={backup}\ntarget={target}\ncandidate={candidate}\nstate={state}\nhealth={health}\nlock={lock}\nwhile kill -0 \"$parent\" 2>/dev/null; do sleep 1; done\nrm -f \"$health\" \"$backup\"\nprintf 'swapping\\n' > \"$state\"\nif [ -e \"$target\" ]; then mv \"$target\" \"$backup\"; fi\nif ! mv \"$candidate\" \"$target\"; then\n  [ -e \"$backup\" ] && mv \"$backup\" \"$target\"\n  printf 'swap-failed\\n' > \"$state\"\n  rm -f \"$lock\"\n  exit 1\nfi\nchmod 755 \"$target\"\nMEDUSA_UPDATE_HEALTH_FILE=\"$health\" \"$target\" {arguments} &\nchild=$!\ni=0\nwhile [ \"$i\" -lt 100 ]; do\n  if [ -s \"$health\" ]; then\n    printf 'healthy\\n' > \"$state\"\n    rm -f \"$backup\" \"$lock\" \"$0\"\n    exit 0\n  fi\n  if ! kill -0 \"$child\" 2>/dev/null; then break; fi\n  i=$((i + 1))\n  sleep 0.1\ndone\nkill \"$child\" 2>/dev/null || true\nrm -f \"$target\"\nif [ -e \"$backup\" ]; then mv \"$backup\" \"$target\"; fi\nprintf 'rolled-back\\n' > \"$state\"\nrm -f \"$lock\"\n\"$target\" {arguments} >/dev/null 2>&1 &\nrm -f \"$0\"\nexit 1\n",
+        r##"#!/bin/sh
+set -eu
+parent={parent_pid}
+backup={backup}
+target={target}
+candidate={candidate}
+state={state}
+health={health}
+lock={lock}
+sequence_file={sequence_file}
+sequence_value={sequence_value}
+child=''
+rollback() {{
+  if [ -n "$child" ]; then kill "$child" 2>/dev/null || true; fi
+  rm -f "$target"
+  if [ -e "$backup" ]; then mv "$backup" "$target"; fi
+  printf 'rolled-back\n' > "$state"
+  rm -f "$lock"
+  "$target" {arguments} >/dev/null 2>&1 &
+  rm -f "$0"
+  exit 1
+}}
+while kill -0 "$parent" 2>/dev/null; do sleep 1; done
+rm -f "$health" "$backup"
+printf 'swapping\n' > "$state"
+if [ -e "$target" ]; then mv "$target" "$backup"; fi
+if ! mv "$candidate" "$target"; then
+  if [ -e "$backup" ]; then mv "$backup" "$target"; fi
+  printf 'swap-failed\n' > "$state"
+  rm -f "$lock"
+  exit 1
+fi
+chmod 755 "$target" || rollback
+MEDUSA_UPDATE_HEALTH_FILE="$health" "$target" {arguments} &
+child=$!
+i=0
+while [ "$i" -lt 100 ]; do
+  if [ -s "$health" ]; then
+    if [ -n "$sequence_file" ]; then
+      printf '%s\n' "$sequence_value" > "$sequence_file.tmp" || rollback
+      mv "$sequence_file.tmp" "$sequence_file" || rollback
+    fi
+    printf 'healthy\n' > "$state"
+    rm -f "$backup" "$lock" "$0"
+    exit 0
+  fi
+  if ! kill -0 "$child" 2>/dev/null; then break; fi
+  i=$((i + 1))
+  sleep 0.1
+done
+rollback
+"##,
         backup = shell_quote_path(backup),
         target = shell_quote_path(target),
         candidate = shell_quote_path(candidate),
@@ -245,6 +318,8 @@ fn unix_replace_script(
     )
 }
 
+// Atomic replacement scripts intentionally receive every persisted path explicitly.
+#[allow(clippy::too_many_arguments)]
 fn windows_replace_script(
     parent_pid: u32,
     backup: &Path,
@@ -261,8 +336,74 @@ fn windows_replace_script(
         .map(|argument| powershell_quote(argument))
         .collect::<Vec<_>>()
         .join(", ");
+    let sequence_file = restart
+        .sequence_file
+        .as_deref()
+        .map(powershell_quote_path)
+        .unwrap_or_else(|| powershell_quote(""));
+    let sequence_value = restart
+        .rollout_sequence
+        .map(|value| powershell_quote(&value.to_string()))
+        .unwrap_or_else(|| powershell_quote(""));
     format!(
-        "$ErrorActionPreference = 'Stop'\r\n$parentPid = {parent_pid}\r\n$backup = {backup}\r\n$target = {target}\r\n$candidate = {candidate}\r\n$state = {state}\r\n$health = {health}\r\n$lock = {lock}\r\nwhile (Get-Process -Id $parentPid -ErrorAction SilentlyContinue) {{ Start-Sleep -Seconds 1 }}\r\nRemove-Item $health,$backup -Force -ErrorAction SilentlyContinue\r\nSet-Content -LiteralPath $state -Value 'swapping' -Encoding ascii\r\ntry {{\r\n  if (Test-Path -LiteralPath $target) {{ Move-Item -LiteralPath $target -Destination $backup -Force }}\r\n  Move-Item -LiteralPath $candidate -Destination $target -Force\r\n}} catch {{\r\n  if (Test-Path -LiteralPath $backup) {{ Move-Item -LiteralPath $backup -Destination $target -Force }}\r\n  Set-Content -LiteralPath $state -Value 'swap-failed' -Encoding ascii\r\n  Remove-Item $lock -Force -ErrorAction SilentlyContinue\r\n  exit 1\r\n}}\r\n$env:{health_env} = $health\r\n$child = Start-Process -FilePath $target -ArgumentList @({arguments}) -PassThru\r\nfor ($i = 0; $i -lt 100; $i++) {{\r\n  if (Test-Path -LiteralPath $health) {{\r\n    Set-Content -LiteralPath $state -Value 'healthy' -Encoding ascii\r\n    Remove-Item $backup,$lock,$PSCommandPath -Force -ErrorAction SilentlyContinue\r\n    exit 0\r\n  }}\r\n  if ($child.HasExited) {{ break }}\r\n  Start-Sleep -Milliseconds 100\r\n  $child.Refresh()\r\n}}\r\nStop-Process -Id $child.Id -Force -ErrorAction SilentlyContinue\r\nRemove-Item $target -Force -ErrorAction SilentlyContinue\r\nif (Test-Path -LiteralPath $backup) {{ Move-Item -LiteralPath $backup -Destination $target -Force }}\r\nSet-Content -LiteralPath $state -Value 'rolled-back' -Encoding ascii\r\nRemove-Item $lock -Force -ErrorAction SilentlyContinue\r\nStart-Process -FilePath $target -ArgumentList @({arguments})\r\nRemove-Item $PSCommandPath -Force -ErrorAction SilentlyContinue\r\nexit 1\r\n",
+        r##"$ErrorActionPreference = 'Stop'
+$parentPid = {parent_pid}
+$backup = {backup}
+$target = {target}
+$candidate = {candidate}
+$state = {state}
+$health = {health}
+$lock = {lock}
+$sequenceFile = {sequence_file}
+$sequenceValue = {sequence_value}
+function Restore-Previous([object]$Child) {{
+  if ($null -ne $Child) {{ Stop-Process -Id $Child.Id -Force -ErrorAction SilentlyContinue }}
+  Remove-Item $target -Force -ErrorAction SilentlyContinue
+  if (Test-Path -LiteralPath $backup) {{ Move-Item -LiteralPath $backup -Destination $target -Force }}
+  Set-Content -LiteralPath $state -Value 'rolled-back' -Encoding ascii
+  Remove-Item $lock -Force -ErrorAction SilentlyContinue
+  Start-Process -FilePath $target -ArgumentList @({arguments})
+  Remove-Item $PSCommandPath -Force -ErrorAction SilentlyContinue
+  exit 1
+}}
+while (Get-Process -Id $parentPid -ErrorAction SilentlyContinue) {{ Start-Sleep -Seconds 1 }}
+Remove-Item $health,$backup -Force -ErrorAction SilentlyContinue
+Set-Content -LiteralPath $state -Value 'swapping' -Encoding ascii
+try {{
+  if (Test-Path -LiteralPath $target) {{ Move-Item -LiteralPath $target -Destination $backup -Force }}
+  Move-Item -LiteralPath $candidate -Destination $target -Force
+}} catch {{
+  if (Test-Path -LiteralPath $backup) {{ Move-Item -LiteralPath $backup -Destination $target -Force }}
+  Set-Content -LiteralPath $state -Value 'swap-failed' -Encoding ascii
+  Remove-Item $lock -Force -ErrorAction SilentlyContinue
+  exit 1
+}}
+$child = $null
+try {{
+  $env:{health_env} = $health
+  $child = Start-Process -FilePath $target -ArgumentList @({arguments}) -PassThru
+  Remove-Item Env:{health_env} -ErrorAction SilentlyContinue
+  for ($i = 0; $i -lt 100; $i++) {{
+    if (Test-Path -LiteralPath $health) {{
+      if ($sequenceFile) {{
+        Set-Content -LiteralPath "$sequenceFile.tmp" -Value $sequenceValue -Encoding ascii
+        Move-Item -LiteralPath "$sequenceFile.tmp" -Destination $sequenceFile -Force
+      }}
+      Set-Content -LiteralPath $state -Value 'healthy' -Encoding ascii
+      Remove-Item $backup,$lock,$PSCommandPath -Force -ErrorAction SilentlyContinue
+      exit 0
+    }}
+    if ($child.HasExited) {{ break }}
+    Start-Sleep -Milliseconds 100
+    $child.Refresh()
+  }}
+}} catch {{
+  Remove-Item Env:{health_env} -ErrorAction SilentlyContinue
+  Restore-Previous $child
+}}
+Remove-Item Env:{health_env} -ErrorAction SilentlyContinue
+Restore-Previous $child
+"##,
         backup = powershell_quote_path(backup),
         target = powershell_quote_path(target),
         candidate = powershell_quote_path(candidate),
@@ -272,7 +413,6 @@ fn windows_replace_script(
         health_env = HEALTH_FILE_ENV,
     )
 }
-
 fn extract_zip(archive: &Path, workspace: &Path) -> MedusaResult<PathBuf> {
     let file = fs::File::open(archive)?;
     let mut zip = zip::ZipArchive::new(file).map_err(zip_error)?;
@@ -495,6 +635,8 @@ mod tests {
     fn scripts_require_health_and_contain_rollback() {
         let restart = Restart {
             arguments: vec!["--repo".into(), "repository with spaces".into()],
+            sequence_file: Some(PathBuf::from("sequence file")),
+            rollout_sequence: Some(42),
         };
         let unix = unix_replace_script(
             42,
@@ -509,6 +651,8 @@ mod tests {
         assert!(unix.contains(HEALTH_FILE_ENV));
         assert!(unix.contains("rolled-back"));
         assert!(unix.contains("repository with spaces"));
+        assert!(unix.contains("sequence file"));
+        assert!(unix.contains("42"));
 
         let windows = windows_replace_script(
             42,
@@ -523,6 +667,9 @@ mod tests {
         assert!(windows.contains(HEALTH_FILE_ENV));
         assert!(windows.contains("rolled-back"));
         assert!(windows.contains("Start-Process"));
+        assert!(windows.contains("Restore-Previous"));
+        assert!(windows.contains("sequence file"));
+        assert!(windows.contains("42"));
     }
 
     #[test]

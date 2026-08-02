@@ -1,20 +1,19 @@
 use std::{
     collections::BTreeMap,
-    fs::{self, File, OpenOptions},
+    fs::{self, OpenOptions},
     io::{Read, Seek, SeekFrom, Write},
     path::{Path, PathBuf},
     thread,
     time::{Duration, Instant},
 };
 
-use medusa_core::{ErrorCategory, ErrorCode, MedusaError, MedusaResult};
+use medusa_core::MedusaResult;
 use reqwest::{
     StatusCode,
     blocking::{Client, Response},
     header::{ACCEPT, ETAG, IF_NONE_MATCH, RANGE},
 };
 use semver::Version;
-use serde::Deserialize;
 
 use crate::{
     Artifact, DownloadReport, Release,
@@ -22,11 +21,16 @@ use crate::{
     model::{invalid, verify_artifact},
 };
 
+mod support;
+
+use support::{GithubAsset, GithubRelease, atomic_write, http_error, read_bounded, sync_parent};
+
 const GITHUB_API: &str = "https://api.github.com";
 const MAX_RELEASE_METADATA: usize = 4 * 1024 * 1024;
 const MAX_MANIFEST: usize = 1024 * 1024;
 const MAX_SIGNATURE: usize = 16 * 1024;
 const DOWNLOAD_ATTEMPTS: u32 = 3;
+const _: () = assert!(MAX_SIGNATURE < MAX_MANIFEST);
 
 /// Discovers a published release and downloads only assets authorized by its signed manifest.
 pub trait ReleaseClient {
@@ -365,67 +369,6 @@ impl ReleaseClient for GithubReleaseClient {
     }
 }
 
-#[derive(Deserialize)]
-struct GithubRelease {
-    tag_name: String,
-    draft: bool,
-    prerelease: bool,
-    assets: Vec<GithubAsset>,
-}
-
-#[derive(Deserialize)]
-struct GithubAsset {
-    name: String,
-    browser_download_url: String,
-    size: u64,
-}
-
-fn read_bounded(mut response: Response, maximum: usize, label: &str) -> MedusaResult<Vec<u8>> {
-    if response
-        .content_length()
-        .is_some_and(|length| length > maximum as u64)
-    {
-        return Err(invalid(format!("{label} exceeds {maximum} bytes")));
-    }
-    let mut body = Vec::new();
-    response
-        .by_ref()
-        .take(maximum as u64 + 1)
-        .read_to_end(&mut body)
-        .map_err(http_error)?;
-    if body.len() > maximum {
-        return Err(invalid(format!("{label} exceeds {maximum} bytes")));
-    }
-    Ok(body)
-}
-
-fn atomic_write(path: &Path, bytes: &[u8]) -> MedusaResult<()> {
-    let temporary = path.with_extension("tmp");
-    {
-        let mut file = File::create(&temporary)?;
-        file.write_all(bytes)?;
-        file.sync_all()?;
-    }
-    fs::rename(&temporary, path)?;
-    sync_parent(path)
-}
-
-fn sync_parent(path: &Path) -> MedusaResult<()> {
-    #[cfg(unix)]
-    if let Some(parent) = path.parent() {
-        File::open(parent)?.sync_all()?;
-    }
-    Ok(())
-}
-
-fn http_error(error: impl std::fmt::Display) -> MedusaError {
-    MedusaError::new(
-        ErrorCode::DependencyUnavailable,
-        ErrorCategory::Transient,
-        format!("GitHub release request failed: {error}"),
-    )
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -440,11 +383,5 @@ mod tests {
         .expect("client");
         assert_eq!(client.api_base, "https://github.example/api/v3");
         assert_eq!(client.repository, "octo/medusa");
-    }
-
-    #[test]
-    fn bounded_reader_rejects_truncated_limit_overrun() {
-        let _ = MAX_MANIFEST;
-        assert!(MAX_SIGNATURE < MAX_MANIFEST);
     }
 }

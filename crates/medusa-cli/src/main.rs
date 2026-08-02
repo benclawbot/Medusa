@@ -195,7 +195,6 @@ fn main() {
 }
 
 fn run() -> MedusaResult<()> {
-    medusa_update::acknowledge_update_health()?;
     let cli = Cli::parse();
     let repo = repository_path(&cli.repo);
 
@@ -209,6 +208,7 @@ fn run() -> MedusaResult<()> {
             .collect::<BTreeMap<_, _>>();
         let config = Config::load_layers(None, None, &BTreeMap::new(), &overrides)?;
         oauth_preflight::run_if_needed(&config)?;
+        medusa_update::acknowledge_update_health()?;
         let mut options = TuiOptions::for_repo(repo);
         options.initial_prompt = cli.prompt;
         options.resume_session = cli.resume_session;

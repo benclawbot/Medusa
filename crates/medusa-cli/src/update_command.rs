@@ -49,6 +49,7 @@ fn release_channel(
     let current = Version::parse(env!("CARGO_PKG_VERSION"))
         .map_err(|error| invalid(format!("invalid running version: {error}")))?;
     let updater = current.clone();
+    let location = InstallLocation::current()?;
     let installed_sequence = read_installed_sequence(repo);
     if updater < release.minimum_updater_version {
         return Err(invalid(format!(
@@ -109,7 +110,6 @@ fn release_channel(
     }
     require_automatic_for_unattended(automatic)?;
 
-    let location = InstallLocation::current()?;
     if let InstallKind::PackageManaged { manager, command } = location.kind {
         println!(
             "This Medusa binary is managed by {manager}. The verified updater will not invoke a package manager; update it explicitly with: {command}"
@@ -159,14 +159,15 @@ fn release_channel(
             repo.to_string_lossy().into_owned(),
             "--continue".to_owned(),
         ],
+        sequence_file: Some(repo.join(".medusa/update-sequence")),
+        rollout_sequence: Some(release.rollout_sequence),
     };
-    super::request_daemon_shutdown(repo);
     let scheduled = installer.schedule_replace(&candidate, &restart, std::process::id())?;
     staging_timer.finish("atomic-handoff-staged", Some(artifact.bytes), None)?;
+    super::request_daemon_shutdown(repo);
     diagnostics
         .phase(UpdatePhase::RestartHandoff)
         .finish("health-check-pending", None, None)?;
-    persist_sequence(repo, release.rollout_sequence)?;
     println!(
         "Verified release {} is staged. After this process exits, Medusa will restart the session, require a health handshake, and roll back automatically on failure. State: {}",
         release.version,
@@ -230,14 +231,6 @@ fn read_installed_sequence(repo: &Path) -> Option<u64> {
         .and_then(|value| value.trim().parse().ok())
 }
 
-fn persist_sequence(repo: &Path, sequence: u64) -> MedusaResult<()> {
-    let directory = repo.join(".medusa");
-    fs::create_dir_all(&directory)?;
-    let temporary = directory.join("update-sequence.tmp");
-    fs::write(&temporary, format!("{sequence}\n"))?;
-    fs::rename(temporary, directory.join("update-sequence"))?;
-    Ok(())
-}
 
 fn invalid(message: impl Into<String>) -> MedusaError {
     MedusaError::new(
@@ -262,10 +255,4 @@ mod tests {
         assert!(rollout_eligible(repo, 100));
     }
 
-    #[test]
-    fn sequence_state_round_trips() {
-        let directory = tempfile::tempdir().expect("tempdir");
-        persist_sequence(directory.path(), 42).expect("sequence");
-        assert_eq!(read_installed_sequence(directory.path()), Some(42));
-    }
 }
