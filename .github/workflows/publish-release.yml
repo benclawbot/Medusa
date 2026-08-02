@@ -108,16 +108,19 @@ jobs:
           --platform linux
           --manifest desktop-package-linux.json
       - name: Build Linux CLI
-        run: cargo build --release --locked --bin medusa
+        run: cargo build --release --locked --bin medusa --bin medusa-github-operation
       - name: Assemble Linux release assets
         shell: bash
         run: |
           set -euo pipefail
           mkdir -p release-assets cli-package
           cp target/release/medusa cli-package/medusa
+          cp target/release/medusa-github-operation cli-package/medusa-github-operation
           cp LICENSE cli-package/LICENSE
           cp docs/RELEASE.md cli-package/RELEASE.md
           cp docs/COMPATIBILITY.md cli-package/COMPATIBILITY.md
+          target/release/medusa-github-operation --help | grep -F 'medusa-github-operation'
+          target/release/medusa-github-operation --help | grep -F 'interchangeable backend'
           python3 scripts/release-evidence.py sbom --root . --output cli-package/medusa-sbom.cdx.json
           tar -czf release-assets/medusa-cli-linux.tar.gz -C cli-package .
 
@@ -166,16 +169,19 @@ jobs:
           --platform macos
           --manifest desktop-package-macos.json
       - name: Build macOS CLI
-        run: cargo build --release --locked --bin medusa
+        run: cargo build --release --locked --bin medusa --bin medusa-github-operation
       - name: Assemble macOS release assets
         shell: bash
         run: |
           set -euo pipefail
           mkdir -p release-assets cli-package
           cp target/release/medusa cli-package/medusa
+          cp target/release/medusa-github-operation cli-package/medusa-github-operation
           cp LICENSE cli-package/LICENSE
           cp docs/RELEASE.md cli-package/RELEASE.md
           cp docs/COMPATIBILITY.md cli-package/COMPATIBILITY.md
+          target/release/medusa-github-operation --help | grep -F 'medusa-github-operation'
+          target/release/medusa-github-operation --help | grep -F 'interchangeable backend'
           python3 scripts/release-evidence.py sbom --root . --output cli-package/medusa-sbom.cdx.json
           tar -czf release-assets/medusa-cli-macos.tar.gz -C cli-package .
 
@@ -224,16 +230,21 @@ jobs:
           --platform windows
           --manifest desktop-package-windows.json
       - name: Build Windows CLI
-        run: cargo build --release --locked --bin medusa
+        run: cargo build --release --locked --bin medusa --bin medusa-github-operation
       - name: Assemble Windows release assets
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
           New-Item -ItemType Directory -Force release-assets, cli-package | Out-Null
           Copy-Item target/release/medusa.exe cli-package/medusa.exe
+          Copy-Item target/release/medusa-github-operation.exe cli-package/medusa-github-operation.exe
           Copy-Item LICENSE cli-package/LICENSE
           Copy-Item docs/RELEASE.md cli-package/RELEASE.md
           Copy-Item docs/COMPATIBILITY.md cli-package/COMPATIBILITY.md
+          & target/release/medusa-github-operation.exe --help | Select-String 'medusa-github-operation'
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          & target/release/medusa-github-operation.exe --help | Select-String 'interchangeable backend'
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           python scripts/release-evidence.py sbom --root . --output cli-package/medusa-sbom.cdx.json
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           Compress-Archive -Path cli-package/* -DestinationPath release-assets/medusa-cli-windows.zip

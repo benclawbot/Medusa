@@ -6,8 +6,10 @@
 //! than being assembled ad hoc by frontends or agents.
 
 use std::{
+    io::Read,
     path::{Path, PathBuf},
-    process::Command,
+    process::{Command, Stdio},
+    thread::{self, JoinHandle},
 };
 
 use medusa_core::{ErrorCategory, ErrorCode, MedusaError, MedusaResult};
@@ -32,6 +34,25 @@ pub trait CommandExecutor {
         arguments: &[String],
         directory: Option<&Path>,
     ) -> MedusaResult<CommandOutput>;
+
+    /// Executes while retaining at most one byte beyond each configured limit.
+    ///
+    /// The default keeps fake and embedded executors source-compatible. The
+    /// production executor overrides this method to drain both pipes while
+    /// bounding retained memory before the child exits.
+    fn run_bounded(
+        &self,
+        program: &str,
+        arguments: &[String],
+        directory: Option<&Path>,
+        stdout_limit: usize,
+        stderr_limit: usize,
+    ) -> MedusaResult<CommandOutput> {
+        let mut output = self.run(program, arguments, directory)?;
+        output.stdout = retain_text_prefix(&output.stdout, stdout_limit.saturating_add(1));
+        output.stderr = retain_text_prefix(&output.stderr, stderr_limit.saturating_add(1));
+        Ok(output)
+    }
 }
 
 /// Production command executor. Arguments are never passed through a shell.
@@ -55,6 +76,43 @@ impl CommandExecutor for SystemExecutor {
             success: output.status.success(),
             stdout: String::from_utf8_lossy(&output.stdout).trim().to_owned(),
             stderr: String::from_utf8_lossy(&output.stderr).trim().to_owned(),
+        })
+    }
+
+    fn run_bounded(
+        &self,
+        program: &str,
+        arguments: &[String],
+        directory: Option<&Path>,
+        stdout_limit: usize,
+        stderr_limit: usize,
+    ) -> MedusaResult<CommandOutput> {
+        let mut command = Command::new(program);
+        command
+            .args(arguments)
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped());
+        if let Some(directory) = directory {
+            command.current_dir(directory);
+        }
+        let mut child = command.spawn().map_err(command_error)?;
+        let stdout = child
+            .stdout
+            .take()
+            .ok_or_else(|| internal_error("bounded command stdout pipe was unavailable"))?;
+        let stderr = child
+            .stderr
+            .take()
+            .ok_or_else(|| internal_error("bounded command stderr pipe was unavailable"))?;
+        let stdout_reader = spawn_bounded_reader(stdout, stdout_limit.saturating_add(1));
+        let stderr_reader = spawn_bounded_reader(stderr, stderr_limit.saturating_add(1));
+        let status = child.wait().map_err(command_error)?;
+        let stdout = join_bounded_reader(stdout_reader)?;
+        let stderr = join_bounded_reader(stderr_reader)?;
+        Ok(CommandOutput {
+            success: status.success(),
+            stdout: String::from_utf8_lossy(&stdout).into_owned(),
+            stderr: String::from_utf8_lossy(&stderr).into_owned(),
         })
     }
 }
@@ -414,6 +472,45 @@ impl<E: CommandExecutor> GitHubService<E> {
 
 fn strings<const N: usize>(arguments: [&str; N]) -> Vec<String> {
     arguments.into_iter().map(str::to_owned).collect()
+}
+
+fn retain_text_prefix(value: &str, max_bytes: usize) -> String {
+    if value.len() <= max_bytes {
+        return value.to_owned();
+    }
+    let mut boundary = max_bytes;
+    while boundary > 0 && !value.is_char_boundary(boundary) {
+        boundary -= 1;
+    }
+    value[..boundary].to_owned()
+}
+
+fn spawn_bounded_reader<R>(reader: R, retain_limit: usize) -> JoinHandle<std::io::Result<Vec<u8>>>
+where
+    R: Read + Send + 'static,
+{
+    thread::spawn(move || read_and_drain(reader, retain_limit))
+}
+
+fn read_and_drain<R: Read>(mut reader: R, retain_limit: usize) -> std::io::Result<Vec<u8>> {
+    let mut retained = Vec::with_capacity(retain_limit.min(8_192));
+    let mut buffer = [0_u8; 8_192];
+    loop {
+        let read = reader.read(&mut buffer)?;
+        if read == 0 {
+            break;
+        }
+        let remaining = retain_limit.saturating_sub(retained.len());
+        retained.extend_from_slice(&buffer[..read.min(remaining)]);
+    }
+    Ok(retained)
+}
+
+fn join_bounded_reader(reader: JoinHandle<std::io::Result<Vec<u8>>>) -> MedusaResult<Vec<u8>> {
+    reader
+        .join()
+        .map_err(|_| internal_error("bounded command output reader panicked"))?
+        .map_err(command_error)
 }
 
 fn invalid_input(message: impl Into<String>) -> MedusaError {

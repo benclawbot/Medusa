@@ -109,7 +109,7 @@ jobs:
       - name: Refresh dependency lock for the merged PR graph
         run: cargo generate-lockfile
       - name: Build release package
-        run: cargo build --release --locked --bin medusa --bin medusa-recall
+        run: cargo build --release --locked --bin medusa --bin medusa-recall --bin medusa-github-operation
       - name: Smoke test package on Unix
         if: runner.os != 'Windows'
         run: bash scripts/package-smoke.sh
@@ -119,6 +119,7 @@ jobs:
         run: |
           $binary = 'target/release/medusa.exe'
           $recall = 'target/release/medusa-recall.exe'
+          $githubOperation = 'target/release/medusa-github-operation.exe'
           & $binary --version
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           & $binary --help | Select-String 'Autonomous coding agent'
@@ -126,6 +127,10 @@ jobs:
           & $recall --help | Select-String 'medusa-recall'
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           & $recall --help | Select-String 'search'
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          & $githubOperation --help | Select-String 'medusa-github-operation'
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          & $githubOperation --help | Select-String 'interchangeable backend'
 
   security:
     if: ${{ github.event_name == 'workflow_dispatch' || github.event.pull_request.draft == false }}

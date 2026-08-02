@@ -19,7 +19,7 @@ Production code and tests on `main` remain the highest authority. Every capabili
 |---|---|---|---|---|---|
 | `shared-runtime` | `production` | runtime maintainers | `medusa`, desktop app | Linux, macOS, Windows | none |
 | `durable-sessions-memory` | `production` | agent runtime maintainers | `medusa`, `medusa run` | Linux, macOS, Windows | none |
-| `github-service` | `production` | integration maintainers | guarded GitHub workflows, `medusa-capabilities create-repository` | Linux, macOS, Windows | GitHub API, GitHub CLI, Git |
+| `github-service` | `production` | integration maintainers | guarded GitHub workflows, `medusa-capabilities create-repository`, `medusa-github-operation` | Linux, macOS, Windows | GitHub API, GitHub CLI, Git |
 | `provider-context-resilience` | `production` | provider maintainers | `medusa`, `medusa run`, `medusa quickstart` | Linux, macOS, Windows | configured model provider |
 | `identity-approval-transactions` | `production` | safety maintainers | `medusa`, `medusa run` | Linux, macOS, Windows | none |
 | `daemon` | `production` | daemon maintainers | daemon and desktop adapter | Linux, macOS, Windows | none |
@@ -33,7 +33,7 @@ The manifest also records production paths, behavioral test paths, canonical gat
 
 - `shared-runtime`: `crates/medusa-runtime`, `crates/medusa-tui`, and `apps/medusa-desktop`; validated by CI, Desktop, and Refactor Guardrails.
 - `durable-sessions-memory`: session persistence and `crates/medusa-memory`; validated by CI and Release Gates.
-- `github-service`: `crates/medusa-github` and the approval-gated `medusa-capabilities create-repository` entrypoint. Existing-repository operations and new-repository creation use typed argument construction without a shell. Repository creation validates personal, organization, template, Enterprise, local-bootstrap, existing-remote, idempotent-retry, and partial-failure paths and returns a structured redacted receipt. Validated by CI and Release Gates; documented in [`explicit-capabilities.md`](explicit-capabilities.md) and [`GITHUB-REPOSITORY-CREATION.md`](GITHUB-REPOSITORY-CREATION.md).
+- `github-service`: `crates/medusa-github`, the approval-gated `medusa-capabilities create-repository` entrypoint, and the backend-neutral `medusa-github-operation` entrypoint. Repository management uses one serialized, repository-confined operation contract with interchangeable native GitHub CLI and `gh api` REST transports, normalized receipts, bounded and redacted payloads, exact ordinary and high-risk approvals, and durable audit evidence. Existing typed convenience methods and repository creation retain their specialized lifecycle behavior. Validated by CI and Release Gates; documented in [`explicit-capabilities.md`](explicit-capabilities.md), [`GITHUB-REPOSITORY-CREATION.md`](GITHUB-REPOSITORY-CREATION.md), and [`GITHUB-BACKEND-PARITY.md`](GITHUB-BACKEND-PARITY.md).
 - `provider-context-resilience`: provider, runtime, and agent layers; validated by CI and Release Gates.
 - `identity-approval-transactions`: identity guard, approval, transaction, and engine wiring with named safety tests; validated by CI, Release Gates, and Refactor Guardrails.
 - `daemon`: `crates/medusa-daemon`; validated by Daemon, Desktop, and CI.

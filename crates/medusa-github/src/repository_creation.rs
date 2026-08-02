@@ -119,9 +119,11 @@ pub struct RepositoryCreationReceipt {
     pub initial_commit: Option<String>,
 }
 
+mod operations;
 mod service;
 mod validation;
 
+pub use operations::*;
 pub(crate) use validation::*;
 
 #[cfg(test)]
