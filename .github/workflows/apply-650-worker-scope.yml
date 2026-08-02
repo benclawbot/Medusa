@@ -38,6 +38,18 @@ jobs:
                                 .map_err(|error| invalid(error.to_string()))?;'''
           if text.count(old) != 1:
               raise SystemExit(f'expected one copied-component conversion, found {text.count(old)}')
+          text = text.replace(old, new, 1)
+          old = '''        normalize_components(&worker.worktree, &components)
+            .map_err(|error| invalid(error.to_string()))
+'''
+          new = '''        if components.is_empty() {
+            return Ok(Vec::new());
+        }
+        normalize_components(&worker.worktree, &components)
+            .map_err(|error| invalid(error.to_string()))
+'''
+          if text.count(old) != 1:
+              raise SystemExit(f'expected one worktree normalization, found {text.count(old)}')
           path.write_text(text.replace(old, new, 1))
           PY
       - name: Validate worker scope
