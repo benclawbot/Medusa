@@ -1,0 +1,75 @@
+name: Package 650 Runtime Generated Source
+
+on:
+  pull_request:
+    branches: [main]
+    types: [opened, synchronize, reopened]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: package-650-runtime-generated-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  package:
+    if: github.event.pull_request.number == 663 && github.event.pull_request.head.repo.full_name == github.repository && github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ github.event.pull_request.head.ref }}
+      - name: Generate runtime authority source
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 scripts/fix-650-runtime-generator.py
+          python3 scripts/apply-650-runtime-authority.py
+          python3 - <<'PY'
+          from pathlib import Path
+          import re
+          for manifest_name in [
+              'crates/medusa-runtime/Cargo.toml',
+              'crates/medusa-multi-agent-scheduler/Cargo.toml',
+          ]:
+              path = Path(manifest_name)
+              lines = [line for line in path.read_text().splitlines() if line.strip() != 'medusa-evidence.workspace = true']
+              dependency_index = lines.index('[dependencies]')
+              lines.insert(dependency_index + 1, 'medusa-evidence.workspace = true')
+              path.write_text('\n'.join(lines) + '\n')
+          scheduler = Path('crates/medusa-multi-agent-scheduler/src/lib.rs')
+          text = scheduler.read_text()
+          pattern = re.compile(r'\n    pub fn succeed_with_evidence\(\n.*?\n    \}\n\n', re.S)
+          matches = list(pattern.finditer(text))
+          if len(matches) != 1:
+              raise SystemExit(f'expected one generated typed succeed method, found {len(matches)}')
+          method = matches[0].group(0).lstrip('\n')
+          text = text[:matches[0].start()] + '\n' + text[matches[0].end():]
+          ledger_start = text.index('impl ExecutionLedger {')
+          fail_marker = '    pub fn fail(&mut self, task_id: &str, reason: impl Into<String>) -> Result<(), String> {'
+          insert_at = text.index(fail_marker, ledger_start)
+          scheduler.write_text(text[:insert_at] + method + text[insert_at:])
+          PY
+          cargo fmt --all
+          tar -czf generated-runtime-authority.tar.gz \
+            Cargo.lock \
+            crates/medusa-evidence/src/change.rs \
+            crates/medusa-workers/Cargo.toml \
+            crates/medusa-workers/src/lib.rs \
+            crates/medusa-agent/src/verification_authority.rs \
+            crates/medusa-runtime/Cargo.toml \
+            crates/medusa-runtime/src/mutating_worker_coordinator.rs \
+            crates/medusa-runtime/src/mutating_worker_coordinator_support.rs \
+            crates/medusa-runtime/src/mutating_worker_coordinator_tests.rs \
+            crates/medusa-runtime/src/mutation_transaction.rs \
+            crates/medusa-multi-agent-scheduler/Cargo.toml \
+            crates/medusa-multi-agent-scheduler/src/lib.rs
+      - name: Upload generated source
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: generated-runtime-authority-${{ github.sha }}
+          path: generated-runtime-authority.tar.gz
+          if-no-files-found: error
+          retention-days: 2
