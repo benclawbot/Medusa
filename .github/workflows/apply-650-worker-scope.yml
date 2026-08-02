@@ -25,7 +25,21 @@ jobs:
         with:
           components: rustfmt, clippy
       - name: Apply exact worker scope
-        run: python3 scripts/apply-650-worker-scope.py
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 scripts/apply-650-worker-scope.py
+          python3 - <<'PY'
+          from pathlib import Path
+          path = Path('crates/medusa-workers/src/lib.rs')
+          text = path.read_text()
+          old = 'let mut component = ChangedComponent::new(ChangeKind::Copied, path.clone())?;'
+          new = '''let mut component = ChangedComponent::new(ChangeKind::Copied, path.clone())
+                                .map_err(|error| invalid(error.to_string()))?;'''
+          if text.count(old) != 1:
+              raise SystemExit(f'expected one copied-component conversion, found {text.count(old)}')
+          path.write_text(text.replace(old, new, 1))
+          PY
       - name: Validate worker scope
         shell: bash
         run: |
