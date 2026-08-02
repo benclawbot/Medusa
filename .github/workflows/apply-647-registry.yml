@@ -31,6 +31,7 @@ jobs:
           set -euo pipefail
           python3 scripts/apply-647-registry.py
           python3 - <<'PY'
+          import json
           from pathlib import Path
           import re
 
@@ -105,6 +106,45 @@ jobs:
           if fixture.count(fixture_old) != 1:
               raise RuntimeError("GitHub operation registry fixture migration did not match exactly once")
           fixture_path.write_text(fixture.replace(fixture_old, fixture_new, 1), encoding="utf-8")
+
+          baseline_path = Path("docs/architecture/baseline.json")
+          baseline = json.loads(baseline_path.read_text(encoding="utf-8"))
+          certifications = {
+              "browser-tools": "quarantined",
+              "plugins-and-extensions": "preview",
+          }
+          updated = 0
+          for row in baseline["capabilities"]:
+              certification = certifications.get(row[0])
+              if certification is not None:
+                  if row[2] != "partial":
+                      raise RuntimeError(f"unexpected generated certification for {row[0]}: {row[2]}")
+                  row[2] = certification
+                  updated += 1
+          if updated != len(certifications):
+              raise RuntimeError("architecture certification migration did not update every capability")
+          baseline_path.write_text(json.dumps(baseline, indent=2) + "\n", encoding="utf-8")
+
+          index_path = Path("docs/architecture/INDEX.md")
+          index = index_path.read_text(encoding="utf-8")
+          replacements = {
+              "| Browser tools | withheld | partial | adapt | registry records remain non-executable until a production handler is certified |":
+                  "| Browser tools | withheld | quarantined | adapt | registry records remain non-executable until a production handler is certified |",
+              "| Plugins/extensions | managed | partial | adapt | versioned manifests and instruction-only `SKILL.md`; executable handlers still require certification |":
+                  "| Plugins/extensions | managed | preview | adapt | versioned manifests and instruction-only `SKILL.md`; executable handlers still require certification |",
+          }
+          for before, after in replacements.items():
+              if index.count(before) != 1:
+                  raise RuntimeError(f"architecture index certification migration did not match: {before}")
+              index = index.replace(before, after, 1)
+          index_path.write_text(index, encoding="utf-8")
+
+          checker_path = Path("scripts/check-architecture-index.py")
+          checker = checker_path.read_text(encoding="utf-8")
+          resolved_fixture = '    "browser-dispatch-unreachable",\n'
+          if checker.count(resolved_fixture) != 1:
+              raise RuntimeError("resolved browser fixture was not required exactly once")
+          checker_path.write_text(checker.replace(resolved_fixture, "", 1), encoding="utf-8")
           PY
       - name: Refresh locked dependency graph
         run: cargo check -p medusa-capabilities -p medusa-extensions -p medusa-agent -p medusa-cli --all-targets
@@ -147,6 +187,7 @@ jobs:
             crates/medusa-cli/src/github_operation.rs \
             docs/architecture/INDEX.md \
             docs/architecture/baseline.json \
-            scripts/architecture-conformance.py
+            scripts/architecture-conformance.py \
+            scripts/check-architecture-index.py
           git commit -m "Migrate production surfaces to the truthful capability registry"
           git push origin HEAD:${{ github.event.pull_request.head.ref }}
