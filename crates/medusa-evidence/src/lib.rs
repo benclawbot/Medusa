@@ -48,7 +48,16 @@ pub(crate) fn hash_bytes(bytes: &[u8]) -> String {
 }
 
 pub(crate) fn fingerprint(value: &impl Serialize) -> String {
-    hash_bytes(&serde_json::to_vec(value).expect("serializable evidence fingerprint input"))
+    match serde_json::to_vec(value) {
+        Ok(bytes) => hash_bytes(&bytes),
+        Err(error) => hash_bytes(
+            format!(
+                "medusa-evidence:fingerprint-serialization-error:{}:{error}",
+                std::any::type_name_of_val(value)
+            )
+            .as_bytes(),
+        ),
+    }
 }
 
 pub(crate) fn write_atomic(path: &std::path::Path, bytes: &[u8]) -> Result<()> {
@@ -68,4 +77,30 @@ pub(crate) fn write_atomic(path: &std::path::Path, bytes: &[u8]) -> Result<()> {
 
 pub(crate) fn write_json_atomic(path: &std::path::Path, value: &impl Serialize) -> Result<()> {
     write_atomic(path, &serde_json::to_vec_pretty(value)?)
+}
+
+#[cfg(test)]
+mod tests {
+    use serde::ser::{Error, Serializer};
+
+    use super::*;
+
+    struct SerializationFailure;
+
+    impl Serialize for SerializationFailure {
+        fn serialize<S>(&self, _serializer: S) -> std::result::Result<S::Ok, S::Error>
+        where
+            S: Serializer,
+        {
+            Err(S::Error::custom("intentional fingerprint failure"))
+        }
+    }
+
+    #[test]
+    fn fingerprint_is_deterministic_without_panicking_when_serialization_fails() {
+        let first = fingerprint(&SerializationFailure);
+        let second = fingerprint(&SerializationFailure);
+        assert_eq!(first, second);
+        assert_eq!(first.len(), 64);
+    }
 }
