@@ -1,0 +1,43 @@
+name: Apply 655 PR Integration
+
+on:
+  pull_request:
+    branches: [main]
+    types: [opened, synchronize, reopened]
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    if: github.event.pull_request.head.repo.full_name == github.repository && github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ github.event.pull_request.head.ref }}
+          fetch-depth: 0
+      - uses: dtolnay/rust-toolchain@39b0b3842c7e8bbf6904c0bfc3d9006fdd4dc4e0 # 1.88.0
+        with:
+          components: rustfmt
+      - name: Apply focused integration edits
+        run: python3 scripts/apply-655-generated.py
+      - name: Refresh lock and format Rust
+        run: |
+          set -euo pipefail
+          cargo generate-lockfile
+          cargo fmt --all
+      - name: Commit generated result and remove temporary machinery
+        shell: bash
+        run: |
+          set -euo pipefail
+          git rm \
+            .github/workflows/apply-655-pr.yml \
+            .github/workflows/apply-655-generated.yml \
+            scripts/apply-655-generated.py
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add Cargo.lock crates/medusa-cli/src/main.rs .github/workflows/publish-release.yml
+          git commit -m "Wire the verified release channel and signing pipeline"
+          git push origin HEAD:${{ github.event.pull_request.head.ref }}
