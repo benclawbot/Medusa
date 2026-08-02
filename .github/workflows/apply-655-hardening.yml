@@ -61,6 +61,7 @@ jobs:
             crates/medusa-update/src/lib.rs \
             crates/medusa-update/src/model.rs \
             crates/medusa-update/tests/update_manager_coverage.rs \
+            crates/medusa-cli/src/main.rs \
             crates/medusa-cli/src/update_command.rs
           git commit -m "Harden signed updates and preserve updater compatibility"
           git push origin HEAD:${{ github.event.pull_request.head.ref }}
