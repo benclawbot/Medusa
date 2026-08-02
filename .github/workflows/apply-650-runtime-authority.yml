@@ -30,6 +30,44 @@ jobs:
           set -euo pipefail
           python3 scripts/fix-650-runtime-generator.py
           python3 scripts/apply-650-runtime-authority.py
+          python3 - <<'PY'
+          from pathlib import Path
+          import re
+
+          for manifest_name in [
+              'crates/medusa-runtime/Cargo.toml',
+              'crates/medusa-multi-agent-scheduler/Cargo.toml',
+          ]:
+              path = Path(manifest_name)
+              lines = [
+                  line
+                  for line in path.read_text().splitlines()
+                  if line.strip() != 'medusa-evidence.workspace = true'
+              ]
+              dependency_index = lines.index('[dependencies]')
+              lines.insert(dependency_index + 1, 'medusa-evidence.workspace = true')
+              path.write_text('\n'.join(lines) + '\n')
+
+          scheduler = Path('crates/medusa-multi-agent-scheduler/src/lib.rs')
+          text = scheduler.read_text()
+          pattern = re.compile(
+              r'\n    pub fn succeed_with_evidence\(\n.*?\n    \}\n\n',
+              re.S,
+          )
+          matches = list(pattern.finditer(text))
+          if len(matches) != 1:
+              raise SystemExit(f'expected one generated typed succeed method, found {len(matches)}')
+          method = matches[0].group(0).lstrip('\n')
+          text = text[:matches[0].start()] + '\n' + text[matches[0].end():]
+          ledger_start = text.index('impl ExecutionLedger {')
+          fail_marker = (
+              '    pub fn fail(&mut self, task_id: &str, reason: impl Into<String>) '
+              '-> Result<(), String> {'
+          )
+          insert_at = text.index(fail_marker, ledger_start)
+          text = text[:insert_at] + method + text[insert_at:]
+          scheduler.write_text(text)
+          PY
       - name: Validate complete authority path
         shell: bash
         run: |
