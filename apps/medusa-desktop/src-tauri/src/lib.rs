@@ -1,5 +1,6 @@
 mod config;
 mod credentials;
+mod desktop_command;
 mod desktop_update;
 mod diffs;
 mod dto;
