@@ -69,11 +69,7 @@ fn from_env_reads_all_knobs_child() {
 
 #[test]
 fn from_env_uses_sensible_defaults() {
-    run_child(
-        "from_env_uses_sensible_defaults_child",
-        &[],
-        CONFIG_KEYS,
-    );
+    run_child("from_env_uses_sensible_defaults_child", &[], CONFIG_KEYS);
 }
 
 #[test]
