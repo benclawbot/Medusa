@@ -6,7 +6,9 @@ use ulid::Ulid;
 
 use crate::{
     ArtifactId, ArtifactMetadata, ArtifactReadReceipt, CommandReceipt, EvidenceError, Result,
-    SCHEMA_VERSION, fingerprint,
+    SCHEMA_VERSION,
+    artifact::{validate_metadata, validate_read},
+    fingerprint,
 };
 
 #[derive(Clone, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize)]
@@ -185,6 +187,20 @@ impl EvidenceBundle {
         let reads = unique_map(&self.reads, |value| value.id.clone(), "read receipt")?;
         let commands = unique_map(&self.commands, |value| value.id.clone(), "command receipt")?;
         let records = unique_map(&self.records, |value| value.id.clone(), "evidence")?;
+        for artifact in &self.artifacts {
+            validate_metadata(artifact)?;
+        }
+        for read in &self.reads {
+            validate_read(read)?;
+            let artifact = artifacts.get(&read.artifact_id).ok_or_else(|| {
+                EvidenceError::Validation("read receipt references missing artifact".to_owned())
+            })?;
+            if read.offset.saturating_add(read.length) > artifact.byte_len {
+                return Err(EvidenceError::Validation(
+                    "read receipt exceeds artifact bounds".to_owned(),
+                ));
+            }
+        }
         for command in &self.commands {
             command.validate()?;
             if !artifacts.contains_key(&command.stdout_artifact)
