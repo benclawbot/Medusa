@@ -7,11 +7,11 @@ use std::{
 use serde::{Deserialize, Serialize};
 use ulid::Ulid;
 
+use crate::change::{package_owners, requires_artifact_semantics, requires_security};
 use crate::{
     ArtifactId, ChangedComponent, EvidenceBundle, EvidenceError, EvidenceId, Result,
     SCHEMA_VERSION, changed_scope_fingerprint, fingerprint, normalize_components,
 };
-use crate::change::{package_owners, requires_artifact_semantics, requires_security};
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize)]
 #[serde(rename_all = "snake_case")]
@@ -66,14 +66,11 @@ impl VerificationCheck {
     ) -> Self {
         let working_directory = working_directory.into();
         let reason = reason.into();
-        let args = args.iter().map(|value| (*value).to_owned()).collect::<Vec<_>>();
-        let input_fingerprint = fingerprint(&(
-            kind,
-            program,
-            &args,
-            &working_directory,
-            &reason,
-        ));
+        let args = args
+            .iter()
+            .map(|value| (*value).to_owned())
+            .collect::<Vec<_>>();
+        let input_fingerprint = fingerprint(&(kind, program, &args, &working_directory, &reason));
         Self {
             id: format!("check-{}", &input_fingerprint[..24]),
             kind,
@@ -196,7 +193,10 @@ impl VerificationPlanner {
         }
         checks.sort_by(|left, right| left.id.cmp(&right.id));
         checks.dedup_by(|left, right| left.id == right.id);
-        let exempted = exemptions.iter().map(|value| value.kind).collect::<BTreeSet<_>>();
+        let exempted = exemptions
+            .iter()
+            .map(|value| value.kind)
+            .collect::<BTreeSet<_>>();
         checks.retain(|check| !exempted.contains(&check.kind));
         let mut plan = VerificationPlan {
             schema_version: SCHEMA_VERSION,
@@ -435,11 +435,18 @@ impl VerificationReceipt {
                     ));
                 }
             }
-            if receipt.evidence_ids.iter().any(|id| {
-                !self.evidence.records.iter().any(|record| &record.id == id)
-            }) || receipt.artifact_ids.iter().any(|id| {
-                !self.evidence.artifacts.iter().any(|artifact| &artifact.id == id)
-            }) {
+            if receipt
+                .evidence_ids
+                .iter()
+                .any(|id| !self.evidence.records.iter().any(|record| &record.id == id))
+                || receipt.artifact_ids.iter().any(|id| {
+                    !self
+                        .evidence
+                        .artifacts
+                        .iter()
+                        .any(|artifact| &artifact.id == id)
+                })
+            {
                 return Err(EvidenceError::Validation(
                     "check references missing evidence or artifacts".to_owned(),
                 ));
@@ -525,40 +532,72 @@ pub fn validate_artifact_semantics(path: &Path) -> Result<ArtifactSemanticResult
     let (class, passed, details) = match extension.as_str() {
         "json" => {
             let valid = serde_json::from_slice::<serde_json::Value>(&bytes).is_ok();
-            (ArtifactSemanticClass::Json, valid, vec![format!("json_parseable={valid}")])
+            (
+                ArtifactSemanticClass::Json,
+                valid,
+                vec![format!("json_parseable={valid}")],
+            )
         }
         "html" | "htm" => {
             let valid = std::str::from_utf8(&bytes).ok().is_some_and(|text| {
                 let text = text.to_ascii_lowercase();
                 text.contains("<html") && text.contains("</html>")
             });
-            (ArtifactSemanticClass::Html, valid, vec![format!("html_document={valid}")])
+            (
+                ArtifactSemanticClass::Html,
+                valid,
+                vec![format!("html_document={valid}")],
+            )
         }
         "png" => {
             let valid = bytes.starts_with(b"\x89PNG\r\n\x1a\n");
-            (ArtifactSemanticClass::Png, valid, vec![format!("png_signature={valid}")])
+            (
+                ArtifactSemanticClass::Png,
+                valid,
+                vec![format!("png_signature={valid}")],
+            )
         }
         "pdf" => {
             let valid = bytes.starts_with(b"%PDF-");
-            (ArtifactSemanticClass::Pdf, valid, vec![format!("pdf_signature={valid}")])
+            (
+                ArtifactSemanticClass::Pdf,
+                valid,
+                vec![format!("pdf_signature={valid}")],
+            )
         }
         "zip" | "jar" | "docx" | "xlsx" | "pptx" => {
             let valid = bytes.starts_with(b"PK\x03\x04");
-            (ArtifactSemanticClass::Zip, valid, vec![format!("zip_signature={valid}")])
+            (
+                ArtifactSemanticClass::Zip,
+                valid,
+                vec![format!("zip_signature={valid}")],
+            )
         }
-        "txt" | "md" | "css" | "scss" | "js" | "jsx" | "ts" | "tsx" | "rs" | "py"
-        | "go" | "java" | "cs" | "toml" | "yaml" | "yml" | "xml" => {
+        "txt" | "md" | "css" | "scss" | "js" | "jsx" | "ts" | "tsx" | "rs" | "py" | "go"
+        | "java" | "cs" | "toml" | "yaml" | "yml" | "xml" => {
             let valid = std::str::from_utf8(&bytes)
                 .ok()
                 .is_some_and(|text| !text.trim().is_empty());
-            (ArtifactSemanticClass::Text, valid, vec![format!("utf8_nonempty={valid}")])
+            (
+                ArtifactSemanticClass::Text,
+                valid,
+                vec![format!("utf8_nonempty={valid}")],
+            )
         }
         _ => {
             let valid = !bytes.is_empty();
-            (ArtifactSemanticClass::Binary, valid, vec![format!("binary_nonempty={valid}")])
+            (
+                ArtifactSemanticClass::Binary,
+                valid,
+                vec![format!("binary_nonempty={valid}")],
+            )
         }
     };
-    Ok(ArtifactSemanticResult { class, passed, details })
+    Ok(ArtifactSemanticResult {
+        class,
+        passed,
+        details,
+    })
 }
 
 fn repository_defined_checks(repo: &Path) -> Result<Vec<VerificationCheck>> {
@@ -611,40 +650,138 @@ fn add_manifest_checks(
     checks: &mut Vec<VerificationCheck>,
 ) -> Result<()> {
     for owner in package_owners(components) {
-        let root = if owner == "." { repo.to_path_buf() } else { repo.join(owner) };
+        let root = if owner == "." {
+            repo.to_path_buf()
+        } else {
+            repo.join(owner)
+        };
         if root.join("Cargo.toml").is_file() {
             checks.extend([
-                VerificationCheck::command(VerificationCheckKind::Format, "cargo", &["fmt", "--all", "--", "--check"], owner, "Rust changes require rustfmt"),
-                VerificationCheck::command(VerificationCheckKind::Lint, "cargo", &["clippy", "--all-targets", "--all-features", "--", "-D", "warnings"], owner, "Rust changes require Clippy"),
-                VerificationCheck::command(VerificationCheckKind::Unit, "cargo", &["test", "--all-targets", "--all-features"], owner, "Rust changes require tests"),
-                VerificationCheck::command(VerificationCheckKind::Build, "cargo", &["build", "--all-targets"], owner, "Rust changes require a build"),
+                VerificationCheck::command(
+                    VerificationCheckKind::Format,
+                    "cargo",
+                    &["fmt", "--all", "--", "--check"],
+                    owner,
+                    "Rust changes require rustfmt",
+                ),
+                VerificationCheck::command(
+                    VerificationCheckKind::Lint,
+                    "cargo",
+                    &[
+                        "clippy",
+                        "--all-targets",
+                        "--all-features",
+                        "--",
+                        "-D",
+                        "warnings",
+                    ],
+                    owner,
+                    "Rust changes require Clippy",
+                ),
+                VerificationCheck::command(
+                    VerificationCheckKind::Unit,
+                    "cargo",
+                    &["test", "--all-targets", "--all-features"],
+                    owner,
+                    "Rust changes require tests",
+                ),
+                VerificationCheck::command(
+                    VerificationCheckKind::Build,
+                    "cargo",
+                    &["build", "--all-targets"],
+                    owner,
+                    "Rust changes require a build",
+                ),
             ]);
         }
         if root.join("package.json").is_file() {
             add_package_checks(&root, owner, checks)?;
         }
-        if root.join("pyproject.toml").is_file() || root.join("pytest.ini").is_file() || root.join("setup.cfg").is_file() {
-            checks.push(VerificationCheck::command(VerificationCheckKind::Unit, "python", &["-m", "pytest"], owner, "Python changes require pytest"));
+        if root.join("pyproject.toml").is_file()
+            || root.join("pytest.ini").is_file()
+            || root.join("setup.cfg").is_file()
+        {
+            checks.push(VerificationCheck::command(
+                VerificationCheckKind::Unit,
+                "python",
+                &["-m", "pytest"],
+                owner,
+                "Python changes require pytest",
+            ));
         }
         if root.join("go.mod").is_file() {
-            checks.push(VerificationCheck::command(VerificationCheckKind::Unit, "go", &["test", "./..."], owner, "Go changes require go test"));
+            checks.push(VerificationCheck::command(
+                VerificationCheckKind::Unit,
+                "go",
+                &["test", "./..."],
+                owner,
+                "Go changes require go test",
+            ));
         }
         if root.join("pom.xml").is_file() {
-            checks.push(VerificationCheck::command(VerificationCheckKind::Integration, "mvn", &["test"], owner, "Maven changes require test lifecycle"));
+            checks.push(VerificationCheck::command(
+                VerificationCheckKind::Integration,
+                "mvn",
+                &["test"],
+                owner,
+                "Maven changes require test lifecycle",
+            ));
         }
-        if root.join("gradlew").is_file() || root.join("build.gradle").is_file() || root.join("build.gradle.kts").is_file() {
-            checks.push(VerificationCheck::command(VerificationCheckKind::Integration, if cfg!(windows) { "gradlew.bat" } else { "./gradlew" }, &["test"], owner, "Gradle changes require test lifecycle"));
+        if root.join("gradlew").is_file()
+            || root.join("build.gradle").is_file()
+            || root.join("build.gradle.kts").is_file()
+        {
+            checks.push(VerificationCheck::command(
+                VerificationCheckKind::Integration,
+                if cfg!(windows) {
+                    "gradlew.bat"
+                } else {
+                    "./gradlew"
+                },
+                &["test"],
+                owner,
+                "Gradle changes require test lifecycle",
+            ));
         }
-        let has_dotnet = fs::read_dir(&root).ok().into_iter().flat_map(|entries| entries.filter_map(std::result::Result::ok)).any(|entry| {
-            entry.path().extension().and_then(|value| value.to_str()).is_some_and(|extension| extension.eq_ignore_ascii_case("sln") || extension.eq_ignore_ascii_case("csproj"))
-        });
+        let has_dotnet = fs::read_dir(&root)
+            .ok()
+            .into_iter()
+            .flat_map(|entries| entries.filter_map(std::result::Result::ok))
+            .any(|entry| {
+                entry
+                    .path()
+                    .extension()
+                    .and_then(|value| value.to_str())
+                    .is_some_and(|extension| {
+                        extension.eq_ignore_ascii_case("sln")
+                            || extension.eq_ignore_ascii_case("csproj")
+                    })
+            });
         if has_dotnet {
-            checks.push(VerificationCheck::command(VerificationCheckKind::Unit, "dotnet", &["test"], owner, ".NET changes require dotnet test"));
+            checks.push(VerificationCheck::command(
+                VerificationCheckKind::Unit,
+                "dotnet",
+                &["test"],
+                owner,
+                ".NET changes require dotnet test",
+            ));
         }
         if root.join("CMakeLists.txt").is_file() {
             checks.extend([
-                VerificationCheck::command(VerificationCheckKind::Build, "cmake", &["-S", ".", "-B", ".medusa/cmake-build"], owner, "CMake changes require configuration"),
-                VerificationCheck::command(VerificationCheckKind::Integration, "ctest", &["--test-dir", ".medusa/cmake-build", "--output-on-failure"], owner, "CMake changes require CTest"),
+                VerificationCheck::command(
+                    VerificationCheckKind::Build,
+                    "cmake",
+                    &["-S", ".", "-B", ".medusa/cmake-build"],
+                    owner,
+                    "CMake changes require configuration",
+                ),
+                VerificationCheck::command(
+                    VerificationCheckKind::Integration,
+                    "ctest",
+                    &["--test-dir", ".medusa/cmake-build", "--output-on-failure"],
+                    owner,
+                    "CMake changes require CTest",
+                ),
             ]);
         }
     }
@@ -653,7 +790,9 @@ fn add_manifest_checks(
 
 fn add_package_checks(root: &Path, owner: &str, checks: &mut Vec<VerificationCheck>) -> Result<()> {
     let package: serde_json::Value = serde_json::from_slice(&fs::read(root.join("package.json"))?)?;
-    let scripts = package.get("scripts").and_then(serde_json::Value::as_object);
+    let scripts = package
+        .get("scripts")
+        .and_then(serde_json::Value::as_object);
     let (manager, prefix): (&str, &[&str]) = if root.join("pnpm-lock.yaml").is_file() {
         ("pnpm", &["run"])
     } else if root.join("yarn.lock").is_file() {
@@ -664,16 +803,43 @@ fn add_package_checks(root: &Path, owner: &str, checks: &mut Vec<VerificationChe
         ("npm", &["run"])
     };
     for (script, kind, reason) in [
-        ("format:check", VerificationCheckKind::Format, "frontend changes require formatting"),
-        ("lint", VerificationCheckKind::Lint, "frontend changes require linting"),
-        ("typecheck", VerificationCheckKind::Typecheck, "frontend changes require type checking"),
-        ("test", VerificationCheckKind::Unit, "frontend changes require tests"),
-        ("build", VerificationCheckKind::Build, "frontend changes require build"),
+        (
+            "format:check",
+            VerificationCheckKind::Format,
+            "frontend changes require formatting",
+        ),
+        (
+            "lint",
+            VerificationCheckKind::Lint,
+            "frontend changes require linting",
+        ),
+        (
+            "typecheck",
+            VerificationCheckKind::Typecheck,
+            "frontend changes require type checking",
+        ),
+        (
+            "test",
+            VerificationCheckKind::Unit,
+            "frontend changes require tests",
+        ),
+        (
+            "build",
+            VerificationCheckKind::Build,
+            "frontend changes require build",
+        ),
     ] {
-        if scripts.is_some_and(|scripts| scripts.get(script).and_then(serde_json::Value::as_str).is_some()) {
+        if scripts.is_some_and(|scripts| {
+            scripts
+                .get(script)
+                .and_then(serde_json::Value::as_str)
+                .is_some()
+        }) {
             let mut args = prefix.to_vec();
             args.push(script);
-            checks.push(VerificationCheck::command(kind, manager, &args, owner, reason));
+            checks.push(VerificationCheck::command(
+                kind, manager, &args, owner, reason,
+            ));
         }
     }
     Ok(())
@@ -681,30 +847,80 @@ fn add_package_checks(root: &Path, owner: &str, checks: &mut Vec<VerificationChe
 
 fn add_security_checks(repo: &Path, checks: &mut Vec<VerificationCheck>) {
     if repo.join("Cargo.lock").is_file() {
-        checks.push(VerificationCheck::command(VerificationCheckKind::Security, "cargo", &["audit"], ".", "security-sensitive changes require cargo audit"));
+        checks.push(VerificationCheck::command(
+            VerificationCheckKind::Security,
+            "cargo",
+            &["audit"],
+            ".",
+            "security-sensitive changes require cargo audit",
+        ));
     } else if repo.join("package-lock.json").is_file() {
-        checks.push(VerificationCheck::command(VerificationCheckKind::Security, "npm", &["audit", "--omit=dev"], ".", "security-sensitive changes require npm audit"));
+        checks.push(VerificationCheck::command(
+            VerificationCheckKind::Security,
+            "npm",
+            &["audit", "--omit=dev"],
+            ".",
+            "security-sensitive changes require npm audit",
+        ));
     }
 }
 
 fn exemption_fingerprint(exemption: &VerificationExemption) -> String {
-    fingerprint(&(exemption.kind, &exemption.scope_fingerprint, &exemption.reviewer, &exemption.reason))
+    fingerprint(&(
+        exemption.kind,
+        &exemption.scope_fingerprint,
+        &exemption.reviewer,
+        &exemption.reason,
+    ))
 }
 
 fn plan_fingerprint(plan: &VerificationPlan) -> String {
-    fingerprint(&(plan.schema_version, &plan.repository_fingerprint, &plan.commit, &plan.components, &plan.checks, &plan.exemptions))
+    fingerprint(&(
+        plan.schema_version,
+        &plan.repository_fingerprint,
+        &plan.commit,
+        &plan.components,
+        &plan.checks,
+        &plan.exemptions,
+    ))
 }
 
 fn command_fingerprint(receipt: &CommandReceipt) -> String {
-    fingerprint(&(receipt.schema_version, &receipt.id, &receipt.check_id, &receipt.command_hash, receipt.exit_code, receipt.timed_out, receipt.duration_ms, &receipt.stdout_artifact, &receipt.stderr_artifact, receipt.passed))
+    fingerprint(&(
+        receipt.schema_version,
+        &receipt.id,
+        &receipt.check_id,
+        &receipt.command_hash,
+        receipt.exit_code,
+        receipt.timed_out,
+        receipt.duration_ms,
+        &receipt.stdout_artifact,
+        &receipt.stderr_artifact,
+        receipt.passed,
+    ))
 }
 
 fn check_fingerprint(receipt: &VerificationCheckReceipt) -> String {
-    fingerprint(&(&receipt.check_id, receipt.kind, receipt.passed, &receipt.command, &receipt.evidence_ids, &receipt.artifact_ids, &receipt.details))
+    fingerprint(&(
+        &receipt.check_id,
+        receipt.kind,
+        receipt.passed,
+        &receipt.command,
+        &receipt.evidence_ids,
+        &receipt.artifact_ids,
+        &receipt.details,
+    ))
 }
 
 fn receipt_fingerprint(receipt: &VerificationReceipt) -> String {
-    fingerprint(&(receipt.schema_version, &receipt.plan, &receipt.checks, &receipt.evidence, receipt.passed, &receipt.coverage))
+    fingerprint(&(
+        receipt.schema_version,
+        &receipt.plan,
+        &receipt.checks,
+        &receipt.evidence,
+        receipt.passed,
+        &receipt.coverage,
+    ))
 }
 
 #[cfg(test)]
@@ -715,25 +931,51 @@ mod tests {
     #[test]
     fn same_components_select_same_checks() {
         let directory = tempfile::tempdir().unwrap();
-        fs::write(directory.path().join("Cargo.toml"), "[package]\nname='x'\nversion='0.1.0'\n").unwrap();
+        fs::write(
+            directory.path().join("Cargo.toml"),
+            "[package]\nname='x'\nversion='0.1.0'\n",
+        )
+        .unwrap();
         fs::create_dir_all(directory.path().join("src")).unwrap();
         fs::write(directory.path().join("src/lib.rs"), "pub fn x(){}\n").unwrap();
         let components = vec![ChangedComponent::new(ChangeKind::Modified, "src/lib.rs").unwrap()];
-        let direct = VerificationPlanner::plan(directory.path(), "repo", "commit", &components, &[]).unwrap();
-        let isolated = VerificationPlanner::plan(directory.path(), "repo", "commit", &components, &[]).unwrap();
+        let direct =
+            VerificationPlanner::plan(directory.path(), "repo", "commit", &components, &[])
+                .unwrap();
+        let isolated =
+            VerificationPlanner::plan(directory.path(), "repo", "commit", &components, &[])
+                .unwrap();
         assert_eq!(direct, isolated);
-        assert!(direct.checks.iter().any(|check| check.kind == VerificationCheckKind::Lint));
+        assert!(
+            direct
+                .checks
+                .iter()
+                .any(|check| check.kind == VerificationCheckKind::Lint)
+        );
     }
 
     #[test]
     fn ui_change_requires_browser_and_accessibility() {
         let directory = tempfile::tempdir().unwrap();
-        fs::write(directory.path().join("package.json"), r#"{"scripts":{"build":"vite build","test":"vitest"}}"#).unwrap();
+        fs::write(
+            directory.path().join("package.json"),
+            r#"{"scripts":{"build":"vite build","test":"vitest"}}"#,
+        )
+        .unwrap();
         fs::write(directory.path().join("App.tsx"), "export default 1").unwrap();
         let components = vec![ChangedComponent::new(ChangeKind::Modified, "App.tsx").unwrap()];
-        let plan = VerificationPlanner::plan(directory.path(), "repo", "commit", &components, &[]).unwrap();
-        assert!(plan.checks.iter().any(|check| check.kind == VerificationCheckKind::BrowserBehavior));
-        assert!(plan.checks.iter().any(|check| check.kind == VerificationCheckKind::Accessibility));
+        let plan = VerificationPlanner::plan(directory.path(), "repo", "commit", &components, &[])
+            .unwrap();
+        assert!(
+            plan.checks
+                .iter()
+                .any(|check| check.kind == VerificationCheckKind::BrowserBehavior)
+        );
+        assert!(
+            plan.checks
+                .iter()
+                .any(|check| check.kind == VerificationCheckKind::Accessibility)
+        );
     }
 
     #[test]
@@ -749,10 +991,15 @@ mod tests {
     #[test]
     fn receipt_rejects_missing_required_check() {
         let directory = tempfile::tempdir().unwrap();
-        fs::write(directory.path().join("Cargo.toml"), "[package]\nname='x'\nversion='0.1.0'\n").unwrap();
+        fs::write(
+            directory.path().join("Cargo.toml"),
+            "[package]\nname='x'\nversion='0.1.0'\n",
+        )
+        .unwrap();
         fs::write(directory.path().join("lib.rs"), "pub fn x(){}\n").unwrap();
         let components = vec![ChangedComponent::new(ChangeKind::Modified, "lib.rs").unwrap()];
-        let plan = VerificationPlanner::plan(directory.path(), "repo", "commit", &components, &[]).unwrap();
+        let plan = VerificationPlanner::plan(directory.path(), "repo", "commit", &components, &[])
+            .unwrap();
         let bundle = EvidenceBundle::new("repo", "commit");
         assert!(VerificationReceipt::new(plan, Vec::new(), bundle).is_err());
     }
