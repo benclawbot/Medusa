@@ -4,9 +4,55 @@
 
 ## GitHub operations
 
-GitHub reads and writes are routed through `medusa-github`. Read permission is required before authentication or repository queries execute. Writes are first represented as reviewable proposals and require an explicit approval before any `gh` or `git` command is invoked.
+GitHub reads and writes are routed through `medusa-github`. Read permission is required before authentication or repository queries execute. Writes require an explicit approval before any `gh` or `git` command is invoked.
 
 Each authorization decision records the capability, requested permission, approval state, outcome, and reason. Denied permissions fail before an external command or other side effect.
+
+### Create a repository
+
+`medusa-capabilities create-repository` is the supported non-interactive repository-creation entrypoint. It prints the complete typed request before execution and requires `--approve` because the operation creates an external persistent resource.
+
+```bash
+medusa-capabilities create-repository \
+  --owner acme \
+  --name example \
+  --visibility private \
+  --description "Example service" \
+  --default-branch main \
+  --add-readme \
+  --disable-wiki \
+  --approve
+```
+
+Create a repository from an existing or new local project:
+
+```bash
+medusa-capabilities create-repository \
+  --owner acme \
+  --name example \
+  --source ./example \
+  --initialize-git \
+  --initial-commit-message "Initial commit" \
+  --approve
+```
+
+The creation request supports public, private, and internal visibility; descriptions and homepages; default branches; README, `.gitignore`, and license initialization; template repositories; issue/wiki settings; GitHub Enterprise hostnames; and explicit idempotent reuse.
+
+Local bootstrap validates the destination before creating the remote, refuses an unrelated `origin`, initializes Git only when requested, creates an initial commit only when requested or when Medusa must materialize an otherwise empty remote, sets the requested branch, and pushes with upstream tracking. A partially completed operation reports the created repository URL and instructs the caller to retry with `--reuse-existing` after correcting the local failure.
+
+Successful execution emits a JSON receipt containing the canonical repository identity, web and clone URLs, visibility, actual default branch, whether the repository was newly created, the local path, and the initial commit when applicable. The receipt and authorization events are appended to `.medusa/audit/github-repository-creation.jsonl` (or the configured `MEDUSA_HOME`). Command arguments are passed directly without a shell, credentials remain owned by the GitHub CLI credential store, and credential-like stderr is redacted.
+
+The following combinations fail before external mutation:
+
+- invalid owner, repository, branch, URL, or template identifiers;
+- template creation mixed with README, license, `.gitignore`, or local-source creation;
+- local-source creation mixed with remote initialization files;
+- a missing/non-Git source when `--initialize-git` was not selected;
+- an existing repository without `--reuse-existing`;
+- an unrelated existing `origin` remote;
+- repository mutation without `--approve`.
+
+See [GitHub repository creation](GITHUB-REPOSITORY-CREATION.md) for modes, recovery, and examples.
 
 ## Self-improvement
 
@@ -26,4 +72,4 @@ Changes to policy, sandbox, approval, credential, capability, hardening, workflo
 
 ## Diagnostics
 
-The shared capability matrix exposes both `GitHub` and `Self-improvement`, including availability details. Runtime diagnostics also expose capability descriptors and the ordered authorization audit trail. The shipped `medusa-capabilities [repository]` command constructs the explicit runtime and emits these diagnostics as JSON; `MEDUSA_GITHUB_REPOSITORY` selects the GitHub repository identity.
+The shared capability matrix exposes both `GitHub` and `Self-improvement`, including availability details. Runtime diagnostics also expose capability descriptors and the ordered authorization audit trail. `medusa-capabilities [repository]` remains backward-compatible and emits these diagnostics as JSON; `MEDUSA_GITHUB_REPOSITORY` selects the GitHub repository identity used by diagnostics.

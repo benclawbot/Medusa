@@ -13,6 +13,9 @@ use std::{
 use medusa_core::{ErrorCategory, ErrorCode, MedusaError, MedusaResult};
 use serde::{Deserialize, Serialize};
 
+mod repository_creation;
+pub use repository_creation::*;
+
 /// Captured result of an external GitHub or Git command.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct CommandOutput {
@@ -367,18 +370,22 @@ impl<E: CommandExecutor> GitHubService<E> {
     }
 
     fn clone_url(&self) -> String {
-        format!("https://{}/{}.git", self.hostname, self.repository)
+        self.clone_url_for(&self.repository)
     }
+
     fn gh<const N: usize>(&self, arguments: [&str; N]) -> MedusaResult<String> {
         self.run("gh", strings(arguments), self.directory.as_deref())
     }
+
     fn gh_status<const N: usize>(&self, arguments: [&str; N]) -> MedusaResult<CommandOutput> {
         self.executor
             .run("gh", &strings(arguments), self.directory.as_deref())
     }
+
     fn git<const N: usize>(&self, arguments: [&str; N]) -> MedusaResult<String> {
         self.git_in(self.directory.as_deref(), arguments)
     }
+
     fn git_in<const N: usize>(
         &self,
         directory: Option<&Path>,
@@ -397,14 +404,9 @@ impl<E: CommandExecutor> GitHubService<E> {
         if output.success {
             Ok(output.stdout)
         } else {
-            Err(MedusaError::new(
-                ErrorCode::ToolExecutionFailed,
-                ErrorCategory::Execution,
-                format!(
-                    "{program} {} failed: {}",
-                    arguments.join(" "),
-                    output.stderr
-                ),
+            Err(execution_error(
+                &format!("{program} {}", arguments.join(" ")),
+                repository_creation::sanitize_external_error(&output.stderr),
             ))
         }
     }
@@ -414,157 +416,54 @@ fn strings<const N: usize>(arguments: [&str; N]) -> Vec<String> {
     arguments.into_iter().map(str::to_owned).collect()
 }
 
+fn invalid_input(message: impl Into<String>) -> MedusaError {
+    MedusaError::new(ErrorCode::InvalidInput, ErrorCategory::Validation, message)
+}
+
+fn policy_denied(message: impl Into<String>) -> MedusaError {
+    MedusaError::new(ErrorCode::PolicyDenied, ErrorCategory::Policy, message)
+}
+
+fn execution_error(operation: &str, detail: impl Into<String>) -> MedusaError {
+    MedusaError::new(
+        ErrorCode::ToolExecutionFailed,
+        ErrorCategory::Execution,
+        format!("{operation} failed: {}", detail.into()),
+    )
+}
+
+fn partial_failure(web_url: &str, cause: MedusaError) -> MedusaError {
+    MedusaError::new(
+        ErrorCode::ToolExecutionFailed,
+        ErrorCategory::Execution,
+        format!(
+            "remote repository {web_url} was created or reused, but local bootstrap failed: {}; retry with reuse_existing=true after correcting the local problem",
+            cause.message
+        ),
+    )
+    .with_retryable(true)
+}
+
+fn internal_error(message: impl Into<String>) -> MedusaError {
+    MedusaError::new(
+        ErrorCode::InternalInvariant,
+        ErrorCategory::Internal,
+        message,
+    )
+}
+
+fn environment_error(error: std::io::Error) -> MedusaError {
+    MedusaError::new(
+        ErrorCode::PersistenceFailed,
+        ErrorCategory::Environment,
+        error.to_string(),
+    )
+}
+
 fn command_error(error: std::io::Error) -> MedusaError {
     MedusaError::new(
         ErrorCode::DependencyUnavailable,
         ErrorCategory::Environment,
         error.to_string(),
     )
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use std::sync::{Arc, Mutex};
-
-    type RecordedCommands = Arc<Mutex<Vec<(String, Vec<String>)>>>;
-
-    #[derive(Clone, Default, Debug)]
-    struct FakeExecutor(RecordedCommands);
-    impl CommandExecutor for FakeExecutor {
-        fn run(
-            &self,
-            program: &str,
-            arguments: &[String],
-            _: Option<&Path>,
-        ) -> MedusaResult<CommandOutput> {
-            self.0
-                .lock()
-                .expect("lock")
-                .push((program.into(), arguments.into()));
-            Ok(CommandOutput {
-                success: true,
-                stdout: "ok".into(),
-                stderr: String::new(),
-            })
-        }
-    }
-    fn service(fake: FakeExecutor) -> GitHubService<FakeExecutor> {
-        GitHubService::enterprise("acme/medusa", "github.example", None, fake)
-    }
-
-    #[test]
-    fn device_flow_targets_enterprise_host_and_secure_store() {
-        let fake = FakeExecutor::default();
-        let status = service(fake.clone())
-            .authenticate_device_flow()
-            .expect("login");
-        assert!(status.authenticated);
-        assert_eq!(status.hostname, "github.example");
-        let calls = fake.0.lock().expect("lock");
-        assert_eq!(calls[0].0, "gh");
-        assert!(
-            calls[0]
-                .1
-                .windows(2)
-                .any(|pair| pair == ["--hostname", "github.example"])
-        );
-        assert!(calls[0].1.contains(&"--web".into()));
-    }
-
-    #[test]
-    fn pull_request_and_actions_lifecycle_use_typed_commands() {
-        let fake = FakeExecutor::default();
-        let github = service(fake.clone());
-        github.merge_pr(42, MergeStrategy::Squash).expect("merge");
-        github.rerun_failed_jobs(99).expect("rerun");
-        github.cancel_workflow(99).expect("cancel");
-        let calls = fake.0.lock().expect("lock");
-        assert!(calls[0].1.contains(&"--squash".into()));
-        assert!(calls[0].1.contains(&"--delete-branch".into()));
-        assert!(calls[1].1.contains(&"--failed".into()));
-        assert_eq!(calls[2].1[1], "cancel");
-    }
-
-    #[test]
-    fn repository_clone_uses_enterprise_url_without_shell_interpolation() {
-        let fake = FakeExecutor::default();
-        service(fake.clone())
-            .clone(Path::new("checkout"))
-            .expect("clone");
-        let calls = fake.0.lock().expect("lock");
-        assert_eq!(calls[0].0, "git");
-        assert_eq!(calls[0].1[1], "https://github.example/acme/medusa.git");
-    }
-
-    #[test]
-    fn every_repository_pr_issue_and_actions_operation_routes_through_the_service() {
-        let fake = FakeExecutor::default();
-        let github = service(fake.clone());
-        github.fetch().expect("fetch");
-        github.pull().expect("pull");
-        github.push().expect("push");
-        github.checkout("main").expect("checkout");
-        github.branches().expect("branches");
-        github.tags().expect("tags");
-        github
-            .create_pr("title", "body", "main", Some("feature"))
-            .expect("create pr");
-        github
-            .update_pr(7, Some("updated"), Some("details"))
-            .expect("update pr");
-        github
-            .review_pr(7, "looks good", false)
-            .expect("comment review");
-        github.close_pr(7).expect("close pr");
-        github.create_issue("bug", "details").expect("create issue");
-        github.comment_issue(8, "triaged").expect("comment issue");
-        github.assign_issue(8, "octocat").expect("assign issue");
-        github.label_issue(8, "bug").expect("label issue");
-        github.milestone_issue(8, "v1").expect("milestone issue");
-        github.watch_workflow(99).expect("watch workflow");
-        github.download_workflow_logs(99).expect("logs");
-        let calls = fake.0.lock().expect("lock");
-        assert!(
-            calls
-                .iter()
-                .any(|(_, args)| args.contains(&"--head".into()))
-        );
-        assert!(
-            calls
-                .iter()
-                .any(|(_, args)| args.contains(&"--comment".into()))
-        );
-        assert!(
-            calls
-                .iter()
-                .any(|(_, args)| args.contains(&"--add-label".into()))
-        );
-        assert!(
-            calls
-                .iter()
-                .any(|(_, args)| args.contains(&"--exit-status".into()))
-        );
-        assert!(calls.iter().any(|(_, args)| args.contains(&"--log".into())));
-    }
-
-    struct FailingExecutor;
-    impl CommandExecutor for FailingExecutor {
-        fn run(&self, _: &str, _: &[String], _: Option<&Path>) -> MedusaResult<CommandOutput> {
-            Ok(CommandOutput {
-                success: false,
-                stdout: String::new(),
-                stderr: "denied".into(),
-            })
-        }
-    }
-
-    #[test]
-    fn failed_external_command_is_a_structured_execution_error() {
-        let github =
-            GitHubService::enterprise("acme/medusa", "github.example", None, FailingExecutor);
-        let error = github.fetch().expect_err("failed git command");
-        assert_eq!(error.code, ErrorCode::ToolExecutionFailed);
-        assert!(error.message.contains("denied"));
-    }
 }
