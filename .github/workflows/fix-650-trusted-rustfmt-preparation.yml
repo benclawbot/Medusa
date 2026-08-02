@@ -28,7 +28,8 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          python3 scripts/fix-650-trusted-rustfmt-preparation.py
+          python3 scripts/patch-650-trusted-rustfmt-generator.py
+          python3 /tmp/fix-650-trusted-rustfmt-preparation.py
           cargo fmt --all
           changed="$(git diff --name-only | sort)"
           expected="$(printf '%s\n' \
