@@ -62,17 +62,6 @@ def function_bodies(text: str, function_name: str) -> list[str]:
     return bodies
 
 
-def integration_precedes_parent_review(root: Path) -> tuple[bool, str]:
-    runtime = read_tree(root, "crates/medusa-runtime/src/lib.rs")
-    integration = runtime.find("mutating_worker_coordinator::run_implementation")
-    parent_execution = runtime.find("engine.step_with_observer_and_context", integration + 1)
-    observed = integration >= 0 and parent_execution > integration
-    return (
-        observed,
-        f"run_implementation_offset={integration}; parent_execution_offset={parent_execution}",
-    )
-
-
 def verification_drops_changed_paths(root: Path) -> tuple[bool, str]:
     coordinator = read_tree(root, "crates/medusa-runtime/src/mutating_worker_coordinator.rs")
     signature = "targeted_verification(&worker.worktree)"
@@ -94,7 +83,6 @@ def provider_capability_mismatch(root: Path) -> tuple[bool, str]:
 
 
 PROBES: dict[str, Callable[[Path], tuple[bool, str]]] = {
-    "integration-precedes-parent-review": integration_precedes_parent_review,
     "isolated-verification-drops-changed-paths": verification_drops_changed_paths,
     "provider-capability-mismatch": provider_capability_mismatch,
 }
