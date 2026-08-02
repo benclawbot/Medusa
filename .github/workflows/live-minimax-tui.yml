@@ -73,11 +73,11 @@ jobs:
           baseline = '        ["git", "add", "Cargo.toml", "src/lib.rs", ".medusa/config.toml"],'
           replacement = (
               '        ["cargo", "generate-lockfile"],\n'
-              '        ["git", "add", "Cargo.toml", "Cargo.lock", "src/lib.rs", ".medusa/config.toml"],'
+              '        ["git", "add", "Cargo.toml", "Cargo.lock", "src/lib.rs", ".medusa/config.toml"]'
           )
           if baseline not in text:
               raise SystemExit("could not add Cargo.lock to the live fixture baseline")
-          text = text.replace(baseline, replacement, 1)
+          text = text.replace(baseline, replacement + ",", 1)
           path.write_text(text, encoding="utf-8")
           PY
           python3 scripts/live-tui-minimax-e2e.py \
