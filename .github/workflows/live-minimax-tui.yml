@@ -45,10 +45,12 @@ jobs:
         run: cargo build --release --locked --bin medusa
       - name: Submit and render one MiniMax answer through the real TUI
         shell: bash
+        env:
+          CARGO_TARGET_DIR: /tmp/live-minimax-tui-cargo-target
         run: |
           python3 scripts/live-tui-minimax-e2e.py \
             --binary target/release/medusa \
-            --work-root target/live-tui-minimax-work \
+            --work-root /tmp/live-tui-minimax-work \
             --output-dir live-tui-minimax-evidence
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         if: always()
