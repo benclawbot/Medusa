@@ -57,7 +57,7 @@ jobs:
         run: |
           set -euo pipefail
           rm -f transaction-validation.log
-          git rm -f \
+          git rm -f --ignore-unmatch \
             .github/workflows/apply-649-transaction.yml \
             .github/workflows/apply-649-transaction-v2.yml \
             scripts/apply-649-transaction.py \
