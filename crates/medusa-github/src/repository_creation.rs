@@ -122,7 +122,7 @@ pub struct RepositoryCreationReceipt {
 mod service;
 mod validation;
 
-pub(super) use validation::*;
+pub(crate) use validation::*;
 
 #[cfg(test)]
 mod tests;
