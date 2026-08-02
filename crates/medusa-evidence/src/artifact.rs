@@ -223,9 +223,8 @@ impl ArtifactStore {
             ));
         }
         let (bytes, receipt) = self.read_range(id, 0, metadata.byte_len, reader)?;
-        let text = std::str::from_utf8(&bytes).map_err(|_| {
-            EvidenceError::Validation("artifact is not valid UTF-8".to_owned())
-        })?;
+        let text = std::str::from_utf8(&bytes)
+            .map_err(|_| EvidenceError::Validation("artifact is not valid UTF-8".to_owned()))?;
         let hits = text
             .match_indices(query)
             .take(MAX_SEARCH_HITS)
@@ -326,8 +325,7 @@ fn read_fingerprint(receipt: &ArtifactReadReceipt) -> String {
 }
 
 fn is_binary(bytes: &[u8]) -> bool {
-    bytes.iter().take(8 * 1024).any(|byte| *byte == 0)
-        || std::str::from_utf8(bytes).is_err()
+    bytes.iter().take(8 * 1024).any(|byte| *byte == 0) || std::str::from_utf8(bytes).is_err()
 }
 
 #[cfg(test)]
