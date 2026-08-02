@@ -11,8 +11,11 @@ pub const SIGNATURE_NAME: &str = "medusa-release-manifest.sig.json";
 pub const MANIFEST_SCHEMA: &str = "medusa-release-manifest-v2";
 pub const SIGNATURE_SCHEMA: &str = "medusa-release-signature-v1";
 pub const DEFAULT_KEY_ID: &str = "medusa-release-2026-01";
-const DEFAULT_PUBLIC_KEY_HEX: &str =
-    "2ea016f00f8187453c6631644a9b472a9e1b6e6b281fe6cba862578a2b852f44";
+const DEFAULT_PUBLIC_KEY: [u8; 32] = [
+    0x2e, 0xa0, 0x16, 0xf0, 0x0f, 0x81, 0x87, 0x45, 0x3c, 0x66, 0x31, 0x64, 0x4a, 0x9b,
+    0x47, 0x2a, 0x9e, 0x1b, 0x6e, 0x6b, 0x28, 0x1f, 0xe6, 0xcb, 0xa8, 0x62, 0x57, 0x8a,
+    0x2b, 0x85, 0x2f, 0x44,
+];
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "lowercase")]
@@ -22,20 +25,11 @@ pub enum OperatingSystem {
     Windows,
 }
 
-impl From<&str> for OperatingSystem {
-    fn from(value: &str) -> Self {
-        match value {
-            "linux" => Self::Linux,
-            "macos" => Self::Macos,
-            "windows" => Self::Windows,
-            other => panic!("unsupported operating system literal {other}"),
-        }
-    }
-}
+impl TryFrom<&str> for OperatingSystem {
+    type Error = ManifestError;
 
-impl OperatingSystem {
-    pub fn current() -> Result<Self, ManifestError> {
-        match std::env::consts::OS {
+    fn try_from(value: &str) -> Result<Self, Self::Error> {
+        match value {
             "linux" => Ok(Self::Linux),
             "macos" => Ok(Self::Macos),
             "windows" => Ok(Self::Windows),
@@ -46,6 +40,12 @@ impl OperatingSystem {
     }
 }
 
+impl OperatingSystem {
+    pub fn current() -> Result<Self, ManifestError> {
+        Self::try_from(std::env::consts::OS)
+    }
+}
+
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "lowercase")]
 pub enum Architecture {
@@ -53,25 +53,23 @@ pub enum Architecture {
     Aarch64,
 }
 
-impl From<&str> for Architecture {
-    fn from(value: &str) -> Self {
-        match value {
-            "x86_64" => Self::X86_64,
-            "aarch64" => Self::Aarch64,
-            other => panic!("unsupported architecture literal {other}"),
-        }
-    }
-}
+impl TryFrom<&str> for Architecture {
+    type Error = ManifestError;
 
-impl Architecture {
-    pub fn current() -> Result<Self, ManifestError> {
-        match std::env::consts::ARCH {
+    fn try_from(value: &str) -> Result<Self, Self::Error> {
+        match value {
             "x86_64" => Ok(Self::X86_64),
             "aarch64" => Ok(Self::Aarch64),
             other => Err(ManifestError::UnsupportedPlatform(format!(
                 "unsupported architecture {other}"
             ))),
         }
+    }
+}
+
+impl Architecture {
+    pub fn current() -> Result<Self, ManifestError> {
+        Self::try_from(std::env::consts::ARCH)
     }
 }
 
@@ -324,14 +322,10 @@ pub struct TrustStore {
 
 impl TrustStore {
     pub fn production() -> Self {
-        let decoded = hex::decode(DEFAULT_PUBLIC_KEY_HEX).expect("compiled release key is valid");
-        let public_key: [u8; 32] = decoded
-            .try_into()
-            .expect("compiled release key has the Ed25519 length");
         Self {
             keys: vec![TrustedKey {
                 key_id: DEFAULT_KEY_ID.to_owned(),
-                public_key,
+                public_key: DEFAULT_PUBLIC_KEY,
                 status: KeyStatus::Active,
                 first_sequence: 1,
                 last_sequence: None,
