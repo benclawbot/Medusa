@@ -222,9 +222,7 @@ fn create_repository(arguments: CreateRepositoryArgs) -> Result<(), Box<dyn std:
         approve,
     )?;
 
-    let audit_path = prepare_repository_creation_audit(
-        request.bootstrap.as_ref().map(|bootstrap| bootstrap.path.as_path()),
-    )?;
+    let audit_path = prepare_repository_creation_audit()?;
     let full_name = format!("{}/{}", request.owner.trim(), request.name.trim());
     let service = GitHubService::enterprise(full_name, hostname, None, SystemExecutor);
     let receipt = service.create_repository(&request)?;
@@ -263,16 +261,18 @@ fn create_repository(arguments: CreateRepositoryArgs) -> Result<(), Box<dyn std:
     }
 }
 
-fn prepare_repository_creation_audit(
-    local_path: Option<&Path>,
-) -> Result<PathBuf, Box<dyn std::error::Error>> {
+fn prepare_repository_creation_audit() -> Result<PathBuf, Box<dyn std::error::Error>> {
     let root = if let Some(value) = env::var_os("MEDUSA_HOME") {
         PathBuf::from(value)
-    } else if let Some(local_path) = local_path {
-        local_path.join(".medusa")
     } else {
         env::current_dir()?.join(".medusa")
     };
+    prepare_repository_creation_audit_at(&root)
+}
+
+fn prepare_repository_creation_audit_at(
+    root: &Path,
+) -> Result<PathBuf, Box<dyn std::error::Error>> {
     let path = root.join("audit").join("github-repository-creation.jsonl");
     let parent = path.parent().ok_or_else(|| {
         medusa_core::MedusaError::new(
@@ -343,11 +343,12 @@ mod tests {
             visibility: RepositoryVisibility::Private,
             default_branch: "main".into(),
             created: true,
-            local_path: Some(directory.path().to_path_buf()),
+            local_path: Some(directory.path().join("project")),
             initial_commit: Some("abc123".into()),
         };
-        let path = prepare_repository_creation_audit(Some(directory.path())).expect("preflight");
+        let path = prepare_repository_creation_audit_at(directory.path()).expect("preflight");
         assert!(path.is_file());
+        assert!(!path.starts_with(receipt.local_path.as_ref().expect("local path")));
         append_repository_creation_audit(&path, &receipt, &[]).expect("persist");
         let content = fs::read_to_string(path).expect("read");
         assert_eq!(content.lines().count(), 1);
