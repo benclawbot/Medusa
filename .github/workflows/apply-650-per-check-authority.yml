@@ -30,6 +30,7 @@ jobs:
           set -euo pipefail
           python3 scripts/apply-650-per-check-authority.py
           python3 scripts/fix-650-per-check-authority.py
+          python3 scripts/fix-650-per-check-fixture.py
       - name: Validate per-check authority
         shell: bash
         run: |
