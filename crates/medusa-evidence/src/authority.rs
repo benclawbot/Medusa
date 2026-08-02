@@ -299,7 +299,7 @@ mod tests {
         let plan = VerificationPlanner::plan(directory.path(), "repo", "commit", &components, &[])
             .unwrap();
         let record = verified_observation("commands were reported as passing");
-        let checks = plan
+        let checks: Vec<VerificationCheckReceipt> = plan
             .checks
             .iter()
             .map(|check| {
@@ -330,7 +330,7 @@ mod tests {
         let plan = VerificationPlanner::plan(directory.path(), "repo", "commit", &components, &[])
             .unwrap();
         let record = verified_observation("browser checks were reported as passing");
-        let checks = plan
+        let checks: Vec<VerificationCheckReceipt> = plan
             .checks
             .iter()
             .map(|check| {
