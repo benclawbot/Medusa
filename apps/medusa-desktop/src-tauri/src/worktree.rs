@@ -1,10 +1,11 @@
 use std::{
     fs,
     path::{Path, PathBuf},
-    process::Command,
 };
 
 use serde::Serialize;
+
+use crate::desktop_command::hidden_command;
 
 #[derive(Debug, Default, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -45,7 +46,7 @@ pub enum DesktopWorktreeChange {
 #[tauri::command]
 pub fn runtime_read_worktree(repo: String) -> Result<DesktopWorktreeStatus, String> {
     let repo = canonical_repo(&repo)?;
-    let output = Command::new("git")
+    let output = hidden_command("git")
         .args([
             "status",
             "--porcelain=v2",
