@@ -390,8 +390,6 @@ impl WorkerManager {
         Ok(commit_tree == head_tree)
     }
 
-
-
     /// Returns the immutable tree identifier for a prepared commit.
     pub fn commit_tree(&self, commit: &str) -> MedusaResult<String> {
         if commit.trim().is_empty() {
@@ -407,7 +405,14 @@ impl WorkerManager {
         }
         git_stdout(
             &self.repo,
-            &["diff", "--binary", "--full-index", base_commit, commit, "--"],
+            &[
+                "diff",
+                "--binary",
+                "--full-index",
+                base_commit,
+                commit,
+                "--",
+            ],
         )
     }
 
@@ -422,7 +427,9 @@ impl WorkerManager {
     /// Materializes an immutable prepared commit in a detached verification worktree.
     pub fn materialize_detached_commit(&self, commit: &str, path: &Path) -> MedusaResult<()> {
         if commit.trim().is_empty() || path.as_os_str().is_empty() || path.exists() {
-            return Err(invalid("detached verification worktree requires a new path and commit"));
+            return Err(invalid(
+                "detached verification worktree requires a new path and commit",
+            ));
         }
         if let Some(parent) = path.parent() {
             fs::create_dir_all(parent)?;
