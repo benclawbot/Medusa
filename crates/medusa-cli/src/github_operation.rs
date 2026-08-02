@@ -61,7 +61,10 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
     let request = read_request(&cli.request)?;
     request.validate()?;
 
-    let repository_directory = cli.repository_directory.unwrap_or(env::current_dir()?);
+    let repository_directory = cli
+        .repository_directory
+        .clone()
+        .unwrap_or(env::current_dir()?);
     if !repository_directory.is_dir() {
         return Err(medusa_core::MedusaError::new(
             medusa_core::ErrorCode::InvalidInput,
