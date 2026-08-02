@@ -9,9 +9,11 @@ use medusa_core::ErrorCode;
 use super::*;
 use crate::{CommandExecutor, CommandOutput, GitHubService};
 
+type RecordedCalls = Arc<Mutex<Vec<(String, Vec<String>)>>>;
+
 #[derive(Clone, Debug, Default)]
 struct FakeExecutor {
-    calls: Arc<Mutex<Vec<(String, Vec<String>, Vec<u8>)>>>,
+    calls: RecordedCalls,
     outputs: Arc<Mutex<Vec<CommandOutput>>>,
 }
 
@@ -34,7 +36,7 @@ impl CommandExecutor for FakeExecutor {
         self.calls
             .lock()
             .expect("calls")
-            .push((program.into(), arguments.to_vec(), Vec::new()));
+            .push((program.into(), arguments.to_vec()));
         self.outputs
             .lock()
             .expect("outputs")
@@ -95,7 +97,6 @@ fn rest_backend_sends_json_without_shell_or_token_arguments() {
             .iter()
             .any(|value| value == "sh" || value == "cmd")
     );
-    assert!(calls[0].2.is_empty());
 }
 
 #[test]
