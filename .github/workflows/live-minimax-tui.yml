@@ -49,8 +49,8 @@ jobs:
           CARGO_TARGET_DIR: ${{ runner.temp }}/live-minimax-tui-cargo-target
         run: |
           # Keep the fixture outside both the checkout and /tmp: Linux containment replaces /tmp.
-          # The acceptance prompt is deliberately operational so the live gate tests editing and
-          # verification rather than spending its bounded provider budget rediscovering the fixture.
+          # Preserve the runner HOME so the real Rust toolchain remains usable. The saved MiniMax
+          # profile is isolated through XDG_CONFIG_HOME rather than a synthetic HOME directory.
           python3 - <<'PY'
           from pathlib import Path
           import re
@@ -69,6 +69,7 @@ jobs:
           if count != 1:
               raise SystemExit("could not replace live TUI prompt")
           text = text.replace("max_turns = 8", "max_turns = 24")
+          text = text.replace("        HOME=str(home),\n", "")
           path.write_text(text, encoding="utf-8")
           PY
           python3 scripts/live-tui-minimax-e2e.py \
