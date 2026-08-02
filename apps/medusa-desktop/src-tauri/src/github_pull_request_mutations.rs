@@ -1,6 +1,6 @@
-use std::process::Command;
-
 use serde::{Deserialize, Serialize};
+
+use crate::desktop_command::hidden_command;
 
 const MAX_TITLE_BYTES: usize = 1024;
 const MAX_BODY_BYTES: usize = 256 * 1024;
@@ -274,7 +274,7 @@ fn gh_json<T: for<'de> Deserialize<'de>>(
     endpoint: &str,
     extra_args: &[&str],
 ) -> Result<T, String> {
-    let output = Command::new("gh")
+    let output = hidden_command("gh")
         .args(["api", "--hostname", hostname, endpoint])
         .args(extra_args)
         .output()
