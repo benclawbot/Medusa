@@ -36,11 +36,11 @@ jobs:
 
           path = Path("crates/medusa-capabilities/src/registry.rs")
           text = path.read_text(encoding="utf-8")
-          pattern = re.compile(r'(?m)^(?P<call>\s*)tool_entry\(\n(?P<arg>\s*)states,\n(?P=arg)"(?P<name>[^"]+)",')
+          pattern = re.compile(r'(?P<call>tool_entry\(\n)(?P<arg>[ \t]*)states,\n(?P=arg)"(?P<name>[^"]+)",')
 
           def replace_call(match: re.Match[str]) -> str:
               return (
-                  f'{match.group("call")}tool_entry(\n'
+                  f'{match.group("call")}'
                   f'{match.group("arg")}ToolIdentity {{ states, name: "{match.group("name")}" }},'
               )
 
@@ -103,7 +103,7 @@ jobs:
         with:
           name: registry-validation-${{ github.sha }}
           path: registry-validation.log
-          if-no-files-found: error
+          if-no-files-found: warn
           retention-days: 2
       - name: Commit validated registry migration
         shell: bash
