@@ -93,11 +93,7 @@ impl<E: CommandExecutor> GitHubService<E> {
                 let mut receipt = self
                     .inspect_repository(&qualified, true)?
                     .ok_or_else(|| internal_error("created repository could not be inspected"))?;
-                self.rename_default_branch_if_needed(
-                    &full_name,
-                    request,
-                    &receipt.default_branch,
-                )?;
+                self.rename_default_branch_if_needed(&full_name, request, &receipt.default_branch)?;
                 receipt = self
                     .inspect_repository(&qualified, true)?
                     .ok_or_else(|| internal_error("created repository could not be inspected"))?;
@@ -116,9 +112,11 @@ impl<E: CommandExecutor> GitHubService<E> {
         let prepared = self.prepare_local_repository(request, &bootstrap, true)?;
         self.create_from_local(&qualified, request, &prepared)?;
         let recovery_url = self.web_url_for(&full_name);
-        self.inspect_repository(&qualified, true)?
-            .ok_or_else(|| internal_error("created repository could not be inspected"))
-            .map_err(|error| partial_failure(&recovery_url, error))
+        (|| {
+            self.inspect_repository(&qualified, true)?
+                .ok_or_else(|| internal_error("created repository could not be inspected"))
+        })()
+        .map_err(|error| partial_failure(&recovery_url, error))
     }
 
     fn create_remote_initialized(
