@@ -14,6 +14,9 @@ use medusa_evidence::{
 };
 use sha2::{Digest, Sha256};
 
+const COMMAND_PREVIEW_MAX_BYTES: usize = 4 * 1024;
+const COMMAND_PREVIEW_MAX_LINES: usize = 32;
+
 use crate::verification::{
     ExecutedVerificationCommand, VerificationResult, execute_verification_command,
     required_browser_verification,
@@ -240,6 +243,8 @@ fn materialize_command(
         artifacts,
         reads,
     )?;
+    let mut preview_details = command_output_preview("stdout", &executed.stdout);
+    preview_details.extend(command_output_preview("stderr", &executed.stderr));
     let command = CommandReceipt::new(
         check,
         executed.exit_code,
@@ -267,7 +272,7 @@ fn materialize_command(
         sources,
     )
     .map_err(evidence_error)?;
-    let details = vec![
+    let mut details = vec![
         format!(
             "command_program={}",
             check.program.as_deref().unwrap_or_default()
@@ -278,6 +283,7 @@ fn materialize_command(
         format!("command_timed_out={}", command.timed_out),
         format!("command_duration_ms={}", command.duration_ms),
     ];
+    details.extend(preview_details);
     let material = CheckMaterial {
         passed: command.passed,
         command: Some(command.clone()),
@@ -457,6 +463,77 @@ fn store_bytes(
     Ok((id, Some(source)))
 }
 
+fn command_output_preview(stream: &str, bytes: &[u8]) -> Vec<String> {
+    if bytes.is_empty() {
+        return Vec::new();
+    }
+    let text = String::from_utf8_lossy(bytes);
+    let mut lines = Vec::new();
+    let mut remaining = COMMAND_PREVIEW_MAX_BYTES;
+    let mut source_lines = text.lines();
+    for source in source_lines.by_ref().take(COMMAND_PREVIEW_MAX_LINES) {
+        if remaining == 0 {
+            break;
+        }
+        let normalized = source
+            .chars()
+            .map(|character| {
+                if character == '\t' {
+                    ' '
+                } else if character.is_control() {
+                    '�'
+                } else {
+                    character
+                }
+            })
+            .collect::<String>();
+        let preview = if secret_like(&normalized) {
+            "[redacted secret-like output]".to_owned()
+        } else {
+            truncate_utf8(&normalized, remaining)
+        };
+        remaining = remaining.saturating_sub(preview.len());
+        lines.push(format!(
+            "command_{stream}_preview_non_authoritative={preview}"
+        ));
+    }
+    if source_lines.next().is_some()
+        || text.len() > COMMAND_PREVIEW_MAX_BYTES
+        || lines.len() == COMMAND_PREVIEW_MAX_LINES
+    {
+        lines.push(format!(
+            "command_{stream}_preview_non_authoritative=[truncated; full output is stored as a content-addressed artifact]"
+        ));
+    }
+    lines
+}
+
+fn truncate_utf8(value: &str, max_bytes: usize) -> String {
+    if value.len() <= max_bytes {
+        return value.to_owned();
+    }
+    let mut end = max_bytes;
+    while end > 0 && !value.is_char_boundary(end) {
+        end -= 1;
+    }
+    value[..end].to_owned()
+}
+
+fn secret_like(value: &str) -> bool {
+    let lower = value.to_ascii_lowercase();
+    [
+        "api_key",
+        "apikey",
+        "authorization:",
+        "bearer ",
+        "password=",
+        "secret=",
+        "token=",
+    ]
+    .iter()
+    .any(|marker| lower.contains(marker))
+}
+
 fn rejected_material(reason: String) -> CheckMaterial {
     CheckMaterial {
         passed: false,
@@ -532,6 +609,28 @@ fn invalid(message: impl Into<String>) -> MedusaError {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn command_preview_is_bounded_and_redacts_secret_like_lines() {
+        let long = "x".repeat(COMMAND_PREVIEW_MAX_BYTES + 512);
+        let output = format!("verified-value-42\ntoken=do-not-persist\n{long}\nextra-line");
+        let preview = command_output_preview("stdout", output.as_bytes());
+        assert!(
+            preview
+                .iter()
+                .any(|line| line.contains("verified-value-42"))
+        );
+        assert!(
+            preview
+                .iter()
+                .any(|line| line.contains("[redacted secret-like output]"))
+        );
+        assert!(!preview.iter().any(|line| line.contains("do-not-persist")));
+        assert!(preview.iter().any(|line| line.contains("[truncated;")));
+        assert!(
+            preview.iter().map(String::len).sum::<usize>() < COMMAND_PREVIEW_MAX_BYTES + 2 * 1024
+        );
+    }
 
     #[test]
     fn corrupt_nonempty_json_fails_authoritative_receipt() {
