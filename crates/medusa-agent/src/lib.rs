@@ -38,9 +38,10 @@ pub use team::{
 pub use transaction::{
     FileMutation, TransactionOutcome, TransactionPreview, apply_atomic, preview,
 };
-pub use verification::{VerificationResult, targeted_verification};
+pub use verification::VerificationResult;
 pub use verification_authority::{
     AuthoritativeVerificationResult, authoritative_verification_for_components,
+    authoritative_verification_for_components_at,
 };
 pub use worker_execution::{
     LeasedAssignment, TeamTaskView, WorkerCompletion, WorkerExecutionController,
