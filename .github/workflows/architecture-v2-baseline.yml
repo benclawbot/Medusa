@@ -57,7 +57,7 @@ jobs:
       - name: Validate living architecture index
         run: python scripts/check-architecture-index.py
       - name: Build real production CLI entrypoint
-        run: cargo build --locked --bin medusa
+        run: cargo build --bin medusa
       - name: Run production entrypoint and known-failure conformance
         shell: bash
         run: |
