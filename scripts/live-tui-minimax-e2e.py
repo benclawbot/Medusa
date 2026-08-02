@@ -79,8 +79,8 @@ def initialize_repository(repo: Path) -> None:
         "pub const RESPONSE: &str = \"TODO\";\n\n"
         "pub fn response() -> &'static str {\n    RESPONSE\n}\n\n"
         "#[cfg(test)]\nmod tests {\n    use super::*;\n\n"
-        "    #[test]\n    fn response_matches_acceptance_marker() {\n"
-        f"        assert_eq!(response(), \"{EXPECTED}\");\n"
+        "    #[test]\n    fn response_is_not_empty() {\n"
+        "        assert!(!response().is_empty());\n"
         "    }\n}\n",
         encoding="utf-8",
     )
@@ -154,19 +154,50 @@ def terminate(pid: int, fd: int) -> int | None:
     return os.waitstatus_to_exitcode(status)
 
 
-def durable_response_paths(repo: Path) -> list[Path]:
+def assistant_text_contains(messages: object, marker: str) -> bool:
+    if not isinstance(messages, list):
+        return False
+    for message in messages:
+        if not isinstance(message, dict) or message.get("role") != "assistant":
+            continue
+        content = message.get("content", [])
+        if not isinstance(content, list):
+            continue
+        for block in content:
+            if (
+                isinstance(block, dict)
+                and block.get("type") == "text"
+                and marker in str(block.get("text", ""))
+            ):
+                return True
+    return False
+
+
+def session_evidence(repo: Path) -> tuple[list[Path], list[Path]]:
     medusa = repo / ".medusa"
     if not medusa.is_dir():
-        return []
-    matched: list[Path] = []
+        return [], []
+    response_paths: list[Path] = []
+    assistant_marker_paths: list[Path] = []
     for path in medusa.rglob("*.json"):
         try:
-            text = path.read_text(encoding="utf-8")
-        except OSError:
+            data = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
             continue
-        if EXPECTED in text and "model_response_received" in text:
-            matched.append(path)
-    return matched
+        if not isinstance(data, dict):
+            continue
+        events = data.get("events", [])
+        response_seen = isinstance(events, list) and any(
+            isinstance(event, dict)
+            and isinstance(event.get("payload"), dict)
+            and event["payload"].get("type") == "model_response_received"
+            for event in events
+        )
+        if response_seen:
+            response_paths.append(path)
+        if assistant_text_contains(data.get("messages"), EXPECTED):
+            assistant_marker_paths.append(path)
+    return response_paths, assistant_marker_paths
 
 
 def source_is_correct(repo: Path) -> bool:
@@ -197,8 +228,7 @@ def copy_regular_tree(source: Path, destination: Path) -> None:
             continue
         if not stat.S_ISREG(mode):
             continue
-        relative = path.relative_to(source)
-        target = destination / relative
+        target = destination / path.relative_to(source)
         target.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(path, target)
 
@@ -221,12 +251,12 @@ def capture_repository_evidence(repo: Path, output_dir: Path) -> list[str]:
                 timeout=120,
             )
             (output_dir / name).write_text(result.stdout, encoding="utf-8")
-        except Exception as error:  # evidence collection must not hide the primary result
+        except Exception as error:
             errors.append(f"{name}: {error}")
-    sessions = repo / ".medusa"
-    if sessions.is_dir():
+    medusa = repo / ".medusa"
+    if medusa.is_dir():
         try:
-            copy_regular_tree(sessions, output_dir / "medusa-state")
+            copy_regular_tree(medusa, output_dir / "medusa-state")
         except Exception as error:
             errors.append(f"medusa-state: {error}")
     return errors
@@ -288,6 +318,8 @@ def main() -> int:
     rendered = False
     exit_code: int | None = None
     error: str | None = None
+    source_change_offset: int | None = None
+    latest_chunk_start = 0
     try:
         while time.monotonic() - started < args.timeout_seconds:
             exited, code = process_exited(pid)
@@ -297,6 +329,7 @@ def main() -> int:
             ready, _, _ = select.select([fd], [], [], 0.1)
             if ready:
                 try:
+                    latest_chunk_start = len(transcript)
                     transcript.extend(os.read(fd, 65536))
                 except BlockingIOError:
                     pass
@@ -308,11 +341,27 @@ def main() -> int:
                 time.sleep(0.2)
                 os.write(fd, b"\r")
                 submitted = True
+
             text = transcript.decode("utf-8", errors="replace")
             if "Task failed" in text:
                 error = "TUI rendered a task failure before a durable MiniMax completion"
                 break
-            if submitted and EXPECTED in text and source_is_correct(repo) and durable_response_paths(repo):
+            if source_change_offset is None and source_is_correct(repo):
+                source_change_offset = latest_chunk_start
+
+            response_paths, assistant_paths = session_evidence(repo)
+            post_change_text = (
+                transcript[source_change_offset:].decode("utf-8", errors="replace")
+                if source_change_offset is not None
+                else ""
+            )
+            if (
+                submitted
+                and source_change_offset is not None
+                and EXPECTED in post_change_text
+                and response_paths
+                and assistant_paths
+            ):
                 rendered = True
                 break
         if not rendered and error is None:
@@ -330,7 +379,7 @@ def main() -> int:
 
     text = sanitize(transcript.decode("utf-8", errors="replace"), api_key)
     (output_dir / "terminal.log").write_text(text, encoding="utf-8")
-    durable_paths = durable_response_paths(repo)
+    response_paths, assistant_paths = session_evidence(repo)
     source_correct = source_is_correct(repo)
     tests_passed = cargo_test_passes(repo) if source_correct else False
     evidence_errors = capture_repository_evidence(repo, output_dir)
@@ -339,17 +388,19 @@ def main() -> int:
         error = "MiniMax changed the file but cargo test did not pass"
 
     summary = {
-        "schema_version": 2,
+        "schema_version": 3,
         "result": "pass" if rendered and error is None and tests_passed else "fail",
         "provider": "minimax",
         "model": "MiniMax-M3",
         "route": "saved-profile-to-interactive-tui",
         "prompt_submitted": submitted,
-        "assistant_marker_rendered": EXPECTED in text,
+        "post_change_marker_rendered": rendered,
+        "assistant_marker_persisted": bool(assistant_paths),
         "source_change_verified": source_correct,
         "cargo_test_passed": tests_passed,
-        "durable_response_observed": bool(durable_paths),
-        "durable_response_files": [str(path.relative_to(repo)) for path in durable_paths],
+        "durable_response_observed": bool(response_paths),
+        "durable_response_files": [str(path.relative_to(repo)) for path in response_paths],
+        "assistant_marker_files": [str(path.relative_to(repo)) for path in assistant_paths],
         "elapsed_seconds": int(time.monotonic() - started),
         "exit_code": exit_code,
         "evidence_errors": evidence_errors,
