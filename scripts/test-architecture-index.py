@@ -28,6 +28,10 @@ class Fixture:
         self.root = Path(self.temp.name)
         self.write("Cargo.toml", '[workspace]\nresolver = "2"\nmembers = ["crates/medusa-core"]\n')
         self.write("crates/medusa-core/Cargo.toml", '[package]\nname = "medusa-core"\nversion = "0.0.0"\n')
+        self.write(
+            "docs/architecture/owners.json",
+            json.dumps({"schema_version": 1, "owners": {"medusa-core": "foundation"}}),
+        )
         for path in (
             "docs/ARCHITECTURE.md",
             "docs/CONTRIBUTOR-ARCHITECTURE.md",
