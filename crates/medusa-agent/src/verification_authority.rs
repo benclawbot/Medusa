@@ -1,0 +1,767 @@
+use std::{
+    collections::BTreeMap,
+    fs,
+    path::{Path, PathBuf},
+    process::Command,
+};
+
+use medusa_core::{ErrorCategory, ErrorCode, MedusaError, MedusaResult};
+use medusa_evidence::{
+    ArtifactId, ArtifactMetadata, ArtifactReadReceipt, ArtifactStore, ChangeKind, ChangedComponent,
+    CommandReceipt, EvidenceBundle, EvidenceKind, EvidenceRecord, EvidenceSource,
+    VerificationCheck, VerificationCheckKind, VerificationCheckReceipt, VerificationPlanner,
+    VerificationReceipt, VerificationStatus, validate_artifact_semantics,
+};
+use sha2::{Digest, Sha256};
+
+const COMMAND_PREVIEW_MAX_BYTES: usize = 4 * 1024;
+const COMMAND_PREVIEW_MAX_LINES: usize = 32;
+
+use crate::verification::{
+    ExecutedVerificationCommand, VerificationResult, execute_verification_command,
+    required_browser_verification,
+};
+
+#[derive(Clone, Debug)]
+pub struct AuthoritativeVerificationResult {
+    pub receipt: VerificationReceipt,
+    pub summary: Vec<String>,
+}
+
+#[derive(Clone)]
+struct CheckMaterial {
+    passed: bool,
+    command: Option<CommandReceipt>,
+    evidence_ids: Vec<medusa_evidence::EvidenceId>,
+    artifact_ids: Vec<ArtifactId>,
+    details: Vec<String>,
+}
+
+pub fn prepare_components_for_verification(
+    repo: &Path,
+    components: &[ChangedComponent],
+) -> MedusaResult<()> {
+    let mut rust_paths = components
+        .iter()
+        .filter(|component| component.kind != ChangeKind::Deleted)
+        .map(|component| component.path.as_str())
+        .filter(|path| Path::new(path).extension().and_then(|value| value.to_str()) == Some("rs"))
+        .filter(|path| repo.join(path).is_file())
+        .map(str::to_owned)
+        .collect::<Vec<_>>();
+    rust_paths.sort();
+    rust_paths.dedup();
+    if rust_paths.is_empty() {
+        return Ok(());
+    }
+    let edition = rust_edition(repo);
+    let mut args = vec!["--edition".to_owned(), edition.to_owned()];
+    args.extend(rust_paths.iter().cloned());
+    let result = execute_verification_command(repo, "rustfmt", &args)?;
+    if !result.passed {
+        let stdout = bounded_failure_text(&result.stdout);
+        let stderr = bounded_failure_text(&result.stderr);
+        return Err(MedusaError::new(
+            ErrorCode::ToolExecutionFailed,
+            ErrorCategory::Execution,
+            format!(
+                "trusted rustfmt preparation failed for {}: stdout={stdout}; stderr={stderr}",
+                rust_paths.join(",")
+            ),
+        ));
+    }
+    Ok(())
+}
+
+pub(crate) fn prepare_paths_for_verification(repo: &Path, paths: &[String]) -> MedusaResult<()> {
+    let components = paths
+        .iter()
+        .map(|path| ChangedComponent::new(ChangeKind::Modified, path.clone()))
+        .collect::<std::result::Result<Vec<_>, _>>()
+        .map_err(evidence_error)?;
+    prepare_components_for_verification(repo, &components)
+}
+
+fn rust_edition(repo: &Path) -> &'static str {
+    let manifest = fs::read_to_string(repo.join("Cargo.toml")).unwrap_or_default();
+    for edition in ["2024", "2021", "2018"] {
+        if manifest.contains(&format!("edition = \"{edition}\""))
+            || manifest.contains(&format!("edition=\"{edition}\""))
+        {
+            return edition;
+        }
+    }
+    "2021"
+}
+
+fn bounded_failure_text(bytes: &[u8]) -> String {
+    let text = String::from_utf8_lossy(bytes);
+    truncate_utf8(text.trim(), 2048)
+}
+
+pub fn authoritative_verification_for_components(
+    repo: &Path,
+    repository_fingerprint: &str,
+    commit: &str,
+    components: &[ChangedComponent],
+) -> MedusaResult<AuthoritativeVerificationResult> {
+    authoritative_verification_for_components_at(
+        repo,
+        &repo.join(".medusa/evidence"),
+        repository_fingerprint,
+        commit,
+        components,
+    )
+}
+
+pub fn authoritative_verification_for_components_at(
+    repo: &Path,
+    evidence_root: &Path,
+    repository_fingerprint: &str,
+    commit: &str,
+    components: &[ChangedComponent],
+) -> MedusaResult<AuthoritativeVerificationResult> {
+    if repository_fingerprint.trim().is_empty() || commit.trim().is_empty() {
+        return Err(invalid(
+            "authoritative verification requires repository and commit identity",
+        ));
+    }
+    let plan = VerificationPlanner::plan(repo, repository_fingerprint, commit, components, &[])
+        .map_err(evidence_error)?;
+    let store_root = evidence_root.join(short_hash(&(repository_fingerprint.to_owned() + commit)));
+    let store = ArtifactStore::open(&store_root).map_err(evidence_error)?;
+    let mut artifacts = BTreeMap::<ArtifactId, ArtifactMetadata>::new();
+    let mut reads = Vec::<ArtifactReadReceipt>::new();
+    let mut commands = Vec::<CommandReceipt>::new();
+    let mut records = Vec::<EvidenceRecord>::new();
+    let mut checks = Vec::with_capacity(plan.checks.len());
+    let mut browser_material: Option<CheckMaterial> = None;
+
+    for check in &plan.checks {
+        let material = match check.kind {
+            VerificationCheckKind::ArtifactSemantic => semantic_material(
+                repo,
+                repository_fingerprint,
+                commit,
+                &plan.components,
+                &store,
+                &mut artifacts,
+                &mut reads,
+                &mut records,
+            )?,
+            VerificationCheckKind::BrowserBehavior | VerificationCheckKind::Accessibility => {
+                if let Some(material) = browser_material.clone() {
+                    material
+                } else {
+                    let material = browser_material_for(
+                        repo,
+                        repository_fingerprint,
+                        commit,
+                        &store,
+                        &mut artifacts,
+                        &mut reads,
+                        &mut records,
+                    )?;
+                    browser_material = Some(material.clone());
+                    material
+                }
+            }
+            _ => command_material(
+                repo,
+                repository_fingerprint,
+                commit,
+                check,
+                &store,
+                &mut artifacts,
+                &mut reads,
+                &mut commands,
+                &mut records,
+            )?,
+        };
+        let mut details = material.details;
+        details.push(format!("planner_reason={}", check.reason));
+        checks.push(VerificationCheckReceipt::new(
+            check,
+            material.passed,
+            material.command,
+            material.evidence_ids,
+            material.artifact_ids,
+            details,
+        ));
+    }
+
+    let mut bundle = EvidenceBundle::new(repository_fingerprint, commit);
+    bundle.artifacts = artifacts.into_values().collect();
+    bundle.reads = reads;
+    bundle.commands = commands;
+    bundle.records = records;
+    bundle.refresh();
+    let receipt = VerificationReceipt::new(plan, checks, bundle).map_err(evidence_error)?;
+    let summary = receipt.summary_lines();
+    fs::create_dir_all(&store_root)?;
+    fs::write(
+        store_root.join("verification-receipt.json"),
+        serde_json::to_vec_pretty(&receipt).map_err(|error| {
+            MedusaError::new(
+                ErrorCode::InternalInvariant,
+                ErrorCategory::Internal,
+                error.to_string(),
+            )
+        })?,
+    )?;
+    Ok(AuthoritativeVerificationResult { receipt, summary })
+}
+
+pub(crate) fn authoritative_verification_for_paths(
+    repo: &Path,
+    paths: &[String],
+) -> MedusaResult<VerificationResult> {
+    let components = paths
+        .iter()
+        .map(|path| ChangedComponent::new(ChangeKind::Modified, path.clone()))
+        .collect::<std::result::Result<Vec<_>, _>>()
+        .map_err(evidence_error)?;
+    let commit = git_stdout(repo, &["rev-parse", "HEAD"]).unwrap_or_else(|| "worktree".to_owned());
+    let repository_fingerprint = short_hash(&format!("{}:{commit}", repo.display()));
+    let result = authoritative_verification_for_components(
+        repo,
+        &repository_fingerprint,
+        &commit,
+        &components,
+    )?;
+    Ok(VerificationResult {
+        passed: result.receipt.passed,
+        evidence: result.summary,
+    })
+}
+
+#[allow(clippy::too_many_arguments)]
+fn command_material(
+    repo: &Path,
+    repository_fingerprint: &str,
+    commit: &str,
+    check: &VerificationCheck,
+    store: &ArtifactStore,
+    artifacts: &mut BTreeMap<ArtifactId, ArtifactMetadata>,
+    reads: &mut Vec<ArtifactReadReceipt>,
+    commands: &mut Vec<CommandReceipt>,
+    records: &mut Vec<EvidenceRecord>,
+) -> MedusaResult<CheckMaterial> {
+    let Some(program) = check.program.as_deref() else {
+        return Ok(rejected_material(format!(
+            "verification check {} has no executable adapter",
+            check.id
+        )));
+    };
+    let working_directory = if check.working_directory == "." {
+        repo.to_path_buf()
+    } else {
+        repo.join(&check.working_directory)
+    };
+    let executed = match execute_verification_command(&working_directory, program, &check.args) {
+        Ok(executed) => executed,
+        Err(error) => return Ok(rejected_material(error.to_string())),
+    };
+    materialize_command(
+        repository_fingerprint,
+        commit,
+        check,
+        executed,
+        store,
+        artifacts,
+        reads,
+        commands,
+        records,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn materialize_command(
+    repository_fingerprint: &str,
+    commit: &str,
+    check: &VerificationCheck,
+    executed: ExecutedVerificationCommand,
+    store: &ArtifactStore,
+    artifacts: &mut BTreeMap<ArtifactId, ArtifactMetadata>,
+    reads: &mut Vec<ArtifactReadReceipt>,
+    commands: &mut Vec<CommandReceipt>,
+    records: &mut Vec<EvidenceRecord>,
+) -> MedusaResult<CheckMaterial> {
+    let (stdout_id, stdout_source) = store_bytes(
+        store,
+        "text/plain; charset=utf-8",
+        "medusa-verification-command-stdout",
+        &executed.stdout,
+        "medusa-verification-command-review",
+        artifacts,
+        reads,
+    )?;
+    let (stderr_id, stderr_source) = store_bytes(
+        store,
+        "text/plain; charset=utf-8",
+        "medusa-verification-command-stderr",
+        &executed.stderr,
+        "medusa-verification-command-review",
+        artifacts,
+        reads,
+    )?;
+    let mut preview_details = command_output_preview("stdout", &executed.stdout);
+    preview_details.extend(command_output_preview("stderr", &executed.stderr));
+    let command = CommandReceipt::new(
+        check,
+        executed.exit_code,
+        executed.timed_out,
+        executed.duration_ms,
+        stdout_id.clone(),
+        stderr_id.clone(),
+    );
+    let mut sources = vec![EvidenceSource::CommandReceipt {
+        receipt_id: command.id.clone(),
+    }];
+    sources.extend(stdout_source);
+    sources.extend(stderr_source);
+    let record = EvidenceRecord::new(
+        EvidenceKind::Observation,
+        format!("verification command {} completed", check.id),
+        repository_fingerprint,
+        commit,
+        "medusa-verification-command-runner",
+        if command.passed {
+            VerificationStatus::Verified
+        } else {
+            VerificationStatus::Rejected
+        },
+        sources,
+    )
+    .map_err(evidence_error)?;
+    let mut details = vec![
+        format!(
+            "command_program={}",
+            check.program.as_deref().unwrap_or_default()
+        ),
+        format!("command_args={}", check.args.join(" ")),
+        format!("command_working_directory={}", check.working_directory),
+        format!("command_exit_code={:?}", command.exit_code),
+        format!("command_timed_out={}", command.timed_out),
+        format!("command_duration_ms={}", command.duration_ms),
+    ];
+    details.extend(preview_details);
+    let material = CheckMaterial {
+        passed: command.passed,
+        command: Some(command.clone()),
+        evidence_ids: vec![record.id.clone()],
+        artifact_ids: vec![stdout_id, stderr_id],
+        details,
+    };
+    commands.push(command);
+    records.push(record);
+    Ok(material)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn browser_material_for(
+    repo: &Path,
+    repository_fingerprint: &str,
+    commit: &str,
+    store: &ArtifactStore,
+    artifacts: &mut BTreeMap<ArtifactId, ArtifactMetadata>,
+    reads: &mut Vec<ArtifactReadReceipt>,
+    records: &mut Vec<EvidenceRecord>,
+) -> MedusaResult<CheckMaterial> {
+    let result = match required_browser_verification(repo) {
+        Ok(result) => result,
+        Err(error) => return Ok(rejected_material(error.to_string())),
+    };
+    let evidence_bytes = result.evidence.join("\n").into_bytes();
+    let (evidence_id, source) = store_bytes(
+        store,
+        "text/plain; charset=utf-8",
+        "medusa-browser-verification",
+        &evidence_bytes,
+        "medusa-browser-verification-review",
+        artifacts,
+        reads,
+    )?;
+    let mut artifact_ids = vec![evidence_id];
+    for line in &result.evidence {
+        let Some(path) = line.strip_prefix("browser_screenshot=") else {
+            continue;
+        };
+        let screenshot = PathBuf::from(path);
+        if screenshot.is_file() {
+            let bytes = fs::read(&screenshot)?;
+            let (id, _) = store_bytes(
+                store,
+                media_type_for_path(&screenshot),
+                "medusa-browser-screenshot",
+                &bytes,
+                "medusa-browser-screenshot-review",
+                artifacts,
+                reads,
+            )?;
+            artifact_ids.push(id);
+        }
+    }
+    let record = EvidenceRecord::new(
+        EvidenceKind::Observation,
+        "required browser and accessibility verification completed",
+        repository_fingerprint,
+        commit,
+        "medusa-browser-verifier",
+        if result.passed {
+            VerificationStatus::Verified
+        } else {
+            VerificationStatus::Rejected
+        },
+        source.into_iter().collect(),
+    )
+    .map_err(evidence_error)?;
+    let material = CheckMaterial {
+        passed: result.passed,
+        command: None,
+        evidence_ids: vec![record.id.clone()],
+        artifact_ids,
+        details: result.evidence,
+    };
+    records.push(record);
+    Ok(material)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn semantic_material(
+    repo: &Path,
+    repository_fingerprint: &str,
+    commit: &str,
+    components: &[ChangedComponent],
+    store: &ArtifactStore,
+    artifacts: &mut BTreeMap<ArtifactId, ArtifactMetadata>,
+    reads: &mut Vec<ArtifactReadReceipt>,
+    records: &mut Vec<EvidenceRecord>,
+) -> MedusaResult<CheckMaterial> {
+    let mut passed = true;
+    let mut evidence_ids = Vec::new();
+    let mut artifact_ids = Vec::new();
+    let mut details = Vec::new();
+    for component in components {
+        if component.kind == ChangeKind::Deleted || !requires_semantic_artifact(component) {
+            continue;
+        }
+        let path = repo.join(&component.path);
+        let result = validate_artifact_semantics(&path).map_err(evidence_error)?;
+        passed &= result.passed;
+        details.push(format!(
+            "artifact_semantics={}:class={:?}:passed={}",
+            component.path, result.class, result.passed
+        ));
+        details.extend(result.details.iter().cloned());
+        if path.is_file() {
+            let bytes = fs::read(&path)?;
+            let (artifact_id, source) = store_bytes(
+                store,
+                media_type_for_path(&path),
+                "medusa-artifact-semantic-validator",
+                &bytes,
+                "medusa-artifact-semantic-review",
+                artifacts,
+                reads,
+            )?;
+            let record = EvidenceRecord::new(
+                EvidenceKind::Observation,
+                format!("semantic artifact validation for {}", component.path),
+                repository_fingerprint,
+                commit,
+                "medusa-artifact-semantic-validator",
+                if result.passed {
+                    VerificationStatus::Verified
+                } else {
+                    VerificationStatus::Rejected
+                },
+                source.into_iter().collect(),
+            )
+            .map_err(evidence_error)?;
+            artifact_ids.push(artifact_id);
+            evidence_ids.push(record.id.clone());
+            records.push(record);
+        }
+    }
+    Ok(CheckMaterial {
+        passed,
+        command: None,
+        evidence_ids,
+        artifact_ids,
+        details,
+    })
+}
+
+#[allow(clippy::too_many_arguments)]
+fn store_bytes(
+    store: &ArtifactStore,
+    media_type: &str,
+    producer: &str,
+    bytes: &[u8],
+    reader: &str,
+    artifacts: &mut BTreeMap<ArtifactId, ArtifactMetadata>,
+    reads: &mut Vec<ArtifactReadReceipt>,
+) -> MedusaResult<(ArtifactId, Option<EvidenceSource>)> {
+    let metadata = store
+        .put_bytes(media_type, producer, bytes)
+        .map_err(evidence_error)?;
+    let id = metadata.id.clone();
+    artifacts.insert(id.clone(), metadata.clone());
+    if metadata.byte_len == 0 {
+        return Ok((id, None));
+    }
+    let (_, read) = store
+        .read_range(&id, 0, metadata.byte_len, reader)
+        .map_err(evidence_error)?;
+    let source = EvidenceSource::ArtifactRange {
+        artifact_id: id.clone(),
+        read_receipt_id: read.id.clone(),
+        offset: read.offset,
+        length: read.length,
+        content_hash: read.content_hash.clone(),
+    };
+    reads.push(read);
+    Ok((id, Some(source)))
+}
+
+fn command_output_preview(stream: &str, bytes: &[u8]) -> Vec<String> {
+    if bytes.is_empty() {
+        return Vec::new();
+    }
+    let text = String::from_utf8_lossy(bytes);
+    let mut lines = Vec::new();
+    let mut remaining = COMMAND_PREVIEW_MAX_BYTES;
+    let mut source_lines = text.lines();
+    for source in source_lines.by_ref().take(COMMAND_PREVIEW_MAX_LINES) {
+        if remaining == 0 {
+            break;
+        }
+        let normalized = source
+            .chars()
+            .map(|character| {
+                if character == '\t' {
+                    ' '
+                } else if character.is_control() {
+                    '�'
+                } else {
+                    character
+                }
+            })
+            .collect::<String>();
+        let preview = if secret_like(&normalized) {
+            "[redacted secret-like output]".to_owned()
+        } else {
+            truncate_utf8(&normalized, remaining)
+        };
+        remaining = remaining.saturating_sub(preview.len());
+        lines.push(format!(
+            "command_{stream}_preview_non_authoritative={preview}"
+        ));
+    }
+    if source_lines.next().is_some()
+        || text.len() > COMMAND_PREVIEW_MAX_BYTES
+        || lines.len() == COMMAND_PREVIEW_MAX_LINES
+    {
+        lines.push(format!(
+            "command_{stream}_preview_non_authoritative=[truncated; full output is stored as a content-addressed artifact]"
+        ));
+    }
+    lines
+}
+
+fn truncate_utf8(value: &str, max_bytes: usize) -> String {
+    if value.len() <= max_bytes {
+        return value.to_owned();
+    }
+    let mut end = max_bytes;
+    while end > 0 && !value.is_char_boundary(end) {
+        end -= 1;
+    }
+    value[..end].to_owned()
+}
+
+fn secret_like(value: &str) -> bool {
+    let lower = value.to_ascii_lowercase();
+    [
+        "api_key",
+        "apikey",
+        "authorization:",
+        "bearer ",
+        "password=",
+        "secret=",
+        "token=",
+    ]
+    .iter()
+    .any(|marker| lower.contains(marker))
+}
+
+fn rejected_material(reason: String) -> CheckMaterial {
+    CheckMaterial {
+        passed: false,
+        command: None,
+        evidence_ids: Vec::new(),
+        artifact_ids: Vec::new(),
+        details: vec![format!("verification_error={reason}")],
+    }
+}
+
+fn requires_semantic_artifact(component: &ChangedComponent) -> bool {
+    component.generated
+        || Path::new(&component.path)
+            .extension()
+            .and_then(|extension| extension.to_str())
+            .is_some_and(|extension| {
+                matches!(
+                    extension.to_ascii_lowercase().as_str(),
+                    "html" | "json" | "png" | "pdf" | "zip" | "jar" | "docx" | "xlsx" | "pptx"
+                )
+            })
+}
+
+fn media_type_for_path(path: &Path) -> &'static str {
+    match path
+        .extension()
+        .and_then(|extension| extension.to_str())
+        .unwrap_or_default()
+        .to_ascii_lowercase()
+        .as_str()
+    {
+        "html" => "text/html; charset=utf-8",
+        "json" => "application/json",
+        "png" => "image/png",
+        "pdf" => "application/pdf",
+        "zip" | "jar" | "docx" | "xlsx" | "pptx" => "application/zip",
+        _ => "application/octet-stream",
+    }
+}
+
+fn git_stdout(repo: &Path, args: &[&str]) -> Option<String> {
+    let output = Command::new("git")
+        .args(args)
+        .current_dir(repo)
+        .output()
+        .ok()?;
+    output
+        .status
+        .success()
+        .then(|| String::from_utf8_lossy(&output.stdout).trim().to_owned())
+}
+
+fn short_hash(value: &str) -> String {
+    hex::encode(Sha256::digest(value.as_bytes()))
+}
+
+fn evidence_error(error: medusa_evidence::EvidenceError) -> MedusaError {
+    MedusaError::new(
+        ErrorCode::InternalInvariant,
+        ErrorCategory::Internal,
+        error.to_string(),
+    )
+}
+
+fn invalid(message: impl Into<String>) -> MedusaError {
+    MedusaError::new(
+        ErrorCode::InvalidConfiguration,
+        ErrorCategory::Validation,
+        message,
+    )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn trusted_rustfmt_preparation_normalizes_only_changed_rust_files() {
+        let directory = tempfile::tempdir().expect("tempdir");
+        fs::create_dir_all(directory.path().join("src")).expect("src");
+        fs::write(
+            directory.path().join("Cargo.toml"),
+            "[package]\nname = \"fixture\"\nversion = \"0.1.0\"\nedition = \"2024\"\n",
+        )
+        .expect("manifest");
+        fs::write(
+            directory.path().join("src/lib.rs"),
+            "pub fn value()->u32{1}\n\n",
+        )
+        .expect("source");
+        fs::write(directory.path().join("untouched.txt"), "unchanged\n").expect("untouched");
+        let component =
+            ChangedComponent::new(ChangeKind::Modified, "src/lib.rs").expect("component");
+        prepare_components_for_verification(directory.path(), &[component]).expect("preparation");
+        assert_eq!(
+            fs::read_to_string(directory.path().join("src/lib.rs")).expect("source"),
+            "pub fn value() -> u32 {\n    1\n}\n"
+        );
+        assert_eq!(
+            fs::read_to_string(directory.path().join("untouched.txt")).expect("untouched"),
+            "unchanged\n"
+        );
+    }
+
+    #[test]
+    fn command_preview_is_bounded_and_redacts_secret_like_lines() {
+        let long = "x".repeat(COMMAND_PREVIEW_MAX_BYTES + 512);
+        let output = format!("verified-value-42\ntoken=do-not-persist\n{long}\nextra-line");
+        let preview = command_output_preview("stdout", output.as_bytes());
+        assert!(
+            preview
+                .iter()
+                .any(|line| line.contains("verified-value-42"))
+        );
+        assert!(
+            preview
+                .iter()
+                .any(|line| line.contains("[redacted secret-like output]"))
+        );
+        assert!(!preview.iter().any(|line| line.contains("do-not-persist")));
+        assert!(preview.iter().any(|line| line.contains("[truncated;")));
+        assert!(
+            preview.iter().map(String::len).sum::<usize>() < COMMAND_PREVIEW_MAX_BYTES + 2 * 1024
+        );
+    }
+
+    #[test]
+    fn corrupt_nonempty_json_fails_authoritative_receipt() {
+        let directory = tempfile::tempdir().unwrap();
+        fs::write(directory.path().join("artifact.json"), "{broken}").unwrap();
+        let component = ChangedComponent::new(ChangeKind::Added, "artifact.json").unwrap();
+        let result = authoritative_verification_for_components(
+            directory.path(),
+            "repo",
+            "commit",
+            &[component],
+        )
+        .unwrap();
+        assert!(!result.receipt.passed);
+        assert!(result.receipt.validate().is_ok());
+    }
+
+    #[test]
+    fn each_planned_command_has_typed_outputs_and_receipt() {
+        let directory = tempfile::tempdir().unwrap();
+        fs::create_dir_all(directory.path().join(".medusa")).unwrap();
+        fs::write(directory.path().join("file.txt"), "changed\n").unwrap();
+        fs::write(
+            directory.path().join(".medusa/verification.json"),
+            r#"{"checks":[{"kind":"repository_defined","program":"rustc","args":["--version"],"working_directory":".","reason":"prove command receipts"}]}"#,
+        )
+        .unwrap();
+        let component = ChangedComponent::new(ChangeKind::Modified, "file.txt").unwrap();
+        let evidence_root = directory.path().join("durable-evidence");
+        let result = authoritative_verification_for_components_at(
+            directory.path(),
+            &evidence_root,
+            "repo",
+            "commit",
+            &[component],
+        )
+        .unwrap();
+        assert!(result.receipt.passed);
+        assert_eq!(result.receipt.evidence.commands.len(), 1);
+        assert!(result.receipt.checks[0].command.is_some());
+        assert!(result.receipt.evidence.artifacts.len() >= 2);
+        assert!(evidence_root.exists());
+    }
+}

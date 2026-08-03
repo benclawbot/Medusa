@@ -56,16 +56,34 @@ jobs:
           import re
 
           expected = "MEDUSA_TUI_MINIMAX_OK"
+          fixture = (
+              f'pub const RESPONSE: &str = "{expected}";\n\n'
+              "pub fn response() -> &'static str {\n    RESPONSE\n}\n\n"
+              "#[cfg(test)]\nmod tests {\n    use super::*;\n\n"
+              "    #[test]\n    fn response_is_not_empty() {\n"
+              "        assert!(!response().is_empty());\n"
+              "    }\n}\n"
+          )
+          instruction = (
+              "Implement the requested repository change in src/lib.rs. The implementation task must "
+              "use fs_write once on the relative path src/lib.rs and replace the complete file with the "
+              "exact UTF-8 content between the markers below, including the final newline. Planning tasks "
+              "should establish the exact scope, and review or verification tasks should evaluate the prepared "
+              "implementation and authoritative evidence according to their assigned roles.\n<<<FILE\n"
+              f"{fixture}"
+              ">>>FILE\nThe implementation task must not call shell_run, update_plan, team tools, or "
+              "git_checkpoint. Medusa's authoritative host verifier will run formatting, build, lint, and tests "
+              f"before integration. After fs_write succeeds, the implementation task must return exactly {expected}."
+          )
           path = Path("scripts/live-tui-minimax-e2e.py")
           text = path.read_text(encoding="utf-8")
-          prompt = f'''PROMPT = (
-              "Act immediately without planning or additional inspection. Use fs_write on the relative path "
-              "src/lib.rs and replace the complete file with the exact fixture content required to set "
-              "RESPONSE to {expected}, while preserving the existing response function and test unchanged. "
-              "Then use shell_run to run cargo test. Do not call update_plan, team tools, or git_checkpoint. "
-              "After the test passes, return exactly {expected}."
-          )'''
-          text, count = re.subn(r"PROMPT = \(.*?\n\)\nDEFAULT_TIMEOUT_SECONDS", prompt + "\nDEFAULT_TIMEOUT_SECONDS", text, flags=re.S)
+          prompt = f"PROMPT = {instruction!r}"
+          text, count = re.subn(
+              r"PROMPT = \(.*?\n\)\nDEFAULT_TIMEOUT_SECONDS",
+              lambda _: prompt + "\nDEFAULT_TIMEOUT_SECONDS",
+              text,
+              flags=re.S,
+          )
           if count != 1:
               raise SystemExit("could not replace live TUI prompt")
           text = text.replace("max_turns = 8", "max_turns = 24")

@@ -62,13 +62,6 @@ def function_bodies(text: str, function_name: str) -> list[str]:
     return bodies
 
 
-def verification_drops_changed_paths(root: Path) -> tuple[bool, str]:
-    coordinator = read_tree(root, "crates/medusa-runtime/src/mutating_worker_coordinator.rs")
-    signature = "targeted_verification(&worker.worktree)"
-    observed = signature in coordinator
-    return observed, f"legacy_signature_present={observed}: {signature}"
-
-
 def provider_capability_mismatch(root: Path) -> tuple[bool, str]:
     provider = read_tree(root, "crates/medusa-provider/src")
     markers = {
@@ -83,7 +76,6 @@ def provider_capability_mismatch(root: Path) -> tuple[bool, str]:
 
 
 PROBES: dict[str, Callable[[Path], tuple[bool, str]]] = {
-    "isolated-verification-drops-changed-paths": verification_drops_changed_paths,
     "provider-capability-mismatch": provider_capability_mismatch,
 }
 

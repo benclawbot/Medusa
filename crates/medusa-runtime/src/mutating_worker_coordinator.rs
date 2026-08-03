@@ -12,8 +12,10 @@ use std::{
 
 use medusa_agent::{
     AgentEngine, AgentExecutionPolicy, AgentUpdate, StepOutcome, TeamMemberContext, TeamRole,
-    TeamRuntime, WorkerExecutionController, targeted_verification,
+    TeamRuntime, WorkerExecutionController, authoritative_verification_for_components_at,
+    prepare_components_for_verification,
 };
+use medusa_evidence::{ChangedComponent, VerificationReceipt, changed_scope_fingerprint};
 use medusa_config::{Config, Mode};
 use medusa_multi_agent_scheduler::{Task, TaskState, Worker as ScheduledWorker};
 use medusa_provider::ConfiguredProvider;
@@ -52,6 +54,44 @@ fn bounded_implementer_turns(configured: u32) -> u32 {
     configured.clamp(1, IMPLEMENTER_TURN_LIMIT)
 }
 
+fn component_paths(components: &[ChangedComponent]) -> Vec<String> {
+    let mut paths = components
+        .iter()
+        .flat_map(ChangedComponent::all_paths)
+        .map(str::to_owned)
+        .collect::<Vec<_>>();
+    paths.sort();
+    paths.dedup();
+    paths
+}
+
+fn has_in_scope_repository_changes(
+    worker: &Worker,
+    allowed_write_paths: &[String],
+) -> Result<bool, String> {
+    if allowed_write_paths.is_empty() {
+        return Ok(false);
+    }
+    let output = std::process::Command::new("git")
+        .args(["status", "--porcelain=v1", "-z", "--untracked-files=all", "--"])
+        .args(allowed_write_paths)
+        .current_dir(&worker.worktree)
+        .output()
+        .map_err(|error| {
+            format!(
+                "failed to inspect bounded implementer worktree {}: {error}",
+                worker.worktree.display()
+            )
+        })?;
+    if !output.status.success() {
+        return Err(format!(
+            "git status failed while inspecting bounded implementer worktree: {}",
+            String::from_utf8_lossy(&output.stderr).trim()
+        ));
+    }
+    Ok(!output.stdout.is_empty())
+}
+
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
 enum ImplementationStatus {
@@ -75,7 +115,11 @@ struct DurableImplementationState {
     turns: u32,
     summary: String,
     changed_paths: Vec<String>,
+    #[serde(default)]
+    changed_components: Vec<ChangedComponent>,
     verification_evidence: Vec<String>,
+    #[serde(default)]
+    verification_receipt: Option<VerificationReceipt>,
     #[serde(default)]
     transaction_path: PathBuf,
     last_error: Option<String>,
@@ -91,7 +135,9 @@ pub struct ImplementationEvidence {
     pub turns: u32,
     pub summary: String,
     pub changed_paths: Vec<String>,
+    pub changed_components: Vec<ChangedComponent>,
     pub verification_evidence: Vec<String>,
+    pub verification_receipt: VerificationReceipt,
     pub base_head: String,
     pub prepared_commit: String,
     pub prepared_tree: String,
@@ -431,7 +477,9 @@ where
             turns: 0,
             summary: String::new(),
             changed_paths: Vec::new(),
+            changed_components: Vec::new(),
             verification_evidence: Vec::new(),
+            verification_receipt: None,
             transaction_path: state_path
                 .parent()
                 .unwrap_or_else(|| Path::new("."))
@@ -513,8 +561,8 @@ where
             }
             return Err(recorded);
         }
-        let changed_paths = match manager.changed_paths_since(&worker, &base_head) {
-            Ok(paths) => paths,
+        let changed_components = match manager.changed_components_since(&worker, &base_head) {
+            Ok(components) => components,
             Err(error) => {
                 let retryable = attempt < MAX_ATTEMPTS;
                 let recorded = record_attempt_failure(
@@ -541,6 +589,7 @@ where
                 return Err(recorded);
             }
         };
+        let changed_paths = component_paths(&changed_components);
         if let Err(error) = validate_changed_paths(&contract, &changed_paths) {
             let retryable = attempt < MAX_ATTEMPTS;
             let recorded = record_attempt_failure(
@@ -566,7 +615,109 @@ where
             }
             return Err(recorded);
         }
-        let verification = match targeted_verification(&worker.worktree) {
+        if let Err(error) =
+            prepare_components_for_verification(&worker.worktree, &changed_components)
+        {
+            let retryable = attempt < MAX_ATTEMPTS;
+            let recorded = record_attempt_failure(
+                &mut controller,
+                team,
+                events,
+                control,
+                manager,
+                state_path,
+                &assignment,
+                &worker,
+                running,
+                Some(&run),
+                changed_paths,
+                Vec::new(),
+                format!("trusted preparation failed: {error}"),
+                retryable,
+                false,
+            )?;
+            last_error = Some(recorded.clone());
+            if retryable {
+                continue;
+            }
+            return Err(recorded);
+        }
+        let prepared_components = match manager.changed_components_since(&worker, &base_head) {
+            Ok(components) => components,
+            Err(error) => {
+                let retryable = attempt < MAX_ATTEMPTS;
+                let recorded = record_attempt_failure(
+                    &mut controller,
+                    team,
+                    events,
+                    control,
+                    manager,
+                    state_path,
+                    &assignment,
+                    &worker,
+                    running,
+                    Some(&run),
+                    changed_paths,
+                    Vec::new(),
+                    format!("failed to inspect prepared changes: {error}"),
+                    retryable,
+                    false,
+                )?;
+                last_error = Some(recorded.clone());
+                if retryable {
+                    continue;
+                }
+                return Err(recorded);
+            }
+        };
+        if changed_scope_fingerprint(&prepared_components)
+            != changed_scope_fingerprint(&changed_components)
+        {
+            let error = format!(
+                "trusted preparation changed repository scope: before={changed_components:?}; after={prepared_components:?}"
+            );
+            let retryable = attempt < MAX_ATTEMPTS;
+            let recorded = record_attempt_failure(
+                &mut controller,
+                team,
+                events,
+                control,
+                manager,
+                state_path,
+                &assignment,
+                &worker,
+                running,
+                Some(&run),
+                component_paths(&prepared_components),
+                Vec::new(),
+                error,
+                retryable,
+                false,
+            )?;
+            last_error = Some(recorded.clone());
+            if retryable {
+                continue;
+            }
+            return Err(recorded);
+        }
+        let changed_components = prepared_components;
+        let changed_paths = component_paths(&changed_components);
+        let worktree_identity = format!(
+            "worktree:{}:{}",
+            base_head,
+            changed_scope_fingerprint(&changed_components)
+        );
+        let evidence_root = state_path
+            .parent()
+            .ok_or_else(|| "implementation state path has no execution root".to_owned())?
+            .join("evidence/worktree");
+        let verification = match authoritative_verification_for_components_at(
+            &worker.worktree,
+            &evidence_root,
+            &preflight.repository_fingerprint,
+            &worktree_identity,
+            &changed_components,
+        ) {
             Ok(verification) => verification,
             Err(error) => {
                 let retryable = attempt < MAX_ATTEMPTS;
@@ -594,10 +745,10 @@ where
                 return Err(recorded);
             }
         };
-        if !verification.passed {
+        if !verification.receipt.passed {
             let error = format!(
                 "isolated worktree verification failed: {}",
-                verification.evidence.join(" | ")
+                verification.summary.join(" | ")
             );
             let retryable = attempt < MAX_ATTEMPTS;
             let recorded = record_attempt_failure(
@@ -612,7 +763,7 @@ where
                 running,
                 Some(&run),
                 changed_paths,
-                verification.evidence,
+                verification.summary,
                 error,
                 retryable,
                 false,
@@ -623,6 +774,8 @@ where
             }
             return Err(recorded);
         }
+        let verification_summary = verification.summary.clone();
+        let verification_receipt = verification.receipt;
         if let Err(error) = manager.discard_untracked_runtime_state(&worker, &base_head) {
             let retryable = attempt < MAX_ATTEMPTS;
             let recorded = record_attempt_failure(
@@ -637,7 +790,7 @@ where
                 running,
                 Some(&run),
                 changed_paths,
-                verification.evidence,
+                verification_summary,
                 format!("failed to clean runtime state after verification: {error}"),
                 retryable,
                 false,
@@ -648,8 +801,8 @@ where
             }
             return Err(recorded);
         }
-        let verified_paths = match manager.changed_paths_since(&worker, &base_head) {
-            Ok(paths) => paths,
+        let verified_components = match manager.changed_components_since(&worker, &base_head) {
+            Ok(components) => components,
             Err(error) => {
                 let retryable = attempt < MAX_ATTEMPTS;
                 let recorded = record_attempt_failure(
@@ -664,7 +817,7 @@ where
                     running,
                     Some(&run),
                     changed_paths,
-                    verification.evidence,
+                    verification_summary,
                     format!("failed to inspect changes after verification: {error}"),
                     retryable,
                     false,
@@ -676,9 +829,11 @@ where
                 return Err(recorded);
             }
         };
-        if verified_paths != changed_paths {
+        if changed_scope_fingerprint(&verified_components)
+            != changed_scope_fingerprint(&changed_components)
+        {
             let error = format!(
-                "verification mutated the isolated worktree: before={changed_paths:?}; after={verified_paths:?}"
+                "verification mutated the isolated worktree scope: before={changed_components:?}; after={verified_components:?}"
             );
             let retryable = attempt < MAX_ATTEMPTS;
             let recorded = record_attempt_failure(
@@ -692,8 +847,8 @@ where
                 &worker,
                 running,
                 Some(&run),
-                verified_paths,
-                verification.evidence,
+                component_paths(&verified_components),
+                verification_summary,
                 error,
                 retryable,
                 false,
@@ -725,7 +880,7 @@ where
                     running,
                     Some(&run),
                     changed_paths,
-                    verification.evidence,
+                    verification_summary.clone(),
                     format!("failed to finalize isolated worker commit: {error}"),
                     retryable,
                     false,
@@ -749,7 +904,9 @@ where
             turns: run.turns,
             summary: run.summary,
             changed_paths,
-            verification_evidence: verification.evidence,
+            changed_components,
+            verification_evidence: verification_summary,
+            verification_receipt: Some(verification_receipt),
             transaction_path: state_path
                 .parent()
                 .unwrap_or_else(|| Path::new("."))
@@ -815,8 +972,13 @@ fn complete_prepared(
             base_head: state.base_head.clone(),
             worker: state.worker.clone(),
             changed_paths: state.changed_paths.clone(),
+            changed_components: state.changed_components.clone(),
             implementation_summary: state.summary.clone(),
             worktree_verification_evidence: state.verification_evidence.clone(),
+            worktree_verification_receipt: state
+                .verification_receipt
+                .clone()
+                .ok_or_else(|| "prepared implementation has no typed verification receipt".to_owned())?,
         },
     )?;
     if transaction.snapshot().prepared_commit != commit {
@@ -944,13 +1106,25 @@ fn execute_production_implementer(
             }
         }
     }
+    let mut summary = summaries.join("\n").trim().to_owned();
     if !completed {
-        return Err(format!(
-            "worker {} exceeded its bounded turn budget",
-            request.worker.id
-        ));
+        if !has_in_scope_repository_changes(
+            &request.worker,
+            &request.contract.allowed_write_paths,
+        )? {
+            return Err(format!(
+                "worker {} exceeded its bounded turn budget without producing an in-scope repository change",
+                request.worker.id
+            ));
+        }
+        let fallback = "The model exhausted its bounded turn budget after producing an in-scope repository change. Runtime exact-scope validation and independent verification are authoritative; this narrative is advisory.";
+        if summary.is_empty() {
+            summary = fallback.to_owned();
+        } else {
+            summary.push_str("\n\n");
+            summary.push_str(fallback);
+        }
     }
-    let summary = summaries.join("\n").trim().to_owned();
     if summary.is_empty() {
         return Err(format!(
             "worker {} returned no implementation evidence",

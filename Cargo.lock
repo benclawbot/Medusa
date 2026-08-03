@@ -1108,6 +1108,7 @@ dependencies = [
  "medusa-continuation",
  "medusa-core",
  "medusa-escalation",
+ "medusa-evidence",
  "medusa-extensions",
  "medusa-failure",
  "medusa-intelligence",
@@ -1313,6 +1314,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "medusa-evidence"
+version = "1.0.0"
+dependencies = [
+ "hex",
+ "serde",
+ "serde_json",
+ "sha2",
+ "tempfile",
+ "thiserror",
+ "time",
+ "ulid",
+]
+
+[[package]]
 name = "medusa-execution-checkpoint"
 version = "1.0.0"
 dependencies = [
@@ -1476,6 +1491,7 @@ name = "medusa-multi-agent-scheduler"
 version = "1.0.0"
 dependencies = [
  "hex",
+ "medusa-evidence",
  "serde",
  "serde_json",
  "sha2",
@@ -1591,6 +1607,7 @@ dependencies = [
  "medusa-context",
  "medusa-continuation",
  "medusa-core",
+ "medusa-evidence",
  "medusa-execution-checkpoint",
  "medusa-execution-replay",
  "medusa-improvement",
@@ -1766,6 +1783,7 @@ name = "medusa-workers"
 version = "1.0.0"
 dependencies = [
  "medusa-core",
+ "medusa-evidence",
  "serde",
  "tempfile",
  "ulid",

@@ -90,6 +90,33 @@ fn repository(
 }
 
 #[test]
+fn turn_budget_fallback_requires_an_in_scope_repository_change() {
+    let (_directory, repo, _plan, _preflight) = repository("src/");
+    let manager = WorkerManager::new(
+        &repo,
+        repo.join(".medusa/executions/turn-budget/worktrees"),
+    )
+    .expect("manager");
+    let worker = manager
+        .open_or_create_worker("turn-budget", "worker-turn-budget")
+        .expect("worker");
+    fs::write(
+        worker.worktree.join("src/lib.rs"),
+        "pub fn value() -> u32 { 2 }\n",
+    )
+    .expect("change");
+    assert!(
+        has_in_scope_repository_changes(&worker, &["src/".to_owned()])
+            .expect("in-scope inspection")
+    );
+    assert!(
+        !has_in_scope_repository_changes(&worker, &["docs/".to_owned()])
+            .expect("out-of-scope inspection")
+    );
+    manager.cleanup(&[worker]).expect("cleanup");
+}
+
+#[test]
 fn implementer_turn_budget_is_bounded_without_truncating_smaller_limits() {
     assert_eq!(bounded_implementer_turns(0), 1);
     assert_eq!(bounded_implementer_turns(8), 8);

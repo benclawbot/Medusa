@@ -6,6 +6,7 @@ use std::{
     path::{Path, PathBuf},
 };
 
+use medusa_evidence::{EvidenceBundle, EvidenceDependency};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
@@ -687,6 +688,29 @@ impl ExecutionLedger {
         self.commit()
     }
 
+    pub fn succeed_with_evidence(
+        &mut self,
+        task_id: &str,
+        evidence: impl Into<String>,
+        dependency: &EvidenceDependency,
+        bundle: &EvidenceBundle,
+    ) -> Result<(), String> {
+        dependency
+            .validate(bundle)
+            .map_err(|error| error.to_string())?;
+        self.succeed(
+            task_id,
+            format!(
+                "{}
+typed_evidence_dependency={}
+bundle={}",
+                evidence.into(),
+                dependency.fingerprint,
+                bundle.fingerprint
+            ),
+        )
+    }
+
     pub fn fail(&mut self, task_id: &str, reason: impl Into<String>) -> Result<(), String> {
         let reason = reason.into();
         if reason.trim().is_empty() {
@@ -1355,6 +1379,33 @@ mod tests {
             healthy: true,
             capacity: 1,
         }
+    }
+
+    #[test]
+    fn scheduler_rejects_invalid_evidence_dependency() {
+        use medusa_evidence::{EvidenceBundle, EvidenceDependency};
+        let directory = tempfile::tempdir().expect("tempdir");
+        let planned = plan_typed(PlannerInput {
+            objective: "Fix src/lib.rs".to_owned(),
+            attachment_count: 0,
+            repository_paths: vec!["src/lib.rs".to_owned()],
+        })
+        .expect("plan");
+        let mut ledger =
+            ExecutionLedger::open_or_create(directory.path().join("execution.json"), &planned)
+                .expect("ledger");
+        ledger.begin("analyze", "planner").expect("begin");
+        let bundle = EvidenceBundle::new("repo", "commit");
+        let invalid = EvidenceDependency {
+            bundle_fingerprint: "stale".to_owned(),
+            decision_ids: Vec::new(),
+            fingerprint: "corrupt".to_owned(),
+        };
+        assert!(
+            ledger
+                .succeed_with_evidence("analyze", "summary", &invalid, &bundle)
+                .is_err()
+        );
     }
 
     #[test]

@@ -6,7 +6,8 @@ use std::{
     sync::mpsc::Sender,
 };
 
-use medusa_agent::{AgentSession, targeted_verification};
+use medusa_agent::{AgentSession, authoritative_verification_for_components_at};
+use medusa_evidence::{ChangedComponent, VerificationReceipt, changed_scope_fingerprint};
 use medusa_provider::{MessageBlock, Role};
 use medusa_workers::{IntegrationReceipt, Worker, WorkerManager};
 use serde::{Deserialize, Serialize};
@@ -62,7 +63,9 @@ pub struct IndependentVerificationReceipt {
     pub commit: String,
     pub tree: String,
     pub changed_paths: Vec<String>,
+    pub changed_components: Vec<ChangedComponent>,
     pub evidence: Vec<String>,
+    pub authority: VerificationReceipt,
     pub fingerprint: String,
 }
 
@@ -84,8 +87,10 @@ pub struct PreparedMutationInput {
     pub base_head: String,
     pub worker: Worker,
     pub changed_paths: Vec<String>,
+    pub changed_components: Vec<ChangedComponent>,
     pub implementation_summary: String,
     pub worktree_verification_evidence: Vec<String>,
+    pub worktree_verification_receipt: VerificationReceipt,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -101,11 +106,13 @@ pub struct MutationTransactionSnapshot {
     pub prepared_commit: String,
     pub prepared_tree: String,
     pub changed_paths: Vec<String>,
+    pub changed_components: Vec<ChangedComponent>,
     pub patch_fingerprint: String,
     pub scope_fingerprint: String,
     pub implementation_summary: String,
     pub implementation_evidence_fingerprint: String,
     pub worktree_verification_evidence: Vec<String>,
+    pub worktree_verification_receipt: Option<VerificationReceipt>,
     pub review: Option<ParentReviewReceipt>,
     pub verification: Option<IndependentVerificationReceipt>,
     pub authorization: Option<IntegrationAuthorization>,
@@ -184,11 +191,13 @@ impl MutationTransaction {
                 prepared_commit: String::new(),
                 prepared_tree: String::new(),
                 changed_paths: Vec::new(),
+                changed_components: Vec::new(),
                 patch_fingerprint: String::new(),
                 scope_fingerprint: String::new(),
                 implementation_summary: String::new(),
                 implementation_evidence_fingerprint: String::new(),
                 worktree_verification_evidence: Vec::new(),
+                worktree_verification_receipt: None,
                 review: None,
                 verification: None,
                 authorization: None,
@@ -225,7 +234,7 @@ impl MutationTransaction {
     let patch = fs::read_to_string(self.root.join("prepared.patch"))
         .map_err(|error| error.to_string())?;
     Ok(format!(
-        "Transactional parent review packet. This packet is the authoritative input for the review decision. The original user request has already been admitted, scoped, and executed by an isolated implementer; do not execute it again or reject the prepared commit merely because this read-only reviewer lacks mutation tools. The primary repository intentionally remains at base HEAD `{}` until authorization, so repository retrieval from the primary tree is stale with respect to prepared commit `{}` and must not be used to claim the patch is absent. Review immutable tree `{}`, exact changed-path scope {:?}, patch fingerprint `{}`, implementation evidence fingerprint `{}`, and runtime worktree verification evidence {:?}. Runtime verification evidence and the immutable patch are authoritative. Implementer narratives and earlier planning or risk summaries are advisory only; ignore any statement that conflicts with the patch or runtime evidence.
+        "Transactional parent review packet. This packet is the authoritative input for the review decision. The original user request has already been admitted, scoped, and executed by an isolated implementer; do not execute it again or reject the prepared commit merely because this read-only reviewer lacks mutation tools. The primary repository intentionally remains at base HEAD `{}` until authorization, so repository retrieval from the primary tree is stale with respect to prepared commit `{}` and must not be used to claim the patch is absent. Review immutable tree `{}`, exact changed-component scope {:?}, patch fingerprint `{}`, implementation evidence fingerprint `{}`, and runtime worktree verification evidence {:?}. Runtime verification evidence and the immutable patch are authoritative. Implementer narratives and earlier planning or risk summaries are advisory only; ignore any statement that conflicts with the patch or runtime evidence.
 
 Prepared patch:
 {}
@@ -234,7 +243,7 @@ Decision rules: accept when the exact patch implements the scoped request, chang
         self.state.base_head,
         self.state.prepared_commit,
         self.state.prepared_tree,
-        self.state.changed_paths,
+        self.state.changed_components,
         self.state.patch_fingerprint,
         self.state.implementation_evidence_fingerprint,
         self.state.worktree_verification_evidence,
@@ -324,11 +333,27 @@ Decision rules: accept when the exact patch implements the scoped request, chang
             ));
         }
         let manager = self.manager(repo)?;
+        let components = manager
+            .commit_changed_components(&self.state.prepared_commit)
+            .map_err(|error| error.to_string())?;
+        if changed_scope_fingerprint(&components)
+            != changed_scope_fingerprint(&self.state.changed_components)
+        {
+            let reason = "prepared commit scope changed before verification".to_owned();
+            self.fail(reason.clone())?;
+            return Err(reason);
+        }
         let verification_root = self.root.join("independent-verification-worktree");
         manager
             .materialize_detached_commit(&self.state.prepared_commit, &verification_root)
             .map_err(|error| error.to_string())?;
-        let verification = targeted_verification(&verification_root);
+        let verification = authoritative_verification_for_components_at(
+            &verification_root,
+            &self.root.join("evidence/independent"),
+            &self.state.repository_fingerprint,
+            &self.state.prepared_commit,
+            &components,
+        );
         let cleanup = manager
             .remove_detached_worktree(&verification_root)
             .map_err(|error| error.to_string());
@@ -338,32 +363,39 @@ Decision rules: accept when the exact patch implements the scoped request, chang
             return Err(error);
         }
         let verification = verification?;
-        if !verification.passed {
+        if !verification.receipt.passed {
             let reason = format!(
                 "independent verification failed: {}",
-                verification.evidence.join(" | ")
+                verification.summary.join(" | ")
             );
             self.fail(reason.clone())?;
             return Err(reason);
         }
-        let changed_paths = manager
-            .commit_changed_paths(&self.state.prepared_commit)
-            .map_err(|error| error.to_string())?;
-        if changed_paths != self.state.changed_paths {
-            let reason = format!(
-                "prepared commit scope changed before verification: expected {:?}, got {:?}",
-                self.state.changed_paths, changed_paths
-            );
-            self.fail(reason.clone())?;
-            return Err(reason);
-        }
-        self.record_verification(true, verification.evidence.clone())?;
-        Ok(verification.evidence)
+        let summary = verification.summary.clone();
+        self.record_authoritative_verification(verification.receipt, summary.clone())?;
+        Ok(summary)
     }
 
+    #[cfg(test)]
     pub fn record_verification(
         &mut self,
         passed: bool,
+        evidence: Vec<String>,
+    ) -> Result<(), String> {
+        if !passed {
+            let reason = format!(
+                "independent verification rejected the commit: {}",
+                evidence.join(" | ")
+            );
+            self.fail(reason.clone())?;
+            return Err(reason);
+        }
+        Err("untyped verification evidence cannot authorize integration".to_owned())
+    }
+
+    pub fn record_authoritative_verification(
+        &mut self,
+        authority: VerificationReceipt,
         evidence: Vec<String>,
     ) -> Result<(), String> {
         if self.state.lifecycle != MutationLifecycle::VerificationPending {
@@ -372,12 +404,15 @@ Decision rules: accept when the exact patch implements the scoped request, chang
                 self.state.lifecycle
             ));
         }
-        if !passed || evidence.is_empty() || evidence.iter().any(|item| item.trim().is_empty()) {
-            let reason = if passed {
-                "independent verification returned no evidence".to_owned()
-            } else {
-                format!("independent verification rejected the commit: {}", evidence.join(" | "))
-            };
+        authority.validate().map_err(|error| error.to_string())?;
+        if !authority.passed
+            || authority.plan.repository_fingerprint != self.state.repository_fingerprint
+            || authority.plan.commit != self.state.prepared_commit
+            || changed_scope_fingerprint(&authority.plan.components)
+                != changed_scope_fingerprint(&self.state.changed_components)
+            || evidence.is_empty()
+        {
+            let reason = "typed verification receipt does not match the prepared mutation".to_owned();
             self.fail(reason.clone())?;
             return Err(reason);
         }
@@ -386,7 +421,9 @@ Decision rules: accept when the exact patch implements the scoped request, chang
             commit: self.state.prepared_commit.clone(),
             tree: self.state.prepared_tree.clone(),
             changed_paths: self.state.changed_paths.clone(),
+            changed_components: self.state.changed_components.clone(),
             evidence,
+            authority,
             fingerprint: String::new(),
         };
         receipt.fingerprint = verification_fingerprint(&receipt);
@@ -412,10 +449,17 @@ Decision rules: accept when the exact patch implements the scoped request, chang
             .verification
             .as_ref()
             .ok_or_else(|| "verified mutation has no independent verification receipt".to_owned())?;
+        verification.authority.validate().map_err(|error| error.to_string())?;
         if review.commit != self.state.prepared_commit
             || verification.commit != self.state.prepared_commit
             || review.tree != self.state.prepared_tree
             || verification.tree != self.state.prepared_tree
+            || !verification.authority.passed
+            || verification.authority.plan.commit != self.state.prepared_commit
+            || verification.authority.plan.repository_fingerprint
+                != self.state.repository_fingerprint
+            || changed_scope_fingerprint(&verification.authority.plan.components)
+                != changed_scope_fingerprint(&self.state.changed_components)
         {
             self.fail("review or verification receipt was substituted".to_owned())?;
             return Err("review or verification receipt was substituted".to_owned());
@@ -629,10 +673,21 @@ Decision rules: accept when the exact patch implements the scoped request, chang
             .clone()
             .ok_or_else(|| "prepared worker has no commit".to_owned())?;
         let tree = manager.commit_tree(&commit).map_err(|error| error.to_string())?;
+        let changed_components = manager
+            .commit_changed_components(&commit)
+            .map_err(|error| error.to_string())?;
         let changed_paths = manager
             .commit_changed_paths(&commit)
             .map_err(|error| error.to_string())?;
-        if changed_paths != input.changed_paths {
+        input
+            .worktree_verification_receipt
+            .validate()
+            .map_err(|error| error.to_string())?;
+        if changed_paths != input.changed_paths
+            || changed_scope_fingerprint(&changed_components)
+                != changed_scope_fingerprint(&input.changed_components)
+            || !input.worktree_verification_receipt.passed
+        {
             return Err(format!(
                 "prepared commit paths do not match verified implementation scope: {:?} != {:?}",
                 changed_paths, input.changed_paths
@@ -650,10 +705,12 @@ Decision rules: accept when the exact patch implements the scoped request, chang
         self.state.prepared_commit = commit;
         self.state.prepared_tree = tree;
         self.state.changed_paths = changed_paths;
+        self.state.changed_components = changed_components;
         self.state.patch_fingerprint = hash(&patch);
-        self.state.scope_fingerprint = hash(&self.state.changed_paths);
+        self.state.scope_fingerprint = changed_scope_fingerprint(&self.state.changed_components);
         self.state.implementation_summary = input.implementation_summary;
         self.state.worktree_verification_evidence = input.worktree_verification_evidence;
+        self.state.worktree_verification_receipt = Some(input.worktree_verification_receipt);
         self.state.implementation_evidence_fingerprint = hash(&(
             &self.state.implementation_summary,
             &self.state.worktree_verification_evidence,
@@ -690,6 +747,7 @@ Decision rules: accept when the exact patch implements the scoped request, chang
             base_head: self.state.base_head.clone(),
             integrated_head: manager.repository_head().map_err(|error| error.to_string())?,
             changed_paths: self.state.changed_paths.clone(),
+            changed_components: self.state.changed_components.clone(),
         })
     }
 
@@ -729,6 +787,7 @@ Decision rules: accept when the exact patch implements the scoped request, chang
             && (self.state.prepared_commit.trim().is_empty()
                 || self.state.prepared_tree.trim().is_empty()
                 || self.state.changed_paths.is_empty()
+                || self.state.changed_components.is_empty()
                 || self.state.patch_fingerprint.trim().is_empty()
                 || self.state.scope_fingerprint.trim().is_empty()
                 || self.state.implementation_evidence_fingerprint.trim().is_empty())
@@ -740,8 +799,12 @@ Decision rules: accept when the exact patch implements the scoped request, chang
         {
             return Err("parent review receipt fingerprint is invalid".to_owned());
         }
+        if let Some(worktree) = self.state.worktree_verification_receipt.as_ref() {
+            worktree.validate().map_err(|error| error.to_string())?;
+        }
         if let Some(verification) = self.state.verification.as_ref()
-            && verification.fingerprint != verification_fingerprint(verification)
+            && (verification.fingerprint != verification_fingerprint(verification)
+                || verification.authority.validate().is_err())
         {
             return Err("independent verification receipt fingerprint is invalid".to_owned());
         }
@@ -958,6 +1021,18 @@ mod tests {
         worker = manager
             .finalize_worker(worker, &base_head, "prepared change")
             .expect("finalize");
+        let commit = worker.commit.clone().expect("commit");
+        let changed_components = manager
+            .commit_changed_components(&commit)
+            .expect("components");
+        let worktree_verification = authoritative_verification_for_components_at(
+            &worker.worktree,
+            &root.join("evidence/test-worktree"),
+            "repo",
+            &format!("worktree:{}", changed_scope_fingerprint(&changed_components)),
+            &changed_components,
+        )
+        .expect("worktree verification");
         let input = PreparedMutationInput {
             plan_fingerprint: "plan".to_owned(),
             repository_fingerprint: "repo".to_owned(),
@@ -965,8 +1040,10 @@ mod tests {
             base_head,
             worker,
             changed_paths: vec!["src/lib.rs".to_owned()],
+            changed_components,
             implementation_summary: "changed the value".to_owned(),
-            worktree_verification_evidence: vec!["worktree verified".to_owned()],
+            worktree_verification_evidence: worktree_verification.summary,
+            worktree_verification_receipt: worktree_verification.receipt,
         };
         (directory, repo, manager, input)
     }
@@ -1048,10 +1125,7 @@ mod tests {
                 "parent-session",
             )
             .expect("review");
-        transaction.begin_verification().expect("begin verification");
-        transaction
-            .record_verification(true, vec!["independent verification passed".to_owned()])
-            .expect("verification");
+        transaction.verify_independently(&repo).expect("verification");
         transaction.authorize(&repo).expect("authorize");
         let first = transaction.integrate(&repo).expect("integrate");
         let second = transaction.integrate(&repo).expect("duplicate integrate");
@@ -1080,10 +1154,7 @@ mod tests {
                 "parent-session",
             )
             .expect("review");
-        transaction.begin_verification().expect("begin verification");
-        transaction
-            .record_verification(true, vec!["verified".to_owned()])
-            .expect("verification");
+        transaction.verify_independently(&repo).expect("verification");
         fs::write(repo.join("drift.txt"), "drift\n").expect("drift");
         git(&repo, &["add", "drift.txt"]);
         git(&repo, &["commit", "-m", "drift"]);
@@ -1120,10 +1191,7 @@ mod tests {
                 .lifecycle,
             MutationLifecycle::ReviewAccepted
         );
-        transaction.begin_verification().expect("verification pending");
-        transaction
-            .record_verification(true, vec!["verified".to_owned()])
-            .expect("verified");
+        transaction.verify_independently(&repo).expect("verified");
         transaction.authorize(&repo).expect("authorized");
         assert_eq!(
             MutationTransaction::open(transaction.path())

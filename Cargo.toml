@@ -2,6 +2,7 @@
 resolver = "2"
 members = [
   "crates/medusa-core",
+  "crates/medusa-evidence",
   "crates/medusa-config",
   "crates/medusa-protocol",
   "crates/medusa-testkit",
@@ -68,10 +69,11 @@ production_execution_model = "bounded-teammates-with-worktree-isolated-mutation"
 production_entrypoint = "medusa-runtime::RuntimeController -> run_prompt -> multi_agent_coordinator::run_preflight -> mutating_worker_coordinator::run_implementation when required -> read-only parent medusa-agent::AgentEngine"
 orchestration_planning = "production runtime path; task contracts drive durable read-only preflight and worktree-isolated implementer execution"
 subagent_delegation = "production; bounded read-only planner and risk-reviewer teammates plus one worktree-isolated implementer contract for explicit mutation objectives"
-verification_gate = "repository"
+verification_gate = "typed-evidence-and-changed-component-authority"
 
 [workspace.dependencies]
 medusa-core = { path = "crates/medusa-core" }
+medusa-evidence = { path = "crates/medusa-evidence" }
 medusa-protocol = { path = "crates/medusa-protocol" }
 medusa-process-containment = { path = "crates/medusa-process-containment" }
 medusa-testkit = { path = "crates/medusa-testkit" }

@@ -56,59 +56,60 @@
   ],
   "components": {
     "rust_crates": {
-      "medusa-core": "preserve",
-      "medusa-config": "preserve",
-      "medusa-protocol": "preserve",
-      "medusa-testkit": "preserve",
-      "medusa-provider": "adapt",
-      "medusa-openai-realtime": "adapt",
-      "medusa-intelligence": "adapt",
-      "medusa-world-model": "adapt",
-      "medusa-goal": "adapt",
-      "medusa-progress": "adapt",
-      "medusa-confidence": "adapt",
-      "medusa-failure": "adapt",
-      "medusa-continuation": "adapt",
-      "medusa-escalation": "adapt",
-      "medusa-process-registry": "preserve",
-      "medusa-wakeup": "adapt",
-      "medusa-prompt-cache": "adapt",
-      "medusa-mcp-cache": "adapt",
-      "medusa-markdown-memory": "adapt",
-      "medusa-memory-consolidation": "adapt",
-      "medusa-clearops": "adapt",
       "medusa-agent": "replace",
       "medusa-browser-client": "adapt",
       "medusa-browserd": "adapt",
-      "medusa-process-containment": "preserve",
-      "medusa-daemon": "adapt",
-      "medusa-runtime": "replace",
-      "medusa-tui": "adapt",
-      "medusa-workers": "adapt",
-      "medusa-memory": "preserve",
-      "medusa-extensions": "adapt",
-      "medusa-improvement": "adapt",
-      "medusa-hardening": "adapt",
-      "medusa-update": "preserve",
-      "medusa-github": "preserve",
       "medusa-capabilities": "replace",
+      "medusa-clearops": "adapt",
       "medusa-cli": "adapt",
+      "medusa-confidence": "adapt",
+      "medusa-config": "preserve",
       "medusa-context": "adapt",
       "medusa-context-retrieval": "adapt",
-      "medusa-turn-assembly": "adapt",
-      "medusa-memory-writeback": "adapt",
-      "medusa-tool-policy": "adapt",
-      "medusa-tool-control": "adapt",
-      "medusa-multi-agent-scheduler": "replace",
-      "medusa-worker-leases": "adapt",
-      "medusa-execution-replay": "adapt",
-      "medusa-runtime-supervisor": "adapt",
+      "medusa-continuation": "adapt",
+      "medusa-core": "preserve",
+      "medusa-daemon": "adapt",
+      "medusa-escalation": "adapt",
+      "medusa-evidence": "preserve",
       "medusa-execution-checkpoint": "adapt",
-      "medusa-time-travel": "adapt",
-      "medusa-transaction-coordinator": "replace",
+      "medusa-execution-replay": "adapt",
+      "medusa-extensions": "adapt",
+      "medusa-failure": "adapt",
+      "medusa-github": "preserve",
+      "medusa-goal": "adapt",
+      "medusa-hardening": "adapt",
+      "medusa-improvement": "adapt",
+      "medusa-intelligence": "adapt",
+      "medusa-markdown-memory": "adapt",
+      "medusa-mcp-cache": "adapt",
+      "medusa-memory": "preserve",
+      "medusa-memory-consolidation": "adapt",
+      "medusa-memory-writeback": "adapt",
+      "medusa-multi-agent-scheduler": "replace",
+      "medusa-openai-realtime": "adapt",
+      "medusa-process-containment": "preserve",
+      "medusa-process-registry": "preserve",
+      "medusa-progress": "adapt",
+      "medusa-prompt-cache": "adapt",
+      "medusa-protocol": "preserve",
+      "medusa-provider": "adapt",
       "medusa-recovery-coordinator": "adapt",
       "medusa-review-model": "replace",
-      "medusa-session-continuity": "adapt"
+      "medusa-runtime": "replace",
+      "medusa-runtime-supervisor": "adapt",
+      "medusa-session-continuity": "adapt",
+      "medusa-testkit": "preserve",
+      "medusa-time-travel": "adapt",
+      "medusa-tool-control": "adapt",
+      "medusa-tool-policy": "adapt",
+      "medusa-transaction-coordinator": "replace",
+      "medusa-tui": "adapt",
+      "medusa-turn-assembly": "adapt",
+      "medusa-update": "preserve",
+      "medusa-wakeup": "adapt",
+      "medusa-worker-leases": "adapt",
+      "medusa-workers": "adapt",
+      "medusa-world-model": "adapt"
     },
     "non_crate": [
       [
@@ -198,6 +199,9 @@
         "medusa-context",
         "medusa-context-retrieval",
         "medusa-turn-assembly"
+      ],
+      "evidence": [
+        "medusa-evidence"
       ]
     }
   },
@@ -283,14 +287,10 @@
     [
       "multi-agent-research",
       "production",
-      "quarantined",
+      "legacy-uncertified",
       "replace",
       "medusa-runtime coordinated path",
-      [
-        "integration precedes parent review",
-        "task/reviewer state is partly decorative",
-        "isolated verification does not receive changed paths"
-      ]
+      []
     ],
     [
       "browser-tools",
@@ -331,6 +331,14 @@
       [
         "crate-local unsafe policy and audit completed by #653"
       ]
+    ],
+    [
+      "evidence-verification-authority",
+      "legacy-free-form",
+      "certified-production",
+      "preserve",
+      "medusa-evidence::VerificationPlanner and VerificationReceipt",
+      []
     ]
   ],
   "capability_paths": {
@@ -388,6 +396,12 @@
     ],
     "unsafe-ffi-boundary": [
       "crates/medusa-process-containment"
+    ],
+    "evidence-verification-authority": [
+      "crates/medusa-evidence",
+      "crates/medusa-agent/src/verification_authority.rs",
+      "crates/medusa-runtime/src/mutation_transaction.rs",
+      "crates/medusa-workers/src/lib.rs"
     ]
   },
   "sources_of_truth": [
@@ -450,13 +464,13 @@
     ],
     [
       "verification",
-      "repository gate plus targeted results",
+      "medusa-evidence VerificationPlan and VerificationReceipt",
       [
-        "worker summaries",
-        "CI prose"
+        "human summaries",
+        "legacy coarse repository result"
       ],
-      "changed-path-aware verification receipt",
-      "changed paths are carried end to end"
+      "typed changed-component verification authority",
+      "every required selected check has a source-bound receipt for the exact commit and scope"
     ],
     [
       "provider route and readiness",
@@ -479,12 +493,12 @@
     ],
     [
       "evidence and artifacts",
-      "repository-local .medusa records and release evidence",
+      "medusa-evidence EvidenceBundle and content-addressed ArtifactStore",
       [
         "human summaries"
       ],
-      "versioned evidence/artifact envelope",
-      "reports derive from evidence"
+      "typed source-bound evidence and durable content-addressed artifacts",
+      "verified conclusions resolve exact sources and durable read receipts"
     ],
     [
       "GitHub authentication and operations",
@@ -643,13 +657,6 @@
   ],
   "known_failure_fixtures": [
     [
-      "isolated-verification-drops-changed-paths",
-      633,
-      false,
-      "targeted_verification receives only the worktree path",
-      "remove after changed paths are explicit input and evidence"
-    ],
-    [
       "provider-capability-mismatch",
       636,
       false,
@@ -731,19 +738,23 @@
     [
       650,
       "4",
-      "provider and OAuth routing",
-      "provider",
+      "authoritative evidence, artifacts, and changed-component verification",
+      "evidence",
       [
-        "route",
-        "health",
-        "readiness",
-        "auth"
+        "EvidenceRecord",
+        "EvidenceBundle",
+        "ArtifactStore",
+        "ChangedComponent",
+        "VerificationPlan",
+        "VerificationReceipt"
       ],
       [
-        "runtime",
-        "frontends"
+        "medusa-agent",
+        "medusa-runtime",
+        "medusa-workers",
+        "medusa-multi-agent-scheduler"
       ],
-      "per-surface readiness logic"
+      "free-form evidence strings, name-only scope, and coarse verification results"
     ],
     [
       651,
