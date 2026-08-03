@@ -38,6 +38,7 @@ members = [
   "crates/medusa-hardening",
   "crates/medusa-update",
   "crates/medusa-github",
+  "crates/medusa-external-github",
   "crates/medusa-capabilities",
   "crates/medusa-cli",
   "crates/medusa-context",
