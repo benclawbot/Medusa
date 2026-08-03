@@ -22,6 +22,7 @@ _AMBIGUOUS = (
 )
 _ORIGINAL_READ_TEXT = _REAL.Path.read_text
 _SHIM_PATH = _REAL.Path(__file__)
+_MARKER_PATH = _SHIM_PATH.parent / "daemon-wire-rerun.txt"
 
 
 class _ServerSource(str):
@@ -46,6 +47,7 @@ for _name in dir(_REAL):
 
 
 def _cleanup() -> None:
+    _MARKER_PATH.unlink(missing_ok=True)
     _SHIM_PATH.unlink(missing_ok=True)
     cache = _SHIM_PATH.parent / "__pycache__"
     if cache.is_dir():
