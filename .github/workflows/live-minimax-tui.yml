@@ -65,16 +65,15 @@ jobs:
               "    }\n}\n"
           )
           instruction = (
-              "Act immediately without planning or additional inspection. The isolated implementation "
-              "worker must use fs_write once on the relative path src/lib.rs and replace the complete "
-              "file with the exact UTF-8 content between the markers below, including the final newline. "
-              "Any read-only planner, risk reviewer, verifier, or parent reviewer must not attempt a write; "
-              "it must evaluate the immutable prepared implementation and authoritative verification evidence, "
-              "then approve or reject that evidence without re-executing the implementation instruction.\n<<<FILE\n"
+              "Implement the requested repository change in src/lib.rs. The implementation task must "
+              "use fs_write once on the relative path src/lib.rs and replace the complete file with the "
+              "exact UTF-8 content between the markers below, including the final newline. Planning tasks "
+              "should establish the exact scope, and review or verification tasks should evaluate the prepared "
+              "implementation and authoritative evidence according to their assigned roles.\n<<<FILE\n"
               f"{fixture}"
-              ">>>FILE\nThe implementation worker must not call shell_run, update_plan, team tools, or "
+              ">>>FILE\nThe implementation task must not call shell_run, update_plan, team tools, or "
               "git_checkpoint. Medusa's authoritative host verifier will run formatting, build, lint, and tests "
-              f"before integration. After fs_write succeeds, the implementation worker must return exactly {expected}."
+              f"before integration. After fs_write succeeds, the implementation task must return exactly {expected}."
           )
           path = Path("scripts/live-tui-minimax-e2e.py")
           text = path.read_text(encoding="utf-8")
