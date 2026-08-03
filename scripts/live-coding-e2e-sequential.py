@@ -19,15 +19,11 @@ ORIGINAL_OBJECTIVE = '''        objective = (
         )'''
 
 DETERMINISTIC_OBJECTIVE = '''        objective = (
-            "Repair exactly value.txt, src/slugify.py, and src/counter.js without modifying "
-            "verify.py, test.mjs, package.json, fixtures, or expected outputs. Set value.txt to "
-            "the verified value, robustly implement src/slugify.py while preserving its public "
-            "API, and repair the counter transitions in src/counter.js. Run `python verify.py`, "
-            "iterate until every check passes, and stop only after all three independent "
-            "validations succeed. Any delegated read-only analysis or risk-review worker must "
-            "inspect only the relevant files, send one concise evidence report to lead, and then "
-            "immediately return a final text response. After team_send_message succeeds, do not "
-            "call update_plan or any additional tool."
+            "Repair exactly value.txt, src/slugify.py, and src/counter.js. These three paths are "
+            "the complete writable scope. Set value.txt to the verified value, robustly implement "
+            "src/slugify.py while preserving its public API, and repair the counter transitions in "
+            "src/counter.js. Run `python verify.py`, iterate until every check passes, and stop only "
+            "after all three independent validations succeed."
         )'''
 
 
