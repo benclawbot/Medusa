@@ -1,9 +1,7 @@
 use serde::{Deserialize, Serialize};
 use time::OffsetDateTime;
 
-use crate::{
-    AttemptId, ContractError, RequestDigest, Result, SCHEMA_VERSION, TrustedHost,
-};
+use crate::{AttemptId, ContractError, RequestDigest, Result, SCHEMA_VERSION, TrustedHost};
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize)]
 #[serde(rename_all = "snake_case")]
@@ -144,8 +142,7 @@ impl OAuthLifecycleReceipt {
                 "active OAuth credentials require a completed code exchange".to_owned(),
             ));
         }
-        if self.credential_state == CredentialState::Revoked
-            && !self.has_stage(OAuthStage::Revoked)
+        if self.credential_state == CredentialState::Revoked && !self.has_stage(OAuthStage::Revoked)
         {
             return Err(ContractError::Validation(
                 "revoked credential state requires revocation evidence".to_owned(),
