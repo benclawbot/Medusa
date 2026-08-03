@@ -75,7 +75,7 @@ V2 invariants:
 | Interactive terminal | `medusa` | `crates/medusa-tui` | runtime command authority; canonical journal → `medusa-protocol` TUI projection |
 | Headless | `medusa run` | `crates/medusa-cli` | runtime command authority; canonical journal → `medusa-protocol` frontend projection |
 | Daemon service | `medusa __daemon-serve` | `crates/medusa-daemon` | daemon protocol v2 routes shared frontend commands; canonical journal → frontend-scoped replay batches |
-| Desktop | `apps/medusa-desktop` | React/Tauri application | runtime command compatibility; canonical journal → `medusa-protocol` desktop projection |
+| Desktop | `apps/medusa-desktop` | React/Tauri application | daemon protocol v2 command, artifact, transient-event, and canonical replay authority |
 | GitHub operations | `medusa github` / capability entrypoints | `crates/medusa-external-github` over `crates/medusa-github` | versioned attempt-bound operation envelope and normalized receipt |
 | Update | `medusa update` | `crates/medusa-update` | Ed25519-verified prebuilt release; explicit `--channel source` developer path |
 

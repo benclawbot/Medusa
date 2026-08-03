@@ -36,6 +36,8 @@ pub enum FrontendCommand {
     CreateSession {
         repository_profile: String,
         objective: Option<String>,
+        #[serde(default)]
+        attachment_ids: Vec<String>,
     },
     ListSessions,
     ResumeSession {
@@ -47,6 +49,19 @@ pub enum FrontendCommand {
         after_cursor: Option<u64>,
     },
     Detach,
+    Replay {
+        after_cursor: u64,
+    },
+    PollTransient,
+    NewSession,
+    RunCommand {
+        input: String,
+    },
+    RecoveryAction {
+        operation: String,
+        checkpoint_id: Option<String>,
+        confirmed_destructive_effects: bool,
+    },
     Submit {
         text: String,
         #[serde(default)]
@@ -112,6 +127,14 @@ impl FrontendCommand {
             }
             Self::ResolveApproval { approval_id, .. } if approval_id.trim().is_empty() => {
                 Err("approval id cannot be empty")
+            }
+            Self::RunCommand { input }
+                if input.trim().is_empty() || !input.trim_start().starts_with('/') =>
+            {
+                Err("runtime command must be a slash command")
+            }
+            Self::RecoveryAction { operation, .. } if operation.trim().is_empty() => {
+                Err("recovery operation cannot be empty")
             }
             Self::ConfigureModel { model, .. } if model.trim().is_empty() => {
                 Err("model cannot be empty")

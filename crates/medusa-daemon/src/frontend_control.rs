@@ -12,10 +12,13 @@ use medusa_protocol::frontend::{
     FrontendCommandEnvelope, FrontendKind,
 };
 use medusa_runtime::{
-    RuntimeController, SubmitDisposition,
+    RecoveryActionRequest, RecoveryOperation, RuntimeController, RuntimeEvent, SubmitDisposition,
     attachment::session::{AttachmentMode, ClientKind, RuntimeAttachRequest},
-    commands::{Effort, ModelCommand, SlashCommand, TeamCommand},
+    commands::{
+        Effort, ModelCommand, ModelConfiguration, SlashCommand, TeamCommand, parse_slash_command,
+    },
     prompt::PromptDraft,
+    recovery_action_context,
 };
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -30,7 +33,44 @@ use crate::{
         LiveSessionAttachmentView, LiveSessionBroker, LiveSessionBrokerError,
         LiveSessionReplayView, LiveSessionSummary,
     },
+    protocol::FrontendArtifactKind,
 };
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum FrontendTransientEvent {
+    RecoveryAvailable {
+        recovery: serde_json::Value,
+    },
+    RecoveryCompleted {
+        record: serde_json::Value,
+        audit_path: String,
+    },
+    Settings {
+        model: String,
+        effort: String,
+        plan_mode: bool,
+        credential_configured: bool,
+    },
+    ConfigurationChanged {
+        revision: u64,
+        active_profile: String,
+        changed_keys: Vec<String>,
+        origin: String,
+        apply_timing: String,
+    },
+    Notice {
+        title: String,
+        details: Vec<String>,
+    },
+    NewSession,
+    Progress {
+        turn: u32,
+    },
+    Failed {
+        message: String,
+    },
+}
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
@@ -48,6 +88,9 @@ pub enum FrontendControlResult {
     },
     Events {
         replay: LiveSessionReplayView,
+    },
+    Transient {
+        events: Vec<FrontendTransientEvent>,
     },
     CursorAcknowledged {
         attachment: LiveSessionAttachmentView,
@@ -91,7 +134,6 @@ struct CachedAcknowledgement {
     acknowledgement: FrontendCommandAcknowledgement,
 }
 
-/// Repository-scoped daemon control plane for all attached frontend kinds.
 pub struct FrontendControlPlane {
     repo: PathBuf,
     config: Config,
@@ -99,6 +141,7 @@ pub struct FrontendControlPlane {
     controllers: BTreeMap<String, RuntimeController>,
     control_clients: BTreeMap<String, String>,
     acknowledgements: BTreeMap<String, CachedAcknowledgement>,
+    credentials: BTreeMap<String, String>,
     artifacts: FrontendArtifactStore,
 }
 
@@ -113,10 +156,10 @@ impl FrontendControlPlane {
             controllers: BTreeMap::new(),
             control_clients: BTreeMap::new(),
             acknowledgements: BTreeMap::new(),
+            credentials: BTreeMap::new(),
         }
     }
 
-    /// Replays canonical journal events for one process-local attached client.
     pub fn replay_events(
         &self,
         client_id: &str,
@@ -125,23 +168,53 @@ impl FrontendControlPlane {
         self.broker.replay(client_id, cursor).map_err(Into::into)
     }
 
-    /// Stages one bounded frontend attachment and returns its opaque content-addressed id.
     pub fn ingest_attachment(
         &self,
         display_name: String,
         mime_type: Option<String>,
         bytes: Vec<u8>,
     ) -> Result<String, FrontendControlError> {
+        let kind = if mime_type
+            .as_deref()
+            .is_some_and(|value| value.starts_with("image/"))
+        {
+            FrontendArtifactKind::Image
+        } else {
+            FrontendArtifactKind::Text
+        };
+        self.ingest_artifact(display_name, mime_type, kind, bytes)
+    }
+
+    pub fn ingest_artifact(
+        &self,
+        display_name: String,
+        mime_type: Option<String>,
+        kind: FrontendArtifactKind,
+        bytes: Vec<u8>,
+    ) -> Result<String, FrontendControlError> {
         self.artifacts
             .ingest(FrontendArtifactInput {
                 display_name,
                 mime_type,
+                kind,
                 bytes,
             })
             .map_err(Into::into)
     }
 
-    /// Exports one verified opaque artifact for a native frontend delivery.
+    pub fn update_credential(
+        &mut self,
+        provider: String,
+        credential: String,
+    ) -> Result<(), FrontendControlError> {
+        let provider = provider.trim().to_ascii_lowercase();
+        if provider.is_empty() || credential.trim().is_empty() {
+            return Err(FrontendControlError::InvalidCredentialUpdate);
+        }
+        self.credentials.insert(provider, credential);
+        Ok(())
+    }
+
     pub fn export_attachment(
         &self,
         artifact_id: &str,
@@ -149,7 +222,6 @@ impl FrontendControlPlane {
         self.artifacts.export(artifact_id).map_err(Into::into)
     }
 
-    /// Validates, serializes, and idempotently acknowledges one frontend command.
     pub fn dispatch(
         &mut self,
         envelope: FrontendCommandEnvelope,
@@ -157,14 +229,17 @@ impl FrontendControlPlane {
         envelope
             .validate()
             .map_err(FrontendControlError::InvalidEnvelope)?;
-        let command_fingerprint = fingerprint(&envelope)?;
-        if let Some(cached) = self.acknowledgements.get(&envelope.idempotency_key) {
-            if cached.command_fingerprint == command_fingerprint {
-                return Ok(cached.acknowledgement.clone());
+        let cacheable = command_is_cacheable(&envelope.command);
+        let command_fingerprint = cacheable.then(|| fingerprint(&envelope)).transpose()?;
+        if cacheable {
+            if let Some(cached) = self.acknowledgements.get(&envelope.idempotency_key) {
+                if Some(&cached.command_fingerprint) == command_fingerprint.as_ref() {
+                    return Ok(cached.acknowledgement.clone());
+                }
+                return Err(FrontendControlError::IdempotencyConflict(
+                    envelope.idempotency_key,
+                ));
             }
-            return Err(FrontendControlError::IdempotencyConflict(
-                envelope.idempotency_key,
-            ));
         }
 
         let session_id = command_session_id(&envelope);
@@ -175,13 +250,15 @@ impl FrontendControlPlane {
             session_id,
             result,
         };
-        self.acknowledgements.insert(
-            envelope.idempotency_key,
-            CachedAcknowledgement {
-                command_fingerprint,
-                acknowledgement: acknowledgement.clone(),
-            },
-        );
+        if let Some(command_fingerprint) = command_fingerprint {
+            self.acknowledgements.insert(
+                envelope.idempotency_key,
+                CachedAcknowledgement {
+                    command_fingerprint,
+                    acknowledgement: acknowledgement.clone(),
+                },
+            );
+        }
         Ok(acknowledgement)
     }
 
@@ -198,13 +275,6 @@ impl FrontendControlPlane {
                 mode,
                 after_cursor,
             } => {
-                if *mode == FrontendAttachmentMode::Owner
-                    && self.controllers.contains_key(session_id)
-                {
-                    return Err(FrontendControlError::RuntimeAlreadyActive(
-                        session_id.clone(),
-                    ));
-                }
                 if *mode == FrontendAttachmentMode::Owner {
                     if !self.controllers.contains_key(session_id) {
                         return Err(FrontendControlError::RuntimeNotActive(session_id.clone()));
@@ -212,16 +282,12 @@ impl FrontendControlPlane {
                     self.control_clients
                         .insert(session_id.clone(), envelope.client_id.clone());
                 }
-                let attachment = self.broker.attach_current(RuntimeAttachRequest {
-                    session_id: session_id.clone(),
-                    client_id: envelope.client_id.clone(),
-                    client_kind: client_kind(envelope.frontend),
-                    requested_mode: AttachmentMode::ReadOnly,
-                    expected_revision: 0,
-                    cursor: after_cursor.unwrap_or_default(),
-                    occurred_at_unix_ms: timestamp_unix_ms(envelope.timestamp),
-                    event_id: envelope.command_id.clone(),
-                })?;
+                let attachment = self.attach_frontend(
+                    session_id,
+                    envelope,
+                    after_cursor.unwrap_or_default(),
+                    envelope.command_id.clone(),
+                )?;
                 Ok(FrontendControlResult::Attached { attachment })
             }
             FrontendCommand::Detach => {
@@ -238,6 +304,16 @@ impl FrontendControlPlane {
                     owner_client_id: continuity.owner_client_id,
                 })
             }
+            FrontendCommand::Replay { after_cursor } => {
+                let replay = self.replay_events(&envelope.client_id, *after_cursor)?;
+                Ok(FrontendControlResult::Events { replay })
+            }
+            FrontendCommand::PollTransient => {
+                let session_id = required_session_id(envelope)?;
+                self.authorize_control(&session_id, &envelope.client_id)?;
+                let events = self.poll_transient(&session_id)?;
+                Ok(FrontendControlResult::Transient { events })
+            }
             FrontendCommand::AcknowledgeCursor { cursor } => {
                 let attachment = self.broker.acknowledge_cursor(
                     &envelope.client_id,
@@ -249,10 +325,17 @@ impl FrontendControlPlane {
             }
             FrontendCommand::ResumeSession { session_id } => {
                 if self.controllers.contains_key(session_id) {
-                    return Err(FrontendControlError::RuntimeAlreadyActive(
-                        session_id.clone(),
-                    ));
+                    let attachment = self.attach_frontend(
+                        session_id,
+                        envelope,
+                        0,
+                        format!("{}:frontend", envelope.command_id),
+                    )?;
+                    self.control_clients
+                        .insert(session_id.clone(), envelope.client_id.clone());
+                    return Ok(FrontendControlResult::RuntimeReady { attachment });
                 }
+
                 let daemon_client_id = format!("daemon-runtime:{session_id}");
                 self.broker.attach_current(RuntimeAttachRequest {
                     session_id: session_id.clone(),
@@ -264,17 +347,14 @@ impl FrontendControlPlane {
                     occurred_at_unix_ms: timestamp_unix_ms(envelope.timestamp),
                     event_id: format!("{}:daemon-owner", envelope.command_id),
                 })?;
-                let attachment = self.broker.attach_current(RuntimeAttachRequest {
-                    session_id: session_id.clone(),
-                    client_id: envelope.client_id.clone(),
-                    client_kind: client_kind(envelope.frontend),
-                    requested_mode: AttachmentMode::ReadOnly,
-                    expected_revision: 0,
-                    cursor: 0,
-                    occurred_at_unix_ms: timestamp_unix_ms(envelope.timestamp),
-                    event_id: format!("{}:frontend", envelope.command_id),
-                })?;
+                let attachment = self.attach_frontend(
+                    session_id,
+                    envelope,
+                    0,
+                    format!("{}:frontend", envelope.command_id),
+                )?;
                 let controller = self.broker.resume_owner(&daemon_client_id)?;
+                self.configure_controller(&controller, current_effort(&self.config))?;
                 self.controllers.insert(session_id.clone(), controller);
                 self.control_clients
                     .insert(session_id.clone(), envelope.client_id.clone());
@@ -283,16 +363,20 @@ impl FrontendControlPlane {
             FrontendCommand::CreateSession {
                 repository_profile: _,
                 objective,
+                attachment_ids,
             } => {
-                let objective = objective
-                    .as_deref()
-                    .filter(|value| !value.trim().is_empty())
-                    .ok_or(FrontendControlError::ObjectiveRequired)?;
+                let attachments = self.artifacts.resolve(attachment_ids)?;
+                let text = objective.clone().unwrap_or_default();
+                if text.trim().is_empty() && attachments.is_empty() {
+                    return Err(FrontendControlError::ObjectiveRequired);
+                }
                 let controller =
                     RuntimeController::start_with_config(self.repo.clone(), self.config.clone());
+                self.configure_controller(&controller, current_effort(&self.config))?;
                 let disposition = controller.submit(PromptDraft {
-                    text: objective.to_owned(),
-                    ..PromptDraft::default()
+                    text,
+                    attachments,
+                    revision: 0,
                 })?;
                 let session_id = controller
                     .active_session_id()
@@ -307,16 +391,12 @@ impl FrontendControlPlane {
                     occurred_at_unix_ms: timestamp_unix_ms(envelope.timestamp),
                     event_id: format!("{}:daemon-owner", envelope.command_id),
                 })?;
-                self.broker.attach_current(RuntimeAttachRequest {
-                    session_id: session_id.clone(),
-                    client_id: envelope.client_id.clone(),
-                    client_kind: client_kind(envelope.frontend),
-                    requested_mode: AttachmentMode::ReadOnly,
-                    expected_revision: 0,
-                    cursor: 0,
-                    occurred_at_unix_ms: timestamp_unix_ms(envelope.timestamp),
-                    event_id: format!("{}:frontend", envelope.command_id),
-                })?;
+                self.attach_frontend(
+                    &session_id,
+                    envelope,
+                    0,
+                    format!("{}:frontend", envelope.command_id),
+                )?;
                 self.controllers.insert(session_id.clone(), controller);
                 self.control_clients
                     .insert(session_id.clone(), envelope.client_id.clone());
@@ -356,6 +436,79 @@ impl FrontendControlPlane {
                     requested,
                 })
             }
+            FrontendCommand::NewSession => {
+                let session_id = required_session_id(envelope)?;
+                self.authorize_control(&session_id, &envelope.client_id)?;
+                let controller = self
+                    .controllers
+                    .remove(&session_id)
+                    .ok_or_else(|| FrontendControlError::RuntimeNotActive(session_id.clone()))?;
+                if let Err(error) = controller.run_command(SlashCommand::New) {
+                    self.controllers.insert(session_id.clone(), controller);
+                    return Err(error.into());
+                }
+                drop(controller);
+                self.control_clients.remove(&session_id);
+                let _ = self.broker.detach(
+                    &envelope.client_id,
+                    timestamp_unix_ms(envelope.timestamp),
+                    format!("{}:detach", envelope.command_id),
+                );
+                Ok(FrontendControlResult::CommandAccepted {
+                    session_id,
+                    command: "new_session".to_owned(),
+                })
+            }
+            FrontendCommand::RunCommand { input } => {
+                let session_id = required_session_id(envelope)?;
+                self.authorize_control(&session_id, &envelope.client_id)?;
+                let command = parse_slash_command(input)
+                    .map_err(|error| FrontendControlError::InvalidCommand(error.to_string()))?
+                    .ok_or_else(|| {
+                        FrontendControlError::InvalidCommand(
+                            "runtime command must be a slash command".to_owned(),
+                        )
+                    })?;
+                match command {
+                    SlashCommand::New => {
+                        return Err(FrontendControlError::UnsupportedCommand(
+                            "use the shared new-session command",
+                        ));
+                    }
+                    SlashCommand::Model(ModelCommand::SetApiKey(_)) => {
+                        return Err(FrontendControlError::UnsupportedCommand(
+                            "credentials use the non-durable local credential channel",
+                        ));
+                    }
+                    command => self.controller(&session_id)?.run_command(command)?,
+                }
+                Ok(FrontendControlResult::CommandAccepted {
+                    session_id,
+                    command: "run_command".to_owned(),
+                })
+            }
+            FrontendCommand::RecoveryAction {
+                operation,
+                checkpoint_id,
+                confirmed_destructive_effects,
+            } => {
+                let session_id = required_session_id(envelope)?;
+                self.authorize_control(&session_id, &envelope.client_id)?;
+                let request = RecoveryActionRequest {
+                    session_id: session_id.clone(),
+                    operation: parse_recovery_operation(operation)?,
+                    checkpoint_id: checkpoint_id.clone(),
+                    confirmed_destructive_effects: *confirmed_destructive_effects,
+                };
+                let (view, preflight) = recovery_action_context(&self.repo, &request)
+                    .map_err(|error| FrontendControlError::Recovery(error.to_string()))?;
+                self.controller(&session_id)?
+                    .execute_recovery(view, request, preflight)?;
+                Ok(FrontendControlResult::CommandAccepted {
+                    session_id,
+                    command: "recovery_action".to_owned(),
+                })
+            }
             FrontendCommand::ShowStatus => {
                 let session_id = required_session_id(envelope)?;
                 let health = medusa_runtime::execution_history::inspect(&self.repo, &session_id)?;
@@ -373,30 +526,39 @@ impl FrontendControlPlane {
                 })
             }
             FrontendCommand::ConfigureModel { provider, model } => {
-                let session_id = required_session_id(envelope)?;
-                self.authorize_control(&session_id, &envelope.client_id)?;
-                let controller = self.controller(&session_id)?;
-                if let Some(provider) = provider {
-                    controller.run_command(SlashCommand::Model(ModelCommand::SetProvider(
-                        provider.clone(),
-                    )))?;
+                let provider = provider
+                    .clone()
+                    .unwrap_or_else(|| self.config.model.provider.clone());
+                let effort = current_effort(&self.config);
+                let configuration = self.model_configuration(&provider, model, effort);
+                if let Some(session_id) = envelope.session_id.as_deref() {
+                    self.authorize_control(session_id, &envelope.client_id)?;
+                    self.controller(session_id)?
+                        .configure_model(configuration)?;
                 }
-                controller
-                    .run_command(SlashCommand::Model(ModelCommand::SetModel(model.clone())))?;
+                self.config.model.provider = provider;
+                self.config.model.name = model.clone();
+                self.config.model.protocol = protocol_for_provider(&self.config.model.provider);
                 Ok(FrontendControlResult::CommandAccepted {
-                    session_id,
+                    session_id: envelope.session_id.clone().unwrap_or_default(),
                     command: "configure_model".to_owned(),
                 })
             }
             FrontendCommand::SetEffort { effort } => {
-                let session_id = required_session_id(envelope)?;
-                self.authorize_control(&session_id, &envelope.client_id)?;
-                self.controller(&session_id)?
-                    .run_command(SlashCommand::Effort {
-                        effort: Some(parse_effort(effort)?),
-                    })?;
+                let effort = parse_effort(effort)?;
+                let configuration = self.model_configuration(
+                    &self.config.model.provider,
+                    &self.config.model.name,
+                    effort,
+                );
+                if let Some(session_id) = envelope.session_id.as_deref() {
+                    self.authorize_control(session_id, &envelope.client_id)?;
+                    self.controller(session_id)?
+                        .configure_model(configuration)?;
+                }
+                self.config.agent.max_turns = turns_for_effort(effort);
                 Ok(FrontendControlResult::CommandAccepted {
-                    session_id,
+                    session_id: envelope.session_id.clone().unwrap_or_default(),
                     command: "set_effort".to_owned(),
                 })
             }
@@ -453,8 +615,29 @@ impl FrontendControlPlane {
         }
     }
 
+    fn attach_frontend(
+        &mut self,
+        session_id: &str,
+        envelope: &FrontendCommandEnvelope,
+        cursor: u64,
+        event_id: String,
+    ) -> Result<LiveSessionAttachmentView, FrontendControlError> {
+        self.broker
+            .attach_current(RuntimeAttachRequest {
+                session_id: session_id.to_owned(),
+                client_id: envelope.client_id.clone(),
+                client_kind: client_kind(envelope.frontend),
+                requested_mode: AttachmentMode::ReadOnly,
+                expected_revision: 0,
+                cursor,
+                occurred_at_unix_ms: timestamp_unix_ms(envelope.timestamp),
+                event_id,
+            })
+            .map_err(Into::into)
+    }
+
     fn submit_text(
-        &self,
+        &mut self,
         envelope: &FrontendCommandEnvelope,
         text: &str,
     ) -> Result<FrontendControlResult, FrontendControlError> {
@@ -468,7 +651,7 @@ impl FrontendControlPlane {
     }
 
     fn submit_draft(
-        &self,
+        &mut self,
         envelope: &FrontendCommandEnvelope,
         draft: PromptDraft,
     ) -> Result<FrontendControlResult, FrontendControlError> {
@@ -479,6 +662,51 @@ impl FrontendControlPlane {
             session_id,
             queued: disposition == SubmitDisposition::Queued,
         })
+    }
+
+    fn poll_transient(
+        &self,
+        session_id: &str,
+    ) -> Result<Vec<FrontendTransientEvent>, FrontendControlError> {
+        let controller = self.controller(session_id)?;
+        let mut events = Vec::new();
+        while events.len() < 200 {
+            let Some(event) = controller.try_event()? else {
+                break;
+            };
+            if let Some(event) = map_transient_event(event)? {
+                events.push(event);
+            }
+        }
+        Ok(events)
+    }
+
+    fn configure_controller(
+        &self,
+        controller: &RuntimeController,
+        effort: Effort,
+    ) -> Result<(), FrontendControlError> {
+        controller
+            .configure_model(self.model_configuration(
+                &self.config.model.provider,
+                &self.config.model.name,
+                effort,
+            ))
+            .map_err(Into::into)
+    }
+
+    fn model_configuration(
+        &self,
+        provider: &str,
+        model: &str,
+        effort: Effort,
+    ) -> ModelConfiguration {
+        ModelConfiguration {
+            provider: provider.to_owned(),
+            model: model.to_owned(),
+            effort,
+            api_key: self.credentials.get(provider).cloned(),
+        }
     }
 
     fn authorize_control(
@@ -499,6 +727,84 @@ impl FrontendControlPlane {
     }
 }
 
+fn map_transient_event(
+    event: RuntimeEvent,
+) -> Result<Option<FrontendTransientEvent>, FrontendControlError> {
+    let event = match event {
+        RuntimeEvent::RecoveryAvailable(recovery) => {
+            Some(FrontendTransientEvent::RecoveryAvailable {
+                recovery: serde_json::to_value(recovery)?,
+            })
+        }
+        RuntimeEvent::Settings {
+            model,
+            effort,
+            plan_mode,
+            credential_configured,
+            ..
+        } => Some(FrontendTransientEvent::Settings {
+            model,
+            effort,
+            plan_mode,
+            credential_configured,
+        }),
+        RuntimeEvent::ConfigurationChanged(change) => {
+            Some(FrontendTransientEvent::ConfigurationChanged {
+                revision: change.revision,
+                active_profile: change.active_profile,
+                changed_keys: change.changed_keys,
+                origin: change.origin.label().to_owned(),
+                apply_timing: change.apply_timing.label().to_owned(),
+            })
+        }
+        RuntimeEvent::Notice { title, details } => {
+            Some(FrontendTransientEvent::Notice { title, details })
+        }
+        RuntimeEvent::NewSession => Some(FrontendTransientEvent::NewSession),
+        RuntimeEvent::Progress { turn } => Some(FrontendTransientEvent::Progress { turn }),
+        RuntimeEvent::Failed(message) if is_unjournaled_publication_failure(&message) => {
+            Some(FrontendTransientEvent::Failed { message })
+        }
+        RuntimeEvent::RecoveryCompleted(receipt) => {
+            Some(FrontendTransientEvent::RecoveryCompleted {
+                record: serde_json::to_value(receipt.record)?,
+                audit_path: receipt.audit_path.to_string_lossy().into_owned(),
+            })
+        }
+        RuntimeEvent::Started
+        | RuntimeEvent::AssistantText(_)
+        | RuntimeEvent::Activity(_)
+        | RuntimeEvent::Team(_)
+        | RuntimeEvent::Plan(_)
+        | RuntimeEvent::Question(_)
+        | RuntimeEvent::Usage { .. }
+        | RuntimeEvent::Compacted { .. }
+        | RuntimeEvent::Completed { .. }
+        | RuntimeEvent::TurnFinished
+        | RuntimeEvent::Cancelled
+        | RuntimeEvent::Failed(_) => None,
+    };
+    Ok(event)
+}
+
+fn is_unjournaled_publication_failure(message: &str) -> bool {
+    let message = message.to_ascii_lowercase();
+    message.contains("journal")
+        && (message.contains("publish")
+            || message.contains("persist")
+            || message.contains("commit"))
+}
+
+fn command_is_cacheable(command: &FrontendCommand) -> bool {
+    !matches!(
+        command,
+        FrontendCommand::ListSessions
+            | FrontendCommand::Replay { .. }
+            | FrontendCommand::PollTransient
+            | FrontendCommand::ShowStatus
+    )
+}
+
 fn parse_effort(value: &str) -> Result<Effort, FrontendControlError> {
     match value.trim().to_ascii_lowercase().as_str() {
         "low" => Ok(Effort::Low),
@@ -506,6 +812,46 @@ fn parse_effort(value: &str) -> Result<Effort, FrontendControlError> {
         "high" => Ok(Effort::High),
         "auto" => Ok(Effort::Auto),
         _ => Err(FrontendControlError::InvalidEffort(value.to_owned())),
+    }
+}
+
+fn current_effort(config: &Config) -> Effort {
+    match config.agent.max_turns {
+        0..=99 => Effort::Low,
+        100..=299 => Effort::Medium,
+        _ => Effort::High,
+    }
+}
+
+fn turns_for_effort(effort: Effort) -> u32 {
+    match effort {
+        Effort::Low => 64,
+        Effort::Medium | Effort::Auto => 200,
+        Effort::High => 500,
+    }
+}
+
+fn protocol_for_provider(provider: &str) -> String {
+    match provider {
+        "anthropic" | "anthropic-compatible" => "anthropic".to_owned(),
+        _ => "openai".to_owned(),
+    }
+}
+
+fn parse_recovery_operation(value: &str) -> Result<RecoveryOperation, FrontendControlError> {
+    match value.trim().to_ascii_lowercase().as_str() {
+        "inspect" => Ok(RecoveryOperation::Inspect),
+        "resume" => Ok(RecoveryOperation::Resume),
+        "restorecheckpoint" | "restore_checkpoint" | "restore-checkpoint" => {
+            Ok(RecoveryOperation::RestoreCheckpoint)
+        }
+        "retryverification" | "retry_verification" | "retry-verification" => {
+            Ok(RecoveryOperation::RetryVerification)
+        }
+        "abandon" => Ok(RecoveryOperation::Abandon),
+        _ => Err(FrontendControlError::InvalidRecoveryOperation(
+            value.to_owned(),
+        )),
     }
 }
 
@@ -554,20 +900,26 @@ pub enum FrontendControlError {
     IdempotencyConflict(String),
     #[error("frontend command requires a session id")]
     SessionRequired,
-    #[error("create-session requires a non-empty objective")]
+    #[error("create-session requires text or an attachment")]
     ObjectiveRequired,
     #[error("runtime did not expose a durable session after accepting the objective")]
     RuntimeDidNotAcceptSession,
-    #[error("runtime for session {0} is already active")]
-    RuntimeAlreadyActive(String),
     #[error("runtime for session {0} is not active")]
     RuntimeNotActive(String),
     #[error("invalid effort level {0}")]
     InvalidEffort(String),
+    #[error("invalid recovery operation {0}")]
+    InvalidRecoveryOperation(String),
+    #[error("invalid runtime command: {0}")]
+    InvalidCommand(String),
+    #[error("frontend credential update is invalid")]
+    InvalidCredentialUpdate,
     #[error("frontend client {0} is attached read-only for runtime control")]
     ReadOnlyClient(String),
     #[error("unsupported frontend command: {0}")]
     UnsupportedCommand(&'static str),
+    #[error("recovery context failed: {0}")]
+    Recovery(String),
     #[error(transparent)]
     Artifact(#[from] FrontendArtifactStoreError),
     #[error(transparent)]
@@ -580,130 +932,30 @@ pub enum FrontendControlError {
 
 #[cfg(test)]
 mod tests {
-    use medusa_agent::AgentEngine;
-    use medusa_core::MedusaResult;
-    use medusa_protocol::frontend::FRONTEND_PROTOCOL_VERSION;
-    use medusa_provider::{ModelProvider, ModelRequest, ModelResponse};
-    use time::macros::datetime;
-
     use super::*;
 
-    struct UnusedProvider;
-
-    impl ModelProvider for UnusedProvider {
-        fn complete(&self, _: &ModelRequest) -> MedusaResult<ModelResponse> {
-            unreachable!("session creation does not call the provider")
-        }
-    }
-
-    fn envelope(
-        command_id: &str,
-        idempotency_key: &str,
-        session_id: Option<&str>,
-        command: FrontendCommand,
-    ) -> FrontendCommandEnvelope {
-        FrontendCommandEnvelope {
-            protocol_version: FRONTEND_PROTOCOL_VERSION,
-            command_id: command_id.to_owned(),
-            idempotency_key: idempotency_key.to_owned(),
-            frontend: FrontendKind::Telegram,
-            client_id: "telegram-42".to_owned(),
-            session_id: session_id.map(str::to_owned),
-            turn_id: None,
-            timestamp: datetime!(2026-07-31 00:00 UTC),
-            command,
-        }
+    #[test]
+    fn polling_commands_do_not_grow_the_idempotency_cache() {
+        assert!(!command_is_cacheable(&FrontendCommand::Replay {
+            after_cursor: 0
+        }));
+        assert!(!command_is_cacheable(&FrontendCommand::PollTransient));
+        assert!(command_is_cacheable(&FrontendCommand::CancelTurn));
     }
 
     #[test]
-    fn list_attach_replay_and_cursor_ack_share_one_journal() {
-        let repository = tempfile::tempdir().expect("repository");
-        let session = AgentEngine::new(UnusedProvider, Config::default())
-            .create_session(repository.path(), "Frontend control".to_owned())
-            .expect("session");
-        let session_id = session.id.to_string();
-        let mut control =
-            FrontendControlPlane::new(repository.path().to_path_buf(), Config::default());
-
-        let listed = control
-            .dispatch(envelope(
-                "list-1",
-                "telegram:42:list-1",
-                None,
-                FrontendCommand::ListSessions,
-            ))
-            .expect("list");
-        let FrontendControlResult::Sessions { sessions } = listed.result else {
-            panic!("expected sessions")
-        };
-        assert_eq!(sessions.len(), 1);
-        assert_eq!(sessions[0].id, session_id);
-
-        let attached = control
-            .dispatch(envelope(
-                "attach-1",
-                "telegram:42:attach-1",
-                None,
-                FrontendCommand::Attach {
-                    session_id: session_id.clone(),
-                    mode: FrontendAttachmentMode::ReadOnly,
-                    after_cursor: Some(0),
-                },
-            ))
-            .expect("attach");
-        let FrontendControlResult::Attached { attachment } = attached.result else {
-            panic!("expected attachment")
-        };
-        assert_eq!(attachment.frontend, FrontendKind::Telegram);
-        assert_eq!(
-            attachment.replay_cursor,
-            session.events.last().map_or(0, |event| event.sequence)
+    fn transient_terminal_projection_suppresses_canonical_state() {
+        assert!(
+            map_transient_event(RuntimeEvent::TurnFinished)
+                .expect("map")
+                .is_none()
         );
-        assert_eq!(attachment.replay.len(), 1);
-        assert_eq!(attachment.replay[0].cursor, attachment.replay_cursor);
-        assert!(attachment.replay[0].event_id.ends_with(":telegram"));
-
-        let cursor = attachment.replay_cursor;
-        let acknowledged = control
-            .dispatch(envelope(
-                "ack-1",
-                "telegram:42:ack-1",
-                Some(&session_id),
-                FrontendCommand::AcknowledgeCursor { cursor },
-            ))
-            .expect("acknowledge");
-        let FrontendControlResult::CursorAcknowledged { attachment } = acknowledged.result else {
-            panic!("expected cursor acknowledgement")
-        };
-        assert_eq!(attachment.acknowledged_cursor, cursor);
-    }
-
-    #[test]
-    fn identical_command_is_idempotent_and_conflicting_reuse_fails_closed() {
-        let repository = tempfile::tempdir().expect("repository");
-        let mut control =
-            FrontendControlPlane::new(repository.path().to_path_buf(), Config::default());
-        let request = envelope(
-            "list-1",
-            "telegram:42:stable",
-            None,
-            FrontendCommand::ListSessions,
-        );
-        let first = control.dispatch(request.clone()).expect("first");
-        let second = control.dispatch(request).expect("second");
-        assert_eq!(first, second);
-
-        let conflict = control
-            .dispatch(envelope(
-                "list-2",
-                "telegram:42:stable",
-                None,
-                FrontendCommand::ListSessions,
-            ))
-            .expect_err("conflicting key");
         assert!(matches!(
-            conflict,
-            FrontendControlError::IdempotencyConflict(_)
+            map_transient_event(RuntimeEvent::Failed(
+                "journal publication failed after commit".to_owned()
+            ))
+            .expect("map"),
+            Some(FrontendTransientEvent::Failed { .. })
         ));
     }
 }

@@ -2,7 +2,7 @@
 
 use std::{error::Error, path::PathBuf};
 
-use medusa_daemon::{DaemonPaths, serve};
+use medusa_daemon::{DaemonPaths, serve_with_config};
 
 fn main() -> Result<(), Box<dyn Error>> {
     let mut args = std::env::args_os().skip(1);
@@ -19,7 +19,8 @@ fn main() -> Result<(), Box<dyn Error>> {
             return Err("unexpected extra daemon host arguments".into());
         }
         let repo = repo.canonicalize().unwrap_or(repo);
-        serve(DaemonPaths::for_repo(&repo))?;
+        let config = medusa_desktop_lib::daemon_config().map_err(std::io::Error::other)?;
+        serve_with_config(DaemonPaths::for_repo(&repo), config)?;
         return Ok(());
     }
 

@@ -390,7 +390,7 @@ impl TelegramSessionService {
         let outcome = match action {
             TelegramInboundAction::Forward(envelope) => {
                 let command = envelope.command.clone();
-                let acknowledgement = self.control.dispatch(envelope)?;
+                let acknowledgement = self.control.dispatch(*envelope)?;
                 let binding = self.binding_after_acknowledgement(
                     key,
                     source_chat_kind,
@@ -949,7 +949,9 @@ impl TelegramSessionService {
             | FrontendControlResult::CommandAccepted { session_id, .. }
             | FrontendControlResult::Status { session_id, .. } => Some(session_id.clone()),
             FrontendControlResult::Events { replay } => Some(replay.session_id.clone()),
-            FrontendControlResult::Sessions { .. } | FrontendControlResult::Detached { .. } => None,
+            FrontendControlResult::Sessions { .. }
+            | FrontendControlResult::Detached { .. }
+            | FrontendControlResult::Transient { .. } => None,
         };
         if let Some(session_id) = result_session_id.or_else(|| acknowledgement.session_id.clone()) {
             if binding

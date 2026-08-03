@@ -19,7 +19,7 @@ pub use control_plane::{
 };
 pub use frontend_control::{
     FrontendCommandAcknowledgement, FrontendControlError, FrontendControlPlane,
-    FrontendControlResult,
+    FrontendControlResult, FrontendTransientEvent,
 };
 pub use lifecycle::{DaemonLaunch, DaemonLifecycle, DaemonLifecycleState, DaemonSupervisor};
 pub use live_session::{
@@ -28,7 +28,8 @@ pub use live_session::{
 };
 pub use paths::DaemonPaths;
 pub use protocol::{
-    DAEMON_PROTOCOL_VERSION, JobRecord, JobState, Request, RequestEnvelope, Response,
+    DAEMON_PROTOCOL_VERSION, FrontendArtifactKind, FrontendArtifactUpload,
+    FrontendCredentialUpdate, JobRecord, JobState, Request, RequestEnvelope, Response,
     ResponseEnvelope,
 };
 pub use scheduler::DaemonLimits;

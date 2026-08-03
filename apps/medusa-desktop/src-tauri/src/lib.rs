@@ -77,6 +77,10 @@ use sessions::{runtime_list_sessions, runtime_read_session};
 use voice::{desktop_establish_realtime_session, desktop_realtime_capability};
 use worktree::runtime_read_worktree;
 
+pub fn daemon_config() -> Result<medusa_config::Config, String> {
+    config::active_config()
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() -> tauri::Result<()> {
     tauri::Builder::default()
