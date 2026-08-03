@@ -5,18 +5,24 @@ from pathlib import Path
 
 telegram_path = Path("crates/medusa-daemon/src/telegram/service.rs")
 telegram = telegram_path.read_text(encoding="utf-8")
-required = (
+required_once = (
     "Result<LiveSessionReplayView, TelegramSessionServiceError>",
-    "event: &FrontendEventEnvelope",
     "FrontendControlResult::Events { replay } => Some(replay.session_id.clone())",
     ".replay_events(&binding.client_id, binding.acknowledged_cursor)",
 )
-for anchor in required:
-    if telegram.count(anchor) != 1:
+for anchor in required_once:
+    count = telegram.count(anchor)
+    if count != 1:
         raise SystemExit(
             f"{telegram_path}: expected one canonical Telegram anchor {anchor!r}, "
-            f"found {telegram.count(anchor)}"
+            f"found {count}"
         )
+
+frontend_event_parameters = telegram.count("event: &FrontendEventEnvelope")
+if frontend_event_parameters < 1:
+    raise SystemExit(
+        f"{telegram_path}: canonical Telegram delivery has no FrontendEventEnvelope parameter"
+    )
 
 # The import-shadow hook has already run at Python shutdown. It copies the
 # standard-library module's __file__ value and therefore cannot delete itself;
