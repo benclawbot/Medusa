@@ -56,6 +56,7 @@ medusa-core.workspace = true
 medusa-escalation = { path = "../medusa-escalation" }
 medusa-daemon = { path = "../medusa-daemon" }
 medusa-extensions = { path = "../medusa-extensions" }
+medusa-external-github = { path = "../medusa-external-github" }
 medusa-github = { path = "../medusa-github" }
 medusa-hardening = { path = "../medusa-hardening" }
 medusa-memory = { path = "../medusa-memory" }
