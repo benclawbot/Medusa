@@ -36,6 +36,7 @@ jobs:
       - name: Remove one-shot generator
         run: |
           rm -f .github/scripts/apply-daemon-wire-frontend-protocol.py
+          rm -f .github/scripts/daemon-wire-frontend-trigger.txt
           rm -f .github/workflows/apply-daemon-wire-frontend-protocol.yml
       - name: Commit generated implementation
         run: |
