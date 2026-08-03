@@ -31,7 +31,9 @@ jobs:
           components: rustfmt, clippy
 
       - name: Apply canonical frontend projection migration
-        run: python .github/scripts/apply_652_projection.py
+        run: |
+          python .github/scripts/apply_652_projection.py
+          python .github/scripts/fix_652_projection.py
 
       - name: Format changed Rust sources
         run: cargo fmt --all
@@ -55,6 +57,7 @@ jobs:
       - name: Commit validated migration slice
         run: |
           rm .github/scripts/apply_652_projection.py
+          rm .github/scripts/fix_652_projection.py
           rm .github/workflows/apply-652-shared-frontend-projection.yml
           git config user.name github-actions[bot]
           git config user.email 41898282+github-actions[bot]@users.noreply.github.com
