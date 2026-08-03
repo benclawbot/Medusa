@@ -1,0 +1,91 @@
+name: Repair PR 664
+
+on:
+  push:
+    branches:
+      - agent/651-provider-external-contracts
+
+permissions:
+  contents: write
+
+jobs:
+  repair:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out PR branch
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          ref: agent/651-provider-external-contracts
+          fetch-depth: 0
+
+      - name: Install repository Rust toolchain
+        uses: dtolnay/rust-toolchain@39b0b3842c7e8bbf6904c0bfc3d9006fdd4dc4e0
+
+      - name: Register phase-five architecture crates
+        shell: python
+        run: |
+          import json
+          from pathlib import Path
+
+          baseline_path = Path("docs/architecture/baseline.json")
+          baseline = json.loads(baseline_path.read_text())
+          crates = baseline["components"]["rust_crates"]
+          crates.update({
+              "medusa-external-contracts": "preserve",
+              "medusa-external-github": "adapt",
+              "medusa-external-provider": "adapt",
+          })
+          baseline["components"]["rust_crates"] = dict(sorted(crates.items()))
+
+          groups = baseline["components"]["owner_groups"]
+          additions = {
+              "foundation": "medusa-external-contracts",
+              "integrations": "medusa-external-github",
+              "provider": "medusa-external-provider",
+          }
+          for group, crate in additions.items():
+              groups[group] = sorted(set(groups[group]) | {crate})
+          baseline_path.write_text(json.dumps(baseline, indent=2) + "\n")
+
+          index_path = Path("docs/architecture/INDEX.md")
+          index = index_path.read_text()
+          replacements = {
+              "| GitHub operations | `medusa github` / capability entrypoints | `crates/medusa-github` | guarded typed operation contract |":
+                  "| GitHub operations | `medusa github` / capability entrypoints | `crates/medusa-external-github` over `crates/medusa-github` | versioned attempt-bound operation envelope and normalized receipt |",
+              "| Provider/context resilience | production | quarantined | replace | streaming, cancellation, fallback-health mismatches |":
+                  "| Provider/context resilience | production | quarantined | replace | `medusa-external-contracts` and `medusa-external-provider` establish truthful route state; remaining production consumers must migrate |",
+              "| Provider route/readiness | configuration plus process-local manager state | durable route health contract | claims equal wire behavior |":
+                  "| Provider route/readiness | configuration plus process-local manager state | `medusa-external-contracts` route readiness consumed through `medusa-external-provider` | claims equal wire behavior |\n| External operations | transport-specific requests and receipts | `medusa-external-contracts` envelopes and adapter-normalized receipts | attempts, digests, idempotency, reconciliation, transport identity, and redaction are explicit |",
+              "- **Provider:** selected route → exact capability preflight → abortable request → response/usage event → durable route-health update.":
+                  "- **Provider:** selected route → `medusa-external-provider` capability preflight → abortable request → normalized response/usage event → durable route-health update.\n- **External operation:** typed operation → canonical digest and attempt ID → trusted-host/capability check → adapter dispatch → reconciliation-aware normalized receipt.",
+              "| 5 | #651 | all frontends on the shared core |":
+                  "| 5 | #651 | provider, authentication, cancellation, and external-operation contracts |",
+              "| 6 | #652 | state migration and staged v1 deletion |":
+                  "| 6 | #652 | migrate every production entrypoint and make frontend state truthful |",
+          }
+          for old, new in replacements.items():
+              if old not in index:
+                  raise SystemExit(f"missing architecture index text: {old}")
+              index = index.replace(old, new)
+          index_path.write_text(index)
+
+      - name: Regenerate dependency lock
+        run: cargo generate-lockfile
+
+      - name: Validate repaired gates
+        run: |
+          python scripts/check-architecture-index.py
+          python scripts/architecture-policy.py check --root . --policy .github/architecture-policy.json --report /tmp/architecture-policy-report.md
+          cargo metadata --format-version 1 --locked --no-deps >/dev/null
+          cargo test -p medusa-update --all-targets --locked
+
+      - name: Commit repaired branch state
+        run: |
+          rm .github/workflows/repair-pr-664.yml
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add Cargo.lock crates/medusa-cli/Cargo.toml docs/architecture/baseline.json docs/architecture/owners.json docs/architecture/INDEX.md .github/workflows/repair-pr-664.yml
+          git commit -m "Fix phase-five architecture and lock metadata"
+          git push origin HEAD:agent/651-provider-external-contracts
+
+# Trigger after the workflow exists on the branch.
