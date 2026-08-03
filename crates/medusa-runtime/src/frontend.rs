@@ -68,6 +68,7 @@ impl CanonicalFrontendEventStream {
         Ok(self.pending.pop_front())
     }
 
+    /// Returns the last scanned canonical journal sequence, including non-presentable events.
     #[must_use]
     pub const fn journal_cursor(&self) -> u64 {
         self.journal_cursor
