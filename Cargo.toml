@@ -3,6 +3,7 @@ resolver = "2"
 members = [
   "crates/medusa-core",
   "crates/medusa-evidence",
+  "crates/medusa-external-contracts",
   "crates/medusa-config",
   "crates/medusa-protocol",
   "crates/medusa-testkit",
@@ -74,6 +75,7 @@ verification_gate = "typed-evidence-and-changed-component-authority"
 [workspace.dependencies]
 medusa-core = { path = "crates/medusa-core" }
 medusa-evidence = { path = "crates/medusa-evidence" }
+medusa-external-contracts = { path = "crates/medusa-external-contracts" }
 medusa-protocol = { path = "crates/medusa-protocol" }
 medusa-process-containment = { path = "crates/medusa-process-containment" }
 medusa-testkit = { path = "crates/medusa-testkit" }
@@ -97,3 +99,10 @@ tungstenite = { version = "0.30", default-features = false, features = ["handsha
 
 [workspace.lints.rust]
 unsafe_code = "forbid"
+
+[workspace.lints.clippy]
+all = "deny"
+pedantic = "deny"
+nursery = "deny"
+cargo = "deny"
+multiple_crate_versions = { level = "allow", priority = 1 }
