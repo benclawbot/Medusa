@@ -72,14 +72,14 @@ V2 invariants:
 
 | Mode | Entry point | Current implementation | Shared authority |
 |---|---|---|---|
-| Interactive terminal | `medusa` | `crates/medusa-tui` | `medusa-runtime::RuntimeController` |
+| Interactive terminal | `medusa` | `crates/medusa-tui` | runtime command authority; canonical journal → `medusa-protocol` TUI projection |
 | Headless | `medusa run` | `crates/medusa-cli` | runtime command authority; canonical journal → `medusa-protocol` frontend projection |
 | Daemon service | `medusa __daemon-serve` | `crates/medusa-daemon` | `medusa-runtime::RuntimeController` |
 | Desktop | `apps/medusa-desktop` | React/Tauri application | `medusa-runtime::RuntimeController` |
 | GitHub operations | `medusa github` / capability entrypoints | `crates/medusa-external-github` over `crates/medusa-github` | versioned attempt-bound operation envelope and normalized receipt |
 | Update | `medusa update` | `crates/medusa-update` | Ed25519-verified prebuilt release; explicit `--channel source` developer path |
 
-The phase-6 frontend migration is proceeding in production-entrypoint order. Headless CLI output now tails committed session-journal events through the versioned `medusa-protocol::frontend` projection. TUI, daemon attachment/replay, desktop, and remote voice surfaces remain explicit follow-up slices; process-local runtime events are temporary wakeups rather than user-visible lifecycle authority.
+The phase-6 frontend migration is proceeding in production-entrypoint order. Headless CLI and interactive TUI transcript/lifecycle output now tail committed session-journal events through the versioned `medusa-protocol::frontend` projection. The TUI temporarily retains process-local settings, startup recovery, turn-counter, and explicit reset hints; daemon attachment/replay, desktop, and remote voice surfaces remain follow-up slices.
 
 ## Capability certification
 

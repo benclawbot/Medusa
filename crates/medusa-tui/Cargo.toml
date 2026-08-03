@@ -18,6 +18,7 @@ hex.workspace = true
 image = { version = "0.25", default-features = false, features = ["gif", "jpeg", "png", "webp"] }
 medusa-config = { path = "../medusa-config" }
 medusa-daemon = { path = "../medusa-daemon" }
+medusa-protocol = { path = "../medusa-protocol" }
 medusa-recovery-coordinator = { path = "../medusa-recovery-coordinator" }
 medusa-runtime = { path = "../medusa-runtime" }
 serde.workspace = true

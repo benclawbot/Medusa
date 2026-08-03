@@ -24,6 +24,10 @@ The phase-6 migration order is enforced in reviewable slices:
 
 Telegram keeps its existing `:<frontend>` event identity through a compatibility wrapper, but the wrapper contains no projection logic.
 
+## Migration status
+
+The headless CLI and interactive TUI now consume the canonical stream for durable transcript, plan, question, activity, usage, cancellation, failure, and completion state. The TUI keeps process-local settings, startup recovery, turn-counter, and explicit reset hints only as bounded compatibility inputs while daemon attachment/replay is built.
+
 ## Consequences
 
 - A frontend cannot report completion, cancellation, verification, or integration before the corresponding committed journal event exists.

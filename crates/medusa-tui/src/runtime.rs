@@ -1,4 +1,5 @@
 use std::{
+    collections::VecDeque,
     path::PathBuf,
     sync::{
         Arc, Mutex, TryLockError,
@@ -13,6 +14,11 @@ use crate::app::{
 };
 use crate::clipboard::PromptDraft;
 use crate::commands::{ModelConfiguration, SlashCommand};
+use medusa_protocol::frontend::{
+    FrontendEvent, FrontendEventEnvelope, FrontendKind, PresentationActivity,
+    PresentationActivityKind, PresentationLifecycle,
+};
+use medusa_runtime::frontend::CanonicalFrontendEventStream;
 
 pub use medusa_runtime::{
     RecoveryActionRequest, RecoveryOperation, RecoveryPreflightEvidence, RecoveryView,
@@ -72,28 +78,81 @@ pub struct RuntimeQuestion {
 
 pub struct RuntimeController {
     inner: Arc<Mutex<medusa_runtime::RuntimeController>>,
+    canonical: Mutex<CanonicalPresentation>,
+    active_session_id: Mutex<Option<String>>,
     deferred_events: Receiver<RuntimeEvent>,
     deferred_event_sender: Sender<RuntimeEvent>,
     submission_in_flight: Arc<AtomicBool>,
 }
 
+struct CanonicalPresentation {
+    repo: PathBuf,
+    stream: CanonicalFrontendEventStream,
+    session_id: Option<String>,
+    pending: VecDeque<RuntimeEvent>,
+    run_active: bool,
+}
+
+impl CanonicalPresentation {
+    fn new(repo: PathBuf) -> Self {
+        Self {
+            stream: CanonicalFrontendEventStream::new(repo.clone(), FrontendKind::Tui),
+            repo,
+            session_id: None,
+            pending: VecDeque::new(),
+            run_active: false,
+        }
+    }
+
+    fn reset(&mut self) {
+        self.stream = CanonicalFrontendEventStream::new(self.repo.clone(), FrontendKind::Tui);
+        self.session_id = None;
+        self.pending.clear();
+        self.run_active = false;
+    }
+
+    fn try_event(&mut self, session_id: &str) -> Result<Option<RuntimeEvent>, RuntimeError> {
+        if self.session_id.as_deref() != Some(session_id) {
+            self.session_id = Some(session_id.to_owned());
+            self.pending.clear();
+            self.run_active = false;
+        }
+        if let Some(event) = self.pending.pop_front() {
+            return Ok(Some(event));
+        }
+        while let Some(envelope) = self.stream.try_event(session_id)? {
+            let mut events = map_frontend_event(envelope, &mut self.run_active);
+            if let Some(event) = events.pop_front() {
+                self.pending.extend(events);
+                return Ok(Some(event));
+            }
+        }
+        Ok(None)
+    }
+}
+
 impl RuntimeController {
     pub fn start(repo: PathBuf) -> Self {
-        Self::from_inner(medusa_runtime::RuntimeController::start(repo))
+        let inner = medusa_runtime::RuntimeController::start(repo.clone());
+        Self::from_inner(repo, inner)
     }
 
     pub fn start_resumed(repo: PathBuf, session_id: &str) -> Result<Self, RuntimeError> {
-        medusa_runtime::RuntimeController::start_resumed(repo, session_id).map(Self::from_inner)
+        let inner = medusa_runtime::RuntimeController::start_resumed(repo.clone(), session_id)?;
+        Ok(Self::from_inner(repo, inner))
     }
 
     pub fn start_continue_latest(repo: PathBuf) -> Result<Self, RuntimeError> {
-        medusa_runtime::RuntimeController::start_continue_latest(repo).map(Self::from_inner)
+        let inner = medusa_runtime::RuntimeController::start_continue_latest(repo.clone())?;
+        Ok(Self::from_inner(repo, inner))
     }
 
-    fn from_inner(inner: medusa_runtime::RuntimeController) -> Self {
+    fn from_inner(repo: PathBuf, inner: medusa_runtime::RuntimeController) -> Self {
         let (deferred_event_sender, deferred_events) = mpsc::channel();
         Self {
             inner: Arc::new(Mutex::new(inner)),
+            canonical: Mutex::new(CanonicalPresentation::new(repo)),
+            active_session_id: Mutex::new(None),
             deferred_events,
             deferred_event_sender,
             submission_in_flight: Arc::new(AtomicBool::new(false)),
@@ -168,14 +227,40 @@ impl RuntimeController {
             Ok(event) => return Ok(Some(event)),
             Err(TryRecvError::Disconnected | TryRecvError::Empty) => {}
         }
-        match self.inner.try_lock() {
-            Ok(inner) => inner.try_event().map(|event| event.map(map_event)),
-            Err(TryLockError::Poisoned(poisoned)) => poisoned
-                .into_inner()
-                .try_event()
-                .map(|event| event.map(map_event)),
-            Err(TryLockError::WouldBlock) => Ok(None),
+
+        let (transient, observed_session_id) = match self.inner.try_lock() {
+            Ok(inner) => (inner.try_event()?, inner.active_session_id()),
+            Err(TryLockError::Poisoned(poisoned)) => {
+                let inner = poisoned.into_inner();
+                (inner.try_event()?, inner.active_session_id())
+            }
+            Err(TryLockError::WouldBlock) => (None, None),
+        };
+
+        let reset = matches!(
+            transient.as_ref(),
+            Some(medusa_runtime::RuntimeEvent::NewSession)
+        );
+        let session_id = if reset {
+            *lock(&self.active_session_id) = None;
+            lock(&self.canonical).reset();
+            None
+        } else if let Some(session_id) = observed_session_id {
+            *lock(&self.active_session_id) = Some(session_id.clone());
+            Some(session_id)
+        } else {
+            lock(&self.active_session_id).clone()
+        };
+
+        if let Some(event) =
+            transient.and_then(|event| map_process_event(event, session_id.is_some()))
+        {
+            return Ok(Some(event));
         }
+        let Some(session_id) = session_id else {
+            return Ok(None);
+        };
+        lock(&self.canonical).try_event(&session_id)
     }
 }
 
@@ -196,14 +281,7 @@ where
         .spawn(move || {
             match operation() {
                 Ok(SubmitDisposition::Started) => {}
-                Ok(SubmitDisposition::Queued) => {
-                    let _ = events.send(RuntimeEvent::Notice {
-                        title: "Follow-up queued".to_owned(),
-                        details: vec![
-                            "The prompt will run after the active agent turn.".to_owned(),
-                        ],
-                    });
-                }
+                Ok(SubmitDisposition::Queued) => {}
                 Err(error) => {
                     let _ = events.send(RuntimeEvent::Failed(format!(
                         "submission rejected: {error}"
@@ -235,95 +313,15 @@ fn lock<T>(mutex: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
         .unwrap_or_else(std::sync::PoisonError::into_inner)
 }
 
-fn map_event(event: medusa_runtime::RuntimeEvent) -> RuntimeEvent {
+fn map_process_event(
+    event: medusa_runtime::RuntimeEvent,
+    session_bound: bool,
+) -> Option<RuntimeEvent> {
     match event {
-        medusa_runtime::RuntimeEvent::RecoveryAvailable(view) => RuntimeEvent::Notice {
+        medusa_runtime::RuntimeEvent::RecoveryAvailable(view) => Some(RuntimeEvent::Notice {
             title: "Recovery available".to_owned(),
             details: recovery_details(&view),
-        },
-        medusa_runtime::RuntimeEvent::RecoveryCompleted(receipt) => RuntimeEvent::Notice {
-            title: "Recovery action recorded".to_owned(),
-            details: vec![
-                format!("Session: {}", receipt.record.session_id),
-                format!("Action: {:?}", receipt.record.operation),
-                format!("Outcome: {:?}", receipt.record.outcome),
-                format!("Audit: {}", receipt.audit_path.display()),
-            ],
-        },
-        medusa_runtime::RuntimeEvent::Started => RuntimeEvent::Started,
-        medusa_runtime::RuntimeEvent::AssistantText(text) => RuntimeEvent::AssistantText(text),
-        medusa_runtime::RuntimeEvent::Activity(activity) => {
-            RuntimeEvent::Activity(presentation_activity(activity))
-        }
-        medusa_runtime::RuntimeEvent::Team(snapshot) => RuntimeEvent::Team(snapshot),
-        medusa_runtime::RuntimeEvent::Plan(steps) => RuntimeEvent::Plan(TranscriptPlan {
-            steps: steps
-                .into_iter()
-                .map(|step| TranscriptPlanStep {
-                    title: step.title,
-                    state: match step.status {
-                        medusa_runtime::AgentPlanStepStatus::Pending => {
-                            TranscriptPlanStepState::Pending
-                        }
-                        medusa_runtime::AgentPlanStepStatus::InProgress => {
-                            TranscriptPlanStepState::Active
-                        }
-                        medusa_runtime::AgentPlanStepStatus::Completed => {
-                            TranscriptPlanStepState::Completed
-                        }
-                        medusa_runtime::AgentPlanStepStatus::Failed => {
-                            TranscriptPlanStepState::Failed
-                        }
-                    },
-                })
-                .collect(),
         }),
-        medusa_runtime::RuntimeEvent::Question(question) => {
-            RuntimeEvent::Question(RuntimeQuestion {
-                questions: question
-                    .prompts()
-                    .iter()
-                    .map(|item| QuestionPrompt {
-                        header: item.header.clone(),
-                        question: item.question.clone(),
-                        options: item
-                            .options
-                            .iter()
-                            .map(|option| QuestionOption {
-                                label: option.label.clone(),
-                                description: option.description.clone(),
-                            })
-                            .collect(),
-                        multi_select: item.multi_select,
-                    })
-                    .collect(),
-            })
-        }
-        medusa_runtime::RuntimeEvent::Usage {
-            input_tokens,
-            output_tokens,
-            cache_read_input_tokens,
-            cache_creation_input_tokens,
-            total_tokens,
-            duration_ms,
-            tokens_per_second_milli,
-            estimated_cost_microusd,
-            provenance,
-        } => RuntimeEvent::Usage {
-            input_tokens,
-            output_tokens,
-            cache_read_input_tokens,
-            cache_creation_input_tokens,
-            total_tokens,
-            duration_ms,
-            tokens_per_second_milli,
-            estimated_cost_microusd,
-            provenance: match provenance {
-                medusa_runtime::UsageProvenance::ProviderReported => "provider".to_owned(),
-                medusa_runtime::UsageProvenance::Estimated => "estimated".to_owned(),
-            },
-        },
-        medusa_runtime::RuntimeEvent::Progress { turn } => RuntimeEvent::Progress { turn },
         medusa_runtime::RuntimeEvent::Settings {
             model,
             effort,
@@ -331,15 +329,15 @@ fn map_event(event: medusa_runtime::RuntimeEvent) -> RuntimeEvent {
             credential_configured,
             context_window_tokens,
             auto_compact_percent,
-        } => RuntimeEvent::Settings {
+        } => Some(RuntimeEvent::Settings {
             model,
             effort,
             plan_mode,
             credential_configured,
             context_window_tokens,
             auto_compact_percent,
-        },
-        medusa_runtime::RuntimeEvent::ConfigurationChanged(change) => RuntimeEvent::Notice {
+        }),
+        medusa_runtime::RuntimeEvent::ConfigurationChanged(change) => Some(RuntimeEvent::Notice {
             title: format!("Configuration revision {} applied", change.revision),
             details: vec![
                 format!("Profile: {}", change.active_profile),
@@ -347,28 +345,302 @@ fn map_event(event: medusa_runtime::RuntimeEvent) -> RuntimeEvent {
                 format!("Origin: {:?}", change.origin),
                 format!("Apply timing: {:?}", change.apply_timing),
             ],
-        },
+        }),
         medusa_runtime::RuntimeEvent::Notice { title, details }
             if title == "Runtime capabilities" =>
         {
-            RuntimeEvent::Activity(RuntimeActivity {
+            Some(RuntimeEvent::Activity(RuntimeActivity {
                 id: Some("runtime-capabilities".to_owned()),
                 kind: RuntimeActivityKind::Done,
                 title,
                 details,
-            })
+            }))
         }
         medusa_runtime::RuntimeEvent::Notice { title, details } => {
-            RuntimeEvent::Notice { title, details }
+            Some(RuntimeEvent::Notice { title, details })
         }
-        medusa_runtime::RuntimeEvent::NewSession => RuntimeEvent::NewSession,
-        medusa_runtime::RuntimeEvent::Compacted { message } => RuntimeEvent::Compacted { message },
-        medusa_runtime::RuntimeEvent::Completed { session_id } => {
-            RuntimeEvent::Completed { session_id }
+        medusa_runtime::RuntimeEvent::NewSession => Some(RuntimeEvent::NewSession),
+        medusa_runtime::RuntimeEvent::Progress { turn } => Some(RuntimeEvent::Progress { turn }),
+        medusa_runtime::RuntimeEvent::Cancelled if !session_bound => Some(RuntimeEvent::Cancelled),
+        medusa_runtime::RuntimeEvent::Failed(error) if !session_bound => {
+            Some(RuntimeEvent::Failed(error))
         }
-        medusa_runtime::RuntimeEvent::TurnFinished => RuntimeEvent::TurnFinished,
-        medusa_runtime::RuntimeEvent::Cancelled => RuntimeEvent::Cancelled,
-        medusa_runtime::RuntimeEvent::Failed(error) => RuntimeEvent::Failed(error),
+        medusa_runtime::RuntimeEvent::RecoveryCompleted(_)
+        | medusa_runtime::RuntimeEvent::Started
+        | medusa_runtime::RuntimeEvent::AssistantText(_)
+        | medusa_runtime::RuntimeEvent::Activity(_)
+        | medusa_runtime::RuntimeEvent::Team(_)
+        | medusa_runtime::RuntimeEvent::Plan(_)
+        | medusa_runtime::RuntimeEvent::Question(_)
+        | medusa_runtime::RuntimeEvent::Usage { .. }
+        | medusa_runtime::RuntimeEvent::Compacted { .. }
+        | medusa_runtime::RuntimeEvent::Completed { .. }
+        | medusa_runtime::RuntimeEvent::TurnFinished
+        | medusa_runtime::RuntimeEvent::Cancelled
+        | medusa_runtime::RuntimeEvent::Failed(_) => None,
+    }
+}
+
+fn map_frontend_event(
+    envelope: FrontendEventEnvelope,
+    run_active: &mut bool,
+) -> VecDeque<RuntimeEvent> {
+    let FrontendEventEnvelope {
+        session_id, event, ..
+    } = envelope;
+    let mut events = VecDeque::new();
+    match event {
+        FrontendEvent::SubmissionAccepted | FrontendEvent::Started => {
+            if let Some(event) = canonical_start_event(run_active) {
+                events.push_back(event);
+            }
+        }
+        FrontendEvent::SubmissionQueued { position } => {
+            events.push_back(RuntimeEvent::Notice {
+                title: "Follow-up queued".to_owned(),
+                details: vec![format!("Queue position: {position}")],
+            });
+        }
+        FrontendEvent::AssistantTextDelta { text } | FrontendEvent::AssistantInterim { text } => {
+            events.push_back(RuntimeEvent::AssistantText(text));
+        }
+        FrontendEvent::Activity(activity) => {
+            events.push_back(RuntimeEvent::Activity(map_presentation_activity(activity)));
+        }
+        FrontendEvent::Team {
+            workers,
+            verification,
+        } => {
+            for worker in workers {
+                let mut details = vec![format!("role {}", worker.role)];
+                if let Some(action) = worker.current_action {
+                    details.push(action);
+                }
+                events.push_back(RuntimeEvent::Activity(RuntimeActivity {
+                    id: Some(format!("team:{}", worker.worker_id)),
+                    kind: runtime_activity_kind(PresentationActivityKind::Worker, worker.lifecycle),
+                    title: format!("{} · {}", worker.worker_id, worker.task),
+                    details,
+                }));
+            }
+            if let Some(verification) = verification {
+                events.push_back(RuntimeEvent::Activity(RuntimeActivity {
+                    id: Some("team-verification".to_owned()),
+                    kind: RuntimeActivityKind::Verification,
+                    title: "Team verification".to_owned(),
+                    details: vec![verification],
+                }));
+            }
+        }
+        FrontendEvent::Plan { steps, .. } => {
+            events.push_back(RuntimeEvent::Plan(TranscriptPlan {
+                steps: steps
+                    .into_iter()
+                    .map(|step| TranscriptPlanStep {
+                        title: step.title,
+                        state: match step.lifecycle {
+                            PresentationLifecycle::Active => TranscriptPlanStepState::Active,
+                            PresentationLifecycle::Succeeded => TranscriptPlanStepState::Completed,
+                            PresentationLifecycle::Failed | PresentationLifecycle::Cancelled => {
+                                TranscriptPlanStepState::Failed
+                            }
+                            PresentationLifecycle::Waiting
+                            | PresentationLifecycle::Informational => {
+                                TranscriptPlanStepState::Pending
+                            }
+                        },
+                    })
+                    .collect(),
+            }));
+        }
+        FrontendEvent::Question(question) => {
+            events.push_back(RuntimeEvent::Question(RuntimeQuestion {
+                questions: vec![QuestionPrompt {
+                    header: "Question".to_owned(),
+                    question: question.prompt,
+                    options: question
+                        .options
+                        .into_iter()
+                        .map(|option| QuestionOption {
+                            description: if option.value != option.label {
+                                option.value
+                            } else {
+                                String::new()
+                            },
+                            label: option.label,
+                        })
+                        .collect(),
+                    multi_select: false,
+                }],
+            }));
+        }
+        FrontendEvent::ApprovalRequired(approval) => {
+            events.push_back(RuntimeEvent::Question(RuntimeQuestion {
+                questions: vec![QuestionPrompt {
+                    header: "Approval".to_owned(),
+                    question: format!(
+                        "{} in {}: {} (risk: {})",
+                        approval.action, approval.scope, approval.reason, approval.risk
+                    ),
+                    options: vec![
+                        QuestionOption {
+                            label: "Approve".to_owned(),
+                            description: "Allow this action once".to_owned(),
+                        },
+                        QuestionOption {
+                            label: "Deny".to_owned(),
+                            description: "Do not perform this action".to_owned(),
+                        },
+                    ],
+                    multi_select: false,
+                }],
+            }));
+        }
+        FrontendEvent::Usage {
+            input_tokens,
+            output_tokens,
+            total_tokens,
+            estimated_cost_microusd,
+        } => {
+            events.push_back(RuntimeEvent::Usage {
+                input_tokens,
+                output_tokens,
+                cache_read_input_tokens: 0,
+                cache_creation_input_tokens: 0,
+                total_tokens,
+                duration_ms: 0,
+                tokens_per_second_milli: 0,
+                estimated_cost_microusd,
+                provenance: "canonical-journal".to_owned(),
+            });
+        }
+        FrontendEvent::Progress { turn, .. } => {
+            events.push_back(RuntimeEvent::Progress { turn });
+        }
+        FrontendEvent::SettingsChanged { .. } => {}
+        FrontendEvent::Notice {
+            severity,
+            title,
+            mut details,
+        } => {
+            if severity != "info" {
+                details.insert(0, format!("Severity: {severity}"));
+            }
+            if title == "Conversation compacted" {
+                events.push_back(RuntimeEvent::Compacted {
+                    message: details.join(" · "),
+                });
+            } else {
+                events.push_back(RuntimeEvent::Notice { title, details });
+            }
+        }
+        FrontendEvent::Artifact(artifact) => {
+            let mut details = vec![
+                format!("Media type: {}", artifact.media_type),
+                format!("Evidence: {}", artifact.evidence_ref),
+            ];
+            if let Some(caption) = artifact.caption {
+                details.push(caption);
+            }
+            events.push_back(RuntimeEvent::Activity(RuntimeActivity {
+                id: Some(artifact.artifact_id),
+                kind: RuntimeActivityKind::Done,
+                title: format!("Artifact available: {}", artifact.name),
+                details,
+            }));
+        }
+        FrontendEvent::TurnFinished => {
+            *run_active = false;
+            events.push_back(RuntimeEvent::TurnFinished);
+        }
+        FrontendEvent::Completed { summary } => {
+            *run_active = false;
+            if let Some(summary) = summary {
+                events.push_back(RuntimeEvent::Notice {
+                    title: "Completion report".to_owned(),
+                    details: vec![summary],
+                });
+            }
+            events.push_back(RuntimeEvent::Completed { session_id });
+        }
+        FrontendEvent::Cancelled { reason } => {
+            *run_active = false;
+            if let Some(reason) = reason {
+                events.push_back(RuntimeEvent::Notice {
+                    title: "Cancellation reason".to_owned(),
+                    details: vec![reason],
+                });
+            }
+            events.push_back(RuntimeEvent::Cancelled);
+        }
+        FrontendEvent::Failed { message, recovery } => {
+            *run_active = false;
+            let message = if recovery.is_empty() {
+                message
+            } else {
+                format!("{message}\nRecovery: {}", recovery.join("; "))
+            };
+            events.push_back(RuntimeEvent::Failed(message));
+        }
+    }
+    events
+}
+
+fn canonical_start_event(run_active: &mut bool) -> Option<RuntimeEvent> {
+    if *run_active {
+        None
+    } else {
+        *run_active = true;
+        Some(RuntimeEvent::Started)
+    }
+}
+
+fn map_presentation_activity(activity: PresentationActivity) -> RuntimeActivity {
+    let mut details = activity.details;
+    if !activity.affected_paths.is_empty() {
+        details.push(format!("Paths: {}", activity.affected_paths.join(", ")));
+    }
+    if let Some(evidence) = activity.evidence_ref {
+        details.push(format!("Evidence: {evidence}"));
+    }
+    RuntimeActivity {
+        id: Some(activity.activity_id),
+        kind: runtime_activity_kind(activity.kind, activity.lifecycle),
+        title: activity.title,
+        details,
+    }
+}
+
+fn runtime_activity_kind(
+    kind: PresentationActivityKind,
+    lifecycle: PresentationLifecycle,
+) -> RuntimeActivityKind {
+    match lifecycle {
+        PresentationLifecycle::Failed | PresentationLifecycle::Cancelled => {
+            RuntimeActivityKind::Error
+        }
+        PresentationLifecycle::Succeeded => match kind {
+            PresentationActivityKind::Assistant => RuntimeActivityKind::Assistant,
+            PresentationActivityKind::Verification | PresentationActivityKind::Test => {
+                RuntimeActivityKind::Verification
+            }
+            PresentationActivityKind::Error => RuntimeActivityKind::Error,
+            _ => RuntimeActivityKind::Done,
+        },
+        PresentationLifecycle::Active
+        | PresentationLifecycle::Waiting
+        | PresentationLifecycle::Informational => match kind {
+            PresentationActivityKind::Assistant => RuntimeActivityKind::Assistant,
+            PresentationActivityKind::RepositoryRead
+            | PresentationActivityKind::Edit
+            | PresentationActivityKind::Command => RuntimeActivityKind::Tool,
+            PresentationActivityKind::Verification | PresentationActivityKind::Test => {
+                RuntimeActivityKind::Verification
+            }
+            PresentationActivityKind::Done => RuntimeActivityKind::Done,
+            PresentationActivityKind::Error => RuntimeActivityKind::Error,
+            _ => RuntimeActivityKind::Progress,
+        },
     }
 }
 
@@ -384,57 +656,6 @@ fn recovery_details(view: &medusa_recovery_coordinator::RecoveryView) -> Vec<Str
     }
     details.extend(view.warnings.iter().cloned());
     details
-}
-
-fn presentation_activity(mut activity: RuntimeActivity) -> RuntimeActivity {
-    activity.details.retain(|detail| !detail.trim().is_empty());
-    let (kind, label) = match activity.kind {
-        RuntimeActivityKind::Assistant if !activity.details.is_empty() => {
-            (RuntimeActivityKind::Progress, Some("Assistant"))
-        }
-        RuntimeActivityKind::Tool if !activity.details.is_empty() => (
-            RuntimeActivityKind::Verification,
-            Some(tool_activity_label(&activity.title)),
-        ),
-        _ => (activity.kind, None),
-    };
-    activity.kind = kind;
-    if let Some(label) = label {
-        activity.title = format!("{label} · {}", activity.title);
-    }
-    activity
-}
-
-fn tool_activity_label(title: &str) -> &'static str {
-    let title = title.to_ascii_lowercase();
-    if ["test", "check", "verify", "lint", "clippy"]
-        .iter()
-        .any(|keyword| title.contains(keyword))
-    {
-        "Test"
-    } else if ["edit", "write", "patch", "update", "create", "delete"]
-        .iter()
-        .any(|keyword| title.contains(keyword))
-    {
-        "Edit"
-    } else if ["run", "shell", "command", "build", "cargo", "npm"]
-        .iter()
-        .any(|keyword| title.contains(keyword))
-    {
-        "Run"
-    } else if ["fetch", "download", "http", "web", "request"]
-        .iter()
-        .any(|keyword| title.contains(keyword))
-    {
-        "Fetch"
-    } else if ["read", "search", "find", "list", "inspect", "open"]
-        .iter()
-        .any(|keyword| title.contains(keyword))
-    {
-        "Read"
-    } else {
-        "Tool"
-    }
 }
 
 #[cfg(test)]
@@ -466,6 +687,52 @@ mod tests {
             thread::sleep(Duration::from_millis(5));
         }
         panic!("submission worker did not complete");
+    }
+
+    #[test]
+    fn canonical_start_is_emitted_once_until_terminal_state() {
+        let mut run_active = false;
+        assert!(matches!(
+            canonical_start_event(&mut run_active),
+            Some(RuntimeEvent::Started)
+        ));
+        assert!(canonical_start_event(&mut run_active).is_none());
+        run_active = false;
+        assert!(matches!(
+            canonical_start_event(&mut run_active),
+            Some(RuntimeEvent::Started)
+        ));
+    }
+
+    #[test]
+    fn session_bound_process_terminal_state_is_suppressed() {
+        assert!(map_process_event(medusa_runtime::RuntimeEvent::TurnFinished, true).is_none());
+        assert!(
+            map_process_event(
+                medusa_runtime::RuntimeEvent::Failed("durable failure".to_owned()),
+                true,
+            )
+            .is_none()
+        );
+    }
+
+    #[test]
+    fn pre_session_failure_remains_visible() {
+        assert!(matches!(
+            map_process_event(
+                medusa_runtime::RuntimeEvent::Failed("startup failed".to_owned()),
+                false,
+            ),
+            Some(RuntimeEvent::Failed(error)) if error == "startup failed"
+        ));
+    }
+
+    #[test]
+    fn process_turn_projection_remains_a_compatibility_hint() {
+        assert!(matches!(
+            map_process_event(medusa_runtime::RuntimeEvent::Progress { turn: 7 }, true),
+            Some(RuntimeEvent::Progress { turn: 7 })
+        ));
     }
 
     #[test]
