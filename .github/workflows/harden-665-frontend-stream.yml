@@ -1,0 +1,54 @@
+name: Harden PR 665 frontend stream
+
+on:
+  push:
+    branches:
+      - agent/652-shared-frontend-projection
+  pull_request:
+    branches:
+      - main
+
+permissions:
+  contents: write
+
+concurrency:
+  group: harden-665-frontend-stream
+  cancel-in-progress: true
+
+jobs:
+  harden-and-validate:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out PR branch
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          ref: agent/652-shared-frontend-projection
+          fetch-depth: 0
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@39b0b3842c7e8bbf6904c0bfc3d9006fdd4dc4e0
+        with:
+          components: rustfmt, clippy
+
+      - name: Apply fail-closed stream hardening
+        run: python .github/scripts/harden_665_frontend_stream.py
+
+      - name: Format and validate focused crates
+        run: |
+          cargo fmt --all
+          cargo test -p medusa-runtime --all-targets --locked
+          cargo test -p medusa-cli --all-targets --locked
+          cargo clippy -p medusa-runtime -p medusa-cli --all-targets --locked -- -D warnings
+          python scripts/check-architecture-index.py
+          python scripts/architecture-policy.py check --root . --policy .github/architecture-policy.json --report /tmp/architecture-policy-report.md
+          git diff --check
+
+      - name: Commit validated hardening
+        run: |
+          rm .github/scripts/harden_665_frontend_stream.py
+          rm .github/workflows/harden-665-frontend-stream.yml
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add -A
+          git commit -m "Harden canonical frontend replay failures"
+          git push origin HEAD:agent/652-shared-frontend-projection
