@@ -376,7 +376,16 @@ mod tests {
         config.model.provider = "unsupported-primary".to_owned();
         config.model.fallback_providers = vec![FallbackProviderConfig {
             provider: "unsupported-fallback".to_owned(),
-            ..FallbackProviderConfig::default()
+            name: "fallback-model".to_owned(),
+            protocol: "openai".to_owned(),
+            base_url: Some("https://fallback.example/v1".to_owned()),
+            auth: "api-key".to_owned(),
+            tool_calling: true,
+            streaming: true,
+            max_retries: 1,
+            retry_base_delay_ms: 10,
+            retry_max_delay_ms: 100,
+            retry_jitter_ms: 5,
         }];
         let manager = LazyConfiguredProviderManager::from_config(&config, None).unwrap();
         assert_eq!(manager.initialized_routes(), 0);
