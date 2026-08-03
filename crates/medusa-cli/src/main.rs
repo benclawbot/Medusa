@@ -376,7 +376,10 @@ fn drain_headless_runtime(
                     ApprovalMatch::NotApproval => {}
                 }
             }
-            Some(RuntimeEvent::Failed(error)) if runtime.active_session_id().is_none() => {
+            Some(RuntimeEvent::Failed(error))
+                if runtime.active_session_id().is_none()
+                    || is_unjournaled_runtime_failure(&error) =>
+            {
                 return Err(MedusaError::new(
                     ErrorCode::DependencyUnavailable,
                     ErrorCategory::Execution,
@@ -461,6 +464,10 @@ fn drain_headless_runtime(
             std::thread::yield_now();
         }
     }
+}
+
+fn is_unjournaled_runtime_failure(message: &str) -> bool {
+    message.starts_with("runtime event was not published because")
 }
 
 fn request_daemon_shutdown(repo: &Path) {
@@ -1133,5 +1140,18 @@ mod tests {
         let cli = Cli::try_parse_from(["medusa", "__daemon-serve", "--repo", "."])
             .expect("parse daemon host");
         assert!(matches!(cli.command, Some(CommandKind::DaemonServe)));
+    }
+
+    #[test]
+    fn headless_runtime_fails_closed_when_terminal_publication_is_not_journaled() {
+        assert!(is_unjournaled_runtime_failure(
+            "runtime event was not published because its durable record failed: disk full"
+        ));
+        assert!(is_unjournaled_runtime_failure(
+            "runtime event was not published because durable serialization failed: invalid value"
+        ));
+        assert!(!is_unjournaled_runtime_failure(
+            "provider returned an ordinary session-bound failure"
+        ));
     }
 }

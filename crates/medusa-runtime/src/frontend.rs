@@ -74,3 +74,100 @@ impl CanonicalFrontendEventStream {
         self.journal_cursor
     }
 }
+
+
+#[cfg(test)]
+mod tests {
+    use std::path::Path;
+
+    use medusa_agent::{AgentSession, record_session_event};
+    use medusa_core::SessionId;
+    use medusa_protocol::{
+        Actor, EventPayload,
+        frontend::{FrontendEvent, FrontendKind},
+    };
+    use serde_json::json;
+    use tempfile::tempdir;
+    use time::OffsetDateTime;
+
+    use super::CanonicalFrontendEventStream;
+
+    fn durable_session(repo: &Path) -> AgentSession {
+        AgentSession {
+            id: SessionId::new(),
+            objective: "canonical frontend replay".to_owned(),
+            repo: repo.to_path_buf(),
+            created_at: OffsetDateTime::UNIX_EPOCH,
+            updated_at: OffsetDateTime::UNIX_EPOCH,
+            completed: false,
+            turn: 0,
+            plan: Vec::new(),
+            pending_question: None,
+            messages: Vec::new(),
+            events: Vec::new(),
+            evidence: Vec::new(),
+            tool_artifacts: Vec::new(),
+            world_model: None,
+            approval_grants: Vec::new(),
+            approval_receipts: Vec::new(),
+            rollback_receipts: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn stream_advances_the_canonical_cursor_through_non_presentable_events() {
+        let directory = tempdir().expect("temporary repository");
+        let mut session = durable_session(directory.path());
+        let objective = session.objective.clone();
+        record_session_event(
+            &mut session,
+            Actor::Coordinator,
+            EventPayload::SessionCreated { objective },
+        )
+        .expect("persist session creation");
+        record_session_event(
+            &mut session,
+            Actor::Coordinator,
+            EventPayload::AssistantMessageRecorded {
+                message: json!({
+                    "role": "user",
+                    "content": [{"type": "text", "text": "not assistant-visible"}],
+                }),
+            },
+        )
+        .expect("persist non-presentable event");
+        record_session_event(
+            &mut session,
+            Actor::Coordinator,
+            EventPayload::RuntimeTurnFinished,
+        )
+        .expect("persist terminal event");
+
+        let session_id = session.id.to_string();
+        let mut stream = CanonicalFrontendEventStream::new(
+            directory.path().to_path_buf(),
+            FrontendKind::Headless,
+        );
+        let accepted = stream
+            .try_event(&session_id)
+            .expect("replay accepted event")
+            .expect("accepted event");
+        assert!(matches!(accepted.event, FrontendEvent::SubmissionAccepted));
+        assert_eq!(accepted.cursor, 1);
+        assert!(accepted.event_id.ends_with(":headless"));
+
+        let finished = stream
+            .try_event(&session_id)
+            .expect("replay terminal event")
+            .expect("terminal event");
+        assert!(matches!(finished.event, FrontendEvent::TurnFinished));
+        assert_eq!(finished.cursor, 3);
+        assert_eq!(stream.journal_cursor(), 3);
+        assert!(
+            stream
+                .try_event(&session_id)
+                .expect("replay exhausted")
+                .is_none()
+        );
+    }
+}
