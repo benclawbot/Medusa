@@ -31,6 +31,7 @@ jobs:
         run: |
           python .github/scripts/apply_desktop_daemon_protocol.py
           python .github/scripts/apply_desktop_daemon_authority.py
+          python .github/scripts/fix_desktop_daemon_clippy.py
       - name: Refresh dependency locks
         run: |
           cargo generate-lockfile
@@ -75,6 +76,7 @@ jobs:
         run: |
           rm -f .github/scripts/apply_desktop_daemon_protocol.py
           rm -f .github/scripts/apply_desktop_daemon_authority.py
+          rm -f .github/scripts/fix_desktop_daemon_clippy.py
           rm -f .github/scripts/desktop_authority_payload_*.txt
           rm -f .github/workflows/apply-desktop-daemon-authority.yml
       - name: Commit generated implementation
