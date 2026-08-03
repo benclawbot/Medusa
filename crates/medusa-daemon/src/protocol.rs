@@ -1,8 +1,11 @@
+use medusa_protocol::frontend::FrontendCommandEnvelope;
 use serde::{Deserialize, Serialize};
 use time::OffsetDateTime;
 
+use crate::frontend_control::FrontendCommandAcknowledgement;
+
 /// Version of the daemon wire protocol.
-pub const DAEMON_PROTOCOL_VERSION: u16 = 1;
+pub const DAEMON_PROTOCOL_VERSION: u16 = 2;
 
 /// Durable job lifecycle.
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -49,26 +52,41 @@ pub enum Request {
     Status { job_id: String },
     Cancel { job_id: String },
     List,
+    Frontend { envelope: FrontendCommandEnvelope },
     Shutdown,
     ShutdownNow,
 }
 
 /// Server response envelope.
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
 pub struct ResponseEnvelope {
     pub version: u16,
     pub response: Response,
 }
 
 /// Supported daemon responses.
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum Response {
     Pong,
-    Submitted { job: JobRecord },
-    Status { job: Option<JobRecord> },
-    Cancelled { job: Option<JobRecord> },
-    Jobs { jobs: Vec<JobRecord> },
+    Submitted {
+        job: JobRecord,
+    },
+    Status {
+        job: Option<JobRecord>,
+    },
+    Cancelled {
+        job: Option<JobRecord>,
+    },
+    Jobs {
+        jobs: Vec<JobRecord>,
+    },
+    Frontend {
+        acknowledgement: FrontendCommandAcknowledgement,
+    },
     Ack,
-    Error { code: String, message: String },
+    Error {
+        code: String,
+        message: String,
+    },
 }

@@ -17,12 +17,15 @@ use std::process::Command;
 #[cfg(unix)]
 use std::process::Stdio;
 
+use medusa_config::Config;
 use medusa_core::{ErrorCategory, ErrorCode, MedusaError, MedusaResult};
+use medusa_protocol::frontend::FrontendCommandEnvelope;
 use time::OffsetDateTime;
 use ulid::Ulid;
 
 use crate::{
     cancellation::{append_detail, cancel_all_jobs, cancel_job, mark_job_interrupted},
+    frontend_control::{FrontendCommandAcknowledgement, FrontendControlPlane},
     paths::DaemonPaths,
     process::ProcessRegistry,
     protocol::{
@@ -100,15 +103,48 @@ impl DaemonClient {
         }
         Ok(response.response)
     }
+
+    /// Sends one versioned frontend command through the repository-scoped daemon authority.
+    pub fn frontend(
+        &self,
+        envelope: FrontendCommandEnvelope,
+    ) -> MedusaResult<FrontendCommandAcknowledgement> {
+        match self.request(Request::Frontend { envelope })? {
+            Response::Frontend { acknowledgement } => Ok(acknowledgement),
+            Response::Error { code, message } => Err(MedusaError::new(
+                ErrorCode::DependencyUnavailable,
+                ErrorCategory::Environment,
+                format!("daemon frontend request failed ({code}): {message}"),
+            )),
+            response => Err(MedusaError::new(
+                ErrorCode::InternalInvariant,
+                ErrorCategory::Internal,
+                format!("daemon returned an unexpected frontend response: {response:?}"),
+            )),
+        }
+    }
 }
 
 /// Starts a daemon loop with production limits and blocks until shutdown.
 pub fn serve(paths: DaemonPaths) -> MedusaResult<()> {
-    serve_with_limits(paths, DaemonLimits::default())
+    serve_with_config(paths, Config::default())
+}
+
+/// Starts a daemon loop with production limits and an explicit resolved configuration.
+pub fn serve_with_config(paths: DaemonPaths, config: Config) -> MedusaResult<()> {
+    serve_with_limits_and_config(paths, DaemonLimits::default(), config)
 }
 
 /// Starts a daemon loop with explicit worker and queue limits.
 pub fn serve_with_limits(paths: DaemonPaths, limits: DaemonLimits) -> MedusaResult<()> {
+    serve_with_limits_and_config(paths, limits, Config::default())
+}
+
+fn serve_with_limits_and_config(
+    paths: DaemonPaths,
+    limits: DaemonLimits,
+    config: Config,
+) -> MedusaResult<()> {
     fs::create_dir_all(&paths.directory)?;
     let _ownership = Ownership::acquire(&paths)?;
     let (jobs, recovered) = load_and_recover(&paths)?;
@@ -117,6 +153,10 @@ pub fn serve_with_limits(paths: DaemonPaths, limits: DaemonLimits) -> MedusaResu
     }
     let jobs = Arc::new(Mutex::new(jobs));
     let processes = Arc::new(ProcessRegistry::default());
+    let frontend = Arc::new(Mutex::new(FrontendControlPlane::new(
+        paths.repo.clone(),
+        config,
+    )));
     let listener = LocalListener::bind(&paths.socket).map_err(transport_error)?;
     let scheduler = match start_scheduler(&paths, &jobs, &processes, limits) {
         Ok(scheduler) => scheduler,
@@ -130,6 +170,7 @@ pub fn serve_with_limits(paths: DaemonPaths, limits: DaemonLimits) -> MedusaResu
         paths,
         jobs,
         processes,
+        frontend,
         Arc::new(AtomicU8::new(SHUTDOWN_NONE)),
         scheduler,
     )
@@ -139,13 +180,29 @@ pub fn serve_with_limits(paths: DaemonPaths, limits: DaemonLimits) -> MedusaResu
 pub fn spawn(
     paths: DaemonPaths,
 ) -> MedusaResult<(ServerHandle, thread::JoinHandle<MedusaResult<()>>)> {
-    spawn_with_limits(paths, DaemonLimits::default())
+    spawn_with_config(paths, Config::default())
+}
+
+/// Starts the server in a dedicated thread with an explicit resolved configuration.
+pub fn spawn_with_config(
+    paths: DaemonPaths,
+    config: Config,
+) -> MedusaResult<(ServerHandle, thread::JoinHandle<MedusaResult<()>>)> {
+    spawn_with_limits_and_config(paths, DaemonLimits::default(), config)
 }
 
 /// Starts the server in a dedicated thread with explicit worker and queue limits.
 pub fn spawn_with_limits(
     paths: DaemonPaths,
     limits: DaemonLimits,
+) -> MedusaResult<(ServerHandle, thread::JoinHandle<MedusaResult<()>>)> {
+    spawn_with_limits_and_config(paths, limits, Config::default())
+}
+
+fn spawn_with_limits_and_config(
+    paths: DaemonPaths,
+    limits: DaemonLimits,
+    config: Config,
 ) -> MedusaResult<(ServerHandle, thread::JoinHandle<MedusaResult<()>>)> {
     fs::create_dir_all(&paths.directory)?;
     limits.validate()?;
@@ -162,6 +219,10 @@ pub fn spawn_with_limits(
             }
             let jobs = Arc::new(Mutex::new(jobs));
             let processes = Arc::new(ProcessRegistry::default());
+            let frontend = Arc::new(Mutex::new(FrontendControlPlane::new(
+                paths.repo.clone(),
+                config,
+            )));
             let listener = LocalListener::bind(&paths.socket).map_err(transport_error)?;
             let scheduler = match start_scheduler(&paths, &jobs, &processes, limits) {
                 Ok(scheduler) => scheduler,
@@ -170,7 +231,15 @@ pub fn spawn_with_limits(
                     return Err(error);
                 }
             };
-            run_loop(listener, paths, jobs, processes, server_shutdown, scheduler)
+            run_loop(
+                listener,
+                paths,
+                jobs,
+                processes,
+                frontend,
+                server_shutdown,
+                scheduler,
+            )
         })
         .map_err(|error| {
             MedusaError::new(
@@ -202,6 +271,7 @@ fn run_loop(
     paths: DaemonPaths,
     jobs: Arc<Mutex<BTreeMap<String, JobRecord>>>,
     processes: Arc<ProcessRegistry>,
+    frontend: Arc<Mutex<FrontendControlPlane>>,
     shutdown: Arc<AtomicU8>,
     mut scheduler: JobScheduler,
 ) -> MedusaResult<()> {
@@ -209,8 +279,9 @@ fn run_loop(
         while shutdown.load(Ordering::SeqCst) == SHUTDOWN_NONE {
             match listener.accept() {
                 Ok(stream) => {
-                    let _ =
-                        handle_connection(stream, &paths, &jobs, &processes, &shutdown, &scheduler);
+                    let _ = handle_connection(
+                        stream, &paths, &jobs, &processes, &frontend, &shutdown, &scheduler,
+                    );
                 }
                 Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
                     thread::sleep(Duration::from_millis(20));
@@ -238,6 +309,7 @@ fn handle_connection(
     paths: &DaemonPaths,
     jobs: &Arc<Mutex<BTreeMap<String, JobRecord>>>,
     processes: &Arc<ProcessRegistry>,
+    frontend: &Arc<Mutex<FrontendControlPlane>>,
     shutdown: &Arc<AtomicU8>,
     scheduler: &JobScheduler,
 ) -> MedusaResult<()> {
@@ -275,6 +347,7 @@ fn handle_connection(
             paths,
             jobs,
             processes,
+            frontend,
             shutdown,
             scheduler,
         )?
@@ -300,6 +373,7 @@ fn dispatch(
     paths: &DaemonPaths,
     jobs: &Arc<Mutex<BTreeMap<String, JobRecord>>>,
     processes: &Arc<ProcessRegistry>,
+    frontend: &Arc<Mutex<FrontendControlPlane>>,
     shutdown: &Arc<AtomicU8>,
     scheduler: &JobScheduler,
 ) -> MedusaResult<Response> {
@@ -359,6 +433,16 @@ fn dispatch(
             let locked = lock_jobs(jobs)?;
             Ok(Response::Jobs {
                 jobs: locked.values().cloned().collect(),
+            })
+        }
+        Request::Frontend { envelope } => {
+            let mut control = lock_frontend(frontend)?;
+            Ok(match control.dispatch(envelope) {
+                Ok(acknowledgement) => Response::Frontend { acknowledgement },
+                Err(error) => Response::Error {
+                    code: "frontend_control".to_owned(),
+                    message: error.to_string(),
+                },
             })
         }
         Request::Shutdown => {
@@ -592,6 +676,18 @@ fn validate_program(program: &str) -> MedusaResult<()> {
         ));
     }
     Ok(())
+}
+
+fn lock_frontend(
+    frontend: &Arc<Mutex<FrontendControlPlane>>,
+) -> MedusaResult<std::sync::MutexGuard<'_, FrontendControlPlane>> {
+    frontend.lock().map_err(|_| {
+        MedusaError::new(
+            ErrorCode::InternalInvariant,
+            ErrorCategory::Internal,
+            "daemon frontend control lock was poisoned",
+        )
+    })
 }
 
 pub(crate) fn lock_jobs(
