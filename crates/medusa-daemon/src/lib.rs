@@ -23,7 +23,8 @@ pub use frontend_control::{
 };
 pub use lifecycle::{DaemonLaunch, DaemonLifecycle, DaemonLifecycleState, DaemonSupervisor};
 pub use live_session::{
-    LiveSessionAttachmentView, LiveSessionBroker, LiveSessionBrokerError, LiveSessionSummary,
+    LiveSessionAttachmentView, LiveSessionBroker, LiveSessionBrokerError, LiveSessionReplayView,
+    LiveSessionSummary,
 };
 pub use paths::DaemonPaths;
 pub use protocol::{

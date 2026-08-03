@@ -26,7 +26,7 @@ Telegram keeps its existing `:<frontend>` event identity through a compatibility
 
 ## Migration status
 
-The headless CLI and interactive TUI now consume the canonical stream for durable transcript, plan, question, activity, usage, cancellation, failure, and completion state. The TUI keeps process-local settings, startup recovery, turn-counter, and explicit reset hints only as bounded compatibility inputs while daemon attachment/replay is built.
+The headless CLI and interactive TUI consume the canonical stream for durable transcript, plan, question, activity, usage, cancellation, failure, and completion state. Daemon attachments and replay project the same journal range according to each attached frontend kind and expose a next canonical cursor even when every scanned event is non-presentable. The TUI keeps process-local settings, startup recovery, turn-counter, and reset hints only as bounded compatibility inputs while daemon wire integration is completed.
 
 ## Consequences
 
