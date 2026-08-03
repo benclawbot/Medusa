@@ -2,6 +2,7 @@
 
 mod command;
 mod event;
+mod projection;
 
 use crate::CURRENT_PROTOCOL_VERSION;
 
@@ -15,3 +16,5 @@ pub use event::{
 };
 
 pub const FRONTEND_PROTOCOL_VERSION: crate::ProtocolVersion = CURRENT_PROTOCOL_VERSION;
+
+pub use projection::project_event;

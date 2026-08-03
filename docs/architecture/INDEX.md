@@ -73,11 +73,13 @@ V2 invariants:
 | Mode | Entry point | Current implementation | Shared authority |
 |---|---|---|---|
 | Interactive terminal | `medusa` | `crates/medusa-tui` | `medusa-runtime::RuntimeController` |
-| Headless | `medusa run` | `crates/medusa-cli` | `medusa-runtime::RuntimeController` |
+| Headless | `medusa run` | `crates/medusa-cli` | runtime command authority; canonical journal → `medusa-protocol` frontend projection |
 | Daemon service | `medusa __daemon-serve` | `crates/medusa-daemon` | `medusa-runtime::RuntimeController` |
 | Desktop | `apps/medusa-desktop` | React/Tauri application | `medusa-runtime::RuntimeController` |
 | GitHub operations | `medusa github` / capability entrypoints | `crates/medusa-external-github` over `crates/medusa-github` | versioned attempt-bound operation envelope and normalized receipt |
 | Update | `medusa update` | `crates/medusa-update` | Ed25519-verified prebuilt release; explicit `--channel source` developer path |
+
+The phase-6 frontend migration is proceeding in production-entrypoint order. Headless CLI output now tails committed session-journal events through the versioned `medusa-protocol::frontend` projection. TUI, daemon attachment/replay, desktop, and remote voice surfaces remain explicit follow-up slices; process-local runtime events are temporary wakeups rather than user-visible lifecycle authority.
 
 ## Capability certification
 
@@ -183,6 +185,7 @@ Use [`LEGACY-DELETION.md`](LEGACY-DELETION.md) for deletion gates and [`RELEASE-
 - Decision: [`decisions/0004-authoritative-durable-scheduler.md`](decisions/0004-authoritative-durable-scheduler.md)
 - Decision: [`decisions/0005-transactional-mutation-lifecycle.md`](decisions/0005-transactional-mutation-lifecycle.md)
 - Decision: [`decisions/0006-authoritative-evidence-artifacts-and-verification.md`](decisions/0006-authoritative-evidence-artifacts-and-verification.md)
+- Decision: [`decisions/0007-canonical-frontend-projection.md`](decisions/0007-canonical-frontend-projection.md)
 - Verified update architecture: [`PREBUILT-UPDATES.md`](PREBUILT-UPDATES.md)
 - Machine-readable baseline: [`baseline.json`](baseline.json)
 - Primary component owners: [`owners.json`](owners.json)

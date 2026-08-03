@@ -33,6 +33,7 @@ pub mod commands;
 mod config_command;
 mod error;
 pub mod execution_history;
+pub mod frontend;
 mod learning_retrieval;
 pub mod learning_review;
 mod multi_agent_coordinator;

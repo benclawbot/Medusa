@@ -28,7 +28,10 @@ use medusa_daemon::{DaemonClient, DaemonPaths, Request, serve};
 use medusa_extensions::{DesktopCommanderClient, DesktopCommanderSettings};
 use medusa_hardening::{CURRENT_SCHEMA_VERSION, Migrator};
 use headless_approval::{ApprovalMatch, HeadlessApprovalPolicy};
-use medusa_runtime::{prompt::PromptDraft, RuntimeController, RuntimeEvent};
+use medusa_protocol::frontend::{FrontendEvent, FrontendKind};
+use medusa_runtime::{
+    frontend::CanonicalFrontendEventStream, prompt::PromptDraft, RuntimeController, RuntimeEvent,
+};
 use medusa_tui::{TuiOptions, run as run_tui};
 use serde::Serialize;
 use walkdir::WalkDir;
@@ -280,19 +283,19 @@ fn run() -> MedusaResult<()> {
                 non_interactive,
                 approve_allowlist.as_deref(),
             )?;
-            let runtime = RuntimeController::start_with_config(repo, config);
+            let runtime = RuntimeController::start_with_config(repo.clone(), config);
             runtime
                 .submit(PromptDraft {
                     text: objective,
                     ..PromptDraft::default()
                 })
                 .map_err(runtime_error)?;
-            drain_headless_runtime(&runtime, approval_policy.as_ref())
+            drain_headless_runtime(&runtime, &repo, approval_policy.as_ref())
         }
         CommandKind::Resume { session } => {
             ensure_selected_runtime()?;
             oauth_preflight::run_if_needed(&config)?;
-            let runtime = RuntimeController::start_resumed_with_config(repo, &session, config)
+            let runtime = RuntimeController::start_resumed_with_config(repo.clone(), &session, config)
                 .map_err(runtime_error)?;
             runtime
                 .submit(PromptDraft {
@@ -300,7 +303,7 @@ fn run() -> MedusaResult<()> {
                     ..PromptDraft::default()
                 })
                 .map_err(runtime_error)?;
-            drain_headless_runtime(&runtime, None)
+            drain_headless_runtime(&runtime, &repo, None)
         }
         CommandKind::Config { .. } => unreachable!("handled before runtime config loading"),
         CommandKind::DaemonServe => serve(DaemonPaths::for_repo(&repo)),
@@ -336,81 +339,129 @@ fn repository_path(requested: &Path) -> PathBuf {
 
 fn drain_headless_runtime(
     runtime: &RuntimeController,
+    repo: &Path,
     approval_policy: Option<&HeadlessApprovalPolicy>,
 ) -> MedusaResult<()> {
+    let mut stream = CanonicalFrontendEventStream::new(repo.to_path_buf(), FrontendKind::Headless);
+    let mut automatically_answered_question = false;
     loop {
-        match runtime.try_event().map_err(runtime_error)? {
-            Some(RuntimeEvent::AssistantText(text)) => println!("{text}"),
-            Some(RuntimeEvent::Activity(activity)) => {
-                println!("{}: {}", activity.title, activity.details.join("; "));
-            }
-            Some(RuntimeEvent::Notice { title, details }) => {
-                println!("{title}: {}", details.join("; "));
-            }
+        let runtime_event = runtime.try_event().map_err(runtime_error)?;
+        match runtime_event {
             Some(RuntimeEvent::Question(question)) => {
-                if let Some(policy) = approval_policy {
-                    match policy.matches(&question) {
-                        ApprovalMatch::Approved(command) => {
-                            println!("approved allowlisted command: {command}");
-                            runtime
-                                .submit(PromptDraft {
-                                    text: "approve".to_owned(),
-                                    ..PromptDraft::default()
-                                })
-                                .map_err(runtime_error)?;
-                            continue;
-                        }
-                        ApprovalMatch::Missing(command) => {
-                            return Err(MedusaError::new(
-                                ErrorCode::PolicyDenied,
-                                ErrorCategory::Policy,
-                                format!(
-                                    "headless approval denied for `{command}` because it is not listed in {}. Add the exact command and rerun with `medusa run --non-interactive --approve-allowlist {} <objective>`.",
-                                    policy.source().display(),
-                                    policy.source().display()
-                                ),
-                            ));
-                        }
-                        ApprovalMatch::NotApproval => {}
+                let Some(policy) = approval_policy else {
+                    continue;
+                };
+                match policy.matches(&question) {
+                    ApprovalMatch::Approved(command) => {
+                        println!("approved allowlisted command: {command}");
+                        runtime
+                            .submit(PromptDraft {
+                                text: "approve".to_owned(),
+                                ..PromptDraft::default()
+                            })
+                            .map_err(runtime_error)?;
+                        automatically_answered_question = true;
                     }
+                    ApprovalMatch::Missing(command) => {
+                        return Err(MedusaError::new(
+                            ErrorCode::PolicyDenied,
+                            ErrorCategory::Policy,
+                            format!(
+                                "headless approval denied for `{command}` because it is not listed in {}. Add the exact command and rerun with `medusa run --non-interactive --approve-allowlist {} <objective>`.",
+                                policy.source().display(),
+                                policy.source().display()
+                            ),
+                        ));
+                    }
+                    ApprovalMatch::NotApproval => {}
                 }
-                return Err(MedusaError::new(
-                    ErrorCode::DependencyUnavailable,
-                    ErrorCategory::Execution,
-                    format!(
-                        "agent is waiting for user input, which headless execution cannot provide: {}. For an approval prompt, create an allowlist and rerun with `medusa run --non-interactive --approve-allowlist .medusa/approve.txt <objective>`; otherwise use the interactive terminal.",
-                        question
-                            .prompts()
-                            .first()
-                            .map(|item| item.question.as_str())
-                            .unwrap_or("question details unavailable")
-                    ),
-                ));
             }
-            Some(RuntimeEvent::Completed { session_id }) => {
-                println!("session {session_id} completed");
-                return Ok(());
-            }
-            Some(RuntimeEvent::TurnFinished) => return Ok(()),
-            Some(RuntimeEvent::Cancelled) => {
-                return Err(MedusaError::new(
-                    ErrorCode::DependencyUnavailable,
-                    ErrorCategory::Execution,
-                    "agent execution was cancelled",
-                ));
-            }
-            Some(RuntimeEvent::Failed(error)) => {
+            Some(RuntimeEvent::Failed(error)) if runtime.active_session_id().is_none() => {
                 return Err(MedusaError::new(
                     ErrorCode::DependencyUnavailable,
                     ErrorCategory::Execution,
                     error,
                 ));
             }
-            Some(_) | None => std::thread::yield_now(),
+            _ => {}
+        }
+
+        let Some(session_id) = runtime.active_session_id() else {
+            std::thread::yield_now();
+            continue;
+        };
+        let mut emitted = false;
+        while let Some(envelope) = stream.try_event(&session_id).map_err(runtime_error)? {
+            emitted = true;
+            match envelope.event {
+                FrontendEvent::Started if automatically_answered_question => {
+                    automatically_answered_question = false;
+                }
+                FrontendEvent::AssistantTextDelta { text }
+                | FrontendEvent::AssistantInterim { text } => println!("{text}"),
+                FrontendEvent::Activity(activity) => {
+                    println!("{}: {}", activity.title, activity.details.join("; "));
+                }
+                FrontendEvent::Notice { title, details, .. } => {
+                    println!("{title}: {}", details.join("; "));
+                }
+                FrontendEvent::Question(question) => {
+                    if automatically_answered_question {
+                        continue;
+                    }
+                    return Err(MedusaError::new(
+                        ErrorCode::DependencyUnavailable,
+                        ErrorCategory::Execution,
+                        format!(
+                            "agent is waiting for user input, which headless execution cannot provide: {}. For an approval prompt, create an allowlist and rerun with `medusa run --non-interactive --approve-allowlist .medusa/approve.txt <objective>`; otherwise use the interactive terminal.",
+                            question.prompt
+                        ),
+                    ));
+                }
+                FrontendEvent::ApprovalRequired(approval) => {
+                    if automatically_answered_question {
+                        continue;
+                    }
+                    return Err(MedusaError::new(
+                        ErrorCode::DependencyUnavailable,
+                        ErrorCategory::Execution,
+                        format!(
+                            "agent requires approval for {} ({}) and headless execution has no matching allowlist decision",
+                            approval.action, approval.scope
+                        ),
+                    ));
+                }
+                FrontendEvent::Completed { summary } => {
+                    if let Some(summary) = summary {
+                        println!("session {session_id} completed: {summary}");
+                    } else {
+                        println!("session {session_id} completed");
+                    }
+                    return Ok(());
+                }
+                FrontendEvent::TurnFinished => return Ok(()),
+                FrontendEvent::Cancelled { .. } => {
+                    return Err(MedusaError::new(
+                        ErrorCode::DependencyUnavailable,
+                        ErrorCategory::Execution,
+                        "agent execution was cancelled",
+                    ));
+                }
+                FrontendEvent::Failed { message, .. } => {
+                    return Err(MedusaError::new(
+                        ErrorCode::DependencyUnavailable,
+                        ErrorCategory::Execution,
+                        message,
+                    ));
+                }
+                _ => {}
+            }
+        }
+        if !emitted {
+            std::thread::yield_now();
         }
     }
 }
-
 
 fn request_daemon_shutdown(repo: &Path) {
     let paths = DaemonPaths::for_repo(repo);
