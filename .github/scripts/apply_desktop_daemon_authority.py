@@ -39,3 +39,39 @@ for name in ("artifact", "frontend", "server", "desktop"):
     filename = ROOT / ".github" / "scripts" / f"embedded_{name}.py"
     namespace = {"__name__": "__main__", "__file__": str(filename)}
     exec(compile(scripts[name], str(filename), "exec"), namespace)
+
+
+def replace_once(path: str, old: str, new: str) -> None:
+    target = ROOT / path
+    content = target.read_text()
+    count = content.count(old)
+    if count != 1:
+        raise SystemExit(f"{path}: expected one compatibility anchor, found {count}")
+    target.write_text(content.replace(old, new, 1))
+
+
+replace_once(
+    "crates/medusa-daemon/src/telegram/command.rs",
+    '''            FrontendCommand::CreateSession {
+                repository_profile: config.repository_profile.clone(),
+                objective: non_empty(arguments).map(str::to_owned),
+            },
+''',
+    '''            FrontendCommand::CreateSession {
+                repository_profile: config.repository_profile.clone(),
+                objective: non_empty(arguments).map(str::to_owned),
+                attachment_ids: Vec::new(),
+            },
+''',
+)
+replace_once(
+    "crates/medusa-daemon/src/telegram/service.rs",
+    '''            FrontendControlResult::Events { replay } => Some(replay.session_id.clone()),
+            FrontendControlResult::Sessions { .. } | FrontendControlResult::Detached { .. } => None,
+''',
+    '''            FrontendControlResult::Events { replay } => Some(replay.session_id.clone()),
+            FrontendControlResult::Sessions { .. }
+            | FrontendControlResult::Detached { .. }
+            | FrontendControlResult::Transient { .. } => None,
+''',
+)
