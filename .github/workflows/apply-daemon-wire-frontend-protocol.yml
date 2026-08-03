@@ -27,6 +27,8 @@ jobs:
         run: python3 .github/scripts/fix-daemon-wire-generator.py
       - name: Apply verified daemon wire patch
         run: python3 .github/scripts/apply-daemon-wire-frontend-protocol.py
+      - name: Apply focused source corrections
+        run: python3 .github/scripts/fix-daemon-wire-source.py
       - name: Format
         run: cargo fmt --all
       - name: Validate focused crates
@@ -39,6 +41,7 @@ jobs:
         run: |
           rm -f .github/scripts/apply-daemon-wire-frontend-protocol.py
           rm -f .github/scripts/fix-daemon-wire-generator.py
+          rm -f .github/scripts/fix-daemon-wire-source.py
           rm -f .github/scripts/daemon-wire-frontend-trigger.txt
           rm -f .github/workflows/apply-daemon-wire-frontend-protocol.yml
       - name: Commit generated implementation
