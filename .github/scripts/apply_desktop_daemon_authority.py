@@ -11,6 +11,14 @@ payload = "".join(
 )
 scripts = json.loads(zlib.decompress(base64.b64decode(payload)))
 
+# The protocol pre-pass writes the daemon manifest before this runner executes.
+daemon_manifest = ROOT / "crates" / "medusa-daemon" / "Cargo.toml"
+manifest = daemon_manifest.read_text()
+workspace_base64 = "base64.workspace = true"
+if manifest.count(workspace_base64) != 1:
+    raise SystemExit("daemon manifest no longer contains the expected generated base64 dependency")
+daemon_manifest.write_text(manifest.replace(workspace_base64, 'base64 = "0.22"', 1))
+
 stale_desktop_row = (
     "| Desktop | `apps/medusa-desktop` | React/Tauri application | "
     "`medusa-runtime::RuntimeController` |"
