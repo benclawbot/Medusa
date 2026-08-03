@@ -1,0 +1,49 @@
+name: Apply TUI canonical projection
+
+on:
+  push:
+    branches:
+      - agent/652-tui-canonical-projection
+
+permissions:
+  contents: write
+
+concurrency:
+  group: apply-tui-canonical-projection
+  cancel-in-progress: false
+
+jobs:
+  apply:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: agent/652-tui-canonical-projection
+          fetch-depth: 0
+      - uses: dtolnay/rust-toolchain@39b0b3842c7e8bbf6904c0bfc3d9006fdd4dc4e0 # 1.88.0
+        with:
+          components: clippy,rustfmt
+      - name: Apply verified canonical TUI patch
+        run: python3 .github/scripts/apply-tui-canonical-projection.py
+      - name: Refresh dependency lock
+        run: cargo generate-lockfile
+      - name: Format
+        run: cargo fmt --all
+      - name: Validate focused crates
+        run: cargo test -p medusa-protocol -p medusa-runtime -p medusa-tui --all-targets --locked
+      - name: Lint focused crates
+        run: cargo clippy -p medusa-protocol -p medusa-runtime -p medusa-tui --all-targets --locked -- -D warnings
+      - name: Validate architecture index
+        run: python3 scripts/check-architecture-index.py
+      - name: Remove one-shot generator
+        run: |
+          rm .github/scripts/apply-tui-canonical-projection.py
+          rm .github/workflows/apply-tui-canonical-projection.yml
+      - name: Commit generated implementation
+        run: |
+          git diff --check
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add -A
+          git commit -m "Migrate TUI to canonical frontend projection"
+          git push origin HEAD:agent/652-tui-canonical-projection
