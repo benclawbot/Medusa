@@ -19,3 +19,8 @@ replace_once(
     "use medusa_daemon::{DaemonClient, DaemonPaths, Request, serve_with_config};\n",
     "use medusa_daemon::{DaemonClient, DaemonPaths, Request, serve, serve_with_config};\n",
 )
+replace_once(
+    Path("crates/medusa-daemon/src/server/tests.rs"),
+    "use super::*;\n",
+    "use crate::FrontendControlResult;\n\nuse super::*;\n",
+)
