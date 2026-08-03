@@ -28,6 +28,10 @@ Telegram delivery consumes the same frontend-scoped replay envelopes as every ot
 
 The headless CLI and interactive TUI consume the canonical stream for durable transcript, plan, question, activity, usage, cancellation, failure, and completion state. Daemon attachments and replay project the same journal range according to each attached frontend kind and expose a next canonical cursor even when every scanned event is non-presentable. Telegram delivery consumes those daemon-projected envelopes directly and acknowledges the batch cursor after hidden events, rather than re-projecting raw journal payloads. Daemon protocol v2 exposes the shared frontend command envelope and typed acknowledgement through the repository-scoped local IPC server. Protocol v2 retains the existing durable-job request variants, but daemon request envelopes remain exact-version contracts: a v1 client must upgrade rather than having its payload silently reinterpreted. The desktop now consumes `FrontendKind::Desktop` envelopes for durable transcript, plan, activity, question, usage, cancellation, failure, and completion state. TUI and desktop keep process-local settings, startup recovery, turn-counter, reset hints, and desktop command execution only as bounded compatibility inputs while desktop commands and attachments move to daemon protocol v2.
 
+## Compatibility removal boundary
+
+The desktop process-local command path is a migration-only adapter, not an alternate runtime authority. Its deletion is required by the next desktop daemon-command slice and, in all cases, before issue #652 can close. New desktop lifecycle, transcript, terminal-state, approval, or verification behavior must not be added to that path; only the existing command, attachment conversion, recovery, settings, and reset compatibility inputs may remain until replacement.
+
 ## Consequences
 
 - A frontend cannot report completion, cancellation, verification, or integration before the corresponding committed journal event exists.
