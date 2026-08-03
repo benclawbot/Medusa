@@ -74,12 +74,12 @@ V2 invariants:
 |---|---|---|---|
 | Interactive terminal | `medusa` | `crates/medusa-tui` | runtime command authority; canonical journal → `medusa-protocol` TUI projection |
 | Headless | `medusa run` | `crates/medusa-cli` | runtime command authority; canonical journal → `medusa-protocol` frontend projection |
-| Daemon service | `medusa __daemon-serve` | `crates/medusa-daemon` | `medusa-runtime::RuntimeController` |
+| Daemon service | `medusa __daemon-serve` | `crates/medusa-daemon` | daemon-owned runtime and continuity; canonical journal → frontend-scoped replay batches |
 | Desktop | `apps/medusa-desktop` | React/Tauri application | `medusa-runtime::RuntimeController` |
 | GitHub operations | `medusa github` / capability entrypoints | `crates/medusa-external-github` over `crates/medusa-github` | versioned attempt-bound operation envelope and normalized receipt |
 | Update | `medusa update` | `crates/medusa-update` | Ed25519-verified prebuilt release; explicit `--channel source` developer path |
 
-The phase-6 frontend migration is proceeding in production-entrypoint order. Headless CLI and interactive TUI transcript/lifecycle output now tail committed session-journal events through the versioned `medusa-protocol::frontend` projection. The TUI temporarily retains process-local settings, startup recovery, turn-counter, and explicit reset hints; daemon attachment/replay, desktop, and remote voice surfaces remain follow-up slices.
+The phase-6 frontend migration is proceeding in production-entrypoint order. Headless CLI and interactive TUI output tail committed session-journal events through `medusa-protocol::frontend`. Daemon attachment and replay now return the same frontend-scoped envelopes plus an explicit next canonical cursor that advances through non-presentable events. The TUI temporarily retains local settings, startup recovery, turn-counter, and reset hints; daemon wire integration, desktop, and remote voice surfaces remain follow-up slices.
 
 ## Capability certification
 

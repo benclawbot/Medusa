@@ -7,7 +7,10 @@
 use std::{collections::BTreeMap, path::PathBuf};
 
 use medusa_agent::session_browser::{SessionSummary, list_sessions};
-use medusa_protocol::EventEnvelope;
+use medusa_protocol::{
+    EventEnvelope,
+    frontend::{FrontendEventEnvelope, FrontendKind, project_event},
+};
 use medusa_runtime::attachment::session::{
     AttachmentMode, ClientKind, ContinuitySession, RuntimeAttachRequest, RuntimeSessionAttachment,
 };
@@ -45,17 +48,30 @@ impl From<SessionSummary> for LiveSessionSummary {
     }
 }
 
+/// One frontend-scoped replay batch over an authoritative journal range.
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+pub struct LiveSessionReplayView {
+    pub session_id: String,
+    pub client_id: String,
+    pub frontend: FrontendKind,
+    pub after_cursor: u64,
+    pub next_cursor: u64,
+    pub events: Vec<FrontendEventEnvelope>,
+}
+
 /// Current daemon view of one attached frontend client.
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
 pub struct LiveSessionAttachmentView {
     pub session: LiveSessionSummary,
     pub client_id: String,
     pub client_kind: ClientKind,
+    pub frontend: FrontendKind,
     pub mode: AttachmentMode,
     pub continuity_revision: u64,
     pub acknowledged_cursor: u64,
+    pub replay_cursor: u64,
     pub owner_client_id: Option<String>,
-    pub replay: Vec<EventEnvelope>,
+    pub replay: Vec<FrontendEventEnvelope>,
 }
 
 /// Process-local broker over journal-backed runtime attachments.
@@ -126,10 +142,17 @@ impl LiveSessionBroker {
         &self,
         client_id: &str,
         cursor: u64,
-    ) -> Result<Vec<EventEnvelope>, LiveSessionBrokerError> {
-        self.attachment(client_id)?
-            .replay_from(cursor)
-            .map_err(Into::into)
+    ) -> Result<LiveSessionReplayView, LiveSessionBrokerError> {
+        let attachment = self.attachment(client_id)?;
+        let client_kind = attachment
+            .continuity
+            .attachments
+            .iter()
+            .find(|candidate| candidate.client_id == client_id)
+            .map(|candidate| candidate.client_kind.clone())
+            .ok_or_else(|| LiveSessionBrokerError::ClientNotAttached(client_id.to_owned()))?;
+        let replay = attachment.replay_from(cursor)?;
+        Ok(replay_view(attachment, &client_kind, cursor, replay))
     }
 
     /// Records the highest canonical journal cursor observed by one client.
@@ -245,6 +268,11 @@ fn attachment_view(
         .ok_or_else(|| {
             LiveSessionBrokerError::ClientNotAttached(attachment.client_id().to_owned())
         })?;
+    let frontend = frontend_kind(&metadata.client_kind);
+    let replay_cursor = attachment
+        .replay
+        .last()
+        .map_or(metadata.journal_cursor, |event| event.sequence);
     Ok(LiveSessionAttachmentView {
         session: LiveSessionSummary {
             id: attachment.session.id.to_string(),
@@ -257,12 +285,48 @@ fn attachment_view(
         },
         client_id: attachment.client_id().to_owned(),
         client_kind: metadata.client_kind.clone(),
+        frontend,
         mode: attachment.mode(),
         continuity_revision: attachment.continuity.revision,
         acknowledged_cursor: metadata.journal_cursor,
+        replay_cursor,
         owner_client_id: attachment.continuity.owner_client_id.clone(),
-        replay: attachment.replay.clone(),
+        replay: project_replay(&attachment.replay, frontend),
     })
+}
+
+fn replay_view(
+    attachment: &RuntimeSessionAttachment,
+    client_kind: &ClientKind,
+    after_cursor: u64,
+    replay: Vec<EventEnvelope>,
+) -> LiveSessionReplayView {
+    let frontend = frontend_kind(client_kind);
+    let next_cursor = replay.last().map_or(after_cursor, |event| event.sequence);
+    LiveSessionReplayView {
+        session_id: attachment.session.id.to_string(),
+        client_id: attachment.client_id().to_owned(),
+        frontend,
+        after_cursor,
+        next_cursor,
+        events: project_replay(&replay, frontend),
+    }
+}
+
+fn project_replay(replay: &[EventEnvelope], frontend: FrontendKind) -> Vec<FrontendEventEnvelope> {
+    replay
+        .iter()
+        .filter_map(|event| project_event(event, event.sequence, frontend))
+        .collect()
+}
+
+const fn frontend_kind(client_kind: &ClientKind) -> FrontendKind {
+    match client_kind {
+        ClientKind::Tui => FrontendKind::Tui,
+        ClientKind::Desktop => FrontendKind::Desktop,
+        ClientKind::Telegram => FrontendKind::Telegram,
+        ClientKind::Daemon | ClientKind::Other(_) => FrontendKind::Other,
+    }
 }
 
 #[derive(Debug, Error)]
@@ -284,10 +348,12 @@ pub enum LiveSessionBrokerError {
 
 #[cfg(test)]
 mod tests {
-    use medusa_agent::AgentEngine;
+    use medusa_agent::{AgentEngine, record_session_event};
     use medusa_config::Config;
     use medusa_core::MedusaResult;
+    use medusa_protocol::{Actor, EventPayload, frontend::FrontendKind};
     use medusa_provider::{ModelProvider, ModelRequest, ModelResponse};
+    use serde_json::json;
 
     use super::*;
 
@@ -351,9 +417,18 @@ mod tests {
             ))
             .expect("observer");
         assert_eq!(owner.session.id, observer.session.id);
-        assert_eq!(owner.replay, observer.replay);
+        assert_eq!(owner.frontend, FrontendKind::Tui);
+        assert_eq!(observer.frontend, FrontendKind::Telegram);
+        assert_eq!(owner.replay_cursor, observer.replay_cursor);
+        assert_eq!(owner.replay.len(), observer.replay.len());
+        for (owner_event, observer_event) in owner.replay.iter().zip(&observer.replay) {
+            assert_eq!(owner_event.cursor, observer_event.cursor);
+            assert_eq!(owner_event.event, observer_event.event);
+            assert!(owner_event.event_id.ends_with(":tui"));
+            assert!(observer_event.event_id.ends_with(":telegram"));
+        }
 
-        let cursor = u64::try_from(observer.replay.len()).expect("cursor");
+        let cursor = observer.replay_cursor;
         let acknowledged = broker
             .acknowledge_cursor("telegram-observer", cursor, 30_002, "ack-observer")
             .expect("acknowledge");
@@ -372,7 +447,54 @@ mod tests {
             ))
             .expect("reattach");
         assert_eq!(reattached.acknowledged_cursor, cursor);
+        assert_eq!(reattached.replay_cursor, cursor);
         assert!(reattached.replay.is_empty());
+    }
+
+    #[test]
+    fn replay_cursor_advances_through_non_presentable_events() {
+        let repository = tempfile::tempdir().expect("repository");
+        let mut session = AgentEngine::new(UnusedProvider, Config::default())
+            .create_session(repository.path(), "Hidden replay event".to_owned())
+            .expect("session");
+        record_session_event(
+            &mut session,
+            Actor::Coordinator,
+            EventPayload::AssistantMessageRecorded {
+                message: json!({
+                    "role": "user",
+                    "content": [{"type": "text", "text": "not frontend-visible"}],
+                }),
+            },
+        )
+        .expect("persist hidden event");
+        let session_id = session.id.to_string();
+        let mut broker = LiveSessionBroker::new(repository.path().to_path_buf());
+        let attached = broker
+            .attach(request(
+                &session_id,
+                "desktop-observer",
+                ClientKind::Desktop,
+                AttachmentMode::ReadOnly,
+                0,
+                1,
+                "attach-hidden",
+            ))
+            .expect("attach");
+        assert_eq!(attached.frontend, FrontendKind::Desktop);
+        assert_eq!(attached.acknowledged_cursor, 1);
+        assert_eq!(attached.replay_cursor, 2);
+        assert!(attached.replay.is_empty());
+
+        let replay = broker.replay("desktop-observer", 1).expect("replay");
+        assert_eq!(replay.frontend, FrontendKind::Desktop);
+        assert_eq!(replay.after_cursor, 1);
+        assert_eq!(replay.next_cursor, 2);
+        assert!(replay.events.is_empty());
+        let acknowledged = broker
+            .acknowledge_cursor("desktop-observer", replay.next_cursor, 30_003, "ack-hidden")
+            .expect("ack hidden cursor");
+        assert_eq!(acknowledged.acknowledged_cursor, 2);
     }
 
     #[test]

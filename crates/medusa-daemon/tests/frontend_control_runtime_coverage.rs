@@ -214,10 +214,10 @@ fn resumed_owner_can_drive_frontend_control_commands_idempotently() {
         FrontendControlResult::CancellationRequested { .. }
     ));
 
-    let events = control
+    let replay = control
         .replay_events("desktop-owner", 0)
         .expect("replay attached client events");
-    let cursor = events.last().map_or(1, |event| event.sequence.max(1));
+    let cursor = replay.next_cursor.max(1);
     assert!(matches!(
         control
             .dispatch(envelope(

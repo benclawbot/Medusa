@@ -7,12 +7,9 @@
 use std::{collections::BTreeMap, path::PathBuf};
 
 use medusa_config::Config;
-use medusa_protocol::{
-    EventEnvelope,
-    frontend::{
-        ApprovalDecision, AttachmentMode as FrontendAttachmentMode, FrontendCommand,
-        FrontendCommandEnvelope, FrontendKind,
-    },
+use medusa_protocol::frontend::{
+    ApprovalDecision, AttachmentMode as FrontendAttachmentMode, FrontendCommand,
+    FrontendCommandEnvelope, FrontendKind,
 };
 use medusa_runtime::{
     RuntimeController, SubmitDisposition,
@@ -30,7 +27,8 @@ use crate::{
         FrontendArtifactStoreError,
     },
     live_session::{
-        LiveSessionAttachmentView, LiveSessionBroker, LiveSessionBrokerError, LiveSessionSummary,
+        LiveSessionAttachmentView, LiveSessionBroker, LiveSessionBrokerError,
+        LiveSessionReplayView, LiveSessionSummary,
     },
 };
 
@@ -49,9 +47,7 @@ pub enum FrontendControlResult {
         owner_client_id: Option<String>,
     },
     Events {
-        session_id: String,
-        after_cursor: u64,
-        events: Vec<EventEnvelope>,
+        replay: LiveSessionReplayView,
     },
     CursorAcknowledged {
         attachment: LiveSessionAttachmentView,
@@ -125,7 +121,7 @@ impl FrontendControlPlane {
         &self,
         client_id: &str,
         cursor: u64,
-    ) -> Result<Vec<EventEnvelope>, FrontendControlError> {
+    ) -> Result<LiveSessionReplayView, FrontendControlError> {
         self.broker.replay(client_id, cursor).map_err(Into::into)
     }
 
@@ -658,9 +654,16 @@ mod tests {
         let FrontendControlResult::Attached { attachment } = attached.result else {
             panic!("expected attachment")
         };
-        assert_eq!(attachment.replay, session.events);
+        assert_eq!(attachment.frontend, FrontendKind::Telegram);
+        assert_eq!(
+            attachment.replay_cursor,
+            session.events.last().map_or(0, |event| event.sequence)
+        );
+        assert_eq!(attachment.replay.len(), 1);
+        assert_eq!(attachment.replay[0].cursor, attachment.replay_cursor);
+        assert!(attachment.replay[0].event_id.ends_with(":telegram"));
 
-        let cursor = u64::try_from(attachment.replay.len()).expect("cursor");
+        let cursor = attachment.replay_cursor;
         let acknowledged = control
             .dispatch(envelope(
                 "ack-1",

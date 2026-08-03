@@ -11,12 +11,9 @@ use std::{
     path::{Path, PathBuf},
 };
 
-use medusa_protocol::{
-    EventEnvelope, EventPayload,
-    frontend::{
-        AttachmentMode, FRONTEND_PROTOCOL_VERSION, FrontendCommand, FrontendCommandEnvelope,
-        FrontendKind,
-    },
+use medusa_protocol::frontend::{
+    AttachmentMode, FRONTEND_PROTOCOL_VERSION, FrontendCommand, FrontendCommandEnvelope,
+    FrontendEvent, FrontendEventEnvelope, FrontendKind,
 };
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
@@ -25,7 +22,7 @@ use super::bot_api::TelegramOutboundFile;
 
 use crate::{
     FrontendCommandAcknowledgement, FrontendControlError, FrontendControlPlane,
-    FrontendControlResult,
+    FrontendControlResult, LiveSessionReplayView,
 };
 
 use super::{
@@ -36,7 +33,6 @@ use super::{
     bot_api::{TelegramBotApiClient, TelegramUpdateCursor},
     callback::CallbackStore,
     delivery::execute_actions,
-    project_event,
 };
 
 const LEGACY_TELEGRAM_SERVICE_SCHEMA_VERSION: u32 = 1;
@@ -662,13 +658,23 @@ impl TelegramSessionService {
             let Some(session_id) = binding.session_id.clone() else {
                 continue;
             };
-            let events = self.replay_for_binding(&binding, &session_id, now)?;
-            for event in events {
-                if event.sequence <= binding.acknowledged_cursor {
+            let replay = self.replay_for_binding(&binding, &session_id, now)?;
+            for event in &replay.events {
+                if event.cursor <= binding.acknowledged_cursor {
                     continue;
                 }
-                self.deliver_event(client, voice_pipeline, &stable_id, &event, now)?;
+                self.deliver_event(client, voice_pipeline, &stable_id, event, now)?;
                 delivered = delivered.saturating_add(1);
+            }
+            let acknowledged_cursor = self
+                .state
+                .bindings
+                .get(&stable_id)
+                .map_or(binding.acknowledged_cursor, |current| {
+                    current.acknowledged_cursor
+                });
+            if replay.next_cursor > acknowledged_cursor {
+                self.acknowledge_binding_cursor(&stable_id, &session_id, replay.next_cursor, now)?;
             }
         }
         Ok(delivered)
@@ -679,7 +685,7 @@ impl TelegramSessionService {
         binding: &TelegramSessionBinding,
         session_id: &str,
         now: time::OffsetDateTime,
-    ) -> Result<Vec<EventEnvelope>, TelegramSessionServiceError> {
+    ) -> Result<LiveSessionReplayView, TelegramSessionServiceError> {
         if self.attached_clients.contains(&binding.client_id) {
             return self
                 .control
@@ -711,7 +717,14 @@ impl TelegramSessionService {
             return Err(TelegramSessionServiceError::InvalidReplayAttachment);
         };
         self.attached_clients.insert(binding.client_id.clone());
-        Ok(attachment.replay)
+        Ok(LiveSessionReplayView {
+            session_id: attachment.session.id.clone(),
+            client_id: attachment.client_id.clone(),
+            frontend: attachment.frontend,
+            after_cursor: binding.acknowledged_cursor,
+            next_cursor: attachment.replay_cursor,
+            events: attachment.replay,
+        })
     }
 
     fn deliver_event(
@@ -719,7 +732,7 @@ impl TelegramSessionService {
         client: &TelegramBotApiClient,
         voice_pipeline: Option<&TelegramVoicePipeline>,
         stable_id: &str,
-        event: &EventEnvelope,
+        event: &FrontendEventEnvelope,
         now: time::OffsetDateTime,
     ) -> Result<(), TelegramSessionServiceError> {
         let original_state = self.state.clone();
@@ -742,15 +755,13 @@ impl TelegramSessionService {
             bot_mentioned: true,
         };
 
-        if event.sequence > binding.delivered_cursor {
-            match &event.payload {
-                EventPayload::UserFollowupDequeued { command_id, .. } => {
+        if event.cursor > binding.delivered_cursor {
+            match &event.event {
+                FrontendEvent::Started => {
                     self.state
-                        .activate_queued_voice_command(stable_id, command_id);
+                        .activate_queued_voice_command(stable_id, &event.correlation_id);
                 }
-                EventPayload::CancellationCompleted
-                | EventPayload::RuntimeFailed { .. }
-                | EventPayload::SessionFailed { .. } => {
+                FrontendEvent::Cancelled { .. } | FrontendEvent::Failed { .. } => {
                     self.state.clear_active_voice_reply(stable_id);
                 }
                 _ => {}
@@ -762,55 +773,49 @@ impl TelegramSessionService {
                 .renderer
                 .take()
                 .map_or_else(|| TelegramRenderer::new(display, source_message_id), Ok)?;
-            if matches!(
-                &event.payload,
-                EventPayload::UserPromptReceived { .. } | EventPayload::UserFollowupDequeued { .. }
-            ) {
+            if matches!(&event.event, FrontendEvent::Started) {
                 renderer.begin_turn(source_message_id);
             }
-            let next_presentation_cursor = binding.presentation_cursor.saturating_add(1);
-            if let Some(projected) = project_event(event, next_presentation_cursor) {
-                let actions = renderer.render(&projected, now)?;
-                let mini_app_url = if self.gateway.config().voice.mini_app_enabled {
-                    match (
-                        self.gateway.config().voice.mini_app_public_url.as_deref(),
-                        self.mini_app_bridge.as_ref(),
-                    ) {
-                        (Some(base), Some(bridge)) => {
-                            let ticket = bridge.issue_launch_ticket(&identity, &session_id, now)?;
-                            let separator = if base.contains('?') { '&' } else { '?' };
-                            Some(format!("{base}{separator}ticket={}", ticket.token))
-                        }
-                        _ => None,
+            let actions = renderer.render(event, now)?;
+            let mini_app_url = if self.gateway.config().voice.mini_app_enabled {
+                match (
+                    self.gateway.config().voice.mini_app_public_url.as_deref(),
+                    self.mini_app_bridge.as_ref(),
+                ) {
+                    (Some(base), Some(bridge)) => {
+                        let ticket = bridge.issue_launch_ticket(&identity, &session_id, now)?;
+                        let separator = if base.contains('?') { '&' } else { '?' };
+                        Some(format!("{base}{separator}ticket={}", ticket.token))
                     }
-                } else {
-                    None
-                };
-                execute_actions(
-                    client,
-                    &mut self.gateway,
-                    &self.control,
-                    &identity,
-                    &session_id,
-                    projected.turn_id.as_deref(),
-                    &mut binding.delivery,
-                    &actions,
-                    mini_app_url.as_deref(),
-                    now,
-                )?;
-                self.deliver_voice_reply(
-                    client,
-                    voice_pipeline,
-                    stable_id,
-                    event,
-                    &identity,
-                    &mut binding,
-                    &actions,
-                )?;
-                binding.presentation_cursor = next_presentation_cursor;
-            }
+                    _ => None,
+                }
+            } else {
+                None
+            };
+            execute_actions(
+                client,
+                &mut self.gateway,
+                &self.control,
+                &identity,
+                &session_id,
+                event.turn_id.as_deref(),
+                &mut binding.delivery,
+                &actions,
+                mini_app_url.as_deref(),
+                now,
+            )?;
+            self.deliver_voice_reply(
+                client,
+                voice_pipeline,
+                stable_id,
+                event,
+                &identity,
+                &mut binding,
+                &actions,
+            )?;
+            binding.presentation_cursor = event.cursor;
             binding.renderer = Some(renderer);
-            binding.delivered_cursor = event.sequence;
+            binding.delivered_cursor = event.cursor;
             self.state
                 .bindings
                 .insert(stable_id.to_owned(), binding.clone());
@@ -821,35 +826,54 @@ impl TelegramSessionService {
             }
         }
 
-        if event.sequence > binding.acknowledged_cursor {
-            let acknowledgement = self.control.dispatch(FrontendCommandEnvelope {
-                protocol_version: FRONTEND_PROTOCOL_VERSION,
-                command_id: format!(
-                    "telegram-cursor-{}",
-                    digest_prefix(&format!("{stable_id}:{}", event.sequence))
-                ),
-                idempotency_key: format!("telegram:{stable_id}:cursor:{}", event.sequence),
-                frontend: FrontendKind::Telegram,
-                client_id: binding.client_id.clone(),
-                session_id: Some(session_id),
-                turn_id: None,
-                timestamp: now,
-                command: FrontendCommand::AcknowledgeCursor {
-                    cursor: event.sequence,
-                },
-            })?;
-            let FrontendControlResult::CursorAcknowledged { attachment } = acknowledgement.result
-            else {
-                return Err(TelegramSessionServiceError::InvalidCursorAcknowledgement);
-            };
-            let entry = self
-                .state
-                .bindings
-                .get_mut(stable_id)
-                .ok_or(TelegramSessionServiceError::BindingNotFound)?;
-            entry.acknowledged_cursor = attachment.acknowledged_cursor;
-            self.persist()?;
+        if event.cursor > binding.acknowledged_cursor {
+            self.acknowledge_binding_cursor(stable_id, &session_id, event.cursor, now)?;
         }
+        Ok(())
+    }
+
+    fn acknowledge_binding_cursor(
+        &mut self,
+        stable_id: &str,
+        session_id: &str,
+        cursor: u64,
+        now: time::OffsetDateTime,
+    ) -> Result<(), TelegramSessionServiceError> {
+        let binding = self
+            .state
+            .bindings
+            .get(stable_id)
+            .cloned()
+            .ok_or(TelegramSessionServiceError::BindingNotFound)?;
+        if cursor <= binding.acknowledged_cursor {
+            return Ok(());
+        }
+        let acknowledgement = self.control.dispatch(FrontendCommandEnvelope {
+            protocol_version: FRONTEND_PROTOCOL_VERSION,
+            command_id: format!(
+                "telegram-cursor-{}",
+                digest_prefix(&format!("{stable_id}:{cursor}"))
+            ),
+            idempotency_key: format!("telegram:{stable_id}:cursor:{cursor}"),
+            frontend: FrontendKind::Telegram,
+            client_id: binding.client_id,
+            session_id: Some(session_id.to_owned()),
+            turn_id: None,
+            timestamp: now,
+            command: FrontendCommand::AcknowledgeCursor { cursor },
+        })?;
+        let FrontendControlResult::CursorAcknowledged { attachment } = acknowledgement.result
+        else {
+            return Err(TelegramSessionServiceError::InvalidCursorAcknowledgement);
+        };
+        let entry = self
+            .state
+            .bindings
+            .get_mut(stable_id)
+            .ok_or(TelegramSessionServiceError::BindingNotFound)?;
+        entry.acknowledged_cursor = attachment.acknowledged_cursor;
+        entry.delivered_cursor = entry.delivered_cursor.max(cursor);
+        self.persist()?;
         Ok(())
     }
 
@@ -859,12 +883,12 @@ impl TelegramSessionService {
         client: &TelegramBotApiClient,
         voice_pipeline: Option<&TelegramVoicePipeline>,
         stable_id: &str,
-        event: &EventEnvelope,
+        event: &FrontendEventEnvelope,
         identity: &TelegramIdentity,
         binding: &mut TelegramSessionBinding,
         actions: &[TelegramAction],
     ) -> Result<(), TelegramSessionServiceError> {
-        if !matches!(&event.payload, EventPayload::RuntimeTurnFinished) {
+        if !matches!(&event.event, FrontendEvent::TurnFinished) {
             return Ok(());
         }
         let requested = binding.voice_mode == TelegramVoiceMode::All
@@ -877,7 +901,7 @@ impl TelegramSessionService {
         let text =
             final_voice_text(actions).ok_or(TelegramSessionServiceError::VoiceReplyMissingText)?;
         let voice = pipeline.synthesize(&text)?;
-        let slot = TelegramMessageSlot::Notice(format!("voice:{}", event.sequence));
+        let slot = TelegramMessageSlot::Notice(format!("voice:{}", event.cursor));
         if !binding.delivery.slots.contains_key(&slot) {
             let message = client.send_voice(
                 identity.chat_id,
@@ -923,8 +947,8 @@ impl TelegramSessionService {
             FrontendControlResult::SubmissionAccepted { session_id, .. }
             | FrontendControlResult::CancellationRequested { session_id, .. }
             | FrontendControlResult::CommandAccepted { session_id, .. }
-            | FrontendControlResult::Status { session_id, .. }
-            | FrontendControlResult::Events { session_id, .. } => Some(session_id.clone()),
+            | FrontendControlResult::Status { session_id, .. } => Some(session_id.clone()),
+            FrontendControlResult::Events { replay } => Some(replay.session_id.clone()),
             FrontendControlResult::Sessions { .. } | FrontendControlResult::Detached { .. } => None,
         };
         if let Some(session_id) = result_session_id.or_else(|| acknowledgement.session_id.clone()) {
