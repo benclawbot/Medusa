@@ -76,7 +76,7 @@ V2 invariants:
 | Headless | `medusa run` | `crates/medusa-cli` | `medusa-runtime::RuntimeController` |
 | Daemon service | `medusa __daemon-serve` | `crates/medusa-daemon` | `medusa-runtime::RuntimeController` |
 | Desktop | `apps/medusa-desktop` | React/Tauri application | `medusa-runtime::RuntimeController` |
-| GitHub operations | `medusa github` / capability entrypoints | `crates/medusa-github` | guarded typed operation contract |
+| GitHub operations | `medusa github` / capability entrypoints | `crates/medusa-external-github` over `crates/medusa-github` | versioned attempt-bound operation envelope and normalized receipt |
 | Update | `medusa update` | `crates/medusa-update` | Ed25519-verified prebuilt release; explicit `--channel source` developer path |
 
 ## Capability certification
@@ -90,7 +90,7 @@ Runtime readiness distinguishes design, experimental, partial, and production be
 | Shared runtime | production | legacy-uncertified | replace authority contracts | lifecycle and ownership remain implicit |
 | Durable sessions and memory | production | legacy-uncertified | adapt | projections must be separated from authority |
 | GitHub service | production | legacy-uncertified | adapt | complete OAuth/backend contract migration |
-| Provider/context resilience | production | quarantined | replace | streaming, cancellation, fallback-health mismatches |
+| Provider/context resilience | production | quarantined | replace | `medusa-external-contracts` and `medusa-external-provider` establish truthful route state; remaining production consumers must migrate |
 | Identity, approvals, transactions | production | legacy-uncertified | adapt | centralize mutation receipts and authority |
 | Evidence, artifacts, verification | legacy-free-form | certified-production | preserve | typed source-bound receipts and content-addressed artifacts are authoritative |
 | Daemon | production | legacy-uncertified | adapt | version daemon/remote contracts |
@@ -114,7 +114,8 @@ The complete machine-readable matrix is in `baseline.json`. The critical rows ar
 | Mutation | worktree manager and transaction receipts | one mutation service | accepted review precedes integration |
 | Review | parent review after integration | independent prepared-change review | integration requires an accepted receipt |
 | Verification | `medusa-evidence::VerificationPlan` and `VerificationReceipt` | typed changed-component authority | every required check is bound to the exact commit, scope, command outputs, and artifacts |
-| Provider route/readiness | configuration plus process-local manager state | durable route health contract | claims equal wire behavior |
+| Provider route/readiness | configuration plus process-local manager state | `medusa-external-contracts` route readiness consumed through `medusa-external-provider` | claims equal wire behavior |
+| External operations | transport-specific requests and receipts | `medusa-external-contracts` envelopes and adapter-normalized receipts | attempts, digests, idempotency, reconciliation, transport identity, and redaction are explicit |
 | Capability availability | legacy claims plus UI/docs | generated registry | no advertised action without certified dispatch |
 | Evidence/artifacts | `EvidenceBundle` and content-addressed `ArtifactStore` | typed source-bound envelope | conclusions resolve exact sources and durable read receipts |
 | Updates/releases | workflows plus source updater | Ed25519-verified prebuilt manifest | no silent source compilation |
@@ -123,7 +124,8 @@ The complete machine-readable matrix is in `baseline.json`. The critical rows ar
 
 - **Session:** frontend command → runtime command envelope → session journal → durable projection → frontend event.
 - **Execution:** plan aggregate → immutable task contract → lease → isolated implementation → changed-path verification → review receipt → integration receipt → repository verification.
-- **Provider:** selected route → exact capability preflight → abortable request → response/usage event → durable route-health update.
+- **Provider:** selected route → `medusa-external-provider` capability preflight → abortable request → normalized response/usage event → durable route-health update.
+- **External operation:** typed operation → canonical digest and attempt ID → trusted-host/capability check → adapter dispatch → reconciliation-aware normalized receipt.
 - **Evidence:** exact changed components → selected checks → raw command/browser/artifact outputs → content-addressed artifacts and read receipts → typed claims/decisions → review, scheduler, authorization, integration, report, and UI consumers.
 - **Persistence:** every mutable concern identifies one journal or aggregate; caches and UI projections are reconstructable and never authoritative.
 
@@ -167,8 +169,8 @@ A new crate, entrypoint, authority, capability, provider route, frontend, persis
 | 2 | #648 | one orchestration core and state ownership |
 | 3 | #649 | transactional mutation, review, verification, and integration lifecycle |
 | 4 | #650 | authoritative evidence, artifacts, and changed-component verification |
-| 5 | #651 | all frontends on the shared core |
-| 6 | #652 | state migration and staged v1 deletion |
+| 5 | #651 | provider, authentication, cancellation, and external-operation contracts |
+| 6 | #652 | migrate every production entrypoint and make frontend state truthful |
 | 7 | #654 | certify every real entrypoint and delete the remaining legacy core |
 
 Use [`LEGACY-DELETION.md`](LEGACY-DELETION.md) for deletion gates and [`RELEASE-POLICY.md`](RELEASE-POLICY.md) for freeze and release rules.

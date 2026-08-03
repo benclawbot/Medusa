@@ -1191,6 +1191,7 @@ dependencies = [
  "medusa-daemon",
  "medusa-escalation",
  "medusa-extensions",
+ "medusa-external-github",
  "medusa-github",
  "medusa-hardening",
  "medusa-memory",
@@ -1359,6 +1360,43 @@ dependencies = [
  "sha2",
  "tempfile",
  "time",
+]
+
+[[package]]
+name = "medusa-external-contracts"
+version = "1.0.0"
+dependencies = [
+ "hex",
+ "proptest",
+ "serde",
+ "serde_json",
+ "sha2",
+ "thiserror",
+ "time",
+ "ulid",
+]
+
+[[package]]
+name = "medusa-external-github"
+version = "1.0.0"
+dependencies = [
+ "medusa-core",
+ "medusa-external-contracts",
+ "medusa-github",
+ "serde",
+ "serde_json",
+ "tempfile",
+]
+
+[[package]]
+name = "medusa-external-provider"
+version = "1.0.0"
+dependencies = [
+ "medusa-config",
+ "medusa-core",
+ "medusa-external-contracts",
+ "medusa-provider",
+ "serde_json",
 ]
 
 [[package]]
@@ -1610,6 +1648,7 @@ dependencies = [
  "medusa-evidence",
  "medusa-execution-checkpoint",
  "medusa-execution-replay",
+ "medusa-external-provider",
  "medusa-improvement",
  "medusa-markdown-memory",
  "medusa-mcp-cache",
@@ -1619,7 +1658,6 @@ dependencies = [
  "medusa-multi-agent-scheduler",
  "medusa-openai-realtime",
  "medusa-protocol",
- "medusa-provider",
  "medusa-recovery-coordinator",
  "medusa-review-model",
  "medusa-session-continuity",
