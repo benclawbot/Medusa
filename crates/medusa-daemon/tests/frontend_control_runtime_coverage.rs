@@ -72,9 +72,15 @@ fn resumed_owner_can_drive_frontend_control_commands_idempotently() {
             FrontendCommand::ListSessions,
         )
     };
+    let polling_reuse = control
+        .dispatch(conflicting)
+        .expect("polling commands do not reserve idempotency keys");
     assert!(matches!(
-        control.dispatch(conflicting),
-        Err(FrontendControlError::IdempotencyConflict(_))
+        polling_reuse.result,
+        FrontendControlResult::Status {
+            runtime_active: false,
+            ..
+        }
     ));
 
     let resumed = control
@@ -91,19 +97,22 @@ fn resumed_owner_can_drive_frontend_control_commands_idempotently() {
         resumed.result,
         FrontendControlResult::RuntimeReady { .. }
     ));
-    assert!(matches!(
-        control.dispatch(envelope(
+    let resumed_again = control
+        .dispatch(envelope(
             3,
             "desktop-owner",
             Some(&session_id),
             FrontendCommand::ResumeSession {
                 session_id: session_id.clone(),
             },
-        )),
-        Err(FrontendControlError::RuntimeAlreadyActive(ref active)) if active == &session_id
-    ));
+        ))
+        .expect("resume existing daemon runtime");
     assert!(matches!(
-        control.dispatch(envelope(
+        resumed_again.result,
+        FrontendControlResult::RuntimeReady { .. }
+    ));
+    let attached_again = control
+        .dispatch(envelope(
             4,
             "desktop-owner",
             Some(&session_id),
@@ -112,8 +121,11 @@ fn resumed_owner_can_drive_frontend_control_commands_idempotently() {
                 mode: AttachmentMode::Owner,
                 after_cursor: Some(0),
             },
-        )),
-        Err(FrontendControlError::RuntimeAlreadyActive(ref active)) if active == &session_id
+        ))
+        .expect("refresh owner attachment");
+    assert!(matches!(
+        attached_again.result,
+        FrontendControlResult::Attached { .. }
     ));
 
     let status = control
@@ -274,6 +286,7 @@ fn artifacts_and_read_only_frontends_fail_closed_without_provider_calls() {
             FrontendCommand::CreateSession {
                 repository_profile: "default".to_owned(),
                 objective: Some("   ".to_owned()),
+                attachment_ids: Vec::new(),
             },
         )),
         Err(FrontendControlError::ObjectiveRequired)

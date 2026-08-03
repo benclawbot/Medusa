@@ -1,105 +1,81 @@
-use std::collections::VecDeque;
-
 use medusa_protocol::frontend::{
-    FrontendEvent, FrontendEventEnvelope, FrontendKind, PresentationActivity,
-    PresentationActivityKind, PresentationLifecycle,
+    FrontendEvent, FrontendEventEnvelope, PresentationActivity, PresentationActivityKind,
+    PresentationLifecycle,
 };
-use medusa_runtime::frontend::CanonicalFrontendEventStream;
 
 struct DesktopCanonicalPresentation {
-    repo: PathBuf,
-    stream: CanonicalFrontendEventStream,
-    session_id: Option<String>,
     pending: VecDeque<DesktopRuntimeEvent>,
     run_active: bool,
 }
 
 impl DesktopCanonicalPresentation {
-    fn new(repo: PathBuf) -> Self {
+    fn new() -> Self {
         Self {
-            stream: CanonicalFrontendEventStream::new(repo.clone(), FrontendKind::Desktop),
-            repo,
-            session_id: None,
             pending: VecDeque::new(),
             run_active: false,
         }
     }
 
-    fn bind_session(&mut self, session_id: &str) {
-        if self.session_id.as_deref() == Some(session_id) {
-            return;
-        }
-        self.stream = CanonicalFrontendEventStream::new(self.repo.clone(), FrontendKind::Desktop);
-        self.session_id = Some(session_id.to_owned());
-        self.pending.clear();
-        self.run_active = false;
-    }
-
     fn reset(&mut self) {
-        self.stream = CanonicalFrontendEventStream::new(self.repo.clone(), FrontendKind::Desktop);
-        self.session_id = None;
         self.pending.clear();
         self.run_active = false;
     }
 
-    fn is_session_bound(&self) -> bool {
-        self.session_id.is_some()
+    fn push(&mut self, envelopes: Vec<FrontendEventEnvelope>) {
+        for envelope in envelopes {
+            self.pending
+                .extend(map_frontend_event(envelope, &mut self.run_active));
+        }
     }
 
-    fn try_event(&mut self) -> Result<Option<DesktopRuntimeEvent>, String> {
-        if let Some(event) = self.pending.pop_front() {
-            return Ok(Some(event));
-        }
-        let Some(session_id) = self.session_id.clone() else {
-            return Ok(None);
-        };
-        while let Some(envelope) = self
-            .stream
-            .try_event(&session_id)
-            .map_err(|error| error.to_string())?
-        {
-            let mut events = map_frontend_event(envelope, &mut self.run_active);
-            if let Some(event) = events.pop_front() {
-                self.pending.extend(events);
-                return Ok(Some(event));
-            }
-        }
-        Ok(None)
+    fn push_transient(&mut self, event: FrontendTransientEvent) {
+        self.pending.push_back(map_transient_event(event));
+    }
+
+    fn try_event(&mut self) -> Option<DesktopRuntimeEvent> {
+        self.pending.pop_front()
     }
 }
 
-fn map_process_event(
-    event: medusa_runtime::RuntimeEvent,
-    session_bound: bool,
-) -> Option<DesktopRuntimeEvent> {
-    match &event {
-        medusa_runtime::RuntimeEvent::RecoveryAvailable(_)
-        | medusa_runtime::RuntimeEvent::RecoveryCompleted(_)
-        | medusa_runtime::RuntimeEvent::Settings { .. }
-        | medusa_runtime::RuntimeEvent::ConfigurationChanged(_)
-        | medusa_runtime::RuntimeEvent::NewSession
-        | medusa_runtime::RuntimeEvent::Progress { .. } => Some(event.into()),
-        medusa_runtime::RuntimeEvent::Notice { title, .. }
-            if !session_bound || title == "Runtime capabilities" =>
-        {
-            Some(event.into())
+fn map_transient_event(event: FrontendTransientEvent) -> DesktopRuntimeEvent {
+    match event {
+        FrontendTransientEvent::RecoveryAvailable { recovery } => {
+            DesktopRuntimeEvent::RecoveryAvailable { recovery }
         }
-        medusa_runtime::RuntimeEvent::Cancelled if !session_bound => Some(event.into()),
-        medusa_runtime::RuntimeEvent::Failed(message)
-            if !session_bound || is_unjournaled_publication_failure(message) =>
-        {
-            Some(event.into())
+        FrontendTransientEvent::RecoveryCompleted { record, audit_path } => {
+            DesktopRuntimeEvent::RecoveryCompleted { record, audit_path }
         }
-        _ => None,
+        FrontendTransientEvent::Settings {
+            model,
+            effort,
+            plan_mode,
+            credential_configured,
+        } => DesktopRuntimeEvent::Settings {
+            model,
+            effort,
+            plan_mode,
+            credential_configured,
+        },
+        FrontendTransientEvent::ConfigurationChanged {
+            revision,
+            active_profile,
+            changed_keys,
+            origin,
+            apply_timing,
+        } => DesktopRuntimeEvent::ConfigurationChanged {
+            revision,
+            active_profile,
+            changed_keys,
+            origin,
+            apply_timing,
+        },
+        FrontendTransientEvent::Notice { title, details } => {
+            DesktopRuntimeEvent::Notice { title, details }
+        }
+        FrontendTransientEvent::NewSession => DesktopRuntimeEvent::NewSession,
+        FrontendTransientEvent::Progress { turn } => DesktopRuntimeEvent::Progress { turn },
+        FrontendTransientEvent::Failed { message } => DesktopRuntimeEvent::Failed { message },
     }
-}
-
-fn is_unjournaled_publication_failure(message: &str) -> bool {
-    let message = message.to_ascii_lowercase();
-    message.contains("journal")
-        && (message.contains("publish")
-            || message.contains("persist")
-            || message.contains("commit"))
 }
 
 fn map_frontend_event(
@@ -419,21 +395,18 @@ mod desktop_projection_tests {
     }
 
     #[test]
-    fn session_bound_process_terminal_state_is_suppressed() {
-        assert!(map_process_event(medusa_runtime::RuntimeEvent::TurnFinished, true).is_none());
-        assert!(map_process_event(
-            medusa_runtime::RuntimeEvent::Failed("durable failure".to_owned()),
-            true,
-        )
-        .is_none());
+    fn transient_settings_keep_the_desktop_contract() {
         assert!(matches!(
-            map_process_event(
-                medusa_runtime::RuntimeEvent::Failed(
-                    "journal publication failed after commit".to_owned()
-                ),
-                true,
-            ),
-            Some(DesktopRuntimeEvent::Failed { .. })
+            map_transient_event(FrontendTransientEvent::Settings {
+                model: "MiniMax-M3".to_owned(),
+                effort: "effort:high".to_owned(),
+                plan_mode: false,
+                credential_configured: true,
+            }),
+            DesktopRuntimeEvent::Settings {
+                credential_configured: true,
+                ..
+            }
         ));
     }
 

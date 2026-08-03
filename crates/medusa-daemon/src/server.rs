@@ -17,6 +17,7 @@ use std::process::Command;
 #[cfg(unix)]
 use std::process::Stdio;
 
+use base64::{Engine as _, engine::general_purpose::STANDARD};
 use medusa_config::Config;
 use medusa_core::{ErrorCategory, ErrorCode, MedusaError, MedusaResult};
 use medusa_protocol::frontend::FrontendCommandEnvelope;
@@ -29,14 +30,15 @@ use crate::{
     paths::DaemonPaths,
     process::ProcessRegistry,
     protocol::{
-        DAEMON_PROTOCOL_VERSION, JobRecord, JobState, Request, RequestEnvelope, Response,
-        ResponseEnvelope,
+        DAEMON_PROTOCOL_VERSION, FrontendArtifactUpload, FrontendCredentialUpdate, JobRecord,
+        JobState, Request, RequestEnvelope, Response, ResponseEnvelope,
     },
     scheduler::{DaemonLimits, JobRunner, JobScheduler, SubmitError},
     transport::{LocalListener, LocalStream, connect, wake},
 };
 
 const MAX_REQUEST_BYTES: usize = 64 * 1024;
+const MAX_ARTIFACT_REQUEST_BYTES: usize = 32 * 1024 * 1024;
 const REQUEST_IO_TIMEOUT: Duration = Duration::from_secs(5);
 const SHUTDOWN_NONE: u8 = 0;
 const SHUTDOWN_GRACEFUL: u8 = 1;
@@ -111,11 +113,7 @@ impl DaemonClient {
     ) -> MedusaResult<FrontendCommandAcknowledgement> {
         match self.request(Request::Frontend { envelope })? {
             Response::Frontend { acknowledgement } => Ok(acknowledgement),
-            Response::Error { code, message } => Err(MedusaError::new(
-                ErrorCode::DependencyUnavailable,
-                ErrorCategory::Environment,
-                format!("daemon frontend request failed ({code}): {message}"),
-            )),
+            Response::Error { code, message } => Err(frontend_request_error(code, message)),
             response => Err(MedusaError::new(
                 ErrorCode::InternalInvariant,
                 ErrorCategory::Internal,
@@ -123,6 +121,40 @@ impl DaemonClient {
             )),
         }
     }
+
+    /// Stages one bounded attachment in the daemon-owned content-addressed artifact store.
+    pub fn frontend_artifact(&self, upload: FrontendArtifactUpload) -> MedusaResult<String> {
+        match self.request(Request::FrontendArtifact { upload })? {
+            Response::FrontendArtifact { artifact_id } => Ok(artifact_id),
+            Response::Error { code, message } => Err(frontend_request_error(code, message)),
+            response => Err(MedusaError::new(
+                ErrorCode::InternalInvariant,
+                ErrorCategory::Internal,
+                format!("daemon returned an unexpected artifact response: {response:?}"),
+            )),
+        }
+    }
+
+    /// Updates one process-local daemon credential without persisting it in protocol evidence.
+    pub fn frontend_credential(&self, update: FrontendCredentialUpdate) -> MedusaResult<()> {
+        match self.request(Request::FrontendCredential { update })? {
+            Response::Ack => Ok(()),
+            Response::Error { code, message } => Err(frontend_request_error(code, message)),
+            response => Err(MedusaError::new(
+                ErrorCode::InternalInvariant,
+                ErrorCategory::Internal,
+                format!("daemon returned an unexpected credential response: {response:?}"),
+            )),
+        }
+    }
+}
+
+fn frontend_request_error(code: String, message: String) -> MedusaError {
+    MedusaError::new(
+        ErrorCode::DependencyUnavailable,
+        ErrorCategory::Environment,
+        format!("daemon frontend request failed ({code}): {message}"),
+    )
 }
 
 /// Starts a daemon loop with production limits and blocks until shutdown.
@@ -320,13 +352,27 @@ fn handle_connection(
         .set_write_timeout(Some(REQUEST_IO_TIMEOUT))
         .map_err(transport_error)?;
     let reader_stream = stream.try_clone().map_err(transport_error)?;
-    let mut reader = BufReader::new(reader_stream).take((MAX_REQUEST_BYTES + 1) as u64);
+    let mut reader = BufReader::new(reader_stream).take((MAX_ARTIFACT_REQUEST_BYTES + 1) as u64);
     let mut line = String::new();
     reader.read_line(&mut line)?;
     if line.trim().is_empty() {
         return Ok(());
     }
-    if line.len() > MAX_REQUEST_BYTES {
+    if line.len() > MAX_ARTIFACT_REQUEST_BYTES {
+        return write_response(
+            &mut stream,
+            Response::Error {
+                code: "request_too_large".into(),
+                message: format!(
+                    "daemon artifact request exceeds {MAX_ARTIFACT_REQUEST_BYTES} bytes"
+                ),
+            },
+        );
+    }
+    let envelope: RequestEnvelope = serde_json::from_str(&line)?;
+    if line.len() > MAX_REQUEST_BYTES
+        && !matches!(&envelope.request, Request::FrontendArtifact { .. })
+    {
         return write_response(
             &mut stream,
             Response::Error {
@@ -335,7 +381,6 @@ fn handle_connection(
             },
         );
     }
-    let envelope: RequestEnvelope = serde_json::from_str(&line)?;
     let response = if envelope.version != DAEMON_PROTOCOL_VERSION {
         Response::Error {
             code: "incompatible_protocol".into(),
@@ -444,6 +489,44 @@ fn dispatch(
                     message: error.to_string(),
                 },
             })
+        }
+        Request::FrontendArtifact { upload } => {
+            let bytes = match STANDARD.decode(upload.bytes_base64.as_bytes()) {
+                Ok(bytes) => bytes,
+                Err(error) => {
+                    return Ok(Response::Error {
+                        code: "invalid_artifact_encoding".to_owned(),
+                        message: format!("frontend artifact is not valid base64: {error}"),
+                    });
+                }
+            };
+            let control = lock_frontend(frontend)?;
+            Ok(
+                match control.ingest_artifact(
+                    upload.display_name,
+                    upload.mime_type,
+                    upload.kind,
+                    bytes,
+                ) {
+                    Ok(artifact_id) => Response::FrontendArtifact { artifact_id },
+                    Err(error) => Response::Error {
+                        code: "frontend_artifact".to_owned(),
+                        message: error.to_string(),
+                    },
+                },
+            )
+        }
+        Request::FrontendCredential { update } => {
+            let mut control = lock_frontend(frontend)?;
+            Ok(
+                match control.update_credential(update.provider, update.credential) {
+                    Ok(()) => Response::Ack,
+                    Err(error) => Response::Error {
+                        code: "frontend_credential".to_owned(),
+                        message: error.to_string(),
+                    },
+                },
+            )
         }
         Request::Shutdown => {
             request_shutdown(shutdown, SHUTDOWN_GRACEFUL);

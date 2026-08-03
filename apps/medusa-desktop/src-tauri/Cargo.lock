@@ -2385,6 +2385,7 @@ dependencies = [
 name = "medusa-daemon"
 version = "1.0.0"
 dependencies = [
+ "base64 0.22.1",
  "getrandom 0.4.3",
  "hex",
  "medusa-agent",

@@ -5,34 +5,9 @@ impl RuntimeRegistry {
         displayed_repo: String,
         session_id: &str,
     ) -> Result<RuntimeStartResponse, String> {
-        let id = format!(
-            "desktop-runtime-{}",
-            self.next_id.fetch_add(1, Ordering::Relaxed) + 1
-        );
-        let controller = RuntimeController::start_resumed(repo.clone(), session_id)
-            .map_err(|error| error.to_string())?;
-        let supervisor = DaemonLaunch::for_current_executable()
-            .map(|launch| DaemonSupervisor::new(&repo, launch))
-            .unwrap_or_else(|_| DaemonSupervisor::observe_only(&repo));
-        let mut presentation = DesktopCanonicalPresentation::new(repo.clone());
-        presentation.bind_session(session_id);
-        let entry = Arc::new(Mutex::new(RuntimeEntry {
-            repo,
-            controller,
-            presentation,
-            daemon: DesktopDaemon {
-                supervisor,
-                last_state: None,
-            },
-        }));
-        self.entries
-            .lock()
-            .map_err(|_| "desktop runtime registry is poisoned".to_owned())?
-            .insert(id.clone(), entry);
-        Ok(RuntimeStartResponse {
-            runtime_id: id,
-            repo: displayed_repo,
-        })
+        let response = self.insert(repo, displayed_repo)?;
+        self.with_entry(&response.runtime_id, |entry| entry.resume(session_id.to_owned()))?;
+        Ok(response)
     }
 }
 

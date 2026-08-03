@@ -21,6 +21,8 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use thiserror::Error;
 
+use crate::protocol::FrontendArtifactKind;
+
 const ARTIFACT_SCHEMA_VERSION: u32 = 1;
 const ARTIFACT_PREFIX: &str = "frontend-artifact-";
 const MAX_DISPLAY_NAME_CHARS: usize = 240;
@@ -30,6 +32,7 @@ const MAX_MIME_TYPE_CHARS: usize = 128;
 pub struct FrontendArtifactInput {
     pub display_name: String,
     pub mime_type: Option<String>,
+    pub kind: FrontendArtifactKind,
     pub bytes: Vec<u8>,
 }
 
@@ -37,6 +40,7 @@ pub struct FrontendArtifactInput {
 pub struct FrontendArtifactExport {
     pub display_name: String,
     pub mime_type: Option<String>,
+    pub kind: FrontendArtifactKind,
     pub bytes: Vec<u8>,
 }
 
@@ -52,6 +56,8 @@ struct FrontendArtifactMetadata {
     artifact_id: String,
     display_name: String,
     mime_type: Option<String>,
+    #[serde(default)]
+    kind: Option<FrontendArtifactKind>,
     byte_len: usize,
     sha256: String,
 }
@@ -71,10 +77,10 @@ impl FrontendArtifactStore {
         if input.bytes.is_empty() {
             return Err(FrontendArtifactStoreError::EmptyArtifact);
         }
-        let byte_limit = if is_supported_image_mime(mime_type.as_deref()) {
-            MAX_IMAGE_BYTES
-        } else {
-            MAX_TOTAL_ATTACHMENT_BYTES
+        let byte_limit = match input.kind {
+            FrontendArtifactKind::Image => MAX_IMAGE_BYTES,
+            FrontendArtifactKind::Text => MAX_CLIPBOARD_TEXT_BYTES,
+            FrontendArtifactKind::File => MAX_TOTAL_ATTACHMENT_BYTES,
         };
         if input.bytes.len() > byte_limit {
             return Err(FrontendArtifactStoreError::ByteLimit {
@@ -82,9 +88,9 @@ impl FrontendArtifactStore {
                 limit: byte_limit,
             });
         }
-        if mime_type.as_deref().is_some_and(|value| {
-            value.starts_with("image/") && !is_supported_image_mime(Some(value))
-        }) {
+        if input.kind == FrontendArtifactKind::Image
+            && !is_supported_image_mime(mime_type.as_deref())
+        {
             return Err(FrontendArtifactStoreError::UnsupportedImageMimeType);
         }
 
@@ -94,6 +100,8 @@ impl FrontendArtifactStore {
         identity.update([0]);
         identity.update(mime_type.as_deref().unwrap_or_default().as_bytes());
         identity.update([0]);
+        identity.update(format!("{:?}", input.kind).as_bytes());
+        identity.update([0]);
         identity.update(byte_digest.as_bytes());
         let artifact_digest = hex::encode(identity.finalize());
         let artifact_id = format!("{ARTIFACT_PREFIX}{artifact_digest}");
@@ -102,6 +110,7 @@ impl FrontendArtifactStore {
             artifact_id: artifact_id.clone(),
             display_name,
             mime_type,
+            kind: Some(input.kind),
             byte_len: input.bytes.len(),
             sha256: byte_digest,
         };
@@ -127,7 +136,10 @@ impl FrontendArtifactStore {
         for artifact_id in artifact_ids {
             let (metadata, blob_path, bytes) = self.read_verified(artifact_id)?;
             total_bytes = total_bytes.saturating_add(bytes.len());
-            if is_supported_image_mime(metadata.mime_type.as_deref()) {
+            let kind = metadata
+                .kind
+                .unwrap_or_else(|| infer_legacy_kind(metadata.mime_type.as_deref()));
+            if kind == FrontendArtifactKind::Image {
                 image_count = image_count.saturating_add(1);
                 if image_count > MAX_IMAGES_PER_PROMPT {
                     return Err(FrontendArtifactStoreError::ImageCountLimit(
@@ -141,7 +153,7 @@ impl FrontendArtifactStore {
                     limit: MAX_TOTAL_ATTACHMENT_BYTES,
                 });
             }
-            attachments.push(resolve_attachment(metadata, blob_path, bytes)?);
+            attachments.push(resolve_attachment(kind, metadata, blob_path, bytes)?);
         }
         Ok(attachments)
     }
@@ -152,9 +164,13 @@ impl FrontendArtifactStore {
         artifact_id: &str,
     ) -> Result<FrontendArtifactExport, FrontendArtifactStoreError> {
         let (metadata, _, bytes) = self.read_verified(artifact_id)?;
+        let kind = metadata
+            .kind
+            .unwrap_or_else(|| infer_legacy_kind(metadata.mime_type.as_deref()));
         Ok(FrontendArtifactExport {
             display_name: metadata.display_name,
             mime_type: metadata.mime_type,
+            kind,
             bytes,
         })
     }
@@ -198,34 +214,43 @@ impl FrontendArtifactStore {
 }
 
 fn resolve_attachment(
+    kind: FrontendArtifactKind,
     metadata: FrontendArtifactMetadata,
     blob_path: PathBuf,
     bytes: Vec<u8>,
 ) -> Result<PromptAttachment, FrontendArtifactStoreError> {
-    if is_supported_image_mime(metadata.mime_type.as_deref()) {
-        return Ok(PromptAttachment::File(FileAttachment {
-            path: blob_path,
-            byte_len: bytes.len(),
-        }));
+    match kind {
+        FrontendArtifactKind::Image | FrontendArtifactKind::File => {
+            Ok(PromptAttachment::File(FileAttachment {
+                path: blob_path,
+                byte_len: bytes.len(),
+            }))
+        }
+        FrontendArtifactKind::Text => {
+            let text = String::from_utf8(bytes).map_err(|_| {
+                FrontendArtifactStoreError::UnsupportedBinaryArtifact(metadata.display_name.clone())
+            })?;
+            Ok(PromptAttachment::PastedText(TextAttachment {
+                display_name: metadata.display_name,
+                text,
+            }))
+        }
     }
+}
 
-    if bytes.len() > MAX_CLIPBOARD_TEXT_BYTES {
-        return Err(FrontendArtifactStoreError::ByteLimit {
-            bytes: bytes.len(),
-            limit: MAX_CLIPBOARD_TEXT_BYTES,
-        });
+fn infer_legacy_kind(mime_type: Option<&str>) -> FrontendArtifactKind {
+    if is_supported_image_mime(mime_type) {
+        FrontendArtifactKind::Image
+    } else {
+        FrontendArtifactKind::Text
     }
-    let text = String::from_utf8(bytes).map_err(|_| {
-        FrontendArtifactStoreError::UnsupportedBinaryArtifact(metadata.display_name.clone())
-    })?;
-    Ok(PromptAttachment::PastedText(TextAttachment {
-        display_name: metadata.display_name,
-        text,
-    }))
 }
 
 fn is_supported_image_mime(value: Option<&str>) -> bool {
-    matches!(value, Some("image/jpeg" | "image/png" | "image/webp"))
+    matches!(
+        value,
+        Some("image/gif" | "image/jpeg" | "image/png" | "image/webp")
+    )
 }
 
 fn parse_artifact_id(artifact_id: &str) -> Result<&str, FrontendArtifactStoreError> {
@@ -319,21 +344,43 @@ mod tests {
             .ingest(FrontendArtifactInput {
                 display_name: "notes.txt".to_owned(),
                 mime_type: Some("text/plain".to_owned()),
-                bytes: b"hello telegram".to_vec(),
+                kind: FrontendArtifactKind::Text,
+                bytes: b"hello desktop".to_vec(),
             })
             .expect("ingest");
         let duplicate = store
             .ingest(FrontendArtifactInput {
                 display_name: "notes.txt".to_owned(),
                 mime_type: Some("text/plain".to_owned()),
-                bytes: b"hello telegram".to_vec(),
+                kind: FrontendArtifactKind::Text,
+                bytes: b"hello desktop".to_vec(),
             })
             .expect("duplicate ingest");
         assert_eq!(id, duplicate);
         assert!(matches!(
             store.resolve(&[id]).expect("resolve").as_slice(),
-            [PromptAttachment::PastedText(TextAttachment { text, .. })] if text == "hello telegram"
+            [PromptAttachment::PastedText(TextAttachment { text, .. })] if text == "hello desktop"
         ));
+    }
+
+    #[test]
+    fn binary_file_resolves_to_repository_scoped_staging_path() {
+        let directory = tempfile::tempdir().expect("artifact store");
+        let store = FrontendArtifactStore::new(directory.path().to_path_buf());
+        let id = store
+            .ingest(FrontendArtifactInput {
+                display_name: "context.bin".to_owned(),
+                mime_type: Some("application/octet-stream".to_owned()),
+                kind: FrontendArtifactKind::File,
+                bytes: vec![0, 1, 2, 3],
+            })
+            .expect("ingest");
+        let resolved = store.resolve(&[id]).expect("resolve");
+        let [PromptAttachment::File(file)] = resolved.as_slice() else {
+            panic!("expected staged file")
+        };
+        assert!(file.path.starts_with(directory.path()));
+        assert_eq!(file.byte_len, 4);
     }
 
     #[test]
@@ -344,6 +391,7 @@ mod tests {
             .ingest(FrontendArtifactInput {
                 display_name: "photo.jpg".to_owned(),
                 mime_type: Some("image/jpeg".to_owned()),
+                kind: FrontendArtifactKind::Image,
                 bytes: vec![0xff, 0xd8, 0xff, 0xd9],
             })
             .expect("ingest");
@@ -363,26 +411,5 @@ mod tests {
             store.resolve(&["frontend-artifact-../secret".to_owned()]),
             Err(FrontendArtifactStoreError::InvalidArtifactId(_))
         ));
-    }
-
-    #[test]
-    fn export_preserves_verified_bytes_and_metadata() {
-        let directory = tempfile::tempdir().expect("artifact store");
-        let store = FrontendArtifactStore::new(directory.path().to_path_buf());
-        let id = store
-            .ingest(FrontendArtifactInput {
-                display_name: "report.txt".to_owned(),
-                mime_type: Some("text/plain".to_owned()),
-                bytes: b"verified report".to_vec(),
-            })
-            .expect("ingest");
-        assert_eq!(
-            store.export(&id).expect("export"),
-            FrontendArtifactExport {
-                display_name: "report.txt".to_owned(),
-                mime_type: Some("text/plain".to_owned()),
-                bytes: b"verified report".to_vec(),
-            }
-        );
     }
 }

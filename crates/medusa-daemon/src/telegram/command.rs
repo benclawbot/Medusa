@@ -25,7 +25,7 @@ pub struct TelegramInboundMessage {
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(tag = "type", content = "data", rename_all = "snake_case")]
 pub enum TelegramInboundAction {
-    Forward(FrontendCommandEnvelope),
+    Forward(Box<FrontendCommandEnvelope>),
     SetToolProgress(ToolProgressMode),
     SetVoiceMode(TelegramVoiceMode),
     VoiceStatus,
@@ -59,6 +59,7 @@ pub(crate) fn map_message(
             FrontendCommand::CreateSession {
                 repository_profile: config.repository_profile.clone(),
                 objective: non_empty(arguments).map(str::to_owned),
+                attachment_ids: Vec::new(),
             },
         ),
         Some("/sessions") => forward(message, FrontendCommand::ListSessions),
@@ -134,7 +135,7 @@ fn forward(
     envelope
         .validate()
         .map_err(|error| TelegramGatewayError::Protocol(error.to_owned()))?;
-    Ok(TelegramInboundAction::Forward(envelope))
+    Ok(TelegramInboundAction::Forward(Box::new(envelope)))
 }
 
 pub(crate) fn client_id(identity: &TelegramIdentity) -> String {

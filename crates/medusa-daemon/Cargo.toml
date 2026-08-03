@@ -8,6 +8,7 @@ repository.workspace = true
 
 # The shipped daemon owns durable process supervision and recovery coordination.
 [dependencies]
+base64 = "0.22"
 hex.workspace = true
 medusa-agent = { path = "../medusa-agent" }
 medusa-config = { path = "../medusa-config" }
