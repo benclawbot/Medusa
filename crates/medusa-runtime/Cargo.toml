@@ -30,7 +30,7 @@ medusa-memory-writeback = { path = "../medusa-memory-writeback" }
 medusa-multi-agent-scheduler = { path = "../medusa-multi-agent-scheduler" }
 medusa-openai-realtime = { path = "../medusa-openai-realtime" }
 medusa-protocol = { path = "../medusa-protocol" }
-medusa-provider = { path = "../medusa-provider" }
+medusa-provider = { package = "medusa-external-provider", path = "../medusa-external-provider" }
 medusa-recovery-coordinator = { path = "../medusa-recovery-coordinator" }
 medusa-review-model = { path = "../medusa-review-model" }
 medusa-session-continuity = { path = "../medusa-session-continuity" }
