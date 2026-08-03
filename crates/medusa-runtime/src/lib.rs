@@ -1276,9 +1276,13 @@ if let Some(evidence) = implementation_evidence.as_ref() {
                     ],
                 }));
                 let provider_started_at = std::time::Instant::now();
-                match engine.step_with_observer_and_context(
+                let turn_instruction = implementation_evidence
+                    .as_ref()
+                    .map(|_| crate::mutation_transaction::PARENT_REVIEW_TURN_INSTRUCTION);
+                match engine.step_with_observer_and_context_and_turn_instruction(
                     &mut session,
                     Some(skill_context.as_str()),
+                    turn_instruction,
                     |update| {
                         forward_update(update, events, &mut updates);
                     },
