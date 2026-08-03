@@ -20,9 +20,9 @@ use medusa_external_contracts::{
 };
 use medusa_provider::ConfiguredProvider as LegacyConfiguredProvider;
 pub use medusa_provider::{
-    ImageSource, Message, MessageBlock, MiniMaxProvider, ModelProvider, ModelRequest, ModelResponse,
-    OpenAiProvider, ProviderCapabilities, ProviderHealth, ProviderManager, ProviderRouteProfile,
-    ResponseBlock, Role, RouteRetryPolicy, ToolDefinition, Usage,
+    ImageSource, Message, MessageBlock, MiniMaxProvider, ModelProvider, ModelRequest,
+    ModelResponse, OpenAiProvider, ProviderCapabilities, ProviderHealth, ProviderManager,
+    ProviderRouteProfile, ResponseBlock, Role, RouteRetryPolicy, ToolDefinition, Usage,
 };
 use serde_json::Value;
 
