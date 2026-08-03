@@ -26,13 +26,14 @@ Telegram delivery consumes the same frontend-scoped replay envelopes as every ot
 
 ## Migration status
 
-The headless CLI and interactive TUI consume the canonical stream for durable transcript, plan, question, activity, usage, cancellation, failure, and completion state. Daemon attachments and replay project the same journal range according to each attached frontend kind and expose a next canonical cursor even when every scanned event is non-presentable. Telegram delivery consumes those daemon-projected envelopes directly and acknowledges the batch cursor after hidden events, rather than re-projecting raw journal payloads. Daemon protocol v2 exposes the shared frontend command envelope and typed acknowledgement through the repository-scoped local IPC server. The TUI keeps process-local settings, startup recovery, turn-counter, and reset hints only as bounded compatibility inputs while desktop migration is completed.
+The headless CLI and interactive TUI consume the canonical stream for durable transcript, plan, question, activity, usage, cancellation, failure, and completion state. Daemon attachments and replay project the same journal range according to each attached frontend kind and expose a next canonical cursor even when every scanned event is non-presentable. Telegram delivery consumes those daemon-projected envelopes directly and acknowledges the batch cursor after hidden events, rather than re-projecting raw journal payloads. Daemon protocol v2 exposes the shared frontend command envelope and typed acknowledgement through the repository-scoped local IPC server. Protocol v2 retains the existing durable-job request variants, but daemon request envelopes remain exact-version contracts: a v1 client must upgrade rather than having its payload silently reinterpreted. The TUI keeps process-local settings, startup recovery, turn-counter, and reset hints only as bounded compatibility inputs while desktop migration is completed.
 
 ## Consequences
 
 - A frontend cannot report completion, cancellation, verification, or integration before the corresponding committed journal event exists.
 - Replayed headless output uses the same redacted event contract as remote delivery.
 - Presentation cursors are stable across process restarts and do not depend on how many event kinds a renderer suppresses.
+- Existing daemon job operations continue under protocol v2, while mismatched wire versions fail closed before dispatch.
 - Process-local runtime events remain temporary wakeups and compatibility inputs until the remaining phase-6 consumers migrate; they are not user-visible authority.
 - A journal-publication failure is surfaced immediately through the transient fail-closed channel because, by definition, no canonical terminal event exists to replay.
 
