@@ -74,6 +74,9 @@
       "medusa-execution-checkpoint": "adapt",
       "medusa-execution-replay": "adapt",
       "medusa-extensions": "adapt",
+      "medusa-external-contracts": "preserve",
+      "medusa-external-github": "adapt",
+      "medusa-external-provider": "adapt",
       "medusa-failure": "adapt",
       "medusa-github": "preserve",
       "medusa-goal": "adapt",
@@ -130,8 +133,9 @@
     ],
     "owner_groups": {
       "foundation": [
-        "medusa-core",
         "medusa-config",
+        "medusa-core",
+        "medusa-external-contracts",
         "medusa-protocol",
         "medusa-testkit"
       ],
@@ -143,8 +147,9 @@
         "medusa-daemon"
       ],
       "provider": [
-        "medusa-provider",
-        "medusa-openai-realtime"
+        "medusa-external-provider",
+        "medusa-openai-realtime",
+        "medusa-provider"
       ],
       "coordination": [
         "medusa-workers",
@@ -161,9 +166,10 @@
         "medusa-hardening"
       ],
       "integrations": [
-        "medusa-github",
         "medusa-capabilities",
-        "medusa-extensions"
+        "medusa-extensions",
+        "medusa-external-github",
+        "medusa-github"
       ],
       "release": [
         "medusa-update"

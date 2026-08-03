@@ -3,10 +3,12 @@ resolver = "2"
 members = [
   "crates/medusa-core",
   "crates/medusa-evidence",
+  "crates/medusa-external-contracts",
   "crates/medusa-config",
   "crates/medusa-protocol",
   "crates/medusa-testkit",
   "crates/medusa-provider",
+  "crates/medusa-external-provider",
   "crates/medusa-openai-realtime",
   "crates/medusa-intelligence",
   "crates/medusa-world-model",
@@ -37,6 +39,7 @@ members = [
   "crates/medusa-hardening",
   "crates/medusa-update",
   "crates/medusa-github",
+  "crates/medusa-external-github",
   "crates/medusa-capabilities",
   "crates/medusa-cli",
   "crates/medusa-context",
@@ -74,6 +77,7 @@ verification_gate = "typed-evidence-and-changed-component-authority"
 [workspace.dependencies]
 medusa-core = { path = "crates/medusa-core" }
 medusa-evidence = { path = "crates/medusa-evidence" }
+medusa-external-contracts = { path = "crates/medusa-external-contracts" }
 medusa-protocol = { path = "crates/medusa-protocol" }
 medusa-process-containment = { path = "crates/medusa-process-containment" }
 medusa-testkit = { path = "crates/medusa-testkit" }
