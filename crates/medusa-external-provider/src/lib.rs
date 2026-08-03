@@ -18,11 +18,36 @@ use medusa_core::{ErrorCategory, ErrorCode, MedusaError, MedusaResult};
 use medusa_external_contracts::{
     ProviderCapabilitySet, ReadinessCheck, ReadinessStage, RouteIdentity, RouteReadiness,
 };
-use medusa_provider::{
-    ConfiguredProvider, ModelProvider, ModelRequest, ModelResponse, ProviderCapabilities,
-    ProviderManager, ProviderRouteProfile, RouteRetryPolicy,
+use medusa_provider::ConfiguredProvider as LegacyConfiguredProvider;
+pub use medusa_provider::{
+    ContentBlock, MiniMaxProvider, ModelMessage, ModelProvider, ModelRequest, ModelResponse,
+    OpenAiProvider, ProviderCapabilities, ProviderExecutionRecord, ProviderHealth, ProviderManager,
+    ProviderRouteProfile, RouteRetryPolicy, ToolCall, ToolDefinition,
 };
 use serde_json::Value;
+
+/// Compatibility facade that redirects runtime manager construction to lazy truthful routes.
+pub struct ConfiguredProvider;
+
+impl ConfiguredProvider {
+    pub fn from_config(config: &Config) -> MedusaResult<LegacyConfiguredProvider> {
+        LegacyConfiguredProvider::from_config(config)
+    }
+
+    pub fn from_config_with_api_key(
+        config: &Config,
+        session_api_key: Option<String>,
+    ) -> MedusaResult<LegacyConfiguredProvider> {
+        LegacyConfiguredProvider::from_config_with_api_key(config, session_api_key)
+    }
+
+    pub fn manager_from_config(
+        config: &Config,
+        session_api_key: Option<String>,
+    ) -> MedusaResult<LazyConfiguredProviderManager> {
+        LazyConfiguredProviderManager::from_config(config, session_api_key)
+    }
+}
 
 #[derive(Clone)]
 struct LazyRoute {
@@ -33,14 +58,14 @@ struct RouteState {
     route_id: String,
     config: Config,
     session_api_key: Option<String>,
-    provider: OnceLock<MedusaResult<ConfiguredProvider>>,
+    provider: OnceLock<MedusaResult<LegacyConfiguredProvider>>,
     live_verified: AtomicBool,
 }
 
 impl RouteState {
-    fn initialize(&self) -> MedusaResult<&ConfiguredProvider> {
+    fn initialize(&self) -> MedusaResult<&LegacyConfiguredProvider> {
         match self.provider.get_or_init(|| {
-            ConfiguredProvider::from_config_with_api_key(
+            LegacyConfiguredProvider::from_config_with_api_key(
                 &self.config,
                 self.session_api_key.clone(),
             )
@@ -223,7 +248,7 @@ impl LazyConfiguredProviderManager {
     }
 
     #[must_use]
-    pub fn health(&self) -> Vec<medusa_provider::ProviderHealth> {
+    pub fn health(&self) -> Vec<ProviderHealth> {
         self.manager.health()
     }
 }
