@@ -1,0 +1,27 @@
+name: Snapshot repository staging
+
+on:
+  push:
+    branches:
+      - agent/652-desktop-daemon-authority-finalize
+
+permissions:
+  contents: read
+
+jobs:
+  snapshot:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          fetch-depth: 1
+      - name: Package repository
+        run: tar --exclude=.git --exclude=repository-snapshot.tar.gz -czf repository-snapshot.tar.gz .
+      - name: Upload repository snapshot
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: repository-snapshot
+          path: repository-snapshot.tar.gz
+          if-no-files-found: error
+          retention-days: 1
