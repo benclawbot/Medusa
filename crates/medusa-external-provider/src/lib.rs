@@ -188,29 +188,17 @@ pub struct LazyConfiguredProviderManager {
 }
 
 impl LazyConfiguredProviderManager {
-    pub fn from_config(
-        config: &Config,
-        session_api_key: Option<String>,
-    ) -> MedusaResult<Self> {
-        let mut route_configs = vec![(
-            "primary".to_owned(),
-            config.clone(),
-            session_api_key,
-        )];
-        route_configs.extend(
-            config
-                .model
-                .fallback_providers
-                .iter()
-                .enumerate()
-                .map(|(index, fallback)| {
-                    (
-                        format!("fallback[{index}]"),
-                        config_for_fallback(config, fallback),
-                        None,
-                    )
-                }),
-        );
+    pub fn from_config(config: &Config, session_api_key: Option<String>) -> MedusaResult<Self> {
+        let mut route_configs = vec![("primary".to_owned(), config.clone(), session_api_key)];
+        route_configs.extend(config.model.fallback_providers.iter().enumerate().map(
+            |(index, fallback)| {
+                (
+                    format!("fallback[{index}]"),
+                    config_for_fallback(config, fallback),
+                    None,
+                )
+            },
+        ));
         let routes = route_configs
             .into_iter()
             .map(|(route_id, config, session_api_key)| {
@@ -303,7 +291,11 @@ fn truthful_capabilities(config: &Config) -> ProviderCapabilitySet {
             Vec::new()
         },
         max_image_bytes: image_input.then_some(20 * 1024 * 1024),
-        max_images_per_request: image_input.then_some(if provider == "anthropic" { 20 } else { 10 }),
+        max_images_per_request: image_input.then_some(if provider == "anthropic" {
+            20
+        } else {
+            10
+        }),
     }
 }
 
@@ -421,11 +413,9 @@ mod tests {
     fn configuration_cannot_invent_streaming_or_cancellation() {
         let mut config = Config::default();
         config.model.streaming = true;
-        let manager = LazyConfiguredProviderManager::from_config(
-            &config,
-            Some("session-key".to_owned()),
-        )
-        .unwrap();
+        let manager =
+            LazyConfiguredProviderManager::from_config(&config, Some("session-key".to_owned()))
+                .unwrap();
         let readiness = manager.route_readiness().unwrap();
         assert!(!readiness[0].capabilities.streaming_text);
         assert!(!readiness[0].capabilities.cancellation);
@@ -435,11 +425,9 @@ mod tests {
     #[test]
     fn saved_profile_and_secret_are_not_live_readiness() {
         let config = Config::default();
-        let manager = LazyConfiguredProviderManager::from_config(
-            &config,
-            Some("session-key".to_owned()),
-        )
-        .unwrap();
+        let manager =
+            LazyConfiguredProviderManager::from_config(&config, Some("session-key".to_owned()))
+                .unwrap();
         let readiness = manager.route_readiness().unwrap();
         assert!(readiness[0].stage_ready(ReadinessStage::ProfileSaved));
         assert!(readiness[0].stage_ready(ReadinessStage::SecretPresent));
