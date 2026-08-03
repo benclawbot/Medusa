@@ -41,7 +41,6 @@ jobs:
           import json
           import os
           from pathlib import Path
-          from urllib.error import HTTPError
           from urllib.request import Request, urlopen
 
           repo = os.environ["GITHUB_REPOSITORY"]
@@ -112,6 +111,7 @@ jobs:
                       "parents": [parent],
                   },
               )
+              final_url = f"https://github.com/{repo}/commit/{final_commit['sha']}"
               request(
                   "POST",
                   status_path,
@@ -119,10 +119,11 @@ jobs:
                       "state": "success",
                       "context": "desktop-authority/final-commit",
                       "description": f"final commit {final_commit['sha']}",
+                      "target_url": final_url,
                   },
               )
               print(final_commit["sha"])
-          except Exception as error:
+          except Exception:
               try:
                   request(
                       "POST",
