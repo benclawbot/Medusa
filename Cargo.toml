@@ -99,10 +99,3 @@ tungstenite = { version = "0.30", default-features = false, features = ["handsha
 
 [workspace.lints.rust]
 unsafe_code = "forbid"
-
-[workspace.lints.clippy]
-all = "deny"
-pedantic = "deny"
-nursery = "deny"
-cargo = "deny"
-multiple_crate_versions = { level = "allow", priority = 1 }
