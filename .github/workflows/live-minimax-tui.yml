@@ -65,15 +65,11 @@ jobs:
               "    }\n}\n"
           )
           instruction = (
-              "Implement the requested repository change in src/lib.rs. The implementation task must "
-              "use fs_write once on the relative path src/lib.rs and replace the complete file with the "
-              "exact UTF-8 content between the markers below, including the final newline. Planning tasks "
-              "should establish the exact scope, and review or verification tasks should evaluate the prepared "
-              "implementation and authoritative evidence according to their assigned roles.\n<<<FILE\n"
+              "Edit only src/lib.rs. Use fs_write exactly once with the relative path src/lib.rs, "
+              "replacing the complete file with the exact UTF-8 content between the markers, including "
+              "the final newline. Do not ask questions and do not call any other tool.\n<<<FILE\n"
               f"{fixture}"
-              ">>>FILE\nThe implementation task must not call shell_run, update_plan, team tools, or "
-              "git_checkpoint. Medusa's authoritative host verifier will run formatting, build, lint, and tests "
-              f"before integration. After fs_write succeeds, the implementation task must return exactly {expected}."
+              f">>>FILE\nAfter fs_write succeeds, return exactly {expected}."
           )
           path = Path("scripts/live-tui-minimax-e2e.py")
           text = path.read_text(encoding="utf-8")
