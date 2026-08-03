@@ -30,6 +30,7 @@ Telegram keeps its existing `:<frontend>` event identity through a compatibility
 - Replayed headless output uses the same redacted event contract as remote delivery.
 - Presentation cursors are stable across process restarts and do not depend on how many event kinds a renderer suppresses.
 - Process-local runtime events remain temporary wakeups and compatibility inputs until the remaining phase-6 consumers migrate; they are not user-visible authority.
+- A journal-publication failure is surfaced immediately through the transient fail-closed channel because, by definition, no canonical terminal event exists to replay.
 
 ## Rejected alternatives
 
