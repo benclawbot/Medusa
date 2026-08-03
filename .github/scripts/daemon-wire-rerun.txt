@@ -1,0 +1,1 @@
+run corrected daemon wire generator
