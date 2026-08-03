@@ -309,7 +309,7 @@ mod tests {
     }
 
     #[test]
-    fn semantic changes alter_request_identity() {
+    fn semantic_changes_alter_request_identity() {
         let one = OperationEnvelope::new(issue("one"), None).unwrap();
         let two = OperationEnvelope::new(issue("two"), None).unwrap();
         assert_ne!(one.request_digest, two.request_digest);
