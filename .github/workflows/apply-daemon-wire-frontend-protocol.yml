@@ -23,6 +23,8 @@ jobs:
       - uses: dtolnay/rust-toolchain@39b0b3842c7e8bbf6904c0bfc3d9006fdd4dc4e0 # 1.88.0
         with:
           components: clippy,rustfmt
+      - name: Narrow verified generator anchors
+        run: python3 .github/scripts/fix-daemon-wire-generator.py
       - name: Apply verified daemon wire patch
         run: python3 .github/scripts/apply-daemon-wire-frontend-protocol.py
       - name: Format
@@ -36,6 +38,7 @@ jobs:
       - name: Remove one-shot generator
         run: |
           rm -f .github/scripts/apply-daemon-wire-frontend-protocol.py
+          rm -f .github/scripts/fix-daemon-wire-generator.py
           rm -f .github/scripts/daemon-wire-frontend-trigger.txt
           rm -f .github/workflows/apply-daemon-wire-frontend-protocol.yml
       - name: Commit generated implementation
