@@ -1,0 +1,47 @@
+name: Apply daemon wire frontend protocol
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+
+permissions:
+  contents: write
+
+concurrency:
+  group: apply-daemon-wire-frontend-${{ github.event.pull_request.head.sha }}
+  cancel-in-progress: false
+
+jobs:
+  apply:
+    if: ${{ github.event.pull_request.head.ref == 'agent/652-daemon-wire-frontend-protocol' }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: agent/652-daemon-wire-frontend-protocol
+          fetch-depth: 0
+      - uses: dtolnay/rust-toolchain@39b0b3842c7e8bbf6904c0bfc3d9006fdd4dc4e0 # 1.88.0
+        with:
+          components: clippy,rustfmt
+      - name: Apply verified daemon wire patch
+        run: python3 .github/scripts/apply-daemon-wire-frontend-protocol.py
+      - name: Format
+        run: cargo fmt --all
+      - name: Validate focused crates
+        run: cargo test -p medusa-protocol -p medusa-daemon -p medusa-cli --all-targets --locked
+      - name: Lint focused crates
+        run: cargo clippy -p medusa-protocol -p medusa-daemon -p medusa-cli --all-targets --locked -- -D warnings
+      - name: Validate architecture index
+        run: python3 scripts/check-architecture-index.py
+      - name: Remove one-shot generator
+        run: |
+          rm -f .github/scripts/apply-daemon-wire-frontend-protocol.py
+          rm -f .github/workflows/apply-daemon-wire-frontend-protocol.yml
+      - name: Commit generated implementation
+        run: |
+          git diff --check
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add -A
+          git commit -m "Expose canonical frontend control over daemon IPC"
+          git push origin HEAD:agent/652-daemon-wire-frontend-protocol
