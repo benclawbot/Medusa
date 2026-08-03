@@ -58,3 +58,5 @@ jobs:
           git add -A
           git commit -m "Migrate headless frontend to canonical event projection"
           git push origin HEAD:agent/652-shared-frontend-projection
+
+# Trigger after the workflow is present on the branch.
