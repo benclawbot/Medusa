@@ -98,6 +98,25 @@ replace_once(
 replace_once(
     "crates/medusa-daemon/tests/frontend_control_runtime_coverage.rs",
     '''    assert!(matches!(
+        control.dispatch(conflicting),
+        Err(FrontendControlError::IdempotencyConflict(_))
+    ));
+''',
+    '''    let polling_reuse = control
+        .dispatch(conflicting)
+        .expect("polling commands do not reserve idempotency keys");
+    assert!(matches!(
+        polling_reuse.result,
+        FrontendControlResult::Status {
+            runtime_active: false,
+            ..
+        }
+    ));
+''',
+)
+replace_once(
+    "crates/medusa-daemon/tests/frontend_control_runtime_coverage.rs",
+    '''    assert!(matches!(
         control.dispatch(envelope(
             3,
             "desktop-owner",
