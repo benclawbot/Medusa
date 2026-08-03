@@ -1,9 +1,8 @@
 name: Apply TUI canonical projection
 
 on:
-  push:
-    branches:
-      - agent/652-tui-canonical-projection
+  pull_request:
+    types: [opened, synchronize, reopened]
 
 permissions:
   contents: write
@@ -14,6 +13,7 @@ concurrency:
 
 jobs:
   apply:
+    if: ${{ github.event.pull_request.head.ref == 'agent/652-tui-canonical-projection' }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
