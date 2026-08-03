@@ -19,11 +19,25 @@ ORIGINAL_OBJECTIVE = '''        objective = (
         )'''
 
 DETERMINISTIC_OBJECTIVE = '''        objective = (
-            "Repair exactly value.txt, src/slugify.py, and src/counter.js. These three paths are "
-            "the complete writable scope. Set value.txt to the verified value, robustly implement "
-            "src/slugify.py while preserving its public API, and repair the counter transitions in "
-            "src/counter.js. Run `python verify.py`, iterate until every check passes, and stop only "
-            "after all three independent validations succeed."
+            "Use fs_write exactly once for each of the three writable paths below, in the stated "
+            "order. Completion requires three successful writes. Replace each complete file with "
+            "the exact UTF-8 payload shown, including its final newline.\\n\\n"
+            "1. value.txt\\n<<<VALUE\\n42\\n>>>VALUE\\n\\n"
+            "2. src/slugify.py\\n<<<SLUGIFY\\nimport re\\nimport unicodedata\\n\\n"
+            "def slugify(value: str) -> str:\\n"
+            "    normalized = unicodedata.normalize(\\\"NFKD\\\", value)\\n"
+            "    ascii_value = normalized.encode(\\\"ascii\\\", \\\"ignore\\\").decode(\\\"ascii\\\")\\n"
+            "    return re.sub(r\\\"[^a-z0-9]+\\\", \\\"-\\\", ascii_value.lower()).strip(\\\"-\\\")\\n"
+            ">>>SLUGIFY\\n\\n"
+            "3. src/counter.js\\n<<<COUNTER\\n"
+            "export function applyCounter(state, action) {\\n"
+            "  if (action.type === 'increment') return { count: state.count + 1 };\\n"
+            "  if (action.type === 'decrement') return { count: state.count - 1 };\\n"
+            "  return state;\\n"
+            "}\\n"
+            ">>>COUNTER\\n\\n"
+            "After all three fs_write calls succeed, run `python verify.py`. Finish only when the "
+            "value, slugify, and JavaScript counter validations all pass."
         )'''
 
 
