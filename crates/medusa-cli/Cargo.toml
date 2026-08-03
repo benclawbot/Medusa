@@ -19,6 +19,7 @@ path = "src/quickstart.rs"
 [[bin]]
 name = "medusa-capabilities"
 path = "src/capabilities.rs"
+doc = false
 
 [[bin]]
 name = "medusa-github-operation"
