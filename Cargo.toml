@@ -8,6 +8,7 @@ members = [
   "crates/medusa-protocol",
   "crates/medusa-testkit",
   "crates/medusa-provider",
+  "crates/medusa-external-provider",
   "crates/medusa-openai-realtime",
   "crates/medusa-intelligence",
   "crates/medusa-world-model",
