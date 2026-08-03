@@ -302,14 +302,14 @@ mod tests {
         ExternalOperation, IdempotencyKey, OperationEnvelope, OperationLifecycle,
         ReconciliationState,
     };
-    use medusa_github::{CommandOutput, CommandExecutor};
+    use medusa_github::{CommandExecutor, CommandOutput};
 
     use super::*;
 
     #[derive(Clone, Default)]
     struct FakeExecutor {
         calls: Arc<Mutex<Vec<Vec<String>>>>,
-        issue_failure: bool,
+        transient_issue_error: bool,
     }
 
     impl CommandExecutor for FakeExecutor {
@@ -322,18 +322,24 @@ mod tests {
             self.calls.lock().unwrap().push(arguments.to_vec());
             let auth = arguments.starts_with(&["auth".to_owned(), "status".to_owned()]);
             let issue = arguments.starts_with(&["issue".to_owned(), "create".to_owned()]);
+            if issue && self.transient_issue_error {
+                return Err(MedusaError::new(
+                    ErrorCode::DependencyUnavailable,
+                    ErrorCategory::Transient,
+                    "simulated uncertain GitHub create",
+                )
+                .with_retryable(true));
+            }
             Ok(CommandOutput {
-                success: auth || !issue || !self.issue_failure,
-                stdout: if issue && !self.issue_failure {
+                success: true,
+                stdout: if issue {
                     "https://github.com/octo/repo/issues/7".to_owned()
+                } else if auth {
+                    "authenticated".to_owned()
                 } else {
                     String::new()
                 },
-                stderr: if issue && self.issue_failure {
-                    "temporary upstream failure".to_owned()
-                } else {
-                    String::new()
-                },
+                stderr: String::new(),
             })
         }
     }
@@ -386,14 +392,15 @@ mod tests {
             "github.com",
             None,
             FakeExecutor {
-                issue_failure: true,
+                transient_issue_error: true,
                 ..FakeExecutor::default()
             },
         );
         let envelope = issue_envelope(Some(IdempotencyKey::parse("issue-create-8").unwrap()));
-        let mut failure = service.execute(&envelope).unwrap_err();
-        failure.error.retryable = true;
-        assert_eq!(failure.receipt.lifecycle, OperationLifecycle::Failed);
+        let failure = service.execute(&envelope).unwrap_err();
+        assert_eq!(failure.receipt.lifecycle, OperationLifecycle::Uncertain);
+        assert_eq!(failure.receipt.reconciliation, ReconciliationState::Pending);
+        failure.receipt.validate_against(&envelope).unwrap();
     }
 
     #[test]
@@ -407,7 +414,10 @@ mod tests {
                 IdempotencyKey::parse("issue-create-9").unwrap(),
             )))
             .unwrap_err();
-        assert_eq!(failure.receipt.reconciliation, ReconciliationState::NotRequired);
+        assert_eq!(
+            failure.receipt.reconciliation,
+            ReconciliationState::NotRequired
+        );
         assert!(calls.lock().unwrap().is_empty());
     }
 }
