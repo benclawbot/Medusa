@@ -22,6 +22,7 @@ keyring = "=4.1.5"
 medusa-config = { path = "../../../crates/medusa-config" }
 medusa-core = { path = "../../../crates/medusa-core" }
 medusa-daemon = { path = "../../../crates/medusa-daemon" }
+medusa-protocol = { path = "../../../crates/medusa-protocol" }
 medusa-memory = { path = "../../../crates/medusa-memory" }
 medusa-review-model = { path = "../../../crates/medusa-review-model" }
 medusa-runtime = { path = "../../../crates/medusa-runtime" }

@@ -25,6 +25,7 @@ mod pull_requests;
 mod review;
 mod runtime {
     include!("runtime.rs");
+    include!("desktop_projection.rs");
     include!("runtime_resume.rs");
     include!("runtime_recovery.rs");
 }

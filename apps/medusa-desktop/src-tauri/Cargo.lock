@@ -33,9 +33,9 @@ dependencies = [
 
 [[package]]
 name = "aho-corasick"
-version = "1.1.4"
+version = "1.1.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ddd31a130427c27518df266943a5308ed92d4b226cc639f5a8f1002816174301"
+checksum = "c982642fa9e8606056828ee9a8505737230110bb1099153c79efe865c59d12ba"
 dependencies = [
  "memchr",
 ]
@@ -785,9 +785,9 @@ dependencies = [
 
 [[package]]
 name = "data-encoding"
-version = "2.11.0"
+version = "2.11.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a4ae5f15dda3c708c0ade84bfee31ccab44a3da4f88015ed22f63732abe300c8"
+checksum = "4583a4551df46e2792f82ceeac45e850d2e2d5debba0b91f102385cda5b11f06"
 
 [[package]]
 name = "dbus"
@@ -1997,9 +1997,9 @@ dependencies = [
 
 [[package]]
 name = "ipnet"
-version = "2.12.0"
+version = "2.12.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d98f6fed1fde3f8c21bc40a1abb88dd75e67924f9cffc3ef95607bad8017f8e2"
+checksum = "6a756c3fac73139e83f14c2d742155dd2b78d3ee56597b419a0579b7bdd6dd78"
 
 [[package]]
 name = "itoa"
@@ -2190,9 +2190,9 @@ dependencies = [
 
 [[package]]
 name = "libredox"
-version = "0.1.18"
+version = "0.1.19"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c943259e342f1e06ff2da7a83eabdfe7f92ce10262688dbf1895ff0b3e6e4652"
+checksum = "2026a5056764a10b2bf5d56488cba40da507f5493a6a429340e2004d9ed085fa"
 dependencies = [
  "libc",
 ]
@@ -2265,6 +2265,7 @@ dependencies = [
  "medusa-continuation",
  "medusa-core",
  "medusa-escalation",
+ "medusa-evidence",
  "medusa-extensions",
  "medusa-failure",
  "medusa-intelligence",
@@ -2306,6 +2307,7 @@ dependencies = [
  "medusa-extensions",
  "medusa-github",
  "medusa-improvement",
+ "medusa-provider",
  "medusa-transaction-coordinator",
  "serde",
  "serde_json",
@@ -2416,6 +2418,7 @@ dependencies = [
  "medusa-core",
  "medusa-daemon",
  "medusa-memory",
+ "medusa-protocol",
  "medusa-review-model",
  "medusa-runtime",
  "medusa-update",
@@ -2437,6 +2440,19 @@ dependencies = [
  "serde_json",
  "sha2",
  "time",
+]
+
+[[package]]
+name = "medusa-evidence"
+version = "1.0.0"
+dependencies = [
+ "hex",
+ "serde",
+ "serde_json",
+ "sha2",
+ "thiserror 2.0.19",
+ "time",
+ "ulid",
 ]
 
 [[package]]
@@ -2473,6 +2489,30 @@ dependencies = [
 ]
 
 [[package]]
+name = "medusa-external-contracts"
+version = "1.0.0"
+dependencies = [
+ "hex",
+ "serde",
+ "serde_json",
+ "sha2",
+ "thiserror 2.0.19",
+ "time",
+ "ulid",
+]
+
+[[package]]
+name = "medusa-external-provider"
+version = "1.0.0"
+dependencies = [
+ "medusa-config",
+ "medusa-core",
+ "medusa-external-contracts",
+ "medusa-provider",
+ "serde_json",
+]
+
+[[package]]
 name = "medusa-failure"
 version = "1.0.0"
 dependencies = [
@@ -2487,6 +2527,8 @@ version = "1.0.0"
 dependencies = [
  "medusa-core",
  "serde",
+ "serde_json",
+ "tempfile",
 ]
 
 [[package]]
@@ -2583,6 +2625,7 @@ name = "medusa-multi-agent-scheduler"
 version = "1.0.0"
 dependencies = [
  "hex",
+ "medusa-evidence",
  "serde",
  "serde_json",
  "sha2",
@@ -2692,8 +2735,10 @@ dependencies = [
  "medusa-config",
  "medusa-context",
  "medusa-continuation",
+ "medusa-evidence",
  "medusa-execution-checkpoint",
  "medusa-execution-replay",
+ "medusa-external-provider",
  "medusa-improvement",
  "medusa-markdown-memory",
  "medusa-mcp-cache",
@@ -2703,7 +2748,6 @@ dependencies = [
  "medusa-multi-agent-scheduler",
  "medusa-openai-realtime",
  "medusa-protocol",
- "medusa-provider",
  "medusa-recovery-coordinator",
  "medusa-review-model",
  "medusa-session-continuity",
@@ -2796,14 +2840,18 @@ name = "medusa-update"
 version = "1.0.0"
 dependencies = [
  "flate2",
+ "hex",
  "medusa-core",
  "reqwest 0.12.28",
+ "ring",
  "semver",
  "serde",
  "serde_json",
  "sha2",
  "tar",
  "tempfile",
+ "thiserror 2.0.19",
+ "time",
  "zip",
 ]
 
@@ -2830,6 +2878,7 @@ name = "medusa-workers"
 version = "1.0.0"
 dependencies = [
  "medusa-core",
+ "medusa-evidence",
  "serde",
  "ulid",
 ]

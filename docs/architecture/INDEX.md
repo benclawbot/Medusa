@@ -75,11 +75,11 @@ V2 invariants:
 | Interactive terminal | `medusa` | `crates/medusa-tui` | runtime command authority; canonical journal → `medusa-protocol` TUI projection |
 | Headless | `medusa run` | `crates/medusa-cli` | runtime command authority; canonical journal → `medusa-protocol` frontend projection |
 | Daemon service | `medusa __daemon-serve` | `crates/medusa-daemon` | daemon protocol v2 routes shared frontend commands; canonical journal → frontend-scoped replay batches |
-| Desktop | `apps/medusa-desktop` | React/Tauri application | `medusa-runtime::RuntimeController` |
+| Desktop | `apps/medusa-desktop` | React/Tauri application | runtime command compatibility; canonical journal → `medusa-protocol` desktop projection |
 | GitHub operations | `medusa github` / capability entrypoints | `crates/medusa-external-github` over `crates/medusa-github` | versioned attempt-bound operation envelope and normalized receipt |
 | Update | `medusa update` | `crates/medusa-update` | Ed25519-verified prebuilt release; explicit `--channel source` developer path |
 
-The phase-6 frontend migration is proceeding in production-entrypoint order. Headless CLI and interactive TUI output tail committed session-journal events through `medusa-protocol::frontend`. Daemon protocol v2 now routes the shared frontend command envelope through one daemon-owned control plane and returns typed acknowledgements plus frontend-scoped replay batches with a next canonical cursor that advances through non-presentable events. The TUI temporarily retains local settings, startup recovery, turn-counter, and reset hints; desktop and remote voice surfaces remain follow-up slices.
+The phase-6 frontend migration is proceeding in production-entrypoint order. Headless CLI and interactive TUI output tail committed session-journal events through `medusa-protocol::frontend`. Daemon protocol v2 now routes the shared frontend command envelope through one daemon-owned control plane and returns typed acknowledgements plus frontend-scoped replay batches with a next canonical cursor that advances through non-presentable events. The TUI and desktop temporarily retain local settings, startup recovery, turn-counter, reset hints, and process-local command compatibility; desktop daemon-command migration and remote voice remain follow-up slices.
 
 ## Capability certification
 
