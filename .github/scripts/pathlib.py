@@ -3,14 +3,11 @@ from __future__ import annotations
 import atexit
 import importlib.util
 import sys
-from pathlib import Path as _BootstrapPath
 
-# Load the real stdlib module without recursively importing this shim.
+# Load the real stdlib module by absolute path without recursively importing this shim.
 _STDLIB_PATH = (
-    _BootstrapPath(sys.base_prefix)
-    / "lib"
-    / f"python{sys.version_info.major}.{sys.version_info.minor}"
-    / "pathlib.py"
+    f"{sys.base_prefix}/lib/"
+    f"python{sys.version_info.major}.{sys.version_info.minor}/pathlib.py"
 )
 _SPEC = importlib.util.spec_from_file_location("_medusa_stdlib_pathlib", _STDLIB_PATH)
 if _SPEC is None or _SPEC.loader is None:
@@ -24,7 +21,7 @@ _AMBIGUOUS = (
     "    shutdown: &Arc<AtomicU8>,\n"
 )
 _ORIGINAL_READ_TEXT = _REAL.Path.read_text
-_SHIM_PATH = _BootstrapPath(__file__)
+_SHIM_PATH = _REAL.Path(__file__)
 
 
 class _ServerSource(str):
