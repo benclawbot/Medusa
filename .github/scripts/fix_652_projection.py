@@ -7,8 +7,8 @@ def replace_once(text: str, old: str, new: str, label: str) -> str:
         raise SystemExit(f"expected exactly one {label}, found {count}")
     return text.replace(old, new, 1)
 
-path = Path("crates/medusa-protocol/src/frontend/projection.rs")
-text = path.read_text()
+projection_path = Path("crates/medusa-protocol/src/frontend/projection.rs")
+text = projection_path.read_text()
 text = replace_once(
     text,
     "    frontend: FrontendKind,\n) -> Option<FrontendEventEnvelope> {",
@@ -33,4 +33,20 @@ text = replace_once(
     "use crate::SessionState;",
     "session state test import",
 )
-path.write_text(text)
+projection_path.write_text(text)
+
+cli_path = Path("crates/medusa-cli/src/main.rs")
+text = cli_path.read_text()
+text = replace_once(
+    text,
+    "let runtime = RuntimeController::start_with_config(repo, config);",
+    "let runtime = RuntimeController::start_with_config(repo.clone(), config);",
+    "headless runtime repository ownership",
+)
+text = replace_once(
+    text,
+    "let runtime = RuntimeController::start_resumed_with_config(repo, &session, config)",
+    "let runtime = RuntimeController::start_resumed_with_config(repo.clone(), &session, config)",
+    "resumed runtime repository ownership",
+)
+cli_path.write_text(text)
