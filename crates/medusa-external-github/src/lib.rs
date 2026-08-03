@@ -154,8 +154,8 @@ impl<E: CommandExecutor> GitHubOperationService<E> {
     }
 
     fn validate_boundary(&self, envelope: &OperationEnvelope) -> Result<(), MedusaError> {
-        let trusted = TrustedHost::parse(&format!("https://{}", self.hostname))
-            .map_err(contract_error)?;
+        let trusted =
+            TrustedHost::parse(&format!("https://{}", self.hostname)).map_err(contract_error)?;
         if !trusted
             .permits(&format!("https://{}/", self.hostname))
             .map_err(contract_error)?
@@ -212,7 +212,8 @@ impl<E: CommandExecutor> GitHubOperationService<E> {
                         "the GitHub CLI backend cannot enforce expected_head; use a direct API backend",
                     ));
                 }
-                self.service.merge_pr(*number, parse_merge_strategy(strategy)?)
+                self.service
+                    .merge_pr(*number, parse_merge_strategy(strategy)?)
             }
             ExternalOperation::WorkflowRerun {
                 run_id,
@@ -399,7 +400,10 @@ mod tests {
         let envelope = issue_envelope(Some(IdempotencyKey::parse("issue-create-8").unwrap()));
         let failure = service.execute(&envelope).unwrap_err();
         assert_eq!(failure.receipt.lifecycle, OperationLifecycle::Uncertain);
-        assert_eq!(failure.receipt.reconciliation, ReconciliationState::Pending);
+        assert_eq!(
+            failure.receipt.reconciliation,
+            ReconciliationState::Pending
+        );
         failure.receipt.validate_against(&envelope).unwrap();
     }
 
