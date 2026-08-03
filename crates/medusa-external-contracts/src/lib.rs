@@ -4,10 +4,15 @@
 //! frontends, and durable runtime state consume these types instead of inventing readiness,
 //! capability, mutation, or receipt state independently.
 
+mod auth;
 mod identity;
 mod operation;
 mod provider;
 
+pub use auth::{
+    AuthenticationMethod, CredentialState, OAuthLifecycleReceipt, OAuthStage, OAuthStageReceipt,
+    PinnedOAuthComponent,
+};
 pub use identity::{
     AttemptId, IdempotencyKey, MAX_IDEMPOTENCY_KEY_BYTES, RequestDigest, TrustedHost,
 };
