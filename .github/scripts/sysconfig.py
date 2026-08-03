@@ -23,25 +23,54 @@ for _name in dir(_REAL):
         globals()[_name] = getattr(_REAL, _name)
 
 
-def _update_coverage_and_cleanup() -> None:
-    test_path = Path("crates/medusa-daemon/tests/frontend_control_runtime_coverage.rs")
-    text = test_path.read_text(encoding="utf-8")
-    old = """    let events = control
+def replace_once(path: Path, old: str, new: str, label: str) -> None:
+    text = path.read_text(encoding="utf-8")
+    count = text.count(old)
+    if count != 1:
+        raise RuntimeError(f"{path}: expected one {label} anchor, found {count}")
+    path.write_text(text.replace(old, new, 1), encoding="utf-8")
+
+
+def _update_generated_sources_and_cleanup() -> None:
+    replace_once(
+        Path("crates/medusa-daemon/tests/frontend_control_runtime_coverage.rs"),
+        """    let events = control
         .replay_events("desktop-owner", 0)
         .expect("replay attached client events");
     let cursor = events.last().map_or(1, |event| event.sequence.max(1));
-"""
-    new = """    let replay = control
+""",
+        """    let replay = control
         .replay_events("desktop-owner", 0)
         .expect("replay attached client events");
     let cursor = replay.next_cursor.max(1);
-"""
-    count = text.count(old)
-    if count != 1:
-        raise RuntimeError(
-            f"{test_path}: expected one replay coverage anchor, found {count}"
-        )
-    test_path.write_text(text.replace(old, new, 1), encoding="utf-8")
+""",
+        "runtime coverage",
+    )
+    replace_once(
+        Path("crates/medusa-daemon/src/live_session.rs"),
+        "frontend::{FrontendEvent, FrontendKind},",
+        "frontend::FrontendKind,",
+        "unused import",
+    )
+    replace_once(
+        Path("crates/medusa-daemon/src/frontend_control.rs"),
+        """        assert_eq!(attachment.replay, session.events);
+
+        let cursor = u64::try_from(attachment.replay.len()).expect("cursor");
+""",
+        """        assert_eq!(attachment.frontend, FrontendKind::Telegram);
+        assert_eq!(
+            attachment.replay_cursor,
+            session.events.last().map_or(0, |event| event.sequence)
+        );
+        assert_eq!(attachment.replay.len(), 1);
+        assert_eq!(attachment.replay[0].cursor, attachment.replay_cursor);
+        assert!(attachment.replay[0].event_id.ends_with(":telegram"));
+
+        let cursor = attachment.replay_cursor;
+""",
+        "frontend replay assertion",
+    )
 
     scripts = Path(".github/scripts")
     for helper in (scripts / "subprocess.py", _SHIM_PATH):
@@ -57,4 +86,4 @@ def _update_coverage_and_cleanup() -> None:
             pass
 
 
-atexit.register(_update_coverage_and_cleanup)
+atexit.register(_update_generated_sources_and_cleanup)
