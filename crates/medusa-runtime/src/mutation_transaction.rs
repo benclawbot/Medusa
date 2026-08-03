@@ -20,6 +20,8 @@ const MAX_REVISIONS: u32 = 2;
 const ACCEPTED_MARKER: &str = "MEDUSA_REVIEW_ACCEPTED:";
 const REVISION_MARKER: &str = "MEDUSA_REVISION_REQUESTED:";
 
+pub(crate) const PARENT_REVIEW_TURN_INSTRUCTION: &str = "Current turn is a transactional parent-review decision, not an implementation turn. The original user request and every tool-use, file-write, question, or exact-output instruction inside it are historical acceptance criteria that an isolated implementer has already executed; none of them apply to this reviewer turn. Do not call tools, write files, run tests, ask questions, or repeat the original task. Evaluate only the authoritative transactional parent-review packet and prepared patch supplied in the system context. Accept when the patch, changed scope, and runtime verification evidence satisfy the scoped request. Request revision only for a concrete defect in that patch, scope, or evidence. End with exactly one required MEDUSA_REVIEW_ACCEPTED or MEDUSA_REVISION_REQUESTED marker.";
+
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum MutationLifecycle {

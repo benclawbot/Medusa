@@ -72,6 +72,25 @@ pub(crate) fn parallel_tool_limit(configured_workers: u16) -> usize {
     usize::from(configured_workers).clamp(1, MAX_PARALLEL_TOOL_CALLS)
 }
 
+fn messages_with_turn_instruction(
+    session: &AgentSession,
+    turn_instruction: Option<&str>,
+) -> Vec<Message> {
+    let mut messages = session.messages.clone();
+    if let Some(instruction) = turn_instruction
+        .map(str::trim)
+        .filter(|text| !text.is_empty())
+    {
+        messages.push(Message {
+            role: Role::User,
+            content: vec![MessageBlock::Text {
+                text: instruction.to_owned(),
+            }],
+        });
+    }
+    messages
+}
+
 fn parallel_safe_tool(name: &str) -> bool {
     matches!(
         name,
@@ -563,6 +582,27 @@ impl<P: ModelProvider> AgentEngine<P> {
         &self,
         session: &mut AgentSession,
         additional_system_context: Option<&str>,
+        observer: F,
+    ) -> MedusaResult<StepOutcome>
+    where
+        F: FnMut(&AgentUpdate),
+    {
+        self.step_with_observer_and_context_and_turn_instruction(
+            session,
+            additional_system_context,
+            None,
+            observer,
+        )
+    }
+
+    /// Executes one model step with ephemeral system context and an optional latest-turn
+    /// instruction. The instruction is sent only in the provider request and is never persisted in
+    /// the durable session history.
+    pub fn step_with_observer_and_context_and_turn_instruction<F>(
+        &self,
+        session: &mut AgentSession,
+        additional_system_context: Option<&str>,
+        turn_instruction: Option<&str>,
         mut observer: F,
     ) -> MedusaResult<StepOutcome>
     where
@@ -612,9 +652,11 @@ impl<P: ModelProvider> AgentEngine<P> {
             tools.extend(team.definitions());
         }
         tools.retain(|tool| self.execution_policy.allows(&tool.name));
+        let mut request_messages = messages_with_turn_instruction(session, turn_instruction);
+        validate_messages(&request_messages, &self.provider.capabilities())?;
         let mut budget = context_budget::PromptBudget::for_request(
             &system,
-            &session.messages,
+            &request_messages,
             &tools,
             self.config.model.max_output_tokens,
             context_budget::configured_context_window_tokens(),
@@ -636,7 +678,7 @@ impl<P: ModelProvider> AgentEngine<P> {
             });
             budget = context_budget::PromptBudget::for_request(
                 &system,
-                &session.messages,
+                &request_messages,
                 &tools,
                 self.config.model.max_output_tokens,
                 context_budget::configured_context_window_tokens(),
@@ -654,11 +696,13 @@ impl<P: ModelProvider> AgentEngine<P> {
                 Some("preserve the current objective, decisions, tool results, and pending work"),
             )?;
             validate_messages(&session.messages, &self.provider.capabilities())?;
+            request_messages = messages_with_turn_instruction(session, turn_instruction);
+            validate_messages(&request_messages, &self.provider.capabilities())?;
             compacted = true;
         }
         let mut request = ModelRequest {
             system,
-            messages: session.messages.clone(),
+            messages: request_messages,
             tools,
             max_tokens: self.config.model.max_output_tokens,
             temperature_milli: self.config.model.temperature_milli,
@@ -678,7 +722,8 @@ impl<P: ModelProvider> AgentEngine<P> {
                         ),
                     )?;
                     validate_messages(&session.messages, &self.provider.capabilities())?;
-                    request.messages = session.messages.clone();
+                    request.messages = messages_with_turn_instruction(session, turn_instruction);
+                    validate_messages(&request.messages, &self.provider.capabilities())?;
                 }
                 self.provider
                     .complete_cancellable(&request, &self.cancellation)?

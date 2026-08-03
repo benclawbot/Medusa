@@ -83,7 +83,9 @@ mod tests {
     use medusa_config::{Config, Mode};
     use medusa_core::{ErrorCategory, ErrorCode, MedusaError, MedusaResult};
     use medusa_protocol::EventPayload;
-    use medusa_provider::{ModelProvider, ModelRequest, ModelResponse, ResponseBlock, Usage};
+    use medusa_provider::{
+        Message, ModelProvider, ModelRequest, ModelResponse, ResponseBlock, Role, Usage,
+    };
     use serde_json::json;
 
     use super::*;
@@ -133,6 +135,25 @@ mod tests {
             Ok(response(
                 vec![ResponseBlock::Text {
                     text: "Task acknowledged.".to_owned(),
+                }],
+                "end_turn",
+            ))
+        }
+    }
+
+    struct CapturingMessagesProvider {
+        messages: Arc<Mutex<Vec<Vec<Message>>>>,
+    }
+
+    impl ModelProvider for CapturingMessagesProvider {
+        fn complete(&self, request: &ModelRequest) -> MedusaResult<ModelResponse> {
+            self.messages
+                .lock()
+                .expect("captured messages lock")
+                .push(request.messages.clone());
+            Ok(response(
+                vec![ResponseBlock::Text {
+                    text: "Review accepted.".to_owned(),
                 }],
                 "end_turn",
             ))
@@ -265,6 +286,46 @@ mod tests {
         let durable_messages =
             serde_json::to_string(&session.messages).expect("serialize messages");
         assert!(!durable_messages.contains("Use the selected release checklist."));
+    }
+
+    #[test]
+    fn ephemeral_turn_instruction_is_latest_user_message_and_never_persisted() {
+        let directory = tempfile::tempdir().expect("temporary directory");
+        let messages = Arc::new(Mutex::new(Vec::new()));
+        let engine = AgentEngine::new(
+            CapturingMessagesProvider {
+                messages: Arc::clone(&messages),
+            },
+            Config::default(),
+        );
+        let mut session = engine
+            .create_session(directory.path(), "write the requested file".to_owned())
+            .expect("session");
+
+        assert_eq!(
+            engine
+                .step_with_observer_and_context_and_turn_instruction(
+                    &mut session,
+                    Some("Review the prepared patch."),
+                    Some("Current turn is review-only; do not execute the original request."),
+                    |_| {},
+                )
+                .expect("ephemeral turn instruction step"),
+            StepOutcome::TurnComplete
+        );
+
+        let captured = messages.lock().expect("captured messages");
+        assert_eq!(captured.len(), 1);
+        assert_eq!(captured[0].len(), 2);
+        assert_eq!(captured[0][1].role, Role::User);
+        let request_messages =
+            serde_json::to_string(&captured[0]).expect("serialize request messages");
+        assert!(request_messages.contains("Current turn is review-only"));
+
+        let durable_messages =
+            serde_json::to_string(&session.messages).expect("serialize durable messages");
+        assert!(!durable_messages.contains("Current turn is review-only"));
+        assert_eq!(session.messages.len(), 2);
     }
 
     #[test]
