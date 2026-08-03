@@ -61,6 +61,7 @@ jobs:
       - name: Remove one-shot generator
         run: |
           rm .github/scripts/apply-tui-canonical-projection.py
+          rm .github/scripts/tui-generator-rerun.txt
           rm .github/workflows/apply-tui-canonical-projection.yml
       - name: Commit generated implementation
         run: |
