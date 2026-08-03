@@ -400,10 +400,7 @@ mod tests {
         let envelope = issue_envelope(Some(IdempotencyKey::parse("issue-create-8").unwrap()));
         let failure = service.execute(&envelope).unwrap_err();
         assert_eq!(failure.receipt.lifecycle, OperationLifecycle::Uncertain);
-        assert_eq!(
-            failure.receipt.reconciliation,
-            ReconciliationState::Pending
-        );
+        assert_eq!(failure.receipt.reconciliation, ReconciliationState::Pending);
         failure.receipt.validate_against(&envelope).unwrap();
     }
 
