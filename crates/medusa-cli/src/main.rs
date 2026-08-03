@@ -24,7 +24,7 @@ use config_profiles::{
 use medusa_agent::{bootstrap, session_browser::list_sessions};
 use medusa_config::Config;
 use medusa_core::{ErrorCategory, ErrorCode, MedusaError, MedusaResult};
-use medusa_daemon::{DaemonClient, DaemonPaths, Request, serve};
+use medusa_daemon::{DaemonClient, DaemonPaths, Request, serve, serve_with_config};
 use medusa_extensions::{DesktopCommanderClient, DesktopCommanderSettings};
 use medusa_hardening::{CURRENT_SCHEMA_VERSION, Migrator};
 use headless_approval::{ApprovalMatch, HeadlessApprovalPolicy};
@@ -229,7 +229,13 @@ fn run() -> MedusaResult<()> {
     }
 
     if matches!(command, CommandKind::DaemonServe) {
-        return serve(DaemonPaths::for_repo(&repo));
+        let overrides = cli
+            .overrides
+            .iter()
+            .cloned()
+            .collect::<BTreeMap<_, _>>();
+        let config = Config::load_layers(None, None, &BTreeMap::new(), &overrides)?;
+        return serve_with_config(DaemonPaths::for_repo(&repo), config);
     }
 
     if let CommandKind::Config { action } = command {
