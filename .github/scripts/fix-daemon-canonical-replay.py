@@ -144,7 +144,7 @@ telegram = replace_once(
 telegram = replace_once(
     telegram,
     "            | FrontendControlResult::Events { session_id, .. } => Some(session_id.clone()),\n",
-    "            FrontendControlResult::Events { replay } => Some(replay.session_id.clone()),\n",
+    "            | FrontendControlResult::Events { replay } => Some(replay.session_id.clone()),\n",
     str(telegram_path),
 )
 telegram_path.write_text(telegram, encoding="utf-8")
