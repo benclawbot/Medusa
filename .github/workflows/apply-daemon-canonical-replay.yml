@@ -25,6 +25,8 @@ jobs:
           components: clippy,rustfmt
       - name: Apply verified daemon replay patch
         run: python3 .github/scripts/apply-daemon-canonical-replay.py
+      - name: Preserve bounded Telegram compatibility
+        run: python3 .github/scripts/fix-daemon-canonical-replay.py
       - name: Format
         run: cargo fmt --all
       - name: Validate focused crates
@@ -36,6 +38,7 @@ jobs:
       - name: Remove one-shot generator
         run: |
           rm .github/scripts/apply-daemon-canonical-replay.py
+          rm .github/scripts/fix-daemon-canonical-replay.py
           rm .github/workflows/apply-daemon-canonical-replay.yml
       - name: Commit generated implementation
         run: |
