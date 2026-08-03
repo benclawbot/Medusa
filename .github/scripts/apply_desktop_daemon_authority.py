@@ -19,6 +19,26 @@ if manifest.count(workspace_base64) != 1:
     raise SystemExit("daemon manifest no longer contains the expected generated base64 dependency")
 daemon_manifest.write_text(manifest.replace(workspace_base64, 'base64 = "0.22"', 1))
 
+# Session-creation emptiness remains a control-plane decision so attachment-only creation and
+# the existing typed ObjectiveRequired error share one authoritative validation path.
+command_path = ROOT / "crates" / "medusa-protocol" / "src" / "frontend" / "command.rs"
+command_source = command_path.read_text()
+eager_create_validation = '''            Self::CreateSession {
+                objective,
+                attachment_ids,
+                ..
+            } if objective
+                .as_deref()
+                .is_none_or(|value| value.trim().is_empty())
+                && attachment_ids.is_empty() =>
+            {
+                Err("session creation must contain text or an attachment")
+            }
+'''
+if command_source.count(eager_create_validation) != 1:
+    raise SystemExit("generated command contract no longer contains eager create validation")
+command_path.write_text(command_source.replace(eager_create_validation, "", 1))
+
 stale_desktop_row = (
     "| Desktop | `apps/medusa-desktop` | React/Tauri application | "
     "`medusa-runtime::RuntimeController` |"
@@ -73,5 +93,78 @@ replace_once(
             FrontendControlResult::Sessions { .. }
             | FrontendControlResult::Detached { .. }
             | FrontendControlResult::Transient { .. } => None,
+''',
+)
+replace_once(
+    "crates/medusa-daemon/tests/frontend_control_runtime_coverage.rs",
+    '''    assert!(matches!(
+        control.dispatch(envelope(
+            3,
+            "desktop-owner",
+            Some(&session_id),
+            FrontendCommand::ResumeSession {
+                session_id: session_id.clone(),
+            },
+        )),
+        Err(FrontendControlError::RuntimeAlreadyActive(ref active)) if active == &session_id
+    ));
+    assert!(matches!(
+        control.dispatch(envelope(
+            4,
+            "desktop-owner",
+            Some(&session_id),
+            FrontendCommand::Attach {
+                session_id: session_id.clone(),
+                mode: AttachmentMode::Owner,
+                after_cursor: Some(0),
+            },
+        )),
+        Err(FrontendControlError::RuntimeAlreadyActive(ref active)) if active == &session_id
+    ));
+''',
+    '''    let resumed_again = control
+        .dispatch(envelope(
+            3,
+            "desktop-owner",
+            Some(&session_id),
+            FrontendCommand::ResumeSession {
+                session_id: session_id.clone(),
+            },
+        ))
+        .expect("resume existing daemon runtime");
+    assert!(matches!(
+        resumed_again.result,
+        FrontendControlResult::RuntimeReady { .. }
+    ));
+    let attached_again = control
+        .dispatch(envelope(
+            4,
+            "desktop-owner",
+            Some(&session_id),
+            FrontendCommand::Attach {
+                session_id: session_id.clone(),
+                mode: AttachmentMode::Owner,
+                after_cursor: Some(0),
+            },
+        ))
+        .expect("refresh owner attachment");
+    assert!(matches!(
+        attached_again.result,
+        FrontendControlResult::Attached { .. }
+    ));
+''',
+)
+replace_once(
+    "crates/medusa-daemon/tests/frontend_control_runtime_coverage.rs",
+    '''            FrontendCommand::CreateSession {
+                repository_profile: "default".to_owned(),
+                objective: Some("   ".to_owned()),
+            },
+''',
+    '''            FrontendCommand::CreateSession {
+                repository_profile: "default".to_owned(),
+                objective: Some("   ".to_owned()),
+                attachment_ids: Vec::new(),
+            },
 ''',
 )
