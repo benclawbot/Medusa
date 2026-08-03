@@ -14,9 +14,12 @@ impl RuntimeRegistry {
         let supervisor = DaemonLaunch::for_current_executable()
             .map(|launch| DaemonSupervisor::new(&repo, launch))
             .unwrap_or_else(|_| DaemonSupervisor::observe_only(&repo));
+        let mut presentation = DesktopCanonicalPresentation::new(repo.clone());
+        presentation.bind_session(session_id);
         let entry = Arc::new(Mutex::new(RuntimeEntry {
             repo,
             controller,
+            presentation,
             daemon: DesktopDaemon {
                 supervisor,
                 last_state: None,

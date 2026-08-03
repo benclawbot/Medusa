@@ -39,6 +39,7 @@ struct DesktopDaemon {
 struct RuntimeEntry {
     repo: PathBuf,
     controller: RuntimeController,
+    presentation: DesktopCanonicalPresentation,
     daemon: DesktopDaemon,
 }
 
@@ -93,6 +94,7 @@ impl RuntimeRegistry {
         let entry = Arc::new(Mutex::new(RuntimeEntry {
             repo: repo.clone(),
             controller,
+            presentation: DesktopCanonicalPresentation::new(repo.clone()),
             daemon: DesktopDaemon {
                 supervisor,
                 last_state: None,
@@ -179,14 +181,17 @@ pub fn runtime_submit(
 ) -> Result<DesktopSubmitDisposition, String> {
     registry.with_entry(&runtime_id, |entry| {
         let draft = convert_prompt(&entry.repo, draft)?;
-        entry
+        let disposition = entry
             .controller
             .submit(draft)
-            .map(|disposition| match disposition {
-                SubmitDisposition::Started => DesktopSubmitDisposition::Started,
-                SubmitDisposition::Queued => DesktopSubmitDisposition::Queued,
-            })
-            .map_err(|error| error.to_string())
+            .map_err(|error| error.to_string())?;
+        if let Some(session_id) = entry.controller.active_session_id() {
+            entry.presentation.bind_session(&session_id);
+        }
+        Ok(match disposition {
+            SubmitDisposition::Started => DesktopSubmitDisposition::Started,
+            SubmitDisposition::Queued => DesktopSubmitDisposition::Queued,
+        })
     })
 }
 
@@ -245,13 +250,27 @@ pub fn runtime_poll(
         if let Some(event) = entry.daemon_event() {
             events.push(event);
         }
+        if let Some(session_id) = entry.controller.active_session_id() {
+            entry.presentation.bind_session(&session_id);
+        }
         while events.len() < limit {
-            match entry
+            let Some(event) = entry
                 .controller
                 .try_event()
                 .map_err(|error| error.to_string())?
-            {
-                Some(event) => events.push(event.into()),
+            else {
+                break;
+            };
+            if matches!(&event, medusa_runtime::RuntimeEvent::NewSession) {
+                entry.presentation.reset();
+            }
+            if let Some(event) = map_process_event(event, entry.presentation.is_session_bound()) {
+                events.push(event);
+            }
+        }
+        while events.len() < limit {
+            match entry.presentation.try_event()? {
+                Some(event) => events.push(event),
                 None => break,
             }
         }
