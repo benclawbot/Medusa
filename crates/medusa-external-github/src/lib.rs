@@ -1,9 +1,8 @@
 //! Typed GitHub operation adapter with normalized attempt-bound receipts.
 //!
-//! The existing `medusa-github` service remains the command-construction and credential-store
-//! boundary. This crate is the external-operation authority layered above it: callers submit a
-//! versioned [`OperationEnvelope`], receive a normalized receipt for both success and failure,
-//! and cannot silently retry an uncertain non-idempotent create.
+//! `medusa-github` remains the command-construction and credential-store boundary. This crate
+//! binds every supported operation to a versioned envelope and returns a normalized receipt on
+//! both success and failure paths.
 
 use std::path::PathBuf;
 
@@ -14,21 +13,18 @@ use medusa_external_contracts::{
 };
 use medusa_github::{CommandExecutor, GitHubService, MergeStrategy, SystemExecutor};
 
-/// Successful typed GitHub execution.
 #[derive(Clone, Debug, PartialEq)]
 pub struct GitHubOperationOutcome {
     pub receipt: OperationReceipt,
     pub output: String,
 }
 
-/// Failed typed GitHub execution, including the durable normalized receipt candidate.
 #[derive(Clone, Debug)]
 pub struct GitHubOperationFailure {
-    pub receipt: OperationReceipt,
-    pub error: MedusaError,
+    pub receipt: Box<OperationReceipt>,
+    pub error: Box<MedusaError>,
 }
 
-/// GitHub operation authority backed by the existing shell-free `gh` command adapter.
 #[derive(Clone, Debug)]
 pub struct GitHubOperationService<E = SystemExecutor> {
     service: GitHubService<E>,
@@ -65,7 +61,6 @@ impl<E: CommandExecutor> GitHubOperationService<E> {
         }
     }
 
-    /// Executes one typed operation and returns an attempt-bound receipt on every path.
     pub fn execute(
         &self,
         envelope: &OperationEnvelope,
@@ -111,27 +106,7 @@ impl<E: CommandExecutor> GitHubOperationService<E> {
         }
 
         match self.dispatch(&envelope.operation) {
-            Ok(output) => {
-                let mut receipt = self.receipt(envelope, OperationLifecycle::Persisted);
-                receipt.persisted = true;
-                if output.starts_with("https://") || output.starts_with("http://") {
-                    receipt.resource_id = output
-                        .trim_end_matches('/')
-                        .rsplit('/')
-                        .next()
-                        .map(str::to_owned);
-                    receipt.resource_url = Some(output.clone());
-                }
-                if let Err(error) = receipt.validate_against(envelope) {
-                    return Err(self.failure(
-                        envelope,
-                        OperationLifecycle::Failed,
-                        ReconciliationState::NotRequired,
-                        contract_error(error),
-                    ));
-                }
-                Ok(GitHubOperationOutcome { receipt, output })
-            }
+            Ok(output) => self.success(envelope, output),
             Err(error) => {
                 let uncertain = envelope.operation.is_non_idempotent_create()
                     && (error.retryable || error.category == ErrorCategory::Transient);
@@ -151,6 +126,32 @@ impl<E: CommandExecutor> GitHubOperationService<E> {
                 ))
             }
         }
+    }
+
+    fn success(
+        &self,
+        envelope: &OperationEnvelope,
+        output: String,
+    ) -> Result<GitHubOperationOutcome, GitHubOperationFailure> {
+        let mut receipt = self.receipt(envelope, OperationLifecycle::Persisted);
+        receipt.persisted = true;
+        if output.starts_with("https://") || output.starts_with("http://") {
+            receipt.resource_id = output
+                .trim_end_matches('/')
+                .rsplit('/')
+                .next()
+                .map(str::to_owned);
+            receipt.resource_url = Some(output.clone());
+        }
+        if let Err(error) = receipt.validate_against(envelope) {
+            return Err(self.failure(
+                envelope,
+                OperationLifecycle::Failed,
+                ReconciliationState::NotRequired,
+                contract_error(error),
+            ));
+        }
+        Ok(GitHubOperationOutcome { receipt, output })
     }
 
     fn validate_boundary(&self, envelope: &OperationEnvelope) -> Result<(), MedusaError> {
@@ -270,7 +271,10 @@ impl<E: CommandExecutor> GitHubOperationService<E> {
             "error_category".to_owned(),
             serde_json::Value::String(format!("{:?}", error.category)),
         );
-        GitHubOperationFailure { receipt, error }
+        GitHubOperationFailure {
+            receipt: Box::new(receipt),
+            error: Box::new(error),
+        }
     }
 }
 
