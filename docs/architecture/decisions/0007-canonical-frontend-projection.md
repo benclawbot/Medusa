@@ -22,7 +22,7 @@ The phase-6 migration order is enforced in reviewable slices:
 4. desktop and remote frontends attach through that daemon authority;
 5. direct frontend-owned runtime projections are deleted and guarded against reintroduction.
 
-Telegram keeps its existing `:<frontend>` event identity through a compatibility wrapper, but the wrapper contains no projection logic.
+Telegram delivery consumes the same frontend-scoped replay envelopes as every other attached client. The Telegram adapter retains transport rendering and delivery state only; it no longer owns a journal projector.
 
 ## Migration status
 
