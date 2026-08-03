@@ -1,0 +1,53 @@
+name: Apply desktop canonical projection
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+
+permissions:
+  contents: write
+
+concurrency:
+  group: apply-desktop-canonical-${{ github.event.pull_request.head.sha }}
+  cancel-in-progress: false
+
+jobs:
+  apply:
+    if: ${{ github.event.pull_request.head.ref == 'agent/652-desktop-canonical-projection' }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: agent/652-desktop-canonical-projection
+          fetch-depth: 0
+      - name: Install Linux Tauri dependencies
+        run: sudo apt-get update && sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf
+      - uses: dtolnay/rust-toolchain@39b0b3842c7e8bbf6904c0bfc3d9006fdd4dc4e0 # 1.88.0
+        with:
+          components: clippy,rustfmt
+      - name: Apply verified desktop projection patch
+        run: python3 .github/scripts/apply-desktop-canonical-projection.py
+      - name: Refresh desktop dependency lock
+        run: cargo generate-lockfile --manifest-path apps/medusa-desktop/src-tauri/Cargo.toml
+      - name: Format
+        run: cargo fmt --manifest-path apps/medusa-desktop/src-tauri/Cargo.toml
+      - name: Validate desktop adapter
+        run: cargo test --manifest-path apps/medusa-desktop/src-tauri/Cargo.toml --locked
+      - name: Lint desktop adapter
+        run: cargo clippy --manifest-path apps/medusa-desktop/src-tauri/Cargo.toml --all-targets --locked -- -D warnings
+      - name: Audit desktop production panic paths
+        run: cargo clippy --manifest-path apps/medusa-desktop/src-tauri/Cargo.toml --lib --bins --locked -- -D warnings -D clippy::unwrap_used -D clippy::expect_used -D clippy::panic
+      - name: Validate architecture index
+        run: python3 scripts/check-architecture-index.py
+      - name: Remove one-shot generator
+        run: |
+          rm -f .github/scripts/apply-desktop-canonical-projection.py
+          rm -f .github/workflows/apply-desktop-canonical-projection.yml
+      - name: Commit generated implementation
+        run: |
+          git diff --check
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add -A
+          git commit -m "Migrate desktop presentation to canonical frontend events"
+          git push origin HEAD:agent/652-desktop-canonical-projection
