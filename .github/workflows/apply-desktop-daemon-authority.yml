@@ -1,0 +1,65 @@
+name: Apply desktop daemon authority
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+
+permissions:
+  contents: write
+
+concurrency:
+  group: desktop-daemon-authority-${{ github.event.pull_request.head.sha }}
+  cancel-in-progress: false
+
+jobs:
+  apply:
+    if: github.event.pull_request.head.ref == 'agent/652-desktop-daemon-authority'
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          ref: ${{ github.event.pull_request.head.ref }}
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+      - name: Install Linux Tauri dependencies
+        run: sudo apt-get update && sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf
+      - uses: dtolnay/rust-toolchain@39b0b3842c7e8bbf6904c0bfc3d9006fdd4dc4e0
+        with:
+          components: rustfmt,clippy
+      - name: Apply verified protocol and desktop authority patch
+        run: |
+          python .github/scripts/apply_desktop_daemon_protocol.py
+          python .github/scripts/apply_desktop_daemon_authority.py
+      - name: Refresh dependency locks
+        run: |
+          cargo generate-lockfile
+          cargo generate-lockfile --manifest-path apps/medusa-desktop/src-tauri/Cargo.toml
+      - name: Format
+        run: cargo fmt --all
+      - name: Validate daemon and protocol
+        run: cargo test -p medusa-protocol -p medusa-daemon --all-targets --locked
+      - name: Lint daemon and protocol
+        run: cargo clippy -p medusa-protocol -p medusa-daemon --all-targets --locked -- -D warnings
+      - name: Validate desktop adapter
+        run: cargo test --manifest-path apps/medusa-desktop/src-tauri/Cargo.toml --locked
+      - name: Lint desktop adapter
+        run: cargo clippy --manifest-path apps/medusa-desktop/src-tauri/Cargo.toml --all-targets --locked -- -D warnings
+      - name: Audit desktop production panic paths
+        run: cargo clippy --manifest-path apps/medusa-desktop/src-tauri/Cargo.toml --lib --bins --locked -- -D warnings -D clippy::unwrap_used -D clippy::expect_used -D clippy::panic
+      - name: Validate architecture index
+        run: python scripts/check-architecture-index.py
+      - name: Remove one-shot generator
+        run: |
+          rm -f .github/scripts/apply_desktop_daemon_protocol.py
+          rm -f .github/scripts/apply_desktop_daemon_authority.py
+          rm -f .github/scripts/desktop_authority_payload_*.txt
+          rm -f .github/workflows/apply-desktop-daemon-authority.yml
+      - name: Commit generated implementation
+        run: |
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add -A
+          git diff --cached --check
+          git commit -m "Move desktop runtime authority into daemon v2"
+          git push origin HEAD:${{ github.event.pull_request.head.ref }}
