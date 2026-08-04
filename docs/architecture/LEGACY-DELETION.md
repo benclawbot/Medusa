@@ -36,6 +36,14 @@ A migration slice is incomplete until its superseded v1 path is removed or has a
 - [ ] #634: remove decorative task, worker, reviewer, or verifier projections without durable execution evidence.
 - [x] #636: remove provider capability, cancellation, fallback, and readiness paths that disagree with wire behavior.
 
+### Parent-review contract deletion receipt (#632, partial)
+
+- `medusa-review-model` owns a versioned parent-review response schema and fail-closed parser.
+- The durable mutation transaction accepts only a final JSON envelope with `schema_version`, typed decision, and non-empty rationale.
+- Free-form `MEDUSA_REVIEW_ACCEPTED` and `MEDUSA_REVISION_REQUESTED` markers no longer authorize integration.
+- Unknown fields, malformed JSON, unsupported schemas, trailing text, and empty rationales fail closed.
+- Remaining #632 work: replace the generic `AgentEngine` review transport with a dedicated no-tools reviewer while preserving durable session evidence.
+
 ### Provider deletion receipt (#636)
 
 - Production adapters report wire-truthful capabilities and use abortable cancellable requests.
