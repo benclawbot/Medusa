@@ -413,14 +413,14 @@ mod tests {
         config.model.provider = "openai".to_owned();
         config.model.protocol = "openai".to_owned();
         config.model.streaming = true;
-        let provider = OpenAiProvider::from_config_with_api_key(
-            &config,
-            Some("session-key".to_owned()),
-        )
-        .expect("openai provider");
+        let provider =
+            OpenAiProvider::from_config_with_api_key(&config, Some("session-key".to_owned()))
+                .expect("openai provider");
         assert!(!provider.capabilities().streaming);
         assert_eq!(
-            provider.request_body(&empty_request()).expect("request body")["stream"],
+            provider
+                .request_body(&empty_request())
+                .expect("request body")["stream"],
             Value::Bool(false)
         );
     }
