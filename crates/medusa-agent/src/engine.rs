@@ -1104,7 +1104,7 @@ impl<P: ModelProvider> AgentEngine<P> {
             }
         }
 
-        if response.stop_reason.as_deref() == Some("end_turn")
+        if stop_reason_completes_turn(response.stop_reason.as_deref())
             && !session.messages.last().is_some_and(|message| {
                 matches!(
                     message.content.first(),
@@ -1175,12 +1175,16 @@ impl<P: ModelProvider> AgentEngine<P> {
         persist(session)?;
         Ok(if session.completed {
             StepOutcome::Completed
-        } else if response.stop_reason.as_deref() == Some("end_turn") {
+        } else if stop_reason_completes_turn(response.stop_reason.as_deref()) {
             StepOutcome::TurnComplete
         } else {
             StepOutcome::Continue
         })
     }
+}
+
+fn stop_reason_completes_turn(stop_reason: Option<&str>) -> bool {
+    matches!(stop_reason.map(str::trim), Some("end_turn" | "stop"))
 }
 
 fn approval_action_label(name: &str, input: &serde_json::Value) -> String {
@@ -1245,5 +1249,78 @@ fn interactively_approvable(name: &str, input: &serde_json::Value) -> bool {
             validate_shell_command_hard_denials(program, &args).is_ok()
         }
         _ => false,
+    }
+}
+
+#[cfg(test)]
+mod terminal_stop_reason_tests {
+    use std::{collections::VecDeque, sync::Mutex};
+
+    use medusa_provider::{ModelResponse, ResponseBlock, Usage};
+
+    use super::*;
+
+    struct ScriptedStopProvider {
+        responses: Mutex<VecDeque<ModelResponse>>,
+    }
+
+    impl ScriptedStopProvider {
+        fn new(stop_reason: &str) -> Self {
+            Self {
+                responses: Mutex::new(
+                    [ModelResponse {
+                        response_id: Some("stop-reason-fixture".to_owned()),
+                        stop_reason: Some(stop_reason.to_owned()),
+                        blocks: vec![ResponseBlock::Text {
+                            text: "Evidence-backed delegated report complete.".to_owned(),
+                        }],
+                        usage: Usage::default(),
+                    }]
+                    .into(),
+                ),
+            }
+        }
+    }
+
+    impl ModelProvider for ScriptedStopProvider {
+        fn complete(&self, _request: &ModelRequest) -> MedusaResult<ModelResponse> {
+            self.responses
+                .lock()
+                .expect("scripted stop provider lock")
+                .pop_front()
+                .ok_or_else(|| {
+                    MedusaError::new(
+                        ErrorCode::DependencyUnavailable,
+                        ErrorCategory::Internal,
+                        "scripted stop response exhausted",
+                    )
+                })
+        }
+    }
+
+    fn read_only_step(stop_reason: &str) -> StepOutcome {
+        let directory = tempfile::tempdir().expect("temporary repository");
+        let mut config = Config::default();
+        config.agent.mode = Mode::ReadOnly;
+        let engine = AgentEngine::new(ScriptedStopProvider::new(stop_reason), config);
+        let mut session = engine
+            .create_session(directory.path(), "inspect the repository".to_owned())
+            .expect("create delegated session");
+        engine.step(&mut session).expect("run delegated step")
+    }
+
+    #[test]
+    fn openai_stop_completes_a_read_only_turn() {
+        assert_eq!(read_only_step("stop"), StepOutcome::TurnComplete);
+    }
+
+    #[test]
+    fn anthropic_end_turn_still_completes_a_read_only_turn() {
+        assert_eq!(read_only_step("end_turn"), StepOutcome::TurnComplete);
+    }
+
+    #[test]
+    fn truncated_provider_output_does_not_complete_the_turn() {
+        assert_eq!(read_only_step("length"), StepOutcome::Continue);
     }
 }
