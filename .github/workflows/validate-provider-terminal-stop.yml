@@ -1,0 +1,118 @@
+name: Validate provider terminal stop
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+
+permissions:
+  contents: write
+  statuses: write
+
+jobs:
+  build:
+    if: github.head_ref == 'agent/652-openai-stop-reason-build'
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    env:
+      BASE_SHA: 5c71c839cdd8fd0a6ce538acb92764a822f9da1d
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          ref: ${{ github.head_ref }}
+          fetch-depth: 0
+      - uses: dtolnay/rust-toolchain@39b0b3842c7e8bbf6904c0bfc3d9006fdd4dc4e0
+        with:
+          components: rustfmt,clippy
+      - name: Materialize provider-neutral terminal handling
+        run: |
+          cp .github/scripts/apply_provider_terminal_stop.py /tmp/apply_provider_terminal_stop.py
+          git checkout --detach "$BASE_SHA"
+          python /tmp/apply_provider_terminal_stop.py
+          cargo fmt --all
+          git diff --check
+      - name: Test terminal stop handling
+        run: cargo test -p medusa-agent -p medusa-runtime -p medusa-tui --all-targets --locked
+      - name: Lint terminal stop handling
+        run: cargo clippy -p medusa-agent -p medusa-runtime -p medusa-tui --all-targets --locked -- -D warnings
+      - name: Build clean source commit
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          python - <<'PY'
+          import base64
+          import json
+          import os
+          import subprocess
+          from pathlib import Path
+          from urllib.request import Request, urlopen
+
+          repo = os.environ['GITHUB_REPOSITORY']
+          workflow_sha = os.environ['GITHUB_SHA']
+          base_sha = os.environ['BASE_SHA']
+          token = os.environ['GH_TOKEN']
+          api = 'https://api.github.com'
+
+          def request(method, path, payload=None):
+              data = None if payload is None else json.dumps(payload).encode()
+              req = Request(
+                  api + path,
+                  data=data,
+                  method=method,
+                  headers={
+                      'Accept': 'application/vnd.github+json',
+                      'Authorization': f'Bearer {token}',
+                      'X-GitHub-Api-Version': '2022-11-28',
+                      'User-Agent': 'medusa-provider-stop-builder',
+                  },
+              )
+              with urlopen(req) as response:
+                  body = response.read()
+              return json.loads(body) if body else {}
+
+          base_commit = request('GET', f'/repos/{repo}/git/commits/{base_sha}')
+          paths = subprocess.check_output(
+              ['git', 'diff', '--name-only', base_sha, '--'],
+              text=True,
+          ).splitlines()
+          paths = [path for path in paths if path and not path.startswith('.github/')]
+          entries = []
+          for path in paths:
+              encoded = base64.b64encode(Path(path).read_bytes()).decode()
+              blob = request(
+                  'POST',
+                  f'/repos/{repo}/git/blobs',
+                  {'content': encoded, 'encoding': 'base64'},
+              )
+              entries.append({
+                  'path': path,
+                  'mode': '100644',
+                  'type': 'blob',
+                  'sha': blob['sha'],
+              })
+          tree = request(
+              'POST',
+              f'/repos/{repo}/git/trees',
+              {'base_tree': base_commit['tree']['sha'], 'tree': entries},
+          )
+          commit = request(
+              'POST',
+              f'/repos/{repo}/git/commits',
+              {
+                  'message': 'fix: recognize OpenAI terminal stop reasons',
+                  'tree': tree['sha'],
+                  'parents': [base_sha],
+              },
+          )
+          final_url = f"https://github.com/{repo}/commit/{commit['sha']}"
+          request(
+              'POST',
+              f'/repos/{repo}/statuses/{workflow_sha}',
+              {
+                  'state': 'success',
+                  'context': 'provider-stop/final-commit',
+                  'description': f"final commit {commit['sha'][:12]}",
+                  'target_url': final_url,
+              },
+          )
+          print(f"CLEAN_SHA={commit['sha']}")
+          PY
