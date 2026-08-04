@@ -1191,13 +1191,15 @@ fn run_prompt(
         verification_context,
     ];
     if implementation_evidence.is_none() {
-    if let Some(evidence) = coordinator_evidence.as_ref() {
-        task_context.push(evidence.parent_context());
+        if let Some(evidence) = coordinator_evidence.as_ref() {
+            task_context.push(evidence.parent_context());
+        }
+    } else {
+        task_context.push(
+            "An isolated implementer has prepared an immutable mutation transaction. A separate dedicated no-tools reviewer is the sole authority for that patch. This conversational turn must not inspect, accept, reject, or claim integration of the prepared mutation; provide only a concise user-facing status and leave authorization to the durable reviewer transport."
+                .to_owned(),
+        );
     }
-}
-if let Some(evidence) = implementation_evidence.as_ref() {
-    task_context.push(evidence.parent_context());
-}
     if let Some(learning) = learning_context.prompt_context {
         task_context.push(learning);
     }
@@ -1209,7 +1211,7 @@ if let Some(evidence) = implementation_evidence.as_ref() {
         .session
         .take()
         .ok_or_else(|| RuntimeError::agent("runtime session disappeared before execution"))?;
-    if coordinated {
+    if coordinated && implementation_evidence.is_none() {
         if let Some(ledger) = execution_ledger.as_mut() {
             crate::production_orchestrator::begin_kinds(
                 ledger,
@@ -1276,13 +1278,10 @@ if let Some(evidence) = implementation_evidence.as_ref() {
                     ],
                 }));
                 let provider_started_at = std::time::Instant::now();
-                let turn_instruction = implementation_evidence
-                    .as_ref()
-                    .map(|_| crate::mutation_transaction::PARENT_REVIEW_TURN_INSTRUCTION);
                 match engine.step_with_observer_and_context_and_turn_instruction(
                     &mut session,
                     Some(skill_context.as_str()),
-                    turn_instruction,
+                    None,
                     |update| {
                         forward_update(update, events, &mut updates);
                     },
@@ -1415,10 +1414,29 @@ if let Some(evidence) = implementation_evidence.as_ref() {
         if let Some(evidence) = implementation_evidence.as_ref() {
             match &result {
                 Ok(RuntimeEvent::Completed { .. } | RuntimeEvent::TurnFinished) => {
+                    if let Some(ledger) = execution_ledger.as_mut() {
+                        crate::production_orchestrator::begin_kinds(
+                            ledger,
+                            &execution_plan,
+                            &[medusa_multi_agent_scheduler::TaskKind::Review],
+                            "dedicated-parent-review",
+                        )
+                        .map_err(RuntimeError::agent)?;
+                        let _ = events.send(RuntimeEvent::Plan(
+                            crate::production_orchestrator::projection(ledger),
+                        ));
+                    }
+                    let review_provider = ConfiguredProvider::manager_from_config(
+                        &state.config,
+                        state.session_api_key.clone(),
+                    )
+                    .map_err(RuntimeError::agent)?;
                     match crate::mutation_transaction::complete_after_parent_review(
                         &evidence.transaction_path,
                         &state.repo,
-                        &session,
+                        &review_provider,
+                        &state.config,
+                        cancel.as_ref(),
                         events,
                     ) {
                         Ok(crate::mutation_transaction::TransactionCompletion::Reconciled(receipt)) => {
@@ -2536,7 +2554,7 @@ mod production_orchestrator;
 /// Production task-contract and schedule definitions used by the runtime coordinator.
 ///
 /// The shipped coordinated path is `RuntimeController -> run_prompt ->
-/// multi_agent_coordinator::run_preflight -> read-only AgentEngine teammates -> parent AgentEngine`.
+/// multi_agent_coordinator::run_preflight -> isolated implementer -> dedicated no-tools parent reviewer`.
 pub mod orchestration_planning {
     pub use super::production_orchestrator::*;
 }

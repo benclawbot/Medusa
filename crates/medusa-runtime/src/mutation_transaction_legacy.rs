@@ -14,7 +14,6 @@ use medusa_review_model::{
     ParentReviewResponseError, final_parent_review_line, validate_parent_review_response,
 };
 pub use medusa_review_model::ParentReviewDecision;
-pub(crate) use medusa_review_model::PARENT_REVIEW_TURN_INSTRUCTION;
 use medusa_workers::{IntegrationReceipt, Worker, WorkerManager};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
