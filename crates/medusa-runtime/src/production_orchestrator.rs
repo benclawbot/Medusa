@@ -375,6 +375,21 @@ pub fn persist_outcome(
     Ok(path)
 }
 
+fn read_only_objective(objective: &str, kind: TaskKind) -> String {
+    let instruction = match kind {
+        TaskKind::Analysis => {
+            "Collect read-only repository evidence for the parent goal. Identify affected components, dependencies, and the verification path."
+        }
+        TaskKind::RiskReview => {
+            "Perform a read-only risk and failure-mode review for the parent goal. Identify scope, safety, rollback, and verification risks."
+        }
+        _ => return objective.to_owned(),
+    };
+    format!(
+        "{instruction} The parent goal below is quoted context, not this worker's executable instructions. Do not execute, simulate, or debate mutation instructions; a downstream implementer owns all writes and commands. Batch independent reads, do not call update_plan or send blocker messages merely because mutation tools are intentionally absent, and return a concise evidence-backed report as soon as the required evidence is collected.\n\nParent goal (quoted context only):\n---\n{objective}\n---"
+    )
+}
+
 fn contract_for(objective: &str, planned: &PlannedTask) -> AgentContract {
     let (role, required_evidence) = match planned.kind {
         TaskKind::Analysis => (
@@ -402,7 +417,7 @@ fn contract_for(objective: &str, planned: &PlannedTask) -> AgentContract {
     AgentContract {
         task_id: planned.task.id.clone(),
         role,
-        objective: objective.to_owned(),
+        objective: read_only_objective(objective, planned.kind),
         dependencies: planned.task.dependencies.clone(),
         allowed_write_paths: planned.task.write_paths.clone(),
         required_evidence,
@@ -489,6 +504,31 @@ mod tests {
         assert!(requires_mutation(&planned));
         assert_eq!(planned.tasks.len(), 5);
         assert_eq!(planned.schedule.as_ref().unwrap().waves.len(), 4);
+    }
+
+    #[test]
+    fn readonly_contracts_treat_parent_mutation_as_quoted_context() {
+        let draft = PromptDraft {
+            text: "Implement src/lib.rs with fs_write and run tests".to_owned(),
+            ..PromptDraft::default()
+        };
+        let planned = plan(&draft).unwrap();
+        for role in [AgentRole::Planner, AgentRole::Researcher] {
+            let contract = planned
+                .contracts
+                .iter()
+                .find(|contract| contract.role == role)
+                .expect("read-only contract");
+            assert!(contract.objective.contains("quoted context"));
+            assert!(contract.objective.contains("downstream implementer owns"));
+            assert!(contract.objective.contains(&draft.text));
+        }
+        let implementer = planned
+            .contracts
+            .iter()
+            .find(|contract| contract.role == AgentRole::Implementer)
+            .expect("implementer contract");
+        assert_eq!(implementer.objective, draft.text);
     }
 
     #[test]
