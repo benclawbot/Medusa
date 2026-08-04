@@ -6,10 +6,7 @@
 
 use std::{
     env,
-    sync::{
-        Arc, OnceLock,
-        atomic::AtomicBool,
-    },
+    sync::{Arc, OnceLock, atomic::AtomicBool},
 };
 
 use medusa_config::{Config, FallbackProviderConfig};
@@ -433,8 +430,7 @@ mod tests {
             retry_max_delay_ms: 100,
             retry_jitter_ms: 5,
         }];
-        let manager =
-            LazyConfiguredProviderManager::from_config_in_memory(&config, None).unwrap();
+        let manager = LazyConfiguredProviderManager::from_config_in_memory(&config, None).unwrap();
         assert_eq!(manager.initialized_routes(), 0);
         assert_eq!(manager.route_readiness().unwrap().len(), 2);
     }
