@@ -361,11 +361,9 @@ mod tests {
         config.model.provider = "anthropic".to_owned();
         config.model.protocol = "anthropic".to_owned();
         config.model.streaming = true;
-        let provider = MiniMaxProvider::from_config_with_api_key(
-            &config,
-            Some("session-key".to_owned()),
-        )
-        .expect("anthropic provider");
+        let provider =
+            MiniMaxProvider::from_config_with_api_key(&config, Some("session-key".to_owned()))
+                .expect("anthropic provider");
         assert!(!provider.capabilities().streaming);
         assert_eq!(
             provider.request_body(&empty_request())["stream"],
