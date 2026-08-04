@@ -65,11 +65,9 @@ def function_bodies(text: str, function_name: str) -> list[str]:
 def provider_capability_mismatch(root: Path) -> tuple[bool, str]:
     provider = read_tree(root, "crates/medusa-provider/src")
     markers = {
-        "config_can_claim_streaming": "capabilities.streaming = config.model.streaming" in provider,
-        "wire_forces_non_streaming": '"stream": false' in provider,
-        "request_runs_on_detached_thread": 'name("medusa-provider-request"' in provider,
-        "cancellation_returns_from_poll_loop": "if cancel.load(Ordering::SeqCst)" in provider
-        and "recv_timeout" in provider,
+        "health_is_process_local": "health: Mutex<Vec<ProviderHealth>>" in provider,
+        "last_execution_is_process_local": "last_execution: Mutex<Option<Value>>" in provider,
+        "no_durable_provider_health_authority": "ProviderHealthStore" not in provider,
     }
     observed = all(markers.values())
     return observed, json.dumps(markers, sort_keys=True)
