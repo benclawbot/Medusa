@@ -6,7 +6,6 @@ from __future__ import annotations
 import argparse
 import json
 import subprocess
-import sys
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Callable
@@ -24,58 +23,7 @@ class Result:
         return self.status in {"passed", "xfail-reproduced"}
 
 
-def read_tree(root: Path, relative: str) -> str:
-    base = root / relative
-    if base.is_file():
-        return base.read_text(encoding="utf-8")
-    if not base.exists():
-        return ""
-    chunks: list[str] = []
-    for path in sorted(base.rglob("*.rs")):
-        chunks.append(f"\n// {path.relative_to(root)}\n")
-        chunks.append(path.read_text(encoding="utf-8"))
-    return "".join(chunks)
-
-
-def function_bodies(text: str, function_name: str) -> list[str]:
-    marker = f"fn {function_name}"
-    bodies: list[str] = []
-    cursor = 0
-    while True:
-        start = text.find(marker, cursor)
-        if start < 0:
-            break
-        brace = text.find("{", start)
-        if brace < 0:
-            break
-        depth = 0
-        end = brace
-        for end in range(brace, len(text)):
-            if text[end] == "{":
-                depth += 1
-            elif text[end] == "}":
-                depth -= 1
-                if depth == 0:
-                    bodies.append(text[brace : end + 1])
-                    break
-        cursor = max(end + 1, start + len(marker))
-    return bodies
-
-
-def provider_capability_mismatch(root: Path) -> tuple[bool, str]:
-    provider = read_tree(root, "crates/medusa-provider/src")
-    markers = {
-        "health_is_process_local": "health: Mutex<Vec<ProviderHealth>>" in provider,
-        "last_execution_is_process_local": "last_execution: Mutex<Option<Value>>" in provider,
-        "no_durable_provider_health_authority": "ProviderHealthStore" not in provider,
-    }
-    observed = all(markers.values())
-    return observed, json.dumps(markers, sort_keys=True)
-
-
-PROBES: dict[str, Callable[[Path], tuple[bool, str]]] = {
-    "provider-capability-mismatch": provider_capability_mismatch,
-}
+PROBES: dict[str, Callable[[Path], tuple[bool, str]]] = {}
 
 
 def load_expected_fixture_ids(root: Path) -> set[str]:

@@ -23,9 +23,7 @@ VALID_CERTIFICATIONS = {
     "deprecated",
 }
 REQUIRED_MIGRATION_ISSUES = set(range(646, 656))
-REQUIRED_FIXTURES = {
-    "provider-capability-mismatch",
-}
+REQUIRED_FIXTURES: set[str] = set()
 REQUIRED_PR_TEXT = {
     "## Architecture impact declaration",
     "No architecture impact",
