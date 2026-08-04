@@ -92,7 +92,7 @@ impl ConfiguredProvider {
             ));
         }
 
-        Ok(ProviderManager::new_with_profiles(providers, profiles))
+        ProviderManager::new_with_profiles_and_user_state(providers, profiles)
     }
 }
 
