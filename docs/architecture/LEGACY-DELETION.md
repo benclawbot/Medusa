@@ -47,6 +47,7 @@ A migration slice is incomplete until its superseded v1 path is removed or has a
 - The review request, provider outcome, typed decision, rationale, usage, and response fingerprint are persisted in a versioned `parent-review-session.json` journal and resumed idempotently after interruption.
 - Tool-use responses, malformed envelopes, journal substitution, and corrupt or incomplete terminal evidence fail closed before verification or integration.
 - The generic conversational `AgentEngine` no longer receives the mutation patch and cannot authorize or reject integration.
+- Accepted mutations bypass the redundant conversational model turn and emit one durable deterministic completion only after review, verification, authorization, integration, and reconciliation succeed.
 - The obsolete conversational review instruction and implementer-to-parent context formatter have been removed from production code.
 - Remaining #632 deletion target: remove the quarantined compatibility parser after recovery fixtures migrate to the dedicated journal path.
 
