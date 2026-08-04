@@ -65,6 +65,7 @@ replace_once(
     let waiting_for_user = matches!(&result, Ok(RuntimeEvent::Question(_)));
 ''',
     '''            }
+        }
         })()
     };
     let waiting_for_user = matches!(&result, Ok(RuntimeEvent::Question(_)));
