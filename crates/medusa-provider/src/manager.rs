@@ -1,4 +1,4 @@
-//! Provider routing with bounded retry, failover, response caching, and health snapshots.
+//! Provider routing with bounded retry, failover, response caching, and durable health snapshots.
 
 use std::{
     collections::BTreeMap,
@@ -14,7 +14,9 @@ use medusa_core::{ErrorCategory, ErrorCode, MedusaError, MedusaResult};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
-use crate::{ModelProvider, ModelRequest, ModelResponse, ProviderCapabilities};
+use crate::{
+    ModelProvider, ModelRequest, ModelResponse, ProviderCapabilities, ProviderHealthStore,
+};
 
 /// Observable health state for a configured provider position.
 #[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
@@ -87,69 +89,43 @@ pub struct ProviderManager<P> {
     providers: Vec<P>,
     profiles: Vec<ProviderRouteProfile>,
     cache: Mutex<BTreeMap<String, ModelResponse>>,
-    health: Mutex<Vec<ProviderHealth>>,
-    last_completed_provider: Mutex<Option<usize>>,
-    cache_hits: Mutex<u64>,
-    last_execution: Mutex<Option<Value>>,
+    state: ProviderHealthStore,
     sleeper: fn(Duration),
 }
 
 impl<P> ProviderManager<P> {
-    /// Builds a manager with a primary provider and zero or more ordered fallbacks.
+    /// Builds a manager with an isolated in-memory state authority for tests and embedding.
     #[must_use]
     pub fn new(providers: Vec<P>) -> Self {
-        let health = vec![ProviderHealth::default(); providers.len()];
-        let profiles = (0..providers.len())
-            .map(|index| ProviderRouteProfile {
-                id: format!("provider[{index}]"),
-                provider: format!("provider-{index}"),
-                model: "unspecified".to_owned(),
-                protocol: "unspecified".to_owned(),
-                endpoint: None,
-                auth_source: "unspecified".to_owned(),
-                tool_calling: true,
-                streaming: false,
-                retry: RouteRetryPolicy::default(),
-            })
-            .collect();
-        Self {
-            providers,
-            profiles,
-            cache: Mutex::new(BTreeMap::new()),
-            health: Mutex::new(health),
-            last_completed_provider: Mutex::new(None),
-            cache_hits: Mutex::new(0),
-            last_execution: Mutex::new(None),
-            sleeper: thread::sleep,
-        }
+        Self::new_with_profiles(providers, Vec::new())
     }
 
     #[must_use]
-    pub fn new_with_profiles(providers: Vec<P>, mut profiles: Vec<ProviderRouteProfile>) -> Self {
-        profiles.truncate(providers.len());
-        while profiles.len() < providers.len() {
-            let index = profiles.len();
-            profiles.push(ProviderRouteProfile {
-                id: format!("provider[{index}]"),
-                provider: format!("provider-{index}"),
-                model: "unspecified".to_owned(),
-                protocol: "unspecified".to_owned(),
-                endpoint: None,
-                auth_source: "unspecified".to_owned(),
-                tool_calling: true,
-                streaming: false,
-                retry: RouteRetryPolicy::default(),
-            });
-        }
-        let health = vec![ProviderHealth::default(); providers.len()];
+    pub fn new_with_profiles(providers: Vec<P>, profiles: Vec<ProviderRouteProfile>) -> Self {
+        let profiles = normalized_profiles(providers.len(), profiles);
+        let state = ProviderHealthStore::in_memory(&profiles);
+        Self::new_with_profiles_and_store(providers, profiles, state)
+    }
+
+    pub fn new_with_profiles_and_user_state(
+        providers: Vec<P>,
+        profiles: Vec<ProviderRouteProfile>,
+    ) -> MedusaResult<Self> {
+        let profiles = normalized_profiles(providers.len(), profiles);
+        let state = ProviderHealthStore::for_user(&profiles)?;
+        Ok(Self::new_with_profiles_and_store(providers, profiles, state))
+    }
+
+    fn new_with_profiles_and_store(
+        providers: Vec<P>,
+        profiles: Vec<ProviderRouteProfile>,
+        state: ProviderHealthStore,
+    ) -> Self {
         Self {
             providers,
             profiles,
             cache: Mutex::new(BTreeMap::new()),
-            health: Mutex::new(health),
-            last_completed_provider: Mutex::new(None),
-            cache_hits: Mutex::new(0),
-            last_execution: Mutex::new(None),
+            state,
             sleeper: thread::sleep,
         }
     }
@@ -176,122 +152,78 @@ impl<P> ProviderManager<P> {
         self
     }
 
-    /// Returns a copy so callers never hold the manager's health lock.
+    /// Returns a copy from the shared route-health authority.
     #[must_use]
     pub fn health(&self) -> Vec<ProviderHealth> {
-        self.health
-            .lock()
-            .map(|health| health.clone())
-            .unwrap_or_default()
+        self.state.health().unwrap_or_default()
     }
 
     /// Returns the configured provider position that completed the latest uncached request.
     #[must_use]
     pub fn last_completed_provider(&self) -> Option<usize> {
-        self.last_completed_provider
-            .lock()
-            .map_or(None, |value| *value)
+        self.state.last_completed_provider().unwrap_or_default()
     }
 
-    /// Returns the total number of responses served from the manager cache.
+    /// Returns the total number of responses served from all managers sharing this state.
     #[must_use]
     pub fn cache_hits(&self) -> u64 {
-        self.cache_hits.lock().map_or(0, |value| *value)
+        self.state.cache_hits().unwrap_or_default()
     }
 
-    /// Returns the latest completed request snapshot for durable engine reporting.
+    /// Returns the latest completed request snapshot from shared durable state.
     #[must_use]
     pub fn execution_status(&self) -> Option<Value> {
-        self.last_execution
-            .lock()
-            .map_or(None, |value| value.clone())
-    }
-
-    fn record_execution(&self, index: usize, cache_hit: bool) {
-        let health = self
-            .health
-            .lock()
-            .ok()
-            .and_then(|health| health.get(index).cloned())
-            .unwrap_or_default();
-        let route = self.profiles.get(index);
-        let snapshot = json!({
-            "provider_index": index,
-            "route_id": route.map(|route| route.id.as_str()),
-            "provider": route.map(|route| route.provider.as_str()),
-            "model": route.map(|route| route.model.as_str()),
-            "protocol": route.map(|route| route.protocol.as_str()),
-            "endpoint": route.and_then(|route| route.endpoint.as_deref()),
-            "auth_source": route.map(|route| route.auth_source.as_str()),
-            "tool_calling": route.map(|route| route.tool_calling),
-            "streaming": route.map(|route| route.streaming),
-            "cache_hit": cache_hit,
-            "cache_hits": self.cache_hits(),
-            "attempts": health.attempts,
-            "retries": health.retries,
-            "failovers": health.failovers,
-            "successes": health.successes,
-            "last_delay_ms": health.last_delay_ms,
-            "last_error": health.last_error,
-        });
-        if let Ok(mut execution) = self.last_execution.lock() {
-            *execution = Some(snapshot);
+        match self.state.execution_status() {
+            Ok(status) => status,
+            Err(error) => Some(json!({"state_error": error.to_string()})),
         }
     }
 
-    fn with_health(&self, index: usize, update: impl FnOnce(&mut ProviderHealth)) {
-        if let Ok(mut health) = self.health.lock()
-            && let Some(entry) = health.get_mut(index)
-        {
-            update(entry);
-        }
+    fn record_attempt(&self, index: usize) -> MedusaResult<()> {
+        self.state.record_attempt(index)
     }
 
-    fn record_attempt(&self, index: usize) {
-        self.with_health(index, |entry| {
-            entry.attempts = entry.attempts.saturating_add(1);
+    fn record_success(&self, index: usize) -> MedusaResult<()> {
+        self.state.record_success(index)
+    }
+
+    fn record_cache_hit(&self) -> MedusaResult<()> {
+        self.state.record_cache_hit()
+    }
+
+    fn record_error(&self, index: usize, error: &MedusaError) -> MedusaResult<()> {
+        self.state.record_error(index, error)
+    }
+
+    fn record_retry(&self, index: usize, delay_ms: u64) -> MedusaResult<()> {
+        self.state.record_retry(index, delay_ms)
+    }
+
+    fn record_failover(&self, index: usize) -> MedusaResult<()> {
+        self.state.record_failover(index)
+    }
+}
+
+fn normalized_profiles(
+    provider_count: usize,
+    mut profiles: Vec<ProviderRouteProfile>,
+) -> Vec<ProviderRouteProfile> {
+    profiles.truncate(provider_count);
+    while profiles.len() < provider_count {
+        let index = profiles.len();
+        profiles.push(ProviderRouteProfile {
+            id: format!("provider[{index}]"),
+            provider: format!("provider-{index}"),
+            model: "unspecified".to_owned(),
+            protocol: "unspecified".to_owned(),
+            endpoint: None,
+            auth_source: "unspecified".to_owned(),
+            tool_calling: true,
+            streaming: false,
+            retry: RouteRetryPolicy::default(),
         });
     }
-
-    fn record_success(&self, index: usize) {
-        self.with_health(index, |entry| {
-            entry.successes = entry.successes.saturating_add(1);
-            entry.last_error = None;
-            entry.last_delay_ms = None;
-        });
-        if let Ok(mut completed) = self.last_completed_provider.lock() {
-            *completed = Some(index);
-        }
-        self.record_execution(index, false);
-    }
-
-    fn record_cache_hit(&self) {
-        if let Ok(mut hits) = self.cache_hits.lock() {
-            *hits = hits.saturating_add(1);
-        }
-        if let Some(index) = self.last_completed_provider() {
-            self.record_execution(index, true);
-        }
-    }
-
-    fn record_error(&self, index: usize, error: &MedusaError) {
-        self.with_health(index, |entry| {
-            entry.last_error = Some(error.to_string());
-        });
-    }
-
-    fn record_retry(&self, index: usize, delay_ms: u64) {
-        self.with_health(index, |entry| {
-            entry.retries = entry.retries.saturating_add(1);
-            entry.last_delay_ms = Some(delay_ms);
-        });
-    }
-
-    fn record_failover(&self, index: usize) {
-        self.with_health(index, |entry| {
-            entry.failovers = entry.failovers.saturating_add(1);
-        });
-    }
+    profiles
 }
 
 impl<P: ModelProvider> ModelProvider for ProviderManager<P> {
@@ -334,7 +266,7 @@ impl<P: ModelProvider> ProviderManager<P> {
         if let Ok(cache) = self.cache.lock()
             && let Some(response) = cache.get(&key)
         {
-            self.record_cache_hit();
+            self.record_cache_hit()?;
             return Ok(response.clone());
         }
 
@@ -346,25 +278,25 @@ impl<P: ModelProvider> ProviderManager<P> {
                 .get(index)
                 .map_or_else(RouteRetryPolicy::default, |profile| profile.retry);
             for attempt in 0..=policy.max_retries {
-                self.record_attempt(index);
+                self.record_attempt(index)?;
                 match cancel.map_or_else(
                     || provider.complete(request),
                     |flag| provider.complete_cancellable(request, flag),
                 ) {
                     Ok(response) => {
-                        self.record_success(index);
+                        self.record_success(index)?;
                         if let Ok(mut cache) = self.cache.lock() {
                             cache.insert(key.clone(), response.clone());
                         }
                         return Ok(response);
                     }
                     Err(error) => {
-                        self.record_error(index, &error);
+                        self.record_error(index, &error)?;
                         final_error = Some(error.clone());
                         match classify_error(&error, has_fallback) {
                             RetryDisposition::Retry if attempt < policy.max_retries => {
                                 let delay_ms = policy.delay_ms(&error, index, attempt);
-                                self.record_retry(index, delay_ms);
+                                self.record_retry(index, delay_ms)?;
                                 if let Some(flag) = cancel {
                                     let deadline =
                                         std::time::Instant::now() + Duration::from_millis(delay_ms);
@@ -385,7 +317,7 @@ impl<P: ModelProvider> ProviderManager<P> {
                             RetryDisposition::Retry | RetryDisposition::Failover
                                 if has_fallback =>
                             {
-                                self.record_failover(index);
+                                self.record_failover(index)?;
                                 break;
                             }
                             RetryDisposition::Permanent | RetryDisposition::Failover => {
