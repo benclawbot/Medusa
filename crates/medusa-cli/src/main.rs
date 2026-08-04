@@ -234,7 +234,14 @@ fn run() -> MedusaResult<()> {
             .iter()
             .cloned()
             .collect::<BTreeMap<_, _>>();
-        let config = Config::load_layers(None, None, &BTreeMap::new(), &overrides)?;
+        let project = repo.join(".medusa/config.toml");
+        let project = project.exists().then_some(project);
+        let config = Config::load_layers(
+            None,
+            project.as_deref(),
+            &BTreeMap::new(),
+            &overrides,
+        )?;
         return serve_with_config(DaemonPaths::for_repo(&repo), config);
     }
 
