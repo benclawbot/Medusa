@@ -245,14 +245,10 @@
     [
       "provider-context-resilience",
       "production",
-      "quarantined",
-      "replace",
-      "medusa-provider::ProviderManager",
-      [
-        "streaming may be claimed while wire requests force stream=false",
-        "cancellation does not abort the blocking HTTP request",
-        "fallback health lacks one durable authority"
-      ]
+      "certified-production",
+      "preserve",
+      "medusa-provider::ProviderManager plus ProviderHealthStore",
+      []
     ],
     [
       "identity-approval-transactions",
@@ -480,7 +476,7 @@
     ],
     [
       "provider route and readiness",
-      "configuration profile plus ProviderManager process state",
+      "active provider profile plus ProviderHealthStore durable state",
       [
         "frontend readiness",
         "request capability flags"
@@ -661,15 +657,7 @@
       ]
     ]
   ],
-  "known_failure_fixtures": [
-    [
-      "provider-capability-mismatch",
-      636,
-      false,
-      "streaming can be true while request_body forces false and cancellation leaves request thread alive",
-      "remove after route claims match wire/cancellation"
-    ]
-  ],
+  "known_failure_fixtures": [],
   "migration": [
     [
       646,
