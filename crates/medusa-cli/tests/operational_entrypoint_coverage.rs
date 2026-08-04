@@ -129,7 +129,10 @@ exit 0
         .expect("parse proof artifact");
         assert_eq!(proof["status"], "passed");
         assert_eq!(proof["acceptance_totals"]["failed"], 0);
-        assert_eq!(proof["guarantees"].as_array().expect("guarantees").len(), 10);
+        assert_eq!(
+            proof["guarantees"].as_array().expect("guarantees").len(),
+            10
+        );
     }
 
     #[test]
@@ -213,25 +216,19 @@ exit 0
         );
         let receipt: serde_json::Value =
             serde_json::from_slice(&lock.stdout).expect("lock receipt");
-        assert!(receipt["graph_sha256"].as_str().is_some_and(|hash| hash.len() == 64));
+        assert!(
+            receipt["graph_sha256"]
+                .as_str()
+                .is_some_and(|hash| hash.len() == 64)
+        );
 
         run_medusa(
             temp.path(),
-            &[
-                "skills",
-                "lock-dependencies",
-                "application",
-                "--check",
-            ],
+            &["skills", "lock-dependencies", "application", "--check"],
         );
         run_medusa(
             temp.path(),
-            &[
-                "skills",
-                "verify-dependency-lock",
-                "application",
-                "--json",
-            ],
+            &["skills", "verify-dependency-lock", "application", "--json"],
         );
     }
 }
