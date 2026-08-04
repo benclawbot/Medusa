@@ -1,6 +1,7 @@
 #[cfg(unix)]
 mod unix {
     use std::{
+        ffi::OsString,
         fs,
         os::unix::fs::PermissionsExt,
         path::{Path, PathBuf},
@@ -27,8 +28,11 @@ mod unix {
         output
     }
 
-    fn fake_path(bin: &Path) -> String {
-        bin.to_string_lossy().into_owned()
+    fn fake_path(bin: &Path) -> OsString {
+        let inherited = std::env::var_os("PATH").unwrap_or_default();
+        let mut paths = vec![bin.to_path_buf()];
+        paths.extend(std::env::split_paths(&inherited));
+        std::env::join_paths(paths).expect("compose fixture PATH")
     }
 
     #[test]
