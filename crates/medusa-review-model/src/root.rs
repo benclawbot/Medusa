@@ -2,6 +2,8 @@
 mod action_history;
 #[path = "model.rs"]
 mod model;
+#[path = "parent_review.rs"]
+mod parent_review;
 #[path = "session_history.rs"]
 mod session_history;
 #[path = "snapshot_builder.rs"]
@@ -15,6 +17,11 @@ pub use action_history::{
     record_authorized_action,
 };
 pub use model::*;
+pub use parent_review::{
+    PARENT_REVIEW_RESPONSE_REQUIREMENT, PARENT_REVIEW_SCHEMA_VERSION,
+    PARENT_REVIEW_TURN_INSTRUCTION, ParentReviewDecision, ParentReviewOutcome,
+    ParentReviewResponse, ParentReviewResponseError, parse_parent_review_response,
+};
 pub use session_history::{
     REVIEW_HISTORY_SCHEMA_VERSION, ReviewAuditExport, ReviewHistoryError, ReviewSessionHistory,
 };
