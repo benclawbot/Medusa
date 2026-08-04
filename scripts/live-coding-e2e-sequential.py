@@ -44,8 +44,13 @@ DETERMINISTIC_OBJECTIVE = '''        objective = (
             "}\\n"
             ">>>COUNTER\\n"
             "The counter.js content ends with one newline immediately after the closing brace.\\n\\n"
-            "After all three fs_write results succeed, run `python verify.py` immediately. Do not "
-            "inspect, plan, or rewrite a path twice. Finish only when the value, slugify, and "
+            "After all three fs_write results succeed, run this exact shell command once to "
+            "normalize and assert the file endings: `python -c \\\"from pathlib import Path; "
+            "paths = [Path('value.txt'), Path('src/slugify.py'), Path('src/counter.js')]; "
+            "[path.write_bytes(path.read_bytes().rstrip(b'\\\\n') + b'\\\\n') for path in paths]; "
+            "assert all(path.read_bytes().endswith(b'\\\\n') for path in paths)\\\"`. Then run "
+            "`python verify.py` immediately. Do not inspect, plan, or rewrite a path through another "
+            "fs_write call. Finish only when the newline assertion and the value, slugify, and "
             "JavaScript counter validations all pass."
         )'''
 
