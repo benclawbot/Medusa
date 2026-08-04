@@ -103,18 +103,14 @@ mod tests {
             "{\"schema_version\":1,\"decision\":\"revision_requested\",\"rationale\":\"missing regression coverage\"}",
         )
         .expect("typed revision");
-        assert_eq!(
-            outcome.decision,
-            ParentReviewDecision::RevisionRequested
-        );
+        assert_eq!(outcome.decision, ParentReviewDecision::RevisionRequested);
     }
 
     #[test]
     fn free_form_marker_cannot_authorize_integration() {
-        let error = parse_parent_review_response(
-            "MEDUSA_REVIEW_ACCEPTED: exact patch and evidence agree",
-        )
-        .expect_err("marker must fail closed");
+        let error =
+            parse_parent_review_response("MEDUSA_REVIEW_ACCEPTED: exact patch and evidence agree")
+                .expect_err("marker must fail closed");
         assert!(matches!(
             error,
             ParentReviewResponseError::InvalidEnvelope(_)
@@ -127,10 +123,12 @@ mod tests {
             "{\"schema_version\":1,\"decision\":\"accepted\",\"rationale\":\"ok\",\"extra\":true}"
         )
         .is_err());
-        assert!(parse_parent_review_response(
-            "{\"schema_version\":1,\"decision\":\"accepted\",\"rationale\":\"ok\"}\ntrailing"
-        )
-        .is_err());
+        assert!(
+            parse_parent_review_response(
+                "{\"schema_version\":1,\"decision\":\"accepted\",\"rationale\":\"ok\"}\ntrailing"
+            )
+            .is_err()
+        );
     }
 
     #[test]
