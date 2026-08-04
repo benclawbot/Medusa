@@ -20,7 +20,8 @@ pub use model::*;
 pub use parent_review::{
     PARENT_REVIEW_RESPONSE_REQUIREMENT, PARENT_REVIEW_SCHEMA_VERSION,
     PARENT_REVIEW_TURN_INSTRUCTION, ParentReviewDecision, ParentReviewOutcome,
-    ParentReviewResponse, ParentReviewResponseError, parse_parent_review_response,
+    ParentReviewResponse, ParentReviewResponseError, final_parent_review_line,
+    validate_parent_review_response,
 };
 pub use session_history::{
     REVIEW_HISTORY_SCHEMA_VERSION, ReviewAuditExport, ReviewHistoryError, ReviewSessionHistory,
