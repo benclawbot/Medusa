@@ -1,7 +1,7 @@
 use std::sync::atomic::AtomicBool;
 
 use medusa_config::{Config, FallbackProviderConfig};
-use medusa_core::{MedusaError, MedusaResult};
+use medusa_core::MedusaResult;
 use serde_json::Value;
 
 use crate::{
@@ -61,8 +61,8 @@ impl ConfiguredProvider {
 
         for (index, fallback) in config.model.fallback_providers.iter().enumerate() {
             let fallback_config = config_for_fallback(config, fallback);
-            let provider = Self::from_config_with_api_key(&fallback_config, None).map_err(
-                |mut error| {
+            let provider =
+                Self::from_config_with_api_key(&fallback_config, None).map_err(|mut error| {
                     error
                         .context
                         .insert("fallback_index".to_owned(), Value::from(index as u64));
@@ -74,8 +74,7 @@ impl ConfiguredProvider {
                         .context
                         .insert("model".to_owned(), Value::from(fallback.name.clone()));
                     error
-                },
-            )?;
+                })?;
             let capabilities = provider.capabilities();
             providers.push(provider);
             profiles.push(route_profile(
@@ -172,6 +171,3 @@ fn route_profile(
         },
     }
 }
-
-#[allow(dead_code)]
-fn _preserve_error_type(_: MedusaError) {}
