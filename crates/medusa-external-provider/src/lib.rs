@@ -1,16 +1,12 @@
-//! Truthful provider route authority layered over the existing model adapters.
+//! Truthful provider route authority layered over the production model adapters.
 //!
 //! Routes are represented without constructing credentials or transports. The primary and each
-//! fallback are initialized only when selected by [`ProviderManager`]. Capability projection is
-//! conservative: the current blocking adapters never advertise streaming or transport-level
-//! cancellation, regardless of configuration wishes.
+//! fallback are initialized only when selected by [`ProviderManager`]. Production managers bind to
+//! the shared user-profile health store, and readiness is derived from that durable route history.
 
 use std::{
     env,
-    sync::{
-        Arc, OnceLock,
-        atomic::{AtomicBool, Ordering},
-    },
+    sync::{Arc, OnceLock, atomic::AtomicBool},
 };
 
 use medusa_config::{Config, FallbackProviderConfig};
@@ -59,7 +55,6 @@ struct RouteState {
     config: Config,
     session_api_key: Option<String>,
     provider: OnceLock<MedusaResult<LegacyConfiguredProvider>>,
-    live_verified: AtomicBool,
 }
 
 impl RouteState {
@@ -87,7 +82,7 @@ impl RouteState {
         }
     }
 
-    fn readiness(&self) -> MedusaResult<RouteReadiness> {
+    fn readiness(&self, health: &ProviderHealth) -> MedusaResult<RouteReadiness> {
         let capabilities = truthful_capabilities(&self.config);
         let mut checks = vec![ReadinessCheck::ready(ReadinessStage::ProfileSaved)];
         if credential_present(&self.config, self.session_api_key.as_deref()) {
@@ -100,7 +95,7 @@ impl RouteState {
             return RouteReadiness::new(self.identity(), capabilities, checks)
                 .map_err(contract_error);
         }
-        if self.live_verified.load(Ordering::SeqCst) {
+        if health.successes > 0 {
             checks.extend([
                 ReadinessCheck::ready(ReadinessStage::EndpointReachable),
                 ReadinessCheck::ready(ReadinessStage::Authenticated),
@@ -110,7 +105,10 @@ impl RouteState {
         } else {
             checks.push(ReadinessCheck::unavailable(
                 ReadinessStage::EndpointReachable,
-                "route has not completed a live request",
+                health
+                    .last_error
+                    .clone()
+                    .unwrap_or_else(|| "route has not completed a live request".to_owned()),
             ));
         }
         RouteReadiness::new(self.identity(), capabilities, checks).map_err(contract_error)
@@ -150,9 +148,7 @@ impl RouteState {
 
 impl ModelProvider for LazyRoute {
     fn complete(&self, request: &ModelRequest) -> MedusaResult<ModelResponse> {
-        let response = self.state.initialize()?.complete(request)?;
-        self.state.live_verified.store(true, Ordering::SeqCst);
-        Ok(response)
+        self.state.initialize()?.complete(request)
     }
 
     fn complete_cancellable(
@@ -160,12 +156,9 @@ impl ModelProvider for LazyRoute {
         request: &ModelRequest,
         cancel: &AtomicBool,
     ) -> MedusaResult<ModelResponse> {
-        let response = self
-            .state
+        self.state
             .initialize()?
-            .complete_cancellable(request, cancel)?;
-        self.state.live_verified.store(true, Ordering::SeqCst);
-        Ok(response)
+            .complete_cancellable(request, cancel)
     }
 
     fn capabilities(&self) -> ProviderCapabilities {
@@ -189,6 +182,32 @@ pub struct LazyConfiguredProviderManager {
 
 impl LazyConfiguredProviderManager {
     pub fn from_config(config: &Config, session_api_key: Option<String>) -> MedusaResult<Self> {
+        Self::build(config, session_api_key, |providers, profiles| {
+            ProviderManager::new_with_profiles_and_user_state(providers, profiles)
+        })
+    }
+
+    #[cfg(test)]
+    fn from_config_in_memory(
+        config: &Config,
+        session_api_key: Option<String>,
+    ) -> MedusaResult<Self> {
+        Self::build(config, session_api_key, |providers, profiles| {
+            Ok(ProviderManager::new_with_profiles(providers, profiles))
+        })
+    }
+
+    fn build<F>(
+        config: &Config,
+        session_api_key: Option<String>,
+        build_manager: F,
+    ) -> MedusaResult<Self>
+    where
+        F: FnOnce(
+            Vec<LazyRoute>,
+            Vec<ProviderRouteProfile>,
+        ) -> MedusaResult<ProviderManager<LazyRoute>>,
+    {
         let mut route_configs = vec![("primary".to_owned(), config.clone(), session_api_key)];
         route_configs.extend(config.model.fallback_providers.iter().enumerate().map(
             |(index, fallback)| {
@@ -207,7 +226,6 @@ impl LazyConfiguredProviderManager {
                     config,
                     session_api_key,
                     provider: OnceLock::new(),
-                    live_verified: AtomicBool::new(false),
                 })
             })
             .collect::<Vec<_>>();
@@ -218,13 +236,21 @@ impl LazyConfiguredProviderManager {
             .collect();
         let profiles = routes.iter().map(|route| route.profile()).collect();
         Ok(Self {
-            manager: ProviderManager::new_with_profiles(providers, profiles),
+            manager: build_manager(providers, profiles)?,
             routes,
         })
     }
 
     pub fn route_readiness(&self) -> MedusaResult<Vec<RouteReadiness>> {
-        self.routes.iter().map(|route| route.readiness()).collect()
+        let health = self.manager.health();
+        self.routes
+            .iter()
+            .enumerate()
+            .map(|(index, route)| {
+                let route_health = health.get(index).cloned().unwrap_or_default();
+                route.readiness(&route_health)
+            })
+            .collect()
     }
 
     #[must_use]
@@ -404,7 +430,7 @@ mod tests {
             retry_max_delay_ms: 100,
             retry_jitter_ms: 5,
         }];
-        let manager = LazyConfiguredProviderManager::from_config(&config, None).unwrap();
+        let manager = LazyConfiguredProviderManager::from_config_in_memory(&config, None).unwrap();
         assert_eq!(manager.initialized_routes(), 0);
         assert_eq!(manager.route_readiness().unwrap().len(), 2);
     }
@@ -413,9 +439,11 @@ mod tests {
     fn configuration_cannot_invent_streaming_or_cancellation() {
         let mut config = Config::default();
         config.model.streaming = true;
-        let manager =
-            LazyConfiguredProviderManager::from_config(&config, Some("session-key".to_owned()))
-                .unwrap();
+        let manager = LazyConfiguredProviderManager::from_config_in_memory(
+            &config,
+            Some("session-key".to_owned()),
+        )
+        .unwrap();
         let readiness = manager.route_readiness().unwrap();
         assert!(!readiness[0].capabilities.streaming_text);
         assert!(!readiness[0].capabilities.cancellation);
@@ -425,13 +453,38 @@ mod tests {
     #[test]
     fn saved_profile_and_secret_are_not_live_readiness() {
         let config = Config::default();
-        let manager =
-            LazyConfiguredProviderManager::from_config(&config, Some("session-key".to_owned()))
-                .unwrap();
+        let manager = LazyConfiguredProviderManager::from_config_in_memory(
+            &config,
+            Some("session-key".to_owned()),
+        )
+        .unwrap();
         let readiness = manager.route_readiness().unwrap();
         assert!(readiness[0].stage_ready(ReadinessStage::ProfileSaved));
         assert!(readiness[0].stage_ready(ReadinessStage::SecretPresent));
         assert!(!readiness[0].stage_ready(ReadinessStage::EndpointReachable));
         assert!(!readiness[0].ready_for_requests());
+    }
+
+    #[test]
+    fn readiness_is_derived_from_route_health_without_initializing_transport() {
+        let config = Config::default();
+        let manager = LazyConfiguredProviderManager::from_config_in_memory(
+            &config,
+            Some("session-key".to_owned()),
+        )
+        .unwrap();
+        let route = &manager.routes[0];
+        let unavailable = route.readiness(&ProviderHealth::default()).unwrap();
+        assert!(!unavailable.ready_for_requests());
+
+        let verified = route
+            .readiness(&ProviderHealth {
+                successes: 1,
+                ..ProviderHealth::default()
+            })
+            .unwrap();
+        assert!(verified.ready_for_requests());
+        assert!(verified.stage_ready(ReadinessStage::LiveRequestVerified));
+        assert_eq!(manager.initialized_routes(), 0);
     }
 }

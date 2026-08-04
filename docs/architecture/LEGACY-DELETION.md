@@ -34,7 +34,15 @@ A migration slice is incomplete until its superseded v1 path is removed or has a
 - [ ] #632: remove integration-before-review ordering and any recovery path that assumes it.
 - [ ] #633: remove verification APIs and receipts that omit changed paths.
 - [ ] #634: remove decorative task, worker, reviewer, or verifier projections without durable execution evidence.
-- [ ] #636: remove provider capability, cancellation, fallback, and readiness paths that disagree with wire behavior.
+- [x] #636: remove provider capability, cancellation, fallback, and readiness paths that disagree with wire behavior.
+
+### Provider deletion receipt (#636)
+
+- Production adapters report wire-truthful capabilities and use abortable cancellable requests.
+- `ProviderManager` persists route attempts, retries, failover, success, cache, and execution state in the active user-profile authority.
+- The production `medusa-external-provider` facade constructs its manager with that durable authority and derives readiness from the same route health.
+- The process-local `live_verified` readiness flag and in-memory production-manager construction path are deleted.
+- Unit, architecture, cross-platform, package, safety, acceptance, and live-provider gates are required before merge.
 
 ## Final v1 removal gate
 
