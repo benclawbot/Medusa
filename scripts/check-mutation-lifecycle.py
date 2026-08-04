@@ -16,11 +16,14 @@ errors: list[str] = []
 if "integrate_prepared(" in coordinator or ".integrate_successful(" in coordinator:
     errors.append("mutating coordinator still integrates before parent review")
 
-status_turn = runtime.find("engine.step_with_observer_and_context_and_turn_instruction")
-provider = runtime.find("ConfiguredProvider::manager_from_config", status_turn)
+provider = runtime.find("ConfiguredProvider::manager_from_config")
 completion = runtime.find("complete_after_parent_review", provider)
-if status_turn < 0 or provider < status_turn or completion < provider:
-    errors.append("dedicated transaction review is not ordered after the conversational status turn")
+if provider < 0 or completion < provider:
+    errors.append("dedicated transaction review is not connected to runtime completion")
+if "let result = if implementation_evidence.is_some()" not in runtime:
+    errors.append("prepared mutations still enter the generic conversational model loop")
+if "mutation_completion_text(" not in runtime or "EventPayload::AssistantMessageRecorded" not in runtime:
+    errors.append("accepted mutations lack a deterministic durable completion response")
 if "state.session_api_key.clone()" not in runtime or "cancel.as_ref()" not in runtime:
     errors.append("dedicated reviewer does not inherit active credential and cancellation authority")
 if "implementation_evidence.as_ref().map" in runtime and "PARENT_REVIEW_TURN_INSTRUCTION" in runtime:
