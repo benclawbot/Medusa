@@ -1,0 +1,1 @@
+trigger provider terminal-stop validation after workflow registration
