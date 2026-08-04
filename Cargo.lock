@@ -1751,6 +1751,7 @@ name = "medusa-tui"
 version = "1.0.0"
 dependencies = [
  "arboard",
+ "base64",
  "clap",
  "crossterm",
  "hex",
@@ -1764,6 +1765,7 @@ dependencies = [
  "serde_json",
  "sha2",
  "tempfile",
+ "time",
 ]
 
 [[package]]

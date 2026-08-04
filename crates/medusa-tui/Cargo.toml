@@ -11,6 +11,7 @@ name = "medusa-tui"
 path = "src/main.rs"
 
 [dependencies]
+base64 = "0.22"
 arboard = "3.6.1"
 clap = { version = "4.5", features = ["derive"] }
 crossterm = "0.29"
@@ -23,6 +24,7 @@ medusa-recovery-coordinator = { path = "../medusa-recovery-coordinator" }
 medusa-runtime = { path = "../medusa-runtime" }
 serde.workspace = true
 serde_json.workspace = true
+time = { version = "0.3", features = ["formatting", "parsing"] }
 sha2.workspace = true
 
 [dev-dependencies]
