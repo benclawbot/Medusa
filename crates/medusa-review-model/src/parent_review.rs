@@ -98,13 +98,10 @@ mod tests {
 
     #[test]
     fn validates_versioned_response_and_fingerprints_exact_envelope() {
-        let encoded =
-            "{\"schema_version\":1,\"decision\":\"accepted\",\"rationale\":\"exact patch and evidence agree\"}";
-        let outcome = validate_parent_review_response(
-            accepted("exact patch and evidence agree"),
-            encoded,
-        )
-        .expect("typed review");
+        let encoded = "{\"schema_version\":1,\"decision\":\"accepted\",\"rationale\":\"exact patch and evidence agree\"}";
+        let outcome =
+            validate_parent_review_response(accepted("exact patch and evidence agree"), encoded)
+                .expect("typed review");
         assert_eq!(outcome.decision, ParentReviewDecision::Accepted);
         assert_eq!(outcome.rationale, "exact patch and evidence agree");
         assert_eq!(outcome.response_fingerprint.len(), 64);
