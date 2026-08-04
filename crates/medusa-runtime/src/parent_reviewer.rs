@@ -1,10 +1,7 @@
 use std::{
     fs,
     path::{Path, PathBuf},
-    sync::{
-        atomic::AtomicBool,
-        mpsc::Sender,
-    },
+    sync::{atomic::AtomicBool, mpsc::Sender},
 };
 
 use medusa_config::Config;
@@ -12,8 +9,8 @@ use medusa_provider::{
     Message, MessageBlock, ModelProvider, ModelRequest, ResponseBlock, Role, Usage,
 };
 use medusa_review_model::{
-    ParentReviewDecision, ParentReviewOutcome, ParentReviewResponse,
-    ParentReviewResponseError, final_parent_review_line, validate_parent_review_response,
+    ParentReviewDecision, ParentReviewOutcome, ParentReviewResponse, ParentReviewResponseError,
+    final_parent_review_line, validate_parent_review_response,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -156,10 +153,7 @@ fn review_packet<P: ModelProvider>(
             }],
         }],
         tools: Vec::new(),
-        max_tokens: config
-            .model
-            .max_output_tokens
-            .min(MAX_REVIEW_OUTPUT_TOKENS),
+        max_tokens: config.model.max_output_tokens.min(MAX_REVIEW_OUTPUT_TOKENS),
         temperature_milli: 0,
     };
     let request_fingerprint = hash(&request);
@@ -176,13 +170,12 @@ fn review_packet<P: ModelProvider>(
             || existing.provider != config.model.provider
             || existing.model != config.model.name
         {
-            return Err("durable parent-review journal does not match this transaction request"
-                .to_owned());
+            return Err(
+                "durable parent-review journal does not match this transaction request".to_owned(),
+            );
         }
         match existing.state {
-            ReviewJournalState::Completed => {
-                return completed_review(existing);
-            }
+            ReviewJournalState::Completed => return completed_review(existing),
             ReviewJournalState::Failed => {
                 return Err(existing
                     .error
@@ -343,14 +336,29 @@ fn load_journal(path: &Path) -> Result<Option<ParentReviewJournal>, String> {
 fn persist_journal(path: &Path, journal: &mut ParentReviewJournal) -> Result<(), String> {
     journal.updated_at_unix_ms = now_unix_ms();
     journal.fingerprint.clear();
-    journal.fingerprint = hash(journal);
+    journal.fingerprint = hash(&*journal);
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent).map_err(|error| error.to_string())?;
     }
     let temporary = path.with_extension("json.tmp");
     let encoded = serde_json::to_vec_pretty(journal).map_err(|error| error.to_string())?;
     fs::write(&temporary, encoded).map_err(|error| error.to_string())?;
-    fs::rename(&temporary, path).map_err(|error| error.to_string())
+    replace_file(&temporary, path)
+}
+
+fn replace_file(temporary: &Path, destination: &Path) -> Result<(), String> {
+    match fs::rename(temporary, destination) {
+        Ok(()) => Ok(()),
+        Err(first_error) if destination.exists() => {
+            fs::remove_file(destination).map_err(|error| {
+                format!(
+                    "could not replace durable parent-review journal after {first_error}: {error}"
+                )
+            })?;
+            fs::rename(temporary, destination).map_err(|error| error.to_string())
+        }
+        Err(error) => Err(error.to_string()),
+    }
 }
 
 fn validate_journal(journal: &ParentReviewJournal) -> Result<(), String> {
@@ -380,20 +388,24 @@ fn validate_journal(journal: &ParentReviewJournal) -> Result<(), String> {
         }
         ReviewJournalState::Completed => {
             if journal.decision.is_none()
-                || journal.rationale.as_deref().is_none_or(str::is_empty)
-                || journal.response_fingerprint.as_deref().is_none_or(str::is_empty)
+                || is_blank(journal.rationale.as_deref())
+                || is_blank(journal.response_fingerprint.as_deref())
                 || journal.error.is_some()
             {
                 return Err("completed parent-review journal is missing typed evidence".to_owned());
             }
         }
         ReviewJournalState::Failed => {
-            if journal.error.as_deref().is_none_or(str::is_empty) || journal.decision.is_some() {
+            if is_blank(journal.error.as_deref()) || journal.decision.is_some() {
                 return Err("failed parent-review journal is missing failure evidence".to_owned());
             }
         }
     }
     Ok(())
+}
+
+fn is_blank(value: Option<&str>) -> bool {
+    value.is_none_or(|value| value.trim().is_empty())
 }
 
 fn hash(value: &impl Serialize) -> String {
@@ -417,7 +429,7 @@ mod tests {
     };
 
     use medusa_core::MedusaResult;
-    use medusa_provider::{ModelResponse, ToolDefinition};
+    use medusa_provider::ModelResponse;
     use tempfile::tempdir;
 
     use super::*;
@@ -469,8 +481,8 @@ mod tests {
         );
         let config = Config::default();
         let cancel = AtomicBool::new(false);
-        let first = review_packet(&provider, &config, &cancel, &packet(root.path()))
-            .expect("first review");
+        let first =
+            review_packet(&provider, &config, &cancel, &packet(root.path())).expect("first review");
         let second = review_packet(&provider, &config, &cancel, &packet(root.path()))
             .expect("resumed review");
         assert_eq!(first.outcome.decision, ParentReviewDecision::Accepted);
@@ -519,20 +531,24 @@ mod tests {
     }
 
     #[test]
-    fn nonempty_tool_schema_is_never_needed_by_the_reviewer() {
-        let definition = ToolDefinition {
-            name: "unused".to_owned(),
-            description: "unused".to_owned(),
-            input_schema: serde_json::json!({"type": "object"}),
-        };
-        assert!(!definition.name.is_empty());
-        let request = ModelRequest {
-            system: REVIEW_SYSTEM_PROMPT.to_owned(),
-            messages: Vec::new(),
-            tools: Vec::new(),
-            max_tokens: MAX_REVIEW_OUTPUT_TOKENS,
-            temperature_milli: 0,
-        };
-        assert!(request.tools.is_empty());
+    fn corrupt_terminal_journal_fails_closed() {
+        let root = tempdir().expect("temporary journal");
+        let provider = FakeProvider::text(
+            "{\"schema_version\":1,\"decision\":\"accepted\",\"rationale\":\"ok\"}",
+        );
+        let config = Config::default();
+        let cancel = AtomicBool::new(false);
+        review_packet(&provider, &config, &cancel, &packet(root.path())).expect("first review");
+        let path = packet(root.path()).journal_path;
+        let mut journal = load_journal(&path)
+            .expect("journal read")
+            .expect("journal");
+        journal.rationale = Some(" ".to_owned());
+        fs::write(&path, serde_json::to_vec_pretty(&journal).expect("encode journal"))
+            .expect("corrupt journal");
+        let error = review_packet(&provider, &config, &cancel, &packet(root.path()))
+            .expect_err("corrupt journal must fail");
+        assert!(error.contains("incomplete or corrupted"));
+        assert_eq!(provider.calls.load(Ordering::SeqCst), 1);
     }
 }
