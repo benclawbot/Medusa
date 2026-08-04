@@ -49,7 +49,6 @@ mod unix {
         let output = assert_success(
             Command::new(env!("CARGO_BIN_EXE_medusa-product-acceptance"))
                 .args(["--output", output_dir.to_str().expect("output path")])
-                .env_clear()
                 .env("PATH", fake_path(&bin))
                 .output()
                 .expect("run product acceptance"),
@@ -116,7 +115,6 @@ exit 0
         let output = assert_success(
             Command::new(env!("CARGO_BIN_EXE_medusa-proof"))
                 .args(["--output", output_dir.to_str().expect("output path")])
-                .env_clear()
                 .env("PATH", fake_path(&bin))
                 .output()
                 .expect("run proof"),
@@ -155,8 +153,11 @@ exit 0
         let output = assert_success(
             Command::new(env!("CARGO_BIN_EXE_medusa-quickstart"))
                 .args(["--json", "--repo", repo.to_str().expect("repo path")])
-                .env_clear()
                 .env("PATH", fake_path(&bin))
+                .env_remove("ANTHROPIC_API_KEY")
+                .env_remove("MINIMAX_API_KEY")
+                .env_remove("MEDUSA_API_KEY")
+                .env_remove("MEDUSA_BASE_URL")
                 .env("OPENAI_API_KEY", "coverage-fixture-not-a-real-secret")
                 .output()
                 .expect("run quickstart"),
