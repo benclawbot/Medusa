@@ -1,6 +1,7 @@
 mod config_command;
 mod config_profiles;
 mod headless_approval;
+mod telegram_command;
 mod update_command;
 
 use std::{
@@ -109,6 +110,11 @@ enum CommandKind {
     },
     Resume {
         session: String,
+    },
+    /// Run the Telegram remote frontend over the repository daemon authority.
+    Telegram {
+        #[command(flatten)]
+        args: Box<telegram_command::TelegramArgs>,
     },
     #[command(name = "__daemon-serve", hide = true)]
     DaemonServe,
@@ -245,6 +251,11 @@ fn run() -> MedusaResult<()> {
         return serve_with_config(DaemonPaths::for_repo(&repo), config);
     }
 
+    let command = match command {
+        CommandKind::Telegram { args } => return telegram_command::run(&repo, *args),
+        command => command,
+    };
+
     if let CommandKind::Config { action } = command {
         return match action {
             None | Some(ConfigAction::Init) => configure_interactive(),
@@ -319,6 +330,7 @@ fn run() -> MedusaResult<()> {
             drain_headless_runtime(&runtime, &repo, None)
         }
         CommandKind::Config { .. } => unreachable!("handled before runtime config loading"),
+        CommandKind::Telegram { .. } => unreachable!("handled before runtime config loading"),
         CommandKind::DaemonServe => serve(DaemonPaths::for_repo(&repo)),
     }
 }

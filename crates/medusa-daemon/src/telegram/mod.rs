@@ -7,6 +7,7 @@ pub mod bot_api;
 mod callback;
 mod command;
 mod config;
+mod control;
 mod delivery;
 mod format;
 mod mini_app;
@@ -31,6 +32,7 @@ pub use config::{
     TelegramChatKind, TelegramConfig, TelegramDisplayConfig, TelegramIdentity, TelegramTransport,
     TelegramVoiceConfig, TelegramVoiceMode, ToolProgressMode,
 };
+pub use control::{TelegramControl, TelegramControlError};
 pub use delivery::TelegramDeliveryState;
 pub use format::{normalize_markdown_tables, split_telegram_text, telegram_markdown_v2, utf16_len};
 pub use mini_app::{

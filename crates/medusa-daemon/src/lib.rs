@@ -14,6 +14,7 @@ mod server;
 pub mod telegram;
 mod transport;
 
+pub use artifact_store::FrontendArtifactExport;
 pub use control_plane::{
     ControlPlaneError, RuntimeBinding, SupervisionControlPlane, SupervisionEvent,
 };

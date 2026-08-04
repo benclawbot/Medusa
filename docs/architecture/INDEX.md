@@ -76,10 +76,11 @@ V2 invariants:
 | Headless | `medusa run` | `crates/medusa-cli` | runtime command authority; canonical journal → `medusa-protocol` frontend projection |
 | Daemon service | `medusa __daemon-serve` | `crates/medusa-daemon` | daemon protocol v2 routes shared frontend commands; canonical journal → frontend-scoped replay batches |
 | Desktop | `apps/medusa-desktop` | React/Tauri application | daemon protocol v2 command, artifact, transient-event, and canonical replay authority |
+| Telegram | `medusa telegram` | `medusa-daemon::telegram` supervised polling/webhook gateway | daemon-client protocol v2 commands, bounded artifacts, canonical replay, and transport-only durable state |
 | GitHub operations | `medusa github` / capability entrypoints | `crates/medusa-external-github` over `crates/medusa-github` | versioned attempt-bound operation envelope and normalized receipt |
 | Update | `medusa update` | `crates/medusa-update` | Ed25519-verified prebuilt release; explicit `--channel source` developer path |
 
-The phase-6 frontend migration is proceeding in production-entrypoint order. Headless CLI output tails committed session-journal events through `medusa-protocol::frontend`. The interactive TUI and desktop now route submit, resume, reconnect, cancellation, slash commands, model settings, recovery, bounded attachments, cursor acknowledgement, transient events, and canonical replay through daemon protocol v2. Their local code is limited to input conversion, credential handoff, lifecycle notices, and presentation projection. Remote voice and the final legacy-authority deletion remain follow-up slices.
+The phase-6 frontend migration is proceeding in production-entrypoint order. Headless CLI output tails committed session-journal events through `medusa-protocol::frontend`. The interactive TUI and desktop route submit, resume, reconnect, cancellation, slash commands, model settings, recovery, bounded attachments, cursor acknowledgement, transient events, and canonical replay through daemon protocol v2. Telegram now has a supervised polling/webhook production entrypoint whose control and artifact backend is the repository daemon; its durable local state is limited to transport bindings, cursors, message IDs, callbacks, media batches, and display/voice preferences. Telegram Mini App duplex-voice certification, other remote frontends, and final legacy-authority deletion remain follow-up slices.
 
 ## Capability certification
 

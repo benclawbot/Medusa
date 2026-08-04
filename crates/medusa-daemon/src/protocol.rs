@@ -2,7 +2,9 @@ use medusa_protocol::frontend::FrontendCommandEnvelope;
 use serde::{Deserialize, Serialize};
 use time::OffsetDateTime;
 
-use crate::frontend_control::FrontendCommandAcknowledgement;
+use crate::{
+    artifact_store::FrontendArtifactExport, frontend_control::FrontendCommandAcknowledgement,
+};
 
 pub const DAEMON_PROTOCOL_VERSION: u16 = 2;
 
@@ -99,6 +101,7 @@ pub enum Request {
     List,
     Frontend { envelope: FrontendCommandEnvelope },
     FrontendArtifact { upload: FrontendArtifactUpload },
+    FrontendArtifactExport { artifact_id: String },
     FrontendCredential { update: FrontendCredentialUpdate },
     Shutdown,
     ShutdownNow,
@@ -131,6 +134,9 @@ pub enum Response {
     },
     FrontendArtifact {
         artifact_id: String,
+    },
+    FrontendArtifactExport {
+        artifact: FrontendArtifactExport,
     },
     Ack,
     Error {
