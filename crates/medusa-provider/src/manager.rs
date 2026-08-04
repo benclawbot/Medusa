@@ -113,7 +113,9 @@ impl<P> ProviderManager<P> {
     ) -> MedusaResult<Self> {
         let profiles = normalized_profiles(providers.len(), profiles);
         let state = ProviderHealthStore::for_user(&profiles)?;
-        Ok(Self::new_with_profiles_and_store(providers, profiles, state))
+        Ok(Self::new_with_profiles_and_store(
+            providers, profiles, state,
+        ))
     }
 
     fn new_with_profiles_and_store(
