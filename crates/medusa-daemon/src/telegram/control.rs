@@ -1,12 +1,13 @@
-//! Telegram control backend over either an embedded control plane (tests/embedding) or daemon IPC.
+//! Telegram control backend over daemon IPC, with an embedded backend available only to unit tests.
 
 use base64::{Engine as _, engine::general_purpose::STANDARD};
 
 use crate::{
     DaemonClient, FrontendArtifactExport, FrontendArtifactKind, FrontendArtifactUpload,
-    FrontendCommandAcknowledgement, FrontendControlError, FrontendControlPlane,
-    FrontendControlResult, LiveSessionReplayView,
+    FrontendCommandAcknowledgement, FrontendControlResult, LiveSessionReplayView,
 };
+#[cfg(test)]
+use crate::{FrontendControlError, FrontendControlPlane};
 use medusa_protocol::frontend::{
     FRONTEND_PROTOCOL_VERSION, FrontendCommand, FrontendCommandEnvelope, FrontendKind,
 };
@@ -14,10 +15,12 @@ use time::OffsetDateTime;
 
 /// Shared Telegram command/artifact backend without frontend-owned runtime authority.
 pub enum TelegramControl {
+    #[cfg(test)]
     InProcess(Box<FrontendControlPlane>),
     Daemon(DaemonClient),
 }
 
+#[cfg(test)]
 impl From<FrontendControlPlane> for TelegramControl {
     fn from(control: FrontendControlPlane) -> Self {
         Self::InProcess(Box::new(control))
@@ -36,6 +39,7 @@ impl TelegramControl {
         envelope: FrontendCommandEnvelope,
     ) -> Result<FrontendCommandAcknowledgement, TelegramControlError> {
         match self {
+            #[cfg(test)]
             Self::InProcess(control) => control.dispatch(envelope).map_err(Into::into),
             Self::Daemon(client) => client
                 .frontend(envelope)
@@ -51,6 +55,7 @@ impl TelegramControl {
         timestamp: OffsetDateTime,
     ) -> Result<LiveSessionReplayView, TelegramControlError> {
         match self {
+            #[cfg(test)]
             Self::InProcess(control) => {
                 control.replay_events(client_id, cursor).map_err(Into::into)
             }
@@ -94,6 +99,7 @@ impl TelegramControl {
     ) -> Result<String, TelegramControlError> {
         let kind = artifact_kind(mime_type.as_deref(), &bytes);
         match self {
+            #[cfg(test)]
             Self::InProcess(control) => control
                 .ingest_artifact(display_name, mime_type, kind, bytes)
                 .map_err(Into::into),
@@ -113,6 +119,7 @@ impl TelegramControl {
         artifact_id: &str,
     ) -> Result<FrontendArtifactExport, TelegramControlError> {
         match self {
+            #[cfg(test)]
             Self::InProcess(control) => control.export_attachment(artifact_id).map_err(Into::into),
             Self::Daemon(client) => client
                 .frontend_artifact_export(artifact_id)
@@ -132,6 +139,7 @@ fn artifact_kind(mime_type: Option<&str>, bytes: &[u8]) -> FrontendArtifactKind 
 
 #[derive(Debug, thiserror::Error)]
 pub enum TelegramControlError {
+    #[cfg(test)]
     #[error(transparent)]
     InProcess(#[from] FrontendControlError),
     #[error("daemon Telegram control failed: {0}")]
