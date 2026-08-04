@@ -1,8 +1,10 @@
 import { readFileSync } from "node:fs";
+import { resolve } from "node:path";
 import { describe, expect, it } from "vitest";
 
-const mobileCss = readFileSync(new URL("./mobile-navigation.css", import.meta.url), "utf8");
-const mainSource = readFileSync(new URL("./main.tsx", import.meta.url), "utf8");
+const sourcePath = (file: string) => resolve(process.cwd(), "src", file);
+const mobileCss = readFileSync(sourcePath("mobile-navigation.css"), "utf8");
+const mainSource = readFileSync(sourcePath("main.tsx"), "utf8");
 
 describe("narrow-window desktop acceptance", () => {
   it("keeps the command rail reachable without overlapping the workspace", () => {
