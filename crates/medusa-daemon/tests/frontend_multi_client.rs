@@ -8,7 +8,7 @@ use medusa_daemon::{
     LiveSessionReplayView, spawn,
 };
 use medusa_protocol::frontend::{
-    FRONTEND_PROTOCOL_VERSION, AttachmentMode, FrontendCommand, FrontendCommandEnvelope,
+    AttachmentMode, FRONTEND_PROTOCOL_VERSION, FrontendCommand, FrontendCommandEnvelope,
     FrontendKind,
 };
 use medusa_provider::{ModelProvider, ModelRequest, ModelResponse};
@@ -82,7 +82,10 @@ fn assert_equivalent_replay(left: &LiveSessionReplayView, right: &LiveSessionRep
 fn simultaneous_frontends_share_daemon_ordering_and_control_authority() {
     let repository = tempfile::tempdir().expect("repository");
     let session = AgentEngine::new(UnusedProvider, Config::default())
-        .create_session(repository.path(), "One daemon-authoritative session".to_owned())
+        .create_session(
+            repository.path(),
+            "One daemon-authoritative session".to_owned(),
+        )
         .expect("session");
     let session_id = session.id.to_string();
     let paths = DaemonPaths::for_repo(repository.path());
@@ -124,8 +127,14 @@ fn simultaneous_frontends_share_daemon_ordering_and_control_authority() {
 
     assert_eq!(tui_attachment.session.id, session_id);
     assert_eq!(telegram_attachment.session.id, session_id);
-    assert_eq!(tui_attachment.replay_cursor, telegram_attachment.replay_cursor);
-    assert_eq!(tui_attachment.replay.len(), telegram_attachment.replay.len());
+    assert_eq!(
+        tui_attachment.replay_cursor,
+        telegram_attachment.replay_cursor
+    );
+    assert_eq!(
+        tui_attachment.replay.len(),
+        telegram_attachment.replay.len()
+    );
     for (tui_event, telegram_event) in tui_attachment
         .replay
         .iter()
