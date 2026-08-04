@@ -46,10 +46,7 @@ pub(crate) fn shared_async_http_client() -> MedusaResult<AsyncClient> {
     Ok(CLIENT.get().cloned().unwrap_or(client))
 }
 
-pub(crate) fn run_cancellable_request<T, F>(
-    cancel: &AtomicBool,
-    future: F,
-) -> MedusaResult<T>
+pub(crate) fn run_cancellable_request<T, F>(cancel: &AtomicBool, future: F) -> MedusaResult<T>
 where
     T: Send,
     F: Future<Output = MedusaResult<T>> + Send,
