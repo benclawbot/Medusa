@@ -18,6 +18,8 @@ describe("narrow-window desktop acceptance", () => {
 
   it("preserves accessible names when controls become icon-only", () => {
     expect(mobileCss).toContain(".sidebar .rail-label");
+    expect(mobileCss).toContain(".rail-collapsed .sidebar .rail-label");
+    expect(mobileCss).toContain("display: block !important");
     expect(mobileCss).toContain("position: absolute !important");
     expect(mobileCss).toContain("clip: rect(0, 0, 0, 0) !important");
     expect(mobileCss).not.toMatch(/\.sidebar\s*\{[^}]*display:\s*none;/);
