@@ -43,17 +43,18 @@ pub enum ParentReviewResponseError {
     EmptyRationale,
 }
 
-pub fn parse_parent_review_response(
-    text: &str,
-) -> Result<ParentReviewOutcome, ParentReviewResponseError> {
-    let final_line = text
-        .lines()
+pub fn final_parent_review_line(text: &str) -> Result<&str, ParentReviewResponseError> {
+    text.lines()
         .rev()
         .map(str::trim)
         .find(|line| !line.is_empty())
-        .ok_or(ParentReviewResponseError::EmptyResponse)?;
-    let response: ParentReviewResponse = serde_json::from_str(final_line)
-        .map_err(|error| ParentReviewResponseError::InvalidEnvelope(error.to_string()))?;
+        .ok_or(ParentReviewResponseError::EmptyResponse)
+}
+
+pub fn validate_parent_review_response(
+    response: ParentReviewResponse,
+    encoded_response: &str,
+) -> Result<ParentReviewOutcome, ParentReviewResponseError> {
     if response.schema_version != PARENT_REVIEW_SCHEMA_VERSION {
         return Err(ParentReviewResponseError::UnsupportedSchema(
             response.schema_version,
@@ -63,33 +64,45 @@ pub fn parse_parent_review_response(
     if rationale.is_empty() {
         return Err(ParentReviewResponseError::EmptyRationale);
     }
-    let response = ParentReviewResponse {
-        schema_version: response.schema_version,
-        decision: response.decision,
-        rationale: rationale.to_owned(),
-    };
-    let response_fingerprint = fingerprint(&response);
     Ok(ParentReviewOutcome {
         schema_version: response.schema_version,
         decision: response.decision,
-        rationale: response.rationale,
-        response_fingerprint,
+        rationale: rationale.to_owned(),
+        response_fingerprint: format!("{:x}", Sha256::digest(encoded_response.as_bytes())),
     })
-}
-
-fn fingerprint(response: &ParentReviewResponse) -> String {
-    let bytes = serde_json::to_vec(response).unwrap_or_default();
-    format!("{:x}", Sha256::digest(bytes))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
+    fn accepted(rationale: &str) -> ParentReviewResponse {
+        ParentReviewResponse {
+            schema_version: PARENT_REVIEW_SCHEMA_VERSION,
+            decision: ParentReviewDecision::Accepted,
+            rationale: rationale.to_owned(),
+        }
+    }
+
     #[test]
-    fn accepts_versioned_final_json_after_human_summary() {
-        let outcome = parse_parent_review_response(
-            "The prepared patch matches the verified scope.\n{\"schema_version\":1,\"decision\":\"accepted\",\"rationale\":\"exact patch and evidence agree\"}",
+    fn identifies_final_non_empty_line() {
+        assert_eq!(
+            final_parent_review_line("human summary\n{typed-response}\n\n").expect("final line"),
+            "{typed-response}"
+        );
+        assert_eq!(
+            final_parent_review_line(" \n\t"),
+            Err(ParentReviewResponseError::EmptyResponse)
+        );
+    }
+
+    #[test]
+    fn validates_versioned_response_and_fingerprints_exact_envelope() {
+        let encoded =
+            "{\"schema_version\":1,\"decision\":\"accepted\",\"rationale\":\"exact patch and evidence agree\"}";
+        let outcome = validate_parent_review_response(
+            accepted("exact patch and evidence agree"),
+            encoded,
         )
         .expect("typed review");
         assert_eq!(outcome.decision, ParentReviewDecision::Accepted);
@@ -98,51 +111,20 @@ mod tests {
     }
 
     #[test]
-    fn accepts_typed_revision_request() {
-        let outcome = parse_parent_review_response(
-            "{\"schema_version\":1,\"decision\":\"revision_requested\",\"rationale\":\"missing regression coverage\"}",
-        )
-        .expect("typed revision");
-        assert_eq!(outcome.decision, ParentReviewDecision::RevisionRequested);
-    }
-
-    #[test]
-    fn free_form_marker_cannot_authorize_integration() {
-        let error =
-            parse_parent_review_response("MEDUSA_REVIEW_ACCEPTED: exact patch and evidence agree")
-                .expect_err("marker must fail closed");
-        assert!(matches!(
-            error,
-            ParentReviewResponseError::InvalidEnvelope(_)
-        ));
-    }
-
-    #[test]
-    fn unknown_fields_and_trailing_text_fail_closed() {
-        assert!(parse_parent_review_response(
-            "{\"schema_version\":1,\"decision\":\"accepted\",\"rationale\":\"ok\",\"extra\":true}"
-        )
-        .is_err());
-        assert!(
-            parse_parent_review_response(
-                "{\"schema_version\":1,\"decision\":\"accepted\",\"rationale\":\"ok\"}\ntrailing"
-            )
-            .is_err()
-        );
-    }
-
-    #[test]
     fn unsupported_schema_and_empty_rationale_fail_closed() {
         assert_eq!(
-            parse_parent_review_response(
-                "{\"schema_version\":2,\"decision\":\"accepted\",\"rationale\":\"ok\"}"
+            validate_parent_review_response(
+                ParentReviewResponse {
+                    schema_version: 2,
+                    decision: ParentReviewDecision::Accepted,
+                    rationale: "ok".to_owned(),
+                },
+                "schema-two",
             ),
             Err(ParentReviewResponseError::UnsupportedSchema(2))
         );
         assert_eq!(
-            parse_parent_review_response(
-                "{\"schema_version\":1,\"decision\":\"accepted\",\"rationale\":\"   \"}"
-            ),
+            validate_parent_review_response(accepted("   "), "empty-rationale"),
             Err(ParentReviewResponseError::EmptyRationale)
         );
     }
