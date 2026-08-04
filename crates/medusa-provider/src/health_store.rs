@@ -1,20 +1,27 @@
 use std::{
     collections::BTreeMap,
     fs,
+    fs::OpenOptions,
+    io::Write,
     path::{Path, PathBuf},
     sync::{Arc, Mutex},
-    time::Duration,
+    thread,
+    time::{Duration, SystemTime},
 };
 
+use medusa_config::ProviderProfileCatalog;
 use medusa_core::{ErrorCategory, ErrorCode, MedusaError, MedusaResult};
-use rusqlite::{Connection, OptionalExtension, TransactionBehavior, params};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
 use crate::{ProviderHealth, ProviderRouteProfile};
 
 const STORE_SCHEMA_VERSION: u16 = 1;
-const STORE_FILE_NAME: &str = "provider-runtime.sqlite3";
+const STORE_FILE_NAME: &str = "provider-runtime.json";
+const LOCK_FILE_NAME: &str = ".provider-runtime.lock";
+const LOCK_RETRY_ATTEMPTS: usize = 200;
+const LOCK_RETRY_DELAY: Duration = Duration::from_millis(10);
+const STALE_LOCK_AGE: Duration = Duration::from_secs(30);
 
 #[derive(Clone)]
 pub struct ProviderHealthStore {
@@ -26,7 +33,7 @@ pub struct ProviderHealthStore {
 #[derive(Clone)]
 enum StoreBackend {
     Memory(Arc<Mutex<ProviderRuntimeState>>),
-    Sqlite(PathBuf),
+    File { state_path: PathBuf, lock_path: PathBuf },
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -60,14 +67,19 @@ impl ProviderHealthStore {
         }
     }
 
-    pub fn for_repository(
-        repository: &Path,
-        profiles: &[ProviderRouteProfile],
-    ) -> MedusaResult<Self> {
-        let state_directory = repository.join(".medusa");
-        fs::create_dir_all(&state_directory).map_err(store_io_error)?;
+    pub fn for_user(profiles: &[ProviderRouteProfile]) -> MedusaResult<Self> {
+        let root = ProviderProfileCatalog::user()?.root().to_path_buf();
+        Self::at(root, profiles)
+    }
+
+    pub fn at(root: impl Into<PathBuf>, profiles: &[ProviderRouteProfile]) -> MedusaResult<Self> {
+        let root = root.into();
+        fs::create_dir_all(&root).map_err(store_io_error)?;
         let store = Self {
-            backend: StoreBackend::Sqlite(state_directory.join(STORE_FILE_NAME)),
+            backend: StoreBackend::File {
+                state_path: root.join(STORE_FILE_NAME),
+                lock_path: root.join(LOCK_FILE_NAME),
+            },
             route_keys: Arc::new(profiles.iter().map(route_key).collect()),
             profiles: Arc::new(profiles.to_vec()),
         };
@@ -208,61 +220,113 @@ impl ProviderHealthStore {
                     .map_err(|_| store_error("provider runtime state lock is poisoned"))?;
                 Ok(update(&mut state))
             }
-            StoreBackend::Sqlite(path) => {
-                let mut connection = open_connection(path)?;
-                let transaction = connection
-                    .transaction_with_behavior(TransactionBehavior::Immediate)
-                    .map_err(sqlite_error)?;
-                let payload = transaction
-                    .query_row(
-                        "SELECT payload FROM provider_runtime_state WHERE singleton = 1",
-                        [],
-                        |row| row.get::<_, String>(0),
-                    )
-                    .optional()
-                    .map_err(sqlite_error)?;
-                let mut state = payload.map_or_else(
-                    || Ok(ProviderRuntimeState::default()),
-                    |payload| serde_json::from_str(&payload).map_err(serialization_error),
-                )?;
-                if state.schema_version != STORE_SCHEMA_VERSION {
-                    return Err(store_error(format!(
-                        "unsupported provider runtime state schema {}",
-                        state.schema_version
-                    )));
-                }
+            StoreBackend::File {
+                state_path,
+                lock_path,
+            } => {
+                let _guard = FileLock::acquire(lock_path)?;
+                let mut state = load_state(state_path)?;
                 let result = update(&mut state);
-                let payload = serde_json::to_string(&state).map_err(serialization_error)?;
-                transaction
-                    .execute(
-                        "INSERT INTO provider_runtime_state(singleton, payload) VALUES(1, ?1) \
-                         ON CONFLICT(singleton) DO UPDATE SET payload = excluded.payload",
-                        params![payload],
-                    )
-                    .map_err(sqlite_error)?;
-                transaction.commit().map_err(sqlite_error)?;
+                let bytes = serde_json::to_vec_pretty(&state).map_err(serialization_error)?;
+                atomic_write(state_path, &bytes)?;
                 Ok(result)
             }
         }
     }
 }
 
-fn open_connection(path: &Path) -> MedusaResult<Connection> {
-    let connection = Connection::open(path).map_err(sqlite_error)?;
-    connection
-        .busy_timeout(Duration::from_secs(5))
-        .map_err(sqlite_error)?;
-    connection
-        .execute_batch(
-            "PRAGMA journal_mode = WAL;
-             PRAGMA synchronous = FULL;
-             CREATE TABLE IF NOT EXISTS provider_runtime_state (
-               singleton INTEGER PRIMARY KEY CHECK(singleton = 1),
-               payload TEXT NOT NULL
-             );",
-        )
-        .map_err(sqlite_error)?;
-    Ok(connection)
+struct FileLock {
+    path: PathBuf,
+}
+
+impl FileLock {
+    fn acquire(path: &Path) -> MedusaResult<Self> {
+        for _ in 0..LOCK_RETRY_ATTEMPTS {
+            match OpenOptions::new().write(true).create_new(true).open(path) {
+                Ok(mut file) => {
+                    writeln!(file, "pid={}", std::process::id()).map_err(store_io_error)?;
+                    file.sync_all().map_err(store_io_error)?;
+                    return Ok(Self {
+                        path: path.to_path_buf(),
+                    });
+                }
+                Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
+                    if lock_is_stale(path) {
+                        match fs::remove_file(path) {
+                            Ok(()) => continue,
+                            Err(remove_error)
+                                if remove_error.kind() == std::io::ErrorKind::NotFound =>
+                            {
+                                continue;
+                            }
+                            Err(_) => {}
+                        }
+                    }
+                    thread::sleep(LOCK_RETRY_DELAY);
+                }
+                Err(error) => return Err(store_io_error(error)),
+            }
+        }
+        Err(store_error(format!(
+            "provider runtime state is busy; could not acquire {}",
+            path.display()
+        )))
+    }
+}
+
+impl Drop for FileLock {
+    fn drop(&mut self) {
+        let _ = fs::remove_file(&self.path);
+        sync_parent(&self.path);
+    }
+}
+
+fn load_state(path: &Path) -> MedusaResult<ProviderRuntimeState> {
+    if !path.exists() {
+        return Ok(ProviderRuntimeState::default());
+    }
+    let bytes = fs::read(path).map_err(store_io_error)?;
+    let state: ProviderRuntimeState = serde_json::from_slice(&bytes).map_err(serialization_error)?;
+    if state.schema_version != STORE_SCHEMA_VERSION {
+        return Err(store_error(format!(
+            "unsupported provider runtime state schema {}",
+            state.schema_version
+        )));
+    }
+    Ok(state)
+}
+
+fn atomic_write(path: &Path, bytes: &[u8]) -> MedusaResult<()> {
+    let parent = path
+        .parent()
+        .ok_or_else(|| store_error("provider runtime state path has no parent"))?;
+    fs::create_dir_all(parent).map_err(store_io_error)?;
+    let temporary = path.with_extension("json.tmp");
+    let mut file = fs::File::create(&temporary).map_err(store_io_error)?;
+    file.write_all(bytes).map_err(store_io_error)?;
+    file.sync_all().map_err(store_io_error)?;
+    fs::rename(&temporary, path).map_err(store_io_error)?;
+    sync_parent(path);
+    Ok(())
+}
+
+fn sync_parent(path: &Path) {
+    #[cfg(unix)]
+    if let Some(parent) = path.parent()
+        && let Ok(directory) = fs::File::open(parent)
+    {
+        let _ = directory.sync_all();
+    }
+    #[cfg(not(unix))]
+    let _ = path;
+}
+
+fn lock_is_stale(path: &Path) -> bool {
+    fs::metadata(path)
+        .and_then(|metadata| metadata.modified())
+        .ok()
+        .and_then(|modified| SystemTime::now().duration_since(modified).ok())
+        .is_some_and(|age| age >= STALE_LOCK_AGE)
 }
 
 fn route_key(profile: &ProviderRouteProfile) -> String {
@@ -313,14 +377,6 @@ fn store_io_error(error: std::io::Error) -> MedusaError {
     )
 }
 
-fn sqlite_error(error: rusqlite::Error) -> MedusaError {
-    MedusaError::new(
-        ErrorCode::DependencyUnavailable,
-        ErrorCategory::Execution,
-        format!("provider runtime state transaction failed: {error}"),
-    )
-}
-
 fn serialization_error(error: serde_json::Error) -> MedusaError {
     MedusaError::new(
         ErrorCode::InvalidConfiguration,
@@ -357,16 +413,14 @@ mod tests {
     }
 
     #[test]
-    fn repository_store_is_shared_across_instances() {
-        let directory = tempfile::tempdir().expect("temporary repository");
+    fn profile_store_is_shared_across_instances() {
+        let directory = tempfile::tempdir().expect("temporary profile root");
         let profiles = vec![profile("gpt-5")];
-        let first = ProviderHealthStore::for_repository(directory.path(), &profiles)
-            .expect("first store");
+        let first = ProviderHealthStore::at(directory.path(), &profiles).expect("first store");
         first.record_attempt(0).expect("record attempt");
         first.record_success(0).expect("record success");
 
-        let second = ProviderHealthStore::for_repository(directory.path(), &profiles)
-            .expect("second store");
+        let second = ProviderHealthStore::at(directory.path(), &profiles).expect("second store");
         assert_eq!(second.health().expect("health")[0].attempts, 1);
         assert_eq!(second.health().expect("health")[0].successes, 1);
         assert_eq!(second.last_completed_provider().expect("last provider"), Some(0));
@@ -378,12 +432,12 @@ mod tests {
 
     #[test]
     fn changed_route_profile_does_not_reuse_old_health() {
-        let directory = tempfile::tempdir().expect("temporary repository");
-        let first = ProviderHealthStore::for_repository(directory.path(), &[profile("gpt-5")])
+        let directory = tempfile::tempdir().expect("temporary profile root");
+        let first = ProviderHealthStore::at(directory.path(), &[profile("gpt-5")])
             .expect("first store");
         first.record_attempt(0).expect("record attempt");
 
-        let second = ProviderHealthStore::for_repository(directory.path(), &[profile("gpt-6")])
+        let second = ProviderHealthStore::at(directory.path(), &[profile("gpt-6")])
             .expect("second store");
         assert_eq!(second.health().expect("health"), vec![ProviderHealth::default()]);
     }
