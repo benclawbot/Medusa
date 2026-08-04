@@ -1,0 +1,50 @@
+name: Agent 654 Apply Dedicated Reviewer
+
+on:
+  push:
+    branches:
+      - agent/654-dedicated-parent-reviewer
+    paths:
+      - scripts/apply-agent-654-dedicated-reviewer.py
+      - .github/workflows/agent-654-apply.yml
+
+permissions:
+  contents: write
+
+concurrency:
+  group: agent-654-dedicated-parent-reviewer
+  cancel-in-progress: true
+
+jobs:
+  apply-and-validate:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: agent/654-dedicated-parent-reviewer
+          fetch-depth: 0
+      - uses: dtolnay/rust-toolchain@39b0b3842c7e8bbf6904c0bfc3d9006fdd4dc4e0 # 1.88.0
+        with:
+          components: rustfmt,clippy
+      - name: Apply exact source patch
+        run: python3 scripts/apply-agent-654-dedicated-reviewer.py
+      - name: Format workspace
+        run: cargo fmt --all
+      - name: Test runtime crate
+        run: cargo test -p medusa-runtime --locked
+      - name: Lint runtime crate
+        run: cargo clippy -p medusa-runtime --all-targets --all-features --locked -- -D warnings
+      - name: Remove temporary patch machinery
+        run: rm scripts/apply-agent-654-dedicated-reviewer.py .github/workflows/agent-654-apply.yml
+      - name: Commit validated source
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add -A
+          git diff --cached --check
+          git commit -m "Use a dedicated durable parent reviewer"
+          git push origin HEAD:agent/654-dedicated-parent-reviewer
