@@ -12,6 +12,7 @@ use medusa_provider::ConfiguredProvider;
 
 use crate::RuntimeEvent;
 
+#[allow(dead_code)]
 #[path = "mutation_transaction_legacy.rs"]
 mod legacy;
 
