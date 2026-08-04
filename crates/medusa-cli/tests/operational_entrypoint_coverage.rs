@@ -169,6 +169,35 @@ exit 0
         assert_eq!(report["selected_route"]["provider"], "openai");
         assert_eq!(report["task"]["verified"], true);
         assert!(repo.join("MEDUSA_QUICKSTART.md").is_file());
+
+        let missing_provider_repo = temp.path().join("missing-provider-repo");
+        fs::create_dir_all(&missing_provider_repo).expect("missing-provider repository");
+        let missing_provider = Command::new(env!("CARGO_BIN_EXE_medusa-quickstart"))
+            .args([
+                "--repo",
+                missing_provider_repo
+                    .to_str()
+                    .expect("missing-provider path"),
+            ])
+            .env("PATH", fake_path(&bin))
+            .env_remove("ANTHROPIC_API_KEY")
+            .env_remove("OPENAI_API_KEY")
+            .env_remove("MINIMAX_API_KEY")
+            .env_remove("MEDUSA_API_KEY")
+            .env_remove("MEDUSA_BASE_URL")
+            .output()
+            .expect("run missing-provider quickstart");
+        assert!(
+            !missing_provider.status.success(),
+            "missing provider must fail: {}",
+            output_text(&missing_provider)
+        );
+        let human = String::from_utf8_lossy(&missing_provider.stdout);
+        assert!(human.contains("Medusa quickstart"));
+        assert!(human.contains("[failed] provider-route"));
+        assert!(human.contains("[failed] bounded-task"));
+        assert!(human.contains("FAILURE:"));
+        assert!(!missing_provider_repo.join("MEDUSA_QUICKSTART.md").exists());
     }
 
     fn write_skill(root: &Path, name: &str, dependencies: &[&str]) {
