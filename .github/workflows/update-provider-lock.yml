@@ -1,0 +1,38 @@
+name: Update provider lock
+
+on:
+  push:
+    branches:
+      - agent/654-provider-wire-truth
+    paths:
+      - crates/medusa-provider/Cargo.toml
+      - .github/workflows/update-provider-lock.yml
+
+permissions:
+  contents: write
+
+concurrency:
+  group: update-provider-lock
+  cancel-in-progress: true
+
+jobs:
+  update-lock:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          ref: agent/654-provider-wire-truth
+      - uses: dtolnay/rust-toolchain@39b0b3842c7e8bbf6904c0bfc3d9006fdd4dc4e0
+      - name: Regenerate committed dependency graph
+        run: cargo generate-lockfile
+      - name: Commit canonical lockfile
+        shell: bash
+        run: |
+          if git diff --quiet -- Cargo.lock; then
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add Cargo.lock
+          git commit -m "Refresh provider dependency lock"
+          git push origin HEAD:agent/654-provider-wire-truth
