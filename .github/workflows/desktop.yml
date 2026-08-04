@@ -144,6 +144,9 @@ jobs:
       - name: Install desktop dependencies
         working-directory: apps/medusa-desktop
         run: npm ci
+      - name: Run responsive and accessibility frontend acceptance
+        working-directory: apps/medusa-desktop
+        run: npm test
       - name: Build unsigned desktop bundles
         working-directory: apps/medusa-desktop
         env:

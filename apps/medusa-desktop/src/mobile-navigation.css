@@ -1,0 +1,178 @@
+/* Narrow-window acceptance layer.
+   Keep every desktop command reachable without allowing the rail to overlap the workspace. */
+
+@media (max-width: 760px) {
+  .app-shell.medusa-shell {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: auto minmax(0, 1fr);
+  }
+
+  .sidebar {
+    position: relative;
+    z-index: 5;
+    display: flex;
+    flex-direction: row;
+    align-items: center;
+    gap: 6px;
+    width: 100%;
+    min-height: 0;
+    padding: 8px;
+    border-width: 0 0 1px;
+    overflow-x: auto;
+    overflow-y: hidden;
+    background: var(--medusa-panel-solid, #fff);
+    scrollbar-width: thin;
+  }
+
+  .window-dots,
+  .brand-row,
+  .sidebar-spacer,
+  .security-note,
+  .section-label,
+  .projectless-action {
+    display: none;
+  }
+
+  .new-session,
+  .nav-item,
+  .project-picker {
+    flex: 0 0 40px;
+    width: 40px;
+    min-width: 40px;
+    height: 40px;
+    min-height: 40px;
+    justify-content: center;
+    padding: 0;
+  }
+
+  .new-session > span {
+    justify-content: center;
+  }
+
+  .new-session kbd,
+  .project-picker > svg:last-child {
+    display: none;
+  }
+
+  .nav-list,
+  .rail-tools {
+    display: flex;
+    flex: 0 0 auto;
+    gap: 4px;
+  }
+
+  .project-card {
+    flex: 0 0 40px;
+    margin: 0;
+    padding: 0;
+    border: 0;
+  }
+
+  .project-picker {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr);
+    place-items: center;
+  }
+
+  .sidebar .rail-label,
+  .rail-collapsed .sidebar .rail-label {
+    display: block !important;
+    position: absolute !important;
+    width: 1px !important;
+    height: 1px !important;
+    padding: 0 !important;
+    margin: -1px !important;
+    overflow: hidden !important;
+    clip: rect(0, 0, 0, 0) !important;
+    white-space: nowrap !important;
+    border: 0 !important;
+  }
+
+  .workspace.medusa-workspace {
+    grid-row: 2;
+    min-width: 0;
+  }
+
+  .rail-toggle,
+  .inspector {
+    display: none;
+  }
+
+  .medusa-workspace .topbar {
+    min-height: 0;
+    padding: 10px 12px;
+    gap: 8px;
+    align-items: center;
+    flex-wrap: wrap;
+  }
+
+  .topbar-title {
+    min-width: 0;
+    flex: 1 1 180px;
+  }
+
+  .topbar-title > div,
+  .topbar-title h2 {
+    min-width: 0;
+  }
+
+  .topbar-title h2 {
+    max-width: calc(100vw - 48px);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .topbar-actions {
+    width: 100%;
+    min-width: 0;
+    justify-content: space-between;
+    gap: 8px !important;
+  }
+
+  .details-button,
+  .runtime-state {
+    min-width: 0;
+  }
+
+  .runtime-state {
+    white-space: nowrap;
+  }
+
+  .transcript {
+    padding-inline: 12px;
+  }
+
+  .composer-wrap {
+    padding-inline: 8px;
+  }
+
+  .standalone-panel {
+    width: calc(100% - 24px);
+    margin: 12px auto;
+    padding: 16px;
+  }
+}
+
+@media (max-width: 420px) {
+  .sidebar {
+    gap: 4px;
+    padding-inline: 6px;
+  }
+
+  .new-session,
+  .nav-item,
+  .project-picker,
+  .project-card {
+    flex-basis: 36px;
+    width: 36px;
+    min-width: 36px;
+    height: 36px;
+    min-height: 36px;
+  }
+
+  .details-button,
+  .runtime-state {
+    font-size: 0.74rem;
+  }
+}
