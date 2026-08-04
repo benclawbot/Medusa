@@ -159,7 +159,35 @@ fn frontend_request_error(code: String, message: String) -> MedusaError {
 
 /// Starts a daemon loop with production limits and blocks until shutdown.
 pub fn serve(paths: DaemonPaths) -> MedusaResult<()> {
-    serve_with_config(paths, Config::default())
+    let config = load_repository_config(&paths.repo)?;
+    serve_with_config(paths, config)
+}
+
+fn load_repository_config(repo: &Path) -> MedusaResult<Config> {
+    let project = repo.join(".medusa/config.toml");
+    let project = project.exists().then_some(project);
+    Config::load_layers(None, project.as_deref(), &BTreeMap::new(), &BTreeMap::new())
+}
+
+#[cfg(test)]
+mod repository_config_tests {
+    use super::*;
+
+    #[test]
+    fn daemon_loads_repository_agent_limits() {
+        let directory = tempfile::tempdir().expect("tempdir");
+        let medusa = directory.path().join(".medusa");
+        fs::create_dir_all(&medusa).expect("create .medusa");
+        fs::write(
+            medusa.join("config.toml"),
+            "[agent]\nmax_turns = 24\nparallel_workers = 1\n",
+        )
+        .expect("write project config");
+
+        let config = load_repository_config(directory.path()).expect("load repository config");
+        assert_eq!(config.agent.max_turns, 24);
+        assert_eq!(config.agent.parallel_workers, 1);
+    }
 }
 
 /// Starts a daemon loop with production limits and an explicit resolved configuration.
@@ -169,7 +197,8 @@ pub fn serve_with_config(paths: DaemonPaths, config: Config) -> MedusaResult<()>
 
 /// Starts a daemon loop with explicit worker and queue limits.
 pub fn serve_with_limits(paths: DaemonPaths, limits: DaemonLimits) -> MedusaResult<()> {
-    serve_with_limits_and_config(paths, limits, Config::default())
+    let config = load_repository_config(&paths.repo)?;
+    serve_with_limits_and_config(paths, limits, config)
 }
 
 fn serve_with_limits_and_config(
