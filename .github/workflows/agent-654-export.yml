@@ -1,0 +1,38 @@
+name: Agent 654 Export Runtime Authority
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+    paths:
+      - scripts/export-agent-654-runtime-authority.py
+      - .github/workflows/agent-654-export.yml
+
+permissions:
+  contents: read
+
+jobs:
+  export:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: dtolnay/rust-toolchain@39b0b3842c7e8bbf6904c0bfc3d9006fdd4dc4e0 # 1.88.0
+        with:
+          components: rustfmt
+      - name: Apply runtime authority patch
+        run: python3 scripts/export-agent-654-runtime-authority.py
+      - name: Format exported Rust sources
+        run: cargo fmt --all
+      - name: Verify exported patch is clean
+        run: git diff --check
+      - name: Package exported files
+        run: |
+          mkdir -p agent-654-export/crates/medusa-runtime/src agent-654-export/docs/architecture
+          cp crates/medusa-runtime/src/lib.rs agent-654-export/crates/medusa-runtime/src/lib.rs
+          cp crates/medusa-runtime/src/mutation_transaction.rs agent-654-export/crates/medusa-runtime/src/mutation_transaction.rs
+          cp docs/architecture/LEGACY-DELETION.md agent-654-export/docs/architecture/LEGACY-DELETION.md
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: agent-654-runtime-authority
+          path: agent-654-export
+          if-no-files-found: error
