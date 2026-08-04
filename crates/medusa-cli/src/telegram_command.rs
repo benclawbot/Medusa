@@ -119,8 +119,7 @@ pub fn run(repo: &Path, args: TelegramArgs) -> MedusaResult<()> {
     fs::create_dir_all(repo.join(".medusa/telegram"))?;
     env::set_current_dir(repo)?;
 
-    let token = TelegramBotToken::new(read_secret(&args.token_env)?)
-        .map_err(telegram_error)?;
+    let token = TelegramBotToken::new(read_secret(&args.token_env)?).map_err(telegram_error)?;
     let client = TelegramBotApiClient::new(token).map_err(telegram_error)?;
     let bot_username = match args.bot_username.as_deref() {
         Some(value) => value.trim().trim_start_matches('@').to_owned(),
@@ -147,8 +146,8 @@ pub fn run(repo: &Path, args: TelegramArgs) -> MedusaResult<()> {
     daemon.ensure_running()?;
     let control = TelegramControl::from(daemon.client());
     let state_path = resolve_path(repo, &args.state_path);
-    let service = TelegramSessionService::load(state_path, gateway, control)
-        .map_err(telegram_error)?;
+    let service =
+        TelegramSessionService::load(state_path, gateway, control).map_err(telegram_error)?;
     let mut runtime = TelegramPollingRuntime::new(
         client.clone(),
         service,
@@ -162,8 +161,7 @@ pub fn run(repo: &Path, args: TelegramArgs) -> MedusaResult<()> {
 
     if telegram_config.voice.mode != TelegramVoiceMode::Off {
         let pipeline = TelegramVoicePipeline::new(
-            OpenAiAudioToken::new(read_secret(&args.openai_token_env)?)
-                .map_err(telegram_error)?,
+            OpenAiAudioToken::new(read_secret(&args.openai_token_env)?).map_err(telegram_error)?,
             args.openai_api_base,
             args.transcription_model,
             args.tts_model,
@@ -187,8 +185,12 @@ pub fn run(repo: &Path, args: TelegramArgs) -> MedusaResult<()> {
             let public_url = args
                 .webhook_public_url
                 .filter(|value| value.starts_with("https://"))
-                .ok_or_else(|| invalid("webhook transport requires --webhook-public-url https://..."))?;
-            let secret_token = webhook_secret.expect("validated webhook secret");
+                .ok_or_else(|| {
+                    invalid("webhook transport requires --webhook-public-url https://...")
+                })?;
+            let secret_token = webhook_secret.ok_or_else(|| {
+                invalid("webhook transport requires a configured webhook secret")
+            })?;
             let server = TelegramWebhookServer::bind(TelegramWebhookConfig {
                 bind: args.webhook_bind,
                 path: args.webhook_path,
@@ -263,8 +265,11 @@ fn read_secret(name: &str) -> MedusaResult<String> {
     {
         return Err(invalid("secret environment variable name is invalid"));
     }
-    let value = env::var(name)
-        .map_err(|_| environment(format!("required secret environment variable {name} is not set")))?;
+    let value = env::var(name).map_err(|_| {
+        environment(format!(
+            "required secret environment variable {name} is not set"
+        ))
+    })?;
     if value.trim().is_empty() {
         return Err(environment(format!(
             "required secret environment variable {name} is empty"
