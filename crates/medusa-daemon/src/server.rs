@@ -135,6 +135,24 @@ impl DaemonClient {
         }
     }
 
+    /// Exports one verified bounded artifact for a remote frontend delivery adapter.
+    pub fn frontend_artifact_export(
+        &self,
+        artifact_id: &str,
+    ) -> MedusaResult<crate::FrontendArtifactExport> {
+        match self.request(Request::FrontendArtifactExport {
+            artifact_id: artifact_id.to_owned(),
+        })? {
+            Response::FrontendArtifactExport { artifact } => Ok(artifact),
+            Response::Error { code, message } => Err(frontend_request_error(code, message)),
+            response => Err(MedusaError::new(
+                ErrorCode::InternalInvariant,
+                ErrorCategory::Internal,
+                format!("daemon returned an unexpected artifact export response: {response:?}"),
+            )),
+        }
+    }
+
     /// Updates one process-local daemon credential without persisting it in protocol evidence.
     pub fn frontend_credential(&self, update: FrontendCredentialUpdate) -> MedusaResult<()> {
         match self.request(Request::FrontendCredential { update })? {
@@ -544,6 +562,16 @@ fn dispatch(
                     },
                 },
             )
+        }
+        Request::FrontendArtifactExport { artifact_id } => {
+            let control = lock_frontend(frontend)?;
+            Ok(match control.export_attachment(&artifact_id) {
+                Ok(artifact) => Response::FrontendArtifactExport { artifact },
+                Err(error) => Response::Error {
+                    code: "frontend_artifact_export".to_owned(),
+                    message: error.to_string(),
+                },
+            })
         }
         Request::FrontendCredential { update } => {
             let mut control = lock_frontend(frontend)?;

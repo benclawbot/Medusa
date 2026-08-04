@@ -36,12 +36,24 @@ pub struct FrontendArtifactInput {
     pub bytes: Vec<u8>,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Deserialize, Eq, PartialEq, Serialize)]
 pub struct FrontendArtifactExport {
     pub display_name: String,
     pub mime_type: Option<String>,
     pub kind: FrontendArtifactKind,
     pub bytes: Vec<u8>,
+}
+
+impl std::fmt::Debug for FrontendArtifactExport {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("FrontendArtifactExport")
+            .field("display_name", &self.display_name)
+            .field("mime_type", &self.mime_type)
+            .field("kind", &self.kind)
+            .field("bytes", &format_args!("<{} bytes>", self.bytes.len()))
+            .finish()
+    }
 }
 
 #[derive(Clone, Debug)]

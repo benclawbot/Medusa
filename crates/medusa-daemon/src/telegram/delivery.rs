@@ -10,11 +10,9 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use time::{Duration, OffsetDateTime};
 
-use crate::FrontendControlPlane;
-
 use super::{
-    TelegramAction, TelegramButtonIntent, TelegramGateway, TelegramMessageSlot, TelegramParseMode,
-    TelegramRenderButton, TelegramSessionServiceError,
+    TelegramAction, TelegramButtonIntent, TelegramControl, TelegramGateway, TelegramMessageSlot,
+    TelegramParseMode, TelegramRenderButton, TelegramSessionServiceError,
     bot_api::{
         TelegramBotApiClient, TelegramBotInlineButton, TelegramBotParseMode,
         TelegramEditMessageOutcome, TelegramEditMessageText, TelegramInlineKeyboardMarkup,
@@ -45,7 +43,7 @@ impl TelegramDeliveryState {
 pub(super) fn execute_actions(
     client: &TelegramBotApiClient,
     gateway: &mut TelegramGateway,
-    control: &FrontendControlPlane,
+    control: &TelegramControl,
     identity: &TelegramIdentity,
     session_id: &str,
     turn_id: Option<&str>,
@@ -75,7 +73,7 @@ pub(super) fn execute_actions(
 fn execute_action(
     client: &TelegramBotApiClient,
     gateway: &mut TelegramGateway,
-    control: &FrontendControlPlane,
+    control: &TelegramControl,
     identity: &TelegramIdentity,
     session_id: &str,
     turn_id: Option<&str>,

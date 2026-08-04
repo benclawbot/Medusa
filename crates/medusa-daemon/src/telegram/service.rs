@@ -20,16 +20,13 @@ use thiserror::Error;
 
 use super::bot_api::TelegramOutboundFile;
 
-use crate::{
-    FrontendCommandAcknowledgement, FrontendControlError, FrontendControlPlane,
-    FrontendControlResult, LiveSessionReplayView,
-};
+use crate::{FrontendCommandAcknowledgement, FrontendControlResult, LiveSessionReplayView};
 
 use super::{
-    TelegramAction, TelegramChatKind, TelegramDeliveryState, TelegramGateway, TelegramGatewayError,
-    TelegramIdentity, TelegramInboundAction, TelegramInboundMessage, TelegramMessageSlot,
-    TelegramMiniAppBridge, TelegramMiniAppCommand, TelegramRenderer, TelegramVoiceMode,
-    TelegramVoicePipeline, ToolProgressMode,
+    TelegramAction, TelegramChatKind, TelegramControl, TelegramControlError, TelegramDeliveryState,
+    TelegramGateway, TelegramGatewayError, TelegramIdentity, TelegramInboundAction,
+    TelegramInboundMessage, TelegramMessageSlot, TelegramMiniAppBridge, TelegramMiniAppCommand,
+    TelegramRenderer, TelegramVoiceMode, TelegramVoicePipeline, ToolProgressMode,
     bot_api::{TelegramBotApiClient, TelegramUpdateCursor},
     callback::CallbackStore,
     delivery::execute_actions,
@@ -256,7 +253,7 @@ pub enum TelegramServiceOutcome {
 pub struct TelegramSessionService {
     path: PathBuf,
     gateway: TelegramGateway,
-    control: FrontendControlPlane,
+    control: TelegramControl,
     state: TelegramServiceState,
     attached_clients: BTreeSet<String>,
     mini_app_bridge: Option<TelegramMiniAppBridge>,
@@ -266,7 +263,7 @@ impl TelegramSessionService {
     pub fn load(
         path: impl Into<PathBuf>,
         gateway: TelegramGateway,
-        control: FrontendControlPlane,
+        control: impl Into<TelegramControl>,
     ) -> Result<Self, TelegramSessionServiceError> {
         let path = path.into();
         let state = if path.is_file() {
@@ -283,7 +280,7 @@ impl TelegramSessionService {
         Ok(Self {
             path,
             gateway,
-            control,
+            control: control.into(),
             state,
             attached_clients: BTreeSet::new(),
             mini_app_bridge: None,
@@ -689,7 +686,12 @@ impl TelegramSessionService {
         if self.attached_clients.contains(&binding.client_id) {
             return self
                 .control
-                .replay_events(&binding.client_id, binding.acknowledged_cursor)
+                .replay_events(
+                    &binding.client_id,
+                    session_id,
+                    binding.acknowledged_cursor,
+                    now,
+                )
                 .map_err(Into::into);
         }
         let stable = format!(
@@ -1138,7 +1140,7 @@ pub enum TelegramSessionServiceError {
     #[error(transparent)]
     Gateway(#[from] TelegramGatewayError),
     #[error(transparent)]
-    Control(#[from] FrontendControlError),
+    Control(#[from] TelegramControlError),
     #[error(transparent)]
     BotApi(#[from] super::bot_api::TelegramBotApiError),
     #[error(transparent)]
@@ -1158,6 +1160,7 @@ mod tests {
     use time::macros::datetime;
 
     use super::*;
+    use crate::FrontendControlPlane;
     use crate::telegram::{TelegramChatKind, TelegramConfig};
 
     struct UnusedProvider;
