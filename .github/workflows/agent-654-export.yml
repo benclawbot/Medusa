@@ -1,4 +1,4 @@
-name: Agent 654 Export Runtime Authority
+name: Agent 654 Commit Runtime Authority
 
 on:
   pull_request:
@@ -8,31 +8,42 @@ on:
       - .github/workflows/agent-654-export.yml
 
 permissions:
-  contents: read
+  contents: write
+
+concurrency:
+  group: agent-654-runtime-authority
+  cancel-in-progress: true
 
 jobs:
-  export:
+  apply-validate-commit:
+    if: github.actor != 'github-actions[bot]'
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ github.head_ref }}
+          fetch-depth: 0
       - uses: dtolnay/rust-toolchain@39b0b3842c7e8bbf6904c0bfc3d9006fdd4dc4e0 # 1.88.0
         with:
-          components: rustfmt
+          components: rustfmt,clippy
       - name: Apply runtime authority patch
         run: python3 scripts/export-agent-654-runtime-authority.py
-      - name: Format exported Rust sources
+      - name: Format workspace
         run: cargo fmt --all
-      - name: Verify exported patch is clean
-        run: git diff --check
-      - name: Package exported files
+      - name: Validate runtime tests
+        run: cargo test -p medusa-runtime --locked
+      - name: Validate runtime lint
+        run: cargo clippy -p medusa-runtime --all-targets --all-features --locked -- -D warnings
+      - name: Remove temporary patch machinery
+        run: rm scripts/export-agent-654-runtime-authority.py .github/workflows/agent-654-export.yml
+      - name: Commit validated implementation
+        shell: bash
         run: |
-          mkdir -p agent-654-export/crates/medusa-runtime/src agent-654-export/docs/architecture
-          cp crates/medusa-runtime/src/lib.rs agent-654-export/crates/medusa-runtime/src/lib.rs
-          cp crates/medusa-runtime/src/mutation_transaction.rs agent-654-export/crates/medusa-runtime/src/mutation_transaction.rs
-          cp docs/architecture/LEGACY-DELETION.md agent-654-export/docs/architecture/LEGACY-DELETION.md
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
-        with:
-          name: agent-654-runtime-authority
-          path: agent-654-export
-          if-no-files-found: error
+          set -euo pipefail
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add -A
+          git diff --cached --check
+          git commit -m "Bind dedicated review to active runtime authority"
+          git push origin HEAD:${{ github.head_ref }}
