@@ -10,7 +10,8 @@ use medusa_agent::{AgentSession, authoritative_verification_for_components_at};
 use medusa_evidence::{ChangedComponent, VerificationReceipt, changed_scope_fingerprint};
 use medusa_provider::{MessageBlock, Role};
 use medusa_review_model::{
-    PARENT_REVIEW_RESPONSE_REQUIREMENT, parse_parent_review_response,
+    PARENT_REVIEW_RESPONSE_REQUIREMENT, ParentReviewOutcome, ParentReviewResponse,
+    ParentReviewResponseError, final_parent_review_line, validate_parent_review_response,
 };
 pub use medusa_review_model::ParentReviewDecision;
 pub(crate) use medusa_review_model::PARENT_REVIEW_TURN_INSTRUCTION;
@@ -248,7 +249,7 @@ impl MutationTransaction {
     ) -> Result<ParentReviewDecision, String> {
         let text = latest_assistant_text(session)
             .ok_or_else(|| "parent reviewer produced no assistant text".to_owned())?;
-        let outcome = parse_parent_review_response(&text).map_err(|error| error.to_string())?;
+        let outcome = decode_parent_review_response(&text)?;
         self.record_review_decision(outcome.decision, outcome.rationale, session.id.as_str())
     }
 
@@ -883,6 +884,14 @@ fn latest_assistant_text(session: &AgentSession) -> Option<String> {
     })
 }
 
+fn decode_parent_review_response(text: &str) -> Result<ParentReviewOutcome, String> {
+    let final_line = final_parent_review_line(text).map_err(|error| error.to_string())?;
+    let response: ParentReviewResponse = serde_json::from_str(final_line).map_err(|error| {
+        ParentReviewResponseError::InvalidEnvelope(error.to_string()).to_string()
+    })?;
+    validate_parent_review_response(response, final_line).map_err(|error| error.to_string())
+}
+
 fn transaction_fingerprint(state: &MutationTransactionSnapshot) -> String {
     let mut canonical = state.clone();
     canonical.fingerprint.clear();
@@ -1012,6 +1021,29 @@ mod tests {
             worktree_verification_receipt: worktree_verification.receipt,
         };
         (directory, repo, manager, input)
+    }
+
+    #[test]
+    fn typed_parent_review_envelope_is_required_at_runtime_boundary() {
+        let accepted = decode_parent_review_response(
+            "The prepared patch is correct.\n{\"schema_version\":1,\"decision\":\"accepted\",\"rationale\":\"exact patch and evidence agree\"}",
+        )
+        .expect("typed response");
+        assert_eq!(accepted.decision, ParentReviewDecision::Accepted);
+        assert_eq!(accepted.response_fingerprint.len(), 64);
+
+        assert!(decode_parent_review_response(
+            "MEDUSA_REVIEW_ACCEPTED: exact patch and evidence agree"
+        )
+        .is_err());
+        assert!(decode_parent_review_response(
+            "{\"schema_version\":1,\"decision\":\"accepted\",\"rationale\":\"ok\",\"extra\":true}"
+        )
+        .is_err());
+        assert!(decode_parent_review_response(
+            "{\"schema_version\":1,\"decision\":\"accepted\",\"rationale\":\"ok\"}\ntrailing"
+        )
+        .is_err());
     }
 
     #[test]
