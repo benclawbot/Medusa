@@ -33,7 +33,10 @@ pub struct ProviderHealthStore {
 #[derive(Clone)]
 enum StoreBackend {
     Memory(Arc<Mutex<ProviderRuntimeState>>),
-    File { state_path: PathBuf, lock_path: PathBuf },
+    File {
+        state_path: PathBuf,
+        lock_path: PathBuf,
+    },
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -98,10 +101,11 @@ impl ProviderHealthStore {
 
     pub fn last_completed_provider(&self) -> MedusaResult<Option<usize>> {
         self.read_state(|state| {
-            state
-                .last_completed_route
-                .as_ref()
-                .and_then(|key| self.route_keys.iter().position(|candidate| candidate == key))
+            state.last_completed_route.as_ref().and_then(|key| {
+                self.route_keys
+                    .iter()
+                    .position(|candidate| candidate == key)
+            })
         })
     }
 
@@ -197,22 +201,26 @@ impl ProviderHealthStore {
     }
 
     fn key(&self, index: usize) -> MedusaResult<&str> {
-        self.route_keys.get(index).map(String::as_str).ok_or_else(|| {
-            store_error(format!("provider route index {index} is not configured"))
-        })
+        self.route_keys
+            .get(index)
+            .map(String::as_str)
+            .ok_or_else(|| store_error(format!("provider route index {index} is not configured")))
     }
 
     fn profile(&self, index: usize) -> MedusaResult<&ProviderRouteProfile> {
-        self.profiles.get(index).ok_or_else(|| {
-            store_error(format!("provider route profile {index} is not configured"))
-        })
+        self.profiles
+            .get(index)
+            .ok_or_else(|| store_error(format!("provider route profile {index} is not configured")))
     }
 
     fn read_state<T>(&self, read: impl FnOnce(&ProviderRuntimeState) -> T) -> MedusaResult<T> {
         self.with_state(|state| read(state))
     }
 
-    fn with_state<T>(&self, update: impl FnOnce(&mut ProviderRuntimeState) -> T) -> MedusaResult<T> {
+    fn with_state<T>(
+        &self,
+        update: impl FnOnce(&mut ProviderRuntimeState) -> T,
+    ) -> MedusaResult<T> {
         match &self.backend {
             StoreBackend::Memory(state) => {
                 let mut state = state
@@ -286,7 +294,8 @@ fn load_state(path: &Path) -> MedusaResult<ProviderRuntimeState> {
         return Ok(ProviderRuntimeState::default());
     }
     let bytes = fs::read(path).map_err(store_io_error)?;
-    let state: ProviderRuntimeState = serde_json::from_slice(&bytes).map_err(serialization_error)?;
+    let state: ProviderRuntimeState =
+        serde_json::from_slice(&bytes).map_err(serialization_error)?;
     if state.schema_version != STORE_SCHEMA_VERSION {
         return Err(store_error(format!(
             "unsupported provider runtime state schema {}",
@@ -423,9 +432,15 @@ mod tests {
         let second = ProviderHealthStore::at(directory.path(), &profiles).expect("second store");
         assert_eq!(second.health().expect("health")[0].attempts, 1);
         assert_eq!(second.health().expect("health")[0].successes, 1);
-        assert_eq!(second.last_completed_provider().expect("last provider"), Some(0));
         assert_eq!(
-            second.execution_status().expect("execution status").expect("snapshot")["model"],
+            second.last_completed_provider().expect("last provider"),
+            Some(0)
+        );
+        assert_eq!(
+            second
+                .execution_status()
+                .expect("execution status")
+                .expect("snapshot")["model"],
             json!("gpt-5")
         );
     }
@@ -433,12 +448,15 @@ mod tests {
     #[test]
     fn changed_route_profile_does_not_reuse_old_health() {
         let directory = tempfile::tempdir().expect("temporary profile root");
-        let first = ProviderHealthStore::at(directory.path(), &[profile("gpt-5")])
-            .expect("first store");
+        let first =
+            ProviderHealthStore::at(directory.path(), &[profile("gpt-5")]).expect("first store");
         first.record_attempt(0).expect("record attempt");
 
-        let second = ProviderHealthStore::at(directory.path(), &[profile("gpt-6")])
-            .expect("second store");
-        assert_eq!(second.health().expect("health"), vec![ProviderHealth::default()]);
+        let second =
+            ProviderHealthStore::at(directory.path(), &[profile("gpt-6")]).expect("second store");
+        assert_eq!(
+            second.health().expect("health"),
+            vec![ProviderHealth::default()]
+        );
     }
 }
