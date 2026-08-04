@@ -4,10 +4,13 @@
 from __future__ import annotations
 
 import importlib.util
+import os
 import sys
 import tempfile
 from pathlib import Path
 
+
+MIN_SEQUENTIAL_TIMEOUT_SECONDS = 1800
 
 ORIGINAL_OBJECTIVE = '''        objective = (
             "Inspect this repository and repair all three product defects without modifying "
@@ -75,6 +78,10 @@ def main() -> int:
         sys.modules[spec.name] = module
         spec.loader.exec_module(module)
         module.PARALLEL_WORKERS = 1
+        configured_timeout = int(os.environ.get("LIVE_E2E_TIMEOUT_SECONDS", "0"))
+        os.environ["LIVE_E2E_TIMEOUT_SECONDS"] = str(
+            max(configured_timeout, MIN_SEQUENTIAL_TIMEOUT_SECONDS)
+        )
         return module.main()
     finally:
         if temporary_path is not None:
