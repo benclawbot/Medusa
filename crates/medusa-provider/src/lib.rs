@@ -3,6 +3,7 @@
 mod anthropic;
 mod configured;
 mod contracts;
+mod health_store;
 mod http;
 mod manager;
 mod openai;
@@ -13,6 +14,7 @@ pub use contracts::{
     ImageSource, Message, MessageBlock, ModelProvider, ModelRequest, ModelResponse,
     ProviderCapabilities, ResponseBlock, Role, ToolDefinition, Usage,
 };
+pub use health_store::ProviderHealthStore;
 pub use manager::{ProviderHealth, ProviderManager, ProviderRouteProfile, RouteRetryPolicy};
 pub use openai::OpenAiProvider;
 
