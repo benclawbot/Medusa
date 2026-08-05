@@ -142,7 +142,9 @@ fn nearest_named_file(repository_root: &Path, start: &Path, names: &[&str]) -> O
         if directory == repository_root {
             break;
         }
-        current = directory.parent().filter(|parent| parent.starts_with(repository_root));
+        current = directory
+            .parent()
+            .filter(|parent| parent.starts_with(repository_root));
     }
     None
 }
@@ -239,7 +241,12 @@ mod tests {
                 .expect("config")
                 .ends_with("packages/app/tsconfig.json")
         );
-        assert!(workspace.package_root.expect("package").ends_with("packages/app"));
+        assert!(
+            workspace
+                .package_root
+                .expect("package")
+                .ends_with("packages/app")
+        );
         assert_eq!(workspace.source_count, 1);
         assert_eq!(workspace.server_config().args, vec!["--stdio"]);
     }
@@ -250,7 +257,10 @@ mod tests {
         let outside = tempfile::tempdir().expect("outside");
         let error = discover_typescript_workspace(repository.path(), outside.path())
             .expect_err("outside target must fail");
-        assert!(matches!(error, TypeScriptWorkspaceError::OutsideRepository(_)));
+        assert!(matches!(
+            error,
+            TypeScriptWorkspaceError::OutsideRepository(_)
+        ));
     }
 
     #[test]
@@ -258,21 +268,30 @@ mod tests {
         let repository = tempfile::tempdir().expect("repository");
         write(&repository.path().join("package.json"), "{}");
         write(&repository.path().join("src/main.ts"), "export {};\n");
-        write(&repository.path().join("node_modules/pkg/index.ts"), "export {};\n");
+        write(
+            &repository.path().join("node_modules/pkg/index.ts"),
+            "export {};\n",
+        );
         write(&repository.path().join("dist/bundle.js"), "export {};\n");
-        write(&repository.path().join("generated/client.ts"), "export {};\n");
+        write(
+            &repository.path().join("generated/client.ts"),
+            "export {};\n",
+        );
         write(&repository.path().join("src/types.d.ts"), "export {};\n");
         write(&repository.path().join("src/vendor.min.js"), "export {};\n");
 
-        let workspace = discover_typescript_workspace(repository.path(), repository.path())
-            .expect("workspace");
+        let workspace =
+            discover_typescript_workspace(repository.path(), repository.path()).expect("workspace");
         assert_eq!(workspace.source_count, 1);
     }
 
     #[test]
     fn root_fallback_is_deterministic_without_config_or_package() {
         let repository = tempfile::tempdir().expect("repository");
-        write(&repository.path().join("src/main.js"), "module.exports = {};\n");
+        write(
+            &repository.path().join("src/main.js"),
+            "module.exports = {};\n",
+        );
         let workspace = discover_typescript_workspace(
             repository.path(),
             &repository.path().join("src/main.js"),
