@@ -69,7 +69,7 @@ repository = "https://github.com/benclawbot/Medusa"
 
 [workspace.metadata.medusa]
 production_execution_model = "bounded-teammates-with-worktree-isolated-mutation"
-production_entrypoint = "medusa-runtime::RuntimeController -> run_prompt -> multi_agent_coordinator::run_preflight -> mutating_worker_coordinator::run_implementation when required -> read-only parent medusa-agent::AgentEngine"
+production_entrypoint = "medusa-runtime::RuntimeController -> run_prompt -> multi_agent_coordinator::run_preflight -> mutating_worker_coordinator::run_implementation when required -> typed worktree verification -> dedicated durable parent reviewer -> independent verification -> authorization -> integration -> reconciliation -> canonical terminal persistence"
 orchestration_planning = "production runtime path; task contracts drive durable read-only preflight and worktree-isolated implementer execution"
 subagent_delegation = "production; bounded read-only planner and risk-reviewer teammates plus one worktree-isolated implementer contract for explicit mutation objectives"
 verification_gate = "typed-evidence-and-changed-component-authority"
