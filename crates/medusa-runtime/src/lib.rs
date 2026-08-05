@@ -1494,6 +1494,14 @@ fn run_prompt(
                             )
                             .map_err(RuntimeError::agent)?;
                             session.completed = true;
+                            medusa_agent::record_session_event(
+                                &mut session,
+                                Actor::Coordinator,
+                                EventPayload::SessionCompleted {
+                                    report_ref: format!("commit:{}", receipt.commit),
+                                },
+                            )
+                            .map_err(RuntimeError::agent)?;
                             let _ = events.send(RuntimeEvent::AssistantText(completion_text));
                             result = Ok(RuntimeEvent::Completed {
                                 session_id: session.id.to_string(),
@@ -1650,6 +1658,55 @@ mod mutation_completion_tests {
             text,
             "Verified and integrated commit `abc123`. Changed paths: src/lib.rs."
         );
+    }
+
+    #[test]
+    fn durable_completion_event_marks_the_session_completed() {
+        use medusa_agent::AgentSession;
+        use medusa_core::SessionId;
+        use medusa_protocol::{Actor, EventPayload};
+        use time::OffsetDateTime;
+
+        let directory = tempfile::tempdir().expect("temporary repository");
+        let mut session = AgentSession {
+            id: SessionId::new(),
+            objective: "durable mutation completion".to_owned(),
+            repo: directory.path().to_path_buf(),
+            created_at: OffsetDateTime::UNIX_EPOCH,
+            updated_at: OffsetDateTime::UNIX_EPOCH,
+            completed: false,
+            turn: 0,
+            plan: Vec::new(),
+            pending_question: None,
+            messages: Vec::new(),
+            events: Vec::new(),
+            evidence: Vec::new(),
+            tool_artifacts: Vec::new(),
+            world_model: None,
+            approval_grants: Vec::new(),
+            approval_receipts: Vec::new(),
+            rollback_receipts: Vec::new(),
+        };
+        session.completed = true;
+        medusa_agent::record_session_event(
+            &mut session,
+            Actor::Coordinator,
+            EventPayload::SessionCompleted {
+                report_ref: "commit:abc123".to_owned(),
+            },
+        )
+        .expect("persist completion");
+
+        let persisted = medusa_agent::session_browser::load_session(
+            directory.path(),
+            session.id.as_str(),
+        )
+        .expect("reload completed session");
+        assert!(persisted.completed);
+        assert!(matches!(
+            persisted.events.last().map(|event| &event.payload),
+            Some(EventPayload::SessionCompleted { report_ref }) if report_ref == "commit:abc123"
+        ));
     }
 }
 
