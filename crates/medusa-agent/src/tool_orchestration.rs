@@ -103,6 +103,21 @@ pub(crate) fn registry() -> BTreeMap<&'static str, ToolCapability> {
         },
     );
     registry.insert(
+        "semantic_capabilities",
+        ToolCapability {
+            name: "semantic_capabilities".into(),
+            capability: "language_capability_report".into(),
+            risk: RiskClass::ReadOnly,
+            latency_weight: 1,
+            token_weight: 4,
+            cacheable: true,
+            concurrent: true,
+            fallback: None,
+            expected_output_bytes: 8 * 1024,
+            escalation: EscalationPolicy::Direct,
+        },
+    );
+    registry.insert(
         "code_index",
         ToolCapability {
             name: "code_index".into(),

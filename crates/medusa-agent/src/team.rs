@@ -105,6 +105,7 @@ impl AgentExecutionPolicy {
         let mut allowed = BTreeSet::from([
             "fs_read".to_owned(),
             "search_text".to_owned(),
+            "semantic_capabilities".to_owned(),
             "code_index".to_owned(),
             "web_search".to_owned(),
             "web_fetch".to_owned(),

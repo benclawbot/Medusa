@@ -1,4 +1,4 @@
-# Explicit GitHub and self-improvement capabilities
+# Explicit production capabilities
 
 `medusa-capabilities` is the shared authority for capability discovery, permission grants, explicit approvals, diagnostics, and audit events used by the CLI, TUI, desktop runtime, and agent prompt context.
 
@@ -73,3 +73,9 @@ Changes to policy, sandbox, approval, credential, capability, hardening, workflo
 ## Diagnostics
 
 The shared capability matrix exposes both `GitHub` and `Self-improvement`, including availability details. Runtime diagnostics also expose capability descriptors and the ordered authorization audit trail. `medusa-capabilities [repository]` remains backward-compatible and emits these diagnostics as JSON; `MEDUSA_GITHUB_REPOSITORY` selects the GitHub repository identity used by diagnostics.
+
+## Code intelligence
+
+The registry exposes a dedicated `CodeIntelligence` capability for the production `semantic_capabilities`, `code_index`, and guarded `symbol_rename` tools. The capability report distinguishes production, partial, and unavailable levels independently for text search, parsed symbols, definitions, references, diagnostics, workspace symbols, and guarded refactoring.
+
+TypeScript/JavaScript LSP normalization remains below the production boundary until a server lifecycle, dependency probe, dispatcher, freshness contract, and v2 mutation transaction are certified. It is therefore reported as text-only rather than as full indexing. See [Code-intelligence capability levels](CODE-INTELLIGENCE-CAPABILITIES.md).
