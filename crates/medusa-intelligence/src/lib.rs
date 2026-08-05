@@ -27,6 +27,7 @@ mod structured_transaction;
 mod support;
 mod symbol_impact;
 mod symbol_table;
+mod typescript_workspace;
 
 pub use ast::{ParseDiagnostic, RustAstDocument, RustAstNode, SourcePosition, SourceRange};
 pub use call_graph::{RustCallEdge, RustCallGraph};
@@ -80,6 +81,9 @@ pub use structured_transaction::{
 pub use symbol_impact::{RustImpactFile, RustSymbolImpact, analyze_rust_symbol_impact};
 pub use symbol_table::{
     RustScope, RustScopeKind, RustSymbol, RustSymbolId, RustSymbolKind, RustSymbolTable,
+};
+pub use typescript_workspace::{
+    TypeScriptWorkspace, TypeScriptWorkspaceError, discover_typescript_workspace,
 };
 
 #[cfg(test)]
