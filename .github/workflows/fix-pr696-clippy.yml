@@ -1,0 +1,38 @@
+name: Fix PR 696 Clippy
+
+on:
+  push:
+    branches:
+      - codex/656-typescript-lsp-production
+    paths:
+      - .github/workflows/fix-pr696-clippy.yml
+
+permissions:
+  contents: write
+
+jobs:
+  fix:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      - name: Apply exact Clippy correction
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          from pathlib import Path
+          path = Path('crates/medusa-intelligence/src/typescript_workspace.rs')
+          text = path.read_text()
+          old = 'std::io::Error::new(std::io::ErrorKind::Other, "walkdir error")'
+          new = 'std::io::Error::other("walkdir error")'
+          if text.count(old) != 1:
+              raise SystemExit(f'expected one Clippy target, found {text.count(old)}')
+          path.write_text(text.replace(old, new))
+          PY
+          rm .github/workflows/fix-pr696-clippy.yml
+          git diff --check
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git commit -m "Use idiomatic I/O error construction"
+          git push origin HEAD:codex/656-typescript-lsp-production
