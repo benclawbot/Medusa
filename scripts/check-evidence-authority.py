@@ -19,7 +19,7 @@ checks = {
     "accessibility behavior is inspected": "unlabeled_controls" in read("crates/medusa-agent/src/verification.rs"),
     "worker preserves git change kinds": "commit_changed_components" in read("crates/medusa-workers/src/lib.rs"),
     "isolated implementation uses authority": "authoritative_verification_for_components_at" in read("crates/medusa-runtime/src/mutating_worker_coordinator.rs"),
-    "independent verification uses authority": "authoritative_verification_for_components_at" in read("crates/medusa-runtime/src/mutation_transaction_legacy.rs"),
+    "independent verification uses authority": "authoritative_verification_for_components_at" in read("crates/medusa-runtime/src/mutation_transaction_state.rs"),
     "dedicated review enters independent verification": "verify_independently(repo)" in read("crates/medusa-runtime/src/parent_reviewer.rs"),
     "scheduler validates evidence dependencies": "succeed_with_evidence" in read("crates/medusa-multi-agent-scheduler/src/lib.rs"),
     "coarse verifier deleted": "targeted_verification" not in read("crates/medusa-agent/src/verification.rs"),

@@ -31,7 +31,7 @@ A migration slice is incomplete until its superseded v1 path is removed or has a
 ## Known-defect deletion targets
 
 - [ ] #631: remove browser tool advertisement without dispatch, or replace it with certified dispatch and permission evidence.
-- [ ] #632: remove integration-before-review ordering and any recovery path that assumes it.
+- [x] #632: remove integration-before-review ordering and any recovery path that assumes it.
 - [ ] #633: remove verification APIs and receipts that omit changed paths.
 - [ ] #634: remove decorative task, worker, reviewer, or verifier projections without durable execution evidence.
 - [x] #636: remove provider capability, cancellation, fallback, and readiness paths that disagree with wire behavior.
@@ -51,7 +51,7 @@ A migration slice is incomplete until its superseded v1 path is removed or has a
 - Reconciled mutations persist the completed session snapshot and canonical `SessionCompleted` event before emitting process-local completion, so CLI, TUI, daemon, desktop, and remote projections observe the same terminal state and headless runs exit without timeout.
 - A reload regression proves the completed snapshot and commit-referenced terminal receipt survive process restart.
 - The obsolete conversational review instruction and implementer-to-parent context formatter have been removed from production code.
-- Remaining #632 deletion target: remove the quarantined compatibility parser after recovery fixtures migrate to the dedicated journal path.
+- The quarantined conversational parser, `AgentSession` review adapter, duplicate completion helper, legacy module name, and free-form marker boundary test have been deleted. The surviving durable mutation state machine is explicitly named `mutation_transaction_state.rs`; typed response validation and failure journals are owned only by the dedicated reviewer.
 
 ### Provider deletion receipt (#636)
 
