@@ -1,0 +1,100 @@
+diff --git a/crates/medusa-runtime/src/support.rs b/crates/medusa-runtime/src/support.rs
+index 4b09bec..3d1f14a 100644
+--- a/crates/medusa-runtime/src/support.rs
++++ b/crates/medusa-runtime/src/support.rs
+@@ -537,6 +537,8 @@ pub(super) fn tool_title(tool: &str, arguments: &Value) -> String {
+                 format!("Index({name})")
+             }
+         }
++        "typescript_semantic" => format!("TypeScript semantic({})", json_string(arguments, "operation")),
++        "typescript_rename" => format!("TypeScript rename({})", json_string(arguments, "new_name")),
+         "patch_apply" => "Edit files".to_owned(),
+         "symbol_rename" => format!(
+             "Rename({} -> {})",
+diff --git a/docs/CAPABILITY-CLAIMS.json b/docs/CAPABILITY-CLAIMS.json
+index 5aa0244..fe1b332 100644
+--- a/docs/CAPABILITY-CLAIMS.json
++++ b/docs/CAPABILITY-CLAIMS.json
+@@ -474,12 +474,15 @@
+     {
+       "id": "truthful-code-intelligence-levels",
+       "maturity": "production",
+-      "summary": "The v2 registry and semantic_capabilities production tool report exact per-language semantic depth without promoting dormant LSP helpers.",
++      "summary": "The v2 registry and semantic_capabilities tool report exact per-language depth, including production TypeScript/JavaScript compiler-language-service workflows.",
+       "owner": "code intelligence maintainers",
+       "production_paths": [
+         "crates/medusa-capabilities/src/registry.rs",
+         "crates/medusa-intelligence/src/capabilities.rs",
+-        "crates/medusa-agent/src/tools/intelligence.rs"
++        "crates/medusa-agent/src/tools/intelligence.rs",
++        "crates/medusa-intelligence/src/typescript_workspace.rs",
++        "crates/medusa-intelligence/src/typescript_semantic.rs",
++        "tools/typescript-semantic-adapter.mjs"
+       ],
+       "test_paths": [
+         "crates/medusa-capabilities/src/registry.rs",
+@@ -494,14 +497,19 @@
+       "entrypoints": [
+         "semantic_capabilities",
+         "code_index",
+-        "symbol_rename"
++        "symbol_rename",
++        "typescript_semantic",
++        "typescript_rename"
+       ],
+       "supported_platforms": [
+         "linux",
+         "macos",
+         "windows"
+       ],
+-      "external_dependencies": [],
++      "external_dependencies": [
++        "Node.js executable",
++        "TypeScript compiler module discovered from the selected package/workspace or NODE_PATH"
++      ],
+       "observability": [
+         "docs/OBSERVABILITY.md"
+       ],
+diff --git a/docs/CAPABILITY-EVIDENCE.md b/docs/CAPABILITY-EVIDENCE.md
+index f5bd090..5fa7bab 100644
+--- a/docs/CAPABILITY-EVIDENCE.md
++++ b/docs/CAPABILITY-EVIDENCE.md
+@@ -84,6 +84,6 @@ Browser and plugin structure must not be presented as active capability merely b
+ 
+ Platform support is explicit per capability and does not imply identical containment internals. External dependencies are recorded so provider APIs, Git services, Node sidecars, or artifact-attestation infrastructure cannot be mistaken for repository-owned guarantees. README, configuration, compatibility, release documentation, and UI labels may describe only behavior at or below the recorded legacy availability and v2 certification.
+ 
+-| `truthful-code-intelligence-levels` | `production` | code intelligence maintainers | `semantic_capabilities`, `code_index`, `symbol_rename` | Linux, macOS, Windows | none |
++| `truthful-code-intelligence-levels` | `production` | code intelligence maintainers | `semantic_capabilities`, `code_index`, `symbol_rename`, `typescript_semantic`, `typescript_rename` | Linux, macOS, Windows | Node.js and TypeScript compiler module for TS/JS semantic depth |
+ 
+-- `truthful-code-intelligence-levels`: typed claims in `crates/medusa-intelligence/src/capabilities.rs`, dedicated registry ownership in `crates/medusa-capabilities/src/registry.rs`, production dispatch in `crates/medusa-agent/src/tools/intelligence.rs`, and guarded ambiguity/parse-error refusal tests. TypeScript/JavaScript LSP helpers remain explicitly unavailable above text search until a certified dispatcher exists.
++- `truthful-code-intelligence-levels`: typed claims in `crates/medusa-intelligence/src/capabilities.rs`, dedicated registry ownership in `crates/medusa-capabilities/src/registry.rs`, production dispatch in `crates/medusa-agent/src/tools/intelligence.rs`, and guarded ambiguity/parse-error refusal tests. TypeScript/JavaScript semantic operations are compiler-language-service backed, repository scoped, fingerprinted, and guarded by source hashes plus atomic byte preconditions.
+diff --git a/docs/CODE-INTELLIGENCE-CAPABILITIES.md b/docs/CODE-INTELLIGENCE-CAPABILITIES.md
+index 5cd4fd9..43f095d 100644
+--- a/docs/CODE-INTELLIGENCE-CAPABILITIES.md
++++ b/docs/CODE-INTELLIGENCE-CAPABILITIES.md
+@@ -8,9 +8,9 @@
+ | --- | --- | --- | --- |
+ | Rust | `tree-sitter-rust` static index | Parsed declarations plus repository-wide exact-name definition and reference queries | References are syntax-token occurrences, not type-directed resolution. Compiler diagnostics are not dispatched. |
+ | Python | bounded lexical scanner | `def`, `async def`, and `class` declarations plus comment- and string-aware identifier occurrences | This is not a Python parser. Diagnostics and rename are unavailable. |
+-| TypeScript/JavaScript | dormant LSP normalization primitives | Text search only | Definition, reference, diagnostic, workspace-symbol, and rename code exists below the production boundary but has no registered server lifecycle or agent dispatcher. Those levels remain unavailable. |
++| TypeScript/JavaScript | TypeScript compiler language service | Definitions, references, syntactic/semantic diagnostics, workspace symbols, and guarded cross-file rename | Requires Node.js and a discoverable TypeScript compiler module. Results are repository-scoped, bounded to 20,000 supported source files, and bound to adapter version, config, source hashes, and a content-derived workspace fingerprint. |
+ 
+-The registry owns the production `CodeIntelligence` capability. `code_index`, `semantic_capabilities`, and `symbol_rename` are registered under it rather than under generic filesystem access. `patch_apply` remains a filesystem mutation because it does not depend on semantic analysis.
++The registry owns the production `CodeIntelligence` capability. `code_index`, `semantic_capabilities`, `symbol_rename`, `typescript_semantic`, and `typescript_rename` are registered under it rather than under generic filesystem access. `patch_apply` remains a filesystem mutation because it does not depend on semantic analysis.
+ 
+ ## Guarded Rust rename
+ 
+@@ -32,6 +32,15 @@ Ambiguous definitions, Python lexical matches, cross-language same-name occurren
+ - Static index and refresh authority: `crates/medusa-intelligence/src/index.rs` and `snapshot.rs`
+ - Guarded patch transaction: `crates/medusa-intelligence/src/patch.rs`
+ - Production agent handlers: `crates/medusa-agent/src/tools/intelligence.rs`
+-- Dormant LSP process and normalization primitives: `crates/medusa-intelligence/src/lsp*.rs`
++- TypeScript workspace, freshness, and process lifecycle: `crates/medusa-intelligence/src/typescript_workspace.rs` and `typescript_semantic.rs`
++- TypeScript compiler-language-service adapter: `tools/typescript-semantic-adapter.mjs`
++- Reusable LSP process and normalization primitives for future adapters: `crates/medusa-intelligence/src/lsp*.rs`
+ 
+ A language level may be promoted only after its real production entrypoint has a lifecycle owner, dependency discovery, permission mapping, fail-closed handler, freshness evidence, cross-platform fixtures, and capability-registry tests. Merely adding parser or LSP helper code does not change the production claim.
++
++
++## TypeScript/JavaScript trust and cache authority
++

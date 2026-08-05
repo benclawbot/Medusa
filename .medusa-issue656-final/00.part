@@ -1,0 +1,170 @@
+diff --git a/.github/workflows/product-acceptance.yml b/.github/workflows/product-acceptance.yml
+index eafac82..fbdc2da 100644
+--- a/.github/workflows/product-acceptance.yml
++++ b/.github/workflows/product-acceptance.yml
+@@ -24,6 +24,11 @@ jobs:
+       - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+         with:
+           python-version: '3.12'
++      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
++        with:
++          node-version: '22'
++      - name: Install desktop TypeScript compiler
++        run: npm ci --prefix apps/medusa-desktop --ignore-scripts
+       - uses: dtolnay/rust-toolchain@39b0b3842c7e8bbf6904c0bfc3d9006fdd4dc4e0 # 1.88.0
+       - name: Refresh dependency lock for the merged PR graph
+         run: cargo generate-lockfile
+@@ -36,6 +41,8 @@ jobs:
+             echo 0 | sudo tee /proc/sys/kernel/apparmor_restrict_unprivileged_userns
+           fi
+       - name: Run shared-target PR smoke acceptance
++        env:
++          NODE_PATH: ${{ github.workspace }}/apps/medusa-desktop/node_modules
+         run: python3 scripts/product-acceptance-smoke.py --output product-acceptance-smoke-artifacts
+       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+         if: always()
+@@ -56,6 +63,11 @@ jobs:
+     runs-on: ${{ matrix.os }}
+     steps:
+       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
++      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
++        with:
++          node-version: '22'
++      - name: Install desktop TypeScript compiler
++        run: npm ci --prefix apps/medusa-desktop --ignore-scripts
+       - uses: dtolnay/rust-toolchain@39b0b3842c7e8bbf6904c0bfc3d9006fdd4dc4e0 # 1.88.0
+       - name: Refresh dependency lock for the merged commit graph
+         run: cargo generate-lockfile
+@@ -69,6 +81,8 @@ jobs:
+             echo 0 | sudo tee /proc/sys/kernel/apparmor_restrict_unprivileged_userns
+           fi
+       - name: Run authoritative product acceptance suite
++        env:
++          NODE_PATH: ${{ github.workspace }}/apps/medusa-desktop/node_modules
+         run: cargo product-acceptance --output product-acceptance-artifacts
+       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+         if: always()
+diff --git a/benchmarks/typescript-semantic-suite.json b/benchmarks/typescript-semantic-suite.json
+new file mode 100644
+index 0000000..70e5c1e
+--- /dev/null
++++ b/benchmarks/typescript-semantic-suite.json
+@@ -0,0 +1,16 @@
++{
++  "schema_version": 1,
++  "adapter": "typescript-compiler-language-service",
++  "limits": {
++    "max_supported_sources": 20000,
++    "max_results_per_request": 2000
++  },
++  "scenarios": [
++    {"id":"cross-file-definition","operation":"definition","correctness":"target path and range resolve across modules","budget_ms":2000},
++    {"id":"cross-file-references","operation":"references","correctness":"declaration and call sites are returned without ignored paths","budget_ms":2500},
++    {"id":"strict-diagnostics","operation":"diagnostics","correctness":"syntactic and semantic type errors are stable","budget_ms":3000},
++    {"id":"workspace-symbols","operation":"workspace_symbols","correctness":"monorepo-selected project symbols are deterministic","budget_ms":3000},
++    {"id":"guarded-rename","operation":"rename","correctness":"all semantic locations carry source hashes and byte preconditions","budget_ms":3000},
++    {"id":"repository-switch","operation":"definition","correctness":"content-derived workspace fingerprints differ after switching repositories","budget_ms":2000}
++  ]
++}
+diff --git a/crates/medusa-agent/src/engine_support.rs b/crates/medusa-agent/src/engine_support.rs
+index 78f166a..9e82755 100644
+--- a/crates/medusa-agent/src/engine_support.rs
++++ b/crates/medusa-agent/src/engine_support.rs
+@@ -111,6 +111,7 @@ pub(crate) fn tool_allowed(mode: Mode, tool: &str) -> bool {
+                 | "search_text"
+                 | "semantic_capabilities"
+                 | "code_index"
++                | "typescript_semantic"
+                 | "web_search"
+                 | "web_fetch"
+                 | "skill_read"
+diff --git a/crates/medusa-agent/src/team.rs b/crates/medusa-agent/src/team.rs
+index faddc28..b319931 100644
+--- a/crates/medusa-agent/src/team.rs
++++ b/crates/medusa-agent/src/team.rs
+@@ -107,6 +107,7 @@ impl AgentExecutionPolicy {
+             "search_text".to_owned(),
+             "semantic_capabilities".to_owned(),
+             "code_index".to_owned(),
++            "typescript_semantic".to_owned(),
+             "web_search".to_owned(),
+             "web_fetch".to_owned(),
+             "skill_read".to_owned(),
+@@ -122,6 +123,7 @@ impl AgentExecutionPolicy {
+                 "fs_write".to_owned(),
+                 "patch_apply".to_owned(),
+                 "symbol_rename".to_owned(),
++                "typescript_rename".to_owned(),
+                 "git_checkpoint".to_owned(),
+             ]);
+         }
+diff --git a/crates/medusa-agent/src/tool_orchestration.rs b/crates/medusa-agent/src/tool_orchestration.rs
+index cc600de..7dc1171 100644
+--- a/crates/medusa-agent/src/tool_orchestration.rs
++++ b/crates/medusa-agent/src/tool_orchestration.rs
+@@ -132,6 +132,21 @@ pub(crate) fn registry() -> BTreeMap<&'static str, ToolCapability> {
+             escalation: EscalationPolicy::SearchBeforeRead,
+         },
+     );
++    registry.insert(
++        "typescript_semantic",
++        ToolCapability {
++            name: "typescript_semantic".into(),
++            capability: "typescript_language_service".into(),
++            risk: RiskClass::ReadOnly,
++            latency_weight: 28,
++            token_weight: 12,
++            cacheable: false,
++            concurrent: false,
++            fallback: Some("search_text".into()),
++            expected_output_bytes: 24 * 1024,
++            escalation: EscalationPolicy::SearchBeforeRead,
++        },
++    );
+     registry.insert(
+         "shell_run",
+         ToolCapability {
+@@ -147,7 +162,7 @@ pub(crate) fn registry() -> BTreeMap<&'static str, ToolCapability> {
+             escalation: EscalationPolicy::TargetedTestBeforeBroadSuite,
+         },
+     );
+-    for name in ["fs_write", "fs_create_dir", "patch_apply", "symbol_rename"] {
++    for name in ["fs_write", "fs_create_dir", "patch_apply", "symbol_rename", "typescript_rename"] {
+         registry.insert(
+             name,
+             ToolCapability {
+diff --git a/crates/medusa-agent/src/tools/intelligence.rs b/crates/medusa-agent/src/tools/intelligence.rs
+index b8a0caa..502f5f6 100644
+--- a/crates/medusa-agent/src/tools/intelligence.rs
++++ b/crates/medusa-agent/src/tools/intelligence.rs
+@@ -1,11 +1,13 @@
+-use std::path::{Path, PathBuf};
++use std::{fs, path::{Path, PathBuf}};
+ 
+ use medusa_core::MedusaResult;
+ use medusa_intelligence::{
+-    CodeIndex, PatchTransaction, TextEdit, format_changed, language_capability_profiles,
+-    select_tests,
++    CodeIndex, PatchTransaction, TextEdit, TypeScriptSemanticOperation,
++    TypeScriptSemanticRequest, execute_typescript_semantic, format_changed,
++    language_capability_profiles, select_tests,
+ };
+ use serde_json::{Value, json};
++use sha2::{Digest, Sha256};
+ 
+ use crate::{
+     policy::safe_path,
+@@ -77,3 +79,87 @@ pub(crate) fn symbol_rename(repo: &Path, input: &Value) -> MedusaResult<String>
+         "test_impact": impact,
+     }))?)
+ }
++
++
++pub(crate) fn typescript_semantic(repo: &Path, input: &Value) -> MedusaResult<String> {
++    let operation = match input_string(input, "operation")? {
++        "definition" => TypeScriptSemanticOperation::Definition,
++        "references" => TypeScriptSemanticOperation::References,
++        "diagnostics" => TypeScriptSemanticOperation::Diagnostics,
++        "workspace_symbols" => TypeScriptSemanticOperation::WorkspaceSymbols,
++        other => return Err(crate::tools::invalid_tool(format!("unsupported TypeScript semantic operation: {other}"))),
++    };
