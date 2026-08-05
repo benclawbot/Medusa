@@ -156,12 +156,13 @@ fn count_supported_sources(root: &Path) -> Result<usize, TypeScriptWorkspaceErro
         .into_iter()
         .filter_entry(|entry| !ignored_entry(entry))
     {
-        let entry =
-            entry.map_err(|error| {
-                TypeScriptWorkspaceError::Io(error.into_io_error().unwrap_or_else(|| {
-                    std::io::Error::other("walkdir error")
-                }))
-            })?;
+        let entry = entry.map_err(|error| {
+            TypeScriptWorkspaceError::Io(
+                error
+                    .into_io_error()
+                    .unwrap_or_else(|| std::io::Error::other("walkdir error")),
+            )
+        })?;
         if entry.file_type().is_file() && supported_source(entry.path()) {
             count += 1;
             if count > MAX_SUPPORTED_SOURCES {
