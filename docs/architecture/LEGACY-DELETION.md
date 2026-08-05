@@ -48,6 +48,8 @@ A migration slice is incomplete until its superseded v1 path is removed or has a
 - Tool-use responses, malformed envelopes, journal substitution, and corrupt or incomplete terminal evidence fail closed before verification or integration.
 - The generic conversational `AgentEngine` no longer receives the mutation patch and cannot authorize or reject integration.
 - Accepted mutations bypass the redundant conversational model turn and emit one durable deterministic completion only after review, verification, authorization, integration, and reconciliation succeed.
+- Reconciled mutations persist the completed session snapshot and canonical `SessionCompleted` event before emitting process-local completion, so CLI, TUI, daemon, desktop, and remote projections observe the same terminal state and headless runs exit without timeout.
+- A reload regression proves the completed snapshot and commit-referenced terminal receipt survive process restart.
 - The obsolete conversational review instruction and implementer-to-parent context formatter have been removed from production code.
 - Remaining #632 deletion target: remove the quarantined compatibility parser after recovery fixtures migrate to the dedicated journal path.
 
