@@ -17,7 +17,7 @@ use medusa_agent::{
 use medusa_capabilities::CapabilityRegistry;
 use medusa_config::{Config, ConfigurationChanged, Mode};
 use medusa_protocol::{Actor, EventPayload};
-use medusa_provider::{ConfiguredProvider, ModelProvider};
+use medusa_provider::{ConfiguredProvider, Message, MessageBlock, ModelProvider, Role};
 
 use crate::{
     commands::{
@@ -1190,14 +1190,11 @@ fn run_prompt(
         tool_policy_context,
         verification_context,
     ];
-    if implementation_evidence.is_none() {
-    if let Some(evidence) = coordinator_evidence.as_ref() {
+    if implementation_evidence.is_none()
+        && let Some(evidence) = coordinator_evidence.as_ref()
+    {
         task_context.push(evidence.parent_context());
     }
-}
-if let Some(evidence) = implementation_evidence.as_ref() {
-    task_context.push(evidence.parent_context());
-}
     if let Some(learning) = learning_context.prompt_context {
         task_context.push(learning);
     }
@@ -1209,7 +1206,7 @@ if let Some(evidence) = implementation_evidence.as_ref() {
         .session
         .take()
         .ok_or_else(|| RuntimeError::agent("runtime session disappeared before execution"))?;
-    if coordinated {
+    if coordinated && implementation_evidence.is_none() {
         if let Some(ledger) = execution_ledger.as_mut() {
             crate::production_orchestrator::begin_kinds(
                 ledger,
@@ -1231,8 +1228,11 @@ if let Some(evidence) = implementation_evidence.as_ref() {
         let _ = events.send(RuntimeEvent::Plan(session.plan.clone()));
     }
 
-    let result = (|| {
-        loop {
+    let result = if implementation_evidence.is_some() {
+        Ok(RuntimeEvent::TurnFinished)
+    } else {
+        (|| {
+            loop {
             if cancel_requested(cancel, submission) {
                 if let Some(ledger) = execution_ledger.as_mut() {
                     let _ = ledger.cancel_remaining("runtime cancellation requested");
@@ -1276,13 +1276,10 @@ if let Some(evidence) = implementation_evidence.as_ref() {
                     ],
                 }));
                 let provider_started_at = std::time::Instant::now();
-                let turn_instruction = implementation_evidence
-                    .as_ref()
-                    .map(|_| crate::mutation_transaction::PARENT_REVIEW_TURN_INSTRUCTION);
                 match engine.step_with_observer_and_context_and_turn_instruction(
                     &mut session,
                     Some(skill_context.as_str()),
-                    turn_instruction,
+                    None,
                     |update| {
                         forward_update(update, events, &mut updates);
                     },
@@ -1400,7 +1397,8 @@ if let Some(evidence) = implementation_evidence.as_ref() {
                 }
             }
         }
-    })();
+        })()
+    };
     let waiting_for_user = matches!(&result, Ok(RuntimeEvent::Question(_)));
     if selected_skill.is_some() && !waiting_for_user {
         state.pending_skill = None;
@@ -1415,10 +1413,29 @@ if let Some(evidence) = implementation_evidence.as_ref() {
         if let Some(evidence) = implementation_evidence.as_ref() {
             match &result {
                 Ok(RuntimeEvent::Completed { .. } | RuntimeEvent::TurnFinished) => {
+                    if let Some(ledger) = execution_ledger.as_mut() {
+                        crate::production_orchestrator::begin_kinds(
+                            ledger,
+                            &execution_plan,
+                            &[medusa_multi_agent_scheduler::TaskKind::Review],
+                            "dedicated-parent-review",
+                        )
+                        .map_err(RuntimeError::agent)?;
+                        let _ = events.send(RuntimeEvent::Plan(
+                            crate::production_orchestrator::projection(ledger),
+                        ));
+                    }
+                    let review_provider = ConfiguredProvider::manager_from_config(
+                        &state.config,
+                        state.session_api_key.clone(),
+                    )
+                    .map_err(RuntimeError::agent)?;
                     match crate::mutation_transaction::complete_after_parent_review(
                         &evidence.transaction_path,
                         &state.repo,
-                        &session,
+                        &review_provider,
+                        &state.config,
+                        cancel.as_ref(),
                         events,
                     ) {
                         Ok(crate::mutation_transaction::TransactionCompletion::Reconciled(receipt)) => {
@@ -1455,6 +1472,40 @@ if let Some(evidence) = implementation_evidence.as_ref() {
                                 },
                             )
                             .map_err(RuntimeError::agent)?;
+                            let completion_text = mutation_completion_text(
+                                &evidence.summary,
+                                &receipt.commit,
+                                &receipt.changed_paths,
+                            );
+                            let message = Message {
+                                role: Role::Assistant,
+                                content: vec![MessageBlock::Text {
+                                    text: completion_text.clone(),
+                                }],
+                            };
+                            session.messages.push(message.clone());
+                            medusa_agent::record_session_event(
+                                &mut session,
+                                Actor::Coordinator,
+                                EventPayload::AssistantMessageRecorded {
+                                    message: serde_json::to_value(&message)
+                                        .map_err(RuntimeError::agent)?,
+                                },
+                            )
+                            .map_err(RuntimeError::agent)?;
+                            session.completed = true;
+                            medusa_agent::record_session_event(
+                                &mut session,
+                                Actor::Coordinator,
+                                EventPayload::SessionCompleted {
+                                    report_ref: format!("commit:{}", receipt.commit),
+                                },
+                            )
+                            .map_err(RuntimeError::agent)?;
+                            let _ = events.send(RuntimeEvent::AssistantText(completion_text));
+                            result = Ok(RuntimeEvent::Completed {
+                                session_id: session.id.to_string(),
+                            });
                         }
                         Ok(crate::mutation_transaction::TransactionCompletion::RevisionRequested(reason)) => {
                             if let Some(ledger) = execution_ledger.as_mut() {
@@ -1561,6 +1612,102 @@ if let Some(evidence) = implementation_evidence.as_ref() {
     }
     state.session = Some(session);
     result
+}
+
+fn mutation_completion_text(summary: &str, commit: &str, changed_paths: &[String]) -> String {
+    let visible_summary = summary
+        .rsplit_once("</think>")
+        .map_or(summary, |(_, visible)| visible)
+        .trim();
+    let status = format!(
+        "Verified and integrated commit `{commit}`. Changed paths: {}.",
+        changed_paths.join(", ")
+    );
+    if visible_summary.is_empty() {
+        status
+    } else {
+        format!("{visible_summary}\n\n{status}")
+    }
+}
+
+#[cfg(test)]
+mod mutation_completion_tests {
+    use super::mutation_completion_text;
+
+    #[test]
+    fn hides_reasoning_and_preserves_visible_implementer_result() {
+        let text = mutation_completion_text(
+            "<think>private implementation reasoning</think>\n\nMEDUSA_TUI_MINIMAX_OK",
+            "abc123",
+            &["src/lib.rs".to_owned()],
+        );
+        assert!(!text.contains("private implementation reasoning"));
+        assert!(text.starts_with("MEDUSA_TUI_MINIMAX_OK"));
+        assert!(text.contains("Verified and integrated commit `abc123`"));
+        assert!(text.contains("src/lib.rs"));
+    }
+
+    #[test]
+    fn falls_back_to_verified_status_when_summary_has_no_visible_text() {
+        let text = mutation_completion_text(
+            "<think>private implementation reasoning</think>",
+            "abc123",
+            &["src/lib.rs".to_owned()],
+        );
+        assert_eq!(
+            text,
+            "Verified and integrated commit `abc123`. Changed paths: src/lib.rs."
+        );
+    }
+
+    #[test]
+    fn durable_completion_event_marks_the_session_completed() {
+        use medusa_agent::AgentSession;
+        use medusa_core::SessionId;
+        use medusa_protocol::{Actor, EventPayload};
+        use time::OffsetDateTime;
+
+        let directory = tempfile::tempdir().expect("temporary repository");
+        let mut session = AgentSession {
+            id: SessionId::new(),
+            objective: "durable mutation completion".to_owned(),
+            repo: directory.path().to_path_buf(),
+            created_at: OffsetDateTime::UNIX_EPOCH,
+            updated_at: OffsetDateTime::UNIX_EPOCH,
+            completed: false,
+            turn: 0,
+            plan: Vec::new(),
+            pending_question: None,
+            messages: Vec::new(),
+            events: Vec::new(),
+            evidence: Vec::new(),
+            tool_artifacts: Vec::new(),
+            world_model: None,
+            approval_grants: Vec::new(),
+            approval_receipts: Vec::new(),
+            rollback_receipts: Vec::new(),
+        };
+        session.completed = true;
+        medusa_agent::record_session_event(
+            &mut session,
+            Actor::Coordinator,
+            EventPayload::SessionCompleted {
+                report_ref: "commit:abc123".to_owned(),
+            },
+        )
+        .expect("persist completion");
+
+        let persisted = medusa_agent::session_browser::load_session(
+            directory.path(),
+            session.id.as_str(),
+        )
+        .expect("reload completed session");
+        assert!(persisted.completed);
+        assert!(matches!(
+            persisted.events.last().map(|event| &event.payload),
+            Some(EventPayload::SessionCompleted { report_ref }) if report_ref == "commit:abc123"
+        ));
+    }
 }
 
 fn append_followups<P: ModelProvider>(
@@ -2536,7 +2683,7 @@ mod production_orchestrator;
 /// Production task-contract and schedule definitions used by the runtime coordinator.
 ///
 /// The shipped coordinated path is `RuntimeController -> run_prompt ->
-/// multi_agent_coordinator::run_preflight -> read-only AgentEngine teammates -> parent AgentEngine`.
+/// multi_agent_coordinator::run_preflight -> isolated implementer -> dedicated no-tools parent reviewer`.
 pub mod orchestration_planning {
     pub use super::production_orchestrator::*;
 }

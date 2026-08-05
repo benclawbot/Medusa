@@ -42,7 +42,16 @@ A migration slice is incomplete until its superseded v1 path is removed or has a
 - The durable mutation transaction accepts only a final JSON envelope with `schema_version`, typed decision, and non-empty rationale.
 - Free-form `MEDUSA_REVIEW_ACCEPTED` and `MEDUSA_REVISION_REQUESTED` markers no longer authorize integration.
 - Unknown fields, malformed JSON, unsupported schemas, trailing text, and empty rationales fail closed.
-- Remaining #632 work: replace the generic `AgentEngine` review transport with a dedicated no-tools reviewer while preserving durable session evidence.
+- Production mutation authorization now uses a dedicated direct `ModelProvider` request that advertises zero tools and receives only the immutable review packet.
+- The reviewer inherits the active runtime model configuration, session API key, fallback routes, and cancellation signal rather than reconstructing defaults.
+- The review request, provider outcome, typed decision, rationale, usage, and response fingerprint are persisted in a versioned `parent-review-session.json` journal and resumed idempotently after interruption.
+- Tool-use responses, malformed envelopes, journal substitution, and corrupt or incomplete terminal evidence fail closed before verification or integration.
+- The generic conversational `AgentEngine` no longer receives the mutation patch and cannot authorize or reject integration.
+- Accepted mutations bypass the redundant conversational model turn and emit one durable deterministic completion only after review, verification, authorization, integration, and reconciliation succeed.
+- Reconciled mutations persist the completed session snapshot and canonical `SessionCompleted` event before emitting process-local completion, so CLI, TUI, daemon, desktop, and remote projections observe the same terminal state and headless runs exit without timeout.
+- A reload regression proves the completed snapshot and commit-referenced terminal receipt survive process restart.
+- The obsolete conversational review instruction and implementer-to-parent context formatter have been removed from production code.
+- Remaining #632 deletion target: remove the quarantined compatibility parser after recovery fixtures migrate to the dedicated journal path.
 
 ### Provider deletion receipt (#636)
 
