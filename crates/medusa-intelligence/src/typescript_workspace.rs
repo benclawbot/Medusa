@@ -240,12 +240,14 @@ mod tests {
         assert!(
             workspace
                 .config_path
+                .as_ref()
                 .expect("config")
                 .ends_with("packages/app/tsconfig.json")
         );
         assert!(
             workspace
                 .package_root
+                .as_ref()
                 .expect("package")
                 .ends_with("packages/app")
         );
