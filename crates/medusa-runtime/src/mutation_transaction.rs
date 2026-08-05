@@ -10,11 +10,10 @@ use medusa_provider::ModelProvider;
 
 use crate::RuntimeEvent;
 
-#[allow(dead_code)]
-#[path = "mutation_transaction_legacy.rs"]
-mod legacy;
+#[path = "mutation_transaction_state.rs"]
+mod state;
 
-pub use legacy::*;
+pub use state::*;
 
 pub fn complete_after_parent_review<P: ModelProvider>(
     path: &Path,

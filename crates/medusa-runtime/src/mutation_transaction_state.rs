@@ -1,4 +1,4 @@
-//! Durable review-before-integration transaction for every production mutation.
+//! Authoritative durable state machine for every production mutation.
 
 use std::{
     fs,
@@ -6,13 +6,9 @@ use std::{
     sync::mpsc::Sender,
 };
 
-use medusa_agent::{AgentSession, authoritative_verification_for_components_at};
+use medusa_agent::authoritative_verification_for_components_at;
 use medusa_evidence::{ChangedComponent, VerificationReceipt, changed_scope_fingerprint};
-use medusa_provider::{MessageBlock, Role};
-use medusa_review_model::{
-    PARENT_REVIEW_RESPONSE_REQUIREMENT, ParentReviewOutcome, ParentReviewResponse,
-    ParentReviewResponseError, final_parent_review_line, validate_parent_review_response,
-};
+use medusa_review_model::PARENT_REVIEW_RESPONSE_REQUIREMENT;
 pub use medusa_review_model::ParentReviewDecision;
 use medusa_workers::{IntegrationReceipt, Worker, WorkerManager};
 use serde::{Deserialize, Serialize};
@@ -240,16 +236,6 @@ impl MutationTransaction {
             self.state.worktree_verification_evidence,
             patch,
         ))
-    }
-
-    pub fn record_parent_review(
-        &mut self,
-        session: &AgentSession,
-    ) -> Result<ParentReviewDecision, String> {
-        let text = latest_assistant_text(session)
-            .ok_or_else(|| "parent reviewer produced no assistant text".to_owned())?;
-        let outcome = decode_parent_review_response(&text)?;
-        self.record_review_decision(outcome.decision, outcome.rationale, session.id.as_str())
     }
 
     pub fn record_review_decision(
@@ -808,41 +794,6 @@ impl MutationTransaction {
     }
 }
 
-pub fn complete_after_parent_review(
-    path: &Path,
-    repo: &Path,
-    session: &AgentSession,
-    events: &Sender<RuntimeEvent>,
-) -> Result<TransactionCompletion, String> {
-    let mut transaction = MutationTransaction::open(path)?;
-    match transaction.record_parent_review(session)? {
-        ParentReviewDecision::RevisionRequested => {
-            let rationale = transaction
-                .state
-                .review
-                .as_ref()
-                .map(|receipt| receipt.rationale.clone())
-                .unwrap_or_else(|| "parent requested revision".to_owned());
-            transaction.emit(events);
-            Ok(TransactionCompletion::RevisionRequested(rationale))
-        }
-        ParentReviewDecision::Accepted => {
-            transaction.emit(events);
-            transaction.begin_verification()?;
-            transaction.emit(events);
-            transaction.verify_independently(repo)?;
-            transaction.emit(events);
-            transaction.authorize(repo)?;
-            transaction.emit(events);
-            transaction.integrate(repo)?;
-            transaction.emit(events);
-            let receipt = transaction.reconcile(repo)?;
-            transaction.emit(events);
-            Ok(TransactionCompletion::Reconciled(receipt))
-        }
-    }
-}
-
 pub fn cancel_transaction(
     path: &Path,
     reason: &str,
@@ -863,32 +814,6 @@ pub fn fail_transaction(
     transaction.fail(reason)?;
     transaction.emit(events);
     Ok(())
-}
-
-fn latest_assistant_text(session: &AgentSession) -> Option<String> {
-    session.messages.iter().rev().find_map(|message| {
-        if message.role != Role::Assistant {
-            return None;
-        }
-        let text = message
-            .content
-            .iter()
-            .filter_map(|block| match block {
-                MessageBlock::Text { text } => Some(text.as_str()),
-                _ => None,
-            })
-            .collect::<Vec<_>>()
-            .join("\n");
-        (!text.trim().is_empty()).then_some(text)
-    })
-}
-
-fn decode_parent_review_response(text: &str) -> Result<ParentReviewOutcome, String> {
-    let final_line = final_parent_review_line(text).map_err(|error| error.to_string())?;
-    let response: ParentReviewResponse = serde_json::from_str(final_line).map_err(|error| {
-        ParentReviewResponseError::InvalidEnvelope(error.to_string()).to_string()
-    })?;
-    validate_parent_review_response(response, final_line).map_err(|error| error.to_string())
 }
 
 fn transaction_fingerprint(state: &MutationTransactionSnapshot) -> String {
@@ -1020,29 +945,6 @@ mod tests {
             worktree_verification_receipt: worktree_verification.receipt,
         };
         (directory, repo, manager, input)
-    }
-
-    #[test]
-    fn typed_parent_review_envelope_is_required_at_runtime_boundary() {
-        let accepted = decode_parent_review_response(
-            "The prepared patch is correct.\n{\"schema_version\":1,\"decision\":\"accepted\",\"rationale\":\"exact patch and evidence agree\"}",
-        )
-        .expect("typed response");
-        assert_eq!(accepted.decision, ParentReviewDecision::Accepted);
-        assert_eq!(accepted.response_fingerprint.len(), 64);
-
-        assert!(decode_parent_review_response(
-            "MEDUSA_REVIEW_ACCEPTED: exact patch and evidence agree"
-        )
-        .is_err());
-        assert!(decode_parent_review_response(
-            "{\"schema_version\":1,\"decision\":\"accepted\",\"rationale\":\"ok\",\"extra\":true}"
-        )
-        .is_err());
-        assert!(decode_parent_review_response(
-            "{\"schema_version\":1,\"decision\":\"accepted\",\"rationale\":\"ok\"}\ntrailing"
-        )
-        .is_err());
     }
 
     #[test]

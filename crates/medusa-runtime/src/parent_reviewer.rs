@@ -499,6 +499,31 @@ mod tests {
     }
 
     #[test]
+    fn typed_parent_review_envelope_is_required_at_runtime_boundary() {
+        let invalid = [
+            "MEDUSA_REVIEW_ACCEPTED: exact patch and evidence agree",
+            "{\"schema_version\":1,\"decision\":\"accepted\",\"rationale\":\"ok\",\"extra\":true}",
+            "{\"schema_version\":1,\"decision\":\"accepted\",\"rationale\":\"ok\"}\ntrailing",
+        ];
+        for response in invalid {
+            let root = tempdir().expect("temporary journal");
+            let provider = FakeProvider::text(response);
+            let error = review_packet(
+                &provider,
+                &Config::default(),
+                &AtomicBool::new(false),
+                &packet(root.path()),
+            )
+            .expect_err("invalid review response must fail closed");
+            assert!(!error.trim().is_empty());
+            let journal = load_journal(&packet(root.path()).journal_path)
+                .expect("journal read")
+                .expect("journal");
+            assert_eq!(journal.state, ReviewJournalState::Failed);
+        }
+    }
+
+    #[test]
     fn tool_use_fails_closed_and_is_durable() {
         let root = tempdir().expect("temporary journal");
         let provider = FakeProvider {

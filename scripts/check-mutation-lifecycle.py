@@ -8,7 +8,8 @@ root = Path(__file__).resolve().parents[1]
 runtime = (root / "crates/medusa-runtime/src/lib.rs").read_text(encoding="utf-8")
 coordinator = (root / "crates/medusa-runtime/src/mutating_worker_coordinator.rs").read_text(encoding="utf-8")
 facade = (root / "crates/medusa-runtime/src/mutation_transaction.rs").read_text(encoding="utf-8")
-transaction = (root / "crates/medusa-runtime/src/mutation_transaction_legacy.rs").read_text(encoding="utf-8")
+transaction_path = root / "crates/medusa-runtime/src/mutation_transaction_state.rs"
+transaction = transaction_path.read_text(encoding="utf-8")
 reviewer = (root / "crates/medusa-runtime/src/parent_reviewer.rs").read_text(encoding="utf-8")
 workers = (root / "crates/medusa-workers/src/lib.rs").read_text(encoding="utf-8")
 
@@ -22,15 +23,24 @@ if provider < 0 or completion < provider:
     errors.append("dedicated transaction review is not connected to runtime completion")
 if "let result = if implementation_evidence.is_some()" not in runtime:
     errors.append("prepared mutations still enter the generic conversational model loop")
-if "mutation_completion_text(" not in runtime or "EventPayload::AssistantMessageRecorded" not in runtime:
-    errors.append("accepted mutations lack a deterministic durable completion response")
+if (
+    "mutation_completion_text(" not in runtime
+    or "EventPayload::AssistantMessageRecorded" not in runtime
+    or "EventPayload::SessionCompleted" not in runtime
+):
+    errors.append("accepted mutations lack deterministic durable terminal completion")
 if "state.session_api_key.clone()" not in runtime or "cancel.as_ref()" not in runtime:
     errors.append("dedicated reviewer does not inherit active credential and cancellation authority")
 if "implementation_evidence.as_ref().map" in runtime and "PARENT_REVIEW_TURN_INSTRUCTION" in runtime:
     errors.append("generic AgentEngine still receives the parent-review authority instruction")
 
-if "AgentSession" in facade or "record_parent_review" in facade:
-    errors.append("transaction facade still delegates authority to an AgentSession")
+legacy_path = root / "crates/medusa-runtime/src/mutation_transaction_legacy.rs"
+if legacy_path.exists():
+    errors.append("quarantined legacy mutation transaction module still exists")
+if "mutation_transaction_legacy" in facade or "mod legacy" in facade:
+    errors.append("transaction facade still exposes a legacy compatibility module")
+if "AgentSession" in transaction or "record_parent_review" in transaction or "latest_assistant_text" in transaction:
+    errors.append("durable transaction state still contains conversational review authority")
 if "crate::parent_reviewer::complete(path, repo, provider, config, cancel, events)" not in facade:
     errors.append("transaction facade does not delegate to the dedicated reviewer")
 
