@@ -48,6 +48,7 @@ def main() -> None:
                                 },
                             )
                             .map_err(RuntimeError::agent)?;
+                            session.completed = true;
                             medusa_agent::record_session_event(
                                 &mut session,
                                 Actor::Coordinator,
@@ -114,6 +115,7 @@ def main() -> None:
             approval_receipts: Vec::new(),
             rollback_receipts: Vec::new(),
         };
+        session.completed = true;
         medusa_agent::record_session_event(
             &mut session,
             Actor::Coordinator,
