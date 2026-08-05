@@ -1018,11 +1018,7 @@ mod tests {
             r#"{"scripts":{"test":"node test.mjs"}}"#,
         )
         .unwrap();
-        fs::write(
-            directory.path().join("verify.py"),
-            "print('verified')\n",
-        )
-        .unwrap();
+        fs::write(directory.path().join("verify.py"), "print('verified')\n").unwrap();
         fs::write(directory.path().join("value.txt"), "42\n").unwrap();
         fs::create_dir_all(directory.path().join("src")).unwrap();
         fs::write(
