@@ -470,6 +470,58 @@
         "provider-context-resilience",
         "identity-approval-transactions"
       ]
+    },
+    {
+      "id": "truthful-code-intelligence-levels",
+      "maturity": "production",
+      "summary": "The v2 registry and semantic_capabilities production tool report exact per-language semantic depth without promoting dormant LSP helpers.",
+      "owner": "code intelligence maintainers",
+      "production_paths": [
+        "crates/medusa-capabilities/src/registry.rs",
+        "crates/medusa-intelligence/src/capabilities.rs",
+        "crates/medusa-agent/src/tools/intelligence.rs"
+      ],
+      "test_paths": [
+        "crates/medusa-capabilities/src/registry.rs",
+        "crates/medusa-intelligence/src/capabilities.rs",
+        "crates/medusa-intelligence/src/lib.rs",
+        "crates/medusa-agent/src/lib.rs"
+      ],
+      "gates": [
+        "CI",
+        "Refactor Guardrails"
+      ],
+      "entrypoints": [
+        "semantic_capabilities",
+        "code_index",
+        "symbol_rename"
+      ],
+      "supported_platforms": [
+        "linux",
+        "macos",
+        "windows"
+      ],
+      "external_dependencies": [],
+      "observability": [
+        "docs/OBSERVABILITY.md"
+      ],
+      "documentation": [
+        "docs/CODE-INTELLIGENCE-CAPABILITIES.md",
+        "docs/explicit-capabilities.md"
+      ],
+      "promotion_checklist": [
+        "owner assigned",
+        "entrypoint identified",
+        "behavioral tests present",
+        "supported platforms declared",
+        "observability documented",
+        "public documentation linked"
+      ],
+      "default_enabled": true,
+      "opt_in": null,
+      "dependencies": [
+        "shared-runtime"
+      ]
     }
   ]
 }

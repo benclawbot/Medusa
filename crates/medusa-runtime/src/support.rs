@@ -528,6 +528,7 @@ pub(super) fn tool_title(tool: &str, arguments: &Value) -> String {
         "fs_create_dir" => format!("Mkdir({})", json_string(arguments, "path")),
         "fs_write" => format!("Write({})", json_string(arguments, "path")),
         "search_text" => format!("Search({})", json_string(arguments, "query")),
+        "semantic_capabilities" => "Semantic capability report".to_owned(),
         "code_index" => {
             let name = json_string(arguments, "name");
             if name.is_empty() {

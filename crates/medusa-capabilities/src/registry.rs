@@ -11,12 +11,13 @@ use medusa_provider::ToolDefinition;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
-pub const CAPABILITY_REGISTRY_SCHEMA_VERSION: u16 = 2;
+pub const CAPABILITY_REGISTRY_SCHEMA_VERSION: u16 = 3;
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Capability {
     Filesystem,
+    CodeIntelligence,
     Shell,
     Git,
     GitHub,
@@ -29,8 +30,9 @@ pub enum Capability {
 }
 
 impl Capability {
-    pub const ALL: [Self; 10] = [
+    pub const ALL: [Self; 11] = [
         Self::Filesystem,
+        Self::CodeIntelligence,
         Self::Shell,
         Self::Git,
         Self::GitHub,
@@ -46,6 +48,7 @@ impl Capability {
     pub const fn label(self) -> &'static str {
         match self {
             Self::Filesystem => "Filesystem",
+            Self::CodeIntelligence => "Code intelligence",
             Self::Shell => "Shell",
             Self::Git => "Git",
             Self::GitHub => "GitHub",
@@ -276,6 +279,16 @@ impl CapabilityRegistry {
                 "repository is accessible"
             } else {
                 "repository path is unavailable"
+            },
+        );
+        insert_state(
+            &mut capabilities,
+            Capability::CodeIntelligence,
+            filesystem,
+            if filesystem {
+                "Rust tree-sitter and Python lexical indexing are available; exact per-language levels are reported by semantic_capabilities"
+            } else {
+                "code intelligence requires an accessible repository"
             },
         );
         let shell = if cfg!(windows) {
@@ -599,10 +612,22 @@ fn builtin_tool_entries(
         tool_entry(
             ToolIdentity {
                 states,
+                name: "semantic_capabilities",
+            },
+            Capability::CodeIntelligence,
+            "Report exact production, partial, and unavailable semantic capability levels for Rust, Python, and TypeScript/JavaScript.",
+            json!({"type":"object","properties":{},"additionalProperties":false}),
+            "medusa-agent::tools::intelligence::semantic_capabilities",
+            [RegistryPermission::Read],
+            false,
+        ),
+        tool_entry(
+            ToolIdentity {
+                states,
                 name: "code_index",
             },
-            Capability::Filesystem,
-            "Build the Rust symbol/reference index and optionally query one identifier.",
+            Capability::CodeIntelligence,
+            "Build the Rust tree-sitter and Python lexical symbol/reference index and optionally query one exact identifier.",
             json!({"type":"object","properties":{"name":{"type":"string"}},"additionalProperties":false}),
             "medusa-agent::tools::intelligence::code_index",
             [RegistryPermission::Read],
@@ -628,8 +653,8 @@ fn builtin_tool_entries(
                 states,
                 name: "symbol_rename",
             },
-            Capability::Filesystem,
-            "Rename one Rust identifier across indexed definitions and references.",
+            Capability::CodeIntelligence,
+            "Guardedly rename one unambiguous Rust identifier across indexed definitions and references; fail closed on parse errors, cross-language matches, or stale bytes.",
             json!({"type":"object","properties":{"old_name":{"type":"string"},"new_name":{"type":"string"}},"required":["old_name","new_name"],"additionalProperties":false}),
             "medusa-agent::tools::intelligence::symbol_rename",
             [
@@ -930,6 +955,42 @@ mod tests {
             assert!(entry.readiness.ready);
             assert!(entry.handler.is_some());
         }
+    }
+
+    #[test]
+    fn code_intelligence_tools_have_a_dedicated_truthful_capability() {
+        let registry = ready_registry();
+        assert!(registry.available(Capability::CodeIntelligence));
+        assert_eq!(
+            registry
+                .entry("tool.semantic_capabilities")
+                .expect("report")
+                .capability,
+            Capability::CodeIntelligence
+        );
+        assert_eq!(
+            registry.entry("tool.code_index").expect("index").capability,
+            Capability::CodeIntelligence
+        );
+        assert_eq!(
+            registry
+                .entry("tool.symbol_rename")
+                .expect("rename")
+                .capability,
+            Capability::CodeIntelligence
+        );
+        assert!(
+            registry
+                .model_tools(true)
+                .iter()
+                .any(|tool| tool.name == "semantic_capabilities")
+        );
+        assert!(
+            !registry
+                .model_tools(true)
+                .iter()
+                .any(|tool| tool.name == "symbol_rename")
+        );
     }
 
     #[test]

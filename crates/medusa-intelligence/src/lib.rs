@@ -2,6 +2,7 @@
 
 mod ast;
 mod call_graph;
+mod capabilities;
 mod format;
 mod graph;
 mod impact;
@@ -29,6 +30,10 @@ mod symbol_table;
 
 pub use ast::{ParseDiagnostic, RustAstDocument, RustAstNode, SourcePosition, SourceRange};
 pub use call_graph::{RustCallEdge, RustCallGraph};
+pub use capabilities::{
+    LanguageCapabilityClaim, LanguageCapabilityLevel, LanguageCapabilityProfile,
+    LanguageCapabilityStatus, language_capability_profiles,
+};
 pub use format::format_changed;
 pub use graph::{CallEdge, DependencyEdge, SemanticGraph, SymbolId};
 pub use impact::{TestImpact, select_tests, select_tests_with_index};
@@ -153,6 +158,49 @@ mod tests {
             impact.commands,
             vec!["cargo test --workspace --all-features"]
         );
+    }
+
+    #[test]
+    fn guarded_rename_refuses_ambiguous_and_incomplete_indexes() {
+        let ambiguous = tempfile::tempdir().expect("ambiguous");
+        fs::write(ambiguous.path().join("first.rs"), "fn duplicate() {}\n").expect("first");
+        fs::write(ambiguous.path().join("second.rs"), "fn duplicate() {}\n").expect("second");
+        let index = CodeIndex::build(ambiguous.path()).expect("ambiguous index");
+        let mut transaction = PatchTransaction::new();
+        let error = transaction
+            .rename_symbol(&index, "duplicate", "renamed")
+            .expect_err("ambiguous rename must fail");
+        assert!(error.to_string().contains("ambiguous symbol rename"));
+
+        let incomplete = tempfile::tempdir().expect("incomplete");
+        fs::write(
+            incomplete.path().join("broken.rs"),
+            "fn target( { target();\n",
+        )
+        .expect("broken");
+        let index = CodeIndex::build(incomplete.path()).expect("incomplete index");
+        assert!(!index.parse_errors.is_empty());
+        let mut transaction = PatchTransaction::new();
+        let error = transaction
+            .rename_symbol(&index, "target", "renamed")
+            .expect_err("parse errors must fail closed");
+        assert!(error.to_string().contains("parse errors"));
+    }
+
+    #[test]
+    fn guarded_rename_refuses_python_lexical_matches() {
+        let directory = tempfile::tempdir().expect("python");
+        fs::write(
+            directory.path().join("module.py"),
+            "def old_name():\n    return 1\n",
+        )
+        .expect("python source");
+        let index = CodeIndex::build(directory.path()).expect("index");
+        let mut transaction = PatchTransaction::new();
+        let error = transaction
+            .rename_symbol(&index, "old_name", "answer")
+            .expect_err("Python lexical rename must fail closed");
+        assert!(error.to_string().contains("Rust only"));
     }
 
     #[test]

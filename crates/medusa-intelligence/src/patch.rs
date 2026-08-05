@@ -105,9 +105,45 @@ impl PatchTransaction {
                 "invalid replacement identifier: {new_name}"
             )));
         }
+        if !index.parse_errors.is_empty() {
+            return Err(invalid(format!(
+                "rename refused because the repository index contains parse errors: {:?}",
+                index.parse_errors
+            )));
+        }
+        let definitions = index.definitions(old_name);
+        match definitions.as_slice() {
+            [] => return Err(invalid(format!("symbol not found: {old_name}"))),
+            [_] => {}
+            _ => {
+                return Err(invalid(format!(
+                    "ambiguous symbol rename: {old_name} has {} indexed definitions",
+                    definitions.len()
+                )));
+            }
+        }
+        let definition = definitions[0];
+        if definition
+            .path
+            .extension()
+            .and_then(|extension| extension.to_str())
+            != Some("rs")
+        {
+            return Err(invalid(
+                "guarded symbol rename is currently production-certified for Rust only",
+            ));
+        }
         let references = index.references(old_name);
-        if references.is_empty() {
-            return Err(invalid(format!("symbol not found: {old_name}")));
+        if references.iter().any(|reference| {
+            reference
+                .path
+                .extension()
+                .and_then(|extension| extension.to_str())
+                != Some("rs")
+        }) {
+            return Err(invalid(format!(
+                "ambiguous cross-language symbol occurrences prevent guarded rename: {old_name}"
+            )));
         }
         for reference in references {
             self.add_edit(TextEdit {

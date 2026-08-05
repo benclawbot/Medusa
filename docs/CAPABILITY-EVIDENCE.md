@@ -83,3 +83,7 @@ Browser and plugin structure must not be presented as active capability merely b
 ## Operational boundaries
 
 Platform support is explicit per capability and does not imply identical containment internals. External dependencies are recorded so provider APIs, Git services, Node sidecars, or artifact-attestation infrastructure cannot be mistaken for repository-owned guarantees. README, configuration, compatibility, release documentation, and UI labels may describe only behavior at or below the recorded legacy availability and v2 certification.
+
+| `truthful-code-intelligence-levels` | `production` | code intelligence maintainers | `semantic_capabilities`, `code_index`, `symbol_rename` | Linux, macOS, Windows | none |
+
+- `truthful-code-intelligence-levels`: typed claims in `crates/medusa-intelligence/src/capabilities.rs`, dedicated registry ownership in `crates/medusa-capabilities/src/registry.rs`, production dispatch in `crates/medusa-agent/src/tools/intelligence.rs`, and guarded ambiguity/parse-error refusal tests. TypeScript/JavaScript LSP helpers remain explicitly unavailable above text search until a certified dispatcher exists.

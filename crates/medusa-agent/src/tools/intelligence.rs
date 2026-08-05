@@ -1,13 +1,22 @@
 use std::path::{Path, PathBuf};
 
 use medusa_core::MedusaResult;
-use medusa_intelligence::{CodeIndex, PatchTransaction, TextEdit, format_changed, select_tests};
+use medusa_intelligence::{
+    CodeIndex, PatchTransaction, TextEdit, format_changed, language_capability_profiles,
+    select_tests,
+};
 use serde_json::{Value, json};
 
 use crate::{
     policy::safe_path,
     tools::{input_string, input_usize},
 };
+
+pub(crate) fn semantic_capabilities() -> MedusaResult<String> {
+    Ok(serde_json::to_string_pretty(&json!({
+        "profiles": language_capability_profiles(),
+    }))?)
+}
 
 pub(crate) fn code_index(repo: &Path, input: &Value) -> MedusaResult<String> {
     let index = CodeIndex::build(repo)?;

@@ -639,6 +639,15 @@ fn repository_defined_checks(repo: &Path) -> Result<Vec<VerificationCheck>> {
             "repository verification script",
         ));
     }
+    if repo.join("verify.py").is_file() {
+        checks.push(VerificationCheck::command(
+            VerificationCheckKind::RepositoryDefined,
+            "python",
+            &["verify.py"],
+            ".",
+            "repository verification script",
+        ));
+    }
     let path = repo.join(".medusa/verification.json");
     if !path.is_file() {
         return Ok(checks);
@@ -999,6 +1008,51 @@ mod tests {
                 .iter()
                 .any(|check| check.kind == VerificationCheckKind::Accessibility)
         );
+    }
+
+    #[test]
+    fn root_python_verifier_is_preserved_for_mixed_language_changes() {
+        let directory = tempfile::tempdir().unwrap();
+        fs::write(
+            directory.path().join("package.json"),
+            r#"{"scripts":{"test":"node test.mjs"}}"#,
+        )
+        .unwrap();
+        fs::write(directory.path().join("verify.py"), "print('verified')\n").unwrap();
+        fs::write(directory.path().join("value.txt"), "42\n").unwrap();
+        fs::create_dir_all(directory.path().join("src")).unwrap();
+        fs::write(
+            directory.path().join("src/slugify.py"),
+            "def slugify(): pass\n",
+        )
+        .unwrap();
+        fs::write(
+            directory.path().join("src/counter.js"),
+            "export default 1;\n",
+        )
+        .unwrap();
+        let components = vec![
+            ChangedComponent::new(ChangeKind::Modified, "value.txt").unwrap(),
+            ChangedComponent::new(ChangeKind::Modified, "src/slugify.py").unwrap(),
+            ChangedComponent::new(ChangeKind::Modified, "src/counter.js").unwrap(),
+        ];
+
+        let plan = VerificationPlanner::plan(directory.path(), "repo", "commit", &components, &[])
+            .unwrap();
+
+        assert!(plan.checks.iter().any(|check| {
+            check.kind == VerificationCheckKind::RepositoryDefined
+                && check.program.as_deref() == Some("python")
+                && check.args.len() == 1
+                && check.args[0] == "verify.py"
+        }));
+        assert!(plan.checks.iter().any(|check| {
+            check.kind == VerificationCheckKind::Unit
+                && check.program.as_deref() == Some("npm")
+                && check.args.len() == 2
+                && check.args[0] == "run"
+                && check.args[1] == "test"
+        }));
     }
 
     #[test]
