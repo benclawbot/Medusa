@@ -123,7 +123,12 @@ impl PatchTransaction {
             }
         }
         let definition = definitions[0];
-        if definition.path.extension().and_then(|extension| extension.to_str()) != Some("rs") {
+        if definition
+            .path
+            .extension()
+            .and_then(|extension| extension.to_str())
+            != Some("rs")
+        {
             return Err(invalid(
                 "guarded symbol rename is currently production-certified for Rust only",
             ));

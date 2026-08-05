@@ -163,16 +163,8 @@ mod tests {
     #[test]
     fn guarded_rename_refuses_ambiguous_and_incomplete_indexes() {
         let ambiguous = tempfile::tempdir().expect("ambiguous");
-        fs::write(
-            ambiguous.path().join("first.rs"),
-            "fn duplicate() {}\n",
-        )
-        .expect("first");
-        fs::write(
-            ambiguous.path().join("second.rs"),
-            "fn duplicate() {}\n",
-        )
-        .expect("second");
+        fs::write(ambiguous.path().join("first.rs"), "fn duplicate() {}\n").expect("first");
+        fs::write(ambiguous.path().join("second.rs"), "fn duplicate() {}\n").expect("second");
         let index = CodeIndex::build(ambiguous.path()).expect("ambiguous index");
         let mut transaction = PatchTransaction::new();
         let error = transaction
@@ -198,8 +190,11 @@ mod tests {
     #[test]
     fn guarded_rename_refuses_python_lexical_matches() {
         let directory = tempfile::tempdir().expect("python");
-        fs::write(directory.path().join("module.py"), "def old_name():\n    return 1\n")
-            .expect("python source");
+        fs::write(
+            directory.path().join("module.py"),
+            "def old_name():\n    return 1\n",
+        )
+        .expect("python source");
         let index = CodeIndex::build(directory.path()).expect("index");
         let mut transaction = PatchTransaction::new();
         let error = transaction

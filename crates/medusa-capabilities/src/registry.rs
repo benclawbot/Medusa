@@ -962,7 +962,10 @@ mod tests {
         let registry = ready_registry();
         assert!(registry.available(Capability::CodeIntelligence));
         assert_eq!(
-            registry.entry("tool.semantic_capabilities").expect("report").capability,
+            registry
+                .entry("tool.semantic_capabilities")
+                .expect("report")
+                .capability,
             Capability::CodeIntelligence
         );
         assert_eq!(
@@ -970,17 +973,24 @@ mod tests {
             Capability::CodeIntelligence
         );
         assert_eq!(
-            registry.entry("tool.symbol_rename").expect("rename").capability,
+            registry
+                .entry("tool.symbol_rename")
+                .expect("rename")
+                .capability,
             Capability::CodeIntelligence
         );
-        assert!(registry
-            .model_tools(true)
-            .iter()
-            .any(|tool| tool.name == "semantic_capabilities"));
-        assert!(!registry
-            .model_tools(true)
-            .iter()
-            .any(|tool| tool.name == "symbol_rename"));
+        assert!(
+            registry
+                .model_tools(true)
+                .iter()
+                .any(|tool| tool.name == "semantic_capabilities")
+        );
+        assert!(
+            !registry
+                .model_tools(true)
+                .iter()
+                .any(|tool| tool.name == "symbol_rename")
+        );
     }
 
     #[test]

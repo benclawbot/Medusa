@@ -43,7 +43,11 @@ pub struct LanguageCapabilityProfile {
 /// Returns the exact language-intelligence levels currently reachable through production tools.
 #[must_use]
 pub fn language_capability_profiles() -> Vec<LanguageCapabilityProfile> {
-    vec![rust_profile(), python_profile(), typescript_javascript_profile()]
+    vec![
+        rust_profile(),
+        python_profile(),
+        typescript_javascript_profile(),
+    ]
 }
 
 fn claim(
@@ -172,14 +176,8 @@ fn python_profile() -> LanguageCapabilityProfile {
 }
 
 fn typescript_javascript_profile() -> LanguageCapabilityProfile {
-    let unavailable = |level, detail| {
-        claim(
-            level,
-            LanguageCapabilityStatus::Unavailable,
-            detail,
-            None,
-        )
-    };
+    let unavailable =
+        |level, detail| claim(level, LanguageCapabilityStatus::Unavailable, detail, None);
     LanguageCapabilityProfile {
         language: "typescript_javascript".into(),
         adapter: "LSP primitives without a certified production dispatcher".into(),

@@ -769,12 +769,8 @@ mod tests {
     #[test]
     fn semantic_capability_tool_reports_exact_language_levels() {
         let directory = tempfile::tempdir().expect("tempdir");
-        let output = execute_tool(
-            directory.path(),
-            "semantic_capabilities",
-            &json!({}),
-        )
-        .expect("semantic capability report");
+        let output = execute_tool(directory.path(), "semantic_capabilities", &json!({}))
+            .expect("semantic capability report");
         let report: serde_json::Value = serde_json::from_str(&output).expect("JSON report");
         let profiles = report["profiles"].as_array().expect("profiles");
         assert_eq!(profiles.len(), 3);
@@ -782,12 +778,14 @@ mod tests {
             .iter()
             .find(|profile| profile["language"] == "typescript_javascript")
             .expect("typescript profile");
-        assert!(typescript["claims"]
-            .as_array()
-            .expect("claims")
-            .iter()
-            .filter(|claim| claim["level"] != "text_only")
-            .all(|claim| claim["status"] == "unavailable"));
+        assert!(
+            typescript["claims"]
+                .as_array()
+                .expect("claims")
+                .iter()
+                .filter(|claim| claim["level"] != "text_only")
+                .all(|claim| claim["status"] == "unavailable")
+        );
     }
 
     #[test]
