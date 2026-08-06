@@ -1,0 +1,108 @@
+n::Read],
+             false,
+         ),
++        tool_entry(
++            ToolIdentity {
++                states,
++                name: "typescript_semantic",
++            },
++            Capability::CodeIntelligence,
++            "Query TypeScript/JavaScript definitions, references, diagnostics, or workspace symbols through the repository-scoped language server.",
++            json!({"type":"object","properties":{"operation":{"type":"string","enum":["definition","references","diagnostics","workspace_symbols"]},"path":{"type":"string"},"line":{"type":"integer","minimum":0},"character":{"type":"integer","minimum":0},"query":{"type":"string"}},"required":["operation"],"additionalProperties":false}),
++            "medusa-agent::tools::intelligence::typescript_semantic",
++            [RegistryPermission::Read, RegistryPermission::ProcessSpawn],
++            false,
++        ),
+         tool_entry(
+             ToolIdentity {
+                 states,
+@@ -972,6 +984,13 @@ mod tests {
+             registry.entry("tool.code_index").expect("index").capability,
+             Capability::CodeIntelligence
+         );
++        assert_eq!(
++            registry
++                .entry("tool.typescript_semantic")
++                .expect("typescript semantic")
++                .capability,
++            Capability::CodeIntelligence
++        );
+         assert_eq!(
+             registry
+                 .entry("tool.symbol_rename")
+@@ -985,6 +1004,12 @@ mod tests {
+                 .iter()
+                 .any(|tool| tool.name == "semantic_capabilities")
+         );
++        assert!(
++            registry
++                .model_tools(true)
++                .iter()
++                .any(|tool| tool.name == "typescript_semantic")
++        );
+         assert!(
+             !registry
+                 .model_tools(true)
+diff --git a/crates/medusa-intelligence/src/capabilities.rs b/crates/medusa-intelligence/src/capabilities.rs
+index 27374ba..738a828 100644
+--- a/crates/medusa-intelligence/src/capabilities.rs
++++ b/crates/medusa-intelligence/src/capabilities.rs
+@@ -176,11 +176,9 @@ fn python_profile() -> LanguageCapabilityProfile {
+ }
+ 
+ fn typescript_javascript_profile() -> LanguageCapabilityProfile {
+-    let unavailable =
+-        |level, detail| claim(level, LanguageCapabilityStatus::Unavailable, detail, None);
+     LanguageCapabilityProfile {
+         language: "typescript_javascript".into(),
+-        adapter: "LSP primitives without a certified production dispatcher".into(),
++        adapter: "typescript-language-server over repository-scoped LSP stdio".into(),
+         claims: vec![
+             claim(
+                 LanguageCapabilityLevel::TextOnly,
+@@ -188,37 +186,50 @@ fn typescript_javascript_profile() -> LanguageCapabilityProfile {
+                 "bounded UTF-8 repository search",
+                 Some("medusa-agent::tools::filesystem::search"),
+             ),
+-            unavailable(
++            claim(
+                 LanguageCapabilityLevel::ParsedSymbols,
+-                "no TypeScript/JavaScript parser-backed production tool is registered",
++                LanguageCapabilityStatus::Production,
++                "TypeScript language-service parsing is available when the repository-scoped adapter readiness probe succeeds",
++                Some("medusa-agent::tools::intelligence::typescript_semantic"),
+             ),
+-            unavailable(
++            claim(
+                 LanguageCapabilityLevel::Definitions,
+-                "LSP normalization exists in medusa-intelligence but has no production lifecycle owner",
++                LanguageCapabilityStatus::Production,
++                "position-based definitions are normalized to repository paths and ranges",
++                Some("medusa-agent::tools::intelligence::typescript_semantic"),
+             ),
+-            unavailable(
++            claim(
+                 LanguageCapabilityLevel::References,
+-                "LSP normalization exists in medusa-intelligence but has no production lifecycle owner",
++                LanguageCapabilityStatus::Production,
++                "position-based cross-file references are normalized to repository paths and ranges",
++                Some("medusa-agent::tools::intelligence::typescript_semantic"),
+             ),
+-            unavailable(
++            claim(
+                 LanguageCapabilityLevel::Diagnostics,
+-                "diagnostic normalization exists but no server process is discovered or dispatched",
++                LanguageCapabilityStatus::Production,
++                "pull diagnostics are bound to the opened source file and source SHA-256 evidence",
++                Some("medusa-agent::tools::intelligence::typescript_semantic"),
+             ),
+-            unavailable(
++            claim(
+                 LanguageCapabilityLevel::WorkspaceSymbols,
+-                "workspace-symbol normalization exists but no production handler is registered",
++                LanguageCapabilityStatus::Production,
++                "workspace-symbol queries run against the deterministically selected monorepo root",
++                Some("medusa-agent::tools::intelligence::typescript_semantic"),
+             ),
+-            unavailable(
++            

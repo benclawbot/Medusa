@@ -1,0 +1,38 @@
+name: Apply TypeScript semantic tranche
+
+on:
+  push:
+    branches:
+      - codex/656-typescript-readonly-semantics
+    paths:
+      - .medusa/ts-semantic-part-*
+      - .github/workflows/apply-typescript-semantic.yml
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          fetch-depth: 0
+      - name: Reconstruct and verify patch
+        shell: bash
+        run: |
+          set -euo pipefail
+          cat .medusa/ts-semantic-part-* > /tmp/typescript-semantic.patch
+          echo 'a3b46b7613679b1869a1f007e248d03c4db093efaa3a446258ce1120c6f62ae6  /tmp/typescript-semantic.patch' | sha256sum -c -
+          git apply --check /tmp/typescript-semantic.patch
+      - name: Apply clean source change
+        shell: bash
+        run: |
+          set -euo pipefail
+          git apply /tmp/typescript-semantic.patch
+          rm -f .medusa/ts-semantic-part-* .github/workflows/apply-typescript-semantic.yml
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add -A
+          git commit -m 'Add production TypeScript read-only semantics'
+          git push

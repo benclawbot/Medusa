@@ -1,0 +1,128 @@
+claim(
+                 LanguageCapabilityLevel::GuardedRefactoring,
+-                "workspace-edit normalization is not connected to the v2 review and verification transaction",
++                LanguageCapabilityStatus::Unavailable,
++                "TypeScript rename remains withheld until workspace edits are bound to stale-state and transactional mutation preconditions",
++                None,
+             ),
+         ],
+         evidence: vec![
++            "crates/medusa-intelligence/src/typescript_workspace.rs".into(),
++            "crates/medusa-intelligence/src/typescript_semantic.rs".into(),
+             "crates/medusa-intelligence/src/lsp.rs".into(),
+             "crates/medusa-intelligence/src/lsp_navigation.rs".into(),
+-            "crates/medusa-intelligence/src/lsp_actions.rs".into(),
+             "crates/medusa-intelligence/src/lsp_semantics.rs".into(),
+-            "no medusa-agent TypeScript/JavaScript dispatch route".into(),
++            "crates/medusa-agent/src/tools/intelligence.rs".into(),
+         ],
+     }
+ }
+@@ -228,7 +239,7 @@ mod tests {
+     use super::*;
+ 
+     #[test]
+-    fn profiles_are_deterministic_and_do_not_overclaim_typescript() {
++    fn profiles_are_deterministic_and_certify_read_only_typescript_semantics() {
+         let profiles = language_capability_profiles();
+         assert_eq!(
+             profiles
+@@ -241,9 +252,30 @@ mod tests {
+             .iter()
+             .find(|profile| profile.language == "typescript_javascript")
+             .expect("typescript profile");
+-        assert!(typescript.claims.iter().all(|claim| {
+-            claim.level == LanguageCapabilityLevel::TextOnly
+-                || claim.status == LanguageCapabilityStatus::Unavailable
+-        }));
++        for level in [
++            LanguageCapabilityLevel::Definitions,
++            LanguageCapabilityLevel::References,
++            LanguageCapabilityLevel::Diagnostics,
++            LanguageCapabilityLevel::WorkspaceSymbols,
++        ] {
++            assert_eq!(
++                typescript
++                    .claims
++                    .iter()
++                    .find(|claim| claim.level == level)
++                    .expect("claim")
++                    .status,
++                LanguageCapabilityStatus::Production
++            );
++        }
++        assert_eq!(
++            typescript
++                .claims
++                .iter()
++                .find(|claim| claim.level == LanguageCapabilityLevel::GuardedRefactoring)
++                .expect("rename claim")
++                .status,
++            LanguageCapabilityStatus::Unavailable
++        );
+     }
+ }
+diff --git a/crates/medusa-intelligence/src/lib.rs b/crates/medusa-intelligence/src/lib.rs
+index f336085..64c6e81 100644
+--- a/crates/medusa-intelligence/src/lib.rs
++++ b/crates/medusa-intelligence/src/lib.rs
+@@ -27,6 +27,7 @@ mod structured_transaction;
+ mod support;
+ mod symbol_impact;
+ mod symbol_table;
++mod typescript_semantic;
+ mod typescript_workspace;
+ 
+ pub use ast::{ParseDiagnostic, RustAstDocument, RustAstNode, SourcePosition, SourceRange};
+@@ -82,6 +83,10 @@ pub use symbol_impact::{RustImpactFile, RustSymbolImpact, analyze_rust_symbol_im
+ pub use symbol_table::{
+     RustScope, RustScopeKind, RustSymbol, RustSymbolId, RustSymbolKind, RustSymbolTable,
+ };
++pub use typescript_semantic::{
++    TypeScriptSemanticError, TypeScriptSemanticEvidence, TypeScriptSemanticOperation,
++    TypeScriptSemanticResult, run_typescript_semantic,
++};
+ pub use typescript_workspace::{
+     TypeScriptWorkspace, TypeScriptWorkspaceError, discover_typescript_workspace,
+ };
+diff --git a/crates/medusa-runtime/src/support.rs b/crates/medusa-runtime/src/support.rs
+index 4b09bec..dfef408 100644
+--- a/crates/medusa-runtime/src/support.rs
++++ b/crates/medusa-runtime/src/support.rs
+@@ -529,6 +529,10 @@ pub(super) fn tool_title(tool: &str, arguments: &Value) -> String {
+         "fs_write" => format!("Write({})", json_string(arguments, "path")),
+         "search_text" => format!("Search({})", json_string(arguments, "query")),
+         "semantic_capabilities" => "Semantic capability report".to_owned(),
++        "typescript_semantic" => format!(
++            "TypeScriptSemantic({})",
++            json_string(arguments, "operation")
++        ),
+         "code_index" => {
+             let name = json_string(arguments, "name");
+             if name.is_empty() {
+diff --git a/docs/CAPABILITY-CLAIMS.json b/docs/CAPABILITY-CLAIMS.json
+index 5aa0244..d8f3c31 100644
+--- a/docs/CAPABILITY-CLAIMS.json
++++ b/docs/CAPABILITY-CLAIMS.json
+@@ -479,6 +479,8 @@
+       "production_paths": [
+         "crates/medusa-capabilities/src/registry.rs",
+         "crates/medusa-intelligence/src/capabilities.rs",
++        "crates/medusa-intelligence/src/typescript_workspace.rs",
++        "crates/medusa-intelligence/src/typescript_semantic.rs",
+         "crates/medusa-agent/src/tools/intelligence.rs"
+       ],
+       "test_paths": [
+@@ -494,6 +496,7 @@
+       "entrypoints": [
+         "semantic_capabilities",
+         "code_index",
++        "typescript_semantic",
+         "symbol_rename"
+       ],
+       "supported_platforms": [
+@@ -501,7 +504,9 @@
+         "macos",
+         "windows"
+       ],
+-      "external_dependencies"

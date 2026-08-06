@@ -1,0 +1,137 @@
+diff --git a/crates/medusa-agent/src/engine_support.rs b/crates/medusa-agent/src/engine_support.rs
+index 78f166a..9e82755 100644
+--- a/crates/medusa-agent/src/engine_support.rs
++++ b/crates/medusa-agent/src/engine_support.rs
+@@ -111,6 +111,7 @@ pub(crate) fn tool_allowed(mode: Mode, tool: &str) -> bool {
+                 | "search_text"
+                 | "semantic_capabilities"
+                 | "code_index"
++                | "typescript_semantic"
+                 | "web_search"
+                 | "web_fetch"
+                 | "skill_read"
+diff --git a/crates/medusa-agent/src/team.rs b/crates/medusa-agent/src/team.rs
+index faddc28..9d63733 100644
+--- a/crates/medusa-agent/src/team.rs
++++ b/crates/medusa-agent/src/team.rs
+@@ -107,6 +107,7 @@ impl AgentExecutionPolicy {
+             "search_text".to_owned(),
+             "semantic_capabilities".to_owned(),
+             "code_index".to_owned(),
++            "typescript_semantic".to_owned(),
+             "web_search".to_owned(),
+             "web_fetch".to_owned(),
+             "skill_read".to_owned(),
+diff --git a/crates/medusa-agent/src/tool_orchestration.rs b/crates/medusa-agent/src/tool_orchestration.rs
+index cc600de..e23f2f0 100644
+--- a/crates/medusa-agent/src/tool_orchestration.rs
++++ b/crates/medusa-agent/src/tool_orchestration.rs
+@@ -117,6 +117,21 @@ pub(crate) fn registry() -> BTreeMap<&'static str, ToolCapability> {
+             escalation: EscalationPolicy::Direct,
+         },
+     );
++    registry.insert(
++        "typescript_semantic",
++        ToolCapability {
++            name: "typescript_semantic".into(),
++            capability: "typescript_language_server_semantics".into(),
++            risk: RiskClass::ReadOnly,
++            latency_weight: 32,
++            token_weight: 12,
++            cacheable: false,
++            concurrent: false,
++            fallback: Some("search_text".into()),
++            expected_output_bytes: 16 * 1024,
++            escalation: EscalationPolicy::SearchBeforeRead,
++        },
++    );
+     registry.insert(
+         "code_index",
+         ToolCapability {
+diff --git a/crates/medusa-agent/src/tools/intelligence.rs b/crates/medusa-agent/src/tools/intelligence.rs
+index b8a0caa..76c0525 100644
+--- a/crates/medusa-agent/src/tools/intelligence.rs
++++ b/crates/medusa-agent/src/tools/intelligence.rs
+@@ -2,8 +2,8 @@ use std::path::{Path, PathBuf};
+ 
+ use medusa_core::MedusaResult;
+ use medusa_intelligence::{
+-    CodeIndex, PatchTransaction, TextEdit, format_changed, language_capability_profiles,
+-    select_tests,
++    CodeIndex, PatchTransaction, TextEdit, TypeScriptSemanticOperation, format_changed,
++    language_capability_profiles, run_typescript_semantic, select_tests,
+ };
+ use serde_json::{Value, json};
+ 
+@@ -18,6 +18,36 @@ pub(crate) fn semantic_capabilities() -> MedusaResult<String> {
+     }))?)
+ }
+ 
++
++pub(crate) fn typescript_semantic(repo: &Path, input: &Value) -> MedusaResult<String> {
++    let operation = serde_json::from_value::<TypeScriptSemanticOperation>(
++        input
++            .get("operation")
++            .cloned()
++            .ok_or_else(|| crate::tools::invalid_tool("operation is required"))?,
++    )
++    .map_err(|error| crate::tools::invalid_tool(error.to_string()))?;
++    let target = input
++        .get("path")
++        .and_then(Value::as_str)
++        .map(Path::new);
++    if let Some(path) = target {
++        let _ = safe_path(repo, path.to_string_lossy().as_ref())?;
++    }
++    let line = input
++        .get("line")
++        .and_then(Value::as_u64)
++        .map(|value| value as u32);
++    let character = input
++        .get("character")
++        .and_then(Value::as_u64)
++        .map(|value| value as u32);
++    let query = input.get("query").and_then(Value::as_str);
++    let result = run_typescript_semantic(repo, operation, target, line, character, query)
++        .map_err(|error| crate::tools::invalid_tool(error.to_string()))?;
++    Ok(serde_json::to_string_pretty(&result)?)
++}
++
+ pub(crate) fn code_index(repo: &Path, input: &Value) -> MedusaResult<String> {
+     let index = CodeIndex::build(repo)?;
+     if let Some(name) = input.get("name").and_then(Value::as_str) {
+diff --git a/crates/medusa-agent/src/tools/mod.rs b/crates/medusa-agent/src/tools/mod.rs
+index 1390ee8..1a2413d 100644
+--- a/crates/medusa-agent/src/tools/mod.rs
++++ b/crates/medusa-agent/src/tools/mod.rs
+@@ -103,6 +103,7 @@ pub(crate) fn execute_tool(repo: &Path, name: &str, input: &Value) -> MedusaResu
+         "search_text" => filesystem::search(repo, input_string(input, "query")?),
+         "semantic_capabilities" => intelligence::semantic_capabilities(),
+         "code_index" => intelligence::code_index(repo, input),
++        "typescript_semantic" => intelligence::typescript_semantic(repo, input),
+         "patch_apply" => intelligence::patch_apply(repo, input),
+         "symbol_rename" => intelligence::symbol_rename(repo, input),
+         "shell_run" => {
+diff --git a/crates/medusa-capabilities/src/registry.rs b/crates/medusa-capabilities/src/registry.rs
+index 7971032..f344091 100644
+--- a/crates/medusa-capabilities/src/registry.rs
++++ b/crates/medusa-capabilities/src/registry.rs
+@@ -621,6 +621,18 @@ fn builtin_tool_entries(
+             [RegistryPermission::Read],
+             false,
+         ),
++        tool_entry(
++            ToolIdentity {
++                states,
++                name: "typescript_semantic",
++            },
++            Capability::CodeIntelligence,
++            "Query TypeScript/JavaScript definitions, references, diagnostics, or workspace symbols through the repository-scoped language server.",
++            json!({"type":"object","properties":{"operation":{"type":"string","enum":["definition","references","diagnostics","workspace_symbols"]},"path":{"type":"string"},"line":{"type":"integer","minimum":0},"character":{"type":"integer","minimum":0},"query":{"type":"string"}},"required":["operation"],"additionalProperties":false}),
++            "medusa-agent::tools::intelligence::typescript_semantic",
++            [RegistryPermission::Read, RegistryPermission::ProcessSpawn],
++            false,
++        ),
+         tool_entry(
+             ToolIdentity {
+                 states,

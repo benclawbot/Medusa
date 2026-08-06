@@ -1,0 +1,44 @@
+: [],
++      "external_dependencies": [
++        "typescript-language-server for TypeScript/JavaScript semantic operations"
++      ],
+       "observability": [
+         "docs/OBSERVABILITY.md"
+       ],
+diff --git a/docs/CAPABILITY-EVIDENCE.md b/docs/CAPABILITY-EVIDENCE.md
+index f5bd090..0236e3e 100644
+--- a/docs/CAPABILITY-EVIDENCE.md
++++ b/docs/CAPABILITY-EVIDENCE.md
+@@ -84,6 +84,6 @@ Browser and plugin structure must not be presented as active capability merely b
+ 
+ Platform support is explicit per capability and does not imply identical containment internals. External dependencies are recorded so provider APIs, Git services, Node sidecars, or artifact-attestation infrastructure cannot be mistaken for repository-owned guarantees. README, configuration, compatibility, release documentation, and UI labels may describe only behavior at or below the recorded legacy availability and v2 certification.
+ 
+-| `truthful-code-intelligence-levels` | `production` | code intelligence maintainers | `semantic_capabilities`, `code_index`, `symbol_rename` | Linux, macOS, Windows | none |
++| `truthful-code-intelligence-levels` | `production` | code intelligence maintainers | `semantic_capabilities`, `code_index`, `typescript_semantic`, `symbol_rename` | Linux, macOS, Windows | `typescript-language-server` for TypeScript/JavaScript semantics |
+ 
+-- `truthful-code-intelligence-levels`: typed claims in `crates/medusa-intelligence/src/capabilities.rs`, dedicated registry ownership in `crates/medusa-capabilities/src/registry.rs`, production dispatch in `crates/medusa-agent/src/tools/intelligence.rs`, and guarded ambiguity/parse-error refusal tests. TypeScript/JavaScript LSP helpers remain explicitly unavailable above text search until a certified dispatcher exists.
++- `truthful-code-intelligence-levels`: typed claims in `crates/medusa-intelligence/src/capabilities.rs`, dedicated registry ownership in `crates/medusa-capabilities/src/registry.rs`, production dispatch in `crates/medusa-agent/src/tools/intelligence.rs`, and guarded ambiguity/parse-error refusal tests. TypeScript/JavaScript definitions, references, pull diagnostics, and workspace symbols are certified through `typescript_semantic`; guarded rename remains unavailable pending stale-state transactional proof.
+diff --git a/docs/CODE-INTELLIGENCE-CAPABILITIES.md b/docs/CODE-INTELLIGENCE-CAPABILITIES.md
+index 5cd4fd9..222898e 100644
+--- a/docs/CODE-INTELLIGENCE-CAPABILITIES.md
++++ b/docs/CODE-INTELLIGENCE-CAPABILITIES.md
+@@ -8,9 +8,9 @@
+ | --- | --- | --- | --- |
+ | Rust | `tree-sitter-rust` static index | Parsed declarations plus repository-wide exact-name definition and reference queries | References are syntax-token occurrences, not type-directed resolution. Compiler diagnostics are not dispatched. |
+ | Python | bounded lexical scanner | `def`, `async def`, and `class` declarations plus comment- and string-aware identifier occurrences | This is not a Python parser. Diagnostics and rename are unavailable. |
+-| TypeScript/JavaScript | dormant LSP normalization primitives | Text search only | Definition, reference, diagnostic, workspace-symbol, and rename code exists below the production boundary but has no registered server lifecycle or agent dispatcher. Those levels remain unavailable. |
++| TypeScript/JavaScript | `typescript-language-server` over repository-scoped LSP stdio | Definitions, references, pull diagnostics, and workspace symbols through `typescript_semantic` | Requires the adapter executable. Workspace selection is deterministic and bounded; guarded rename remains unavailable. |
+ 
+-The registry owns the production `CodeIntelligence` capability. `code_index`, `semantic_capabilities`, and `symbol_rename` are registered under it rather than under generic filesystem access. `patch_apply` remains a filesystem mutation because it does not depend on semantic analysis.
++The registry owns the production `CodeIntelligence` capability. `code_index`, `semantic_capabilities`, `typescript_semantic`, and `symbol_rename` are registered under it rather than under generic filesystem access. `patch_apply` remains a filesystem mutation because it does not depend on semantic analysis.
+ 
+ ## Guarded Rust rename
+ 
+@@ -32,6 +32,6 @@ Ambiguous definitions, Python lexical matches, cross-language same-name occurren
+ - Static index and refresh authority: `crates/medusa-intelligence/src/index.rs` and `snapshot.rs`
+ - Guarded patch transaction: `crates/medusa-intelligence/src/patch.rs`
+ - Production agent handlers: `crates/medusa-agent/src/tools/intelligence.rs`
+-- Dormant LSP process and normalization primitives: `crates/medusa-intelligence/src/lsp*.rs`
++- TypeScript workspace, lifecycle, and semantic dispatcher: `crates/medusa-intelligence/src/typescript_workspace.rs`, `typescript_semantic.rs`, and `lsp*.rs`
+ 
+ A language level may be promoted only after its real production entrypoint has a lifecycle owner, dependency discovery, permission mapping, fail-closed handler, freshness evidence, cross-platform fixtures, and capability-registry tests. Merely adding parser or LSP helper code does not change the production claim.
