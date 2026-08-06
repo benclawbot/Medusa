@@ -49,7 +49,7 @@ pub fn validate_guarded_rename(
         by_path
             .entry(text.path.clone())
             .or_default()
-            .push(text.range);
+            .push(text.range.clone());
     }
 
     for (path, ranges) in &mut by_path {
@@ -79,9 +79,7 @@ pub fn validate_guarded_rename(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{
-        LspAnnotatedTextEdit, LspPosition, LspResourceOperation, LspWorkspaceOperation,
-    };
+    use crate::{LspAnnotatedTextEdit, LspPosition, LspResourceOperation, LspWorkspaceOperation};
 
     fn text_edit(path: &str, start: u32, end: u32) -> LspWorkspaceOperation {
         LspWorkspaceOperation::Text(LspAnnotatedTextEdit {
@@ -142,10 +140,7 @@ mod tests {
     #[test]
     fn refuses_overlapping_and_resource_edits() {
         let overlap = LspWorkspaceEdit {
-            operations: vec![
-                text_edit("src/lib.ts", 0, 4),
-                text_edit("src/lib.ts", 3, 7),
-            ],
+            operations: vec![text_edit("src/lib.ts", 0, 4), text_edit("src/lib.ts", 3, 7)],
             annotations: BTreeMap::new(),
         };
         let error = validate_guarded_rename(
@@ -167,8 +162,8 @@ mod tests {
             )],
             annotations: BTreeMap::new(),
         };
-        let error = validate_guarded_rename(resource, &[], &[])
-            .expect_err("resource operation must fail");
+        let error =
+            validate_guarded_rename(resource, &[], &[]).expect_err("resource operation must fail");
         assert!(error.contains("resource operations"));
     }
 }
