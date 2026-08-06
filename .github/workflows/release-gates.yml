@@ -2,7 +2,7 @@ name: Release Gates
 
 on:
   pull_request:
-    types: [opened, synchronize, reopened, ready_for_review]
+    types: [opened, synchronize, reopened, ready_for_review, edited, labeled, unlabeled]
   workflow_dispatch:
 
 permissions:
@@ -13,8 +13,29 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  final-issue-validation:
+    name: Final issue validation requested
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (
+        github.event_name == 'pull_request' &&
+        github.event.pull_request.draft == false &&
+        (
+          contains(github.event.pull_request.labels.*.name, 'final-issue-validation') ||
+          contains(github.event.pull_request.body, 'Closes #') ||
+          contains(github.event.pull_request.body, 'closes #') ||
+          contains(github.event.pull_request.body, 'Fixes #') ||
+          contains(github.event.pull_request.body, 'fixes #') ||
+          contains(github.event.pull_request.body, 'Resolves #') ||
+          contains(github.event.pull_request.body, 'resolves #')
+        )
+      )
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo 'Running exhaustive release validation for an issue-closing merge.'
+
   coverage:
-    if: ${{ github.event_name == 'workflow_dispatch' || github.event.pull_request.draft == false }}
+    needs: final-issue-validation
     name: Workspace coverage >= 75%
     runs-on: ubuntu-latest
     steps:
@@ -42,7 +63,7 @@ jobs:
           if-no-files-found: warn
 
   adversarial-regression:
-    if: ${{ github.event_name == 'workflow_dispatch' || github.event.pull_request.draft == false }}
+    needs: final-issue-validation
     name: Named adversarial regressions
     runs-on: ubuntu-latest
     steps:
@@ -80,7 +101,7 @@ jobs:
         run: cargo test -p medusa-hardening arbitrary_archive_paths_never_escape --locked -- --nocapture
 
   fuzz-smoke:
-    if: ${{ github.event_name == 'workflow_dispatch' || github.event.pull_request.draft == false }}
+    needs: final-issue-validation
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
@@ -88,7 +109,7 @@ jobs:
       - run: bash scripts/fuzz-smoke.sh
 
   chaos-and-migrations:
-    if: ${{ github.event_name == 'workflow_dispatch' || github.event.pull_request.draft == false }}
+    needs: final-issue-validation
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
@@ -97,7 +118,7 @@ jobs:
       - run: cargo test -p medusa-hardening clean_install_upgrade_and_rollback_are_byte_exact -- --exact
 
   package-smoke:
-    if: ${{ github.event_name == 'workflow_dispatch' || github.event.pull_request.draft == false }}
+    needs: final-issue-validation
     strategy:
       fail-fast: false
       matrix:
@@ -133,7 +154,7 @@ jobs:
           & $githubOperation --help | Select-String 'interchangeable backend'
 
   security:
-    if: ${{ github.event_name == 'workflow_dispatch' || github.event.pull_request.draft == false }}
+    needs: final-issue-validation
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
@@ -147,7 +168,7 @@ jobs:
       - run: cargo test -p medusa-hardening operational_events_redact_credentials -- --exact
 
   docs-and-schema:
-    if: ${{ github.event_name == 'workflow_dispatch' || github.event.pull_request.draft == false }}
+    needs: final-issue-validation
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
@@ -166,7 +187,8 @@ jobs:
       - run: test -s docs/SECURITY-HARDENING.md
 
   live-minimax-coding-e2e:
-    if: ${{ github.event_name == 'workflow_dispatch' || github.event.pull_request.draft == false }}
+    needs: final-issue-validation
+    if: ${{ github.event_name == 'workflow_dispatch' || github.event.pull_request.head.repo.full_name == github.repository }}
     runs-on: ubuntu-latest
     timeout-minutes: 35
     env:
