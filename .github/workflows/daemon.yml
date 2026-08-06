@@ -2,7 +2,7 @@ name: Daemon
 
 on:
   pull_request:
-    types: [opened, synchronize, reopened, ready_for_review, edited, labeled, unlabeled]
+    types: [opened, synchronize, reopened, ready_for_review, labeled, unlabeled]
   workflow_dispatch:
 
 permissions:
@@ -19,15 +19,7 @@ jobs:
       (
         github.event_name == 'pull_request' &&
         github.event.pull_request.draft == false &&
-        (
-          contains(github.event.pull_request.labels.*.name, 'final-issue-validation') ||
-          contains(github.event.pull_request.body, 'Closes #') ||
-          contains(github.event.pull_request.body, 'closes #') ||
-          contains(github.event.pull_request.body, 'Fixes #') ||
-          contains(github.event.pull_request.body, 'fixes #') ||
-          contains(github.event.pull_request.body, 'Resolves #') ||
-          contains(github.event.pull_request.body, 'resolves #')
-        )
+        contains(github.event.pull_request.labels.*.name, 'final-issue-validation')
       )
     name: daemon-and-tui (${{ matrix.os }})
     strategy:
