@@ -61,11 +61,6 @@ jobs:
           fi
           git config user.name 'Medusa CI'
           git config user.email 'actions@users.noreply.github.com'
-          git add crates/medusa-multi-agent-scheduler/src/lib.rs \
-                  crates/medusa-runtime/src/production_orchestrator.rs \
-                  crates/medusa-runtime/src/multi_agent_coordinator.rs \
-                  crates/medusa-runtime/src/mutating_worker_coordinator.rs \
-                  crates/medusa-runtime/src/lib.rs \
-                  .medusa/patches/685-fast-lane.patch.gz.b64
+          git add -u
           git commit -m 'Add risk-adaptive fast mutation execution lane'
           git push origin HEAD:agent/685-fast-mutation-lane
