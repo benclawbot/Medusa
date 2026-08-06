@@ -778,14 +778,27 @@ mod tests {
             .iter()
             .find(|profile| profile["language"] == "typescript_javascript")
             .expect("typescript profile");
-        assert!(
-            typescript["claims"]
-                .as_array()
-                .expect("claims")
+        let claims = typescript["claims"].as_array().expect("claims");
+        for level in [
+            "text_only",
+            "definitions",
+            "references",
+            "diagnostics",
+            "workspace_symbols",
+        ] {
+            let claim = claims
                 .iter()
-                .filter(|claim| claim["level"] != "text_only")
-                .all(|claim| claim["status"] == "unavailable")
-        );
+                .find(|claim| claim["level"] == level)
+                .expect("production TypeScript claim");
+            assert_eq!(claim["status"], "production");
+        }
+        for level in ["parsed_symbols", "guarded_refactoring"] {
+            let claim = claims
+                .iter()
+                .find(|claim| claim["level"] == level)
+                .expect("unavailable TypeScript claim");
+            assert_eq!(claim["status"], "unavailable");
+        }
     }
 
     #[test]

@@ -636,6 +636,18 @@ fn builtin_tool_entries(
         tool_entry(
             ToolIdentity {
                 states,
+                name: "typescript_semantic",
+            },
+            Capability::CodeIntelligence,
+            "Run read-only TypeScript/JavaScript definitions, references, diagnostics, or workspace-symbol queries through the repository-scoped language server.",
+            json!({"type":"object","properties":{"operation":{"type":"string","enum":["definition","references","diagnostics","workspace_symbols"]},"path":{"type":"string"},"line":{"type":"integer","minimum":0},"character":{"type":"integer","minimum":0},"query":{"type":"string"}},"required":["operation"],"additionalProperties":false}),
+            "medusa-agent::tools::intelligence::typescript_semantic",
+            [RegistryPermission::Read, RegistryPermission::ProcessSpawn],
+            false,
+        ),
+        tool_entry(
+            ToolIdentity {
+                states,
                 name: "patch_apply",
             },
             Capability::Filesystem,

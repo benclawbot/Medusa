@@ -1,9 +1,13 @@
-use std::path::{Path, PathBuf};
+use std::{
+    fs,
+    path::{Path, PathBuf},
+};
 
 use medusa_core::MedusaResult;
 use medusa_intelligence::{
-    CodeIndex, PatchTransaction, TextEdit, format_changed, language_capability_profiles,
-    select_tests,
+    CodeIndex, LspClient, PatchTransaction, TextEdit, discover_typescript_workspace,
+    find_references, format_changed, go_to_definition, language_capability_profiles, select_tests,
+    workspace_symbols,
 };
 use serde_json::{Value, json};
 
@@ -28,6 +32,112 @@ pub(crate) fn code_index(repo: &Path, input: &Value) -> MedusaResult<String> {
         }))?)
     } else {
         Ok(serde_json::to_string_pretty(&index)?)
+    }
+}
+
+pub(crate) fn typescript_semantic(repo: &Path, input: &Value) -> MedusaResult<String> {
+    let operation = input_string(input, "operation")?;
+    let target = input.get("path").and_then(Value::as_str).unwrap_or(".");
+    let target_path = safe_path(repo, target)?;
+    let workspace = discover_typescript_workspace(repo, &target_path)
+        .map_err(|error| crate::tools::invalid_tool(error.to_string()))?;
+    let mut client = LspClient::new(workspace.server_config());
+    client
+        .start()
+        .map_err(|error| crate::tools::invalid_tool(error.to_string()))?;
+
+    let result = match operation {
+        "workspace_symbols" => workspace_symbols(
+            &mut client,
+            &workspace.workspace_root,
+            input.get("query").and_then(Value::as_str).unwrap_or(""),
+        )
+        .map(|result| json!(result)),
+        "definition" | "references" | "diagnostics" => {
+            if !target_path.is_file() {
+                return Err(crate::tools::invalid_tool(
+                    "path must identify a source file",
+                ));
+            }
+            let text = fs::read_to_string(&target_path)?;
+            let uri = file_uri(&target_path);
+            client
+                .notify(
+                    "textDocument/didOpen",
+                    json!({
+                        "textDocument": {
+                            "uri": uri,
+                            "languageId": language_id(&target_path),
+                            "version": 1,
+                            "text": text,
+                        }
+                    }),
+                )
+                .map_err(|error| crate::tools::invalid_tool(error.to_string()))?;
+            let line = input_usize(input, "line").unwrap_or(0) as u32;
+            let character = input_usize(input, "character").unwrap_or(0) as u32;
+            match operation {
+                "definition" => go_to_definition(
+                    &mut client,
+                    &workspace.workspace_root,
+                    &target_path,
+                    line,
+                    character,
+                )
+                .map(|result| json!(result)),
+                "references" => find_references(
+                    &mut client,
+                    &workspace.workspace_root,
+                    &target_path,
+                    line,
+                    character,
+                    true,
+                )
+                .map(|result| json!(result)),
+                "diagnostics" => {
+                    let _ = workspace_symbols(&mut client, &workspace.workspace_root, "");
+                    let diagnostics = client
+                        .drain_notifications()
+                        .into_iter()
+                        .filter(|message| {
+                            message.get("method").and_then(Value::as_str)
+                                == Some("textDocument/publishDiagnostics")
+                        })
+                        .collect::<Vec<_>>();
+                    Ok(json!({"notifications": diagnostics}))
+                }
+                _ => unreachable!(),
+            }
+        }
+        _ => {
+            return Err(crate::tools::invalid_tool(
+                "unsupported TypeScript semantic operation",
+            ));
+        }
+    }
+    .map_err(|error| crate::tools::invalid_tool(error.to_string()))?;
+
+    Ok(serde_json::to_string_pretty(&json!({
+        "workspace": workspace,
+        "operation": operation,
+        "result": result,
+    }))?)
+}
+
+fn file_uri(path: &Path) -> String {
+    let normalized = path.to_string_lossy().replace('\\', "/");
+    if normalized.starts_with('/') {
+        format!("file://{normalized}")
+    } else {
+        format!("file:///{normalized}")
+    }
+}
+
+fn language_id(path: &Path) -> &'static str {
+    match path.extension().and_then(|value| value.to_str()) {
+        Some("js" | "jsx" | "mjs" | "cjs") => "javascript",
+        Some("tsx") => "typescriptreact",
+        _ => "typescript",
     }
 }
 

@@ -133,6 +133,21 @@ pub(crate) fn registry() -> BTreeMap<&'static str, ToolCapability> {
         },
     );
     registry.insert(
+        "typescript_semantic",
+        ToolCapability {
+            name: "typescript_semantic".into(),
+            capability: "typescript_javascript_semantics".into(),
+            risk: RiskClass::ReadOnly,
+            latency_weight: 30,
+            token_weight: 12,
+            cacheable: false,
+            concurrent: false,
+            fallback: Some("search_text".into()),
+            expected_output_bytes: 16 * 1024,
+            escalation: EscalationPolicy::Direct,
+        },
+    );
+    registry.insert(
         "shell_run",
         ToolCapability {
             name: "shell_run".into(),
