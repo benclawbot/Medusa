@@ -117,10 +117,12 @@ pub fn validate_guarded_rename_snapshot(
     }
 
     for path in &bound.plan.paths {
-        let expected = bound
-            .before_hashes
-            .get(path)
-            .ok_or_else(|| format!("rename refused because `{}` has no snapshot", path.display()))?;
+        let expected = bound.before_hashes.get(path).ok_or_else(|| {
+            format!(
+                "rename refused because `{}` has no snapshot",
+                path.display()
+            )
+        })?;
         let actual = read_hash(repo, path)?;
         if &actual != expected {
             return Err(format!(
@@ -216,8 +218,8 @@ mod tests {
         fs::create_dir_all(directory.path().join("src")).expect("source directory");
         fs::write(directory.path().join("src/lib.ts"), "let answer = 1;").expect("source");
 
-        let bound = bind_guarded_rename_snapshot(directory.path(), plan("src/lib.ts"))
-            .expect("snapshot");
+        let bound =
+            bind_guarded_rename_snapshot(directory.path(), plan("src/lib.ts")).expect("snapshot");
         assert_eq!(bound.before_hashes[Path::new("src/lib.ts")].len(), 64);
         validate_guarded_rename_snapshot(directory.path(), &bound).expect("fresh snapshot");
     }
@@ -228,8 +230,8 @@ mod tests {
         fs::create_dir_all(directory.path().join("src")).expect("source directory");
         fs::write(directory.path().join("src/lib.ts"), "let answer = 1;").expect("source");
 
-        let mut bound = bind_guarded_rename_snapshot(directory.path(), plan("src/lib.ts"))
-            .expect("snapshot");
+        let mut bound =
+            bind_guarded_rename_snapshot(directory.path(), plan("src/lib.ts")).expect("snapshot");
         fs::write(directory.path().join("src/lib.ts"), "let answer = 2;").expect("changed");
         let error = validate_guarded_rename_snapshot(directory.path(), &bound)
             .expect_err("changed content must fail");
