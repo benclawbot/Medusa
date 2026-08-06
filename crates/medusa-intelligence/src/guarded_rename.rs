@@ -429,10 +429,7 @@ fn read_guarded_bytes(repo: &Path, path: &Path) -> Result<Vec<u8>, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{
-        LspAnnotatedTextEdit, LspResourceOperation, LspWorkspaceOperation,
-        finalize_patch_transactions,
-    };
+    use crate::{LspAnnotatedTextEdit, LspWorkspaceOperation, finalize_patch_transactions};
 
     fn text_edit(path: &str, start: u32, end: u32) -> LspWorkspaceOperation {
         ranged_text_edit(path, 0, start, 0, end)
