@@ -1,0 +1,16 @@
+{
+  "baseline_version": 1,
+  "source_commit": "99684df536c70db5b410d54eba6160a042ca1add",
+  "configuration": "benchmarks/performance/schema/run-v1.json",
+  "toolchains": {
+    "python": "3.x-stdlib",
+    "rust": "workspace-pinned",
+    "node": "workspace-pinned"
+  },
+  "provider_mode": "deterministic_fixture",
+  "machine_profile": "github-hosted-linux-x86_64",
+  "scenarios": [
+    "warm_localized_fix"
+  ],
+  "update_policy": "reviewed pull request with rationale and before/after artifacts"
+}

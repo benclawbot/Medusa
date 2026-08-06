@@ -1,0 +1,28 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://medusa.local/performance/run-v1.json",
+  "title": "Medusa verified-completion performance run",
+  "type": "object",
+  "additionalProperties": true,
+  "required": [
+    "schema_version", "run_id", "scenario", "mode", "repository_revision",
+    "platform", "machine", "provider", "outcome", "phases", "model",
+    "tools", "verification", "artifacts"
+  ],
+  "properties": {
+    "schema_version": {"const": 1},
+    "run_id": {"type": "string", "minLength": 1},
+    "scenario": {"type": "string", "minLength": 1},
+    "mode": {"enum": ["cold", "warm_repository", "warm_resources", "repeated_session", "constrained"]},
+    "repository_revision": {"type": "string", "minLength": 1},
+    "platform": {"type": "string", "minLength": 1},
+    "machine": {"type": "object", "required": ["cpu", "memory_bytes", "os"], "additionalProperties": true},
+    "provider": {"type": "object", "required": ["mode", "route"], "additionalProperties": true},
+    "outcome": {"type": "object", "required": ["status", "verified_success", "first_pass_verified_success"], "properties": {"status": {"enum": ["success", "failure", "timeout", "cancelled", "crashed"]}, "verified_success": {"type": "boolean"}, "first_pass_verified_success": {"type": "boolean"}}},
+    "phases": {"type": "object", "required": ["objective_accepted_ns", "verified_completion_ns"], "additionalProperties": {"type": "integer", "minimum": 0}},
+    "model": {"type": "object", "required": ["requests", "tokens", "retries", "cache_eligible", "cache_hits"], "additionalProperties": true},
+    "tools": {"type": "object", "required": ["calls", "redundant_calls", "failures", "cancelled"], "additionalProperties": true},
+    "verification": {"type": "object", "required": ["coverage", "started_ns", "completed_ns", "failures", "reruns"], "additionalProperties": true},
+    "artifacts": {"type": "array", "minItems": 1, "items": {"type": "string", "minLength": 1}}
+  }
+}
