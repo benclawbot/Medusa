@@ -1,4 +1,4 @@
-name: Apply code-intelligence registry patch
+name: Apply code-intelligence final metadata patch
 
 on:
   push:
@@ -19,15 +19,14 @@ jobs:
       - uses: dtolnay/rust-toolchain@39b0b3842c7e8bbf6904c0bfc3d9006fdd4dc4e0 # 1.88.0
         with:
           components: rustfmt
-      - name: Apply exact registry metadata update
+      - name: Apply exact registry and workspace corrections
         shell: bash
         run: |
           python3 - <<'PY'
           from pathlib import Path
 
-          path = Path('crates/medusa-capabilities/src/registry.rs')
-          text = path.read_text(encoding='utf-8')
-
+          registry = Path('crates/medusa-capabilities/src/registry.rs')
+          text = registry.read_text(encoding='utf-8')
           replacements = [
               (
                   'Rust tree-sitter and Python lexical indexing are available; exact per-language levels are reported by semantic_capabilities',
@@ -119,17 +118,89 @@ jobs:
           );'''
           if text.count(old_test) != 1:
               raise SystemExit(f'expected one exact registry test replacement, found {text.count(old_test)}')
-          path.write_text(text.replace(old_test, new_test, 1), encoding='utf-8')
+          registry.write_text(text.replace(old_test, new_test, 1), encoding='utf-8')
+
+          workspace = Path('crates/medusa-intelligence/src/typescript_workspace.rs')
+          text = workspace.read_text(encoding='utf-8')
+          old_import = '''use std::{
+              fmt, fs,
+              path::{Component, Path, PathBuf},
+          };'''
+          new_import = '''use std::{
+              fmt, fs,
+              path::{Path, PathBuf},
+          };'''
+          if text.count(old_import) != 1:
+              raise SystemExit('expected exact TypeScript workspace import')
+          text = text.replace(old_import, new_import, 1)
+
+          old_ignore = '''    matches!(
+              name.as_ref(),
+              "node_modules"
+                  | ".git"
+                  | ".medusa"
+                  | "target"
+                  | "dist"
+                  | "build"
+                  | "coverage"
+                  | ".next"
+                  | ".turbo"
+                  | "out"
+          ) || entry.path().components().any(|component| {
+              matches!(
+                  component,
+                  Component::Normal(value) if value == "generated" || value == "vendor"
+              )
+          })'''
+          new_ignore = '''    matches!(
+              name.as_ref(),
+              "node_modules"
+                  | ".git"
+                  | ".medusa"
+                  | "target"
+                  | "dist"
+                  | "build"
+                  | "coverage"
+                  | ".next"
+                  | ".turbo"
+                  | "out"
+                  | "generated"
+                  | "vendor"
+          )'''
+          if text.count(old_ignore) != 1:
+              raise SystemExit('expected exact TypeScript workspace ignore block')
+          text = text.replace(old_ignore, new_ignore, 1)
+
+          marker = '''    #[test]
+              fn root_fallback_is_deterministic_without_config_or_package() {'''
+          regression = '''    #[test]
+              fn repository_parent_named_vendor_does_not_hide_sources() {
+                  let sandbox = tempfile::tempdir().expect("sandbox");
+                  let repository = sandbox.path().join("vendor/repository");
+                  write(&repository.join("package.json"), "{}");
+                  write(&repository.join("src/main.ts"), "export {};\\n");
+
+                  let workspace = discover_typescript_workspace(&repository, &repository)
+                      .expect("workspace under vendor parent");
+                  assert_eq!(workspace.source_count, 1);
+              }
+
+          '''
+          if text.count(marker) != 1:
+              raise SystemExit('expected TypeScript workspace regression insertion point')
+          workspace.write_text(text.replace(marker, regression + marker, 1), encoding='utf-8')
           PY
           cargo fmt --all
           git diff --check
-      - name: Verify registry contract
-        run: cargo test -p medusa-capabilities code_intelligence_tools_have_a_dedicated_truthful_capability --locked
-      - name: Commit registry patch
+      - name: Verify registry and workspace contracts
+        run: |
+          cargo test -p medusa-capabilities code_intelligence_tools_have_a_dedicated_truthful_capability --locked
+          cargo test -p medusa-intelligence --all-features --locked typescript_workspace -- --nocapture
+      - name: Commit verified corrections
         shell: bash
         run: |
           git config user.name 'Medusa CI'
           git config user.email 'actions@users.noreply.github.com'
-          git add crates/medusa-capabilities/src/registry.rs
-          git commit -m 'Align code-intelligence registry permissions and claims'
+          git add crates/medusa-capabilities/src/registry.rs crates/medusa-intelligence/src/typescript_workspace.rs
+          git commit -m 'Align code-intelligence permissions and workspace filtering'
           git push origin HEAD:agent/656-final-certification
