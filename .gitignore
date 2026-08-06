@@ -1,5 +1,10 @@
 /target/
 .medusa/
+!.medusa/
+.medusa/*
+!.medusa/patches/
+.medusa/patches/*
+!.medusa/patches/685-fast-lane.patch.gz.b64
 *.tmp
 /apps/medusa-desktop/node_modules/
 /apps/medusa-desktop/dist/
