@@ -19,5 +19,9 @@ walkdir = "2.5"
 [dev-dependencies]
 tempfile.workspace = true
 
+[[bench]]
+name = "typescript_workspace"
+harness = false
+
 [lints]
 workspace = true
