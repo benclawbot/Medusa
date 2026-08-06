@@ -73,3 +73,15 @@ Run the complete benchmark through the shipped runtime acceptance entry point:
 ```bash
 python3 scripts/orchestration-benchmark.py
 ```
+
+## TypeScript/JavaScript workspace benchmark
+
+`crates/medusa-intelligence/benches/typescript_workspace.rs` measures deterministic production workspace discovery and content fingerprinting for 100, 1,000, and 5,000 supported source files. Every iteration verifies the exact source count and stable workspace fingerprint before emitting a machine-readable timing line. Generated and dependency paths are present in the fixture but excluded from adapter coverage.
+
+Compile and run it with:
+
+```bash
+cargo bench -p medusa-intelligence --bench typescript_workspace --locked
+```
+
+The final `Code Intelligence Certification` workflow compiles the benchmark on Linux, macOS, and Windows and executes it on Linux. Results are performance evidence only; correctness, freshness, repository confinement, stale-state refusal, and cross-file mutation safety remain release invariants.
