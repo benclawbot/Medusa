@@ -163,8 +163,8 @@ pub fn lsp_position_to_byte_offset(text: &str, position: &LspPosition) -> Result
 /// Translate a revision-bound LSP workspace edit into the existing guarded patch transaction.
 ///
 /// The returned transaction remains non-mutating until `PatchTransaction::commit` is invoked.
-/// Prepared edits partition every touched source file into rename replacements and no-op
-/// expected-content guards, so drift anywhere in a file fails before journaling or replacement.
+/// Prepared edits collapse every touched source file into one whole-file expected-content
+/// edit, so drift anywhere in a file fails before journaling or replacement.
 pub fn prepare_guarded_rename_transaction(
     repo: &Path,
     bound: &RevisionBoundRenamePlan,
@@ -250,7 +250,7 @@ pub fn prepare_guarded_rename_transaction(
                 path.display()
             )
         })?;
-        add_revision_guarded_edits(&mut transaction, path, source, edits)?;
+        add_revision_guarded_file_edit(&mut transaction, path, source, edits)?;
     }
     if !replacements.is_empty() {
         return Err("rename refused because replacements escaped the guarded path set".into());
@@ -259,61 +259,73 @@ pub fn prepare_guarded_rename_transaction(
     Ok(transaction)
 }
 
-fn add_revision_guarded_edits(
+fn add_revision_guarded_file_edit(
     transaction: &mut PatchTransaction,
     path: &Path,
     source: &str,
     mut replacements: Vec<TextEdit>,
 ) -> Result<(), String> {
+    if source.is_empty() {
+        return Err(format!(
+            "rename refused because `{}` is empty",
+            path.display()
+        ));
+    }
     replacements.sort_by_key(|edit| edit.start_byte);
-    let mut cursor = 0usize;
-    for replacement in replacements {
-        if replacement.start_byte < cursor || replacement.end_byte > source.len() {
+    let mut previous_end = 0usize;
+    for replacement in &replacements {
+        if replacement.path.as_path() != path {
+            return Err(format!(
+                "rename refused because a replacement escaped `{}`",
+                path.display()
+            ));
+        }
+        if replacement.start_byte < previous_end || replacement.end_byte > source.len() {
             return Err(format!(
                 "rename refused because byte ranges overlap or escape `{}`",
                 path.display()
             ));
         }
-        if cursor < replacement.start_byte {
-            let unchanged = source.get(cursor..replacement.start_byte).ok_or_else(|| {
+        let expected = source
+            .get(replacement.start_byte..replacement.end_byte)
+            .ok_or_else(|| {
                 format!(
-                    "rename refused because a revision guard splits UTF-8 in `{}`",
+                    "rename refused because a byte range splits UTF-8 in `{}`",
                     path.display()
                 )
             })?;
-            transaction
-                .add_edit(TextEdit {
-                    path: path.to_path_buf(),
-                    start_byte: cursor,
-                    end_byte: replacement.start_byte,
-                    expected: unchanged.to_owned(),
-                    replacement: unchanged.to_owned(),
-                })
-                .map_err(|error| error.to_string())?;
-        }
-        cursor = replacement.end_byte;
-        transaction
-            .add_edit(replacement)
-            .map_err(|error| error.to_string())?;
-    }
-    if cursor < source.len() {
-        let unchanged = source.get(cursor..).ok_or_else(|| {
-            format!(
-                "rename refused because a revision guard splits UTF-8 in `{}`",
+        if expected != replacement.expected {
+            return Err(format!(
+                "rename refused because expected content differs in `{}`",
                 path.display()
-            )
-        })?;
-        transaction
-            .add_edit(TextEdit {
-                path: path.to_path_buf(),
-                start_byte: cursor,
-                end_byte: source.len(),
-                expected: unchanged.to_owned(),
-                replacement: unchanged.to_owned(),
-            })
-            .map_err(|error| error.to_string())?;
+            ));
+        }
+        previous_end = replacement.end_byte;
     }
-    Ok(())
+
+    let mut updated = source.to_owned();
+    for replacement in replacements.into_iter().rev() {
+        updated.replace_range(
+            replacement.start_byte..replacement.end_byte,
+            &replacement.replacement,
+        );
+    }
+    if updated == source {
+        return Err(format!(
+            "rename refused because `{}` would not change",
+            path.display()
+        ));
+    }
+
+    transaction
+        .add_edit(TextEdit {
+            path: path.to_path_buf(),
+            start_byte: 0,
+            end_byte: source.len(),
+            expected: source.to_owned(),
+            replacement: updated,
+        })
+        .map_err(|error| error.to_string())
 }
 
 fn validate_snapshot_paths(bound: &RevisionBoundRenamePlan) -> Result<(), String> {
@@ -665,7 +677,7 @@ mod tests {
 
         let resource = LspWorkspaceEdit {
             operations: vec![LspWorkspaceOperation::Resource(
-                LspResourceOperation::Create {
+                crate::LspResourceOperation::Create {
                     path: "src/new.ts".into(),
                     overwrite: false,
                     ignore_if_exists: false,
