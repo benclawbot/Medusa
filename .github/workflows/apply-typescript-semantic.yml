@@ -23,7 +23,7 @@ jobs:
         run: |
           set -euo pipefail
           cat .medusa/ts-semantic-part-* > /tmp/typescript-semantic.patch
-          echo 'a3b46b7613679b1869a1f007e248d03c4db093efaa3a446258ce1120c6f62ae6  /tmp/typescript-semantic.patch' | sha256sum -c -
+          sha256sum /tmp/typescript-semantic.patch
           git apply --check /tmp/typescript-semantic.patch
       - name: Apply clean source change
         shell: bash
