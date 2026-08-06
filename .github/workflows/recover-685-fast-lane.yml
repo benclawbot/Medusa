@@ -1,0 +1,44 @@
+name: Recover #685 fast mutation lane
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  recover:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          ref: agent/685-fast-mutation-lane
+      - uses: dtolnay/rust-toolchain@39b0b3842c7e8bbf6904c0bfc3d9006fdd4dc4e0
+        with:
+          components: rustfmt,clippy
+      - name: Apply and verify exact staged patch
+        shell: bash
+        run: |
+          set -euo pipefail
+          base64 -d .medusa/patches/685-fast-lane.patch.gz.b64 | gzip -d > /tmp/685.patch
+          git apply --check /tmp/685.patch
+          git apply /tmp/685.patch
+          rm -f .medusa/patches/685-fast-lane.patch.gz.b64
+          cargo fmt --all
+          git diff --check
+          cargo test -p medusa-multi-agent-scheduler --locked
+          cargo test -p medusa-runtime --locked production_orchestrator -- --nocapture
+          cargo test -p medusa-runtime --locked multi_agent_coordinator -- --nocapture
+          cargo clippy -p medusa-multi-agent-scheduler -p medusa-runtime --all-targets --locked -- -D warnings
+      - name: Commit verified tranche
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name 'Medusa CI'
+          git config user.email 'actions@users.noreply.github.com'
+          git add -u
+          git commit -m 'Add risk-adaptive fast mutation execution lane'
+          git push origin HEAD:agent/685-fast-mutation-lane
