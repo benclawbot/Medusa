@@ -19,7 +19,8 @@ jobs:
           echo '01c33a34fec411a8008b8c5290ae35ddae1f04acb1c26b638b296cf81cd733b6  /tmp/issue656-final.patch' | sha256sum --check
           git apply --check /tmp/issue656-final.patch
           git apply /tmp/issue656-final.patch
-          rm -rf .medusa-issue656-final .github/workflows/apply-issue656-final-text.yml
+          git checkout HEAD -- .github/workflows/product-acceptance.yml .github/workflows/apply-issue656-final-text.yml
+          rm -rf .medusa-issue656-final
       - name: Commit production tranche
         run: |
           git config user.name github-actions[bot]
