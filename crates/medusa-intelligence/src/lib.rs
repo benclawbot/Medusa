@@ -5,6 +5,7 @@ mod call_graph;
 mod capabilities;
 mod format;
 mod graph;
+mod guarded_rename;
 mod impact;
 mod index;
 mod language;
@@ -37,6 +38,7 @@ pub use capabilities::{
 };
 pub use format::format_changed;
 pub use graph::{CallEdge, DependencyEdge, SemanticGraph, SymbolId};
+pub use guarded_rename::{GuardedRenamePlan, validate_guarded_rename};
 pub use impact::{TestImpact, select_tests, select_tests_with_index};
 pub use index::IndexRefresh;
 pub use language::{CodeIndex, Language, Reference, Symbol, SymbolKind};
