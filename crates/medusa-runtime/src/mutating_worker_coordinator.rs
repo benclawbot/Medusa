@@ -155,6 +155,7 @@ struct ImplementationRequest {
     team_context: TeamMemberContext,
     control: TeamControlPlane,
     events: Sender<RuntimeEvent>,
+    max_model_turns: u32,
 }
 
 #[derive(Clone, Debug)]
@@ -481,6 +482,7 @@ where
             team_context,
             control: control.clone(),
             events: events.clone(),
+            max_model_turns: u32::from(plan.planning.model_turn_budget.successful_path_total),
         };
         let run = match executor(request) {
             Ok(run) => run,
@@ -999,7 +1001,8 @@ fn execute_production_implementer(
 ) -> Result<WorkerRun, String> {
     let mut worker_config = config.clone();
     worker_config.agent.mode = Mode::Yolo;
-    worker_config.agent.max_turns = bounded_implementer_turns(worker_config.agent.max_turns);
+    worker_config.agent.max_turns = bounded_implementer_turns(worker_config.agent.max_turns)
+        .min(request.max_model_turns.max(1));
     let provider = ConfiguredProvider::manager_from_config(&worker_config, session_api_key)
         .map_err(|error| error.to_string())?;
     let policy = AgentExecutionPolicy::for_team_role(TeamRole::Implementer)
@@ -1009,8 +1012,11 @@ fn execute_production_implementer(
             .with_execution_policy(policy)
             .with_team_context(request.team_context.clone());
     let objective = format!(
-        "Implement delegated task `{}` inside this isolated Git worktree. Objective: {}. Stay within allowed write paths {:?}. These paths are exact contract boundaries: do not create sibling files, package metadata, or convenience files outside them; report any genuinely required out-of-scope change instead. Use the bounded turn budget efficiently: batch independent reads, make every required product edit, run focused verification, and then return a concise evidence-backed summary. Do not ask the user questions and do not modify tests or fixtures merely to make failures disappear.",
-        request.contract.task_id, request.contract.objective, request.contract.allowed_write_paths,
+        "Implement delegated task `{}` inside this isolated Git worktree. Objective: {}. Stay within allowed write paths {:?}. These paths are exact contract boundaries: do not create sibling files, package metadata, or convenience files outside them; report any genuinely required out-of-scope change instead. Use the hard {}-turn model budget efficiently: batch independent reads, make every required product edit, run focused verification, and then return a concise evidence-backed summary. Do not ask the user questions and do not modify tests or fixtures merely to make failures disappear.",
+        request.contract.task_id,
+        request.contract.objective,
+        request.contract.allowed_write_paths,
+        request.max_model_turns,
     );
     let mut session = engine
         .create_session(&request.worker.worktree, objective)

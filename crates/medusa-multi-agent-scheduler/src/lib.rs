@@ -26,6 +26,33 @@ pub enum ExecutionStrategy {
     CoordinatedMutation,
 }
 
+#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ExecutionLane {
+    Instant,
+    FastMutation,
+    StandardMutation,
+    #[default]
+    FullOrchestration,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct ModelTurnBudget {
+    pub before_first_edit: u8,
+    pub successful_path_total: u8,
+    pub repair_attempts: u8,
+}
+
+impl Default for ModelTurnBudget {
+    fn default() -> Self {
+        Self {
+            before_first_edit: 3,
+            successful_path_total: 8,
+            repair_attempts: 3,
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum TaskKind {
@@ -85,6 +112,12 @@ pub struct PlanningResult {
     pub confidence_milli: u16,
     pub required_capabilities: Vec<String>,
     pub strategy: ExecutionStrategy,
+    #[serde(default)]
+    pub lane: ExecutionLane,
+    #[serde(default = "default_lane_rationale")]
+    pub lane_rationale: String,
+    #[serde(default)]
+    pub model_turn_budget: ModelTurnBudget,
     pub tasks: Vec<PlannedTask>,
     pub fingerprint: String,
 }
@@ -211,16 +244,24 @@ pub fn plan_typed(mut input: PlannerInput) -> Result<PlanningResult, &'static st
         }
         _ => ExecutionStrategy::CoordinatedReadOnly,
     };
+    let high_risk_language = words.iter().any(|word| {
+        matches!(
+            word.as_str(),
+            "architecture"
+                | "dependency"
+                | "dependencies"
+                | "migration"
+                | "release"
+                | "security"
+                | "upgrade"
+        )
+    });
     let risk = if strategy == ExecutionStrategy::CoordinatedMutation
-        && (broad_scope
-            || scope.effective.len() > 2
-            || words.iter().any(|word| {
-                matches!(
-                    word.as_str(),
-                    "architecture" | "migration" | "release" | "security"
-                )
-            })) {
+        && (broad_scope || scope.effective.len() > 2 || high_risk_language)
+    {
         RiskLevel::High
+    } else if strategy == ExecutionStrategy::CoordinatedMutation && scope.effective.len() == 1 {
+        RiskLevel::Low
     } else if strategy == ExecutionStrategy::CoordinatedMutation || repository_relevant {
         RiskLevel::Medium
     } else {
@@ -233,6 +274,15 @@ pub fn plan_typed(mut input: PlannerInput) -> Result<PlanningResult, &'static st
         _ => 800,
     };
     let affected_components = affected_components(&scope, &input.repository_paths);
+    let (lane, lane_rationale) = select_execution_lane(
+        strategy,
+        risk,
+        confidence_milli,
+        &scope,
+        broad_scope,
+        high_risk_language,
+    );
+    let model_turn_budget = model_turn_budget(lane);
     let tasks = planned_tasks(strategy, &scope);
     let required_capabilities = tasks
         .iter()
@@ -249,6 +299,9 @@ pub fn plan_typed(mut input: PlannerInput) -> Result<PlanningResult, &'static st
         confidence_milli,
         required_capabilities,
         strategy,
+        lane,
+        lane_rationale,
+        model_turn_budget,
         tasks,
         fingerprint: String::new(),
     };
@@ -259,21 +312,54 @@ pub fn plan_typed(mut input: PlannerInput) -> Result<PlanningResult, &'static st
 
 impl PlanningResult {
     pub fn validate(&self) -> Result<(), &'static str> {
+        let current_fingerprint = self.fingerprint == planning_fingerprint(self);
+        let legacy_fingerprint = self.lane == ExecutionLane::FullOrchestration
+            && self.lane_rationale == default_lane_rationale()
+            && self.model_turn_budget == ModelTurnBudget::default()
+            && self.fingerprint == legacy_planning_fingerprint(self);
         if self.confidence_milli > 1_000
             || self.requested_outcomes.is_empty()
             || self
                 .requested_outcomes
                 .iter()
                 .any(|value| value.trim().is_empty())
-            || self.fingerprint != planning_fingerprint(self)
+            || (!current_fingerprint && !legacy_fingerprint)
         {
             return Err("typed planning result is incomplete or corrupted");
+        }
+        if self.lane_rationale.trim().is_empty()
+            || self.model_turn_budget.successful_path_total == 0
+            || self.model_turn_budget.before_first_edit
+                > self.model_turn_budget.successful_path_total
+        {
+            return Err("execution lane and model-turn budget are incomplete");
         }
         if self.strategy == ExecutionStrategy::CoordinatedMutation
             && (self.scope.resolution != ScopeResolution::Resolved
                 || self.scope.effective.is_empty())
         {
             return Err("mutating execution requires resolved effective scope");
+        }
+        match self.lane {
+            ExecutionLane::Instant if self.strategy != ExecutionStrategy::Direct => {
+                return Err("instant execution requires direct strategy");
+            }
+            ExecutionLane::FastMutation
+                if self.strategy != ExecutionStrategy::CoordinatedMutation
+                    || self.scope.resolution != ScopeResolution::Resolved
+                    || self.scope.effective.len() != 1
+                    || self.risk != RiskLevel::Low
+                    || self.model_turn_budget.before_first_edit > 1
+                    || self.model_turn_budget.successful_path_total > 2 =>
+            {
+                return Err("fast mutation requires one low-risk resolved write scope");
+            }
+            ExecutionLane::StandardMutation
+                if self.strategy != ExecutionStrategy::CoordinatedMutation =>
+            {
+                return Err("standard mutation requires mutating strategy");
+            }
+            _ => {}
         }
         if self.strategy != ExecutionStrategy::CoordinatedMutation
             && self
@@ -318,6 +404,86 @@ impl PlanningResult {
     #[must_use]
     pub fn task(&self, kind: TaskKind) -> Option<&PlannedTask> {
         self.tasks.iter().find(|task| task.kind == kind)
+    }
+
+    #[must_use]
+    pub fn uses_deterministic_preflight(&self) -> bool {
+        self.lane == ExecutionLane::FastMutation
+    }
+}
+
+fn default_lane_rationale() -> String {
+    "legacy plan defaults to full orchestration".to_owned()
+}
+
+fn select_execution_lane(
+    strategy: ExecutionStrategy,
+    risk: RiskLevel,
+    confidence_milli: u16,
+    scope: &RepositoryScope,
+    broad_scope: bool,
+    high_risk_language: bool,
+) -> (ExecutionLane, String) {
+    if strategy == ExecutionStrategy::Direct {
+        return (
+            ExecutionLane::Instant,
+            "conversation intent requires no durable scheduler graph".to_owned(),
+        );
+    }
+    if strategy == ExecutionStrategy::CoordinatedMutation
+        && risk == RiskLevel::Low
+        && confidence_milli >= 900
+        && scope.resolution == ScopeResolution::Resolved
+        && scope.effective.len() == 1
+        && !broad_scope
+        && !high_risk_language
+    {
+        return (
+            ExecutionLane::FastMutation,
+            "one exact low-risk write path permits deterministic preflight and targeted verification"
+                .to_owned(),
+        );
+    }
+    if strategy == ExecutionStrategy::CoordinatedMutation && risk == RiskLevel::Medium {
+        return (
+            ExecutionLane::StandardMutation,
+            "related-file mutation retains bounded planning, review, and verification".to_owned(),
+        );
+    }
+    (
+        ExecutionLane::FullOrchestration,
+        if strategy == ExecutionStrategy::CoordinatedReadOnly {
+            "repository analysis retains coordinated evidence because no direct lane is authorized"
+                .to_owned()
+        } else {
+            "high-risk, broad, ambiguous, or low-confidence work requires full orchestration"
+                .to_owned()
+        },
+    )
+}
+
+const fn model_turn_budget(lane: ExecutionLane) -> ModelTurnBudget {
+    match lane {
+        ExecutionLane::Instant => ModelTurnBudget {
+            before_first_edit: 1,
+            successful_path_total: 1,
+            repair_attempts: 0,
+        },
+        ExecutionLane::FastMutation => ModelTurnBudget {
+            before_first_edit: 1,
+            successful_path_total: 2,
+            repair_attempts: 1,
+        },
+        ExecutionLane::StandardMutation => ModelTurnBudget {
+            before_first_edit: 2,
+            successful_path_total: 4,
+            repair_attempts: 2,
+        },
+        ExecutionLane::FullOrchestration => ModelTurnBudget {
+            before_first_edit: 3,
+            successful_path_total: 8,
+            repair_attempts: 3,
+        },
     }
 }
 
@@ -406,6 +572,23 @@ fn planned_task(
 }
 
 fn planning_fingerprint(result: &PlanningResult) -> String {
+    hash(&(
+        result.intent,
+        &result.requested_outcomes,
+        &result.affected_components,
+        &result.scope,
+        result.risk,
+        result.confidence_milli,
+        &result.required_capabilities,
+        result.strategy,
+        result.lane,
+        &result.lane_rationale,
+        result.model_turn_budget,
+        &result.tasks,
+    ))
+}
+
+fn legacy_planning_fingerprint(result: &PlanningResult) -> String {
     hash(&(
         result.intent,
         &result.requested_outcomes,
@@ -1567,6 +1750,52 @@ mod tests {
         assert_eq!(planned.intent, PlanningIntent::ReadOnly);
         assert_eq!(planned.strategy, ExecutionStrategy::CoordinatedReadOnly);
         assert!(planned.task(TaskKind::Implementation).is_none());
+    }
+
+    #[test]
+    fn single_file_localized_fix_selects_fast_mutation_budget() {
+        let planned = plan_typed(PlannerInput {
+            objective: "Fix src/lib.rs".to_owned(),
+            attachment_count: 0,
+            repository_paths: vec!["src/lib.rs".to_owned()],
+        })
+        .unwrap();
+        assert_eq!(planned.risk, RiskLevel::Low);
+        assert_eq!(planned.lane, ExecutionLane::FastMutation);
+        assert_eq!(planned.model_turn_budget.before_first_edit, 1);
+        assert_eq!(planned.model_turn_budget.successful_path_total, 2);
+        assert!(planned.uses_deterministic_preflight());
+    }
+
+    #[test]
+    fn related_file_mutation_selects_standard_lane() {
+        let planned = plan_typed(PlannerInput {
+            objective: "Fix src/lib.rs and src/tests.rs".to_owned(),
+            attachment_count: 0,
+            repository_paths: vec!["src/lib.rs".to_owned(), "src/tests.rs".to_owned()],
+        })
+        .unwrap();
+        assert_eq!(planned.risk, RiskLevel::Medium);
+        assert_eq!(planned.lane, ExecutionLane::StandardMutation);
+        assert!(!planned.uses_deterministic_preflight());
+    }
+
+    #[test]
+    fn security_and_repository_wide_work_select_full_orchestration() {
+        for objective in [
+            "Fix security policy in src/lib.rs",
+            "Implement a repository-wide refactor",
+            "Upgrade dependency in Cargo.toml",
+        ] {
+            let planned = plan_typed(PlannerInput {
+                objective: objective.to_owned(),
+                attachment_count: 0,
+                repository_paths: vec!["src/lib.rs".to_owned(), "Cargo.toml".to_owned()],
+            })
+            .unwrap();
+            assert_eq!(planned.lane, ExecutionLane::FullOrchestration);
+            assert!(!planned.uses_deterministic_preflight());
+        }
     }
 
     #[test]

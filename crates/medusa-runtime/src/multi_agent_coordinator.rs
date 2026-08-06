@@ -23,7 +23,7 @@ use medusa_agent::{
     TeamRuntime, WorkerExecutionController,
 };
 use medusa_config::{Config, Mode};
-use medusa_multi_agent_scheduler::{Task, TaskState, Worker as ScheduledWorker};
+use medusa_multi_agent_scheduler::{ExecutionLane, Task, TaskState, Worker as ScheduledWorker};
 use medusa_provider::ConfiguredProvider;
 use medusa_workers::{Worker, WorkerState};
 use serde::{Deserialize, Serialize};
@@ -106,6 +106,117 @@ pub fn run_preflight(
     coordinate_with_control(repo, plan, cancel, control, events, |request| {
         execute_production_worker(repo, config, session_api_key.clone(), cancel, request)
     })
+}
+
+pub fn run_deterministic_fast_preflight(
+    repo: &Path,
+    plan: &ProductionExecutionPlan,
+    control: &TeamControlPlane,
+    events: &Sender<RuntimeEvent>,
+) -> Result<CoordinatorEvidence, String> {
+    if plan.planning.lane != ExecutionLane::FastMutation
+        || !plan.planning.uses_deterministic_preflight()
+    {
+        return Err("deterministic preflight requires the fast mutation lane".to_owned());
+    }
+    let repository_fingerprint = repository_fingerprint(repo)?;
+    let root = execution_root(repo, &plan.fingerprint, &repository_fingerprint);
+    let evidence_path = root.join("preflight-evidence.json");
+    if evidence_path.is_file() {
+        let restored: CoordinatorEvidence =
+            serde_json::from_slice(&fs::read(&evidence_path).map_err(|error| error.to_string())?)
+                .map_err(|error| error.to_string())?;
+        validate_evidence(plan, &repository_fingerprint, &evidence_path, &restored)?;
+        return Ok(restored);
+    }
+
+    let contracts = preflight_contracts(plan);
+    if contracts.len() < 2 {
+        return Err("fast mutation requires deterministic analysis and risk contracts".to_owned());
+    }
+    fs::create_dir_all(&root).map_err(|error| error.to_string())?;
+    let execution_key = execution_id(&plan.fingerprint, &repository_fingerprint);
+    let _ = events.send(RuntimeEvent::Team(control.begin(
+        execution_key,
+        contracts.iter().map(|contract| TeamWorkerRegistration {
+            worker_id: worker_id_for(&contract.task_id),
+            role: format!("{:?}", contract.role).to_ascii_lowercase(),
+            task_id: contract.task_id.clone(),
+        }),
+    )));
+
+    let mut workers = Vec::with_capacity(contracts.len());
+    for contract in contracts {
+        let packet = context_for_task(
+            plan,
+            &contract.task_id,
+            BTreeMap::new(),
+            vec![
+                "read-only repository access".to_owned(),
+                "runtime-enforced role policy".to_owned(),
+                "no user interaction".to_owned(),
+            ],
+            contract.required_evidence.clone(),
+        )?;
+        let summary = match contract.role {
+            AgentRole::Planner => format!(
+                "Deterministic fast-lane scope accepted: exact write paths {:?}; affected components {:?}; required capabilities {:?}. No planning model request was used.",
+                plan.planning.scope.effective,
+                plan.planning.affected_components,
+                plan.planning.required_capabilities,
+            ),
+            AgentRole::Researcher => format!(
+                "Deterministic fast-lane risk policy accepted at confidence {}/1000. Any unexpected path, public API or dependency change, security-sensitive file, failed verification, or repeated patch attempt invalidates this authorization and requires escalation.",
+                plan.planning.confidence_milli,
+            ),
+            _ => return Err("fast preflight received a non-read-only contract".to_owned()),
+        };
+        let worker = WorkerEvidence {
+            task_id: contract.task_id.clone(),
+            worker_id: worker_id_for(&contract.task_id),
+            role: contract.role,
+            context_fingerprint: packet.fingerprint,
+            lease_epoch: 1,
+            session_id: format!(
+                "deterministic-fast-{}-{}",
+                contract.task_id,
+                plan.fingerprint.chars().take(12).collect::<String>()
+            ),
+            turns: 0,
+            summary,
+        };
+        let contracts_by_task = BTreeMap::from([(contract.task_id.clone(), contract.clone())]);
+        validate_worker_evidence(plan, &contracts_by_task, &worker)?;
+        if let Ok(snapshot) = control.complete(&worker.worker_id, "deterministic fast-lane evidence") {
+            let _ = events.send(RuntimeEvent::Team(snapshot));
+        }
+        workers.push(worker);
+    }
+    workers.sort_by(|left, right| left.task_id.cmp(&right.task_id));
+    let evidence = CoordinatorEvidence {
+        plan_fingerprint: plan.fingerprint.clone(),
+        repository_fingerprint,
+        workers,
+        state_path: evidence_path.clone(),
+    };
+    validate_evidence(
+        plan,
+        &evidence.repository_fingerprint,
+        &evidence_path,
+        &evidence,
+    )?;
+    write_atomic(&evidence_path, &evidence)?;
+    let _ = events.send(RuntimeEvent::Activity(RuntimeActivity {
+        id: Some(plan.fingerprint.clone()),
+        kind: RuntimeActivityKind::Done,
+        title: "Fast-lane deterministic preflight accepted".to_owned(),
+        details: vec![
+            "zero planning or risk-review model turns".to_owned(),
+            format!("scope={:?}", plan.planning.scope.effective),
+            format!("budget={:?}", plan.planning.model_turn_budget),
+        ],
+    }));
+    Ok(evidence)
 }
 
 #[cfg(test)]
@@ -929,6 +1040,32 @@ mod tests {
             Err("cached evidence should avoid worker execution".to_owned())
         })
         .expect("restored evidence");
+        assert_eq!(restored, first);
+    }
+
+    #[test]
+    fn deterministic_fast_preflight_uses_zero_model_turns_and_restores() {
+        let repo = tempfile::tempdir().expect("repository");
+        fs::create_dir_all(repo.path().join("src")).expect("src");
+        fs::write(repo.path().join("src/lib.rs"), "pub fn value() -> u8 { 1 }\n")
+            .expect("source");
+        let plan = production_orchestrator::plan_for_repository(
+            repo.path(),
+            &PromptDraft {
+                text: "Fix src/lib.rs".to_owned(),
+                ..PromptDraft::default()
+            },
+        )
+        .expect("plan");
+        assert_eq!(plan.planning.lane, ExecutionLane::FastMutation);
+        let (events, _) = mpsc::channel();
+        let control = TeamControlPlane::default();
+        let first = run_deterministic_fast_preflight(repo.path(), &plan, &control, &events)
+            .expect("deterministic preflight");
+        assert_eq!(first.workers.len(), 2);
+        assert!(first.workers.iter().all(|worker| worker.turns == 0));
+        let restored = run_deterministic_fast_preflight(repo.path(), &plan, &control, &events)
+            .expect("restored deterministic preflight");
         assert_eq!(restored, first);
     }
 
