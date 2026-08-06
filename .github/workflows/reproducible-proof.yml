@@ -2,7 +2,7 @@ name: Reproducible Safety Proof
 
 on:
   pull_request:
-    types: [opened, synchronize, reopened, ready_for_review]
+    types: [opened, synchronize, reopened, ready_for_review, edited, labeled, unlabeled]
   workflow_dispatch:
 
 permissions:
@@ -14,7 +14,21 @@ concurrency:
 
 jobs:
   proof:
-    if: ${{ github.event_name == 'workflow_dispatch' || github.event.pull_request.draft == false }}
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (
+        github.event_name == 'pull_request' &&
+        github.event.pull_request.draft == false &&
+        (
+          contains(github.event.pull_request.labels.*.name, 'final-issue-validation') ||
+          contains(github.event.pull_request.body, 'Closes #') ||
+          contains(github.event.pull_request.body, 'closes #') ||
+          contains(github.event.pull_request.body, 'Fixes #') ||
+          contains(github.event.pull_request.body, 'fixes #') ||
+          contains(github.event.pull_request.body, 'Resolves #') ||
+          contains(github.event.pull_request.body, 'resolves #')
+        )
+      )
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
