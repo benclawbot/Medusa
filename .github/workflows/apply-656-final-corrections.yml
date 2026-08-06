@@ -5,6 +5,9 @@ on:
     branches: [agent/656-final-corrections]
   pull_request:
     types: [opened, synchronize, reopened]
+  workflow_run:
+    workflows: [CI, Architecture policy, Refactor Guardrails, Release Gates]
+    types: [completed]
   schedule:
     - cron: '*/5 * * * *'
   workflow_dispatch:
