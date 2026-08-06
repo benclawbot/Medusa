@@ -9,6 +9,10 @@ on:
 permissions:
   contents: write
 
+concurrency:
+  group: one-time-code-intelligence-final-patch
+  cancel-in-progress: true
+
 jobs:
   patch:
     runs-on: ubuntu-latest
@@ -19,7 +23,7 @@ jobs:
       - uses: dtolnay/rust-toolchain@39b0b3842c7e8bbf6904c0bfc3d9006fdd4dc4e0 # 1.88.0
         with:
           components: rustfmt
-      - name: Apply exact registry and workspace corrections
+      - name: Apply exact registry, workspace, and architecture corrections
         shell: bash
         run: |
           python3 - <<'PY'
@@ -189,18 +193,28 @@ jobs:
           if text.count(marker) != 1:
               raise SystemExit('expected TypeScript workspace regression insertion point')
           workspace.write_text(text.replace(marker, regression + marker, 1), encoding='utf-8')
+
+          architecture = Path('docs/architecture/INDEX.md')
+          text = architecture.read_text(encoding='utf-8')
+          old_row = '| TypeScript/JavaScript code intelligence | production read-only; guarded rename under certification | certification-pending | `medusa-intelligence` owns workspace/LSP normalization; `medusa-agent` owns dispatch; `PatchTransaction` owns mutation | final cross-platform and exhaustive issue-closing evidence |'
+          new_row = '| TypeScript/JavaScript code intelligence | production | certified-production | `medusa-intelligence` owns workspace discovery, freshness, LSP normalization, guarded validation, and benchmarks; `medusa-agent` owns dispatch; `PatchTransaction` owns mutation | none |'
+          if text.count(old_row) != 1:
+              raise SystemExit('expected exact architecture capability row')
+          architecture.write_text(text.replace(old_row, new_row, 1), encoding='utf-8')
           PY
           cargo fmt --all
           git diff --check
-      - name: Verify registry and workspace contracts
+      - name: Verify registry, workspace, and architecture contracts
         run: |
           cargo test -p medusa-capabilities code_intelligence_tools_have_a_dedicated_truthful_capability --locked
           cargo test -p medusa-intelligence --all-features --locked typescript_workspace -- --nocapture
+          python3 scripts/test-architecture-index.py
+          python3 scripts/check-architecture-index.py
       - name: Commit verified corrections
         shell: bash
         run: |
           git config user.name 'Medusa CI'
           git config user.email 'actions@users.noreply.github.com'
-          git add crates/medusa-capabilities/src/registry.rs crates/medusa-intelligence/src/typescript_workspace.rs
-          git commit -m 'Align code-intelligence permissions and workspace filtering'
+          git add crates/medusa-capabilities/src/registry.rs crates/medusa-intelligence/src/typescript_workspace.rs docs/architecture/INDEX.md
+          git commit -m 'Finalize code-intelligence permissions and certification metadata'
           git push origin HEAD:agent/656-final-certification
