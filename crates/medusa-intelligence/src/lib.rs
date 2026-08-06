@@ -40,7 +40,8 @@ pub use format::format_changed;
 pub use graph::{CallEdge, DependencyEdge, SemanticGraph, SymbolId};
 pub use guarded_rename::{
     GuardedRenamePlan, RevisionBoundRenamePlan, bind_guarded_rename_snapshot,
-    validate_guarded_rename, validate_guarded_rename_snapshot,
+    lsp_position_to_byte_offset, prepare_guarded_rename_transaction, validate_guarded_rename,
+    validate_guarded_rename_snapshot,
 };
 pub use impact::{TestImpact, select_tests, select_tests_with_index};
 pub use index::IndexRefresh;
