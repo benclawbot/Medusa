@@ -15,10 +15,6 @@ on:
 permissions:
   contents: write
 
-concurrency:
-  group: apply-685-fast-mutation-lane
-  cancel-in-progress: false
-
 jobs:
   patch:
     if: >-
