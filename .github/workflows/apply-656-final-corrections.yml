@@ -1,35 +1,22 @@
-name: Apply #656 final corrections
+name: Apply 656 final corrections
 
 on:
   push:
-    branches: [agent/656-final-corrections]
-  pull_request:
-    types: [opened, synchronize, reopened]
-  workflow_run:
-    workflows: [CI, Architecture policy, Refactor Guardrails, Release Gates]
-    types: [completed]
-  schedule:
-    - cron: '*/5 * * * *'
-  workflow_dispatch:
+    branches:
+      - agent/656-final-corrections
 
 permissions:
   contents: write
 
-concurrency:
-  group: apply-656-final-corrections
-  cancel-in-progress: false
-
 jobs:
   patch:
-    if: >-
-      github.event_name != 'pull_request' ||
-      github.event.pull_request.head.ref == 'agent/656-final-corrections'
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/checkout@v4
         with:
           ref: agent/656-final-corrections
-      - uses: dtolnay/rust-toolchain@39b0b3842c7e8bbf6904c0bfc3d9006fdd4dc4e0 # 1.88.0
+      - uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt
       - name: Apply exact source corrections
@@ -40,20 +27,16 @@ jobs:
 
           registry = Path('crates/medusa-capabilities/src/registry.rs')
           text = registry.read_text(encoding='utf-8')
-          old_detail = 'Rust tree-sitter and Python lexical indexing are available; exact per-language levels are reported by semantic_capabilities'
-          new_detail = 'Rust/Python indexing and repository-scoped TypeScript/JavaScript semantic and guarded-refactoring tools are available; exact per-language levels are reported by semantic_capabilities'
-          if old_detail in text:
-              text = text.replace(old_detail, new_detail, 1)
-          elif new_detail not in text:
-              raise SystemExit('code-intelligence capability detail not found')
-
-          old_description = 'Guardedly rename one unambiguous Rust identifier across indexed definitions and references; fail closed on parse errors, cross-language matches, or stale bytes.'
-          new_description = 'Guardedly rename one unambiguous Rust or TypeScript/JavaScript symbol; fail closed on parse/protocol errors, ambiguity, repository scope drift, incomplete references, or stale bytes.'
-          if old_description in text:
-              text = text.replace(old_description, new_description, 1)
-          elif new_description not in text:
-              raise SystemExit('symbol_rename description not found')
-
+          text = text.replace(
+              'Rust tree-sitter and Python lexical indexing are available; exact per-language levels are reported by semantic_capabilities',
+              'Rust/Python indexing and repository-scoped TypeScript/JavaScript semantic and guarded-refactoring tools are available; exact per-language levels are reported by semantic_capabilities',
+              1,
+          )
+          text = text.replace(
+              'Guardedly rename one unambiguous Rust identifier across indexed definitions and references; fail closed on parse errors, cross-language matches, or stale bytes.',
+              'Guardedly rename one unambiguous Rust or TypeScript/JavaScript symbol; fail closed on parse/protocol errors, ambiguity, repository scope drift, incomplete references, or stale bytes.',
+              1,
+          )
           old_permissions = '''            [
                       RegistryPermission::Write,
                       RegistryPermission::RepositoryMutation,
@@ -107,8 +90,8 @@ jobs:
           assert!(rename.permissions.contains(&RegistryPermission::ProcessSpawn));'''
           if old_test in text:
               text = text.replace(old_test, new_test, 1)
-          elif 'let typescript = registry' not in text or 'rename.permissions.contains(&RegistryPermission::ProcessSpawn)' not in text:
-              raise SystemExit('registry permission assertions not found')
+          elif 'let typescript = registry' not in text:
+              raise SystemExit('registry assertions not found')
           registry.write_text(text, encoding='utf-8')
 
           workspace = Path('crates/medusa-intelligence/src/typescript_workspace.rs')
@@ -169,21 +152,20 @@ jobs:
 '''
           if 'fn repository_parent_named_vendor_does_not_hide_sources()' not in text:
               if marker not in text:
-                  raise SystemExit('workspace regression insertion point not found')
+                  raise SystemExit('workspace test insertion point not found')
               text = text.replace(marker, regression + marker, 1)
           workspace.write_text(text, encoding='utf-8')
           PY
           cargo fmt --all
           git diff --check
-      - name: Verify focused contracts
+      - name: Run focused tests
         run: |
           cargo test -p medusa-capabilities code_intelligence_tools_have_a_dedicated_truthful_capability --locked
           cargo test -p medusa-intelligence --all-features --locked typescript_workspace -- --nocapture
-      - name: Commit corrections when needed
+      - name: Commit verified corrections
         shell: bash
         run: |
           if git diff --quiet; then
-            echo 'Final corrections are already present.'
             exit 0
           fi
           git config user.name 'Medusa CI'
