@@ -8,7 +8,7 @@
 | --- | --- | --- | --- |
 | Rust | `tree-sitter-rust` static index | Parsed declarations plus repository-wide exact-name definition and reference queries | References are syntax-token occurrences, not type-directed resolution. Compiler diagnostics are not dispatched. |
 | Python | bounded lexical scanner | `def`, `async def`, and `class` declarations plus comment- and string-aware identifier occurrences | This is not a Python parser. Diagnostics and rename are unavailable. |
-| TypeScript/JavaScript | repository-scoped `typescript-language-server` dispatcher | Definitions, references, diagnostics, and workspace symbols through `typescript_semantic`; guarded rename is wired through `symbol_rename` and remains certification-pending | No parser-backed parsed-symbol claim. LSP output is untrusted until repository scope, ambiguity, range, static-path, and freshness checks pass. |
+| TypeScript/JavaScript | repository-scoped `typescript-language-server` dispatcher | Definitions, references, diagnostics, workspace symbols, and guarded cross-file rename through production entrypoints | No parser-backed parsed-symbol claim. LSP output is untrusted until repository scope, ambiguity, range, static-path, freshness, and exact-snapshot checks pass. |
 
 The registry owns the production `CodeIntelligence` capability. `code_index`, `semantic_capabilities`, `typescript_semantic`, and `symbol_rename` are registered under it rather than under generic filesystem access. `patch_apply` remains a filesystem mutation because it does not depend on semantic analysis.
 
@@ -24,9 +24,10 @@ The TypeScript/JavaScript path additionally requires:
 - no resource operations, confirmation-requiring edits, scope escapes, empty replacements, or overlapping ranges;
 - exact SHA-256 snapshots for every touched file;
 - conversion of LSP UTF-16 ranges to byte-precise expected-content edits;
+- a fresh deterministic workspace fingerprint immediately before transaction preparation;
 - a guarded `PatchTransaction` commit before formatting and impacted-test evidence is returned.
 
-Ambiguity, unsupported capability responses, parse/protocol errors, stale bytes, incomplete coverage, repository switching, and path escapes fail before mutation. The guarded-refactoring capability claim is promoted only after the final cross-platform and exhaustive issue-closing certification passes.
+Ambiguity, unsupported capability responses, parse/protocol errors, stale bytes, incomplete coverage, repository switching, workspace drift, and path escapes fail before mutation. The production claim is merge-gated by the final cross-platform `Code Intelligence Certification` suite and the repository’s exhaustive issue-closing gates.
 
 ## Workspace freshness
 
