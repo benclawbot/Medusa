@@ -1,0 +1,17 @@
+{
+  "schema_version": 1,
+  "scenarios": [
+    {"id":"repository_lookup","language":"mixed","risk":"low","modes":["cold","warm"]},
+    {"id":"rust_single_file_fix","language":"rust","risk":"low","modes":["cold","warm"]},
+    {"id":"typescript_multi_file_feature","language":"typescript","risk":"medium","modes":["cold","warm"]},
+    {"id":"failing_test_repair","language":"mixed","risk":"medium","modes":["cold","warm","injected_tool_latency"]},
+    {"id":"cross_package_refactor","language":"rust","risk":"high","modes":["cold","warm"]},
+    {"id":"browser_verified_ui_change","language":"typescript","risk":"medium","modes":["cold","warm"]},
+    {"id":"security_sensitive_change","language":"mixed","risk":"high","modes":["cold","warm"]},
+    {"id":"ambiguous_scope_fail_closed","language":"mixed","risk":"high","modes":["cold","warm"]},
+    {"id":"provider_failure_recovery","language":"mixed","risk":"medium","modes":["injected_provider_latency"]},
+    {"id":"verification_failure_repair","language":"mixed","risk":"high","modes":["cold","warm"]},
+    {"id":"crash_resume","language":"mixed","risk":"high","modes":["cold"]},
+    {"id":"multi_implementer_conflict","language":"mixed","risk":"high","modes":["cold","warm"]}
+  ]
+}
