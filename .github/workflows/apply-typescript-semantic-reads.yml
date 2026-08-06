@@ -1,0 +1,35 @@
+name: Apply TypeScript semantic reads
+
+on:
+  push:
+    branches:
+      - codex/656-typescript-semantic-reads
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          fetch-depth: 0
+      - name: Verify and apply source patch
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo '5c526f07d16fdc8d56263f473c20240bd8ca79b6ae6281fc39de79a25a1cf6c1  .medusa/patch/change.patch.gz' | sha256sum --check --strict
+          gzip -dc .medusa/patch/change.patch.gz > /tmp/change.patch
+          echo 'cfeb5de1ea353f0851b5b3983068224663b8213f19209cdffb69890b3f9236f7  /tmp/change.patch' | sha256sum --check --strict
+          git apply --check /tmp/change.patch
+          git apply /tmp/change.patch
+          rm -rf .medusa/patch
+          rm -f .github/workflows/apply-typescript-semantic-reads.yml
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add -A
+          git diff --cached --check
+          git commit -m 'Add TypeScript semantic read entrypoints'
+          git push origin HEAD:codex/656-typescript-semantic-reads
