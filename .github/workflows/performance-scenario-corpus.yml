@@ -1,0 +1,38 @@
+name: Performance Scenario Corpus
+
+on:
+  pull_request:
+    paths:
+      - 'benchmarks/performance/**'
+      - 'scripts/performance/**'
+      - '.github/workflows/performance-scenario-corpus.yml'
+  schedule:
+    - cron: '17 3 * * 1'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  validate-corpus:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - name: Validate representative corpus
+        run: python scripts/performance/validate_scenarios.py
+      - name: Validate complete telemetry fixture
+        run: >-
+          python scripts/performance/summarize_runs.py
+          benchmarks/performance/fixtures/complete-run.json
+          --output performance-summary.json
+      - uses: actions/upload-artifact@v4
+        with:
+          name: performance-corpus-${{ runner.os }}
+          path: performance-summary.json
+          if-no-files-found: error
+          retention-days: 14
