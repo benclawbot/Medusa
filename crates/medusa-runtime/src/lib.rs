@@ -1041,15 +1041,27 @@ fn run_prompt(
                 crate::production_orchestrator::projection(ledger),
             ));
         }
-        match crate::multi_agent_coordinator::run_preflight(
-            &state.repo,
-            &config,
-            state.session_api_key.clone(),
+        let preflight = if crate::production_orchestrator::uses_deterministic_preflight(
             &execution_plan,
-            cancel,
-            &state.team_control,
-            events,
         ) {
+            crate::multi_agent_coordinator::run_deterministic_fast_preflight(
+                &state.repo,
+                &execution_plan,
+                &state.team_control,
+                events,
+            )
+        } else {
+            crate::multi_agent_coordinator::run_preflight(
+                &state.repo,
+                &config,
+                state.session_api_key.clone(),
+                &execution_plan,
+                cancel,
+                &state.team_control,
+                events,
+            )
+        };
+        match preflight {
             Ok(evidence) => {
                 if let Some(ledger) = execution_ledger.as_mut() {
                     crate::production_orchestrator::succeed_kinds(
@@ -1059,7 +1071,13 @@ fn run_prompt(
                             medusa_multi_agent_scheduler::TaskKind::Analysis,
                             medusa_multi_agent_scheduler::TaskKind::RiskReview,
                         ],
-                        "durable preflight worker evidence recorded",
+                        if crate::production_orchestrator::uses_deterministic_preflight(
+                            &execution_plan,
+                        ) {
+                            "durable deterministic fast-lane evidence recorded"
+                        } else {
+                            "durable preflight worker evidence recorded"
+                        },
                     )
                     .map_err(RuntimeError::agent)?;
                     let _ = events.send(RuntimeEvent::Plan(

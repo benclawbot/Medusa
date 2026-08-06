@@ -6,8 +6,9 @@ use std::{
 
 use medusa_agent::{AgentPlanStep, AgentPlanStepStatus};
 use medusa_multi_agent_scheduler::{
-    CancellationAuthority, ExecutionLedger, ExecutionStrategy, LedgerTaskState, PlannedTask,
-    PlannerInput, PlanningResult, Schedule, Task, TaskKind, Worker, plan_typed, schedule,
+    CancellationAuthority, ExecutionLane, ExecutionLedger, ExecutionStrategy, LedgerTaskState,
+    PlannedTask, PlannerInput, PlanningResult, Schedule, Task, TaskKind, Worker, plan_typed,
+    schedule,
 };
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -125,6 +126,12 @@ pub fn requires_mutation(plan: &ProductionExecutionPlan) -> bool {
         && plan.planning.task(TaskKind::Implementation).is_some()
 }
 
+#[must_use]
+pub fn uses_deterministic_preflight(plan: &ProductionExecutionPlan) -> bool {
+    plan.planning.lane == ExecutionLane::FastMutation
+        && plan.planning.uses_deterministic_preflight()
+}
+
 pub fn runtime_context(plan: &ProductionExecutionPlan) -> String {
     if plan.mode == ExecutionMode::Direct {
         return "Production execution mode: direct. No scheduler tasks or mutation authority were created."
@@ -147,12 +154,15 @@ pub fn runtime_context(plan: &ProductionExecutionPlan) -> String {
         .collect::<Vec<_>>()
         .join("\n");
     format!(
-        "Production execution mode: {:?}. Intent={:?}; scope={:?}; risk={:?}; confidence={}/1000. The persisted execution ledger is the sole task authority. Unknown write scope grants no mutation authority. Every displayed task has durable dispatch and terminal evidence.\n{}",
+        "Production execution mode: {:?}. Intent={:?}; lane={:?}; scope={:?}; risk={:?}; confidence={}/1000; model_turn_budget={:?}. Lane rationale: {}. The persisted execution ledger is the sole task authority. Unknown write scope grants no mutation authority. Every displayed task has durable dispatch and terminal evidence.\n{}",
         plan.planning.strategy,
         plan.planning.intent,
+        plan.planning.lane,
         plan.planning.scope,
         plan.planning.risk,
         plan.planning.confidence_milli,
+        plan.planning.model_turn_budget,
+        plan.planning.lane_rationale,
         contracts,
     )
 }
@@ -252,8 +262,10 @@ pub fn events(plan: &ProductionExecutionPlan) -> Vec<RuntimeEvent> {
         details: vec![
             format!("{} typed tasks", plan.tasks.len()),
             format!("strategy={:?}", plan.planning.strategy),
+            format!("lane={:?}", plan.planning.lane),
             format!("scope={:?}", plan.planning.scope.resolution),
             format!("risk={:?}", plan.planning.risk),
+            format!("model_turn_budget={:?}", plan.planning.model_turn_budget),
             "All frontend task state is projected from the durable execution ledger."
                 .to_owned(),
         ],
@@ -614,6 +626,26 @@ mod tests {
                 .map(|view| view.state),
             Some(LedgerTaskState::Pending { attempts: 0 })
         ));
+    }
+
+    #[test]
+    fn localized_mutation_exposes_fast_lane_and_budget() {
+        let directory = tempfile::tempdir().unwrap();
+        fs::create_dir_all(directory.path().join("src")).unwrap();
+        fs::write(
+            directory.path().join("src/lib.rs"),
+            "pub fn value() -> u8 { 1 }\n",
+        )
+        .unwrap();
+        let draft = PromptDraft {
+            text: "Fix src/lib.rs".to_owned(),
+            ..PromptDraft::default()
+        };
+        let planned = plan_for_repository(directory.path(), &draft).unwrap();
+        assert!(uses_deterministic_preflight(&planned));
+        assert_eq!(planned.planning.model_turn_budget.before_first_edit, 1);
+        assert_eq!(planned.planning.model_turn_budget.successful_path_total, 2);
+        assert!(runtime_context(&planned).contains("lane=FastMutation"));
     }
 
     #[test]

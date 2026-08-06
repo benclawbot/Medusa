@@ -49,8 +49,10 @@ impl TypeScriptWorkspace {
 
     pub fn is_fresh(&self) -> Result<bool, TypeScriptWorkspaceError> {
         let refreshed = self.refresh()?;
-        Ok(self.repository_fingerprint == refreshed.repository_fingerprint
-            && self.workspace_fingerprint == refreshed.workspace_fingerprint)
+        Ok(
+            self.repository_fingerprint == refreshed.repository_fingerprint
+                && self.workspace_fingerprint == refreshed.workspace_fingerprint,
+        )
     }
 
     #[must_use]
@@ -211,7 +213,12 @@ fn fingerprint_repository(repository_root: &Path) -> String {
     hasher.update([0]);
     hasher.update(normalized_path(repository_root, repository_root).as_bytes());
     hasher.update([0]);
-    hasher.update(repository_root.to_string_lossy().replace('\\', "/").as_bytes());
+    hasher.update(
+        repository_root
+            .to_string_lossy()
+            .replace('\\', "/")
+            .as_bytes(),
+    );
     hex::encode(hasher.finalize())
 }
 
@@ -227,7 +234,10 @@ fn fingerprint_workspace(
     hasher.update(FINGERPRINT_VERSION);
     hasher.update([0]);
     hasher.update(repository_fingerprint.as_bytes());
-    hash_path(&mut hasher, &normalized_path(repository_root, workspace_root));
+    hash_path(
+        &mut hasher,
+        &normalized_path(repository_root, workspace_root),
+    );
 
     if let Some(config_path) = config_path {
         hash_file(&mut hasher, repository_root, config_path)?;
