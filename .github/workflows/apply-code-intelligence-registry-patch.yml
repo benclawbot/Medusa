@@ -1,0 +1,135 @@
+name: Apply code-intelligence registry patch
+
+on:
+  push:
+    branches: [agent/656-final-certification]
+    paths:
+      - '.github/workflows/apply-code-intelligence-registry-patch.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: agent/656-final-certification
+      - uses: dtolnay/rust-toolchain@39b0b3842c7e8bbf6904c0bfc3d9006fdd4dc4e0 # 1.88.0
+        with:
+          components: rustfmt
+      - name: Apply exact registry metadata update
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+
+          path = Path('crates/medusa-capabilities/src/registry.rs')
+          text = path.read_text(encoding='utf-8')
+
+          replacements = [
+              (
+                  'Rust tree-sitter and Python lexical indexing are available; exact per-language levels are reported by semantic_capabilities',
+                  'Rust/Python indexing and repository-scoped TypeScript/JavaScript semantic and guarded-refactoring tools are available; exact per-language levels are reported by semantic_capabilities',
+              ),
+              (
+                  'Guardedly rename one unambiguous Rust identifier across indexed definitions and references; fail closed on parse errors, cross-language matches, or stale bytes.',
+                  'Guardedly rename one unambiguous Rust or TypeScript/JavaScript symbol; fail closed on parse/protocol errors, ambiguity, repository scope drift, incomplete references, or stale bytes.',
+              ),
+              (
+                  '''            [
+                      RegistryPermission::Write,
+                      RegistryPermission::RepositoryMutation,
+                  ],
+                  true,
+              ),
+              tool_entry(
+                  ToolIdentity {
+                      states,
+                      name: "shell_run",''',
+                  '''            [
+                      RegistryPermission::Write,
+                      RegistryPermission::RepositoryMutation,
+                      RegistryPermission::ProcessSpawn,
+                  ],
+                  true,
+              ),
+              tool_entry(
+                  ToolIdentity {
+                      states,
+                      name: "shell_run",''',
+              ),
+          ]
+          for old, new in replacements:
+              if text.count(old) != 1:
+                  raise SystemExit(f'expected one exact registry replacement, found {text.count(old)}')
+              text = text.replace(old, new, 1)
+
+          old_test = '''        assert_eq!(
+              registry.entry("tool.code_index").expect("index").capability,
+              Capability::CodeIntelligence
+          );
+          assert_eq!(
+              registry
+                  .entry("tool.symbol_rename")
+                  .expect("rename")
+                  .capability,
+              Capability::CodeIntelligence
+          );
+          assert!(
+              registry
+                  .model_tools(true)
+                  .iter()
+                  .any(|tool| tool.name == "semantic_capabilities")
+          );'''
+          new_test = '''        assert_eq!(
+              registry.entry("tool.code_index").expect("index").capability,
+              Capability::CodeIntelligence
+          );
+          let typescript = registry
+              .entry("tool.typescript_semantic")
+              .expect("typescript semantic");
+          assert_eq!(typescript.capability, Capability::CodeIntelligence);
+          assert!(typescript.permissions.contains(&RegistryPermission::Read));
+          assert!(
+              typescript
+                  .permissions
+                  .contains(&RegistryPermission::ProcessSpawn)
+          );
+          let rename = registry.entry("tool.symbol_rename").expect("rename");
+          assert_eq!(rename.capability, Capability::CodeIntelligence);
+          assert!(
+              rename
+                  .permissions
+                  .contains(&RegistryPermission::RepositoryMutation)
+          );
+          assert!(rename.permissions.contains(&RegistryPermission::ProcessSpawn));
+          assert!(
+              registry
+                  .model_tools(true)
+                  .iter()
+                  .any(|tool| tool.name == "semantic_capabilities")
+          );
+          assert!(
+              registry
+                  .model_tools(true)
+                  .iter()
+                  .any(|tool| tool.name == "typescript_semantic")
+          );'''
+          if text.count(old_test) != 1:
+              raise SystemExit(f'expected one exact registry test replacement, found {text.count(old_test)}')
+          path.write_text(text.replace(old_test, new_test, 1), encoding='utf-8')
+          PY
+          cargo fmt --all
+          git diff --check
+      - name: Verify registry contract
+        run: cargo test -p medusa-capabilities code_intelligence_tools_have_a_dedicated_truthful_capability --locked
+      - name: Commit registry patch
+        shell: bash
+        run: |
+          git config user.name 'Medusa CI'
+          git config user.email 'actions@users.noreply.github.com'
+          git add crates/medusa-capabilities/src/registry.rs
+          git commit -m 'Align code-intelligence registry permissions and claims'
+          git push origin HEAD:agent/656-final-certification
