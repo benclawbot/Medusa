@@ -111,6 +111,7 @@ pub(crate) fn tool_allowed(mode: Mode, tool: &str) -> bool {
                 | "search_text"
                 | "semantic_capabilities"
                 | "code_index"
+                | "typescript_semantic"
                 | "web_search"
                 | "web_fetch"
                 | "skill_read"

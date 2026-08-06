@@ -180,7 +180,7 @@ fn typescript_javascript_profile() -> LanguageCapabilityProfile {
         |level, detail| claim(level, LanguageCapabilityStatus::Unavailable, detail, None);
     LanguageCapabilityProfile {
         language: "typescript_javascript".into(),
-        adapter: "LSP primitives without a certified production dispatcher".into(),
+        adapter: "typescript-language-server repository-scoped read-only dispatcher".into(),
         claims: vec![
             claim(
                 LanguageCapabilityLevel::TextOnly,
@@ -192,21 +192,29 @@ fn typescript_javascript_profile() -> LanguageCapabilityProfile {
                 LanguageCapabilityLevel::ParsedSymbols,
                 "no TypeScript/JavaScript parser-backed production tool is registered",
             ),
-            unavailable(
+            claim(
                 LanguageCapabilityLevel::Definitions,
-                "LSP normalization exists in medusa-intelligence but has no production lifecycle owner",
+                LanguageCapabilityStatus::Production,
+                "repository-scoped TypeScript language-server definitions",
+                Some("medusa-agent::tools::intelligence::typescript_semantic"),
             ),
-            unavailable(
+            claim(
                 LanguageCapabilityLevel::References,
-                "LSP normalization exists in medusa-intelligence but has no production lifecycle owner",
+                LanguageCapabilityStatus::Production,
+                "repository-scoped TypeScript language-server references",
+                Some("medusa-agent::tools::intelligence::typescript_semantic"),
             ),
-            unavailable(
+            claim(
                 LanguageCapabilityLevel::Diagnostics,
-                "diagnostic normalization exists but no server process is discovered or dispatched",
+                LanguageCapabilityStatus::Production,
+                "publishDiagnostics captured after deterministic document synchronization",
+                Some("medusa-agent::tools::intelligence::typescript_semantic"),
             ),
-            unavailable(
+            claim(
                 LanguageCapabilityLevel::WorkspaceSymbols,
-                "workspace-symbol normalization exists but no production handler is registered",
+                LanguageCapabilityStatus::Production,
+                "repository-scoped TypeScript language-server workspace symbols",
+                Some("medusa-agent::tools::intelligence::typescript_semantic"),
             ),
             unavailable(
                 LanguageCapabilityLevel::GuardedRefactoring,
