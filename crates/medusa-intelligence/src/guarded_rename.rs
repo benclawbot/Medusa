@@ -605,14 +605,14 @@ mod tests {
         let transaction =
             prepare_guarded_rename_transaction(directory.path(), &bound).expect("transaction");
 
-        fs::write(&path, "target + changed\n").expect("drift");
+        fs::write(&path, "target + elsewhere\n").expect("drift");
         let error = transaction
             .commit(directory.path())
             .expect_err("unrenamed drift must fail");
         assert!(error.to_string().contains("stale edit"));
         assert_eq!(
             fs::read_to_string(path).expect("source"),
-            "target + changed\n"
+            "target + elsewhere\n"
         );
     }
 
