@@ -1,6 +1,8 @@
 name: Apply #685 fast mutation lane
 
 on:
+  push:
+    branches: [main]
   pull_request:
     types: [opened, synchronize, reopened]
   workflow_run:
