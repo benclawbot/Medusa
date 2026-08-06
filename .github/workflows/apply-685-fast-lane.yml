@@ -1,0 +1,63 @@
+name: Apply #685 fast mutation lane
+
+on:
+  schedule:
+    - cron: '*/5 * * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: apply-685-fast-mutation-lane
+  cancel-in-progress: false
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: agent/685-fast-mutation-lane
+      - uses: dtolnay/rust-toolchain@39b0b3842c7e8bbf6904c0bfc3d9006fdd4dc4e0 # 1.88.0
+        with:
+          components: rustfmt,clippy
+      - name: Apply exact fast-lane patch
+        shell: bash
+        run: |
+          set -euo pipefail
+          base64 -d .medusa/patches/685-fast-lane.patch.gz.b64 | gzip -d > /tmp/685.patch
+          if git apply --check /tmp/685.patch; then
+            git apply /tmp/685.patch
+          elif git apply --reverse --check /tmp/685.patch; then
+            echo 'Fast-lane source patch is already applied.'
+          else
+            echo 'Fast-lane patch does not match the branch.'
+            exit 1
+          fi
+          rm -f .medusa/patches/685-fast-lane.patch.gz.b64
+          cargo fmt --all
+          git diff --check
+      - name: Verify fast-lane contracts
+        run: |
+          cargo test -p medusa-multi-agent-scheduler --locked
+          cargo test -p medusa-runtime --locked production_orchestrator -- --nocapture
+          cargo test -p medusa-runtime --locked multi_agent_coordinator -- --nocapture
+          cargo clippy -p medusa-multi-agent-scheduler -p medusa-runtime --all-targets --locked -- -D warnings
+      - name: Commit verified fast-lane tranche
+        shell: bash
+        run: |
+          if git diff --quiet; then
+            echo 'Verified fast-lane tranche is already present.'
+            exit 0
+          fi
+          git config user.name 'Medusa CI'
+          git config user.email 'actions@users.noreply.github.com'
+          git add crates/medusa-multi-agent-scheduler/src/lib.rs \
+                  crates/medusa-runtime/src/production_orchestrator.rs \
+                  crates/medusa-runtime/src/multi_agent_coordinator.rs \
+                  crates/medusa-runtime/src/mutating_worker_coordinator.rs \
+                  crates/medusa-runtime/src/lib.rs \
+                  .medusa/patches/685-fast-lane.patch.gz.b64
+          git commit -m 'Add risk-adaptive fast mutation execution lane'
+          git push origin HEAD:agent/685-fast-mutation-lane
