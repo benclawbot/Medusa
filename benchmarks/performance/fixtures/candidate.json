@@ -1,0 +1,12 @@
+{
+  "schema_version": 1,
+  "scenario": "warm_localized_fix",
+  "repository_revision": "candidate",
+  "platform": "linux-x86_64",
+  "verified_success": true,
+  "verification_coverage": 1.0,
+  "end_to_end_ms": 900,
+  "runtime_overhead_ms": 35,
+  "model_requests": 2,
+  "redundant_tool_call_ratio": 0.01
+}
