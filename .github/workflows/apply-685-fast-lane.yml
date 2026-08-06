@@ -3,6 +3,9 @@ name: Apply #685 fast mutation lane
 on:
   pull_request:
     types: [opened, synchronize, reopened]
+  workflow_run:
+    workflows: [CI, Architecture policy, Refactor Guardrails, Release Gates]
+    types: [completed]
   schedule:
     - cron: '*/5 * * * *'
   workflow_dispatch:
