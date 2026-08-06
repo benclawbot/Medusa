@@ -127,10 +127,7 @@ pub fn validate_guarded_rename_snapshot(
 ///
 /// Line endings may be LF, CRLF, or CR. Positions that split a UTF-16 surrogate
 /// pair or exceed the selected line fail closed.
-pub fn lsp_position_to_byte_offset(
-    text: &str,
-    position: &LspPosition,
-) -> Result<usize, String> {
+pub fn lsp_position_to_byte_offset(text: &str, position: &LspPosition) -> Result<usize, String> {
     let target_line = usize::try_from(position.line)
         .map_err(|_| "rename refused because the LSP line does not fit this platform".to_owned())?;
     let target_character = usize::try_from(position.character).map_err(|_| {
@@ -321,11 +318,7 @@ fn add_revision_guarded_edits(
 
 fn validate_snapshot_paths(bound: &RevisionBoundRenamePlan) -> Result<(), String> {
     let planned_paths = bound.plan.paths.iter().cloned().collect::<BTreeSet<_>>();
-    let snapshot_paths = bound
-        .before_hashes
-        .keys()
-        .cloned()
-        .collect::<BTreeSet<_>>();
+    let snapshot_paths = bound.before_hashes.keys().cloned().collect::<BTreeSet<_>>();
     if planned_paths != snapshot_paths {
         return Err(format!(
             "rename refused because snapshot paths differ from the guarded plan: planned={planned_paths:?}, snapshot={snapshot_paths:?}"
@@ -556,11 +549,8 @@ mod tests {
     fn prepares_and_commits_unicode_cross_file_rename() {
         let directory = tempfile::tempdir().expect("tempdir");
         fs::create_dir_all(directory.path().join("src")).expect("source directory");
-        fs::write(
-            directory.path().join("src/a.ts"),
-            "const 😀target = 1;\n",
-        )
-        .expect("first source");
+        fs::write(directory.path().join("src/a.ts"), "const 😀target = 1;\n")
+            .expect("first source");
         fs::write(directory.path().join("src/b.ts"), "target();\n").expect("second source");
 
         let edit = LspWorkspaceEdit {
@@ -662,10 +652,7 @@ mod tests {
     #[test]
     fn refuses_overlapping_and_resource_edits() {
         let overlap = LspWorkspaceEdit {
-            operations: vec![
-                text_edit("src/lib.ts", 0, 4),
-                text_edit("src/lib.ts", 3, 7),
-            ],
+            operations: vec![text_edit("src/lib.ts", 0, 4), text_edit("src/lib.ts", 3, 7)],
             annotations: BTreeMap::new(),
         };
         let error = validate_guarded_rename(
