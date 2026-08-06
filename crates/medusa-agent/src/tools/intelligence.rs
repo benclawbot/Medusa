@@ -1,4 +1,7 @@
-use std::{fs, path::{Path, PathBuf}};
+use std::{
+    fs,
+    path::{Path, PathBuf},
+};
 
 use medusa_core::MedusaResult;
 use medusa_intelligence::{
@@ -32,7 +35,6 @@ pub(crate) fn code_index(repo: &Path, input: &Value) -> MedusaResult<String> {
     }
 }
 
-
 pub(crate) fn typescript_semantic(repo: &Path, input: &Value) -> MedusaResult<String> {
     let operation = input_string(input, "operation")?;
     let target = input.get("path").and_then(Value::as_str).unwrap_or(".");
@@ -53,7 +55,9 @@ pub(crate) fn typescript_semantic(repo: &Path, input: &Value) -> MedusaResult<St
         .map(|result| json!(result)),
         "definition" | "references" | "diagnostics" => {
             if !target_path.is_file() {
-                return Err(crate::tools::invalid_tool("path must identify a source file"));
+                return Err(crate::tools::invalid_tool(
+                    "path must identify a source file",
+                ));
             }
             let text = fs::read_to_string(&target_path)?;
             let uri = file_uri(&target_path);
@@ -95,14 +99,21 @@ pub(crate) fn typescript_semantic(repo: &Path, input: &Value) -> MedusaResult<St
                     let diagnostics = client
                         .drain_notifications()
                         .into_iter()
-                        .filter(|message| message.get("method").and_then(Value::as_str) == Some("textDocument/publishDiagnostics"))
+                        .filter(|message| {
+                            message.get("method").and_then(Value::as_str)
+                                == Some("textDocument/publishDiagnostics")
+                        })
                         .collect::<Vec<_>>();
                     Ok(json!({"notifications": diagnostics}))
                 }
                 _ => unreachable!(),
             }
         }
-        _ => return Err(crate::tools::invalid_tool("unsupported TypeScript semantic operation")),
+        _ => {
+            return Err(crate::tools::invalid_tool(
+                "unsupported TypeScript semantic operation",
+            ));
+        }
     }
     .map_err(|error| crate::tools::invalid_tool(error.to_string()))?;
 
@@ -115,7 +126,11 @@ pub(crate) fn typescript_semantic(repo: &Path, input: &Value) -> MedusaResult<St
 
 fn file_uri(path: &Path) -> String {
     let normalized = path.to_string_lossy().replace('\\', "/");
-    if normalized.starts_with('/') { format!("file://{normalized}") } else { format!("file:///{normalized}") }
+    if normalized.starts_with('/') {
+        format!("file://{normalized}")
+    } else {
+        format!("file:///{normalized}")
+    }
 }
 
 fn language_id(path: &Path) -> &'static str {
