@@ -2,9 +2,7 @@ name: Product Acceptance
 
 on:
   pull_request:
-    types: [opened, synchronize, reopened, ready_for_review]
-  push:
-    branches: [main]
+    types: [opened, synchronize, reopened, ready_for_review, edited, labeled, unlabeled]
   workflow_dispatch:
 
 permissions:
@@ -47,7 +45,21 @@ jobs:
           if-no-files-found: error
 
   full-evidence:
-    if: ${{ github.event_name == 'workflow_dispatch' || github.event_name == 'push' }}
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (
+        github.event_name == 'pull_request' &&
+        github.event.pull_request.draft == false &&
+        (
+          contains(github.event.pull_request.labels.*.name, 'final-issue-validation') ||
+          contains(github.event.pull_request.body, 'Closes #') ||
+          contains(github.event.pull_request.body, 'closes #') ||
+          contains(github.event.pull_request.body, 'Fixes #') ||
+          contains(github.event.pull_request.body, 'fixes #') ||
+          contains(github.event.pull_request.body, 'Resolves #') ||
+          contains(github.event.pull_request.body, 'resolves #')
+        )
+      )
     name: Full evidence (${{ matrix.os }})
     strategy:
       fail-fast: false
