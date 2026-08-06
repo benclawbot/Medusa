@@ -226,7 +226,7 @@ fn typescript_javascript_profile() -> LanguageCapabilityProfile {
             "crates/medusa-intelligence/src/lsp_navigation.rs".into(),
             "crates/medusa-intelligence/src/lsp_actions.rs".into(),
             "crates/medusa-intelligence/src/lsp_semantics.rs".into(),
-            "no medusa-agent TypeScript/JavaScript dispatch route".into(),
+            "crates/medusa-agent/src/tools/intelligence.rs".into(),
         ],
     }
 }
@@ -249,9 +249,42 @@ mod tests {
             .iter()
             .find(|profile| profile.language == "typescript_javascript")
             .expect("typescript profile");
-        assert!(typescript.claims.iter().all(|claim| {
-            claim.level == LanguageCapabilityLevel::TextOnly
-                || claim.status == LanguageCapabilityStatus::Unavailable
-        }));
+        assert_eq!(
+            typescript
+                .claims
+                .iter()
+                .map(|claim| (claim.level, claim.status))
+                .collect::<Vec<_>>(),
+            vec![
+                (
+                    LanguageCapabilityLevel::TextOnly,
+                    LanguageCapabilityStatus::Production,
+                ),
+                (
+                    LanguageCapabilityLevel::ParsedSymbols,
+                    LanguageCapabilityStatus::Unavailable,
+                ),
+                (
+                    LanguageCapabilityLevel::Definitions,
+                    LanguageCapabilityStatus::Production,
+                ),
+                (
+                    LanguageCapabilityLevel::References,
+                    LanguageCapabilityStatus::Production,
+                ),
+                (
+                    LanguageCapabilityLevel::Diagnostics,
+                    LanguageCapabilityStatus::Production,
+                ),
+                (
+                    LanguageCapabilityLevel::WorkspaceSymbols,
+                    LanguageCapabilityStatus::Production,
+                ),
+                (
+                    LanguageCapabilityLevel::GuardedRefactoring,
+                    LanguageCapabilityStatus::Unavailable,
+                ),
+            ]
+        );
     }
 }
