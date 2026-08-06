@@ -1,20 +1,21 @@
 name: Apply code-intelligence final metadata patch
 
 on:
-  push:
-    branches: [agent/656-final-certification]
-    paths:
-      - '.github/workflows/apply-code-intelligence-registry-patch.yml'
+  pull_request:
+    types: [opened, synchronize, reopened]
 
 permissions:
   contents: write
 
 concurrency:
-  group: one-time-code-intelligence-final-patch
+  group: one-time-code-intelligence-final-patch-${{ github.event.pull_request.number }}
   cancel-in-progress: true
 
 jobs:
   patch:
+    if: >-
+      github.event.pull_request.head.repo.full_name == github.repository &&
+      github.event.pull_request.head.ref == 'agent/656-final-certification'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
@@ -31,153 +32,160 @@ jobs:
 
           registry = Path('crates/medusa-capabilities/src/registry.rs')
           text = registry.read_text(encoding='utf-8')
-          replacements = [
-              (
-                  'Rust tree-sitter and Python lexical indexing are available; exact per-language levels are reported by semantic_capabilities',
-                  'Rust/Python indexing and repository-scoped TypeScript/JavaScript semantic and guarded-refactoring tools are available; exact per-language levels are reported by semantic_capabilities',
-              ),
-              (
-                  'Guardedly rename one unambiguous Rust identifier across indexed definitions and references; fail closed on parse errors, cross-language matches, or stale bytes.',
-                  'Guardedly rename one unambiguous Rust or TypeScript/JavaScript symbol; fail closed on parse/protocol errors, ambiguity, repository scope drift, incomplete references, or stale bytes.',
-              ),
-              (
-                  '''            [
-                      RegistryPermission::Write,
-                      RegistryPermission::RepositoryMutation,
-                  ],
-                  true,
-              ),
-              tool_entry(
-                  ToolIdentity {
-                      states,
-                      name: "shell_run",''',
-                  '''            [
-                      RegistryPermission::Write,
-                      RegistryPermission::RepositoryMutation,
-                      RegistryPermission::ProcessSpawn,
-                  ],
-                  true,
-              ),
-              tool_entry(
-                  ToolIdentity {
-                      states,
-                      name: "shell_run",''',
-              ),
-          ]
-          for old, new in replacements:
-              if text.count(old) != 1:
-                  raise SystemExit(f'expected one exact registry replacement, found {text.count(old)}')
-              text = text.replace(old, new, 1)
+          desired_registry_marker = (
+              'Rust/Python indexing and repository-scoped TypeScript/JavaScript semantic '
+              'and guarded-refactoring tools are available'
+          )
+          already_applied = desired_registry_marker in text
+          if not already_applied:
+              replacements = [
+                  (
+                      'Rust tree-sitter and Python lexical indexing are available; exact per-language levels are reported by semantic_capabilities',
+                      'Rust/Python indexing and repository-scoped TypeScript/JavaScript semantic and guarded-refactoring tools are available; exact per-language levels are reported by semantic_capabilities',
+                  ),
+                  (
+                      'Guardedly rename one unambiguous Rust identifier across indexed definitions and references; fail closed on parse errors, cross-language matches, or stale bytes.',
+                      'Guardedly rename one unambiguous Rust or TypeScript/JavaScript symbol; fail closed on parse/protocol errors, ambiguity, repository scope drift, incomplete references, or stale bytes.',
+                  ),
+                  (
+                      '''            [
+                          RegistryPermission::Write,
+                          RegistryPermission::RepositoryMutation,
+                      ],
+                      true,
+                  ),
+                  tool_entry(
+                      ToolIdentity {
+                          states,
+                          name: "shell_run",''',
+                      '''            [
+                          RegistryPermission::Write,
+                          RegistryPermission::RepositoryMutation,
+                          RegistryPermission::ProcessSpawn,
+                      ],
+                      true,
+                  ),
+                  tool_entry(
+                      ToolIdentity {
+                          states,
+                          name: "shell_run",''',
+                  ),
+              ]
+              for old, new in replacements:
+                  if text.count(old) != 1:
+                      raise SystemExit(f'expected one exact registry replacement, found {text.count(old)}')
+                  text = text.replace(old, new, 1)
 
-          old_test = '''        assert_eq!(
-              registry.entry("tool.code_index").expect("index").capability,
-              Capability::CodeIntelligence
-          );
-          assert_eq!(
-              registry
-                  .entry("tool.symbol_rename")
-                  .expect("rename")
-                  .capability,
-              Capability::CodeIntelligence
-          );
-          assert!(
-              registry
-                  .model_tools(true)
-                  .iter()
-                  .any(|tool| tool.name == "semantic_capabilities")
-          );'''
-          new_test = '''        assert_eq!(
-              registry.entry("tool.code_index").expect("index").capability,
-              Capability::CodeIntelligence
-          );
-          let typescript = registry
-              .entry("tool.typescript_semantic")
-              .expect("typescript semantic");
-          assert_eq!(typescript.capability, Capability::CodeIntelligence);
-          assert!(typescript.permissions.contains(&RegistryPermission::Read));
-          assert!(
-              typescript
-                  .permissions
-                  .contains(&RegistryPermission::ProcessSpawn)
-          );
-          let rename = registry.entry("tool.symbol_rename").expect("rename");
-          assert_eq!(rename.capability, Capability::CodeIntelligence);
-          assert!(
-              rename
-                  .permissions
-                  .contains(&RegistryPermission::RepositoryMutation)
-          );
-          assert!(rename.permissions.contains(&RegistryPermission::ProcessSpawn));
-          assert!(
-              registry
-                  .model_tools(true)
-                  .iter()
-                  .any(|tool| tool.name == "semantic_capabilities")
-          );
-          assert!(
-              registry
-                  .model_tools(true)
-                  .iter()
-                  .any(|tool| tool.name == "typescript_semantic")
-          );'''
-          if text.count(old_test) != 1:
-              raise SystemExit(f'expected one exact registry test replacement, found {text.count(old_test)}')
-          registry.write_text(text.replace(old_test, new_test, 1), encoding='utf-8')
+              old_test = '''        assert_eq!(
+                  registry.entry("tool.code_index").expect("index").capability,
+                  Capability::CodeIntelligence
+              );
+              assert_eq!(
+                  registry
+                      .entry("tool.symbol_rename")
+                      .expect("rename")
+                      .capability,
+                  Capability::CodeIntelligence
+              );
+              assert!(
+                  registry
+                      .model_tools(true)
+                      .iter()
+                      .any(|tool| tool.name == "semantic_capabilities")
+              );'''
+              new_test = '''        assert_eq!(
+                  registry.entry("tool.code_index").expect("index").capability,
+                  Capability::CodeIntelligence
+              );
+              let typescript = registry
+                  .entry("tool.typescript_semantic")
+                  .expect("typescript semantic");
+              assert_eq!(typescript.capability, Capability::CodeIntelligence);
+              assert!(typescript.permissions.contains(&RegistryPermission::Read));
+              assert!(
+                  typescript
+                      .permissions
+                      .contains(&RegistryPermission::ProcessSpawn)
+              );
+              let rename = registry.entry("tool.symbol_rename").expect("rename");
+              assert_eq!(rename.capability, Capability::CodeIntelligence);
+              assert!(
+                  rename
+                      .permissions
+                      .contains(&RegistryPermission::RepositoryMutation)
+              );
+              assert!(rename.permissions.contains(&RegistryPermission::ProcessSpawn));
+              assert!(
+                  registry
+                      .model_tools(true)
+                      .iter()
+                      .any(|tool| tool.name == "semantic_capabilities")
+              );
+              assert!(
+                  registry
+                      .model_tools(true)
+                      .iter()
+                      .any(|tool| tool.name == "typescript_semantic")
+              );'''
+              if text.count(old_test) != 1:
+                  raise SystemExit(f'expected one exact registry test replacement, found {text.count(old_test)}')
+              registry.write_text(text.replace(old_test, new_test, 1), encoding='utf-8')
 
           workspace = Path('crates/medusa-intelligence/src/typescript_workspace.rs')
           text = workspace.read_text(encoding='utf-8')
-          old_import = '''use std::{
-              fmt, fs,
-              path::{Component, Path, PathBuf},
-          };'''
-          new_import = '''use std::{
-              fmt, fs,
-              path::{Path, PathBuf},
-          };'''
-          if text.count(old_import) != 1:
-              raise SystemExit('expected exact TypeScript workspace import')
-          text = text.replace(old_import, new_import, 1)
+          if 'entry.path().components()' in text:
+              old_import = '''use std::{
+                  fmt, fs,
+                  path::{Component, Path, PathBuf},
+              };'''
+              new_import = '''use std::{
+                  fmt, fs,
+                  path::{Path, PathBuf},
+              };'''
+              if text.count(old_import) != 1:
+                  raise SystemExit('expected exact TypeScript workspace import')
+              text = text.replace(old_import, new_import, 1)
 
-          old_ignore = '''    matches!(
-              name.as_ref(),
-              "node_modules"
-                  | ".git"
-                  | ".medusa"
-                  | "target"
-                  | "dist"
-                  | "build"
-                  | "coverage"
-                  | ".next"
-                  | ".turbo"
-                  | "out"
-          ) || entry.path().components().any(|component| {
-              matches!(
-                  component,
-                  Component::Normal(value) if value == "generated" || value == "vendor"
-              )
-          })'''
-          new_ignore = '''    matches!(
-              name.as_ref(),
-              "node_modules"
-                  | ".git"
-                  | ".medusa"
-                  | "target"
-                  | "dist"
-                  | "build"
-                  | "coverage"
-                  | ".next"
-                  | ".turbo"
-                  | "out"
-                  | "generated"
-                  | "vendor"
-          )'''
-          if text.count(old_ignore) != 1:
-              raise SystemExit('expected exact TypeScript workspace ignore block')
-          text = text.replace(old_ignore, new_ignore, 1)
+              old_ignore = '''    matches!(
+                  name.as_ref(),
+                  "node_modules"
+                      | ".git"
+                      | ".medusa"
+                      | "target"
+                      | "dist"
+                      | "build"
+                      | "coverage"
+                      | ".next"
+                      | ".turbo"
+                      | "out"
+              ) || entry.path().components().any(|component| {
+                  matches!(
+                      component,
+                      Component::Normal(value) if value == "generated" || value == "vendor"
+                  )
+              })'''
+              new_ignore = '''    matches!(
+                  name.as_ref(),
+                  "node_modules"
+                      | ".git"
+                      | ".medusa"
+                      | "target"
+                      | "dist"
+                      | "build"
+                      | "coverage"
+                      | ".next"
+                      | ".turbo"
+                      | "out"
+                      | "generated"
+                      | "vendor"
+              )'''
+              if text.count(old_ignore) != 1:
+                  raise SystemExit('expected exact TypeScript workspace ignore block')
+              text = text.replace(old_ignore, new_ignore, 1)
 
-          marker = '''    #[test]
+              marker = '''    #[test]
               fn root_fallback_is_deterministic_without_config_or_package() {'''
-          regression = '''    #[test]
+              regression = '''    #[test]
               fn repository_parent_named_vendor_does_not_hide_sources() {
                   let sandbox = tempfile::tempdir().expect("sandbox");
                   let repository = sandbox.path().join("vendor/repository");
@@ -189,18 +197,19 @@ jobs:
                   assert_eq!(workspace.source_count, 1);
               }
 
-          '''
-          if text.count(marker) != 1:
-              raise SystemExit('expected TypeScript workspace regression insertion point')
-          workspace.write_text(text.replace(marker, regression + marker, 1), encoding='utf-8')
+              '''
+              if text.count(marker) != 1:
+                  raise SystemExit('expected TypeScript workspace regression insertion point')
+              workspace.write_text(text.replace(marker, regression + marker, 1), encoding='utf-8')
 
           architecture = Path('docs/architecture/INDEX.md')
           text = architecture.read_text(encoding='utf-8')
           old_row = '| TypeScript/JavaScript code intelligence | production read-only; guarded rename under certification | certification-pending | `medusa-intelligence` owns workspace/LSP normalization; `medusa-agent` owns dispatch; `PatchTransaction` owns mutation | final cross-platform and exhaustive issue-closing evidence |'
           new_row = '| TypeScript/JavaScript code intelligence | production | certified-production | `medusa-intelligence` owns workspace discovery, freshness, LSP normalization, guarded validation, and benchmarks; `medusa-agent` owns dispatch; `PatchTransaction` owns mutation | none |'
-          if text.count(old_row) != 1:
-              raise SystemExit('expected exact architecture capability row')
-          architecture.write_text(text.replace(old_row, new_row, 1), encoding='utf-8')
+          if old_row in text:
+              architecture.write_text(text.replace(old_row, new_row, 1), encoding='utf-8')
+          elif new_row not in text:
+              raise SystemExit('expected TypeScript architecture capability row')
           PY
           cargo fmt --all
           git diff --check
@@ -210,9 +219,13 @@ jobs:
           cargo test -p medusa-intelligence --all-features --locked typescript_workspace -- --nocapture
           python3 scripts/test-architecture-index.py
           python3 scripts/check-architecture-index.py
-      - name: Commit verified corrections
+      - name: Commit verified corrections when needed
         shell: bash
         run: |
+          if git diff --quiet; then
+            echo 'Verified corrections are already present.'
+            exit 0
+          fi
           git config user.name 'Medusa CI'
           git config user.email 'actions@users.noreply.github.com'
           git add crates/medusa-capabilities/src/registry.rs crates/medusa-intelligence/src/typescript_workspace.rs docs/architecture/INDEX.md
