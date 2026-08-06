@@ -43,6 +43,13 @@ jobs:
             rustfmt.log
             rustfmt.patch
           if-no-files-found: ignore
+      - name: Validate unsafe boundary policy
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 scripts/test-unsafe-boundary.py
+          python3 scripts/check-unsafe-boundary.py
+          cargo check -p medusa-process-containment --all-targets --locked
       - name: Clippy
         shell: bash
         run: |

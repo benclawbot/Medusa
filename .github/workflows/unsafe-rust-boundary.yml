@@ -2,8 +2,7 @@ name: Unsafe Rust Boundary
 
 on:
   pull_request:
-  push:
-    branches: [main]
+    types: [opened, synchronize, reopened, ready_for_review, labeled, unlabeled]
   release:
     types: [published, prereleased]
   workflow_dispatch:
@@ -17,6 +16,14 @@ concurrency:
 
 jobs:
   unsafe-boundary:
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      github.event_name == 'release' ||
+      (
+        github.event_name == 'pull_request' &&
+        github.event.pull_request.draft == false &&
+        contains(github.event.pull_request.labels.*.name, 'final-issue-validation')
+      )
     name: Unsafe boundary (${{ matrix.os }})
     strategy:
       fail-fast: false

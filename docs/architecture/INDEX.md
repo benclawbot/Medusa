@@ -90,6 +90,7 @@ The versioned runtime authority is `medusa-capabilities::CapabilityRegistry`. Mo
 | Plugins/extensions | managed | preview | managed manifests and instruction-only `SKILL.md`; executable handlers require certification | handler-specific evidence |
 | Telegram remote frontend | partial | quarantined | shared daemon path is authoritative; duplex/audio claims remain withheld | authenticated microphone/audio and live Telegram evidence |
 | Unsafe/FFI boundary | production | certified-production | preserve crate-local allowlist and cross-platform containment proof | none |
+| TypeScript/JavaScript code intelligence | production read-only; guarded rename under certification | certification-pending | `medusa-intelligence` owns workspace/LSP normalization; `medusa-agent` owns dispatch; `PatchTransaction` owns mutation | final cross-platform and exhaustive issue-closing evidence |
 
 ## Source-of-truth matrix
 
@@ -118,6 +119,7 @@ The complete machine-readable matrix is in `baseline.json`. The critical rows ar
 - **External operation:** typed operation → canonical digest and attempt ID → trusted-host and capability check → adapter dispatch → reconciliation-aware normalized receipt.
 - **Evidence:** exact changed components → selected checks → raw command, browser, and artifact outputs → content-addressed artifacts and read receipts → typed claims and decisions → review, scheduler, authorization, integration, report, and UI consumers.
 - **Persistence:** every mutable concern identifies one journal or aggregate; caches and UI projections are reconstructable and never authoritative.
+- **TypeScript intelligence:** confined target → deterministic workspace discovery and content fingerprints → disposable LSP → normalized semantic result → optional guarded snapshot-bound transaction.
 
 ## Trust boundaries
 
@@ -179,6 +181,7 @@ Use [`LEGACY-DELETION.md`](LEGACY-DELETION.md) for deletion receipts and [`RELEA
 - Final independent audit: [`FINAL-CERTIFICATION-AUDIT.md`](FINAL-CERTIFICATION-AUDIT.md)
 - Machine-readable certification baseline: [`baseline.json`](baseline.json)
 - Primary component owners: [`owners.json`](owners.json)
+- TypeScript/JavaScript code-intelligence architecture: [`typescript-code-intelligence.md`](typescript-code-intelligence.md)
 - Contributor crate map: [`../CONTRIBUTOR-ARCHITECTURE.md`](../CONTRIBUTOR-ARCHITECTURE.md)
 - Capability evidence: [`../CAPABILITY-EVIDENCE.md`](../CAPABILITY-EVIDENCE.md)
 - Architecture checker: `python scripts/check-architecture-index.py`

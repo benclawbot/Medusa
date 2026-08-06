@@ -180,7 +180,7 @@ fn typescript_javascript_profile() -> LanguageCapabilityProfile {
         |level, detail| claim(level, LanguageCapabilityStatus::Unavailable, detail, None);
     LanguageCapabilityProfile {
         language: "typescript_javascript".into(),
-        adapter: "typescript-language-server repository-scoped read-only dispatcher".into(),
+        adapter: "typescript-language-server repository-scoped semantic and guarded-refactoring dispatcher".into(),
         claims: vec![
             claim(
                 LanguageCapabilityLevel::TextOnly,
@@ -216,9 +216,11 @@ fn typescript_javascript_profile() -> LanguageCapabilityProfile {
                 "repository-scoped TypeScript language-server workspace symbols",
                 Some("medusa-agent::tools::intelligence::typescript_semantic"),
             ),
-            unavailable(
+            claim(
                 LanguageCapabilityLevel::GuardedRefactoring,
-                "workspace-edit normalization is not connected to the v2 review and verification transaction",
+                LanguageCapabilityStatus::Production,
+                "repository-scoped language-server rename validated against independent references, exact snapshots, deterministic workspace freshness, and the guarded PatchTransaction",
+                Some("medusa-agent::tools::intelligence::symbol_rename"),
             ),
         ],
         evidence: vec![
@@ -226,7 +228,11 @@ fn typescript_javascript_profile() -> LanguageCapabilityProfile {
             "crates/medusa-intelligence/src/lsp_navigation.rs".into(),
             "crates/medusa-intelligence/src/lsp_actions.rs".into(),
             "crates/medusa-intelligence/src/lsp_semantics.rs".into(),
+            "crates/medusa-intelligence/src/guarded_rename.rs".into(),
+            "crates/medusa-intelligence/src/typescript_workspace.rs".into(),
+            "crates/medusa-intelligence/benches/typescript_workspace.rs".into(),
             "crates/medusa-agent/src/tools/intelligence.rs".into(),
+            "docs/architecture/typescript-code-intelligence.md".into(),
         ],
     }
 }
@@ -236,7 +242,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn profiles_are_deterministic_and_do_not_overclaim_typescript() {
+    fn profiles_are_deterministic_and_report_certified_typescript_depth() {
         let profiles = language_capability_profiles();
         assert_eq!(
             profiles
@@ -282,7 +288,7 @@ mod tests {
                 ),
                 (
                     LanguageCapabilityLevel::GuardedRefactoring,
-                    LanguageCapabilityStatus::Unavailable,
+                    LanguageCapabilityStatus::Production,
                 ),
             ]
         );

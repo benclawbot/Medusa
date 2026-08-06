@@ -1,0 +1,59 @@
+name: Code Intelligence Certification
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review, labeled, unlabeled]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: code-intelligence-certification-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  certify:
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (
+        github.event_name == 'pull_request' &&
+        github.event.pull_request.draft == false &&
+        contains(github.event.pull_request.labels.*.name, 'final-issue-validation')
+      )
+    name: TypeScript intelligence (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-2022]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: '22'
+      - uses: dtolnay/rust-toolchain@39b0b3842c7e8bbf6904c0bfc3d9006fdd4dc4e0 # 1.88.0
+        with:
+          components: rustfmt,clippy
+      - name: Install production TypeScript language server
+        run: npm install --global typescript typescript-language-server
+      - name: Verify language-server availability
+        run: typescript-language-server --version
+      - name: Require committed dependency graph
+        run: cargo metadata --format-version 1 --locked --no-deps
+      - name: Check formatting
+        run: cargo fmt --all -- --check
+      - name: Lint intelligence and production dispatcher
+        run: cargo clippy -p medusa-intelligence -p medusa-agent --all-targets --all-features --locked -- -D warnings
+      - name: Run intelligence correctness and freshness fixtures
+        run: cargo test -p medusa-intelligence --all-features --locked -- --nocapture
+      - name: Run production agent tool fixtures
+        run: cargo test -p medusa-agent --all-features --locked intelligence -- --nocapture
+      - name: Compile TypeScript workspace benchmark
+        run: cargo bench -p medusa-intelligence --bench typescript_workspace --no-run --locked
+      - name: Execute TypeScript workspace benchmark
+        if: runner.os == 'Linux'
+        run: cargo bench -p medusa-intelligence --bench typescript_workspace --locked
+      - name: Validate architecture ownership and trust boundaries
+        run: python3 scripts/check-architecture-index.py

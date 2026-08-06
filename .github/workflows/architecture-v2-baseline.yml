@@ -2,36 +2,7 @@ name: Architecture v2 Baseline
 
 on:
   pull_request:
-    paths:
-      - 'Cargo.toml'
-      - 'Cargo.lock'
-      - 'crates/**'
-      - 'apps/**'
-      - 'docs/**'
-      - 'scripts/check-architecture-index.py'
-      - 'scripts/test-architecture-index.py'
-      - 'scripts/architecture-conformance.py'
-      - 'scripts/check-mutation-lifecycle.py'
-      - 'scripts/check-evidence-authority.py'
-      - '.github/CODEOWNERS'
-      - '.github/PULL_REQUEST_TEMPLATE.md'
-      - '.github/workflows/**'
-  push:
-    branches: [main]
-    paths:
-      - 'Cargo.toml'
-      - 'Cargo.lock'
-      - 'crates/**'
-      - 'apps/**'
-      - 'docs/**'
-      - 'scripts/check-architecture-index.py'
-      - 'scripts/test-architecture-index.py'
-      - 'scripts/architecture-conformance.py'
-      - 'scripts/check-mutation-lifecycle.py'
-      - 'scripts/check-evidence-authority.py'
-      - '.github/CODEOWNERS'
-      - '.github/PULL_REQUEST_TEMPLATE.md'
-      - '.github/workflows/**'
+    types: [opened, synchronize, reopened, ready_for_review, labeled, unlabeled]
   workflow_dispatch:
 
 permissions:
@@ -43,6 +14,13 @@ concurrency:
 
 jobs:
   baseline:
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (
+        github.event_name == 'pull_request' &&
+        github.event.pull_request.draft == false &&
+        contains(github.event.pull_request.labels.*.name, 'final-issue-validation')
+      )
     name: Baseline (${{ matrix.os }})
     strategy:
       fail-fast: false

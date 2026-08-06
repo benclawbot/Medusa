@@ -28,6 +28,7 @@ Architecture v2 adds a separate certification status: `certified-production`, `l
 | `release-trust` | `production` | release maintainers | publish-release workflow | Linux, macOS, Windows | GitHub artifact attestations |
 | `self-update` | `production` | CLI maintainers | `medusa update` | Linux, macOS, Windows | GitHub repository access |
 | `multi-agent-research` | `production` | agent runtime maintainers | coordinated `run_prompt` preflight and worktree implementation | Linux, macOS, Windows | configured model provider, Git |
+| `truthful-code-intelligence-levels` | `production` | code intelligence maintainers | `semantic_capabilities`, `code_index`, `typescript_semantic`, `symbol_rename` | Linux, macOS, Windows | `typescript-language-server` for TypeScript/JavaScript semantic operations |
 
 The manifest records current production paths, behavioral test paths, canonical gates, observability references, public documentation, promotion evidence, default activation, explicit opt-ins, and capability dependencies. The v2 baseline additionally records dispositions, exact blockers, source-of-truth ownership, trust boundaries, migration consumers, and legacy deletion targets.
 
@@ -48,6 +49,7 @@ The manifest records current production paths, behavioral test paths, canonical 
 | Plugins/extensions | structural | design-only | no certified manifest, permissions, dispatcher, lifecycle, or durable result contract |
 | Telegram remote frontend | partial | quarantined | shared-path and operator conformance are incomplete |
 | Unsafe/FFI boundary | partial | legacy-uncertified | #653 owns the explicit unsafe allowlist and audit boundary |
+| TypeScript/JavaScript code intelligence | production | certified-production | none; final issue-closing certification binds dispatcher, freshness, benchmarks, architecture, and cross-platform evidence |
 
 These downgrades prevent current gaps from being presented as architecture-v2 guarantees while preserving truthful evidence about existing entrypoints.
 
@@ -62,6 +64,7 @@ These downgrades prevent current gaps from being presented as architecture-v2 gu
 - `release-trust`: release evidence scripts and publish workflows; validated by CI, Desktop, Release Gates, and Refactor Guardrails. #655 connects immutable Ed25519-verified prebuilt artifacts to the updater without requiring paid platform signing.
 - `self-update`: current CLI entrypoint in `crates/medusa-cli` and `crates/medusa-update`; available on supported platforms, but quarantined for v2 because the default update path compiles from source.
 - `multi-agent-research`: `run_prompt` dispatches independent read-only planner and risk-reviewer `AgentEngine` sessions under durable leases. Explicit mutation objectives then run an implementer `AgentEngine` in an execution-specific isolated worktree, reject out-of-scope or overlapping changes, verify the worktree, prepare a commit, integrate it, and only then hand evidence to the read-only parent reviewer. The current manager can roll back integration conflicts, but the review-after-integration order and changed-path verification gap are known failures, not v2 guarantees. Validated as legacy availability by CI, Daemon, Desktop, and Refactor Guardrails.
+- `truthful-code-intelligence-levels`: `semantic_capabilities` reports exact Rust, Python, and TypeScript/JavaScript depth. `typescript_semantic` dispatches repository-scoped definitions, references, diagnostics, and workspace symbols. `symbol_rename` routes TypeScript/JavaScript through an exact workspace symbol, `prepareRename`, independent references, normalized workspace-edit validation, deterministic repository/workspace fingerprints, exact touched-file snapshots, and the guarded `PatchTransaction`. Monorepo, ignored/generated, repository-switching, stale-state, Unicode cross-file, large-workspace, benchmark, and cross-platform certification evidence are retained in the code-intelligence architecture record and final gate.
 
 ## Planned and scaffolding behavior
 
@@ -79,11 +82,10 @@ Browser and plugin structure must not be presented as active capability merely b
 - **Refactor Guardrails** enforces workflow permissions, current architecture metadata, and legacy maturity contracts.
 - **Architecture v2 Baseline** validates the living index, workspace/component inventory, production paths, duplicate authorities, forbidden dependencies, PR governance, CODEOWNERS, real CLI entrypoints, and removable expected-failure fixtures on Linux, macOS, and Windows.
 - **Release Gates** validates coverage, adversarial regressions, fuzzing, chaos recovery, security, packages, documentation/schema consistency, and live-provider scenarios.
+- **Code Intelligence Certification** installs the production TypeScript language server and validates formatting, linting, correctness/freshness fixtures, production agent tests, benchmark compilation/execution, and architecture ownership on Linux, macOS, and Windows for the final issue-closing PR.
 
 ## Operational boundaries
 
 Platform support is explicit per capability and does not imply identical containment internals. External dependencies are recorded so provider APIs, Git services, Node sidecars, or artifact-attestation infrastructure cannot be mistaken for repository-owned guarantees. README, configuration, compatibility, release documentation, and UI labels may describe only behavior at or below the recorded legacy availability and v2 certification.
 
-| `truthful-code-intelligence-levels` | `production` | code intelligence maintainers | `semantic_capabilities`, `code_index`, `symbol_rename` | Linux, macOS, Windows | none |
-
-- `truthful-code-intelligence-levels`: typed claims in `crates/medusa-intelligence/src/capabilities.rs`, dedicated registry ownership in `crates/medusa-capabilities/src/registry.rs`, production dispatch in `crates/medusa-agent/src/tools/intelligence.rs`, and guarded ambiguity/parse-error refusal tests. TypeScript/JavaScript LSP helpers remain explicitly unavailable above text search until a certified dispatcher exists.
+- The `truthful-code-intelligence-levels` claim is recorded in the maturity matrix above and in `CAPABILITY-CLAIMS.json`. Its typed profiles, registry permissions, production dispatch, deterministic freshness evidence, guarded mutation path, architecture record, and benchmark must remain synchronized.
