@@ -2,10 +2,7 @@ use std::{fs, path::Path};
 
 use medusa_core::MedusaResult;
 
-use crate::{
-    SessionRecallStore, SessionRecord,
-    support::LifecycleLock,
-};
+use crate::{SessionRecallStore, SessionRecord, support::LifecycleLock};
 
 /// Opens the session recall store and atomically ingests durable records left by the agent.
 pub fn open_session_recall(root: impl AsRef<Path>) -> MedusaResult<SessionRecallStore> {
@@ -131,7 +128,9 @@ mod tests {
             fs::read_dir(&inbox)
                 .expect("inbox entries")
                 .filter_map(Result::ok)
-                .all(|entry| entry.path().extension().and_then(|value| value.to_str()) != Some("json"))
+                .all(|entry| {
+                    entry.path().extension().and_then(|value| value.to_str()) != Some("json")
+                })
         );
     }
 }
