@@ -119,6 +119,15 @@ pub(crate) fn typescript_semantic(repo: &Path, input: &Value) -> MedusaResult<St
     }
     .map_err(|error| crate::tools::invalid_tool(error.to_string()))?;
 
+    if !workspace
+        .is_fresh()
+        .map_err(|error| crate::tools::invalid_tool(error.to_string()))?
+    {
+        return Err(crate::tools::invalid_tool(
+            "TypeScript semantic request refused because the workspace changed while the language-server request was in flight",
+        ));
+    }
+
     Ok(serde_json::to_string_pretty(&json!({
         "workspace": workspace,
         "operation": operation,
@@ -341,6 +350,15 @@ fn typescript_symbol_rename(repo: &Path, old_name: &str, new_name: &str) -> Medu
     }
     for path in &static_paths {
         let _ = safe_path(repo, path.to_string_lossy().as_ref())?;
+    }
+
+    if !workspace
+        .is_fresh()
+        .map_err(|error| crate::tools::invalid_tool(error.to_string()))?
+    {
+        return Err(crate::tools::invalid_tool(
+            "TypeScript rename refused because the workspace changed while semantic references and edits were being prepared",
+        ));
     }
 
     let plan = validate_guarded_rename(edit, &static_paths, &static_paths)
