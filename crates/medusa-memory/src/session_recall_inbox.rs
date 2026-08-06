@@ -91,8 +91,7 @@ mod tests {
         for index in 0..8 {
             fs::write(
                 inbox.join(format!("session-{index}.json")),
-                serde_json::to_vec_pretty(&record(&format!("session-{index}")))
-                    .expect("serialize"),
+                serde_json::to_vec_pretty(&record(&format!("session-{index}"))).expect("serialize"),
             )
             .expect("write record");
         }
