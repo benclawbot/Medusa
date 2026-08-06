@@ -8,9 +8,8 @@ use medusa_core::MedusaResult;
 use medusa_intelligence::{
     CodeIndex, LspCapabilityResult, LspClient, PatchTransaction, TextEdit,
     bind_guarded_rename_snapshot, discover_typescript_workspace, find_references, format_changed,
-    go_to_definition, language_capability_profiles, lsp_rename,
-    prepare_guarded_rename_transaction, prepare_rename, select_tests, validate_guarded_rename,
-    workspace_symbols,
+    go_to_definition, language_capability_profiles, lsp_rename, prepare_guarded_rename_transaction,
+    prepare_rename, select_tests, validate_guarded_rename, workspace_symbols,
 };
 use serde_json::{Value, json};
 
@@ -220,11 +219,7 @@ fn rust_symbol_rename(
     }))?)
 }
 
-fn typescript_symbol_rename(
-    repo: &Path,
-    old_name: &str,
-    new_name: &str,
-) -> MedusaResult<String> {
+fn typescript_symbol_rename(repo: &Path, old_name: &str, new_name: &str) -> MedusaResult<String> {
     let workspace = discover_typescript_workspace(repo, repo)
         .map_err(|error| crate::tools::invalid_tool(error.to_string()))?;
     let mut client = LspClient::new(workspace.server_config());
@@ -351,8 +346,8 @@ fn typescript_symbol_rename(
     let plan = validate_guarded_rename(edit, &static_paths, &static_paths)
         .map_err(crate::tools::invalid_tool)?;
     let bound = bind_guarded_rename_snapshot(repo, plan).map_err(crate::tools::invalid_tool)?;
-    let transaction = prepare_guarded_rename_transaction(repo, &bound)
-        .map_err(crate::tools::invalid_tool)?;
+    let transaction =
+        prepare_guarded_rename_transaction(repo, &bound).map_err(crate::tools::invalid_tool)?;
     let receipt = transaction.commit(repo)?;
     let formatting = format_changed(repo, &receipt.changed_paths)?;
     let impact = select_tests(&receipt.changed_paths);
