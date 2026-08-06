@@ -1,0 +1,16 @@
+{
+  "schema_version": 1,
+  "adapter": "typescript-compiler-language-service",
+  "limits": {
+    "max_supported_sources": 20000,
+    "max_results_per_request": 2000
+  },
+  "scenarios": [
+    {"id":"cross-file-definition","operation":"definition","correctness":"target path and range resolve across modules","budget_ms":2000},
+    {"id":"cross-file-references","operation":"references","correctness":"declaration and call sites are returned without ignored paths","budget_ms":2500},
+    {"id":"strict-diagnostics","operation":"diagnostics","correctness":"syntactic and semantic type errors are stable","budget_ms":3000},
+    {"id":"workspace-symbols","operation":"workspace_symbols","correctness":"monorepo-selected project symbols are deterministic","budget_ms":3000},
+    {"id":"guarded-rename","operation":"rename","correctness":"all semantic locations carry source hashes and byte preconditions","budget_ms":3000},
+    {"id":"repository-switch","operation":"definition","correctness":"content-derived workspace fingerprints differ after switching repositories","budget_ms":2000}
+  ]
+}

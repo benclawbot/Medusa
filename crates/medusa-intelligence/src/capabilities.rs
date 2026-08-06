@@ -176,11 +176,9 @@ fn python_profile() -> LanguageCapabilityProfile {
 }
 
 fn typescript_javascript_profile() -> LanguageCapabilityProfile {
-    let unavailable =
-        |level, detail| claim(level, LanguageCapabilityStatus::Unavailable, detail, None);
     LanguageCapabilityProfile {
         language: "typescript_javascript".into(),
-        adapter: "LSP primitives without a certified production dispatcher".into(),
+        adapter: "TypeScript compiler language service production adapter".into(),
         claims: vec![
             claim(
                 LanguageCapabilityLevel::TextOnly,
@@ -188,37 +186,48 @@ fn typescript_javascript_profile() -> LanguageCapabilityProfile {
                 "bounded UTF-8 repository search",
                 Some("medusa-agent::tools::filesystem::search"),
             ),
-            unavailable(
+            claim(
                 LanguageCapabilityLevel::ParsedSymbols,
-                "no TypeScript/JavaScript parser-backed production tool is registered",
+                LanguageCapabilityStatus::Production,
+                "TypeScript compiler project parsing with deterministic config and monorepo selection",
+                Some("medusa-agent::tools::intelligence::typescript_semantic"),
             ),
-            unavailable(
+            claim(
                 LanguageCapabilityLevel::Definitions,
-                "LSP normalization exists in medusa-intelligence but has no production lifecycle owner",
+                LanguageCapabilityStatus::Production,
+                "type-directed definitions with repository-relative ranges and source hashes",
+                Some("medusa-agent::tools::intelligence::typescript_semantic"),
             ),
-            unavailable(
+            claim(
                 LanguageCapabilityLevel::References,
-                "LSP normalization exists in medusa-intelligence but has no production lifecycle owner",
+                LanguageCapabilityStatus::Production,
+                "language-service references bounded to the selected repository workspace",
+                Some("medusa-agent::tools::intelligence::typescript_semantic"),
             ),
-            unavailable(
+            claim(
                 LanguageCapabilityLevel::Diagnostics,
-                "diagnostic normalization exists but no server process is discovered or dispatched",
+                LanguageCapabilityStatus::Production,
+                "syntactic, semantic, and suggestion diagnostics with source freshness evidence",
+                Some("medusa-agent::tools::intelligence::typescript_semantic"),
             ),
-            unavailable(
+            claim(
                 LanguageCapabilityLevel::WorkspaceSymbols,
-                "workspace-symbol normalization exists but no production handler is registered",
+                LanguageCapabilityStatus::Production,
+                "deterministic navigation-tree symbols across the selected project",
+                Some("medusa-agent::tools::intelligence::typescript_semantic"),
             ),
-            unavailable(
+            claim(
                 LanguageCapabilityLevel::GuardedRefactoring,
-                "workspace-edit normalization is not connected to the v2 review and verification transaction",
+                LanguageCapabilityStatus::Production,
+                "semantic rename with workspace fingerprint, repository scope, ignored-path, source-hash, and atomic byte-precondition guards",
+                Some("medusa-agent::tools::intelligence::typescript_rename"),
             ),
         ],
         evidence: vec![
-            "crates/medusa-intelligence/src/lsp.rs".into(),
-            "crates/medusa-intelligence/src/lsp_navigation.rs".into(),
-            "crates/medusa-intelligence/src/lsp_actions.rs".into(),
-            "crates/medusa-intelligence/src/lsp_semantics.rs".into(),
-            "no medusa-agent TypeScript/JavaScript dispatch route".into(),
+            "crates/medusa-intelligence/src/typescript_workspace.rs".into(),
+            "crates/medusa-intelligence/src/typescript_semantic.rs".into(),
+            "tools/typescript-semantic-adapter.mjs".into(),
+            "crates/medusa-agent/src/tools/intelligence.rs".into(),
         ],
     }
 }
@@ -228,7 +237,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn profiles_are_deterministic_and_do_not_overclaim_typescript() {
+    fn profiles_are_deterministic_and_certify_typescript_entrypoints() {
         let profiles = language_capability_profiles();
         assert_eq!(
             profiles
@@ -241,9 +250,10 @@ mod tests {
             .iter()
             .find(|profile| profile.language == "typescript_javascript")
             .expect("typescript profile");
-        assert!(typescript.claims.iter().all(|claim| {
-            claim.level == LanguageCapabilityLevel::TextOnly
-                || claim.status == LanguageCapabilityStatus::Unavailable
-        }));
+        assert!(typescript
+            .claims
+            .iter()
+            .all(|claim| claim.status == LanguageCapabilityStatus::Production));
+        assert!(typescript.claims.iter().all(|claim| claim.production_entrypoint.is_some()));
     }
 }

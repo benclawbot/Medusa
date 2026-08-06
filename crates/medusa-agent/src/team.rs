@@ -107,6 +107,7 @@ impl AgentExecutionPolicy {
             "search_text".to_owned(),
             "semantic_capabilities".to_owned(),
             "code_index".to_owned(),
+            "typescript_semantic".to_owned(),
             "web_search".to_owned(),
             "web_fetch".to_owned(),
             "skill_read".to_owned(),
@@ -122,6 +123,7 @@ impl AgentExecutionPolicy {
                 "fs_write".to_owned(),
                 "patch_apply".to_owned(),
                 "symbol_rename".to_owned(),
+                "typescript_rename".to_owned(),
                 "git_checkpoint".to_owned(),
             ]);
         }

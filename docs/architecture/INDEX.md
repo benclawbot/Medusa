@@ -86,6 +86,7 @@ The versioned runtime authority is `medusa-capabilities::CapabilityRegistry`. Mo
 | Release trust | production | certified-production | preserve signed manifest v2, protected signer, and reviewed keyring | none |
 | Self-update | production | certified-production | preserve verified prebuilt default and explicit source channel | none |
 | Multi-agent execution | production | certified-production | preserve bounded teammates, isolated mutation, dedicated review, and durable completion | none |
+| Code intelligence | production | certified-production | `medusa-capabilities` registry plus `medusa-intelligence` static and TypeScript compiler adapters; mutation remains in `PatchTransaction` | none |
 | Browser tools | withheld | quarantined | no executable projection until dispatcher and permission behavior are certified | authenticated live browser evidence |
 | Plugins/extensions | managed | preview | managed manifests and instruction-only `SKILL.md`; executable handlers require certification | handler-specific evidence |
 | Telegram remote frontend | partial | quarantined | shared daemon path is authoritative; duplex/audio claims remain withheld | authenticated microphone/audio and live Telegram evidence |
@@ -106,6 +107,7 @@ The complete machine-readable matrix is in `baseline.json`. The critical rows ar
 | Verification | `medusa-evidence::VerificationPlan` and `VerificationReceipt` | human summaries | required checks bind to the exact commit and changed scope |
 | Provider route/readiness | selected provider profile plus durable `ProviderHealthStore` | frontend readiness | claims equal actual wire and cancellation behavior |
 | Capability availability | generated versioned registry snapshot | model, CLI, UI, protocol, and docs projections | no advertised action lacks certified dispatch |
+| TypeScript semantic state | content-derived workspace fingerprint plus per-file source hashes; no durable cache | definitions, references, diagnostics, symbols, rename plans | repository switching or source drift invalidates follow-up operations |
 | Evidence/artifacts | typed `EvidenceBundle` and content-addressed `ArtifactStore` | reports and UI | conclusions resolve exact sources and durable read receipts |
 | GitHub operations | guarded attempt-bound operation lifecycle | CLI presentation | credentials never enter receipts |
 | Updates/releases | signed manifest v2 and protected signing workflow | release metadata | signature is verified before metadata is trusted |
@@ -116,6 +118,7 @@ The complete machine-readable matrix is in `baseline.json`. The critical rows ar
 - **Execution:** plan aggregate → immutable task contract → lease → isolated implementation → changed-path verification → dedicated review receipt → independent verification → authorization → integration → reconciliation → canonical terminal completion.
 - **Provider:** selected route → capability preflight → abortable request → normalized response and usage event → durable route-health update.
 - **External operation:** typed operation → canonical digest and attempt ID → trusted-host and capability check → adapter dispatch → reconciliation-aware normalized receipt.
+- **Code intelligence:** repository target → deterministic config/package selection → bounded compiler-language-service project → repository-relative semantic result and freshness evidence → optional guarded patch transaction.
 - **Evidence:** exact changed components → selected checks → raw command, browser, and artifact outputs → content-addressed artifacts and read receipts → typed claims and decisions → review, scheduler, authorization, integration, report, and UI consumers.
 - **Persistence:** every mutable concern identifies one journal or aggregate; caches and UI projections are reconstructable and never authoritative.
 

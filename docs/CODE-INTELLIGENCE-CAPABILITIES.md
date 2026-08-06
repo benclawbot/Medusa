@@ -8,9 +8,9 @@
 | --- | --- | --- | --- |
 | Rust | `tree-sitter-rust` static index | Parsed declarations plus repository-wide exact-name definition and reference queries | References are syntax-token occurrences, not type-directed resolution. Compiler diagnostics are not dispatched. |
 | Python | bounded lexical scanner | `def`, `async def`, and `class` declarations plus comment- and string-aware identifier occurrences | This is not a Python parser. Diagnostics and rename are unavailable. |
-| TypeScript/JavaScript | dormant LSP normalization primitives | Text search only | Definition, reference, diagnostic, workspace-symbol, and rename code exists below the production boundary but has no registered server lifecycle or agent dispatcher. Those levels remain unavailable. |
+| TypeScript/JavaScript | TypeScript compiler language service | Definitions, references, syntactic/semantic diagnostics, workspace symbols, and guarded cross-file rename | Requires Node.js and a discoverable TypeScript compiler module. Results are repository-scoped, bounded to 20,000 supported source files, and bound to adapter version, config, source hashes, and a content-derived workspace fingerprint. |
 
-The registry owns the production `CodeIntelligence` capability. `code_index`, `semantic_capabilities`, and `symbol_rename` are registered under it rather than under generic filesystem access. `patch_apply` remains a filesystem mutation because it does not depend on semantic analysis.
+The registry owns the production `CodeIntelligence` capability. `code_index`, `semantic_capabilities`, `symbol_rename`, `typescript_semantic`, and `typescript_rename` are registered under it rather than under generic filesystem access. `patch_apply` remains a filesystem mutation because it does not depend on semantic analysis.
 
 ## Guarded Rust rename
 
@@ -32,6 +32,15 @@ Ambiguous definitions, Python lexical matches, cross-language same-name occurren
 - Static index and refresh authority: `crates/medusa-intelligence/src/index.rs` and `snapshot.rs`
 - Guarded patch transaction: `crates/medusa-intelligence/src/patch.rs`
 - Production agent handlers: `crates/medusa-agent/src/tools/intelligence.rs`
-- Dormant LSP process and normalization primitives: `crates/medusa-intelligence/src/lsp*.rs`
+- TypeScript workspace, freshness, and process lifecycle: `crates/medusa-intelligence/src/typescript_workspace.rs` and `typescript_semantic.rs`
+- TypeScript compiler-language-service adapter: `tools/typescript-semantic-adapter.mjs`
+- Reusable LSP process and normalization primitives for future adapters: `crates/medusa-intelligence/src/lsp*.rs`
 
 A language level may be promoted only after its real production entrypoint has a lifecycle owner, dependency discovery, permission mapping, fail-closed handler, freshness evidence, cross-platform fixtures, and capability-registry tests. Merely adding parser or LSP helper code does not change the production claim.
+
+
+## TypeScript/JavaScript trust and cache authority
+
+`discover_typescript_workspace` selects the nearest `tsconfig.json` or `jsconfig.json`, then the nearest package root, without crossing the repository boundary. Dependency, generated, vendor, declaration, minified, build-output, and repository-state paths are excluded. The adapter reparses the selected project for every production request; there is no hidden durable semantic cache. The returned content-derived workspace fingerprint is the freshness authority for follow-up operations and repository switching.
+
+Read-only results include repository-relative paths, exact ranges, per-file source hashes, TypeScript adapter version, config path, package root, source count, and workspace fingerprint. `typescript_rename` requires an optional expected workspace fingerprint, rejects TypeScript rename refusals and ignored or out-of-scope locations, rechecks every file hash, and commits byte-exact edits through `PatchTransaction`. This keeps semantic planning read-only and places mutation under the existing review and verification transaction.

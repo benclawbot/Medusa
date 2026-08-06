@@ -636,6 +636,30 @@ fn builtin_tool_entries(
         tool_entry(
             ToolIdentity {
                 states,
+                name: "typescript_semantic",
+            },
+            Capability::CodeIntelligence,
+            "Run repository-scoped TypeScript/JavaScript definitions, references, diagnostics, or workspace-symbol queries with compiler-language-service freshness evidence.",
+            json!({"type":"object","properties":{"operation":{"type":"string","enum":["definition","references","diagnostics","workspace_symbols"]},"path":{"type":"string"},"line":{"type":"integer","minimum":0},"character":{"type":"integer","minimum":0},"query":{"type":"string"},"expected_workspace_fingerprint":{"type":"string"}},"required":["operation"],"additionalProperties":false}),
+            "medusa-agent::tools::intelligence::typescript_semantic",
+            [RegistryPermission::Read, RegistryPermission::ProcessSpawn],
+            false,
+        ),
+        tool_entry(
+            ToolIdentity {
+                states,
+                name: "typescript_rename",
+            },
+            Capability::CodeIntelligence,
+            "Apply a guarded TypeScript/JavaScript semantic rename that refuses stale workspaces, scope escapes, ignored paths, unsupported constructs, and stale source bytes.",
+            json!({"type":"object","properties":{"path":{"type":"string"},"line":{"type":"integer","minimum":0},"character":{"type":"integer","minimum":0},"new_name":{"type":"string"},"expected_workspace_fingerprint":{"type":"string"}},"required":["path","line","character","new_name"],"additionalProperties":false}),
+            "medusa-agent::tools::intelligence::typescript_rename",
+            [RegistryPermission::Read, RegistryPermission::Write, RegistryPermission::ProcessSpawn, RegistryPermission::RepositoryMutation],
+            true,
+        ),
+        tool_entry(
+            ToolIdentity {
+                states,
                 name: "patch_apply",
             },
             Capability::Filesystem,

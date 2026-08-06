@@ -25,6 +25,20 @@ SCENARIOS: tuple[dict[str, Any], ...] = (
         "marker": None,
     },
     {
+        "id": "typescript-semantic-production",
+        "guarantee": "TypeScript definitions, references, diagnostics, workspace symbols, stale-state refusal, and guarded rename execute through the production adapter.",
+        "args": [
+            "test",
+            "-p",
+            "medusa-intelligence",
+            "adapter_definitions_references_diagnostics_symbols_and_rename",
+            "--locked",
+            "--",
+            "--nocapture",
+        ],
+        "marker": "adapter_definitions_references_diagnostics_symbols_and_rename",
+    },
+    {
         "id": "headless-entrypoint",
         "guarantee": "The shipped CLI retains the supported headless run entrypoint.",
         "args": [

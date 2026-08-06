@@ -103,6 +103,8 @@ pub(crate) fn execute_tool(repo: &Path, name: &str, input: &Value) -> MedusaResu
         "search_text" => filesystem::search(repo, input_string(input, "query")?),
         "semantic_capabilities" => intelligence::semantic_capabilities(),
         "code_index" => intelligence::code_index(repo, input),
+        "typescript_semantic" => intelligence::typescript_semantic(repo, input),
+        "typescript_rename" => intelligence::typescript_rename(repo, input),
         "patch_apply" => intelligence::patch_apply(repo, input),
         "symbol_rename" => intelligence::symbol_rename(repo, input),
         "shell_run" => {

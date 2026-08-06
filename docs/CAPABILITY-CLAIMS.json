@@ -474,12 +474,15 @@
     {
       "id": "truthful-code-intelligence-levels",
       "maturity": "production",
-      "summary": "The v2 registry and semantic_capabilities production tool report exact per-language semantic depth without promoting dormant LSP helpers.",
+      "summary": "The v2 registry and semantic_capabilities tool report exact per-language depth, including production TypeScript/JavaScript compiler-language-service workflows.",
       "owner": "code intelligence maintainers",
       "production_paths": [
         "crates/medusa-capabilities/src/registry.rs",
         "crates/medusa-intelligence/src/capabilities.rs",
-        "crates/medusa-agent/src/tools/intelligence.rs"
+        "crates/medusa-agent/src/tools/intelligence.rs",
+        "crates/medusa-intelligence/src/typescript_workspace.rs",
+        "crates/medusa-intelligence/src/typescript_semantic.rs",
+        "tools/typescript-semantic-adapter.mjs"
       ],
       "test_paths": [
         "crates/medusa-capabilities/src/registry.rs",
@@ -494,14 +497,19 @@
       "entrypoints": [
         "semantic_capabilities",
         "code_index",
-        "symbol_rename"
+        "symbol_rename",
+        "typescript_semantic",
+        "typescript_rename"
       ],
       "supported_platforms": [
         "linux",
         "macos",
         "windows"
       ],
-      "external_dependencies": [],
+      "external_dependencies": [
+        "Node.js executable",
+        "TypeScript compiler module discovered from the selected package/workspace or NODE_PATH"
+      ],
       "observability": [
         "docs/OBSERVABILITY.md"
       ],

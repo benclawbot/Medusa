@@ -537,6 +537,8 @@ pub(super) fn tool_title(tool: &str, arguments: &Value) -> String {
                 format!("Index({name})")
             }
         }
+        "typescript_semantic" => format!("TypeScript semantic({})", json_string(arguments, "operation")),
+        "typescript_rename" => format!("TypeScript rename({})", json_string(arguments, "new_name")),
         "patch_apply" => "Edit files".to_owned(),
         "symbol_rename" => format!(
             "Rename({} -> {})",
