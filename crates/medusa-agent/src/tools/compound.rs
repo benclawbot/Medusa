@@ -316,6 +316,73 @@ pub(crate) fn apply_structured_patch(repo: &Path, input: &Value) -> MedusaResult
     .map_err(Into::into)
 }
 
+pub(crate) fn verify_impacted(repo: &Path, input: &Value) -> MedusaResult<String> {
+    let expected_revision = input
+        .get("repository_revision")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| {
+            crate::tools::invalid_tool("repository_revision must be a non-empty string")
+        })?;
+    let paths = input
+        .get("paths")
+        .and_then(Value::as_array)
+        .ok_or_else(|| crate::tools::invalid_tool("paths must be a non-empty array"))?;
+    if paths.is_empty() {
+        return Err(crate::tools::invalid_tool(
+            "paths must be a non-empty array",
+        ));
+    }
+    let mut normalized = Vec::<String>::with_capacity(paths.len());
+    for value in paths {
+        let relative = value
+            .as_str()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .ok_or_else(|| crate::tools::invalid_tool("every path must be a non-empty string"))?;
+        let absolute = safe_path(repo, relative)?;
+        let root = repo.canonicalize()?;
+        let relative = absolute.strip_prefix(&root).map_err(|_| {
+            crate::tools::invalid_tool("verification path escaped repository scope")
+        })?;
+        normalized.push(relative.to_string_lossy().replace('\\', "/"));
+    }
+    normalized.sort();
+    normalized.dedup();
+
+    let graph = RepositoryGraph::open(repo)?;
+    if graph.freshness() != RepositoryGraphFreshness::Current
+        || graph.snapshot().repository_revision != expected_revision
+    {
+        return Err(crate::tools::invalid_tool(
+            "verify_impacted refused repository revision drift",
+        ));
+    }
+    let graph_paths = normalized.iter().map(PathBuf::from).collect::<Vec<_>>();
+    let impact = graph.related_tests(&graph_paths);
+    if impact.freshness != RepositoryGraphFreshness::Current {
+        return Err(crate::tools::invalid_tool(
+            "verify_impacted refused stale test-impact evidence",
+        ));
+    }
+
+    let result =
+        crate::verification_authority::authoritative_verification_for_paths(repo, &normalized)?;
+    serde_json::to_string_pretty(&json!({
+        "repository_revision": expected_revision,
+        "graph_revision": graph.snapshot().graph_revision,
+        "freshness": graph.freshness(),
+        "paths": normalized,
+        "selected_by_graph": impact.value,
+        "coverage_rationale": impact.evidence_refs,
+        "passed": result.passed,
+        "evidence": result.evidence,
+        "escalation_required": !result.passed,
+    }))
+    .map_err(Into::into)
+}
+
 fn snapshots_for(repo: &Path, paths: &[PathBuf]) -> MedusaResult<BTreeMap<PathBuf, FileSnapshot>> {
     let mut snapshots = BTreeMap::new();
     for relative in paths {
@@ -576,6 +643,43 @@ mod tests {
         )
         .expect("delete");
         assert!(!renamed.exists());
+    }
+
+    #[test]
+    fn verify_impacted_is_revision_bound_and_returns_authoritative_evidence() {
+        let directory = fixture();
+        let graph = RepositoryGraph::open(directory.path()).expect("graph");
+        let revision = graph.snapshot().repository_revision.clone();
+        let output = verify_impacted(
+            directory.path(),
+            &json!({"repository_revision": revision, "paths": ["src/lib.rs"]}),
+        )
+        .expect("verify");
+        let value: Value = serde_json::from_str(&output).expect("json");
+        assert_eq!(value["freshness"], "current");
+        assert!(value["passed"].is_boolean());
+        assert!(value["evidence"].is_array());
+        assert!(value["selected_by_graph"]["commands"].is_array());
+    }
+
+    #[test]
+    fn verify_impacted_rejects_revision_drift_and_unsafe_paths() {
+        let directory = fixture();
+        assert!(
+            verify_impacted(
+                directory.path(),
+                &json!({"repository_revision": "stale", "paths": ["src/lib.rs"]}),
+            )
+            .expect_err("drift")
+            .to_string()
+            .contains("revision drift")
+        );
+        let graph = RepositoryGraph::open(directory.path()).expect("graph");
+        assert!(verify_impacted(
+            directory.path(),
+            &json!({"repository_revision": graph.snapshot().repository_revision, "paths": ["../escape"]}),
+        )
+        .is_err());
     }
 
     #[test]

@@ -663,6 +663,18 @@ fn builtin_tool_entries(
         tool_entry(
             ToolIdentity {
                 states,
+                name: "verify_impacted",
+            },
+            Capability::CodeIntelligence,
+            "Run the smallest conservative authoritative verification set for exact revision-bound changed paths, using repository-graph test impact and returning structured pass/failure evidence and escalation requirements. Prefer this over manually chaining shell verification commands.",
+            json!({"type":"object","properties":{"repository_revision":{"type":"string"},"paths":{"type":"array","minItems":1,"items":{"type":"string"}}},"required":["repository_revision","paths"],"additionalProperties":false}),
+            "medusa-agent::tools::compound::verify_impacted",
+            [RegistryPermission::Read, RegistryPermission::ProcessSpawn],
+            false,
+        ),
+        tool_entry(
+            ToolIdentity {
+                states,
                 name: "typescript_semantic",
             },
             Capability::CodeIntelligence,
