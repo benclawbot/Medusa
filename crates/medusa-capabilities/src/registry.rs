@@ -636,6 +636,18 @@ fn builtin_tool_entries(
         tool_entry(
             ToolIdentity {
                 states,
+                name: "inspect_target",
+            },
+            Capability::CodeIntelligence,
+            "Inspect one path or symbol with a bounded revision-bound evidence packet containing definitions, references, source excerpts, ownership metadata, dependency impact, related verification, repository instructions, freshness, confidence, omissions, and evidence IDs. Prefer this compound tool over chains of fs_read/search_text/code_index calls.",
+            json!({"type":"object","properties":{"path":{"type":"string"},"symbol":{"type":"string"}},"oneOf":[{"required":["path"]},{"required":["symbol"]}],"additionalProperties":false}),
+            "medusa-agent::tools::compound::inspect_target",
+            [RegistryPermission::Read],
+            false,
+        ),
+        tool_entry(
+            ToolIdentity {
+                states,
                 name: "typescript_semantic",
             },
             Capability::CodeIntelligence,
