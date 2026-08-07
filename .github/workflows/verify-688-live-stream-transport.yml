@@ -23,7 +23,9 @@ jobs:
           toolchain: 1.88.0
           components: rustfmt,clippy
       - name: Apply live streaming transport tranche
-        run: python3 .github/scripts/apply-688-live-stream-transport.py
+        run: |
+          python3 .github/scripts/apply-688-live-stream-transport.py
+          python3 .github/scripts/fix-688-streaming-fixtures.py
       - name: Format
         run: cargo fmt --all
       - name: Provider tests
