@@ -1,0 +1,43 @@
+name: Fix 735 Execution History
+on:
+  pull_request:
+    branches: [main]
+permissions:
+  contents: write
+jobs:
+  fix-and-verify:
+    if: github.head_ref == 'perf/687-tool-timing-telemetry'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          fetch-depth: 0
+          ref: perf/687-tool-timing-telemetry
+      - uses: dtolnay/rust-toolchain@39b0b3842c7e8bbf6904c0bfc3d9006fdd4dc4e0
+        with:
+          components: rustfmt, clippy
+      - name: Add timing event history mapping
+        shell: bash
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          path = Path('crates/medusa-runtime/src/execution_history.rs')
+          text = path.read_text()
+          old = '''        EventPayload::ToolExecutionCompleted { .. } => "tool_execution_completed",\n'''
+          new = '''        EventPayload::ToolExecutionCompleted { .. } => "tool_execution_completed",\n        EventPayload::ToolExecutionTimingRecorded { .. } => "tool_execution_timing_recorded",\n'''
+          assert old in text, 'payload-kind anchor missing'
+          path.write_text(text.replace(old, new, 1))
+          PY
+      - name: Format
+        run: cargo fmt --all -- --check
+      - name: Runtime tests
+        run: cargo test -p medusa-runtime --lib -- --nocapture
+      - name: Workspace Clippy
+        run: cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
+      - name: Publish verified source
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add crates/medusa-runtime/src/execution_history.rs
+          git commit -m 'Map tool timing events in execution history'
+          git push origin HEAD:perf/687-tool-timing-telemetry
