@@ -9,6 +9,9 @@ on:
   schedule:
     - cron: '17 3 * * 1'
   workflow_dispatch:
+  push:
+    tags:
+      - 'v*'
 
 permissions:
   contents: read
@@ -25,12 +28,25 @@ jobs:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
       - name: Validate representative corpus
         run: python scripts/performance/validate_scenarios.py
-      - name: Validate complete telemetry fixture
+      - name: Validate telemetry and publish machine-readable summary
         run: >-
           python scripts/performance/summarize_runs.py
-          benchmarks/performance/fixtures/complete-run.json
+          benchmarks/performance/fixtures/run-v1.json
           --output performance-summary.json
-      - uses: actions/upload-artifact@v4
+      - name: Prove summary artifact is complete
+        shell: bash
+        run: |
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          path = Path('performance-summary.json')
+          if not path.is_file():
+              raise SystemExit('performance summary was not written')
+          report = json.loads(path.read_text(encoding='utf-8'))
+          if report.get('schema_version') != 1 or not report.get('groups'):
+              raise SystemExit('performance summary is incomplete')
+          PY
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: performance-corpus-${{ runner.os }}
           path: performance-summary.json
