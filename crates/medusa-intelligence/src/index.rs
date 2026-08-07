@@ -38,7 +38,11 @@ impl CodeIndex {
     {
         let mut index = Self::default();
         for path in paths {
-            let path = if path.is_absolute() { path } else { repo.join(path) };
+            let path = if path.is_absolute() {
+                path
+            } else {
+                repo.join(path)
+            };
             if path.is_file() {
                 index_file(repo, &path, &mut index)?;
             }
