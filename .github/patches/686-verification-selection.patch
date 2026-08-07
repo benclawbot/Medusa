@@ -164,7 +164,7 @@
 +    if command.starts_with("python -m pytest") {
 +        return plan.checks.iter().any(|check| {
 +            check.program.as_deref() == Some("python")
-+                && check.args.get(0).is_some_and(|arg| arg == "-m")
++                && check.args.first().is_some_and(|arg| arg == "-m")
 +                && check.args.get(1).is_some_and(|arg| arg == "pytest")
 +        });
 +    }
