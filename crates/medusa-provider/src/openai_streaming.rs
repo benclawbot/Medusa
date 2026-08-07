@@ -215,23 +215,25 @@ mod tests {
     fn fragmented_tool_call_becomes_ready_before_done() {
         let mut accumulator = OpenAiStreamAccumulator::default();
         let mut events = Vec::new();
-        let mut sink = |event| {
-            events.push(event);
-            Ok(())
-        };
+        {
+            let mut sink = |event| {
+                events.push(event);
+                Ok(())
+            };
 
-        accumulator
-            .push_sse_data(
-                r#"{"id":"chatcmpl-1","choices":[{"delta":{"tool_calls":[{"index":0,"id":"call-1","function":{"name":"read_file","arguments":"{\"path\":\"src/"}}]},"finish_reason":null}]}"#,
-                &mut sink,
-            )
-            .expect("first chunk");
-        accumulator
-            .push_sse_data(
-                r#"{"id":"chatcmpl-1","choices":[{"delta":{"tool_calls":[{"index":0,"function":{"arguments":"lib.rs\"}"}}]},"finish_reason":"tool_calls"}]}"#,
-                &mut sink,
-            )
-            .expect("completion boundary");
+            accumulator
+                .push_sse_data(
+                    r#"{"id":"chatcmpl-1","choices":[{"delta":{"tool_calls":[{"index":0,"id":"call-1","function":{"name":"read_file","arguments":"{\"path\":\"src/"}}]},"finish_reason":null}]}"#,
+                    &mut sink,
+                )
+                .expect("first chunk");
+            accumulator
+                .push_sse_data(
+                    r#"{"id":"chatcmpl-1","choices":[{"delta":{"tool_calls":[{"index":0,"function":{"arguments":"lib.rs\"}"}}]},"finish_reason":"tool_calls"}]}"#,
+                    &mut sink,
+                )
+                .expect("completion boundary");
+        }
 
         assert!(events.iter().any(|event| matches!(
             event,
@@ -244,10 +246,16 @@ mod tests {
                 .any(|event| matches!(event, ProviderStreamEvent::Completed { .. }))
         );
 
-        let response = accumulator
-            .push_sse_data("[DONE]", &mut sink)
-            .expect("done")
-            .expect("response");
+        let response = {
+            let mut sink = |event| {
+                events.push(event);
+                Ok(())
+            };
+            accumulator
+                .push_sse_data("[DONE]", &mut sink)
+                .expect("done")
+                .expect("response")
+        };
         assert_eq!(response.stop_reason.as_deref(), Some("tool_calls"));
         assert!(matches!(
             response.blocks.as_slice(),
