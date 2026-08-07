@@ -141,6 +141,32 @@ pub struct AgentEngine<P> {
     team_context: Option<TeamMemberContext>,
 }
 
+fn refreshed_repository_revision(repo: &Path) -> Option<String> {
+    let mut graph = medusa_intelligence::RepositoryGraph::open(repo).ok()?;
+    if graph.freshness() != medusa_intelligence::RepositoryGraphFreshness::Current {
+        graph.refresh().ok()?;
+    }
+    (graph.freshness() == medusa_intelligence::RepositoryGraphFreshness::Current)
+        .then(|| graph.snapshot().repository_revision.clone())
+}
+
+fn stale_revision_error(name: &str, current_revision: &str) -> MedusaError {
+    let mut error = MedusaError::new(
+        ErrorCode::DependencyUnavailable,
+        ErrorCategory::Execution,
+        format!("tool {name} was cancelled because its repository revision became stale"),
+    );
+    error.context.insert(
+        "stale_repository_revision".into(),
+        serde_json::Value::Bool(true),
+    );
+    error.context.insert(
+        "current_repository_revision".into(),
+        serde_json::Value::String(current_revision.to_owned()),
+    );
+    error
+}
+
 fn dependency_failure_error(name: &str) -> MedusaError {
     let mut error = MedusaError::new(
         ErrorCode::DependencyUnavailable,
@@ -1015,6 +1041,14 @@ impl<P: ModelProvider> AgentEngine<P> {
                 vec![(id, name, input, result)]
             };
 
+            let repository_revision_after_mutation = executed
+                .iter()
+                .any(|(_, name, input, result)| {
+                    result.is_ok() && crate::tool_dag::invalidates_repository_revision(name, input)
+                })
+                .then(|| refreshed_repository_revision(&session.repo))
+                .flatten();
+
             let failed_dependencies = executed
                 .iter()
                 .filter_map(|(_, name, input, result)| {
@@ -1033,6 +1067,14 @@ impl<P: ModelProvider> AgentEngine<P> {
                 let error = dependency_failure_error(&name);
                 (id, name, input, Err(error))
             }));
+            if let Some(current_revision) = repository_revision_after_mutation {
+                let stale =
+                    crate::tool_dag::drain_stale_revision_calls(&mut calls, &current_revision);
+                executed.extend(stale.into_iter().map(|(id, name, input)| {
+                    let error = stale_revision_error(&name, &current_revision);
+                    (id, name, input, Err(error))
+                }));
+            }
 
             for (id, name, input, result) in executed {
                 if let Ok(output) = &result
