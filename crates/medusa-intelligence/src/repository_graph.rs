@@ -74,19 +74,20 @@ pub struct RepositoryGraph {
 impl RepositoryGraph {
     pub fn open(repo: &Path) -> MedusaResult<Self> {
         let repo = repo.canonicalize()?;
-        let current = capture(&repo)?;
         let cache_path = repo.join(CACHE_RELATIVE_PATH);
         if let Ok(bytes) = fs::read(&cache_path)
             && let Ok(cached) = serde_json::from_slice::<RepositoryGraphSnapshot>(&bytes)
             && cached.schema_version == SCHEMA_VERSION
-            && cached.graph_revision == current.graph_revision
-            && cached.repository_revision == current.repository_revision
+            && let Ok((repository_revision, graph_revision)) = graph_identity(&repo)
+            && cached.repository_revision == repository_revision
+            && cached.graph_revision == graph_revision
         {
             return Ok(Self {
                 repo,
                 snapshot: cached,
             });
         }
+        let current = capture(&repo)?;
         persist(&cache_path, &current)?;
         Ok(Self {
             repo,
@@ -223,10 +224,17 @@ fn tracked_paths(repo: &Path) -> MedusaResult<Vec<PathBuf>> {
         .split(|byte| *byte == 0)
         .filter(|entry| !entry.is_empty())
         .map(|entry| PathBuf::from(String::from_utf8_lossy(entry).into_owned()))
+        .filter(|path| !is_internal_runtime_path(path))
         .collect::<Vec<_>>();
     paths.sort();
     paths.dedup();
     Ok(paths)
+}
+
+fn is_internal_runtime_path(path: &Path) -> bool {
+    path.components()
+        .next()
+        .is_some_and(|component| component.as_os_str() == ".medusa")
 }
 
 fn file_metadata(
@@ -458,6 +466,13 @@ mod tests {
                 .snapshot()
                 .files
                 .contains_key(Path::new("src/new.rs"))
+        );
+        assert!(
+            !feature
+                .snapshot()
+                .files
+                .contains_key(Path::new(CACHE_RELATIVE_PATH)),
+            "Medusa runtime state must never become repository graph evidence"
         );
         let impact = feature.related_tests(&[PathBuf::from("src/lib.rs")]);
         assert_eq!(impact.freshness, RepositoryGraphFreshness::Current);
