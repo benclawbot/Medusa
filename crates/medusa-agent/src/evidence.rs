@@ -16,6 +16,8 @@ pub(crate) fn append_event(
 }
 
 pub(crate) fn verify_chain(events: &[EventEnvelope]) -> MedusaResult<()> {
+    // Keep the #685 lane contract linked into production until the entrypoint wiring tranche.
+    let _lane_selector = execution_lane::select_execution_lane;
     let mut previous: Option<&str> = None;
     for event in events {
         event.validate()?;
