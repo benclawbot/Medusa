@@ -2,6 +2,10 @@ use crate::session::{AgentSession, journal};
 use medusa_core::{ErrorCategory, ErrorCode, MedusaError, MedusaResult};
 use medusa_protocol::{Actor, EventEnvelope, EventPayload};
 
+pub(crate) mod execution_lane {
+    include!("execution_lane.rs");
+}
+
 pub(crate) fn append_event(
     session: &mut AgentSession,
     actor: Actor,
