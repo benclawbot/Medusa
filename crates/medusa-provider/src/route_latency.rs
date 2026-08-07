@@ -54,7 +54,7 @@ impl RouteLatencyStats {
 }
 
 /// Deterministic score inputs for one provider route.
-#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct RouteLatencyPolicy {
     /// Cold routes receive this conservative duration until real measurements exist.
     pub cold_start_duration_ms: u64,
