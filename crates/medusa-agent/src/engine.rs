@@ -141,6 +141,19 @@ pub struct AgentEngine<P> {
     team_context: Option<TeamMemberContext>,
 }
 
+fn dependency_failure_error(name: &str) -> MedusaError {
+    let mut error = MedusaError::new(
+        ErrorCode::DependencyUnavailable,
+        ErrorCategory::Execution,
+        format!("tool {name} was cancelled because an authoritative dependency failed"),
+    );
+    error.context.insert(
+        "authoritative_dependency_failed".into(),
+        serde_json::Value::Bool(true),
+    );
+    error
+}
+
 fn audited_tool_name(name: &str, input: &serde_json::Value) -> String {
     if name == "desktop_commander" {
         if let Some(tool) = input.get("tool").and_then(serde_json::Value::as_str) {
@@ -1001,6 +1014,25 @@ impl<P: ModelProvider> AgentEngine<P> {
                 };
                 vec![(id, name, input, result)]
             };
+
+            let failed_dependencies = executed
+                .iter()
+                .filter_map(|(_, name, input, result)| {
+                    let error = result.as_ref().err()?;
+                    let awaiting_approval = error.code == ErrorCode::PolicyDenied
+                        && self.config.agent.mode != Mode::ReadOnly
+                        && self.execution_policy.denial_reason(name, input).is_none()
+                        && interactively_approvable(name, input);
+                    (!awaiting_approval).then(|| (name.clone(), input.clone()))
+                })
+                .collect::<Vec<_>>();
+            let blocked =
+                crate::tool_dag::drain_failed_dependents(&mut calls, &failed_dependencies);
+            let mut executed = executed;
+            executed.extend(blocked.into_iter().map(|(id, name, input)| {
+                let error = dependency_failure_error(&name);
+                (id, name, input, Err(error))
+            }));
 
             for (id, name, input, result) in executed {
                 if let Ok(output) = &result

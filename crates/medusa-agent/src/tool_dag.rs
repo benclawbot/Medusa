@@ -261,6 +261,32 @@ pub(crate) fn select_ready_positions(
     selected
 }
 
+pub(crate) fn drain_failed_dependents<I>(
+    queue: &mut VecDeque<(I, String, Value)>,
+    failed: &[(String, Value)],
+) -> Vec<(I, String, Value)> {
+    if queue.is_empty() || failed.is_empty() {
+        return Vec::new();
+    }
+    let mut blockers = failed
+        .iter()
+        .map(|(name, input)| profile(name, input))
+        .collect::<Vec<_>>();
+    let mut blocked = Vec::new();
+    let mut retained = VecDeque::new();
+    for (id, name, input) in std::mem::take(queue) {
+        let current = profile(&name, &input);
+        if blockers.iter().any(|prior| depends_on(prior, &current)) {
+            blockers.push(current);
+            blocked.push((id, name, input));
+        } else {
+            retained.push_back((id, name, input));
+        }
+    }
+    *queue = retained;
+    blocked
+}
+
 pub(crate) fn drain_positions<T>(queue: &mut VecDeque<T>, positions: &[usize]) -> Vec<T> {
     let selected = positions.iter().copied().collect::<BTreeSet<_>>();
     let mut picked = Vec::with_capacity(selected.len());
@@ -286,6 +312,14 @@ mod tests {
         items
             .iter()
             .map(|(name, input)| ((*name).to_owned(), input.clone()))
+            .collect()
+    }
+
+    fn queued_calls(items: &[(&str, Value)]) -> VecDeque<(String, String, Value)> {
+        calls(items)
+            .into_iter()
+            .enumerate()
+            .map(|(index, (name, input))| (format!("call-{index}"), name, input))
             .collect()
     }
 
@@ -354,6 +388,47 @@ mod tests {
             ("search_text", json!({"query":"needle"})),
         ]);
         assert_eq!(select_ready_positions(&calls, 2), vec![0, 2]);
+    }
+
+    #[test]
+    fn failed_dependency_blocks_conflicting_downstream_calls_transitively() {
+        let mut queue = queued_calls(&[
+            ("fs_write", json!({"path":"a.rs","content":"x"})),
+            ("fs_read", json!({"path":"b.rs"})),
+            (
+                "apply_structured_patch",
+                json!({"repository_revision":"r","edits":[]}),
+            ),
+            ("web_fetch", json!({"url":"https://example.com"})),
+        ]);
+        let failed = calls(&[("fs_read", json!({"path":"a.rs"}))]);
+        let blocked = drain_failed_dependents(&mut queue, &failed);
+        assert_eq!(
+            blocked
+                .iter()
+                .map(|(_, name, _)| name.as_str())
+                .collect::<Vec<_>>(),
+            vec!["fs_write", "fs_read", "apply_structured_patch"]
+        );
+        assert_eq!(
+            queue
+                .iter()
+                .map(|(_, name, _)| name.as_str())
+                .collect::<Vec<_>>(),
+            vec!["web_fetch"]
+        );
+    }
+
+    #[test]
+    fn failed_network_dependency_does_not_cancel_repository_work() {
+        let mut queue = queued_calls(&[
+            ("fs_read", json!({"path":"a.rs"})),
+            ("web_fetch", json!({"url":"https://example.com/next"})),
+        ]);
+        let failed = calls(&[("web_search", json!({"query":"docs"}))]);
+        let blocked = drain_failed_dependents(&mut queue, &failed);
+        assert!(blocked.is_empty());
+        assert_eq!(queue.len(), 2);
     }
 
     #[test]
