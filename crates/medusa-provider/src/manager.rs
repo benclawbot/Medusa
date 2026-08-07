@@ -7,7 +7,7 @@ use std::{
         atomic::{AtomicBool, Ordering},
     },
     thread,
-    time::Duration,
+    time::{Duration, Instant},
 };
 
 use medusa_core::{ErrorCategory, ErrorCode, MedusaError, MedusaResult};
@@ -16,6 +16,7 @@ use serde_json::{Value, json};
 
 use crate::{
     ModelProvider, ModelRequest, ModelResponse, ProviderCapabilities, ProviderHealthStore,
+    ProviderRouteLatencyStore, RouteLatencyPolicy, RouteLatencyStats, latency_aware_route_order,
 };
 
 /// Observable health state for a configured provider position.
@@ -84,17 +85,19 @@ impl RouteRetryPolicy {
     }
 }
 
-/// Routes requests through a primary provider followed by optional fallbacks.
+/// Routes requests through configured providers using durable latency and health evidence.
 pub struct ProviderManager<P> {
     providers: Vec<P>,
     profiles: Vec<ProviderRouteProfile>,
     cache: Mutex<BTreeMap<String, ModelResponse>>,
     state: ProviderHealthStore,
+    latency: ProviderRouteLatencyStore,
+    latency_policy: RouteLatencyPolicy,
     sleeper: fn(Duration),
 }
 
 impl<P> ProviderManager<P> {
-    /// Builds a manager with an isolated in-memory state authority for tests and embedding.
+    /// Builds a manager with isolated in-memory state authorities for tests and embedding.
     #[must_use]
     pub fn new(providers: Vec<P>) -> Self {
         Self::new_with_profiles(providers, Vec::new())
@@ -104,7 +107,8 @@ impl<P> ProviderManager<P> {
     pub fn new_with_profiles(providers: Vec<P>, profiles: Vec<ProviderRouteProfile>) -> Self {
         let profiles = normalized_profiles(providers.len(), profiles);
         let state = ProviderHealthStore::in_memory(&profiles);
-        Self::new_with_profiles_and_store(providers, profiles, state)
+        let latency = ProviderRouteLatencyStore::in_memory(&profiles);
+        Self::new_with_profiles_and_store(providers, profiles, state, latency)
     }
 
     pub fn new_with_profiles_and_user_state(
@@ -113,8 +117,9 @@ impl<P> ProviderManager<P> {
     ) -> MedusaResult<Self> {
         let profiles = normalized_profiles(providers.len(), profiles);
         let state = ProviderHealthStore::for_user(&profiles)?;
+        let latency = ProviderRouteLatencyStore::for_user(&profiles)?;
         Ok(Self::new_with_profiles_and_store(
-            providers, profiles, state,
+            providers, profiles, state, latency,
         ))
     }
 
@@ -122,12 +127,15 @@ impl<P> ProviderManager<P> {
         providers: Vec<P>,
         profiles: Vec<ProviderRouteProfile>,
         state: ProviderHealthStore,
+        latency: ProviderRouteLatencyStore,
     ) -> Self {
         Self {
             providers,
             profiles,
             cache: Mutex::new(BTreeMap::new()),
             state,
+            latency,
+            latency_policy: RouteLatencyPolicy::default(),
             sleeper: thread::sleep,
         }
     }
@@ -149,6 +157,12 @@ impl<P> ProviderManager<P> {
     }
 
     #[cfg(test)]
+    fn with_latency_policy(mut self, policy: RouteLatencyPolicy) -> Self {
+        self.latency_policy = policy;
+        self
+    }
+
+    #[cfg(test)]
     fn without_sleep(mut self) -> Self {
         self.sleeper = |_| {};
         self
@@ -158,6 +172,12 @@ impl<P> ProviderManager<P> {
     #[must_use]
     pub fn health(&self) -> Vec<ProviderHealth> {
         self.state.health().unwrap_or_default()
+    }
+
+    /// Returns durable route latency measurements in configured-route order.
+    #[must_use]
+    pub fn route_latency(&self) -> Vec<RouteLatencyStats> {
+        self.latency.stats().unwrap_or_default()
     }
 
     /// Returns the configured provider position that completed the latest uncached request.
@@ -272,20 +292,33 @@ impl<P: ModelProvider> ProviderManager<P> {
             return Ok(response.clone());
         }
 
+        let stats = self.latency.stats()?;
+        let route_order = latency_aware_route_order(
+            &self.profiles,
+            &stats,
+            !request.tools.is_empty(),
+            false,
+            self.latency_policy,
+        );
         let mut final_error = None;
-        for (index, provider) in self.providers.iter().enumerate() {
-            let has_fallback = index + 1 < self.providers.len();
+        for (position, index) in route_order.iter().copied().enumerate() {
+            let provider = &self.providers[index];
+            let has_fallback = position + 1 < route_order.len();
             let policy = self
                 .profiles
                 .get(index)
                 .map_or_else(RouteRetryPolicy::default, |profile| profile.retry);
             for attempt in 0..=policy.max_retries {
                 self.record_attempt(index)?;
+                let started = Instant::now();
                 match cancel.map_or_else(
                     || provider.complete(request),
                     |flag| provider.complete_cancellable(request, flag),
                 ) {
                     Ok(response) => {
+                        let duration_ms = elapsed_ms(started);
+                        self.latency
+                            .record_success(index, duration_ms, response.usage)?;
                         self.record_success(index)?;
                         if let Ok(mut cache) = self.cache.lock() {
                             cache.insert(key.clone(), response.clone());
@@ -293,6 +326,8 @@ impl<P: ModelProvider> ProviderManager<P> {
                         return Ok(response);
                     }
                     Err(error) => {
+                        let duration_ms = elapsed_ms(started);
+                        self.latency.record_failure(index, duration_ms)?;
                         self.record_error(index, &error)?;
                         final_error = Some(error.clone());
                         match classify_error(&error, has_fallback) {
@@ -300,10 +335,10 @@ impl<P: ModelProvider> ProviderManager<P> {
                                 let delay_ms = policy.delay_ms(&error, index, attempt);
                                 self.record_retry(index, delay_ms)?;
                                 if let Some(flag) = cancel {
-                                    let deadline =
-                                        std::time::Instant::now() + Duration::from_millis(delay_ms);
-                                    while std::time::Instant::now() < deadline {
+                                    let deadline = Instant::now() + Duration::from_millis(delay_ms);
+                                    while Instant::now() < deadline {
                                         if flag.load(Ordering::SeqCst) {
+                                            self.latency.record_cancellation(index, 0)?;
                                             return Err(MedusaError::new(
                                                 ErrorCode::DependencyUnavailable,
                                                 ErrorCategory::Transient,
@@ -336,10 +371,14 @@ impl<P: ModelProvider> ProviderManager<P> {
             MedusaError::new(
                 ErrorCode::DependencyUnavailable,
                 ErrorCategory::Environment,
-                "no model providers are configured",
+                "no compatible model providers are configured",
             )
         }))
     }
+}
+
+fn elapsed_ms(started: Instant) -> u64 {
+    u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX)
 }
 
 fn classify_error(error: &MedusaError, has_fallback: bool) -> RetryDisposition {
@@ -442,6 +481,20 @@ mod tests {
         )
     }
 
+    fn profile(id: &str) -> ProviderRouteProfile {
+        ProviderRouteProfile {
+            id: id.to_owned(),
+            provider: id.to_owned(),
+            model: "model".to_owned(),
+            protocol: "test".to_owned(),
+            endpoint: None,
+            auth_source: "test".to_owned(),
+            tool_calling: true,
+            streaming: false,
+            retry: RouteRetryPolicy::default(),
+        }
+    }
+
     #[test]
     fn retryable_primary_failure_falls_back_and_caches_response() {
         let (primary, primary_calls) = provider(Err(failure(ErrorCategory::Transient, true)));
@@ -465,6 +518,8 @@ mod tests {
         assert_eq!(cached["provider_index"], json!(1));
         assert_eq!(cached["cache_hit"], json!(true));
         assert_eq!(cached["cache_hits"], json!(1));
+        assert_eq!(manager.route_latency()[0].failures, 2);
+        assert_eq!(manager.route_latency()[1].successes, 1);
     }
 
     #[test]
@@ -480,6 +535,7 @@ mod tests {
         assert_eq!(status["provider_index"], json!(0));
         assert_eq!(status["attempts"], json!(1));
         assert_eq!(status["successes"], json!(1));
+        assert_eq!(manager.route_latency()[0].successes, 1);
     }
 
     #[test]
@@ -528,5 +584,37 @@ mod tests {
         assert!(manager.complete(&request()).is_err());
         assert_eq!(manager.health()[0].last_delay_ms, Some(3_000));
         assert_eq!(manager.execution_status(), None);
+    }
+
+    #[test]
+    fn persisted_latency_can_promote_a_faster_fallback() {
+        let (slow, slow_calls) = provider(Ok(success()));
+        let (fast, fast_calls) = provider(Ok(success()));
+        let profiles = vec![profile("slow"), profile("fast")];
+        let health = ProviderHealthStore::in_memory(&profiles);
+        let latency = ProviderRouteLatencyStore::in_memory(&profiles);
+        latency
+            .record_success(0, 1_000, Usage::default())
+            .expect("slow observation");
+        latency
+            .record_success(1, 10, Usage::default())
+            .expect("fast observation");
+        let manager = ProviderManager::new_with_profiles_and_store(
+            vec![slow, fast],
+            profiles,
+            health,
+            latency,
+        )
+        .with_latency_policy(RouteLatencyPolicy {
+            cold_start_duration_ms: 30_000,
+            failure_penalty_ms_per_mille: 10,
+            max_cache_credit_ms: 0,
+        });
+
+        manager.complete(&request()).expect("fast response");
+
+        assert_eq!(slow_calls.load(Ordering::SeqCst), 0);
+        assert_eq!(fast_calls.load(Ordering::SeqCst), 1);
+        assert_eq!(manager.last_completed_provider(), Some(1));
     }
 }
