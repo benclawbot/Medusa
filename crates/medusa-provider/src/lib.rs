@@ -8,6 +8,7 @@ mod http;
 mod manager;
 mod openai;
 mod route_latency;
+mod route_metrics_store;
 
 pub use anthropic::MiniMaxProvider;
 pub use configured::ConfiguredProvider;
@@ -21,6 +22,7 @@ pub use openai::OpenAiProvider;
 pub use route_latency::{
     RouteLatencyPolicy, RouteLatencyStats, expected_latency_ms, latency_aware_route_order,
 };
+pub use route_metrics_store::ProviderRouteLatencyStore;
 
 pub(crate) use http::{
     async_response_error, blocking_response_error, cancelled_provider_error, provider_error,
