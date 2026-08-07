@@ -2,15 +2,19 @@ name: Verify 687 Fair Priority Scheduling
 on:
   push:
     branches: [perf/687-fair-priority-scheduling]
+  pull_request:
+    branches: [main]
 permissions:
   contents: write
 jobs:
   verify-source:
+    if: github.event_name == 'push' || github.head_ref == 'perf/687-fair-priority-scheduling'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
           fetch-depth: 0
+          ref: perf/687-fair-priority-scheduling
       - uses: dtolnay/rust-toolchain@39b0b3842c7e8bbf6904c0bfc3d9006fdd4dc4e0
         with:
           components: rustfmt, clippy
@@ -66,6 +70,7 @@ jobs:
       - name: Clippy
         run: cargo clippy -p medusa-agent --all-targets --all-features -- -D warnings
       - name: Publish verified source only
+        if: github.event_name == 'push'
         run: |
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
