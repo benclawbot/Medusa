@@ -31,7 +31,10 @@ pub struct ProviderRouteLatencyStore {
 #[derive(Clone)]
 enum StoreBackend {
     Memory(Arc<Mutex<RouteLatencyState>>),
-    File { state_path: PathBuf, lock_path: PathBuf },
+    File {
+        state_path: PathBuf,
+        lock_path: PathBuf,
+    },
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -86,12 +89,7 @@ impl ProviderRouteLatencyStore {
         })
     }
 
-    pub fn record_success(
-        &self,
-        index: usize,
-        duration_ms: u64,
-        usage: Usage,
-    ) -> MedusaResult<()> {
+    pub fn record_success(&self, index: usize, duration_ms: u64, usage: Usage) -> MedusaResult<()> {
         self.update(index, |stats| {
             stats.samples = stats.samples.saturating_add(1);
             stats.successes = stats.successes.saturating_add(1);
@@ -118,7 +116,11 @@ impl ProviderRouteLatencyStore {
         })
     }
 
-    fn update(&self, index: usize, update: impl FnOnce(&mut RouteLatencyStats)) -> MedusaResult<()> {
+    fn update(
+        &self,
+        index: usize,
+        update: impl FnOnce(&mut RouteLatencyStats),
+    ) -> MedusaResult<()> {
         let key = self
             .route_keys
             .get(index)
@@ -139,7 +141,10 @@ impl ProviderRouteLatencyStore {
                     .map_err(|_| store_error("provider route latency state lock is poisoned"))?;
                 Ok(update(&mut state))
             }
-            StoreBackend::File { state_path, lock_path } => {
+            StoreBackend::File {
+                state_path,
+                lock_path,
+            } => {
                 let _guard = FileLock::acquire(lock_path)?;
                 let mut state = load_state(state_path)?;
                 let result = update(&mut state);
@@ -162,7 +167,9 @@ impl FileLock {
                 Ok(mut file) => {
                     writeln!(file, "pid={}", std::process::id()).map_err(store_io_error)?;
                     file.sync_all().map_err(store_io_error)?;
-                    return Ok(Self { path: path.to_path_buf() });
+                    return Ok(Self {
+                        path: path.to_path_buf(),
+                    });
                 }
                 Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
                     if lock_is_stale(path) {
@@ -316,6 +323,9 @@ mod tests {
 
         let changed = ProviderRouteLatencyStore::at(directory.path(), &[profile("gpt-6")])
             .expect("changed route");
-        assert_eq!(changed.stats().expect("changed stats"), vec![RouteLatencyStats::default()]);
+        assert_eq!(
+            changed.stats().expect("changed stats"),
+            vec![RouteLatencyStats::default()]
+        );
     }
 }
