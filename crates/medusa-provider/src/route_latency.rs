@@ -158,13 +158,7 @@ mod tests {
             },
         ];
         assert_eq!(
-            latency_aware_route_order(
-                &profiles,
-                &stats,
-                true,
-                true,
-                RouteLatencyPolicy::default()
-            ),
+            latency_aware_route_order(&profiles, &stats, true, true, RouteLatencyPolicy::default()),
             vec![1, 0]
         );
     }
@@ -177,13 +171,7 @@ mod tests {
             profile("eligible", true, true),
         ];
         assert_eq!(
-            latency_aware_route_order(
-                &profiles,
-                &[],
-                true,
-                true,
-                RouteLatencyPolicy::default()
-            ),
+            latency_aware_route_order(&profiles, &[], true, true, RouteLatencyPolicy::default()),
             vec![2]
         );
     }
@@ -207,9 +195,7 @@ mod tests {
             total_duration_ms: 20_000,
             ..RouteLatencyStats::default()
         };
-        assert!(
-            expected_latency_ms(unreliable, policy) > expected_latency_ms(reliable, policy)
-        );
+        assert!(expected_latency_ms(unreliable, policy) > expected_latency_ms(reliable, policy));
     }
 
     #[test]
@@ -234,13 +220,7 @@ mod tests {
     fn cold_route_ties_preserve_configured_order() {
         let profiles = vec![profile("a", true, false), profile("b", true, false)];
         assert_eq!(
-            latency_aware_route_order(
-                &profiles,
-                &[],
-                true,
-                false,
-                RouteLatencyPolicy::default()
-            ),
+            latency_aware_route_order(&profiles, &[], true, false, RouteLatencyPolicy::default()),
             vec![0, 1]
         );
     }
