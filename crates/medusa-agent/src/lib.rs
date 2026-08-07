@@ -785,6 +785,7 @@ mod tests {
             "references",
             "diagnostics",
             "workspace_symbols",
+            "guarded_refactoring",
         ] {
             let claim = claims
                 .iter()
@@ -792,13 +793,11 @@ mod tests {
                 .expect("production TypeScript claim");
             assert_eq!(claim["status"], "production");
         }
-        for level in ["parsed_symbols", "guarded_refactoring"] {
-            let claim = claims
-                .iter()
-                .find(|claim| claim["level"] == level)
-                .expect("unavailable TypeScript claim");
-            assert_eq!(claim["status"], "unavailable");
-        }
+        let parsed_symbols = claims
+            .iter()
+            .find(|claim| claim["level"] == "parsed_symbols")
+            .expect("unavailable TypeScript parsed-symbol claim");
+        assert_eq!(parsed_symbols["status"], "unavailable");
     }
 
     #[test]
