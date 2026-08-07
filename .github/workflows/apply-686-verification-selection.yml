@@ -20,6 +20,10 @@ jobs:
       - name: Apply graph verification patch
         shell: bash
         run: |
+          if grep -q 'fn graph_verification_assessment' crates/medusa-agent/src/verification_authority.rs; then
+            echo 'graph verification patch already applied'
+            exit 0
+          fi
           git fetch origin main
           git show origin/main:.github/patches/686-verification-selection.patch > /tmp/686.patch
           git apply --check /tmp/686.patch
