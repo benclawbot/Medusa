@@ -188,6 +188,15 @@ pub enum EventPayload {
         tool: String,
         exit_code: Option<i32>,
     },
+    ToolExecutionTimingRecorded {
+        tool_use_id: String,
+        tool: String,
+        queue_duration_ns: u64,
+        execution_duration_ns: u64,
+        expected_duration_ms: u64,
+        concurrency_cost: u16,
+        cached: bool,
+    },
     FileTransactionCommitted {
         paths: Vec<String>,
         rollback_ref: String,
@@ -335,6 +344,33 @@ mod tests {
             let json = serde_json::to_string(&event).expect("serialize");
             prop_assert_eq!(serde_json::from_str::<EventEnvelope>(&json).expect("deserialize"), event);
         }
+    }
+
+    #[test]
+    fn tool_execution_timing_round_trips() {
+        let event = EventEnvelope::new(
+            2,
+            SessionId::new(),
+            Actor::Coordinator,
+            CorrelationId::new(),
+            EventPayload::ToolExecutionTimingRecorded {
+                tool_use_id: "tool-1".to_owned(),
+                tool: "fs_read".to_owned(),
+                queue_duration_ns: 125,
+                execution_duration_ns: 500,
+                expected_duration_ms: 10,
+                concurrency_cost: 1,
+                cached: false,
+            },
+            None,
+            OffsetDateTime::UNIX_EPOCH,
+        )
+        .expect("timing event");
+        let json = serde_json::to_string(&event).expect("serialize timing event");
+        assert_eq!(
+            serde_json::from_str::<EventEnvelope>(&json).expect("deserialize timing event"),
+            event
+        );
     }
 
     #[test]

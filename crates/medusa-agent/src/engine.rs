@@ -189,6 +189,17 @@ fn audited_tool_name(name: &str, input: &serde_json::Value) -> String {
     name.to_owned()
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct ToolExecutionTiming {
+    queue_duration_ns: u64,
+    execution_duration_ns: u64,
+    cached: bool,
+}
+
+fn duration_ns(duration: std::time::Duration) -> u64 {
+    duration.as_nanos().min(u128::from(u64::MAX)) as u64
+}
+
 impl<P: ModelProvider> AgentEngine<P> {
     #[must_use]
     pub fn new(provider: P, config: Config) -> Self {
@@ -792,6 +803,7 @@ impl<P: ModelProvider> AgentEngine<P> {
         let mut assistant_blocks = Vec::new();
         let mut assistant_text = Vec::new();
         let mut calls = VecDeque::new();
+        let mut tool_requested_at = BTreeMap::<String, std::time::Instant>::new();
         for block in response.blocks {
             match block {
                 ResponseBlock::Text { text } => {
@@ -809,6 +821,7 @@ impl<P: ModelProvider> AgentEngine<P> {
                         name: name.clone(),
                         input: input.clone(),
                     });
+                    tool_requested_at.insert(id.clone(), std::time::Instant::now());
                     calls.push_back((id, name, input));
                 }
             }
@@ -879,15 +892,27 @@ impl<P: ModelProvider> AgentEngine<P> {
                 }
                 let repo = session.repo.as_path();
                 let cache = &safe_tool_cache;
+                let requested_at = &tool_requested_at;
                 let cancellation = Arc::clone(&self.cancellation);
                 map_parallel_ordered(batch, |(id, name, input)| {
-                    let cached = crate::tool_dag::dedup_key(&name, &input)
+                    let started = std::time::Instant::now();
+                    let queue_duration_ns = requested_at
+                        .get(&id)
+                        .map(|requested| duration_ns(started.duration_since(*requested)))
+                        .unwrap_or_default();
+                    let cached_output = crate::tool_dag::dedup_key(&name, &input)
                         .and_then(|key| cache.get(&key).cloned());
-                    let result = cached.map_or_else(
+                    let cached = cached_output.is_some();
+                    let result = cached_output.map_or_else(
                         || execute_tool_cancellable(repo, &name, &input, cancellation.as_ref()),
                         Ok,
                     );
-                    (id, name, input, result)
+                    let timing = ToolExecutionTiming {
+                        queue_duration_ns,
+                        execution_duration_ns: duration_ns(started.elapsed()),
+                        cached,
+                    };
+                    (id, name, input, result, Some(timing))
                 })?
             } else {
                 let (id, name, input) = batch.into_iter().next().ok_or_else(|| {
@@ -897,6 +922,13 @@ impl<P: ModelProvider> AgentEngine<P> {
                         "tool batch was unexpectedly empty",
                     )
                 })?;
+                let started = std::time::Instant::now();
+                let queue_duration_ns = tool_requested_at
+                    .get(&id)
+                    .map(|requested| duration_ns(started.duration_since(*requested)))
+                    .unwrap_or_default();
+                let mut measured = false;
+                let mut cached = false;
                 let result = if let Some(reason) =
                     self.execution_policy.denial_reason(&name, &input)
                 {
@@ -914,6 +946,7 @@ impl<P: ModelProvider> AgentEngine<P> {
                         reason,
                     ))
                 } else if name == "update_plan" {
+                    measured = true;
                     append_observed(
                         session,
                         EventPayload::ToolExecutionStarted {
@@ -948,6 +981,7 @@ impl<P: ModelProvider> AgentEngine<P> {
                         Ok("Visible task plan updated.".to_owned())
                     }
                 } else if name == "ask_user_question" {
+                    measured = true;
                     append_observed(
                         session,
                         EventPayload::ToolExecutionStarted {
@@ -975,6 +1009,7 @@ impl<P: ModelProvider> AgentEngine<P> {
                     .as_ref()
                     .is_some_and(|team| team.handles(&name))
                 {
+                    measured = true;
                     append_observed(
                         session,
                         EventPayload::ToolExecutionStarted {
@@ -994,6 +1029,7 @@ impl<P: ModelProvider> AgentEngine<P> {
                         .execute(&name, &input)
                 } else if name == "desktop_commander" && tool_allowed(self.config.agent.mode, &name)
                 {
+                    measured = true;
                     append_observed(
                         session,
                         EventPayload::ToolExecutionStarted {
@@ -1003,9 +1039,11 @@ impl<P: ModelProvider> AgentEngine<P> {
                     )?;
                     self.execute_desktop_commander(&session.repo, &input)
                 } else if tool_allowed(self.config.agent.mode, &name) {
+                    measured = true;
                     if let Some(output) = crate::tool_dag::dedup_key(&name, &input)
                         .and_then(|key| safe_tool_cache.get(&key).cloned())
                     {
+                        cached = true;
                         Ok(output)
                     } else {
                         append_observed(
@@ -1038,12 +1076,17 @@ impl<P: ModelProvider> AgentEngine<P> {
                         reason,
                     ))
                 };
-                vec![(id, name, input, result)]
+                let timing = measured.then(|| ToolExecutionTiming {
+                    queue_duration_ns,
+                    execution_duration_ns: duration_ns(started.elapsed()),
+                    cached,
+                });
+                vec![(id, name, input, result, timing)]
             };
 
             let repository_revision_after_mutation = executed
                 .iter()
-                .any(|(_, name, input, result)| {
+                .any(|(_, name, input, result, _)| {
                     result.is_ok() && crate::tool_dag::invalidates_repository_revision(name, input)
                 })
                 .then(|| refreshed_repository_revision(&session.repo))
@@ -1051,7 +1094,7 @@ impl<P: ModelProvider> AgentEngine<P> {
 
             let failed_dependencies = executed
                 .iter()
-                .filter_map(|(_, name, input, result)| {
+                .filter_map(|(_, name, input, result, _)| {
                     let error = result.as_ref().err()?;
                     let awaiting_approval = error.code == ErrorCode::PolicyDenied
                         && self.config.agent.mode != Mode::ReadOnly
@@ -1065,18 +1108,18 @@ impl<P: ModelProvider> AgentEngine<P> {
             let mut executed = executed;
             executed.extend(blocked.into_iter().map(|(id, name, input)| {
                 let error = dependency_failure_error(&name);
-                (id, name, input, Err(error))
+                (id, name, input, Err(error), None)
             }));
             if let Some(current_revision) = repository_revision_after_mutation {
                 let stale =
                     crate::tool_dag::drain_stale_revision_calls(&mut calls, &current_revision);
                 executed.extend(stale.into_iter().map(|(id, name, input)| {
                     let error = stale_revision_error(&name, &current_revision);
-                    (id, name, input, Err(error))
+                    (id, name, input, Err(error), None)
                 }));
             }
 
-            for (id, name, input, result) in executed {
+            for (id, name, input, result, timing) in executed {
                 if let Ok(output) = &result
                     && let Some(key) = crate::tool_dag::dedup_key(&name, &input)
                 {
@@ -1154,11 +1197,27 @@ impl<P: ModelProvider> AgentEngine<P> {
                 append_observed(
                     session,
                     EventPayload::ToolExecutionCompleted {
-                        tool: event_tool,
+                        tool: event_tool.clone(),
                         exit_code,
                     },
                     &mut observer,
                 )?;
+                if let Some(timing) = timing {
+                    let profile = crate::tool_dag::profile(&name, &input);
+                    append_observed(
+                        session,
+                        EventPayload::ToolExecutionTimingRecorded {
+                            tool_use_id: id.clone(),
+                            tool: event_tool,
+                            queue_duration_ns: timing.queue_duration_ns,
+                            execution_duration_ns: timing.execution_duration_ns,
+                            expected_duration_ms: profile.expected_duration_ms,
+                            concurrency_cost: profile.concurrency_cost,
+                            cached: timing.cached,
+                        },
+                        &mut observer,
+                    )?;
+                }
                 // The TUI sees the full body verbatim; the model sees the compact
                 // head/tail envelope with a pointer to the on-disk artifact.
                 observer(&AgentUpdate::ToolOutput {
