@@ -7,6 +7,7 @@ mod health_store;
 mod http;
 mod manager;
 mod openai;
+mod route_latency;
 
 pub use anthropic::MiniMaxProvider;
 pub use configured::ConfiguredProvider;
@@ -17,6 +18,9 @@ pub use contracts::{
 pub use health_store::ProviderHealthStore;
 pub use manager::{ProviderHealth, ProviderManager, ProviderRouteProfile, RouteRetryPolicy};
 pub use openai::OpenAiProvider;
+pub use route_latency::{
+    RouteLatencyPolicy, RouteLatencyStats, expected_latency_ms, latency_aware_route_order,
+};
 
 pub(crate) use http::{
     async_response_error, blocking_response_error, cancelled_provider_error, provider_error,
