@@ -648,6 +648,21 @@ fn builtin_tool_entries(
         tool_entry(
             ToolIdentity {
                 states,
+                name: "apply_structured_patch",
+            },
+            Capability::CodeIntelligence,
+            "Apply one revision-bound atomic structured repository mutation. Supports guarded byte-range updates plus create/delete/rename/move operations, requires exact repository revision and content hashes for existing files, rejects overlapping/stale/unsafe paths, and returns transaction hashes, public-API risk, invalidated graph nodes, and stable evidence references. Prefer this over whole-file rewrites when the target is known.",
+            json!({"type":"object","properties":{"repository_revision":{"type":"string"},"plan_id":{"type":"string"},"edits":{"type":"array","items":{"type":"object","properties":{"path":{"type":"string"},"file_hash":{"type":"string"},"start_byte":{"type":"integer","minimum":0},"end_byte":{"type":"integer","minimum":0},"expected_content":{"type":"string"},"replacement":{"type":"string"},"intent":{"type":"string"},"annotation":{"type":"string"}},"required":["path","file_hash","start_byte","end_byte","replacement"],"additionalProperties":false}},"file_operations":{"type":"array","items":{"type":"object","properties":{"kind":{"type":"string","enum":["create","delete","rename","move"]},"path":{"type":"string"},"from":{"type":"string"},"to":{"type":"string"},"content":{"type":"string"},"expected_hash":{"type":"string"},"overwrite":{"type":"boolean"},"intent":{"type":"string"},"annotation":{"type":"string"}},"required":["kind"],"additionalProperties":false}}},"required":["repository_revision","plan_id"],"additionalProperties":false}),
+            "medusa-agent::tools::compound::apply_structured_patch",
+            [
+                RegistryPermission::Write,
+                RegistryPermission::RepositoryMutation,
+            ],
+            true,
+        ),
+        tool_entry(
+            ToolIdentity {
+                states,
                 name: "typescript_semantic",
             },
             Capability::CodeIntelligence,
