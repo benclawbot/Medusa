@@ -24,12 +24,13 @@ jobs:
           git show origin/main:.github/patches/686-verification-selection.patch > /tmp/686.patch
           git apply --check /tmp/686.patch
           git apply /tmp/686.patch
+          rm -f .github/686-verification-trigger.txt
           cargo fmt --all
           git diff --check
           cargo test -p medusa-agent --locked verification_authority -- --nocapture
           cargo clippy -p medusa-agent --all-targets --locked -- -D warnings
           git config user.name github-actions[bot]
           git config user.email 41898282+github-actions[bot]@users.noreply.github.com
-          git add crates/medusa-agent/src/verification_authority.rs
+          git add -A
           git commit -m 'Wire repository graph into authoritative verification'
           git push origin HEAD:${{ github.head_ref }}
