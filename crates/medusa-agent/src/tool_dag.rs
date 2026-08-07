@@ -213,8 +213,15 @@ fn depends_on(prior: &ToolExecutionProfile, current: &ToolExecutionProfile) -> b
 
 /// Returns the next deterministic ready wave from the resource dependency DAG.
 /// Independent safe reads can leap over a blocked mutation, while conflicts and
-/// duplicate safe reads retain their original dependency order.
-pub(crate) fn select_ready_positions(calls: &[(String, Value)], worker_limit: usize) -> Vec<usize> {
+/// duplicate safe reads retain their original dependency order. `concurrency_budget`
+/// is a weighted resource budget, not a call count: each selected profile consumes
+/// its declared `concurrency_cost`, preventing expensive tools from oversubscribing
+/// the executor. The first ready call is always admitted so progress remains possible
+/// even when one tool's declared cost exceeds the configured budget.
+pub(crate) fn select_ready_positions(
+    calls: &[(String, Value)],
+    concurrency_budget: usize,
+) -> Vec<usize> {
     if calls.is_empty() {
         return Vec::new();
     }
@@ -238,11 +245,20 @@ pub(crate) fn select_ready_positions(calls: &[(String, Value)], worker_limit: us
         .copied()
         .find(|&position| !profiles[position].parallel_safe)
         .unwrap_or(usize::MAX);
-    ready
+    let budget = concurrency_budget.max(1);
+    let mut consumed = 0usize;
+    let mut selected = Vec::new();
+    for position in ready
         .into_iter()
         .filter(|&position| position < barrier && profiles[position].parallel_safe)
-        .take(worker_limit.max(1))
-        .collect()
+    {
+        let cost = usize::from(profiles[position].concurrency_cost.max(1));
+        if selected.is_empty() || consumed.saturating_add(cost) <= budget {
+            consumed = consumed.saturating_add(cost);
+            selected.push(position);
+        }
+    }
+    selected
 }
 
 pub(crate) fn drain_positions<T>(queue: &mut VecDeque<T>, positions: &[usize]) -> Vec<T> {
@@ -311,6 +327,33 @@ mod tests {
         let calls = calls(&[("fs_read", input.clone()), ("fs_read", input)]);
         assert_eq!(select_ready_positions(&calls, 8), vec![0]);
         assert!(dedup_key(&calls[0].0, &calls[0].1).is_some());
+    }
+
+    #[test]
+    fn concurrency_cost_bounds_ready_wave() {
+        let calls = calls(&[
+            ("web_search", json!({"query":"one"})),
+            ("web_fetch", json!({"url":"https://example.com/a"})),
+            ("fs_read", json!({"path":"a.rs"})),
+        ]);
+        assert_eq!(select_ready_positions(&calls, 4), vec![0, 1]);
+        assert_eq!(select_ready_positions(&calls, 5), vec![0, 1, 2]);
+    }
+
+    #[test]
+    fn oversized_first_ready_call_is_admitted_for_progress() {
+        let calls = calls(&[("web_search", json!({"query":"one"}))]);
+        assert_eq!(select_ready_positions(&calls, 1), vec![0]);
+    }
+
+    #[test]
+    fn skipped_expensive_read_does_not_block_later_affordable_read() {
+        let calls = calls(&[
+            ("fs_read", json!({"path":"a.rs"})),
+            ("web_search", json!({"query":"one"})),
+            ("search_text", json!({"query":"needle"})),
+        ]);
+        assert_eq!(select_ready_positions(&calls, 2), vec![0, 2]);
     }
 
     #[test]
