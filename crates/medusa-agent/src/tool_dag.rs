@@ -31,6 +31,7 @@ pub(crate) struct ToolExecutionProfile {
     pub cancellation_supported: bool,
     pub expected_duration_ms: u64,
     pub concurrency_cost: u16,
+    pub priority: u8,
     pub parallel_safe: bool,
     pub dedup_key: Option<String>,
 }
@@ -172,6 +173,12 @@ pub(crate) fn profile(name: &str, input: &Value) -> ToolExecutionProfile {
             false,
         ),
     };
+    let priority = match name {
+        "fs_read" | "search_text" | "skill_read" | "semantic_capabilities" => 3,
+        "code_index" | "inspect_target" | "typescript_semantic" => 2,
+        "web_search" | "web_fetch" => 1,
+        _ => 2,
+    };
     let dedup_key = (idempotent && side_effect == SideEffectClass::None).then(|| {
         format!(
             "{name}:{}",
@@ -185,6 +192,7 @@ pub(crate) fn profile(name: &str, input: &Value) -> ToolExecutionProfile {
         cancellation_supported,
         expected_duration_ms,
         concurrency_cost,
+        priority,
         parallel_safe,
         dedup_key,
     }
@@ -275,18 +283,32 @@ pub(crate) fn select_ready_positions(
         .find(|&position| !profiles[position].parallel_safe)
         .unwrap_or(usize::MAX);
     let budget = concurrency_budget.max(1);
-    let mut consumed = 0usize;
-    let mut selected = Vec::new();
-    for position in ready
+    let first_cost = usize::from(profiles[first].concurrency_cost.max(1));
+    let mut consumed = first_cost;
+    let mut selected = vec![first];
+    if first_cost >= budget {
+        return selected;
+    }
+    let mut candidates = ready
         .into_iter()
-        .filter(|&position| position < barrier && profiles[position].parallel_safe)
-    {
+        .filter(|&position| {
+            position != first && position < barrier && profiles[position].parallel_safe
+        })
+        .collect::<Vec<_>>();
+    candidates.sort_by(|left, right| {
+        profiles[*right]
+            .priority
+            .cmp(&profiles[*left].priority)
+            .then(left.cmp(right))
+    });
+    for position in candidates {
         let cost = usize::from(profiles[position].concurrency_cost.max(1));
-        if selected.is_empty() || consumed.saturating_add(cost) <= budget {
+        if consumed.saturating_add(cost) <= budget {
             consumed = consumed.saturating_add(cost);
             selected.push(position);
         }
     }
+    selected.sort_unstable();
     selected
 }
 
@@ -399,7 +421,7 @@ mod tests {
             ("web_fetch", json!({"url":"https://example.com/a"})),
             ("fs_read", json!({"path":"a.rs"})),
         ]);
-        assert_eq!(select_ready_positions(&calls, 4), vec![0, 1]);
+        assert_eq!(select_ready_positions(&calls, 4), vec![0, 2]);
         assert_eq!(select_ready_positions(&calls, 5), vec![0, 1, 2]);
     }
 
@@ -417,6 +439,26 @@ mod tests {
             ("search_text", json!({"query":"needle"})),
         ]);
         assert_eq!(select_ready_positions(&calls, 2), vec![0, 2]);
+    }
+
+    #[test]
+    fn priority_favors_short_local_work_after_oldest_ready_call() {
+        let calls = calls(&[
+            ("web_search", json!({"query":"one"})),
+            ("web_fetch", json!({"url":"https://example.com/a"})),
+            ("fs_read", json!({"path":"a.rs"})),
+        ]);
+        assert_eq!(select_ready_positions(&calls, 4), vec![0, 2]);
+    }
+
+    #[test]
+    fn oldest_ready_call_is_never_starved_by_later_priority_work() {
+        let calls = calls(&[
+            ("web_search", json!({"query":"oldest"})),
+            ("fs_read", json!({"path":"a.rs"})),
+            ("search_text", json!({"query":"needle"})),
+        ]);
+        assert_eq!(select_ready_positions(&calls, 2), vec![0]);
     }
 
     #[test]
@@ -532,6 +574,7 @@ mod tests {
         let read = profile("inspect_target", &json!({"path":"src/lib.rs"}));
         assert_eq!(read.side_effect, SideEffectClass::None);
         assert!(read.idempotent && read.parallel_safe && read.cancellation_supported);
+        assert_eq!(read.priority, 2);
         let mutation = profile("apply_structured_patch", &json!({}));
         assert_eq!(mutation.side_effect, SideEffectClass::RepositoryMutation);
         assert!(!mutation.idempotent && !mutation.parallel_safe);
