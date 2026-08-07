@@ -103,6 +103,30 @@ jobs:
           if baseline not in text:
               raise SystemExit("could not add Cargo.lock to the live fixture baseline")
           text = text.replace(baseline, replacement + ",", 1)
+
+          # The session journal schema now records durable assistant completion with
+          # assistant_message_recorded/session_completed. Keep the legacy event for old fixtures.
+          legacy_event = 'event["payload"].get("type") == "model_response_received"'
+          current_events = (
+              'event["payload"].get("type") in '
+              '{"model_response_received", "assistant_message_recorded", "session_completed"}'
+          )
+          if legacy_event not in text:
+              raise SystemExit("could not update live TUI durable-response event predicate")
+          text = text.replace(legacy_event, current_events, 1)
+
+          # The prompt itself contains the marker, so require the TUI's completion banner too.
+          # This avoids the old change-offset race while still proving the real terminal rendered completion.
+          old_completion = (
+              "if submitted and change_offset is not None and EXPECTED in post_change and responses and assistants:"
+          )
+          new_completion = (
+              'if submitted and change_offset is not None and EXPECTED in text and "Task completed" in text '
+              'and responses and assistants:'
+          )
+          if old_completion not in text:
+              raise SystemExit("could not update live TUI rendered-completion predicate")
+          text = text.replace(old_completion, new_completion, 1)
           path.write_text(text, encoding="utf-8")
           PY
           python3 scripts/live-tui-minimax-e2e.py \
