@@ -42,7 +42,10 @@ pub struct ExecutionLaneDecision {
 impl ExecutionLaneDecision {
     #[must_use]
     pub fn requires_model_review(&self) -> bool {
-        matches!(self.lane, ExecutionLane::StandardMutation | ExecutionLane::FullOrchestration)
+        matches!(
+            self.lane,
+            ExecutionLane::StandardMutation | ExecutionLane::FullOrchestration
+        )
     }
 }
 
@@ -61,8 +64,14 @@ pub fn select_execution_lane(input: &ExecutionLaneInput) -> ExecutionLaneDecisio
     }
 
     let full_reasons = [
-        (input.repository_forces_full, "repository policy requires full orchestration"),
-        (!input.scope_resolved || input.ambiguous, "write scope is unresolved or ambiguous"),
+        (
+            input.repository_forces_full,
+            "repository policy requires full orchestration",
+        ),
+        (
+            !input.scope_resolved || input.ambiguous,
+            "write scope is unresolved or ambiguous",
+        ),
         (input.security_sensitive, "security-sensitive change"),
         (input.migration_or_release, "migration or release change"),
         (input.repository_wide, "repository-wide change"),
@@ -71,7 +80,10 @@ pub fn select_execution_lane(input: &ExecutionLaneInput) -> ExecutionLaneDecisio
         (input.generated_file_risk, "generated-file risk"),
         (input.package_count > 1, "multi-package change"),
         (input.changed_path_count > 8, "broad changed-path scope"),
-        (input.historical_failures >= 2, "repeated historical failures"),
+        (
+            input.historical_failures >= 2,
+            "repeated historical failures",
+        ),
         (confidence < 700, "insufficient confidence for a fast lane"),
     ];
     let rationale = full_reasons
@@ -154,12 +166,38 @@ mod tests {
     #[test]
     fn high_risk_or_ambiguous_work_selects_full_orchestration() {
         for input in [
-            ExecutionLaneInput { mutating: true, scope_resolved: false, confidence_milli: 1000, ..ExecutionLaneInput::default() },
-            ExecutionLaneInput { mutating: true, scope_resolved: true, security_sensitive: true, confidence_milli: 1000, ..ExecutionLaneInput::default() },
-            ExecutionLaneInput { mutating: true, scope_resolved: true, migration_or_release: true, confidence_milli: 1000, ..ExecutionLaneInput::default() },
-            ExecutionLaneInput { mutating: true, scope_resolved: true, package_count: 2, confidence_milli: 1000, ..ExecutionLaneInput::default() },
+            ExecutionLaneInput {
+                mutating: true,
+                scope_resolved: false,
+                confidence_milli: 1000,
+                ..ExecutionLaneInput::default()
+            },
+            ExecutionLaneInput {
+                mutating: true,
+                scope_resolved: true,
+                security_sensitive: true,
+                confidence_milli: 1000,
+                ..ExecutionLaneInput::default()
+            },
+            ExecutionLaneInput {
+                mutating: true,
+                scope_resolved: true,
+                migration_or_release: true,
+                confidence_milli: 1000,
+                ..ExecutionLaneInput::default()
+            },
+            ExecutionLaneInput {
+                mutating: true,
+                scope_resolved: true,
+                package_count: 2,
+                confidence_milli: 1000,
+                ..ExecutionLaneInput::default()
+            },
         ] {
-            assert_eq!(select_execution_lane(&input).lane, ExecutionLane::FullOrchestration);
+            assert_eq!(
+                select_execution_lane(&input).lane,
+                ExecutionLane::FullOrchestration
+            );
         }
     }
 
