@@ -2,14 +2,16 @@ use std::{
     collections::BTreeSet,
     fs,
     path::{Path, PathBuf},
+    process::Command,
 };
 
 use medusa_core::MedusaResult;
 use medusa_intelligence::{
-    CodeIndex, LspCapabilityResult, LspClient, PatchTransaction, TextEdit,
-    bind_guarded_rename_snapshot, discover_typescript_workspace, find_references, format_changed,
-    go_to_definition, language_capability_profiles, lsp_rename, prepare_guarded_rename_transaction,
-    prepare_rename, select_tests, validate_guarded_rename, workspace_symbols,
+    CodeIndex, LspCapabilityResult, LspClient, PatchTransaction, RepositoryGraph,
+    RepositoryGraphFreshness, TextEdit, bind_guarded_rename_snapshot,
+    discover_typescript_workspace, find_references, format_changed, go_to_definition,
+    language_capability_profiles, lsp_rename, prepare_guarded_rename_transaction, prepare_rename,
+    select_tests, validate_guarded_rename, workspace_symbols,
 };
 use serde_json::{Value, json};
 
@@ -25,12 +27,18 @@ pub(crate) fn semantic_capabilities() -> MedusaResult<String> {
 }
 
 pub(crate) fn code_index(repo: &Path, input: &Value) -> MedusaResult<String> {
-    let index = CodeIndex::build(repo)?;
+    let (index, binding) = revision_bound_index(repo)?;
     if let Some(name) = input.get("name").and_then(Value::as_str) {
         Ok(serde_json::to_string_pretty(&json!({
             "definitions": index.definitions(name),
             "references": index.references(name),
             "parse_errors": index.parse_errors,
+            "repository_graph": binding,
+        }))?)
+    } else if binding.is_some() {
+        Ok(serde_json::to_string_pretty(&json!({
+            "index": index,
+            "repository_graph": binding,
         }))?)
     } else {
         Ok(serde_json::to_string_pretty(&index)?)
@@ -178,7 +186,7 @@ pub(crate) fn patch_apply(repo: &Path, input: &Value) -> MedusaResult<String> {
     }
     let receipt = transaction.commit(repo)?;
     let formatting = format_changed(repo, &receipt.changed_paths)?;
-    let impact = select_tests(&receipt.changed_paths);
+    let impact = revision_bound_test_impact(repo, &receipt.changed_paths)?;
     Ok(serde_json::to_string_pretty(&json!({
         "receipt": receipt,
         "formatting": formatting,
@@ -189,7 +197,7 @@ pub(crate) fn patch_apply(repo: &Path, input: &Value) -> MedusaResult<String> {
 pub(crate) fn symbol_rename(repo: &Path, input: &Value) -> MedusaResult<String> {
     let old_name = input_string(input, "old_name")?;
     let new_name = input_string(input, "new_name")?;
-    let index = CodeIndex::build(repo)?;
+    let (index, binding) = revision_bound_index(repo)?;
     let indexed_references = index.references(old_name);
     let has_typescript_reference = indexed_references
         .iter()
@@ -199,15 +207,16 @@ pub(crate) fn symbol_rename(repo: &Path, input: &Value) -> MedusaResult<String> 
         .any(|reference| !is_typescript_path(&reference.path));
 
     if has_non_typescript_reference || !has_typescript_reference {
-        return rust_symbol_rename(repo, &index, old_name, new_name);
+        return rust_symbol_rename(repo, &index, binding, old_name, new_name);
     }
 
-    typescript_symbol_rename(repo, old_name, new_name)
+    typescript_symbol_rename(repo, binding, old_name, new_name)
 }
 
 fn rust_symbol_rename(
     repo: &Path,
     index: &CodeIndex,
+    binding: Option<Value>,
     old_name: &str,
     new_name: &str,
 ) -> MedusaResult<String> {
@@ -218,17 +227,23 @@ fn rust_symbol_rename(
     }
     let receipt = transaction.commit(repo)?;
     let formatting = format_changed(repo, &receipt.changed_paths)?;
-    let impact = select_tests(&receipt.changed_paths);
+    let impact = revision_bound_test_impact(repo, &receipt.changed_paths)?;
     Ok(serde_json::to_string_pretty(&json!({
         "language": "rust",
         "renamed_references": references,
         "receipt": receipt,
         "formatting": formatting,
         "test_impact": impact,
+        "index_repository_graph": binding,
     }))?)
 }
 
-fn typescript_symbol_rename(repo: &Path, old_name: &str, new_name: &str) -> MedusaResult<String> {
+fn typescript_symbol_rename(
+    repo: &Path,
+    binding: Option<Value>,
+    old_name: &str,
+    new_name: &str,
+) -> MedusaResult<String> {
     let workspace = discover_typescript_workspace(repo, repo)
         .map_err(|error| crate::tools::invalid_tool(error.to_string()))?;
     let mut client = LspClient::new(workspace.server_config());
@@ -368,7 +383,7 @@ fn typescript_symbol_rename(repo: &Path, old_name: &str, new_name: &str) -> Medu
         prepare_guarded_rename_transaction(repo, &bound).map_err(crate::tools::invalid_tool)?;
     let receipt = transaction.commit(repo)?;
     let formatting = format_changed(repo, &receipt.changed_paths)?;
-    let impact = select_tests(&receipt.changed_paths);
+    let impact = revision_bound_test_impact(repo, &receipt.changed_paths)?;
 
     Ok(serde_json::to_string_pretty(&json!({
         "language": "typescript_javascript",
@@ -377,5 +392,56 @@ fn typescript_symbol_rename(repo: &Path, old_name: &str, new_name: &str) -> Medu
         "receipt": receipt,
         "formatting": formatting,
         "test_impact": impact,
+        "index_repository_graph": binding,
     }))?)
+}
+
+fn revision_bound_index(repo: &Path) -> MedusaResult<(CodeIndex, Option<Value>)> {
+    if !git_repository(repo) {
+        return Ok((CodeIndex::build(repo)?, None));
+    }
+
+    let graph = RepositoryGraph::open(repo)?;
+    let freshness = graph.freshness();
+    if freshness != RepositoryGraphFreshness::Current {
+        return Err(crate::tools::invalid_tool(
+            "repository graph is stale before semantic tool execution",
+        ));
+    }
+    let binding = json!({
+        "repository_revision": graph.snapshot().repository_revision,
+        "graph_revision": graph.snapshot().graph_revision,
+        "freshness": freshness,
+        "source_adapter": "persistent-repository-graph",
+        "confidence_milli": 1000,
+        "evidence_refs": [format!(
+            "repository-graph:{}:{}",
+            graph.snapshot().repository_revision,
+            graph.snapshot().graph_revision
+        )],
+    });
+    Ok((graph.snapshot().index.clone(), Some(binding)))
+}
+
+fn revision_bound_test_impact(repo: &Path, changed_paths: &[PathBuf]) -> MedusaResult<Value> {
+    if !git_repository(repo) {
+        return Ok(serde_json::to_value(select_tests(changed_paths))?);
+    }
+
+    let graph = RepositoryGraph::open(repo)?;
+    let impact = graph.related_tests(changed_paths);
+    if impact.freshness != RepositoryGraphFreshness::Current {
+        return Err(crate::tools::invalid_tool(
+            "repository graph is stale during test-impact selection",
+        ));
+    }
+    Ok(serde_json::to_value(impact)?)
+}
+
+fn git_repository(repo: &Path) -> bool {
+    Command::new("git")
+        .args(["rev-parse", "--is-inside-work-tree"])
+        .current_dir(repo)
+        .output()
+        .is_ok_and(|output| output.status.success() && output.stdout.starts_with(b"true"))
 }
