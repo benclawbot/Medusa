@@ -22,6 +22,7 @@ pub use contracts::{
 pub use health_store::ProviderHealthStore;
 pub use manager::{ProviderHealth, ProviderManager, ProviderRouteProfile, RouteRetryPolicy};
 pub use openai::OpenAiProvider;
+pub use openai_streaming::OpenAiStreamAccumulator;
 pub use route_latency::{
     RouteLatencyPolicy, RouteLatencyStats, expected_latency_ms, latency_aware_route_order,
 };
