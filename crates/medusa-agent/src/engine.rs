@@ -22,7 +22,7 @@ mod world_model_observation {
 mod runtime_failure;
 
 use std::{
-    collections::VecDeque,
+    collections::{BTreeMap, VecDeque},
     path::Path,
     sync::{Arc, Mutex, atomic::AtomicBool},
     thread,
@@ -89,13 +89,6 @@ fn messages_with_turn_instruction(
         });
     }
     messages
-}
-
-fn parallel_safe_tool(name: &str) -> bool {
-    matches!(
-        name,
-        "fs_read" | "search_text" | "skill_read" | "web_search" | "web_fetch"
-    )
 }
 
 pub(crate) fn map_parallel_ordered<T, U, F>(items: Vec<T>, operation: F) -> MedusaResult<Vec<U>>
@@ -803,18 +796,18 @@ impl<P: ModelProvider> AgentEngine<P> {
             return Ok(StepOutcome::WaitingForUser);
         }
 
+        let mut safe_tool_cache = BTreeMap::<String, String>::new();
         while !calls.is_empty() {
-            let parallel_count = calls
+            let schedulable = calls
                 .iter()
-                .take(parallel_tool_limit(self.config.agent.parallel_workers))
-                .take_while(|(_, name, _)| {
-                    parallel_safe_tool(name)
-                        && tool_allowed(self.config.agent.mode, name)
-                        && self.execution_policy.allows(name)
-                })
-                .count();
-            let batch_len = parallel_count.max(1);
-            let batch = calls.drain(..batch_len).collect::<Vec<_>>();
+                .map(|(_, name, input)| (name.clone(), input.clone()))
+                .collect::<Vec<_>>();
+            let positions = crate::tool_dag::select_ready_positions(
+                &schedulable,
+                parallel_tool_limit(self.config.agent.parallel_workers),
+            );
+            let batch = crate::tool_dag::drain_positions(&mut calls, &positions);
+            let parallel_count = batch.len();
             for (_, name, input) in &batch {
                 append_observed(
                     session,
@@ -828,17 +821,24 @@ impl<P: ModelProvider> AgentEngine<P> {
 
             let executed = if parallel_count > 1 {
                 for (_, name, input) in &batch {
-                    append_observed(
-                        session,
-                        EventPayload::ToolExecutionStarted {
-                            tool: audited_tool_name(name, input),
-                        },
-                        &mut observer,
-                    )?;
+                    let cached = crate::tool_dag::dedup_key(name, input)
+                        .is_some_and(|key| safe_tool_cache.contains_key(&key));
+                    if !cached {
+                        append_observed(
+                            session,
+                            EventPayload::ToolExecutionStarted {
+                                tool: audited_tool_name(name, input),
+                            },
+                            &mut observer,
+                        )?;
+                    }
                 }
                 let repo = session.repo.as_path();
+                let cache = &safe_tool_cache;
                 map_parallel_ordered(batch, |(id, name, input)| {
-                    let result = execute_tool(repo, &name, &input);
+                    let cached = crate::tool_dag::dedup_key(&name, &input)
+                        .and_then(|key| cache.get(&key).cloned());
+                    let result = cached.map_or_else(|| execute_tool(repo, &name, &input), Ok);
                     (id, name, input, result)
                 })?
             } else {
@@ -955,14 +955,20 @@ impl<P: ModelProvider> AgentEngine<P> {
                     )?;
                     self.execute_desktop_commander(&session.repo, &input)
                 } else if tool_allowed(self.config.agent.mode, &name) {
-                    append_observed(
-                        session,
-                        EventPayload::ToolExecutionStarted {
-                            tool: audited_tool_name(&name, &input),
-                        },
-                        &mut observer,
-                    )?;
-                    execute_tool(&session.repo, &name, &input)
+                    if let Some(output) = crate::tool_dag::dedup_key(&name, &input)
+                        .and_then(|key| safe_tool_cache.get(&key).cloned())
+                    {
+                        Ok(output)
+                    } else {
+                        append_observed(
+                            session,
+                            EventPayload::ToolExecutionStarted {
+                                tool: audited_tool_name(&name, &input),
+                            },
+                            &mut observer,
+                        )?;
+                        execute_tool(&session.repo, &name, &input)
+                    }
                 } else {
                     let reason = "tool is unavailable in read-only planning mode".to_owned();
                     append_observed(
@@ -983,6 +989,11 @@ impl<P: ModelProvider> AgentEngine<P> {
             };
 
             for (id, name, input, result) in executed {
+                if let Ok(output) = &result
+                    && let Some(key) = crate::tool_dag::dedup_key(&name, &input)
+                {
+                    safe_tool_cache.entry(key).or_insert_with(|| output.clone());
+                }
                 if let Err(error) = &result
                     && error.code == ErrorCode::PolicyDenied
                     && self.config.agent.mode != Mode::ReadOnly
