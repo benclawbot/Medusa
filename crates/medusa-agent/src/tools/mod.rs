@@ -8,7 +8,10 @@ mod shell;
 pub(crate) mod skills;
 mod web;
 
-use std::path::{Path, PathBuf};
+use std::{
+    path::{Path, PathBuf},
+    sync::atomic::{AtomicBool, Ordering},
+};
 
 use medusa_capabilities::{CapabilityRegistry, SystemProbe};
 use medusa_core::{ErrorCategory, ErrorCode, MedusaError, MedusaResult};
@@ -149,6 +152,66 @@ pub(crate) fn execute_tool(repo: &Path, name: &str, input: &Value) -> MedusaResu
     }
 }
 
+pub(crate) fn execute_tool_cancellable(
+    repo: &Path,
+    name: &str,
+    input: &Value,
+    cancellation: &AtomicBool,
+) -> MedusaResult<String> {
+    if cancellation.load(Ordering::Acquire) {
+        return Err(cancelled_tool(name));
+    }
+    if name != "shell_run" {
+        return execute_tool(repo, name, input);
+    }
+    let program = input_string(input, "program")?;
+    let args = input
+        .get("args")
+        .and_then(Value::as_array)
+        .ok_or_else(|| invalid_tool("args must be an array"))?
+        .iter()
+        .map(|value| {
+            value
+                .as_str()
+                .map(str::to_owned)
+                .ok_or_else(|| invalid_tool("every arg must be a string"))
+        })
+        .collect::<MedusaResult<Vec<_>>>()?;
+    let output_mode =
+        crate::output_envelope::OutputMode::parse(input_optional_string(input, "output_mode")?)?;
+    shell::run_cancellable(repo, program, &args, output_mode, cancellation)
+}
+
+pub(crate) fn execute_approved_tool_cancellable(
+    repo: &Path,
+    name: &str,
+    input: &Value,
+    cancellation: &AtomicBool,
+) -> MedusaResult<String> {
+    if cancellation.load(Ordering::Acquire) {
+        return Err(cancelled_tool(name));
+    }
+    if name != "shell_run" {
+        return execute_approved_tool(repo, name, input);
+    }
+    let program = input_string(input, "program")?;
+    let args = input
+        .get("args")
+        .and_then(Value::as_array)
+        .ok_or_else(|| invalid_tool("args must be an array"))?
+        .iter()
+        .map(|value| {
+            value
+                .as_str()
+                .map(str::to_owned)
+                .ok_or_else(|| invalid_tool("every arg must be a string"))
+        })
+        .collect::<MedusaResult<Vec<_>>>()?;
+    let output_mode =
+        crate::output_envelope::OutputMode::parse(input_optional_string(input, "output_mode")?)?;
+    shell::run_approved_cancellable(repo, program, &args, output_mode, cancellation)
+}
+
 pub(crate) fn execute_approved_tool(
     repo: &Path,
     name: &str,
@@ -251,6 +314,18 @@ pub fn format_command_output(
         format!("stdout={}", String::from_utf8_lossy(stdout)),
         format!("stderr={}", String::from_utf8_lossy(stderr)),
     ]
+}
+
+fn cancelled_tool(name: &str) -> MedusaError {
+    let mut error = MedusaError::new(
+        ErrorCode::ToolExecutionFailed,
+        ErrorCategory::Execution,
+        format!("tool execution cancelled: {name}"),
+    );
+    error
+        .context
+        .insert("cancelled".into(), serde_json::Value::Bool(true));
+    error
 }
 
 pub(crate) fn invalid_tool(message: impl Into<String>) -> MedusaError {

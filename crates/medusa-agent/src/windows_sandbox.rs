@@ -3,13 +3,42 @@
 //! The adapter preserves fail-closed containment errors and reports the
 //! effective Windows boundary in structured diagnostics.
 
-use std::{path::Path, process::Output};
+use std::{path::Path, process::Output, sync::atomic::AtomicBool};
 
 use medusa_core::{ErrorCategory, ErrorCode, MedusaError, MedusaResult};
-use medusa_process_containment::{WindowsSandboxRestrictions, run_appcontainer};
+use medusa_process_containment::{
+    WindowsSandboxRestrictions, run_appcontainer, run_appcontainer_cancellable,
+};
 
 pub(crate) fn run(repo: &Path, program: &str, args: &[String]) -> MedusaResult<Output> {
     run_appcontainer(repo, program, args).map_err(unavailable)
+}
+
+pub(crate) fn run_cancellable(
+    repo: &Path,
+    program: &str,
+    args: &[String],
+    cancellation: &AtomicBool,
+) -> MedusaResult<Output> {
+    run_appcontainer_cancellable(repo, program, args, cancellation).map_err(|error| {
+        if error.kind() == std::io::ErrorKind::Interrupted {
+            cancelled(error)
+        } else {
+            unavailable(error)
+        }
+    })
+}
+
+fn cancelled(error: std::io::Error) -> MedusaError {
+    let mut result = MedusaError::new(
+        ErrorCode::ToolExecutionFailed,
+        ErrorCategory::Execution,
+        error.to_string(),
+    );
+    result
+        .context
+        .insert("cancelled".into(), serde_json::Value::Bool(true));
+    result
 }
 
 fn unavailable(error: std::io::Error) -> MedusaError {

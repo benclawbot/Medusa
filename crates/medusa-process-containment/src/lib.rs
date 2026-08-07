@@ -19,7 +19,9 @@ mod windows;
 mod windows_acl;
 
 #[cfg(windows)]
-pub use base_container::{WindowsSandboxRestrictions, run_appcontainer};
+pub use base_container::{
+    WindowsSandboxRestrictions, run_appcontainer, run_appcontainer_cancellable,
+};
 #[cfg(windows)]
 pub(crate) use flatbuffer_builder::FlatBufferBuilder;
 #[cfg(windows)]
