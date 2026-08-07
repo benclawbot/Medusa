@@ -1,0 +1,203 @@
+name: Verify 687 Tool Process Cancellation
+on:
+  push:
+    branches: [perf/687-tool-process-cancellation]
+permissions:
+  contents: write
+jobs:
+  verify-source:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          fetch-depth: 0
+      - uses: dtolnay/rust-toolchain@39b0b3842c7e8bbf6904c0bfc3d9006fdd4dc4e0
+        with:
+          components: rustfmt, clippy
+      - name: Wire cancellation through tool process containment
+        shell: bash
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          def replace(path, old, new, count=1):
+              p = Path(path)
+              s = p.read_text()
+              assert s.count(old) >= count, f"anchor missing in {path}: {old[:80]!r}"
+              p.write_text(s.replace(old, new, count))
+
+          # medusa-process-containment: expose cancellable Windows AppContainer execution.
+          replace(
+              'crates/medusa-process-containment/src/lib.rs',
+              'pub use base_container::{WindowsSandboxRestrictions, run_appcontainer};',
+              'pub use base_container::{\n    WindowsSandboxRestrictions, run_appcontainer, run_appcontainer_cancellable,\n};',
+          )
+          replace(
+              'crates/medusa-process-containment/src/base_container.rs',
+              '    ptr::{null, null_mut},\n    thread,\n    time::Duration,\n};',
+              '    ptr::{null, null_mut},\n    sync::atomic::{AtomicBool, Ordering},\n    thread,\n    time::{Duration, Instant},\n};',
+          )
+          replace(
+              'crates/medusa-process-containment/src/base_container.rs',
+              '''pub fn run_appcontainer(repo: &Path, program: &str, args: &[String]) -> io::Result<Output> {\n    let root = strip_verbatim(&repo.canonicalize()?);\n    let executable = strip_verbatim(&resolve_program(program)?);\n    let read_only = read_only_paths(&executable);\n    let specification = sandbox_specification(&root, &read_only);\n    let api = SandboxApi::load()?;\n    unsafe { launch(&api, &root, &executable, args, &specification) }\n}\n''',
+              '''pub fn run_appcontainer(repo: &Path, program: &str, args: &[String]) -> io::Result<Output> {\n    let cancellation = AtomicBool::new(false);\n    run_appcontainer_cancellable(repo, program, args, &cancellation)\n}\n\npub fn run_appcontainer_cancellable(\n    repo: &Path,\n    program: &str,\n    args: &[String],\n    cancellation: &AtomicBool,\n) -> io::Result<Output> {\n    let root = strip_verbatim(&repo.canonicalize()?);\n    let executable = strip_verbatim(&resolve_program(program)?);\n    let read_only = read_only_paths(&executable);\n    let specification = sandbox_specification(&root, &read_only);\n    let api = SandboxApi::load()?;\n    unsafe { launch(&api, &root, &executable, args, &specification, cancellation) }\n}\n''',
+          )
+          replace(
+              'crates/medusa-process-containment/src/base_container.rs',
+              '''    args: &[String],\n    specification: &[u8],\n) -> io::Result<Output> {''',
+              '''    args: &[String],\n    specification: &[u8],\n    cancellation: &AtomicBool,\n) -> io::Result<Output> {''',
+          )
+          replace(
+              'crates/medusa-process-containment/src/base_container.rs',
+              '''    let stdout_reader = thread::spawn(move || read_all(stdout_read));\n    let stderr_reader = thread::spawn(move || read_all(stderr_read));\n    let wait = unsafe { WaitForSingleObject(process_handle.0, COMMAND_TIMEOUT.as_millis() as u32) };\n    if wait == WAIT_TIMEOUT {\n        return Err(io::Error::new(\n            io::ErrorKind::TimedOut,\n            format!(\n                "Windows composable sandbox command timed out after {} seconds",\n                COMMAND_TIMEOUT.as_secs()\n            ),\n        ));\n    }\n    if wait != WAIT_OBJECT_0 {\n        return Err(io::Error::last_os_error());\n    }\n''',
+              '''    let stdout_reader = thread::spawn(move || read_all(stdout_read));\n    let stderr_reader = thread::spawn(move || read_all(stderr_read));\n    let started = Instant::now();\n    loop {\n        if cancellation.load(Ordering::Acquire) {\n            drop(job);\n            let _ = join_reader(stdout_reader);\n            let _ = join_reader(stderr_reader);\n            return Err(io::Error::new(\n                io::ErrorKind::Interrupted,\n                "Windows composable sandbox command cancelled",\n            ));\n        }\n        let wait = unsafe { WaitForSingleObject(process_handle.0, 50) };\n        if wait == WAIT_OBJECT_0 {\n            break;\n        }\n        if wait != WAIT_TIMEOUT {\n            drop(job);\n            let _ = join_reader(stdout_reader);\n            let _ = join_reader(stderr_reader);\n            return Err(io::Error::last_os_error());\n        }\n        if started.elapsed() >= COMMAND_TIMEOUT {\n            drop(job);\n            let _ = join_reader(stdout_reader);\n            let _ = join_reader(stderr_reader);\n            return Err(io::Error::new(\n                io::ErrorKind::TimedOut,\n                format!(\n                    "Windows composable sandbox command timed out after {} seconds",\n                    COMMAND_TIMEOUT.as_secs()\n                ),\n            ));\n        }\n    }\n''',
+          )
+
+          # Agent Windows adapter: preserve cancellation as execution failure, not sandbox absence.
+          replace(
+              'crates/medusa-agent/src/windows_sandbox.rs',
+              'use std::{path::Path, process::Output};',
+              'use std::{path::Path, process::Output, sync::atomic::AtomicBool};',
+          )
+          replace(
+              'crates/medusa-agent/src/windows_sandbox.rs',
+              'use medusa_process_containment::{WindowsSandboxRestrictions, run_appcontainer};',
+              'use medusa_process_containment::{\n    WindowsSandboxRestrictions, run_appcontainer, run_appcontainer_cancellable,\n};',
+          )
+          replace(
+              'crates/medusa-agent/src/windows_sandbox.rs',
+              '''pub(crate) fn run(repo: &Path, program: &str, args: &[String]) -> MedusaResult<Output> {\n    run_appcontainer(repo, program, args).map_err(unavailable)\n}\n''',
+              '''pub(crate) fn run(repo: &Path, program: &str, args: &[String]) -> MedusaResult<Output> {\n    run_appcontainer(repo, program, args).map_err(unavailable)\n}\n\npub(crate) fn run_cancellable(\n    repo: &Path,\n    program: &str,\n    args: &[String],\n    cancellation: &AtomicBool,\n) -> MedusaResult<Output> {\n    run_appcontainer_cancellable(repo, program, args, cancellation).map_err(|error| {\n        if error.kind() == std::io::ErrorKind::Interrupted {\n            cancelled(error)\n        } else {\n            unavailable(error)\n        }\n    })\n}\n\nfn cancelled(error: std::io::Error) -> MedusaError {\n    let mut result = MedusaError::new(\n        ErrorCode::ToolExecutionFailed,\n        ErrorCategory::Execution,\n        error.to_string(),\n    );\n    result\n        .context\n        .insert("cancelled".into(), serde_json::Value::Bool(true));\n    result\n}\n''',
+          )
+
+          # Policy boundary: cancellable polling for Linux/macOS; Windows delegates to Job Object path.
+          replace(
+              'crates/medusa-agent/src/policy.rs',
+              '    process::Output,\n};',
+              '    process::Output,\n    sync::atomic::{AtomicBool, Ordering},\n};',
+          )
+          replace(
+              'crates/medusa-agent/src/policy.rs',
+              '''pub(crate) fn sandboxed_command(\n    repo: &Path,\n    program: &str,\n    args: &[String],\n) -> MedusaResult<Output> {''',
+              '''pub(crate) fn sandboxed_command(\n    repo: &Path,\n    program: &str,\n    args: &[String],\n) -> MedusaResult<Output> {\n    let cancellation = AtomicBool::new(false);\n    sandboxed_command_cancellable(repo, program, args, &cancellation)\n}\n\npub(crate) fn sandboxed_command_cancellable(\n    repo: &Path,\n    program: &str,\n    args: &[String],\n    cancellation: &AtomicBool,\n) -> MedusaResult<Output> {''',
+          )
+          replace(
+              'crates/medusa-agent/src/policy.rs',
+              '        output_with_timeout(&mut command, "Linux bubblewrap sandbox")',
+              '        output_with_timeout(&mut command, "Linux bubblewrap sandbox", cancellation)',
+          )
+          replace(
+              'crates/medusa-agent/src/policy.rs',
+              '        let result = output_with_timeout(&mut command, "macOS sandbox-exec sandbox");',
+              '        let result = output_with_timeout(&mut command, "macOS sandbox-exec sandbox", cancellation);',
+          )
+          replace(
+              'crates/medusa-agent/src/policy.rs',
+              '        windows_sandbox::run(repo, program, args)',
+              '        windows_sandbox::run_cancellable(repo, program, args, cancellation)',
+          )
+          replace(
+              'crates/medusa-agent/src/policy.rs',
+              'fn output_with_timeout(command: &mut Command, description: &str) -> MedusaResult<Output> {',
+              'fn output_with_timeout(\n    command: &mut Command,\n    description: &str,\n    cancellation: &AtomicBool,\n) -> MedusaResult<Output> {',
+          )
+          replace(
+              'crates/medusa-agent/src/policy.rs',
+              '''    loop {\n        if child.try_wait()?.is_some() {''',
+              '''    loop {\n        if cancellation.load(Ordering::Acquire) {\n            let _ = child.kill();\n            let _ = child.wait();\n            return Err(cancelled_command(description));\n        }\n        if child.try_wait()?.is_some() {''',
+          )
+          replace(
+              'crates/medusa-agent/src/policy.rs',
+              '''fn policy_denied(message: impl Into<String>) -> MedusaError {\n    MedusaError::new(ErrorCode::PolicyDenied, ErrorCategory::Policy, message)\n}\n''',
+              '''fn cancelled_command(description: &str) -> MedusaError {\n    let mut error = MedusaError::new(\n        ErrorCode::ToolExecutionFailed,\n        ErrorCategory::Execution,\n        format!("{description} cancelled"),\n    );\n    error\n        .context\n        .insert("cancelled".into(), serde_json::Value::Bool(true));\n    error\n}\n\nfn policy_denied(message: impl Into<String>) -> MedusaError {\n    MedusaError::new(ErrorCode::PolicyDenied, ErrorCategory::Policy, message)\n}\n''',
+          )
+
+          # Shell tool: preserve existing API and add cancellable entrypoints.
+          replace(
+              'crates/medusa-agent/src/tools/shell.rs',
+              'use std::{fs, path::Path, time::Instant};',
+              'use std::{fs, path::Path, sync::atomic::AtomicBool, time::Instant};',
+          )
+          replace(
+              'crates/medusa-agent/src/tools/shell.rs',
+              '    policy::{sandboxed_command, validate_shell_command},',
+              '    policy::{sandboxed_command, sandboxed_command_cancellable, validate_shell_command},',
+          )
+          replace(
+              'crates/medusa-agent/src/tools/shell.rs',
+              '    run_validated(repo, program, args, output_mode)\n}',
+              '    run_validated(repo, program, args, output_mode, None)\n}',
+              1,
+          )
+          replace(
+              'crates/medusa-agent/src/tools/shell.rs',
+              '    run_validated(repo, program, args, output_mode)\n}',
+              '    run_validated(repo, program, args, output_mode, None)\n}\n\npub(crate) fn run_cancellable(\n    repo: &Path,\n    program: &str,\n    args: &[String],\n    output_mode: OutputMode,\n    cancellation: &AtomicBool,\n) -> MedusaResult<String> {\n    validate_shell_command(program, args)?;\n    run_validated(repo, program, args, output_mode, Some(cancellation))\n}\n\npub(crate) fn run_approved_cancellable(\n    repo: &Path,\n    program: &str,\n    args: &[String],\n    output_mode: OutputMode,\n    cancellation: &AtomicBool,\n) -> MedusaResult<String> {\n    validate_shell_command(program, args)?;\n    run_validated(repo, program, args, output_mode, Some(cancellation))\n}',
+              1,
+          )
+          replace(
+              'crates/medusa-agent/src/tools/shell.rs',
+              '''    args: &[String],\n    output_mode: OutputMode,\n) -> MedusaResult<String> {''',
+              '''    args: &[String],\n    output_mode: OutputMode,\n    cancellation: Option<&AtomicBool>,\n) -> MedusaResult<String> {''',
+          )
+          replace(
+              'crates/medusa-agent/src/tools/shell.rs',
+              '    let output = sandboxed_command(repo, program, args)?;',
+              '''    let output = match cancellation {\n        Some(cancellation) => sandboxed_command_cancellable(repo, program, args, cancellation)?,\n        None => sandboxed_command(repo, program, args)?,\n    };''',
+          )
+
+          # Tool dispatch: make shell execution cancellable while retaining compatibility APIs.
+          replace(
+              'crates/medusa-agent/src/tools/mod.rs',
+              'use std::path::{Path, PathBuf};',
+              'use std::{\n    path::{Path, PathBuf},\n    sync::atomic::{AtomicBool, Ordering},\n};',
+          )
+          marker = '''pub(crate) fn execute_approved_tool(\n    repo: &Path,\n    name: &str,\n    input: &Value,\n) -> MedusaResult<String> {'''
+          insert = '''pub(crate) fn execute_tool_cancellable(\n    repo: &Path,\n    name: &str,\n    input: &Value,\n    cancellation: &AtomicBool,\n) -> MedusaResult<String> {\n    if cancellation.load(Ordering::Acquire) {\n        return Err(cancelled_tool(name));\n    }\n    if name != "shell_run" {\n        return execute_tool(repo, name, input);\n    }\n    let program = input_string(input, "program")?;\n    let args = input\n        .get("args")\n        .and_then(Value::as_array)\n        .ok_or_else(|| invalid_tool("args must be an array"))?\n        .iter()\n        .map(|value| {\n            value\n                .as_str()\n                .map(str::to_owned)\n                .ok_or_else(|| invalid_tool("every arg must be a string"))\n        })\n        .collect::<MedusaResult<Vec<_>>>()?;\n    let output_mode = crate::output_envelope::OutputMode::parse(input_optional_string(\n        input,\n        "output_mode",\n    )?)?;\n    shell::run_cancellable(repo, program, &args, output_mode, cancellation)\n}\n\npub(crate) fn execute_approved_tool_cancellable(\n    repo: &Path,\n    name: &str,\n    input: &Value,\n    cancellation: &AtomicBool,\n) -> MedusaResult<String> {\n    if cancellation.load(Ordering::Acquire) {\n        return Err(cancelled_tool(name));\n    }\n    if name != "shell_run" {\n        return execute_approved_tool(repo, name, input);\n    }\n    let program = input_string(input, "program")?;\n    let args = input\n        .get("args")\n        .and_then(Value::as_array)\n        .ok_or_else(|| invalid_tool("args must be an array"))?\n        .iter()\n        .map(|value| {\n            value\n                .as_str()\n                .map(str::to_owned)\n                .ok_or_else(|| invalid_tool("every arg must be a string"))\n        })\n        .collect::<MedusaResult<Vec<_>>>()?;\n    let output_mode = crate::output_envelope::OutputMode::parse(input_optional_string(\n        input,\n        "output_mode",\n    )?)?;\n    shell::run_approved_cancellable(repo, program, &args, output_mode, cancellation)\n}\n\n'''
+          p = Path('crates/medusa-agent/src/tools/mod.rs')
+          s = p.read_text()
+          assert marker in s
+          p.write_text(s.replace(marker, insert + marker, 1))
+          replace(
+              'crates/medusa-agent/src/tools/mod.rs',
+              '''pub(crate) fn invalid_tool(message: impl Into<String>) -> MedusaError {\n    MedusaError::new(''',
+              '''fn cancelled_tool(name: &str) -> MedusaError {\n    let mut error = MedusaError::new(\n        ErrorCode::ToolExecutionFailed,\n        ErrorCategory::Execution,\n        format!("tool execution cancelled: {name}"),\n    );\n    error\n        .context\n        .insert("cancelled".into(), serde_json::Value::Bool(true));\n    error\n}\n\npub(crate) fn invalid_tool(message: impl Into<String>) -> MedusaError {\n    MedusaError::new(''',
+          )
+
+          # Engine: route production calls through cancellable dispatch.
+          replace(
+              'crates/medusa-agent/src/engine.rs',
+              '    tools::{execute_approved_tool, execute_tool, input_string},',
+              '''    tools::{\n        execute_approved_tool_cancellable, execute_tool_cancellable, input_string,\n    },''',
+          )
+          replace(
+              'crates/medusa-agent/src/engine.rs',
+              '                    let result = cached.map_or_else(|| execute_tool(repo, &name, &input), Ok);',
+              '''                    let result = cached.map_or_else(\n                        || execute_tool_cancellable(repo, &name, &input, self.cancellation.as_ref()),\n                        Ok,\n                    );''',
+          )
+          replace(
+              'crates/medusa-agent/src/engine.rs',
+              '                    execute_approved_tool(&session.repo, &name, &input)',
+              '''                    execute_approved_tool_cancellable(\n                        &session.repo,\n                        &name,\n                        &input,\n                        self.cancellation.as_ref(),\n                    )''',
+          )
+          replace(
+              'crates/medusa-agent/src/engine.rs',
+              '                        execute_tool(&session.repo, &name, &input)',
+              '''                        execute_tool_cancellable(\n                            &session.repo,\n                            &name,\n                            &input,\n                            self.cancellation.as_ref(),\n                        )''',
+          )
+          PY
+      - name: Format
+        run: cargo fmt --all -- --check || (cargo fmt --all && cargo fmt --all -- --check)
+      - name: Agent library tests
+        run: cargo test -p medusa-agent --lib -- --nocapture
+      - name: Process containment tests
+        run: cargo test -p medusa-process-containment --lib -- --nocapture
+      - name: Clippy
+        run: cargo clippy -p medusa-agent -p medusa-process-containment --all-targets --all-features -- -D warnings
+      - name: Publish verified source only
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add crates/medusa-agent/src/engine.rs crates/medusa-agent/src/policy.rs crates/medusa-agent/src/tools/mod.rs crates/medusa-agent/src/tools/shell.rs crates/medusa-agent/src/windows_sandbox.rs crates/medusa-process-containment/src/lib.rs crates/medusa-process-containment/src/base_container.rs
+          git commit -m 'Propagate cancellation into contained tool subprocesses'
+          git push origin HEAD:perf/687-tool-process-cancellation
