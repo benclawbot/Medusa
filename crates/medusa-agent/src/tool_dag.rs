@@ -194,6 +194,35 @@ pub(crate) fn dedup_key(name: &str, input: &Value) -> Option<String> {
     profile(name, input).dedup_key
 }
 
+pub(crate) fn invalidates_repository_revision(name: &str, input: &Value) -> bool {
+    profile(name, input)
+        .resources
+        .iter()
+        .any(|resource| resource.key == "repository" && resource.access == ResourceAccess::Write)
+}
+
+pub(crate) fn drain_stale_revision_calls<I>(
+    queue: &mut VecDeque<(I, String, Value)>,
+    current_revision: &str,
+) -> Vec<(I, String, Value)> {
+    let mut stale = Vec::new();
+    let mut retained = VecDeque::new();
+    for (id, name, input) in std::mem::take(queue) {
+        let expected = input
+            .get("repository_revision")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|value| !value.is_empty());
+        if expected.is_some_and(|expected| expected != current_revision) {
+            stale.push((id, name, input));
+        } else {
+            retained.push_back((id, name, input));
+        }
+    }
+    *queue = retained;
+    stale
+}
+
 fn conflicts(left: &ToolExecutionProfile, right: &ToolExecutionProfile) -> bool {
     left.resources.iter().any(|left_resource| {
         right.resources.iter().any(|right_resource| {
@@ -429,6 +458,60 @@ mod tests {
         let blocked = drain_failed_dependents(&mut queue, &failed);
         assert!(blocked.is_empty());
         assert_eq!(queue.len(), 2);
+    }
+
+    #[test]
+    fn stale_revision_calls_are_pruned_without_touching_matching_or_unbound_work() {
+        let mut queue = queued_calls(&[
+            (
+                "verify_impacted",
+                json!({"repository_revision":"old","paths":["a.rs"]}),
+            ),
+            (
+                "verify_impacted",
+                json!({"repository_revision":"current","paths":["b.rs"]}),
+            ),
+            ("web_fetch", json!({"url":"https://example.com"})),
+            (
+                "apply_structured_patch",
+                json!({"repository_revision":"older","plan_id":"p","edits":[]}),
+            ),
+        ]);
+        let stale = drain_stale_revision_calls(&mut queue, "current");
+        assert_eq!(
+            stale
+                .iter()
+                .map(|(_, name, _)| name.as_str())
+                .collect::<Vec<_>>(),
+            vec!["verify_impacted", "apply_structured_patch"]
+        );
+        assert_eq!(
+            queue
+                .iter()
+                .map(|(_, name, _)| name.as_str())
+                .collect::<Vec<_>>(),
+            vec!["verify_impacted", "web_fetch"]
+        );
+    }
+
+    #[test]
+    fn scheduler_profiles_identify_repository_revision_invalidators() {
+        assert!(invalidates_repository_revision(
+            "apply_structured_patch",
+            &json!({"repository_revision":"r"})
+        ));
+        assert!(invalidates_repository_revision(
+            "shell_run",
+            &json!({"program":"cargo","args":["fmt"]})
+        ));
+        assert!(!invalidates_repository_revision(
+            "inspect_target",
+            &json!({"path":"src/lib.rs"})
+        ));
+        assert!(!invalidates_repository_revision(
+            "verify_impacted",
+            &json!({"repository_revision":"r","paths":["src/lib.rs"]})
+        ));
     }
 
     #[test]
