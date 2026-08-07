@@ -1,0 +1,12 @@
+{
+  "schema_version": 1,
+  "scenario": "warm_localized_fix_compound_navigation",
+  "baseline_revision": "99684df536c70db5b410d54eba6160a042ca1add",
+  "description": "Frozen pre-#687 navigation pattern for one known-symbol localized fix before compound inspection and dependency-aware scheduling.",
+  "primitive_navigation_calls": 4,
+  "compound_navigation_calls": 1,
+  "minimum_tool_call_reduction_ratio": 0.5,
+  "maximum_redundant_tool_call_ratio": 0.03,
+  "required_platforms": ["Linux", "macOS", "Windows"],
+  "required_suites": ["compound", "tool_dag", "process_containment"]
+}
