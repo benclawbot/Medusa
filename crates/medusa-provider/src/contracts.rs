@@ -4,7 +4,7 @@ use medusa_core::MedusaResult;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use crate::cancelled_provider_error;
+use crate::{ProviderStreamEvent, cancelled_provider_error};
 
 /// Strict tool definition sent to the model.
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
@@ -117,6 +117,23 @@ pub struct ModelResponse {
 /// Pluggable provider interface used by orchestration.
 pub trait ModelProvider {
     fn complete(&self, request: &ModelRequest) -> MedusaResult<ModelResponse>;
+
+    /// Streams provider-neutral events when the route supports incremental delivery.
+    ///
+    /// The default preserves compatibility for non-streaming routes by producing only a terminal
+    /// event after the ordinary completion call. Callers must check `capabilities().streaming`
+    /// before relying on incremental delivery or time-to-first-event measurements.
+    fn complete_streaming(
+        &self,
+        request: &ModelRequest,
+        sink: &mut dyn FnMut(ProviderStreamEvent) -> MedusaResult<()>,
+    ) -> MedusaResult<ModelResponse> {
+        let response = self.complete(request)?;
+        sink(ProviderStreamEvent::Completed {
+            response: response.clone(),
+        })?;
+        Ok(response)
+    }
 
     fn complete_cancellable(
         &self,
