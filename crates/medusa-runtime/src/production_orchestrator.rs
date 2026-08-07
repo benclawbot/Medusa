@@ -5,10 +5,11 @@ use std::{
 };
 
 use medusa_agent::{AgentPlanStep, AgentPlanStepStatus};
+use medusa_intelligence::{RepositoryGraph, RepositoryGraphFreshness, ReviewImpact};
 use medusa_multi_agent_scheduler::{
     CancellationAuthority, ExecutionLane, ExecutionLedger, ExecutionStrategy, LedgerTaskState,
-    PlannedTask, PlannerInput, PlanningResult, Schedule, Task, TaskKind, Worker, plan_typed,
-    schedule,
+    PlannedTask, PlannerInput, PlanningResult, Schedule, Task, TaskKind, Worker,
+    apply_repository_graph_evidence, plan_typed, schedule,
 };
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -93,6 +94,7 @@ pub fn plan_for_repository(
         attachment_count: draft.attachments.len(),
         repository_paths: repository_paths(repo),
     })?;
+    let planning = enrich_plan_from_repository_graph(repo, planning)?;
     let mode = if planning.strategy == ExecutionStrategy::Direct {
         ExecutionMode::Direct
     } else {
@@ -118,6 +120,52 @@ pub fn plan_for_repository(
         contracts,
         fingerprint,
     })
+}
+
+fn enrich_plan_from_repository_graph(
+    repo: &Path,
+    planning: PlanningResult,
+) -> Result<PlanningResult, &'static str> {
+    let Ok(graph) = RepositoryGraph::open(repo) else {
+        return Ok(planning);
+    };
+    if graph.freshness() != RepositoryGraphFreshness::Current {
+        return apply_repository_graph_evidence(planning, Vec::new(), false, false);
+    }
+
+    let changed = if planning.scope.effective.iter().any(|path| path == "repository") {
+        graph.snapshot().files.keys().cloned().collect::<Vec<_>>()
+    } else {
+        planning
+            .scope
+            .effective
+            .iter()
+            .map(PathBuf::from)
+            .collect::<Vec<_>>()
+    };
+    if changed.is_empty() {
+        return apply_repository_graph_evidence(planning, Vec::new(), false, true);
+    }
+
+    let affected = graph.affected_files(&changed);
+    if affected.freshness != RepositoryGraphFreshness::Current
+        || affected.repository_revision != graph.snapshot().repository_revision
+        || affected.graph_revision != graph.snapshot().graph_revision
+    {
+        return apply_repository_graph_evidence(planning, Vec::new(), false, false);
+    }
+    let review = ReviewImpact::analyze(&graph.snapshot().index, &changed);
+    let components = affected
+        .value
+        .iter()
+        .map(|path| {
+            path.components()
+                .next()
+                .map(|component| component.as_os_str().to_string_lossy().into_owned())
+                .unwrap_or_else(|| path.display().to_string())
+        })
+        .collect::<Vec<_>>();
+    apply_repository_graph_evidence(planning, components, review.public_api_risk, true)
 }
 
 #[must_use]

@@ -310,6 +310,47 @@ pub fn plan_typed(mut input: PlannerInput) -> Result<PlanningResult, &'static st
     Ok(result)
 }
 
+/// Applies fresh revision-bound repository graph evidence to an already fail-closed plan.
+///
+/// Graph evidence may broaden affected components or raise risk, but stale evidence never narrows
+/// scope, lowers risk, or grants mutation authority.
+pub fn apply_repository_graph_evidence(
+    mut result: PlanningResult,
+    affected_components: Vec<String>,
+    public_api_risk: bool,
+    evidence_current: bool,
+) -> Result<PlanningResult, &'static str> {
+    if !evidence_current {
+        return Ok(result);
+    }
+
+    let components = affected_components
+        .into_iter()
+        .filter_map(|component| {
+            let component = component.trim();
+            (!component.is_empty()).then(|| component.to_owned())
+        })
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .collect::<Vec<_>>();
+    if !components.is_empty() {
+        result.affected_components = components;
+    }
+
+    if public_api_risk && result.strategy == ExecutionStrategy::CoordinatedMutation {
+        result.risk = RiskLevel::High;
+        result.lane = ExecutionLane::FullOrchestration;
+        result.lane_rationale =
+            "fresh repository graph reports public API risk; full orchestration is required"
+                .to_owned();
+        result.model_turn_budget = model_turn_budget(ExecutionLane::FullOrchestration);
+    }
+
+    result.fingerprint = planning_fingerprint(&result);
+    result.validate()?;
+    Ok(result)
+}
+
 impl PlanningResult {
     pub fn validate(&self) -> Result<(), &'static str> {
         let current_fingerprint = self.fingerprint == planning_fingerprint(self);
@@ -1750,6 +1791,28 @@ mod tests {
         assert_eq!(planned.intent, PlanningIntent::ReadOnly);
         assert_eq!(planned.strategy, ExecutionStrategy::CoordinatedReadOnly);
         assert!(planned.task(TaskKind::Implementation).is_none());
+    }
+
+    #[test]
+    fn fresh_graph_public_api_risk_escalates_fast_plan_without_changing_scope() {
+        let planned = plan_typed(PlannerInput {
+            objective: "Fix src/lib.rs".to_owned(),
+            attachment_count: 0,
+            repository_paths: vec!["src/lib.rs".to_owned()],
+        })
+        .unwrap();
+        assert_eq!(planned.lane, ExecutionLane::FastMutation);
+        let enriched = apply_repository_graph_evidence(
+            planned,
+            vec!["src".to_owned(), "api".to_owned()],
+            true,
+            true,
+        )
+        .unwrap();
+        assert_eq!(enriched.scope.effective, vec!["src/lib.rs"]);
+        assert_eq!(enriched.risk, RiskLevel::High);
+        assert_eq!(enriched.lane, ExecutionLane::FullOrchestration);
+        assert_eq!(enriched.affected_components, vec!["api", "src"]);
     }
 
     #[test]

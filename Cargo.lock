@@ -1675,6 +1675,7 @@ dependencies = [
  "medusa-execution-replay",
  "medusa-external-provider",
  "medusa-improvement",
+ "medusa-intelligence",
  "medusa-markdown-memory",
  "medusa-mcp-cache",
  "medusa-memory",
