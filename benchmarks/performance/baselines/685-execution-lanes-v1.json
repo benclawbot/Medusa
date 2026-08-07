@@ -1,0 +1,12 @@
+{
+  "schema_version": 1,
+  "scenario": "localized-low-risk-execution-lane",
+  "baseline_model_requests_before_first_edit": 2,
+  "baseline_model_requests_success_path": 4,
+  "candidate_max_model_requests_before_first_edit": 1,
+  "candidate_max_model_requests_success_path": 2,
+  "required_lane": "fast_mutation",
+  "routing_budget_ms_p95": 10,
+  "runtime_overhead_budget_ms_p95": 50,
+  "notes": "Issue #685 acceptance contract for deterministic lane selection; measured cross-platform runtime certification is required before issue closure."
+}
