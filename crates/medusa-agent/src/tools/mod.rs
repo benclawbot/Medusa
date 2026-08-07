@@ -106,6 +106,7 @@ pub(crate) fn execute_tool(repo: &Path, name: &str, input: &Value) -> MedusaResu
         "code_index" => intelligence::code_index(repo, input),
         "inspect_target" => compound::inspect_target(repo, input),
         "apply_structured_patch" => compound::apply_structured_patch(repo, input),
+        "verify_impacted" => compound::verify_impacted(repo, input),
         "typescript_semantic" => intelligence::typescript_semantic(repo, input),
         "patch_apply" => intelligence::patch_apply(repo, input),
         "symbol_rename" => intelligence::symbol_rename(repo, input),
