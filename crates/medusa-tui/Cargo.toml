@@ -16,7 +16,8 @@ arboard = "3.6.1"
 clap = { version = "4.5", features = ["derive"] }
 crossterm = "0.29"
 hex.workspace = true
-image = { version = "0.25", default-features = false, features = ["gif", "jpeg", "png", "webp"] }
+# image 0.25.6+ moved JPEG decoding to zune-jpeg 0.5.x, which does not compile on Rust 1.88.
+image = { version = "=0.25.5", default-features = false, features = ["gif", "jpeg", "png", "webp"] }
 medusa-config = { path = "../medusa-config" }
 medusa-daemon = { path = "../medusa-daemon" }
 medusa-protocol = { path = "../medusa-protocol" }
