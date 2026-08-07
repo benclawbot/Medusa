@@ -26,6 +26,8 @@ serde.workspace = true
 serde_json.workspace = true
 time = { version = "0.3", features = ["formatting", "parsing"] }
 sha2.workspace = true
+# image accepts zune-jpeg ^0.5.5; 0.5.15 does not compile on the workspace's Rust 1.88 toolchain.
+zune-jpeg = "=0.5.14"
 
 [dev-dependencies]
 tempfile.workspace = true
