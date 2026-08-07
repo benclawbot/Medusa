@@ -39,16 +39,6 @@ pub struct ExecutionLaneDecision {
     pub max_model_requests_success_path: u8,
 }
 
-impl ExecutionLaneDecision {
-    #[must_use]
-    pub fn requires_model_review(&self) -> bool {
-        matches!(
-            self.lane,
-            ExecutionLane::StandardMutation | ExecutionLane::FullOrchestration
-        )
-    }
-}
-
 /// Select the narrowest lane allowed by deterministic safety/risk evidence.
 #[must_use]
 pub fn select_execution_lane(input: &ExecutionLaneInput) -> ExecutionLaneDecision {
@@ -88,7 +78,8 @@ pub fn select_execution_lane(input: &ExecutionLaneInput) -> ExecutionLaneDecisio
     ];
     let rationale = full_reasons
         .into_iter()
-        .filter_map(|(active, reason)| active.then(|| reason.to_owned()))
+        .filter(|(active, _)| *active)
+        .map(|(_, reason)| reason.to_owned())
         .collect::<Vec<_>>();
     if !rationale.is_empty() {
         return ExecutionLaneDecision {
@@ -146,7 +137,6 @@ mod tests {
         assert_eq!(decision.lane, ExecutionLane::FastMutation);
         assert_eq!(decision.max_model_requests_before_first_edit, 1);
         assert_eq!(decision.max_model_requests_success_path, 2);
-        assert!(!decision.requires_model_review());
     }
 
     #[test]
@@ -160,7 +150,6 @@ mod tests {
             ..ExecutionLaneInput::default()
         });
         assert_eq!(decision.lane, ExecutionLane::StandardMutation);
-        assert!(decision.requires_model_review());
     }
 
     #[test]
