@@ -321,10 +321,7 @@ fn persist(path: &Path, snapshot: &RepositoryGraphSnapshot) -> MedusaResult<()> 
 fn language(path: &str) -> &'static str {
     if path.ends_with(".rs") {
         "rust"
-    } else if matches!(
-        path.rsplit('.').next(),
-        Some("ts" | "tsx" | "mts" | "cts")
-    ) {
+    } else if matches!(path.rsplit('.').next(), Some("ts" | "tsx" | "mts" | "cts")) {
         "typescript"
     } else if matches!(path.rsplit('.').next(), Some("js" | "jsx" | "mjs" | "cjs")) {
         "javascript"
@@ -388,7 +385,10 @@ mod tests {
     fn repository() -> tempfile::TempDir {
         let repo = tempfile::tempdir().expect("repository");
         git_ok(repo.path(), &["init", "-q"]);
-        git_ok(repo.path(), &["config", "user.email", "medusa@example.invalid"]);
+        git_ok(
+            repo.path(),
+            &["config", "user.email", "medusa@example.invalid"],
+        );
         git_ok(repo.path(), &["config", "user.name", "Medusa Test"]);
         fs::create_dir_all(repo.path().join("src")).expect("src");
         fs::create_dir_all(repo.path().join("tests")).expect("tests");
@@ -453,7 +453,12 @@ mod tests {
         git_ok(repo.path(), &["commit", "-qm", "feature"]);
         let feature = RepositoryGraph::open(repo.path()).expect("feature graph");
         assert_ne!(feature.snapshot().repository_revision, original_revision);
-        assert!(feature.snapshot().files.contains_key(Path::new("src/new.rs")));
+        assert!(
+            feature
+                .snapshot()
+                .files
+                .contains_key(Path::new("src/new.rs"))
+        );
         let impact = feature.related_tests(&[PathBuf::from("src/lib.rs")]);
         assert_eq!(impact.freshness, RepositoryGraphFreshness::Current);
         assert!(!impact.value.commands.is_empty());
