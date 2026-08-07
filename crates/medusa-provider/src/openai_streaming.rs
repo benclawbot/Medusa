@@ -4,9 +4,7 @@ use medusa_core::{ErrorCategory, ErrorCode, MedusaError, MedusaResult};
 use serde::Deserialize;
 use serde_json::Value;
 
-use crate::{
-    ModelResponse, ProviderStreamEvent, ResponseBlock, StreamingToolCallAssembler, Usage,
-};
+use crate::{ModelResponse, ProviderStreamEvent, ResponseBlock, StreamingToolCallAssembler, Usage};
 
 #[derive(Debug, Default)]
 pub(crate) struct OpenAiStreamAccumulator {
@@ -62,7 +60,9 @@ impl OpenAiStreamAccumulator {
                 self.tool_calls.push_fragment(
                     index,
                     call.id.as_deref(),
-                    call.function.as_ref().and_then(|function| function.name.as_deref()),
+                    call.function
+                        .as_ref()
+                        .and_then(|function| function.name.as_deref()),
                     call.function
                         .as_ref()
                         .and_then(|function| function.arguments.as_deref())
@@ -113,7 +113,11 @@ impl OpenAiStreamAccumulator {
         &mut self,
         sink: &mut dyn FnMut(ProviderStreamEvent) -> MedusaResult<()>,
     ) -> MedusaResult<()> {
-        let pending = self.pending_tool_indices.iter().copied().collect::<Vec<_>>();
+        let pending = self
+            .pending_tool_indices
+            .iter()
+            .copied()
+            .collect::<Vec<_>>();
         for index in pending {
             let ready = self.tool_calls.finish(index)?;
             let ProviderStreamEvent::ToolUseReady { id, name, input } = &ready else {
@@ -232,14 +236,21 @@ mod tests {
             ProviderStreamEvent::ToolUseReady { id, name, input }
                 if id == "call-1" && name == "read_file" && input["path"] == "src/lib.rs"
         )));
-        assert!(!events.iter().any(|event| matches!(event, ProviderStreamEvent::Completed { .. })));
+        assert!(
+            !events
+                .iter()
+                .any(|event| matches!(event, ProviderStreamEvent::Completed { .. }))
+        );
 
         let response = accumulator
             .push_sse_data("[DONE]", &mut sink)
             .expect("done")
             .expect("response");
         assert_eq!(response.stop_reason.as_deref(), Some("tool_calls"));
-        assert!(matches!(response.blocks.as_slice(), [ResponseBlock::ToolUse { .. }]));
+        assert!(matches!(
+            response.blocks.as_slice(),
+            [ResponseBlock::ToolUse { .. }]
+        ));
     }
 
     #[test]
