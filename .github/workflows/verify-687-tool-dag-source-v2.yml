@@ -1,0 +1,54 @@
+name: Verify 687 Tool DAG Source V2
+on:
+  push:
+    branches: [perf/687-tool-dag]
+permissions:
+  contents: write
+jobs:
+  verify-source:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          fetch-depth: 0
+      - uses: dtolnay/rust-toolchain@39b0b3842c7e8bbf6904c0bfc3d9006fdd4dc4e0
+        with:
+          components: rustfmt, clippy
+      - name: Run proven source generator
+        shell: python
+        run: |
+          from pathlib import Path
+          lines = Path('.github/workflows/fix-687-tool-dag.yml').read_text().splitlines()
+          start = lines.index('      - name: Add resource-aware tool DAG planner')
+          run = next(i for i in range(start + 1, len(lines)) if lines[i] == '        run: |') + 1
+          end = lines.index('      - name: Format', run)
+          script = '\n'.join(line[10:] if line.startswith('          ') else line for line in lines[run:end]) + '\n'
+          Path('/tmp/generate-687.sh').write_text(script)
+      - name: Generate source and repair known Clippy import
+        shell: bash
+        run: |
+          bash /tmp/generate-687.sh
+          python - <<'PY'
+          from pathlib import Path
+          p=Path('crates/medusa-agent/src/engine.rs')
+          s=p.read_text()
+          bad='use std::{collections::{BTreeMap, VecDeque}, sync::Mutex};'
+          good='use std::{collections::VecDeque, sync::Mutex};'
+          assert bad in s
+          p.write_text(s.replace(bad, good, 1))
+          PY
+      - name: Format
+        run: cargo fmt --all -- --check || (cargo fmt --all && cargo fmt --all -- --check)
+      - name: Tool DAG unit tests
+        run: cargo test -p medusa-agent tool_dag::tests -- --nocapture
+      - name: Engine regression tests
+        run: cargo test -p medusa-agent --lib -- --nocapture
+      - name: Clippy
+        run: cargo clippy -p medusa-agent --all-targets --all-features -- -D warnings
+      - name: Publish tested source only
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add crates/medusa-agent/src/tool_dag.rs crates/medusa-agent/src/lib.rs crates/medusa-agent/src/engine.rs
+          git commit -m 'Add resource-aware tool DAG scheduling and safe-read deduplication'
+          git push origin HEAD:perf/687-tool-dag
