@@ -9,6 +9,8 @@ mod manager;
 mod openai;
 mod route_latency;
 mod route_metrics_store;
+mod streaming;
+mod streaming_tool_calls;
 
 pub use anthropic::MiniMaxProvider;
 pub use configured::ConfiguredProvider;
@@ -23,6 +25,8 @@ pub use route_latency::{
     RouteLatencyPolicy, RouteLatencyStats, expected_latency_ms, latency_aware_route_order,
 };
 pub use route_metrics_store::ProviderRouteLatencyStore;
+pub use streaming::{ProviderStreamEvent, ProviderStreamTranscript, SequencedStreamEvent};
+pub use streaming_tool_calls::StreamingToolCallAssembler;
 
 pub(crate) use http::{
     async_response_error, blocking_response_error, cancelled_provider_error, provider_error,
