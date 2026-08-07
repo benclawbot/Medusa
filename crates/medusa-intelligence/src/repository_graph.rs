@@ -156,10 +156,22 @@ impl RepositoryGraph {
     }
 
     pub fn related_tests(&self, changed: &[PathBuf]) -> RevisionBound<TestImpact> {
-        self.bound(
-            select_tests_with_index(&self.snapshot.index, changed),
-            "semantic-test-impact",
-        )
+        let mut impact = select_tests_with_index(&self.snapshot.index, changed);
+        let excluded = impact
+            .commands
+            .iter()
+            .filter(|command| !test_command_applicable(command, &self.snapshot.files))
+            .cloned()
+            .collect::<Vec<_>>();
+        impact
+            .commands
+            .retain(|command| test_command_applicable(command, &self.snapshot.files));
+        impact.reasons.extend(excluded.into_iter().map(|command| {
+            format!("Excluded graph test recommendation without matching manifest: {command}")
+        }));
+        impact.reasons.sort();
+        impact.reasons.dedup();
+        self.bound(impact, "semantic-test-impact")
     }
 
     fn bound<T>(&self, value: T, adapter: &str) -> RevisionBound<T> {
@@ -181,6 +193,21 @@ impl RepositoryGraph {
             value,
         }
     }
+}
+
+fn test_command_applicable(command: &str, files: &BTreeMap<PathBuf, RepositoryGraphFile>) -> bool {
+    if !command.starts_with("cargo ") {
+        return true;
+    }
+    if let Some(package) = command
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .windows(2)
+        .find_map(|pair| (pair[0] == "-p").then_some(pair[1]))
+    {
+        return files.contains_key(Path::new(&format!("crates/{package}/Cargo.toml")));
+    }
+    files.contains_key(Path::new("Cargo.toml"))
 }
 
 fn capture(repo: &Path) -> MedusaResult<RepositoryGraphSnapshot> {
@@ -401,6 +428,11 @@ mod tests {
         fs::create_dir_all(repo.path().join("src")).expect("src");
         fs::create_dir_all(repo.path().join("tests")).expect("tests");
         fs::write(
+            repo.path().join("Cargo.toml"),
+            "[package]\nname = \"fixture\"\nversion = \"0.1.0\"\nedition = \"2024\"\n",
+        )
+        .expect("manifest");
+        fs::write(
             repo.path().join("src/lib.rs"),
             "pub fn answer() -> u8 { 42 }\n",
         )
@@ -477,5 +509,22 @@ mod tests {
         let impact = feature.related_tests(&[PathBuf::from("src/lib.rs")]);
         assert_eq!(impact.freshness, RepositoryGraphFreshness::Current);
         assert!(!impact.value.commands.is_empty());
+    }
+    #[test]
+    fn test_impact_does_not_invent_cargo_without_a_manifest() {
+        let repo = repository();
+        fs::remove_file(repo.path().join("Cargo.toml")).expect("remove manifest");
+        git_ok(repo.path(), &["add", "-u"]);
+        git_ok(repo.path(), &["commit", "-qm", "remove manifest"]);
+        let graph = RepositoryGraph::open(repo.path()).expect("graph");
+        let impact = graph.related_tests(&[PathBuf::from("src/lib.rs")]);
+        assert!(
+            impact
+                .value
+                .commands
+                .iter()
+                .all(|command| !command.starts_with("cargo ")),
+            "graph must not recommend Cargo without a matching Cargo.toml"
+        );
     }
 }
