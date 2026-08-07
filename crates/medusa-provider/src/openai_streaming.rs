@@ -2,12 +2,12 @@ use std::collections::BTreeSet;
 
 use medusa_core::{ErrorCategory, ErrorCode, MedusaError, MedusaResult};
 use serde::Deserialize;
-use serde_json::Value;
 
 use crate::{ModelResponse, ProviderStreamEvent, ResponseBlock, StreamingToolCallAssembler, Usage};
 
+/// Stateful OpenAI chat-completions SSE parser that emits provider-neutral stream events.
 #[derive(Debug, Default)]
-pub(crate) struct OpenAiStreamAccumulator {
+pub struct OpenAiStreamAccumulator {
     response_id: Option<String>,
     stop_reason: Option<String>,
     text: String,
@@ -19,7 +19,8 @@ pub(crate) struct OpenAiStreamAccumulator {
 }
 
 impl OpenAiStreamAccumulator {
-    pub(crate) fn push_sse_data(
+    /// Consumes one SSE `data:` payload and returns the completed response on `[DONE]`.
+    pub fn push_sse_data(
         &mut self,
         data: &str,
         sink: &mut dyn FnMut(ProviderStreamEvent) -> MedusaResult<()>,
@@ -77,7 +78,8 @@ impl OpenAiStreamAccumulator {
         Ok(None)
     }
 
-    pub(crate) fn finish(
+    /// Finishes a stream after all fragmented tool calls reached a completion boundary.
+    pub fn finish(
         &mut self,
         sink: &mut dyn FnMut(ProviderStreamEvent) -> MedusaResult<()>,
     ) -> MedusaResult<ModelResponse> {
