@@ -43,8 +43,8 @@ jobs:
           )
           replace(
               path,
-              '''        expected_duration_ms,\n        concurrency_cost,\n        parallel_safe,\n''',
-              '''        expected_duration_ms,\n        concurrency_cost,\n        priority,\n        parallel_safe,\n''',
+              '''    ToolExecutionProfile {\n        resources,\n        side_effect,\n        idempotent,\n        cancellation_supported,\n        expected_duration_ms,\n        concurrency_cost,\n        parallel_safe,\n        dedup_key,\n    }\n''',
+              '''    ToolExecutionProfile {\n        resources,\n        side_effect,\n        idempotent,\n        cancellation_supported,\n        expected_duration_ms,\n        concurrency_cost,\n        priority,\n        parallel_safe,\n        dedup_key,\n    }\n''',
           )
 
           old = '''    let budget = concurrency_budget.max(1);\n    let mut consumed = 0usize;\n    let mut selected = Vec::new();\n    for position in ready\n        .into_iter()\n        .filter(|&position| position < barrier && profiles[position].parallel_safe)\n    {\n        let cost = usize::from(profiles[position].concurrency_cost.max(1));\n        if selected.is_empty() || consumed.saturating_add(cost) <= budget {\n            consumed = consumed.saturating_add(cost);\n            selected.push(position);\n        }\n    }\n    selected\n'''
