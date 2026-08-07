@@ -56,7 +56,7 @@ fn request(phase: &str) -> ModelRequest {
 }
 
 #[test]
-fn failover_completes_planning_tool_and_final_turns_once_each() {
+fn failover_learns_healthy_route_across_planning_tool_and_final_turns() {
     let primary_calls = Arc::new(AtomicUsize::new(0));
     let fallback_calls = Arc::new(AtomicUsize::new(0));
     let manager = ProviderManager::new(vec![
@@ -79,10 +79,12 @@ fn failover_completes_planning_tool_and_final_turns_once_each() {
         assert_eq!(status["cache_hit"], json!(false));
     }
 
-    assert_eq!(primary_calls.load(Ordering::SeqCst), 6);
+    // The cold first request exercises the configured primary, including its bounded retry,
+    // then fails over. Later phases use the now-observed healthy route directly.
+    assert_eq!(primary_calls.load(Ordering::SeqCst), 2);
     assert_eq!(fallback_calls.load(Ordering::SeqCst), 3);
-    assert_eq!(manager.health()[0].retries, 3);
-    assert_eq!(manager.health()[0].failovers, 3);
+    assert_eq!(manager.health()[0].retries, 1);
+    assert_eq!(manager.health()[0].failovers, 1);
     assert_eq!(manager.health()[1].successes, 3);
 }
 
