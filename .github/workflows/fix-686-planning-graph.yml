@@ -1,0 +1,89 @@
+name: Fix 686 Planning Graph
+
+on:
+  push:
+    branches: [perf/686-planning-risk-graph]
+
+permissions:
+  contents: write
+
+jobs:
+  apply-and-verify:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          ref: perf/686-planning-risk-graph
+          fetch-depth: 0
+      - uses: dtolnay/rust-toolchain@39b0b3842c7e8bbf6904c0bfc3d9006fdd4dc4e0
+      - name: Apply production graph planning wiring
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+
+          scheduler = Path('crates/medusa-multi-agent-scheduler/src/lib.rs')
+          text = scheduler.read_text(encoding='utf-8')
+          marker = '    Ok(result)\n}\n\nimpl PlanningResult {'
+          addition = '''    Ok(result)\n}\n\n/// Applies fresh revision-bound repository graph evidence to an already fail-closed plan.\n///\n/// Graph evidence may broaden affected components or raise risk, but stale evidence never narrows\n/// scope, lowers risk, or grants mutation authority.\npub fn apply_repository_graph_evidence(\n    mut result: PlanningResult,\n    affected_components: Vec<String>,\n    public_api_risk: bool,\n    evidence_current: bool,\n) -> Result<PlanningResult, &'static str> {\n    if !evidence_current {\n        return Ok(result);\n    }\n\n    let components = affected_components\n        .into_iter()\n        .filter_map(|component| {\n            let component = component.trim();\n            (!component.is_empty()).then(|| component.to_owned())\n        })\n        .collect::<BTreeSet<_>>()\n        .into_iter()\n        .collect::<Vec<_>>();\n    if !components.is_empty() {\n        result.affected_components = components;\n    }\n\n    if public_api_risk && result.strategy == ExecutionStrategy::CoordinatedMutation {\n        result.risk = RiskLevel::High;\n        result.lane = ExecutionLane::FullOrchestration;\n        result.lane_rationale =\n            "fresh repository graph reports public API risk; full orchestration is required"\n                .to_owned();\n        result.model_turn_budget = model_turn_budget(ExecutionLane::FullOrchestration);\n    }\n\n    result.fingerprint = planning_fingerprint(&result);\n    result.validate()?;\n    Ok(result)\n}\n\nimpl PlanningResult {'''
+          if marker not in text:
+              raise SystemExit('scheduler insertion marker missing')
+          text = text.replace(marker, addition, 1)
+
+          test_marker = '    #[test]\n    fn single_file_localized_fix_selects_fast_mutation_budget() {'
+          test = '''    #[test]\n    fn fresh_graph_public_api_risk_escalates_fast_plan_without_changing_scope() {\n        let planned = plan_typed(PlannerInput {\n            objective: "Fix src/lib.rs".to_owned(),\n            attachment_count: 0,\n            repository_paths: vec!["src/lib.rs".to_owned()],\n        })\n        .unwrap();\n        assert_eq!(planned.lane, ExecutionLane::FastMutation);\n        let enriched = apply_repository_graph_evidence(\n            planned,\n            vec!["src".to_owned(), "api".to_owned()],\n            true,\n            true,\n        )\n        .unwrap();\n        assert_eq!(enriched.scope.effective, vec!["src/lib.rs"]);\n        assert_eq!(enriched.risk, RiskLevel::High);\n        assert_eq!(enriched.lane, ExecutionLane::FullOrchestration);\n        assert_eq!(enriched.affected_components, vec!["api", "src"]);\n    }\n\n'''+test_marker
+          if test_marker not in text:
+              raise SystemExit('scheduler test marker missing')
+          text = text.replace(test_marker, test, 1)
+          scheduler.write_text(text, encoding='utf-8')
+
+          cargo = Path('crates/medusa-runtime/Cargo.toml')
+          text = cargo.read_text(encoding='utf-8')
+          dep_marker = 'medusa-improvement = { path = "../medusa-improvement" }\n'
+          if dep_marker not in text:
+              raise SystemExit('runtime dependency marker missing')
+          text = text.replace(dep_marker, dep_marker + 'medusa-intelligence = { path = "../medusa-intelligence" }\n', 1)
+          cargo.write_text(text, encoding='utf-8')
+
+          runtime = Path('crates/medusa-runtime/src/production_orchestrator.rs')
+          text = runtime.read_text(encoding='utf-8')
+          import_marker = 'use medusa_agent::{AgentPlanStep, AgentPlanStepStatus};\n'
+          if import_marker not in text:
+              raise SystemExit('runtime graph import marker missing')
+          text = text.replace(import_marker, import_marker + 'use medusa_intelligence::{RepositoryGraph, RepositoryGraphFreshness, ReviewImpact};\n', 1)
+          scheduler_import = '    PlannedTask, PlannerInput, PlanningResult, Schedule, Task, TaskKind, Worker, plan_typed,\n    schedule,\n'
+          scheduler_replacement = '    PlannedTask, PlannerInput, PlanningResult, Schedule, Task, TaskKind, Worker,\n    apply_repository_graph_evidence, plan_typed, schedule,\n'
+          if scheduler_import not in text:
+              raise SystemExit('runtime scheduler import marker missing')
+          text = text.replace(scheduler_import, scheduler_replacement, 1)
+          plan_marker = '''    let planning = plan_typed(PlannerInput {\n        objective: draft.text.clone(),\n        attachment_count: draft.attachments.len(),\n        repository_paths: repository_paths(repo),\n    })?;\n'''
+          plan_replacement = plan_marker + '    let planning = enrich_plan_from_repository_graph(repo, planning)?;\n'
+          if plan_marker not in text:
+              raise SystemExit('runtime planning marker missing')
+          text = text.replace(plan_marker, plan_replacement, 1)
+          helper_marker = '#[must_use]\npub fn requires_mutation(plan: &ProductionExecutionPlan) -> bool {'
+          helper = '''fn enrich_plan_from_repository_graph(\n    repo: &Path,\n    planning: PlanningResult,\n) -> Result<PlanningResult, &'static str> {\n    let Ok(graph) = RepositoryGraph::open(repo) else {\n        return Ok(planning);\n    };\n    if graph.freshness() != RepositoryGraphFreshness::Current {\n        return apply_repository_graph_evidence(planning, Vec::new(), false, false);\n    }\n\n    let changed = if planning.scope.effective.iter().any(|path| path == "repository") {\n        graph.snapshot().files.keys().cloned().collect::<Vec<_>>()\n    } else {\n        planning\n            .scope\n            .effective\n            .iter()\n            .map(PathBuf::from)\n            .collect::<Vec<_>>()\n    };\n    if changed.is_empty() {\n        return apply_repository_graph_evidence(planning, Vec::new(), false, true);\n    }\n\n    let affected = graph.affected_files(&changed);\n    if affected.freshness != RepositoryGraphFreshness::Current\n        || affected.repository_revision != graph.snapshot().repository_revision\n        || affected.graph_revision != graph.snapshot().graph_revision\n    {\n        return apply_repository_graph_evidence(planning, Vec::new(), false, false);\n    }\n    let review = ReviewImpact::analyze(&graph.snapshot().index, &changed);\n    let components = affected\n        .value\n        .iter()\n        .map(|path| {\n            path.components()\n                .next()\n                .map(|component| component.as_os_str().to_string_lossy().into_owned())\n                .unwrap_or_else(|| path.display().to_string())\n        })\n        .collect::<Vec<_>>();\n    apply_repository_graph_evidence(planning, components, review.public_api_risk, true)\n}\n\n#[must_use]\npub fn requires_mutation(plan: &ProductionExecutionPlan) -> bool {'''
+          if helper_marker not in text:
+              raise SystemExit('runtime helper marker missing')
+          text = text.replace(helper_marker, helper, 1)
+          runtime.write_text(text, encoding='utf-8')
+          PY
+      - name: Format
+        run: cargo fmt --all
+      - name: Focused tests
+        run: |
+          cargo test -p medusa-multi-agent-scheduler
+          cargo test -p medusa-runtime production_orchestrator
+      - name: Clippy changed crates
+        run: cargo clippy -p medusa-multi-agent-scheduler -p medusa-runtime --all-targets --all-features -- -D warnings
+      - name: Remove one-shot verifier and publish verified source
+        shell: bash
+        run: |
+          rm .github/workflows/fix-686-planning-graph.yml
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add -A
+          git commit -m 'Wire repository graph into planning and risk'
+          git push origin HEAD:perf/686-planning-risk-graph
