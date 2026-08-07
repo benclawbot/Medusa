@@ -208,6 +208,7 @@ pub fn project_event(
             vec![format!("{byte_count} bytes")],
             Some(artifact_ref.clone()),
         )),
+        EventPayload::ToolExecutionTimingRecorded { .. } => return None,
         EventPayload::ToolExecutionCompleted { tool, exit_code } => {
             let succeeded = exit_code.is_none_or(|code| code == 0);
             FrontendEvent::Activity(activity(

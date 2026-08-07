@@ -491,6 +491,7 @@ fn payload_kind(payload: &EventPayload) -> &'static str {
         EventPayload::ToolExecutionStarted { .. } => "tool_execution_started",
         EventPayload::ToolOutputChunk { .. } => "tool_output_chunk",
         EventPayload::ToolExecutionCompleted { .. } => "tool_execution_completed",
+        EventPayload::ToolExecutionTimingRecorded { .. } => "tool_execution_timing_recorded",
         EventPayload::FileTransactionCommitted { .. } => "file_transaction_committed",
         EventPayload::CheckpointCreated { .. } => "checkpoint_created",
         EventPayload::VerificationStarted { .. } => "verification_started",
