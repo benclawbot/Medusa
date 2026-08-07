@@ -16,6 +16,7 @@ mod lsp_semantics;
 mod module_graph;
 mod patch;
 mod rename;
+mod repository_graph;
 mod resolution;
 mod retrieval;
 mod review;
@@ -70,6 +71,10 @@ pub use patch::{
 };
 pub use rename::{
     RustRenameConflict, RustRenameConflictKind, RustRenameFile, RustRenamePlan, plan_rust_rename,
+};
+pub use repository_graph::{
+    RepositoryGraph, RepositoryGraphCapability, RepositoryGraphFile, RepositoryGraphFreshness,
+    RepositoryGraphSnapshot, RevisionBound,
 };
 pub use resolution::{ResolutionStatus, RustResolutionIndex, RustResolvedReference};
 pub use retrieval::{RetrievalBudget, RetrievalExclusion, RetrievalReport, RetrievalResult};
