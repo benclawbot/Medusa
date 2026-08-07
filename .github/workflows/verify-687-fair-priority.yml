@@ -1,0 +1,74 @@
+name: Verify 687 Fair Priority Scheduling
+on:
+  push:
+    branches: [perf/687-fair-priority-scheduling]
+permissions:
+  contents: write
+jobs:
+  verify-source:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          fetch-depth: 0
+      - uses: dtolnay/rust-toolchain@39b0b3842c7e8bbf6904c0bfc3d9006fdd4dc4e0
+        with:
+          components: rustfmt, clippy
+      - name: Apply fair priority scheduler
+        shell: bash
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          def replace(path, old, new, count=1):
+              p = Path(path)
+              s = p.read_text()
+              assert s.count(old) >= count, f"anchor missing in {path}: {old[:120]!r}"
+              p.write_text(s.replace(old, new, count))
+
+          path = 'crates/medusa-agent/src/tool_dag.rs'
+          replace(
+              path,
+              '''    pub concurrency_cost: u16,\n    pub parallel_safe: bool,\n''',
+              '''    pub concurrency_cost: u16,\n    pub priority: u8,\n    pub parallel_safe: bool,\n''',
+          )
+          replace(
+              path,
+              '''    let dedup_key = (idempotent && side_effect == SideEffectClass::None).then(|| {\n''',
+              '''    let priority = match name {\n        "fs_read" | "search_text" | "skill_read" | "semantic_capabilities" => 3,\n        "code_index" | "inspect_target" | "typescript_semantic" => 2,\n        "web_search" | "web_fetch" => 1,\n        _ => 2,\n    };\n    let dedup_key = (idempotent && side_effect == SideEffectClass::None).then(|| {\n''',
+          )
+          replace(
+              path,
+              '''        expected_duration_ms,\n        concurrency_cost,\n        parallel_safe,\n''',
+              '''        expected_duration_ms,\n        concurrency_cost,\n        priority,\n        parallel_safe,\n''',
+          )
+
+          old = '''    let budget = concurrency_budget.max(1);\n    let mut consumed = 0usize;\n    let mut selected = Vec::new();\n    for position in ready\n        .into_iter()\n        .filter(|&position| position < barrier && profiles[position].parallel_safe)\n    {\n        let cost = usize::from(profiles[position].concurrency_cost.max(1));\n        if selected.is_empty() || consumed.saturating_add(cost) <= budget {\n            consumed = consumed.saturating_add(cost);\n            selected.push(position);\n        }\n    }\n    selected\n'''
+          new = '''    let budget = concurrency_budget.max(1);\n    let first_cost = usize::from(profiles[first].concurrency_cost.max(1));\n    let mut consumed = first_cost;\n    let mut selected = vec![first];\n    if first_cost >= budget {\n        return selected;\n    }\n    let mut candidates = ready\n        .into_iter()\n        .filter(|&position| {\n            position != first && position < barrier && profiles[position].parallel_safe\n        })\n        .collect::<Vec<_>>();\n    candidates.sort_by(|left, right| {\n        profiles[*right]\n            .priority\n            .cmp(&profiles[*left].priority)\n            .then(left.cmp(right))\n    });\n    for position in candidates {\n        let cost = usize::from(profiles[position].concurrency_cost.max(1));\n        if consumed.saturating_add(cost) <= budget {\n            consumed = consumed.saturating_add(cost);\n            selected.push(position);\n        }\n    }\n    selected.sort_unstable();\n    selected\n'''
+          replace(path, old, new)
+
+          test_anchor = '''    #[test]\n    fn failed_dependency_blocks_conflicting_downstream_calls_transitively() {\n'''
+          tests = '''    #[test]\n    fn priority_favors_short_local_work_after_oldest_ready_call() {\n        let calls = calls(&[\n            ("web_search", json!({"query":"one"})),\n            ("web_fetch", json!({"url":"https://example.com/a"})),\n            ("fs_read", json!({"path":"a.rs"})),\n        ]);\n        assert_eq!(select_ready_positions(&calls, 4), vec![0, 2]);\n    }\n\n    #[test]\n    fn oldest_ready_call_is_never_starved_by_later_priority_work() {\n        let calls = calls(&[\n            ("web_search", json!({"query":"oldest"})),\n            ("fs_read", json!({"path":"a.rs"})),\n            ("search_text", json!({"query":"needle"})),\n        ]);\n        assert_eq!(select_ready_positions(&calls, 2), vec![0]);\n    }\n\n'''
+          replace(path, test_anchor, tests + test_anchor)
+
+          replace(
+              path,
+              '''        assert!(read.idempotent && read.parallel_safe && read.cancellation_supported);\n''',
+              '''        assert!(read.idempotent && read.parallel_safe && read.cancellation_supported);\n        assert_eq!(read.priority, 2);\n''',
+          )
+          PY
+      - name: Format
+        run: cargo fmt --all -- --check || (cargo fmt --all && cargo fmt --all -- --check)
+      - name: Tool DAG tests
+        run: cargo test -p medusa-agent tool_dag -- --nocapture
+      - name: Agent library tests
+        run: cargo test -p medusa-agent --lib -- --nocapture
+      - name: Clippy
+        run: cargo clippy -p medusa-agent --all-targets --all-features -- -D warnings
+      - name: Publish verified source only
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add crates/medusa-agent/src/tool_dag.rs
+          git commit -m 'Add fair priority scheduling to tool DAG'
+          git push origin HEAD:perf/687-fair-priority-scheduling
