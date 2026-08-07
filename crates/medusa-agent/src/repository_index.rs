@@ -2,11 +2,15 @@ use std::{
     collections::{BTreeMap, BTreeSet},
     fs,
     path::{Path, PathBuf},
+    process::Command,
     sync::{Mutex, MutexGuard, OnceLock},
 };
 
 use medusa_core::{ErrorCategory, ErrorCode, MedusaError, MedusaResult};
-use medusa_intelligence::{IndexRefresh, IndexSnapshot, RetrievalBudget, RetrievalReport};
+use medusa_intelligence::{
+    CodeIndex, IndexRefresh, IndexSnapshot, RepositoryGraph, RepositoryGraphFreshness,
+    RetrievalBudget, RetrievalReport,
+};
 use medusa_memory::{SessionSearchQuery, open_session_recall};
 
 use crate::session_browser::RepositoryIndexCache;
@@ -20,7 +24,110 @@ const MAX_RECALL_EXCERPT_CHARS: usize = 1_200;
 struct CachedRepository {
     git_identity: Vec<u8>,
     source_paths: BTreeSet<PathBuf>,
-    cache: RepositoryIndexCache,
+    graph: Option<RepositoryGraph>,
+    legacy_cache: Option<RepositoryIndexCache>,
+}
+
+impl CachedRepository {
+    fn load(repo: PathBuf, git_identity: Vec<u8>) -> MedusaResult<Self> {
+        if git_repository(&repo) {
+            let graph = RepositoryGraph::open(&repo)?;
+            let source_paths = graph.snapshot().files.keys().cloned().collect();
+            return Ok(Self {
+                git_identity,
+                source_paths,
+                graph: Some(graph),
+                legacy_cache: None,
+            });
+        }
+
+        let snapshot = IndexSnapshot::capture(&repo)?;
+        Ok(Self {
+            git_identity,
+            source_paths: snapshot.files.into_keys().collect(),
+            graph: None,
+            legacy_cache: Some(RepositoryIndexCache::load(repo)?),
+        })
+    }
+
+    fn index(&self) -> MedusaResult<&CodeIndex> {
+        if let Some(graph) = &self.graph {
+            return Ok(&graph.snapshot().index);
+        }
+        self.legacy_cache
+            .as_ref()
+            .map(RepositoryIndexCache::index)
+            .ok_or_else(|| {
+                MedusaError::new(
+                    ErrorCode::InternalInvariant,
+                    ErrorCategory::Internal,
+                    "repository retrieval cache has no active index",
+                )
+            })
+    }
+
+    fn parse_errors(&self) -> MedusaResult<Vec<PathBuf>> {
+        Ok(self.index()?.parse_errors.clone())
+    }
+
+    fn refresh_incremental(&mut self) -> MedusaResult<Option<IndexRefresh>> {
+        if let Some(graph) = &mut self.graph {
+            let changed = graph.refresh()?;
+            if changed.is_empty() {
+                return Ok(None);
+            }
+            let source_paths = graph.snapshot().files.keys().cloned().collect::<BTreeSet<_>>();
+            let removed = self
+                .source_paths
+                .difference(&source_paths)
+                .cloned()
+                .collect::<Vec<_>>();
+            let reindexed = changed
+                .into_iter()
+                .filter(|path| source_paths.contains(path))
+                .collect::<Vec<_>>();
+            self.source_paths = source_paths;
+            return Ok(Some(IndexRefresh {
+                reindexed,
+                removed,
+                parse_errors: graph.snapshot().index.parse_errors.clone(),
+            }));
+        }
+
+        let cache = self.legacy_cache.as_mut().ok_or_else(|| {
+            MedusaError::new(
+                ErrorCode::InternalInvariant,
+                ErrorCategory::Internal,
+                "repository retrieval cache has no refresh adapter",
+            )
+        })?;
+        let refresh = cache.refresh()?;
+        if refresh.is_some() {
+            self.source_paths = IndexSnapshot::capture(cache.repo())?.files.into_keys().collect();
+        }
+        Ok(refresh)
+    }
+
+    fn ensure_retrieval_freshness(&mut self) -> MedusaResult<()> {
+        let Some(graph) = &mut self.graph else {
+            return Ok(());
+        };
+        if graph.freshness() == RepositoryGraphFreshness::Stale {
+            graph.refresh()?;
+            self.source_paths = graph.snapshot().files.keys().cloned().collect();
+        }
+        Ok(())
+    }
+
+    fn graph_status(&self) -> Option<String> {
+        let graph = self.graph.as_ref()?;
+        Some(format!(
+            "Persistent repository graph: repository revision {}, graph revision {}, freshness {:?}.",
+            graph.snapshot().repository_revision,
+            graph.snapshot().graph_revision,
+            graph.freshness()
+        ))
+    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -44,11 +151,10 @@ fn indexes() -> MedusaResult<MutexGuard<'static, BTreeMap<PathBuf, CachedReposit
         })
 }
 
-/// Refreshes the process-wide index for one repository before a model turn.
+/// Refreshes the process-wide repository evidence before a model turn.
 ///
-/// The first call builds the cache and returns `None`. Later calls refresh changed source files
-/// incrementally. A branch, fetch, pull, or detached-HEAD transition forces a complete reload even
-/// when the repository path is unchanged.
+/// Real Git repositories use the persistent revision-bound repository graph. Non-Git fixtures and
+/// repositories retain the legacy in-memory index as an explicit compatibility fallback.
 pub(crate) fn refresh(repo: &Path) -> MedusaResult<Option<IndexRefresh>> {
     let mut indexes = indexes()?;
     let key = repo.to_path_buf();
@@ -56,43 +162,25 @@ pub(crate) fn refresh(repo: &Path) -> MedusaResult<Option<IndexRefresh>> {
 
     if let Some(entry) = indexes.get_mut(&key) {
         if entry.git_identity != identity {
-            let snapshot = IndexSnapshot::capture(repo)?;
-            let source_paths = snapshot.files.keys().cloned().collect::<BTreeSet<_>>();
-            let removed = entry
-                .source_paths
-                .difference(&source_paths)
+            let previous_paths = entry.source_paths.clone();
+            let replacement = CachedRepository::load(key, identity)?;
+            let removed = previous_paths
+                .difference(&replacement.source_paths)
                 .cloned()
                 .collect::<Vec<_>>();
-            let cache = RepositoryIndexCache::load(key)?;
             let refresh = IndexRefresh {
-                reindexed: source_paths.iter().cloned().collect(),
+                reindexed: replacement.source_paths.iter().cloned().collect(),
                 removed,
-                parse_errors: cache.index().parse_errors.clone(),
+                parse_errors: replacement.parse_errors()?,
             };
-            *entry = CachedRepository {
-                git_identity: identity,
-                source_paths,
-                cache,
-            };
+            *entry = replacement;
             return Ok(Some(refresh));
         }
 
-        let refresh = entry.cache.refresh()?;
-        if refresh.is_some() {
-            entry.source_paths = IndexSnapshot::capture(repo)?.files.into_keys().collect();
-        }
-        return Ok(refresh);
+        return entry.refresh_incremental();
     }
 
-    let snapshot = IndexSnapshot::capture(repo)?;
-    indexes.insert(
-        key.clone(),
-        CachedRepository {
-            git_identity: identity,
-            source_paths: snapshot.files.into_keys().collect(),
-            cache: RepositoryIndexCache::load(key)?,
-        },
-    );
+    indexes.insert(key.clone(), CachedRepository::load(key, identity)?);
     Ok(None)
 }
 
@@ -110,24 +198,18 @@ pub(crate) fn retrieve_context(
     let mut indexes = indexes()?;
     let key = repo.to_path_buf();
     if !indexes.contains_key(&key) {
-        let snapshot = IndexSnapshot::capture(repo)?;
-        indexes.insert(
-            key.clone(),
-            CachedRepository {
-                git_identity: git_identity(repo)?,
-                source_paths: snapshot.files.into_keys().collect(),
-                cache: RepositoryIndexCache::load(key.clone())?,
-            },
-        );
+        let identity = git_identity(repo)?;
+        indexes.insert(key.clone(), CachedRepository::load(key.clone(), identity)?);
     }
-    let entry = indexes.get(&key).ok_or_else(|| {
+    let entry = indexes.get_mut(&key).ok_or_else(|| {
         MedusaError::new(
             ErrorCode::InternalInvariant,
             ErrorCategory::Internal,
             "repository index cache was not initialized",
         )
     })?;
-    let report = entry.cache.index().retrieve(
+    entry.ensure_retrieval_freshness()?;
+    let report = entry.index()?.retrieve(
         repo,
         query,
         RetrievalBudget {
@@ -136,6 +218,9 @@ pub(crate) fn retrieve_context(
             max_tokens_per_result: 1_200,
         },
     );
+    let graph_status = entry.graph_status();
+    drop(indexes);
+
     let recall = retrieve_recall_context(repo, query)?;
     if report.results.is_empty() && report.exclusions.is_empty() && recall.is_none() {
         return Ok(None);
@@ -146,6 +231,9 @@ pub(crate) fn retrieve_context(
     if !report.results.is_empty() || !report.exclusions.is_empty() {
         fragments.push(format_retrieval_context(&report));
         statuses.push(retrieval_summary(&report, available_tokens));
+    }
+    if let Some(status) = graph_status {
+        statuses.push(status);
     }
     if let Some(recall) = recall {
         fragments.push(recall.system_fragment);
@@ -248,6 +336,14 @@ fn retrieval_summary(report: &RetrievalReport, available_tokens: u64) -> String 
     )
 }
 
+fn git_repository(repo: &Path) -> bool {
+    Command::new("git")
+        .args(["rev-parse", "--is-inside-work-tree"])
+        .current_dir(repo)
+        .output()
+        .is_ok_and(|output| output.status.success() && output.stdout.starts_with(b"true"))
+}
+
 fn git_identity(repo: &Path) -> std::io::Result<Vec<u8>> {
     let Some(git_dir) = resolve_git_dir(repo)? else {
         return Ok(Vec::new());
@@ -345,6 +441,15 @@ mod tests {
 
     use super::*;
 
+    fn git_ok(repo: &Path, args: &[&str]) {
+        let status = Command::new("git")
+            .args(args)
+            .current_dir(repo)
+            .status()
+            .expect("git command");
+        assert!(status.success(), "git {args:?} failed");
+    }
+
     #[test]
     fn process_cache_noops_then_reports_changed_sources() {
         let repository = tempfile::tempdir().expect("repository");
@@ -357,6 +462,44 @@ mod tests {
         let report = refresh(repository.path()).expect("refresh").expect("changed");
         assert_eq!(report.reindexed, vec![PathBuf::from("lib.rs")]);
         assert!(summary(&report).contains("lib.rs"));
+    }
+
+    #[test]
+    fn git_repository_retrieval_uses_persistent_graph_and_refreshes_stale_content() {
+        let repository = tempfile::tempdir().expect("repository");
+        git_ok(repository.path(), &["init", "-q"]);
+        git_ok(
+            repository.path(),
+            &["config", "user.email", "medusa@example.invalid"],
+        );
+        git_ok(repository.path(), &["config", "user.name", "Medusa Test"]);
+        fs::write(
+            repository.path().join("lib.rs"),
+            "pub fn graph_before() -> usize { 1 }\n",
+        )
+        .expect("source");
+        git_ok(repository.path(), &["add", "lib.rs"]);
+        git_ok(repository.path(), &["commit", "-qm", "fixture"]);
+
+        assert!(refresh(repository.path()).expect("initial graph load").is_none());
+        {
+            let indexes = indexes().expect("indexes");
+            let entry = indexes.get(repository.path()).expect("entry");
+            assert!(entry.graph.is_some());
+            assert!(entry.legacy_cache.is_none());
+        }
+
+        fs::write(
+            repository.path().join("lib.rs"),
+            "pub fn graph_after() -> usize { 2 }\n",
+        )
+        .expect("modify");
+        let context = retrieve_context(repository.path(), "graph_after", 2_000)
+            .expect("retrieval")
+            .expect("context");
+        assert!(context.system_fragment.contains("graph_after"));
+        assert!(context.status.contains("Persistent repository graph"));
+        assert!(context.status.contains("Current"));
     }
 
     #[test]
