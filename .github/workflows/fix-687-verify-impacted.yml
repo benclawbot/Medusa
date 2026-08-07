@@ -1,0 +1,163 @@
+name: Fix 687 Verify Impacted
+on:
+  push:
+    branches: [perf/687-verify-impacted]
+permissions:
+  contents: write
+jobs:
+  apply-and-verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          fetch-depth: 0
+      - uses: dtolnay/rust-toolchain@39b0b3842c7e8bbf6904c0bfc3d9006fdd4dc4e0
+        with:
+          toolchain: stable
+          components: rustfmt, clippy
+      - name: Add verify_impacted compound tool
+        shell: python
+        run: |
+          from pathlib import Path
+          p=Path('crates/medusa-agent/src/tools/compound.rs')
+          s=p.read_text()
+          marker='fn snapshots_for(repo: &Path, paths: &[PathBuf]) -> MedusaResult<BTreeMap<PathBuf, FileSnapshot>> {'
+          fn=r'''pub(crate) fn verify_impacted(repo: &Path, input: &Value) -> MedusaResult<String> {
+              let expected_revision = input
+                  .get("repository_revision")
+                  .and_then(Value::as_str)
+                  .map(str::trim)
+                  .filter(|value| !value.is_empty())
+                  .ok_or_else(|| crate::tools::invalid_tool("repository_revision must be a non-empty string"))?;
+              let paths = input
+                  .get("paths")
+                  .and_then(Value::as_array)
+                  .ok_or_else(|| crate::tools::invalid_tool("paths must be a non-empty array"))?;
+              if paths.is_empty() {
+                  return Err(crate::tools::invalid_tool("paths must be a non-empty array"));
+              }
+              let mut normalized = Vec::<String>::with_capacity(paths.len());
+              for value in paths {
+                  let relative = value
+                      .as_str()
+                      .map(str::trim)
+                      .filter(|value| !value.is_empty())
+                      .ok_or_else(|| crate::tools::invalid_tool("every path must be a non-empty string"))?;
+                  let absolute = safe_path(repo, relative)?;
+                  let root = repo.canonicalize()?;
+                  let relative = absolute
+                      .strip_prefix(&root)
+                      .map_err(|_| crate::tools::invalid_tool("verification path escaped repository scope"))?;
+                  normalized.push(relative.to_string_lossy().replace('\\', "/"));
+              }
+              normalized.sort();
+              normalized.dedup();
+
+              let graph = RepositoryGraph::open(repo)?;
+              if graph.freshness() != RepositoryGraphFreshness::Current
+                  || graph.snapshot().repository_revision != expected_revision
+              {
+                  return Err(crate::tools::invalid_tool(
+                      "verify_impacted refused repository revision drift",
+                  ));
+              }
+              let graph_paths = normalized.iter().map(PathBuf::from).collect::<Vec<_>>();
+              let impact = graph.related_tests(&graph_paths);
+              if impact.freshness != RepositoryGraphFreshness::Current {
+                  return Err(crate::tools::invalid_tool(
+                      "verify_impacted refused stale test-impact evidence",
+                  ));
+              }
+
+              let result = crate::verification_authority::authoritative_verification_for_paths(
+                  repo,
+                  &normalized,
+              )?;
+              serde_json::to_string_pretty(&json!({
+                  "repository_revision": expected_revision,
+                  "graph_revision": graph.snapshot().graph_revision,
+                  "freshness": graph.freshness(),
+                  "paths": normalized,
+                  "selected_by_graph": impact.value,
+                  "coverage_rationale": impact.evidence_refs,
+                  "passed": result.passed,
+                  "evidence": result.evidence,
+                  "escalation_required": !result.passed,
+              }))
+              .map_err(Into::into)
+          }
+
+          '''
+          assert marker in s
+          s=s.replace(marker,fn+marker)
+          test_marker='    #[test]\n    fn path_inspection_is_revision_bound_and_bounded() {'
+          test=r'''    #[test]
+              fn verify_impacted_is_revision_bound_and_returns_authoritative_evidence() {
+                  let directory = fixture();
+                  let graph = RepositoryGraph::open(directory.path()).expect("graph");
+                  let revision = graph.snapshot().repository_revision.clone();
+                  let output = verify_impacted(
+                      directory.path(),
+                      &json!({"repository_revision": revision, "paths": ["src/lib.rs"]}),
+                  )
+                  .expect("verify");
+                  let value: Value = serde_json::from_str(&output).expect("json");
+                  assert_eq!(value["freshness"], "current");
+                  assert!(value["passed"].is_boolean());
+                  assert!(value["evidence"].is_array());
+                  assert!(value["selected_by_graph"]["commands"].is_array());
+              }
+
+              #[test]
+              fn verify_impacted_rejects_revision_drift_and_unsafe_paths() {
+                  let directory = fixture();
+                  assert!(verify_impacted(
+                      directory.path(),
+                      &json!({"repository_revision": "stale", "paths": ["src/lib.rs"]}),
+                  )
+                  .expect_err("drift")
+                  .to_string()
+                  .contains("revision drift"));
+                  let graph = RepositoryGraph::open(directory.path()).expect("graph");
+                  assert!(verify_impacted(
+                      directory.path(),
+                      &json!({"repository_revision": graph.snapshot().repository_revision, "paths": ["../escape"]}),
+                  )
+                  .is_err());
+              }
+
+          '''
+          assert test_marker in s
+          s=s.replace(test_marker,test+test_marker)
+          p.write_text(s)
+
+          p=Path('crates/medusa-agent/src/tools/mod.rs')
+          s=p.read_text()
+          old='        "apply_structured_patch" => compound::apply_structured_patch(repo, input),\n'
+          assert old in s
+          s=s.replace(old,old+'        "verify_impacted" => compound::verify_impacted(repo, input),\n')
+          p.write_text(s)
+
+          p=Path('crates/medusa-capabilities/src/registry.rs')
+          s=p.read_text()
+          anchor='''        tool_entry(\n            ToolIdentity {\n                states,\n                name: "typescript_semantic",\n            },'''
+          entry='''        tool_entry(\n            ToolIdentity {\n                states,\n                name: "verify_impacted",\n            },\n            Capability::CodeIntelligence,\n            "Run the smallest conservative authoritative verification set for exact revision-bound changed paths, using repository-graph test impact and returning structured pass/failure evidence and escalation requirements. Prefer this over manually chaining shell verification commands.",\n            json!({"type":"object","properties":{"repository_revision":{"type":"string"},"paths":{"type":"array","minItems":1,"items":{"type":"string"}}},"required":["repository_revision","paths"],"additionalProperties":false}),\n            "medusa-agent::tools::compound::verify_impacted",\n            [RegistryPermission::Read, RegistryPermission::ProcessSpawn],\n            false,\n        ),\n'''
+          assert anchor in s
+          s=s.replace(anchor,entry+anchor)
+          p.write_text(s)
+      - name: Format
+        run: cargo fmt --all -- --check || (cargo fmt --all && cargo fmt --all -- --check)
+      - name: Focused compound tests
+        run: cargo test -p medusa-agent tools::compound::tests::verify_impacted -- --nocapture
+      - name: Capability registry tests
+        run: cargo test -p medusa-capabilities registry::tests -- --nocapture
+      - name: Clippy changed crates
+        run: cargo clippy -p medusa-agent -p medusa-capabilities --all-targets --all-features -- -D warnings
+      - name: Remove one-shot verifier and publish verified source
+        run: |
+          rm .github/workflows/fix-687-verify-impacted.yml
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add crates/medusa-agent/src/tools/compound.rs crates/medusa-agent/src/tools/mod.rs crates/medusa-capabilities/src/registry.rs .github/workflows/fix-687-verify-impacted.yml
+          git commit -m 'Add revision-bound verify_impacted compound tool'
+          git push origin HEAD:perf/687-verify-impacted
