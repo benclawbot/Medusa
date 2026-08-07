@@ -25,9 +25,27 @@ pub struct IndexRefresh {
 impl CodeIndex {
     /// Builds a deterministic syntax index from supported repository source files.
     pub fn build(repo: &Path) -> MedusaResult<Self> {
+        Self::build_from_paths(repo, source_files(repo))
+    }
+
+    /// Builds an index from an explicit revision-bound path set.
+    ///
+    /// Callers such as the persistent repository graph use this to avoid an unrestricted
+    /// recursive discovery pass when Git already provides the authoritative tracked set.
+    pub fn build_from_paths<I>(repo: &Path, paths: I) -> MedusaResult<Self>
+    where
+        I: IntoIterator<Item = PathBuf>,
+    {
         let mut index = Self::default();
-        for path in source_files(repo) {
-            index_file(repo, &path, &mut index)?;
+        for path in paths {
+            let path = if path.is_absolute() {
+                path
+            } else {
+                repo.join(path)
+            };
+            if path.is_file() {
+                index_file(repo, &path, &mut index)?;
+            }
         }
         index.normalize();
         Ok(index)
