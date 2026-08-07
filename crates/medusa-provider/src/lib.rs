@@ -7,6 +7,7 @@ mod health_store;
 mod http;
 mod manager;
 mod openai;
+mod openai_streaming;
 mod route_latency;
 mod route_metrics_store;
 mod streaming;
