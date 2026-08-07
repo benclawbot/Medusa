@@ -10,6 +10,7 @@ mod policy;
 mod session;
 pub mod session_browser;
 pub mod team;
+mod tool_dag;
 pub mod tools;
 mod transaction;
 mod verification;
