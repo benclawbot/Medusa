@@ -106,12 +106,7 @@ mod tests {
     fn fragmented_arguments_dispatch_only_after_explicit_finish() {
         let mut assembler = StreamingToolCallAssembler::default();
         assembler
-            .push_fragment(
-                0,
-                Some("call-1"),
-                Some("read_file"),
-                "{\"path\":\"src/",
-            )
+            .push_fragment(0, Some("call-1"), Some("read_file"), "{\"path\":\"src/")
             .expect("first fragment");
         assembler
             .push_fragment(0, None, None, "lib.rs\"}")
