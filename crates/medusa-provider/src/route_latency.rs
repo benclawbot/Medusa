@@ -10,6 +10,8 @@ pub struct RouteLatencyStats {
     pub failures: u64,
     pub total_duration_ms: u64,
     pub total_first_token_ms: u64,
+    #[serde(default)]
+    pub first_token_samples: u64,
     pub cancellation_total_ms: u64,
     pub cancellation_samples: u64,
     pub cached_input_tokens: u64,
@@ -24,7 +26,7 @@ impl RouteLatencyStats {
 
     #[must_use]
     pub fn average_first_token_ms(self) -> Option<u64> {
-        (self.samples > 0).then(|| self.total_first_token_ms / self.samples)
+        (self.first_token_samples > 0).then(|| self.total_first_token_ms / self.first_token_samples)
     }
 
     #[must_use]

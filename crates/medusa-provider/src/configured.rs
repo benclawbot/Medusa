@@ -6,7 +6,8 @@ use serde_json::Value;
 
 use crate::{
     MiniMaxProvider, ModelProvider, ModelRequest, ModelResponse, OpenAiProvider,
-    ProviderCapabilities, ProviderManager, ProviderRouteProfile, RouteRetryPolicy,
+    ProviderCapabilities, ProviderManager, ProviderRouteProfile, ProviderStreamEvent,
+    RouteRetryPolicy,
 };
 
 /// Runtime-selected provider supporting Anthropic and OpenAI-compatible APIs.
@@ -101,6 +102,33 @@ impl ModelProvider for ConfiguredProvider {
         match self {
             Self::Anthropic(provider) => provider.complete(request),
             Self::OpenAi(provider) => provider.complete(request),
+        }
+    }
+
+    fn complete_streaming(
+        &self,
+        request: &ModelRequest,
+        sink: &mut dyn FnMut(ProviderStreamEvent) -> MedusaResult<()>,
+    ) -> MedusaResult<ModelResponse> {
+        match self {
+            Self::Anthropic(provider) => provider.complete_streaming(request, sink),
+            Self::OpenAi(provider) => provider.complete_streaming(request, sink),
+        }
+    }
+
+    fn complete_streaming_cancellable(
+        &self,
+        request: &ModelRequest,
+        cancel: &AtomicBool,
+        sink: &mut dyn FnMut(ProviderStreamEvent) -> MedusaResult<()>,
+    ) -> MedusaResult<ModelResponse> {
+        match self {
+            Self::Anthropic(provider) => {
+                provider.complete_streaming_cancellable(request, cancel, sink)
+            }
+            Self::OpenAi(provider) => {
+                provider.complete_streaming_cancellable(request, cancel, sink)
+            }
         }
     }
 

@@ -135,6 +135,24 @@ pub trait ModelProvider {
         Ok(response)
     }
 
+    /// Streams provider-neutral events while preserving cooperative cancellation.
+    /// Streaming-capable providers should override this so cancellation reaches the socket.
+    fn complete_streaming_cancellable(
+        &self,
+        request: &ModelRequest,
+        cancel: &AtomicBool,
+        sink: &mut dyn FnMut(ProviderStreamEvent) -> MedusaResult<()>,
+    ) -> MedusaResult<ModelResponse> {
+        if cancel.load(Ordering::SeqCst) {
+            return Err(cancelled_provider_error());
+        }
+        let response = self.complete_streaming(request, sink)?;
+        if cancel.load(Ordering::SeqCst) {
+            return Err(cancelled_provider_error());
+        }
+        Ok(response)
+    }
+
     fn complete_cancellable(
         &self,
         request: &ModelRequest,

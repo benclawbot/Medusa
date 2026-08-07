@@ -8,9 +8,9 @@ use serde_json::{Value, json};
 
 use crate::{
     ImageSource, MessageBlock, ModelProvider, ModelRequest, ModelResponse, ProviderCapabilities,
-    ResponseBlock, Role, Usage, async_response_error, blocking_response_error, provider_error,
-    provider_response_error, run_cancellable_request, shared_async_http_client,
-    shared_blocking_http_client,
+    ProviderStreamEvent, ResponseBlock, Role, Usage, async_response_error, blocking_response_error,
+    openai_transport, provider_error, provider_response_error, run_cancellable_request,
+    shared_async_http_client, shared_blocking_http_client,
 };
 
 #[derive(Clone)]
@@ -84,7 +84,7 @@ impl OpenAiProvider {
                 max_image_bytes: image_input.then_some(20 * 1024 * 1024),
                 max_images_per_request: image_input.then_some(10),
                 tool_calling: config.model.tool_calling,
-                streaming: false,
+                streaming: config.model.streaming,
             },
         })
     }
@@ -100,7 +100,7 @@ impl OpenAiProvider {
         Ok(())
     }
 
-    fn request_body(&self, request: &ModelRequest) -> MedusaResult<Value> {
+    fn request_body(&self, request: &ModelRequest, streaming: bool) -> MedusaResult<Value> {
         let mut messages = vec![json!({"role": "system", "content": request.system})];
         for message in &request.messages {
             let role = match message.role {
@@ -193,14 +193,18 @@ impl OpenAiProvider {
                 })
             })
             .collect::<Vec<_>>();
-        Ok(json!({
+        let mut body = json!({
             "model": self.model,
             "messages": messages,
             "tools": tools,
             "max_tokens": request.max_tokens,
             "temperature": f64::from(request.temperature_milli) / 1000.0,
-            "stream": false
-        }))
+            "stream": streaming
+        });
+        if streaming {
+            body["stream_options"] = json!({"include_usage": true});
+        }
+        Ok(body)
     }
 
     fn complete_request(&self, request: &ModelRequest) -> MedusaResult<ModelResponse> {
@@ -209,7 +213,7 @@ impl OpenAiProvider {
         let mut builder = self
             .blocking_client
             .post(&endpoint)
-            .json(&self.request_body(request)?);
+            .json(&self.request_body(request, false)?);
         if let Some(key) = &self.api_key {
             builder = builder.bearer_auth(key);
         }
@@ -227,7 +231,7 @@ impl OpenAiProvider {
         let mut builder = self
             .async_client
             .post(&endpoint)
-            .json(&self.request_body(request)?);
+            .json(&self.request_body(request, false)?);
         if let Some(key) = &self.api_key {
             builder = builder.bearer_auth(key);
         }
@@ -243,6 +247,40 @@ impl OpenAiProvider {
 impl ModelProvider for OpenAiProvider {
     fn complete(&self, request: &ModelRequest) -> MedusaResult<ModelResponse> {
         self.complete_request(request)
+    }
+
+    fn complete_streaming(
+        &self,
+        request: &ModelRequest,
+        sink: &mut dyn FnMut(ProviderStreamEvent) -> MedusaResult<()>,
+    ) -> MedusaResult<ModelResponse> {
+        self.validate_request(request)?;
+        let endpoint = format!("{}/chat/completions", self.base_url);
+        openai_transport::complete_blocking(
+            &self.blocking_client,
+            &endpoint,
+            self.api_key.as_deref(),
+            self.request_body(request, true)?,
+            sink,
+        )
+    }
+
+    fn complete_streaming_cancellable(
+        &self,
+        request: &ModelRequest,
+        cancel: &AtomicBool,
+        sink: &mut dyn FnMut(ProviderStreamEvent) -> MedusaResult<()>,
+    ) -> MedusaResult<ModelResponse> {
+        self.validate_request(request)?;
+        let endpoint = format!("{}/chat/completions", self.base_url);
+        openai_transport::complete_cancellable(
+            &self.async_client,
+            &endpoint,
+            self.api_key.as_deref(),
+            self.request_body(request, true)?,
+            cancel,
+            sink,
+        )
     }
 
     fn complete_cancellable(
@@ -416,22 +454,24 @@ mod tests {
         let provider =
             OpenAiProvider::from_config_with_api_key(&config, Some("session-key".to_owned()))
                 .expect("openai provider");
-        assert!(!provider.capabilities().streaming);
-        assert_eq!(
-            provider
-                .request_body(&empty_request())
-                .expect("request body")["stream"],
-            Value::Bool(false)
-        );
+        assert!(provider.capabilities().streaming);
+        let body = provider
+            .request_body(&empty_request(), true)
+            .expect("request body");
+        assert_eq!(body["stream"], Value::Bool(true));
+        assert_eq!(body["stream_options"]["include_usage"], Value::Bool(true));
     }
 
     #[test]
     fn serializes_base64_images_as_image_url_parts() {
         let body = test_provider(true)
-            .request_body(&request_with_image(ImageSource::Base64 {
-                media_type: "image/png".to_owned(),
-                data: "AAEC".to_owned(),
-            }))
+            .request_body(
+                &request_with_image(ImageSource::Base64 {
+                    media_type: "image/png".to_owned(),
+                    data: "AAEC".to_owned(),
+                }),
+                false,
+            )
             .expect("request body");
         let content = body["messages"][1]["content"]
             .as_array()
@@ -444,10 +484,13 @@ mod tests {
     #[test]
     fn rejects_images_when_route_is_text_only() {
         let error = test_provider(false)
-            .request_body(&request_with_image(ImageSource::Base64 {
-                media_type: "image/png".to_owned(),
-                data: "AAEC".to_owned(),
-            }))
+            .request_body(
+                &request_with_image(ImageSource::Base64 {
+                    media_type: "image/png".to_owned(),
+                    data: "AAEC".to_owned(),
+                }),
+                false,
+            )
             .expect_err("reject image");
         assert_eq!(error.context["content_type"], "image");
     }
@@ -455,9 +498,12 @@ mod tests {
     #[test]
     fn rejects_unresolved_attachment_references() {
         let error = test_provider(true)
-            .request_body(&request_with_image(ImageSource::AttachmentRef {
-                attachment_id: "attachment-1".to_owned(),
-            }))
+            .request_body(
+                &request_with_image(ImageSource::AttachmentRef {
+                    attachment_id: "attachment-1".to_owned(),
+                }),
+                false,
+            )
             .expect_err("reject unresolved reference");
         assert!(error.to_string().contains("attachment-1"));
     }
