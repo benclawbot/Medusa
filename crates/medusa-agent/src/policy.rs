@@ -2,6 +2,7 @@ use std::{
     fs,
     path::{Component, Path, PathBuf},
     process::Output,
+    sync::atomic::{AtomicBool, Ordering},
 };
 
 #[cfg(any(target_os = "linux", target_os = "macos"))]
@@ -201,6 +202,16 @@ pub(crate) fn sandboxed_command(
     program: &str,
     args: &[String],
 ) -> MedusaResult<Output> {
+    let cancellation = AtomicBool::new(false);
+    sandboxed_command_cancellable(repo, program, args, &cancellation)
+}
+
+pub(crate) fn sandboxed_command_cancellable(
+    repo: &Path,
+    program: &str,
+    args: &[String],
+    cancellation: &AtomicBool,
+) -> MedusaResult<Output> {
     #[cfg(target_os = "linux")]
     {
         let root = repo.canonicalize()?;
@@ -225,7 +236,7 @@ pub(crate) fn sandboxed_command(
             .arg("--")
             .arg(program)
             .args(args);
-        output_with_timeout(&mut command, "Linux bubblewrap sandbox")
+        output_with_timeout(&mut command, "Linux bubblewrap sandbox", cancellation)
     }
     #[cfg(target_os = "macos")]
     {
@@ -251,13 +262,13 @@ pub(crate) fn sandboxed_command(
             .args(args)
             .current_dir(&root)
             .env("PYTHONDONTWRITEBYTECODE", "1");
-        let result = output_with_timeout(&mut command, "macOS sandbox-exec sandbox");
+        let result = output_with_timeout(&mut command, "macOS sandbox-exec sandbox", cancellation);
         let _ = fs::remove_file(&profile_path);
         result
     }
     #[cfg(windows)]
     {
-        windows_sandbox::run(repo, program, args)
+        windows_sandbox::run_cancellable(repo, program, args, cancellation)
     }
     #[cfg(not(any(target_os = "linux", target_os = "macos", windows)))]
     {
@@ -276,7 +287,11 @@ fn sandbox_profile_string(path: &Path) -> String {
 }
 
 #[cfg(any(target_os = "linux", target_os = "macos"))]
-fn output_with_timeout(command: &mut Command, description: &str) -> MedusaResult<Output> {
+fn output_with_timeout(
+    command: &mut Command,
+    description: &str,
+    cancellation: &AtomicBool,
+) -> MedusaResult<Output> {
     let mut child = command
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -290,6 +305,11 @@ fn output_with_timeout(command: &mut Command, description: &str) -> MedusaResult
         })?;
     let started = Instant::now();
     loop {
+        if cancellation.load(Ordering::Acquire) {
+            let _ = child.kill();
+            let _ = child.wait();
+            return Err(cancelled_command(description));
+        }
         if child.try_wait()?.is_some() {
             return child.wait_with_output().map_err(|error| {
                 MedusaError::new(
@@ -329,6 +349,18 @@ fn sandbox_unavailable(message: impl Into<String>) -> MedusaError {
     error
         .context
         .insert("effective_restrictions".into(), serde_json::json!([]));
+    error
+}
+
+fn cancelled_command(description: &str) -> MedusaError {
+    let mut error = MedusaError::new(
+        ErrorCode::ToolExecutionFailed,
+        ErrorCategory::Execution,
+        format!("{description} cancelled"),
+    );
+    error
+        .context
+        .insert("cancelled".into(), serde_json::Value::Bool(true));
     error
 }
 

@@ -48,7 +48,7 @@ use crate::{
         PendingToolApproval, bootstrap, load, persist,
     },
     team::{AgentExecutionPolicy, TeamMemberContext},
-    tools::{execute_approved_tool, execute_tool, input_string},
+    tools::{execute_approved_tool_cancellable, execute_tool_cancellable, input_string},
     verification_authority::{
         authoritative_verification_for_paths, prepare_paths_for_verification,
     },
@@ -448,7 +448,12 @@ impl<P: ModelProvider> AgentEngine<P> {
                 )?;
                 session.updated_at = OffsetDateTime::now_utc();
                 persist(session)?;
-                let result = execute_approved_tool(&session.repo, &approval.tool, &approval.input);
+                let result = execute_approved_tool_cancellable(
+                    &session.repo,
+                    &approval.tool,
+                    &approval.input,
+                    self.cancellation.as_ref(),
+                );
                 append_event(
                     session,
                     Actor::Coordinator,
@@ -835,10 +840,14 @@ impl<P: ModelProvider> AgentEngine<P> {
                 }
                 let repo = session.repo.as_path();
                 let cache = &safe_tool_cache;
+                let cancellation = Arc::clone(&self.cancellation);
                 map_parallel_ordered(batch, |(id, name, input)| {
                     let cached = crate::tool_dag::dedup_key(&name, &input)
                         .and_then(|key| cache.get(&key).cloned());
-                    let result = cached.map_or_else(|| execute_tool(repo, &name, &input), Ok);
+                    let result = cached.map_or_else(
+                        || execute_tool_cancellable(repo, &name, &input, cancellation.as_ref()),
+                        Ok,
+                    );
                     (id, name, input, result)
                 })?
             } else {
@@ -967,7 +976,12 @@ impl<P: ModelProvider> AgentEngine<P> {
                             },
                             &mut observer,
                         )?;
-                        execute_tool(&session.repo, &name, &input)
+                        execute_tool_cancellable(
+                            &session.repo,
+                            &name,
+                            &input,
+                            self.cancellation.as_ref(),
+                        )
                     }
                 } else {
                     let reason = "tool is unavailable in read-only planning mode".to_owned();

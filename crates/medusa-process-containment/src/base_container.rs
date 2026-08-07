@@ -7,8 +7,9 @@ use std::{
     path::{Path, PathBuf},
     process::{ExitStatus, Output},
     ptr::{null, null_mut},
+    sync::atomic::{AtomicBool, Ordering},
     thread,
-    time::Duration,
+    time::{Duration, Instant},
 };
 
 use flatbuffers::FlatBufferBuilder;
@@ -91,12 +92,22 @@ impl Default for WindowsSandboxRestrictions {
 /// No shell or batch file is involved, so arguments cannot be reinterpreted as
 /// shell syntax after they cross the command-policy boundary.
 pub fn run_appcontainer(repo: &Path, program: &str, args: &[String]) -> io::Result<Output> {
+    let cancellation = AtomicBool::new(false);
+    run_appcontainer_cancellable(repo, program, args, &cancellation)
+}
+
+pub fn run_appcontainer_cancellable(
+    repo: &Path,
+    program: &str,
+    args: &[String],
+    cancellation: &AtomicBool,
+) -> io::Result<Output> {
     let root = strip_verbatim(&repo.canonicalize()?);
     let executable = strip_verbatim(&resolve_program(program)?);
     let read_only = read_only_paths(&executable);
     let specification = sandbox_specification(&root, &read_only);
     let api = SandboxApi::load()?;
-    unsafe { launch(&api, &root, &executable, args, &specification) }
+    unsafe { launch(&api, &root, &executable, args, &specification, cancellation) }
 }
 
 unsafe fn launch(
@@ -105,6 +116,7 @@ unsafe fn launch(
     executable: &Path,
     args: &[String],
     specification: &[u8],
+    cancellation: &AtomicBool,
 ) -> io::Result<Output> {
     let job = OwnedHandle::new(unsafe { CreateJobObjectW(null(), null()) })?;
     let mut limits: JOBOBJECT_EXTENDED_LIMIT_INFORMATION = unsafe { zeroed() };
@@ -178,18 +190,39 @@ unsafe fn launch(
 
     let stdout_reader = thread::spawn(move || read_all(stdout_read));
     let stderr_reader = thread::spawn(move || read_all(stderr_read));
-    let wait = unsafe { WaitForSingleObject(process_handle.0, COMMAND_TIMEOUT.as_millis() as u32) };
-    if wait == WAIT_TIMEOUT {
-        return Err(io::Error::new(
-            io::ErrorKind::TimedOut,
-            format!(
-                "Windows composable sandbox command timed out after {} seconds",
-                COMMAND_TIMEOUT.as_secs()
-            ),
-        ));
-    }
-    if wait != WAIT_OBJECT_0 {
-        return Err(io::Error::last_os_error());
+    let started = Instant::now();
+    loop {
+        if cancellation.load(Ordering::Acquire) {
+            drop(job);
+            let _ = join_reader(stdout_reader);
+            let _ = join_reader(stderr_reader);
+            return Err(io::Error::new(
+                io::ErrorKind::Interrupted,
+                "Windows composable sandbox command cancelled",
+            ));
+        }
+        let wait = unsafe { WaitForSingleObject(process_handle.0, 50) };
+        if wait == WAIT_OBJECT_0 {
+            break;
+        }
+        if wait != WAIT_TIMEOUT {
+            drop(job);
+            let _ = join_reader(stdout_reader);
+            let _ = join_reader(stderr_reader);
+            return Err(io::Error::last_os_error());
+        }
+        if started.elapsed() >= COMMAND_TIMEOUT {
+            drop(job);
+            let _ = join_reader(stdout_reader);
+            let _ = join_reader(stderr_reader);
+            return Err(io::Error::new(
+                io::ErrorKind::TimedOut,
+                format!(
+                    "Windows composable sandbox command timed out after {} seconds",
+                    COMMAND_TIMEOUT.as_secs()
+                ),
+            ));
+        }
     }
     let mut exit_code = 0u32;
     if unsafe { GetExitCodeProcess(process_handle.0, &mut exit_code) } == 0 {

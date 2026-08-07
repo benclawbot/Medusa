@@ -1,4 +1,4 @@
-use std::{fs, path::Path, time::Instant};
+use std::{fs, path::Path, sync::atomic::AtomicBool, time::Instant};
 
 use medusa_core::{ErrorCategory, ErrorCode, MedusaError, MedusaResult};
 use serde_json::json;
@@ -15,7 +15,7 @@ mod tool_telemetry;
 
 use crate::{
     output_envelope::{OutputMode, adapt_command},
-    policy::{sandboxed_command, validate_shell_command},
+    policy::{sandboxed_command, sandboxed_command_cancellable, validate_shell_command},
 };
 
 pub(crate) fn run(
@@ -25,7 +25,7 @@ pub(crate) fn run(
     output_mode: OutputMode,
 ) -> MedusaResult<String> {
     validate_shell_command(program, args)?;
-    run_validated(repo, program, args, output_mode)
+    run_validated(repo, program, args, output_mode, None)
 }
 
 pub(crate) fn run_approved(
@@ -35,7 +35,29 @@ pub(crate) fn run_approved(
     output_mode: OutputMode,
 ) -> MedusaResult<String> {
     validate_shell_command(program, args)?;
-    run_validated(repo, program, args, output_mode)
+    run_validated(repo, program, args, output_mode, None)
+}
+
+pub(crate) fn run_cancellable(
+    repo: &Path,
+    program: &str,
+    args: &[String],
+    output_mode: OutputMode,
+    cancellation: &AtomicBool,
+) -> MedusaResult<String> {
+    validate_shell_command(program, args)?;
+    run_validated(repo, program, args, output_mode, Some(cancellation))
+}
+
+pub(crate) fn run_approved_cancellable(
+    repo: &Path,
+    program: &str,
+    args: &[String],
+    output_mode: OutputMode,
+    cancellation: &AtomicBool,
+) -> MedusaResult<String> {
+    validate_shell_command(program, args)?;
+    run_validated(repo, program, args, output_mode, Some(cancellation))
 }
 
 fn output_mode_label(output_mode: OutputMode) -> &'static str {
@@ -51,6 +73,7 @@ fn run_validated(
     program: &str,
     args: &[String],
     output_mode: OutputMode,
+    cancellation: Option<&AtomicBool>,
 ) -> MedusaResult<String> {
     let mode = output_mode_label(output_mode);
     let command_summary = format!("{} {}", program, args.join(" "));
@@ -80,7 +103,10 @@ fn run_validated(
     }
 
     let started = Instant::now();
-    let output = sandboxed_command(repo, program, args)?;
+    let output = match cancellation {
+        Some(cancellation) => sandboxed_command_cancellable(repo, program, args, cancellation)?,
+        None => sandboxed_command(repo, program, args)?,
+    };
     let command = format!("command={} {}", program, args.join(" "));
     let raw = format!(
         "{command}\nstdout:\n{}\nstderr:\n{}",
