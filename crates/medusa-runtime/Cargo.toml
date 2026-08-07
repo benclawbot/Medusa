@@ -22,6 +22,7 @@ medusa-continuation = { path = "../medusa-continuation" }
 medusa-execution-checkpoint = { path = "../medusa-execution-checkpoint" }
 medusa-execution-replay = { path = "../medusa-execution-replay" }
 medusa-improvement = { path = "../medusa-improvement" }
+medusa-intelligence = { path = "../medusa-intelligence" }
 medusa-markdown-memory = { path = "../medusa-markdown-memory" }
 medusa-mcp-cache = { path = "../medusa-mcp-cache" }
 medusa-memory = { path = "../medusa-memory" }
