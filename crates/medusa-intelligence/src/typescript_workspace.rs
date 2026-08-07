@@ -1,6 +1,6 @@
 use std::{
     fmt, fs,
-    path::{Component, Path, PathBuf},
+    path::{Path, PathBuf},
 };
 
 use serde::{Deserialize, Serialize};
@@ -49,8 +49,10 @@ impl TypeScriptWorkspace {
 
     pub fn is_fresh(&self) -> Result<bool, TypeScriptWorkspaceError> {
         let refreshed = self.refresh()?;
-        Ok(self.repository_fingerprint == refreshed.repository_fingerprint
-            && self.workspace_fingerprint == refreshed.workspace_fingerprint)
+        Ok(
+            self.repository_fingerprint == refreshed.repository_fingerprint
+                && self.workspace_fingerprint == refreshed.workspace_fingerprint,
+        )
     }
 
     #[must_use]
@@ -211,7 +213,12 @@ fn fingerprint_repository(repository_root: &Path) -> String {
     hasher.update([0]);
     hasher.update(normalized_path(repository_root, repository_root).as_bytes());
     hasher.update([0]);
-    hasher.update(repository_root.to_string_lossy().replace('\\', "/").as_bytes());
+    hasher.update(
+        repository_root
+            .to_string_lossy()
+            .replace('\\', "/")
+            .as_bytes(),
+    );
     hex::encode(hasher.finalize())
 }
 
@@ -227,7 +234,10 @@ fn fingerprint_workspace(
     hasher.update(FINGERPRINT_VERSION);
     hasher.update([0]);
     hasher.update(repository_fingerprint.as_bytes());
-    hash_path(&mut hasher, &normalized_path(repository_root, workspace_root));
+    hash_path(
+        &mut hasher,
+        &normalized_path(repository_root, workspace_root),
+    );
 
     if let Some(config_path) = config_path {
         hash_file(&mut hasher, repository_root, config_path)?;
@@ -286,12 +296,9 @@ fn ignored_entry(entry: &DirEntry) -> bool {
             | ".next"
             | ".turbo"
             | "out"
-    ) || entry.path().components().any(|component| {
-        matches!(
-            component,
-            Component::Normal(value) if value == "generated" || value == "vendor"
-        )
-    })
+            | "generated"
+            | "vendor"
+    )
 }
 
 fn supported_source(path: &Path) -> bool {
@@ -391,6 +398,18 @@ mod tests {
         let refreshed =
             discover_typescript_workspace(repository.path(), repository.path()).expect("refresh");
         assert_eq!(refreshed.workspace_fingerprint, original_fingerprint);
+    }
+
+    #[test]
+    fn repository_parent_named_vendor_does_not_hide_sources() {
+        let sandbox = tempfile::tempdir().expect("sandbox");
+        let repository = sandbox.path().join("vendor/repository");
+        write(&repository.join("package.json"), "{}");
+        write(&repository.join("src/main.ts"), "export {};\n");
+
+        let workspace = discover_typescript_workspace(&repository, &repository)
+            .expect("workspace under vendor parent");
+        assert_eq!(workspace.source_count, 1);
     }
 
     #[test]

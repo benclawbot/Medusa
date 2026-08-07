@@ -496,10 +496,7 @@
       ],
       "gates": [
         "CI",
-        "Product Acceptance",
         "Refactor Guardrails",
-        "Architecture v2 Baseline",
-        "Code Intelligence Certification",
         "Release Gates"
       ],
       "entrypoints": [

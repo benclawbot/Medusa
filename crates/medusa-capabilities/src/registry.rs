@@ -286,7 +286,7 @@ impl CapabilityRegistry {
             Capability::CodeIntelligence,
             filesystem,
             if filesystem {
-                "Rust tree-sitter and Python lexical indexing are available; exact per-language levels are reported by semantic_capabilities"
+                "Rust/Python indexing and repository-scoped TypeScript/JavaScript semantic and guarded-refactoring tools are available; exact per-language levels are reported by semantic_capabilities"
             } else {
                 "code intelligence requires an accessible repository"
             },
@@ -666,12 +666,13 @@ fn builtin_tool_entries(
                 name: "symbol_rename",
             },
             Capability::CodeIntelligence,
-            "Guardedly rename one unambiguous Rust identifier across indexed definitions and references; fail closed on parse errors, cross-language matches, or stale bytes.",
+            "Guardedly rename one unambiguous Rust or TypeScript/JavaScript symbol; fail closed on parse/protocol errors, ambiguity, repository scope drift, incomplete references, or stale bytes.",
             json!({"type":"object","properties":{"old_name":{"type":"string"},"new_name":{"type":"string"}},"required":["old_name","new_name"],"additionalProperties":false}),
             "medusa-agent::tools::intelligence::symbol_rename",
             [
                 RegistryPermission::Write,
                 RegistryPermission::RepositoryMutation,
+                RegistryPermission::ProcessSpawn,
             ],
             true,
         ),
@@ -984,12 +985,17 @@ mod tests {
             registry.entry("tool.code_index").expect("index").capability,
             Capability::CodeIntelligence
         );
-        assert_eq!(
-            registry
-                .entry("tool.symbol_rename")
-                .expect("rename")
-                .capability,
-            Capability::CodeIntelligence
+        let rename = registry.entry("tool.symbol_rename").expect("rename");
+        assert_eq!(rename.capability, Capability::CodeIntelligence);
+        assert!(
+            rename
+                .permissions
+                .contains(&RegistryPermission::RepositoryMutation)
+        );
+        assert!(
+            rename
+                .permissions
+                .contains(&RegistryPermission::ProcessSpawn)
         );
         assert!(
             registry
