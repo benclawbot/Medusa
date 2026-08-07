@@ -53,7 +53,9 @@ impl ProviderStreamTranscript {
 
     pub fn push(&mut self, event: ProviderStreamEvent) -> MedusaResult<u64> {
         if self.completed {
-            return Err(stream_error("provider emitted output after stream completion"));
+            return Err(stream_error(
+                "provider emitted output after stream completion",
+            ));
         }
         if let ProviderStreamEvent::ToolUseReady { id, .. } = &event
             && !self.ready_tool_ids.insert(id.clone())
