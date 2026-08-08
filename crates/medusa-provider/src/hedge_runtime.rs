@@ -602,10 +602,11 @@ mod tests {
 
         assert!(error.to_string().contains("failed after output"));
         assert_eq!(secondary_cancellations.load(Ordering::SeqCst), 1);
-        assert!(events.iter().any(|event| matches!(
-            event,
-            ProviderStreamEvent::OutputStarted
-        )));
+        assert!(
+            events
+                .iter()
+                .any(|event| matches!(event, ProviderStreamEvent::OutputStarted))
+        );
         assert!(events.iter().all(|event| !matches!(
             event,
             ProviderStreamEvent::ResponseStarted { response_id: Some(id) } if id == "secondary"
