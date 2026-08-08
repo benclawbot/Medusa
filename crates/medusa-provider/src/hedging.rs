@@ -100,8 +100,9 @@ pub struct HedgeDecision {
 /// - requires explicit policy enablement and enough primary telemetry;
 /// - refuses requests whose duplicate output budget exceeds the configured waste cap;
 /// - when a monetary cap is configured, requires authoritative secondary-route cost evidence and
-///   refuses a duplicate whose observed average cost exceeds that cap;
-/// - requires two capability-compatible routes;
+///   refuses duplicates whose observed average cost exceeds that cap;
+/// - scans latency-ranked fallbacks and selects the first route satisfying capability, cost, and
+///   tail-recovery constraints;
 /// - waits until the latency-ranked primary breaches a learned tail threshold;
 /// - launches only when the secondary is expected to complete within one learned tail-recovery
 ///   window from launch.
@@ -129,13 +130,7 @@ pub fn hedge_decision(
     }
 
     let primary_index = route_order[0];
-    let secondary_index = route_order[1];
     let primary_profile = profiles.get(primary_index)?;
-    let secondary_profile = profiles.get(secondary_index)?;
-    if primary_profile.tool_calling != secondary_profile.tool_calling {
-        return None;
-    }
-
     let primary_stats = stats.get(primary_index).copied().unwrap_or_default();
     if primary_stats.samples < policy.min_primary_samples {
         return None;
@@ -146,25 +141,30 @@ pub fn hedge_decision(
     let launch_after_ms = launch_after_ms.min(policy.max_delay_ms).max(1);
     let primary_expected_ms = expected_latency_ms(primary_stats, latency_policy);
 
-    let secondary_stats = stats.get(secondary_index).copied().unwrap_or_default();
-    let secondary_cost_microusd = secondary_stats.average_cost_microusd();
-    if let Some(max_cost) = policy.max_duplicate_cost_microusd
-        && secondary_cost_microusd.is_none_or(|cost| cost > max_cost)
-    {
-        return None;
-    }
-    let secondary_expected_ms = expected_latency_ms(secondary_stats, latency_policy);
-    if secondary_expected_ms >= launch_after_ms {
-        return None;
-    }
-
-    Some(HedgeDecision {
-        primary_index,
-        secondary_index,
-        launch_after_ms,
-        primary_expected_ms,
-        secondary_expected_ms,
-        secondary_cost_microusd,
+    route_order.iter().copied().skip(1).find_map(|secondary_index| {
+        let secondary_profile = profiles.get(secondary_index)?;
+        if primary_profile.tool_calling != secondary_profile.tool_calling {
+            return None;
+        }
+        let secondary_stats = stats.get(secondary_index).copied().unwrap_or_default();
+        let secondary_cost_microusd = secondary_stats.average_cost_microusd();
+        if let Some(max_cost) = policy.max_duplicate_cost_microusd
+            && secondary_cost_microusd.is_none_or(|cost| cost > max_cost)
+        {
+            return None;
+        }
+        let secondary_expected_ms = expected_latency_ms(secondary_stats, latency_policy);
+        if secondary_expected_ms >= launch_after_ms {
+            return None;
+        }
+        Some(HedgeDecision {
+            primary_index,
+            secondary_index,
+            launch_after_ms,
+            primary_expected_ms,
+            secondary_expected_ms,
+            secondary_cost_microusd,
+        })
     })
 }
 
@@ -337,6 +337,41 @@ mod tests {
             RouteLatencyPolicy::default(),
         )
         .expect("bounded authoritative cost permits hedge");
+        assert_eq!(decision.secondary_cost_microusd, Some(400));
+    }
+
+    #[test]
+    fn over_budget_secondary_does_not_hide_later_eligible_route() {
+        let profiles = vec![
+            profile("primary"),
+            profile("expensive"),
+            profile("bounded"),
+        ];
+        let primary = stats(4_000, 10);
+        let expensive = RouteLatencyStats {
+            cost_microusd_total: 6_000,
+            cost_samples: 10,
+            ..stats(100, 10)
+        };
+        let bounded = RouteLatencyStats {
+            cost_microusd_total: 4_000,
+            cost_samples: 10,
+            ..stats(200, 10)
+        };
+        let policy = HedgePolicy {
+            max_duplicate_cost_microusd: Some(500),
+            ..HedgePolicy::production_default()
+        };
+        let decision = hedge_decision(
+            &[0, 1, 2],
+            &profiles,
+            &[primary, expensive, bounded],
+            1_024,
+            policy,
+            RouteLatencyPolicy::default(),
+        )
+        .expect("later bounded route is eligible");
+        assert_eq!(decision.secondary_index, 2);
         assert_eq!(decision.secondary_cost_microusd, Some(400));
     }
 
