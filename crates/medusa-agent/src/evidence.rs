@@ -54,12 +54,16 @@ fn refresh_committed_events(session: &mut AgentSession) -> MedusaResult<()> {
 }
 
 fn accepted_action<'a>(session: &'a AgentSession, action_id: &str) -> Option<&'a SessionAction> {
-    session.events.iter().rev().find_map(|event| match &event.payload {
-        EventPayload::SessionActionAccepted { action } if action.action_id == action_id => {
-            Some(action)
-        }
-        _ => None,
-    })
+    session
+        .events
+        .iter()
+        .rev()
+        .find_map(|event| match &event.payload {
+            EventPayload::SessionActionAccepted { action } if action.action_id == action_id => {
+                Some(action)
+            }
+            _ => None,
+        })
 }
 
 fn action_lifecycle(session: &AgentSession, action_id: &str) -> Option<SessionActionLifecycle> {
@@ -83,16 +87,20 @@ fn action_lifecycle(session: &AgentSession, action_id: &str) -> Option<SessionAc
 
 fn complete_running_cancel_action(session: &mut AgentSession) -> MedusaResult<()> {
     let cancellation_event_sequence = session.events.last().map_or(0, |event| event.sequence);
-    let action_id = session.events.iter().rev().find_map(|event| match &event.payload {
-        EventPayload::SessionActionAccepted { action }
-            if action.kind == SessionActionKind::Cancel
-                && action_lifecycle(session, &action.action_id)
-                    == Some(SessionActionLifecycle::Running) =>
-        {
-            Some(action.action_id.clone())
-        }
-        _ => None,
-    });
+    let action_id = session
+        .events
+        .iter()
+        .rev()
+        .find_map(|event| match &event.payload {
+            EventPayload::SessionActionAccepted { action }
+                if action.kind == SessionActionKind::Cancel
+                    && action_lifecycle(session, &action.action_id)
+                        == Some(SessionActionLifecycle::Running) =>
+            {
+                Some(action.action_id.clone())
+            }
+            _ => None,
+        });
     if let Some(action_id) = action_id {
         transition(
             session,
