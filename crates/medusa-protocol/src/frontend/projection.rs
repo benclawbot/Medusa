@@ -50,6 +50,19 @@ pub fn project_event(
                 format!("Delivery: {:?}", action.delivery_policy),
             ],
         },
+        EventPayload::SessionActionRejected {
+            action,
+            authoritative_revision,
+            reason,
+        } => FrontendEvent::Notice {
+            severity: "warning".to_owned(),
+            title: "Session action rejected".to_owned(),
+            details: vec![
+                format!("Action: {}", action.action_id),
+                format!("Reason: {reason}"),
+                format!("Authoritative revision: {authoritative_revision}"),
+            ],
+        },
         EventPayload::SessionActionLifecycleChanged {
             action_id,
             from,
@@ -724,6 +737,20 @@ mod tests {
         .expect("event")
     }
 
+    fn action() -> SessionAction {
+        SessionAction {
+            action_id: "action-1".to_owned(),
+            idempotency_key: "idempotency-1".to_owned(),
+            source: "test".to_owned(),
+            target_session_id: "session-1".to_owned(),
+            expected_session_revision: 4,
+            kind: SessionActionKind::Steer,
+            delivery_policy: SessionActionDeliveryPolicy::NextSafeTurnBoundary,
+            wake_policy: SessionActionWakePolicy::OnBoundary,
+            payload: json!({"text":"do not expose this payload"}),
+        }
+    }
+
     #[test]
     fn assistant_projection_excludes_tool_arguments() {
         let source = event(EventPayload::AssistantMessageRecorded {
@@ -746,19 +773,7 @@ mod tests {
 
     #[test]
     fn session_action_events_are_projected_for_every_frontend() {
-        let source = event(EventPayload::SessionActionAccepted {
-            action: SessionAction {
-                action_id: "action-1".to_owned(),
-                idempotency_key: "idempotency-1".to_owned(),
-                source: "test".to_owned(),
-                target_session_id: "session-1".to_owned(),
-                expected_session_revision: 4,
-                kind: SessionActionKind::Steer,
-                delivery_policy: SessionActionDeliveryPolicy::NextSafeTurnBoundary,
-                wake_policy: SessionActionWakePolicy::OnBoundary,
-                payload: json!({"text":"do not expose this payload"}),
-            },
-        });
+        let source = event(EventPayload::SessionActionAccepted { action: action() });
         for frontend in [
             FrontendKind::Tui,
             FrontendKind::Desktop,
@@ -789,6 +804,34 @@ mod tests {
         )
         .expect("lifecycle projection");
         assert_eq!(lifecycle.lifecycle, PresentationLifecycle::Waiting);
+    }
+
+    #[test]
+    fn rejected_action_projection_is_identical_for_desktop_and_telegram() {
+        let source = event(EventPayload::SessionActionRejected {
+            action: action(),
+            authoritative_revision: 9,
+            reason: "stale_revision".to_owned(),
+        });
+        let desktop = project_event(&source, 7, FrontendKind::Desktop).expect("desktop projection");
+        let telegram =
+            project_event(&source, 7, FrontendKind::Telegram).expect("telegram projection");
+        assert_eq!(desktop.event, telegram.event);
+        assert_eq!(desktop.lifecycle, telegram.lifecycle);
+        assert_eq!(desktop.cursor, telegram.cursor);
+        assert!(desktop.event_id.ends_with(":desktop"));
+        assert!(telegram.event_id.ends_with(":telegram"));
+        let FrontendEvent::Notice {
+            severity,
+            details,
+            ..
+        } = desktop.event
+        else {
+            panic!("expected rejection notice")
+        };
+        assert_eq!(severity, "warning");
+        assert!(details.iter().any(|detail| detail.contains("stale_revision")));
+        assert!(details.iter().any(|detail| detail.contains("9")));
     }
 
     #[test]
