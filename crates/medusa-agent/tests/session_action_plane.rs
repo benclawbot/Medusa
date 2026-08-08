@@ -140,7 +140,8 @@ fn concurrent_replace_and_enqueue_share_one_cas_winner() {
         .iter()
         .filter_map(|event| match &event.payload {
             EventPayload::SessionActionAccepted { action }
-                if action.action_id == replacement.action_id || action.action_id == enqueue.action_id =>
+                if action.action_id == replacement.action_id
+                    || action.action_id == enqueue.action_id =>
             {
                 Some(action.action_id.as_str())
             }
@@ -152,14 +153,19 @@ fn concurrent_replace_and_enqueue_share_one_cas_winner() {
         .iter()
         .filter_map(|event| match &event.payload {
             EventPayload::SessionActionRejected { action, reason, .. }
-                if action.action_id == replacement.action_id || action.action_id == enqueue.action_id =>
+                if action.action_id == replacement.action_id
+                    || action.action_id == enqueue.action_id =>
             {
                 Some((action.action_id.as_str(), reason.as_str()))
             }
             _ => None,
         })
         .collect::<Vec<_>>();
-    assert_eq!(accepted.len(), 1, "only one same-revision action may win CAS");
+    assert_eq!(
+        accepted.len(),
+        1,
+        "only one same-revision action may win CAS"
+    );
     assert_eq!(rejected.len(), 1, "the losing action remains auditable");
     assert_eq!(rejected[0].1, "stale_revision");
 }
@@ -248,7 +254,10 @@ fn steering_waits_until_after_the_inflight_tool_boundary() {
         .iter()
         .find_map(|event| match &event.payload {
             EventPayload::SessionActionLifecycleChanged { action_id, .. }
-                if action_id == &steer.action_id => Some(event.sequence),
+                if action_id == &steer.action_id =>
+            {
+                Some(event.sequence)
+            }
             _ => None,
         })
         .expect("action lifecycle");
