@@ -66,6 +66,7 @@ replace(
         let mut streamed_text = String::new();
         let mut stream_text_rejected = false;
         let mut early_tool_executions = BTreeMap::<String, EarlyToolExecution>::new();
+        let streaming_repo = session.repo.clone();
         let mut complete_request = |request: &ModelRequest| {''',
 )
 
@@ -108,7 +109,7 @@ replace(
                         let requested_at = std::time::Instant::now();
                         let started = std::time::Instant::now();
                         if let Ok(output) = execute_tool_cancellable(
-                            &session.repo,
+                            &streaming_repo,
                             &name,
                             &input,
                             self.cancellation.as_ref(),
@@ -245,7 +246,6 @@ replace(
                 });''',
 )
 
-# Append behavioral coverage before the terminal stop-reason tests.
 replace(
     ENGINE,
     '''#[cfg(test)]
