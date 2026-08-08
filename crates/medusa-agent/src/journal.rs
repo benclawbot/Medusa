@@ -144,8 +144,10 @@ fn normalize_action_admission(
         });
     };
     let replaceable = action_state(events, replaces_action_id)?.is_some_and(|(kind, lifecycle)| {
-        matches!(kind, SessionActionKind::FollowUp | SessionActionKind::ReplaceFollowUp)
-            && lifecycle == SessionActionLifecycle::Queued
+        matches!(
+            kind,
+            SessionActionKind::FollowUp | SessionActionKind::ReplaceFollowUp
+        ) && lifecycle == SessionActionLifecycle::Queued
     });
     if !replaceable {
         return Ok(EventPayload::SessionActionRejected {
@@ -1060,7 +1062,10 @@ mod tests {
             },
         )
         .expect("first admission");
-        assert!(matches!(accepted.payload, EventPayload::SessionActionAccepted { .. }));
+        assert!(matches!(
+            accepted.payload,
+            EventPayload::SessionActionAccepted { .. }
+        ));
         let rejected = append_payload_committed(
             &mut second,
             Actor::User,
@@ -1161,7 +1166,10 @@ mod tests {
             },
         )
         .expect("replacement admission");
-        assert!(matches!(accepted.payload, EventPayload::SessionActionAccepted { .. }));
+        assert!(matches!(
+            accepted.payload,
+            EventPayload::SessionActionAccepted { .. }
+        ));
     }
 
     #[test]
