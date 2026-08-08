@@ -140,6 +140,18 @@ impl FrontendCommand {
                 {
                     Err("steer/follow-up action requires non-empty text")
                 }
+                SessionActionKind::ReplaceFollowUp
+                    if payload
+                        .get("text")
+                        .and_then(Value::as_str)
+                        .is_none_or(|text| text.trim().is_empty())
+                        || payload
+                            .get("replaces_action_id")
+                            .and_then(Value::as_str)
+                            .is_none_or(|action_id| action_id.trim().is_empty()) =>
+                {
+                    Err("replacement follow-up requires text and replaces_action_id")
+                }
                 SessionActionKind::GoalAdjustment
                     if payload
                         .get("objective")
@@ -267,6 +279,21 @@ mod tests {
         assert_eq!(
             serde_json::from_str::<FrontendCommandEnvelope>(&encoded).expect("deserialize"),
             envelope
+        );
+    }
+
+    #[test]
+    fn replacement_action_requires_target_identity() {
+        assert!(
+            command(FrontendCommand::SubmitSessionAction {
+                kind: SessionActionKind::ReplaceFollowUp,
+                delivery_policy: SessionActionDeliveryPolicy::WhenIdle,
+                wake_policy: SessionActionWakePolicy::OnBoundary,
+                expected_session_revision: 7,
+                payload: serde_json::json!({"text":"replace it"}),
+            })
+            .validate()
+            .is_err()
         );
     }
 
