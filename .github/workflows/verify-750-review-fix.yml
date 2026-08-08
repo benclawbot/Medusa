@@ -1,0 +1,41 @@
+name: Verify 750 Review Fix
+
+on:
+  push:
+    branches: [perf/688-route-telemetry]
+
+concurrency:
+  group: verify-750-review-fix
+  cancel-in-progress: true
+
+permissions:
+  contents: write
+
+jobs:
+  verify:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          ref: perf/688-route-telemetry
+          fetch-depth: 0
+      - uses: dtolnay/rust-toolchain@39b0b3842c7e8bbf6904c0bfc3d9006fdd4dc4e0
+        with:
+          components: rustfmt,clippy
+      - name: Apply review fix
+        run: python .github/scripts/apply-750-review-fix.py
+      - name: Format
+        run: cargo fmt --all -- --check
+      - name: Strict Clippy
+        run: cargo clippy -p medusa-provider --all-targets --all-features -- -D warnings
+      - name: Provider tests
+        run: cargo test -p medusa-provider -- --nocapture
+      - name: Publish validated source
+        run: |
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add crates/medusa-provider/src/route_metrics_store.rs
+          if git diff --cached --quiet; then exit 0; fi
+          git commit -m 'Compare route throughput on TTFT-backed intervals'
+          git push origin HEAD:perf/688-route-telemetry
