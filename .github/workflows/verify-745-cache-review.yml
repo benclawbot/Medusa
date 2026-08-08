@@ -3,6 +3,8 @@ name: Verify 745 Cache Review
 on:
   push:
     branches: [perf/688-cache-telemetry]
+  pull_request:
+    branches: [main]
 
 permissions:
   contents: write
