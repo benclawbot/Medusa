@@ -18,23 +18,22 @@ jobs:
           fetch-depth: 0
       - uses: dtolnay/rust-toolchain@39b0b3842c7e8bbf6904c0bfc3d9006fdd4dc4e0
         with:
-          toolchain: 1.88.0
           components: rustfmt,clippy
       - name: Apply engine streaming delivery
         run: python3 .github/scripts/apply-688-engine-stream-delivery.py
       - name: Format
         run: cargo fmt --all
-      - name: Agent and runtime tests
-        run: cargo test -p medusa-agent -p medusa-runtime -- --nocapture
-      - name: Agent and runtime Clippy
-        run: cargo clippy -p medusa-agent -p medusa-runtime --all-targets --all-features -- -D warnings
+      - name: Focused Clippy
+        run: cargo clippy -p medusa-provider -p medusa-agent -p medusa-runtime --all-targets --all-features -- -D warnings
+      - name: Focused tests
+        run: cargo test -p medusa-provider -p medusa-agent -p medusa-runtime -- --nocapture
       - name: Commit verified source
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add crates/medusa-agent
+          git add crates/medusa-provider crates/medusa-agent
           if git diff --cached --quiet; then
             exit 0
           fi
-          git commit -m "Stream provider text through the agent engine"
+          git commit -m "Stream provider output through runtime routing"
           git push origin HEAD:perf/688-engine-stream-delivery
