@@ -233,10 +233,7 @@ mod tests {
         fields.extend((4..22).map(|field| field.to_string()));
         fields.push("987654".to_owned());
         let stat = format!("123 (worker name) with ) parens) {}", fields.join(" "));
-        assert_eq!(
-            parse_linux_start_ticks(&stat).expect("start ticks"),
-            987654
-        );
+        assert_eq!(parse_linux_start_ticks(&stat).expect("start ticks"), 987654);
     }
 
     #[test]
