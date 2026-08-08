@@ -23,6 +23,12 @@
         "reason": "Calls the Windows composable-sandbox, process, pipe, environment, library-loader, and Job Object APIs while owning every returned handle and allocation."
       },
       {
+        "path": "crates/medusa-process-containment/src/process_identity.rs",
+        "module": "process_identity",
+        "classification": "unsafe-ffi",
+        "reason": "Acquires immutable native process-creation identity using reviewed Windows process-time and macOS libproc APIs; Linux uses procfs without unsafe Rust, while all FFI remains isolated in this low-level module."
+      },
+      {
         "path": "crates/medusa-process-containment/src/windows.rs",
         "module": "windows",
         "classification": "unsafe-ffi",
