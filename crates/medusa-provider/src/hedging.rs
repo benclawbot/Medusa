@@ -1,6 +1,6 @@
 use serde::{Deserialize, Serialize};
 
-use crate::{ProviderRouteProfile, RouteLatencyStats, expected_latency_ms, RouteLatencyPolicy};
+use crate::{RouteLatencyPolicy, RouteLatencyStats, ProviderRouteProfile, expected_latency_ms};
 
 /// Explicit, bounded policy for deciding whether a secondary provider request may be started.
 ///
@@ -56,8 +56,8 @@ pub struct HedgeDecision {
 /// - requires explicit policy enablement and enough primary telemetry;
 /// - refuses requests whose duplicate output budget exceeds the configured waste cap;
 /// - requires two capability-compatible routes;
-/// - launches only when the secondary's expected completion time is lower than the primary's
-///   remaining expected time at the learned threshold.
+/// - launches only after the primary breaches its learned threshold and only when the secondary
+///   has lower expected completion cost than the primary route that has already gone into tail.
 #[must_use]
 pub fn hedge_decision(
     route_order: &[usize],
@@ -94,14 +94,10 @@ pub fn hedge_decision(
         / 1_000;
     let launch_after_ms = launch_after_ms.min(policy.max_delay_ms).max(1);
     let primary_expected_ms = expected_latency_ms(primary_stats, latency_policy);
-    if launch_after_ms >= primary_expected_ms {
-        return None;
-    }
 
     let secondary_stats = stats.get(secondary_index).copied().unwrap_or_default();
     let secondary_expected_ms = expected_latency_ms(secondary_stats, latency_policy);
-    let primary_remaining_ms = primary_expected_ms.saturating_sub(launch_after_ms);
-    if secondary_expected_ms >= primary_remaining_ms {
+    if secondary_expected_ms >= primary_expected_ms {
         return None;
     }
 
