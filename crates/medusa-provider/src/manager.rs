@@ -19,10 +19,11 @@ use serde_json::{Value, json};
 use time::OffsetDateTime;
 
 use crate::{
-    ModelProvider, ModelRequest, ModelResponse, ProviderCapabilities, ProviderHealthStore,
-    ProviderRouteLatencyStore, ProviderStreamEvent, RouteLatencyPolicy, RouteLatencyStats,
-    latency_aware_route_order,
+    HedgePolicy, ModelProvider, ModelRequest, ModelResponse, ProviderCapabilities,
+    ProviderHealthStore, ProviderRouteLatencyStore, ProviderStreamEvent, RouteLatencyPolicy,
+    RouteLatencyStats, hedge_decision, latency_aware_route_order,
 };
+use crate::hedge_runtime::{HedgeCandidateOutcome, HedgeRacePlan, race_provider_candidates};
 
 /// Observable health state for a configured provider position.
 #[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
@@ -99,6 +100,7 @@ pub struct ProviderManager<P> {
     state: ProviderHealthStore,
     latency: ProviderRouteLatencyStore,
     latency_policy: RouteLatencyPolicy,
+    hedge_policy: HedgePolicy,
     sleeper: fn(Duration),
 }
 
@@ -143,6 +145,7 @@ impl<P> ProviderManager<P> {
             state,
             latency,
             latency_policy: RouteLatencyPolicy::default(),
+            hedge_policy: HedgePolicy::default(),
             sleeper: thread::sleep,
         }
     }
@@ -166,6 +169,12 @@ impl<P> ProviderManager<P> {
     #[cfg(test)]
     fn with_latency_policy(mut self, policy: RouteLatencyPolicy) -> Self {
         self.latency_policy = policy;
+        self
+    }
+
+    #[cfg(test)]
+    fn with_hedge_policy(mut self, policy: HedgePolicy) -> Self {
+        self.hedge_policy = policy;
         self
     }
 
@@ -418,9 +427,49 @@ impl<P: ModelProvider> ProviderManager<P> {
             })
             .map_err(cache_validation_error)
     }
+
+    fn record_hedge_candidate(
+        &self,
+        candidate: &HedgeCandidateOutcome,
+        authoritative_index: Option<usize>,
+        request: &ModelRequest,
+    ) -> MedusaResult<Option<ModelResponse>> {
+        if authoritative_index == Some(candidate.index) {
+            match &candidate.result {
+                Ok(response) => {
+                    self.latency.record_success_with_first_token(
+                        candidate.index,
+                        candidate.duration_ms,
+                        candidate.first_token_ms,
+                        response.usage,
+                    )?;
+                    let _ = self.record_prompt_cache_observation(
+                        candidate.index,
+                        request,
+                        response.usage,
+                    );
+                    self.record_success(candidate.index)?;
+                    return Ok(Some(response.clone()));
+                }
+                Err(error) => {
+                    self.latency
+                        .record_failure(candidate.index, candidate.duration_ms)?;
+                    self.record_error(candidate.index, error)?;
+                }
+            }
+        } else if authoritative_index.is_some() {
+            self.latency
+                .record_cancellation(candidate.index, candidate.duration_ms)?;
+        } else if let Err(error) = &candidate.result {
+            self.latency
+                .record_failure(candidate.index, candidate.duration_ms)?;
+            self.record_error(candidate.index, error)?;
+        }
+        Ok(None)
+    }
 }
 
-impl<P: ModelProvider> ModelProvider for ProviderManager<P> {
+impl<P: ModelProvider + Sync> ModelProvider for ProviderManager<P> {
     fn complete(&self, request: &ModelRequest) -> MedusaResult<ModelResponse> {
         self.complete_with_cancel_and_sink(request, None, None)
     }
@@ -469,7 +518,7 @@ impl<P: ModelProvider> ModelProvider for ProviderManager<P> {
     }
 }
 
-impl<P: ModelProvider> ProviderManager<P> {
+impl<P: ModelProvider + Sync> ProviderManager<P> {
     fn complete_with_cancel_and_sink(
         &self,
         request: &ModelRequest,
@@ -503,6 +552,55 @@ impl<P: ModelProvider> ProviderManager<P> {
             false,
             self.latency_policy,
         );
+        if let Some(decision) = hedge_decision(
+            &route_order,
+            &self.profiles,
+            &stats,
+            request.max_tokens,
+            self.hedge_policy,
+            self.latency_policy,
+        ) {
+            self.record_attempt(decision.primary_index)?;
+            let outcome = {
+                let mut race_sink = sink.as_deref_mut();
+                race_provider_candidates(
+                    &self.providers,
+                    &self.profiles,
+                    request,
+                    HedgeRacePlan {
+                        primary_index: decision.primary_index,
+                        secondary_index: decision.secondary_index,
+                        launch_after_ms: decision.launch_after_ms,
+                    },
+                    cancel,
+                    &mut race_sink,
+                )?
+            };
+            if outcome.secondary.is_some() {
+                self.record_attempt(decision.secondary_index)?;
+            }
+            let mut response = self.record_hedge_candidate(
+                &outcome.primary,
+                outcome.authoritative_index,
+                request,
+            )?;
+            if let Some(secondary) = outcome.secondary.as_ref()
+                && let Some(authoritative) = self.record_hedge_candidate(
+                    secondary,
+                    outcome.authoritative_index,
+                    request,
+                )?
+            {
+                response = Some(authoritative);
+            }
+            if let Some(response) = response {
+                if let Ok(mut cache) = self.cache.lock() {
+                    cache.insert(key.clone(), response.clone());
+                }
+                return Ok(response);
+            }
+        }
+
         let mut final_error = None;
         for (position, index) in route_order.iter().copied().enumerate() {
             let provider = &self.providers[index];
@@ -932,6 +1030,10 @@ mod tests {
             cold_start_duration_ms: 30_000,
             failure_penalty_ms_per_mille: 10,
             max_cache_credit_ms: 0,
+        })
+        .with_hedge_policy(HedgePolicy {
+            enabled: false,
+            ..HedgePolicy::default()
         });
 
         manager.complete(&request()).expect("fast response");
