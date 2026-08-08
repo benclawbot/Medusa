@@ -21,6 +21,7 @@ fn fragmented_tool_call_becomes_ready_before_stream_completion() {
             &mut sink,
         )
         .expect("second tool fragment");
+    drop(sink);
 
     let ready_position = events
         .iter()
@@ -33,10 +34,15 @@ fn fragmented_tool_call_becomes_ready_before_stream_completion() {
         "completion must not be emitted until the provider terminates the stream"
     );
 
+    let mut sink = |event| {
+        events.push(event);
+        Ok(())
+    };
     let response = accumulator
         .push_sse_data("[DONE]", &mut sink)
         .expect("done marker")
         .expect("completed response");
+    drop(sink);
     let completed_position = events
         .iter()
         .position(|event| matches!(event, ProviderStreamEvent::Completed { .. }))
