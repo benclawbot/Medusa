@@ -17,6 +17,7 @@ use std::os::unix::process::CommandExt;
 use std::os::windows::process::CommandExt;
 
 use medusa_core::{ErrorCategory, ErrorCode, MedusaError, MedusaResult};
+use medusa_process_containment::{ProcessOwnershipReceipt, ProcessOwnershipVerification};
 #[cfg(windows)]
 use medusa_process_containment::WindowsJob;
 
@@ -112,6 +113,7 @@ impl ProcessRegistry {
 struct ProcessControl {
     cancelled: AtomicBool,
     child: Mutex<Option<Child>>,
+    ownership: Mutex<Option<ProcessOwnershipReceipt>>,
     #[cfg(windows)]
     job: Mutex<Option<WindowsJob>>,
 }
@@ -138,7 +140,7 @@ impl ProcessControl {
             .stdout(Stdio::from(stdout))
             .stderr(Stdio::from(stderr));
         configure_process_group(&mut command);
-        let child = match command.spawn() {
+        let mut child = match command.spawn() {
             Ok(child) => child,
             Err(error) => {
                 cleanup_output_files(&stdout_path, &stderr_path);
@@ -149,8 +151,6 @@ impl ProcessControl {
                 ));
             }
         };
-        #[cfg(windows)]
-        let mut child = child;
         #[cfg(windows)]
         let job = match WindowsJob::assign(&child).and_then(|job| {
             job.resume(&child)?;
@@ -168,11 +168,28 @@ impl ProcessControl {
                 ));
             }
         };
+        let ownership = match ProcessOwnershipReceipt::capture(child.id()) {
+            Ok(ownership) => ownership,
+            Err(error) => {
+                let _ = child.kill();
+                let _ = child.wait();
+                cleanup_output_files(&stdout_path, &stderr_path);
+                return Err(MedusaError::new(
+                    ErrorCode::ToolExecutionFailed,
+                    ErrorCategory::Execution,
+                    format!(
+                        "failed to capture ownership identity for daemon job process {program}: {error}"
+                    ),
+                ));
+            }
+        };
         {
             let mut child_slot = lock_child(&self.child)?;
+            let mut ownership_slot = lock_ownership(&self.ownership)?;
             #[cfg(windows)]
             let mut job_slot = lock_job(&self.job)?;
             *child_slot = Some(child);
+            *ownership_slot = Some(ownership);
             #[cfg(windows)]
             {
                 *job_slot = Some(job);
@@ -192,7 +209,7 @@ impl ProcessControl {
                         "daemon child process disappeared before wait",
                     ));
                 };
-                process.try_wait()?
+                try_wait_preserving_unix_group_identity(process)?
             };
             if let Some(status) = status {
                 if self.process_tree_exited()? {
@@ -214,6 +231,7 @@ impl ProcessControl {
         })();
         cleanup_output_files(&stdout_path, &stderr_path);
         *lock_child(&self.child)? = None;
+        *lock_ownership(&self.ownership)? = None;
         #[cfg(windows)]
         {
             *lock_job(&self.job)? = None;
@@ -231,9 +249,19 @@ impl ProcessControl {
         let Some(process) = child.as_mut() else {
             return Ok(());
         };
+        let ownership = lock_ownership(&self.ownership)?
+            .clone()
+            .ok_or_else(|| process_error("daemon process ownership receipt is missing"))?;
+        if ownership.pid != process.id() {
+            return Err(process_error(format!(
+                "daemon process ownership receipt PID {} does not match child PID {}",
+                ownership.pid,
+                process.id()
+            )));
+        }
         #[cfg(unix)]
         {
-            terminate_process_tree(process)
+            terminate_process_tree(process, &ownership)
         }
         #[cfg(windows)]
         {
@@ -244,7 +272,7 @@ impl ProcessControl {
                     "Windows Job Object is missing for daemon process tree {pid}"
                 )));
             };
-            terminate_process_tree(process, job)
+            terminate_process_tree(process, job, &ownership)
         }
     }
 
@@ -289,6 +317,14 @@ fn lock_child(child: &Mutex<Option<Child>>) -> MedusaResult<MutexGuard<'_, Optio
         .map_err(|_| process_error("daemon child process lock was poisoned"))
 }
 
+fn lock_ownership(
+    ownership: &Mutex<Option<ProcessOwnershipReceipt>>,
+) -> MedusaResult<MutexGuard<'_, Option<ProcessOwnershipReceipt>>> {
+    ownership
+        .lock()
+        .map_err(|_| process_error("daemon process ownership lock was poisoned"))
+}
+
 #[cfg(windows)]
 fn lock_job(job: &Mutex<Option<WindowsJob>>) -> MedusaResult<MutexGuard<'_, Option<WindowsJob>>> {
     job.lock()
@@ -300,6 +336,20 @@ fn process_error(message: impl Into<String>) -> MedusaError {
         ErrorCode::InternalInvariant,
         ErrorCategory::Internal,
         message,
+    )
+}
+
+fn ownership_error(
+    pid: u32,
+    verification: ProcessOwnershipVerification,
+    action: &str,
+) -> MedusaError {
+    MedusaError::new(
+        ErrorCode::ToolExecutionFailed,
+        ErrorCategory::Execution,
+        format!(
+            "refusing to {action} process tree {pid}: ownership identity is {verification:?}"
+        ),
     )
 }
 
@@ -315,18 +365,54 @@ fn configure_process_group(command: &mut Command) {
     command.creation_flags(CREATE_SUSPENDED | CREATE_NO_WINDOW);
 }
 
+#[cfg(target_os = "linux")]
+fn try_wait_preserving_unix_group_identity(process: &mut Child) -> MedusaResult<Option<ExitStatus>> {
+    // Do not reap a Linux group leader while descendants remain. Keeping the leader PID allocated
+    // preserves the process-group identity until the complete tree exits, preventing PID/PGID reuse
+    // from racing a later cancellation request.
+    if process_group_alive(process.id()) {
+        Ok(None)
+    } else {
+        Ok(process.try_wait()?)
+    }
+}
+
+#[cfg(not(target_os = "linux"))]
+fn try_wait_preserving_unix_group_identity(process: &mut Child) -> MedusaResult<Option<ExitStatus>> {
+    Ok(process.try_wait()?)
+}
+
 #[cfg(unix)]
-fn terminate_process_tree(process: &mut Child) -> MedusaResult<()> {
+fn terminate_process_tree(
+    process: &mut Child,
+    ownership: &ProcessOwnershipReceipt,
+) -> MedusaResult<()> {
     let pid = process.id();
-    if wait_for_unix_tree_exit(process, pid, Duration::ZERO)? {
+    if !process_group_alive(pid) {
+        let _ = process.try_wait()?;
         return Ok(());
     }
+    require_current_ownership(ownership, "signal")?;
     send_group_signal("-TERM", pid)?;
-    if wait_for_unix_tree_exit(process, pid, TERMINATION_GRACE)? {
+    if wait_for_unix_group_exit(pid, TERMINATION_GRACE) {
+        let _ = process.try_wait()?;
         return Ok(());
     }
+
+    // The leader has deliberately not been reaped while the group is alive, so its PID cannot be
+    // recycled between TERM and KILL. Re-verify the same launch receipt before escalation anyway;
+    // mismatch or probe uncertainty fails closed rather than targeting a numeric group blindly.
+    require_current_ownership(ownership, "force-terminate")?;
     send_group_signal("-KILL", pid)?;
-    if wait_for_unix_tree_exit(process, pid, TERMINATION_GRACE)? {
+    if wait_for_unix_group_exit(pid, TERMINATION_GRACE) {
+        let _ = process.try_wait()?;
+        return Ok(());
+    }
+
+    // No further destructive action will be attempted. It is now safe to reap a terminated leader
+    // before reporting that descendants remain.
+    let _ = process.try_wait()?;
+    if !process_group_alive(pid) {
         return Ok(());
     }
     Err(MedusaError::new(
@@ -337,15 +423,27 @@ fn terminate_process_tree(process: &mut Child) -> MedusaResult<()> {
 }
 
 #[cfg(unix)]
-fn wait_for_unix_tree_exit(process: &mut Child, pid: u32, timeout: Duration) -> MedusaResult<bool> {
+fn require_current_ownership(
+    ownership: &ProcessOwnershipReceipt,
+    action: &str,
+) -> MedusaResult<()> {
+    let verification = ownership.verify();
+    if verification.permits_destructive_action() {
+        Ok(())
+    } else {
+        Err(ownership_error(ownership.pid, verification, action))
+    }
+}
+
+#[cfg(unix)]
+fn wait_for_unix_group_exit(pid: u32, timeout: Duration) -> bool {
     let deadline = Instant::now() + timeout;
     loop {
-        let leader_exited = process.try_wait()?.is_some();
-        if leader_exited && !process_group_alive(pid) {
-            return Ok(true);
+        if !process_group_alive(pid) {
+            return true;
         }
         if Instant::now() >= deadline {
-            return Ok(false);
+            return false;
         }
         thread::sleep(PROCESS_POLL_INTERVAL);
     }
@@ -429,10 +527,21 @@ fn process_group_signal_alive(pid: u32) -> bool {
 }
 
 #[cfg(windows)]
-fn terminate_process_tree(process: &mut Child, job: &WindowsJob) -> MedusaResult<()> {
+fn terminate_process_tree(
+    process: &mut Child,
+    job: &WindowsJob,
+    ownership: &ProcessOwnershipReceipt,
+) -> MedusaResult<()> {
     let pid = process.id();
-    if process.try_wait()?.is_some() && job.is_empty().map_err(MedusaError::from)? {
+    let leader_exited = process.try_wait()?.is_some();
+    if leader_exited && job.is_empty().map_err(MedusaError::from)? {
         return Ok(());
+    }
+    if !leader_exited {
+        let verification = ownership.verify();
+        if !verification.permits_destructive_action() {
+            return Err(ownership_error(pid, verification, "terminate"));
+        }
     }
     let deadline = Instant::now() + TERMINATION_GRACE;
     loop {
@@ -444,6 +553,8 @@ fn terminate_process_tree(process: &mut Child, job: &WindowsJob) -> MedusaResult
         }
         thread::sleep(PROCESS_POLL_INTERVAL);
     }
+    // The Job Object handle is a stable kernel ownership anchor for descendants even after the
+    // original leader exits, so this action cannot be redirected by numeric PID reuse.
     job.terminate().map_err(MedusaError::from)?;
     let deadline = Instant::now() + TERMINATION_GRACE;
     loop {
@@ -460,4 +571,38 @@ fn terminate_process_tree(process: &mut Child, job: &WindowsJob) -> MedusaResult
         ErrorCategory::Execution,
         format!("Windows Job Object process tree {pid} remained alive after termination"),
     ))
+}
+
+#[cfg(all(test, unix))]
+mod tests {
+    use super::*;
+
+    fn spawn_sleep() -> Child {
+        let mut command = Command::new("sleep");
+        command.arg("30").stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null());
+        configure_process_group(&mut command);
+        command.spawn().expect("spawn sleep")
+    }
+
+    #[test]
+    fn verified_real_process_is_cancellable() {
+        let mut child = spawn_sleep();
+        let receipt = ProcessOwnershipReceipt::capture(child.id()).expect("capture receipt");
+        terminate_process_tree(&mut child, &receipt).expect("terminate verified child");
+        assert!(child.try_wait().expect("wait child").is_some());
+    }
+
+    #[test]
+    fn mismatched_receipt_never_signals_live_process() {
+        let mut child = spawn_sleep();
+        let mut receipt = ProcessOwnershipReceipt::capture(child.id()).expect("capture receipt");
+        receipt.start_marker.value.push_str("-recycled");
+
+        let error = terminate_process_tree(&mut child, &receipt).expect_err("identity mismatch");
+        assert!(error.to_string().contains("VerifiedStale"));
+        assert!(child.try_wait().expect("child status").is_none());
+
+        child.kill().expect("cleanup child");
+        child.wait().expect("reap child");
+    }
 }
