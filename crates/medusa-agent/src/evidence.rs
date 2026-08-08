@@ -2,7 +2,10 @@ use crate::session::{AgentSession, journal};
 use medusa_core::{ErrorCategory, ErrorCode, MedusaError, MedusaResult};
 use medusa_extensions::desktop_commander_tool_is_mutating;
 use medusa_protocol::{Actor, EventEnvelope, EventPayload};
-use medusa_provider::{mark_pending_route_mutation, record_pending_route_verification};
+use medusa_provider::{
+    clear_pending_route_verification, mark_pending_route_mutation,
+    record_pending_route_verification,
+};
 
 pub(crate) mod execution_lane {
     include!("execution_lane.rs");
@@ -21,6 +24,17 @@ fn successful_mutation_event(payload: &EventPayload) -> bool {
     )
 }
 
+fn abandons_verification_attribution(payload: &EventPayload) -> bool {
+    matches!(
+        payload,
+        EventPayload::SessionReset { .. }
+            | EventPayload::CancellationCompleted
+            | EventPayload::RuntimeFailed { .. }
+            | EventPayload::SessionFailed { .. }
+            | EventPayload::SessionCompleted { .. }
+    )
+}
+
 pub(crate) fn append_event(
     session: &mut AgentSession,
     actor: Actor,
@@ -31,14 +45,18 @@ pub(crate) fn append_event(
         EventPayload::VerificationCompleted { passed, .. } => Some(*passed),
         _ => None,
     };
+    let attribution_abandoned = abandons_verification_attribution(&payload);
+    let session_id = session.id.as_str().to_owned();
 
     journal::append_payload_committed(session, actor, payload)?;
 
     if mutation_completed {
-        mark_pending_route_mutation();
+        mark_pending_route_mutation(&session_id);
     }
     if let Some(passed) = verification_completed {
-        record_pending_route_verification(passed)?;
+        record_pending_route_verification(&session_id, passed)?;
+    } else if attribution_abandoned {
+        clear_pending_route_verification(&session_id);
     }
     Ok(())
 }
@@ -91,6 +109,23 @@ mod tests {
             &EventPayload::ToolExecutionCompleted {
                 tool: "fs_write".to_owned(),
                 exit_code: Some(1),
+            }
+        ));
+    }
+
+    #[test]
+    fn terminal_session_events_clear_unverified_attribution() {
+        assert!(abandons_verification_attribution(
+            &EventPayload::SessionReset {
+                reason: "new task".to_owned(),
+            }
+        ));
+        assert!(abandons_verification_attribution(
+            &EventPayload::CancellationCompleted
+        ));
+        assert!(!abandons_verification_attribution(
+            &EventPayload::SessionPaused {
+                reason: "approval".to_owned(),
             }
         ));
     }
