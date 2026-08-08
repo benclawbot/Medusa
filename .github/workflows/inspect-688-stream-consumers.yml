@@ -1,0 +1,20 @@
+name: Inspect 688 Stream Consumers
+
+on:
+  push:
+    branches: [perf/688-engine-stream-delivery]
+
+permissions:
+  contents: read
+
+jobs:
+  inspect:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      - name: Locate AgentUpdate consumers
+        run: |
+          echo '=== AgentUpdate references ==='
+          rg -n 'AgentUpdate|AssistantText' crates apps . --glob '!target/**' | head -400 || true
+          echo '=== provider streaming references ==='
+          rg -n 'ProviderStreamEvent|complete_streaming' crates apps . --glob '!target/**' | head -400 || true
