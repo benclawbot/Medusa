@@ -20,14 +20,14 @@ jobs:
         run: |
           {
             echo '=== AgentUpdate references ==='
-            rg -n 'AgentUpdate|AssistantText' crates apps . --glob '!target/**' | head -500 || true
+            grep -RInE 'AgentUpdate|AssistantText' crates apps 2>/dev/null | head -500 || true
             echo '=== provider streaming references ==='
-            rg -n 'ProviderStreamEvent|complete_streaming' crates apps . --glob '!target/**' | head -500 || true
+            grep -RInE 'ProviderStreamEvent|complete_streaming' crates apps 2>/dev/null | head -500 || true
           } > .github/inspect-688-stream-consumers.txt
       - name: Commit map
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add .github/inspect-688-stream-consumers.txt
-          git commit -m "Capture 688 streaming consumer map"
+          git commit -m "Capture 688 streaming consumer map" || exit 0
           git push origin HEAD:perf/688-engine-stream-delivery
