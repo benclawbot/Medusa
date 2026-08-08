@@ -590,6 +590,45 @@ mod tests {
         command.spawn().expect("spawn sleep")
     }
 
+    #[cfg(target_os = "linux")]
+    fn spawn_sleep_tree() -> Child {
+        let mut command = Command::new("sh");
+        command
+            .args(["-c", "sleep 30 & wait"])
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null());
+        configure_process_group(&mut command);
+        command.spawn().expect("spawn sleep tree")
+    }
+
+    #[cfg(target_os = "linux")]
+    fn linux_group_member_count(group_id: u32) -> usize {
+        fs::read_dir("/proc")
+            .into_iter()
+            .flatten()
+            .filter_map(Result::ok)
+            .filter(|entry| {
+                entry.file_name().to_string_lossy().parse::<u32>().is_ok()
+                    && linux_process_is_live_group_member(&entry.path().join("stat"), group_id)
+            })
+            .count()
+    }
+
+    #[cfg(target_os = "linux")]
+    fn wait_for_linux_group_members(group_id: u32, minimum: usize) -> bool {
+        let deadline = Instant::now() + Duration::from_secs(1);
+        loop {
+            if linux_group_member_count(group_id) >= minimum {
+                return true;
+            }
+            if Instant::now() >= deadline {
+                return false;
+            }
+            thread::sleep(PROCESS_POLL_INTERVAL);
+        }
+    }
+
     #[test]
     fn verified_real_process_is_cancellable() {
         let mut child = spawn_sleep();
@@ -610,5 +649,29 @@ mod tests {
 
         child.kill().expect("cleanup child");
         child.wait().expect("reap child");
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn stale_leader_identity_cannot_target_contained_grandchildren() {
+        let mut child = spawn_sleep_tree();
+        let receipt = ProcessOwnershipReceipt::capture(child.id()).expect("capture receipt");
+        assert!(
+            wait_for_linux_group_members(child.id(), 2),
+            "shell leader never spawned its contained child"
+        );
+
+        let mut stale_receipt = receipt.clone();
+        stale_receipt.start_marker.value.push_str("-recycled");
+        let error = terminate_process_tree(&mut child, &stale_receipt)
+            .expect_err("stale leader identity must fail closed");
+        assert!(error.to_string().contains("VerifiedStale"));
+        assert!(
+            linux_group_member_count(child.id()) >= 2,
+            "stale identity unexpectedly signalled the contained process tree"
+        );
+
+        terminate_process_tree(&mut child, &receipt).expect("cleanup verified process tree");
+        assert!(!process_group_alive(child.id()));
     }
 }
