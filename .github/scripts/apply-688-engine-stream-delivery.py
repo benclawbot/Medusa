@@ -91,8 +91,7 @@ new = '''        let request_started = std::time::Instant::now();
                 complete_request(&request)?
             }
             Err(error) => return Err(error),
-        };
-        drop(complete_request);'''
+        };'''
 replace("crates/medusa-agent/src/engine.rs", old, new)
 
 replace(
