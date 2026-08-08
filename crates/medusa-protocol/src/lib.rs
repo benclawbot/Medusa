@@ -9,7 +9,7 @@ use sha2::{Digest, Sha256};
 use time::OffsetDateTime;
 
 /// Current wire protocol version.
-pub const CURRENT_PROTOCOL_VERSION: ProtocolVersion = ProtocolVersion { major: 1, minor: 2 };
+pub const CURRENT_PROTOCOL_VERSION: ProtocolVersion = ProtocolVersion { major: 1, minor: 3 };
 
 /// Independently versioned wire protocol.
 #[derive(Clone, Copy, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize)]
@@ -80,6 +80,7 @@ pub enum SessionState {
 pub enum SessionActionKind {
     Steer,
     FollowUp,
+    ReplaceFollowUp,
     Cancel,
     GoalAdjustment,
 }
@@ -204,6 +205,11 @@ pub enum EventPayload {
     },
     SessionActionAccepted {
         action: SessionAction,
+    },
+    SessionActionRejected {
+        action: SessionAction,
+        authoritative_revision: u64,
+        reason: String,
     },
     SessionActionLifecycleChanged {
         action_id: String,
@@ -501,6 +507,40 @@ mod tests {
         );
         assert!(
             SessionActionLifecycle::Committing.can_transition_to(SessionActionLifecycle::Running)
+        );
+    }
+
+    #[test]
+    fn replacement_and_rejection_contracts_round_trip() {
+        let action = SessionAction {
+            action_id: "action-2".to_owned(),
+            idempotency_key: "idem-2".to_owned(),
+            source: "telegram:client-2".to_owned(),
+            target_session_id: "session-1".to_owned(),
+            expected_session_revision: 9,
+            kind: SessionActionKind::ReplaceFollowUp,
+            delivery_policy: SessionActionDeliveryPolicy::WhenIdle,
+            wake_policy: SessionActionWakePolicy::OnBoundary,
+            payload: json!({"text": "replacement", "replaces_action_id": "action-1"}),
+        };
+        let event = EventEnvelope::new(
+            10,
+            SessionId::new(),
+            Actor::User,
+            CorrelationId::new(),
+            EventPayload::SessionActionRejected {
+                action,
+                authoritative_revision: 10,
+                reason: "stale_revision".to_owned(),
+            },
+            None,
+            OffsetDateTime::UNIX_EPOCH,
+        )
+        .expect("rejection event");
+        let json = serde_json::to_string(&event).expect("serialize rejection");
+        assert_eq!(
+            serde_json::from_str::<EventEnvelope>(&json).expect("deserialize rejection"),
+            event
         );
     }
 
