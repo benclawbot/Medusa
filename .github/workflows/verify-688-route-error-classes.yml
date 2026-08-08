@@ -1,0 +1,43 @@
+name: Verify 688 Route Error Classes
+
+on:
+  push:
+    branches:
+      - perf/688-route-error-classes
+
+permissions:
+  contents: write
+
+concurrency:
+  group: verify-688-route-error-classes-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  verify:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          ref: perf/688-route-error-classes
+          fetch-depth: 0
+      - uses: dtolnay/rust-toolchain@39b0b3842c7e8bbf6904c0bfc3d9006fdd4dc4e0
+      - name: Apply product patch
+        run: python .github/scripts/apply-688-route-error-classes.py
+      - name: Format
+        run: cargo fmt --all
+      - name: Strict provider Clippy
+        run: cargo clippy -p medusa-provider --all-targets --all-features -- -D warnings
+      - name: Provider tests
+        run: cargo test -p medusa-provider -- --nocapture
+      - name: Publish validated product source
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add crates/medusa-provider/src/manager.rs crates/medusa-provider/src/route_latency.rs crates/medusa-provider/src/route_metrics_store.rs
+          if git diff --cached --quiet; then
+            echo "No product changes to publish"
+            exit 0
+          fi
+          git commit -m "Record provider route error classes"
+          git push origin HEAD:perf/688-route-error-classes
