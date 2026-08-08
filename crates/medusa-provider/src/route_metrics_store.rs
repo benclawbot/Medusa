@@ -113,9 +113,11 @@ impl ProviderRouteLatencyStore {
             stats.cached_input_tokens = stats
                 .cached_input_tokens
                 .saturating_add(usage.cache_read_input_tokens);
-            stats.output_tokens = stats.output_tokens.saturating_add(usage.output_tokens);
-            let generation_ms = duration_ms.saturating_sub(first_token_ms.unwrap_or_default());
-            stats.generation_total_ms = stats.generation_total_ms.saturating_add(generation_ms);
+            if let Some(first_token_ms) = first_token_ms {
+                stats.output_tokens = stats.output_tokens.saturating_add(usage.output_tokens);
+                let generation_ms = duration_ms.saturating_sub(first_token_ms);
+                stats.generation_total_ms = stats.generation_total_ms.saturating_add(generation_ms);
+            }
         })
     }
 
@@ -352,7 +354,7 @@ mod tests {
         assert_eq!(stats.total_duration_ms, 120);
         assert_eq!(stats.cache_reuse_milli(), 900);
         assert_eq!(stats.output_tokens, 0);
-        assert_eq!(stats.generation_total_ms, 120);
+        assert_eq!(stats.generation_total_ms, 0);
 
         let changed = ProviderRouteLatencyStore::at(directory.path(), &[profile("gpt-6")])
             .expect("changed route");
