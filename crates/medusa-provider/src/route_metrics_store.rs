@@ -118,7 +118,9 @@ impl ProviderRouteLatencyStore {
                 let generation_ms = duration_ms.saturating_sub(first_token_ms);
                 stats.generation_total_ms = stats.generation_total_ms.saturating_add(generation_ms);
             }
-        })
+        })?;
+        crate::verification_bridge::register_pending_route_completion(self.clone(), index);
+        Ok(())
     }
 
     /// Records an authoritative monetary cost observation for a route.
