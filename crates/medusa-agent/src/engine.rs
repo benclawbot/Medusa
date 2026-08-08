@@ -32,7 +32,10 @@ use medusa_config::{Config, Mode};
 use medusa_core::{ErrorCategory, ErrorCode, MedusaError, MedusaResult, SessionId};
 use medusa_extensions::{DesktopCommanderClient, DesktopCommanderSettings};
 use medusa_protocol::{Actor, EventPayload};
-use medusa_provider::{Message, MessageBlock, ModelProvider, ModelRequest, ResponseBlock, Role};
+use medusa_provider::{
+    Message, MessageBlock, ModelProvider, ModelRequest, ProviderStreamEvent,
+    ProviderStreamTranscript, ResponseBlock, Role,
+};
 use medusa_world_model::{WorkspaceModel, create_for_session, load as load_world_model};
 use time::OffsetDateTime;
 
@@ -756,10 +759,38 @@ impl<P: ModelProvider> AgentEngine<P> {
             temperature_milli: self.config.model.temperature_milli,
         };
         let request_started = std::time::Instant::now();
-        let response = match self
-            .provider
-            .complete_cancellable(&request, &self.cancellation)
-        {
+        let streaming = self.provider.capabilities().streaming;
+        let mut stream_transcript = ProviderStreamTranscript::default();
+        let mut streamed_text = String::new();
+        let mut stream_text_rejected = false;
+        let mut complete_request = |request: &ModelRequest| {
+            if !streaming {
+                return self
+                    .provider
+                    .complete_cancellable(request, &self.cancellation);
+            }
+            let mut sink = |event: ProviderStreamEvent| {
+                stream_transcript.push(event.clone())?;
+                if let ProviderStreamEvent::TextDelta { text } = event
+                    && !stream_text_rejected
+                {
+                    streamed_text.push_str(&text);
+                    if validate_provider_text(&streamed_text).is_ok() {
+                        observer(&AgentUpdate::AssistantText(text));
+                    } else {
+                        stream_text_rejected = true;
+                        observer(&AgentUpdate::AssistantText(
+                            "[provider output rejected: identity or policy contamination]"
+                                .to_owned(),
+                        ));
+                    }
+                }
+                Ok(())
+            };
+            self.provider
+                .complete_streaming_cancellable(request, &self.cancellation, &mut sink)
+        };
+        let response = match complete_request(&request) {
             Ok(response) => response,
             Err(error) if context_budget::is_context_limit_rejection(&error.to_string()) => {
                 if !compacted {
@@ -773,8 +804,7 @@ impl<P: ModelProvider> AgentEngine<P> {
                     request.messages = messages_with_turn_instruction(session, turn_instruction);
                     validate_messages(&request.messages, &self.provider.capabilities())?;
                 }
-                self.provider
-                    .complete_cancellable(&request, &self.cancellation)?
+                complete_request(&request)?
             }
             Err(error) => return Err(error),
         };
@@ -844,7 +874,10 @@ impl<P: ModelProvider> AgentEngine<P> {
             .is_empty()
             .then(|| question_from_assistant_text(&assistant_text.join("\n")))
             .flatten();
-        if fallback_question.is_none() && !assistant_text.is_empty() {
+        if fallback_question.is_none()
+            && !assistant_text.is_empty()
+            && (!streaming || streamed_text.is_empty())
+        {
             observer(&AgentUpdate::AssistantText(assistant_text.join("\n")));
         }
 
