@@ -56,8 +56,14 @@ pub struct HedgeDecision {
 /// - requires explicit policy enablement and enough primary telemetry;
 /// - refuses requests whose duplicate output budget exceeds the configured waste cap;
 /// - requires two capability-compatible routes;
-/// - launches only after the primary breaches its learned threshold and only when the secondary
-///   has lower expected completion cost than the primary route that has already gone into tail.
+/// - waits until the latency-ranked primary breaches a learned tail threshold;
+/// - launches only when the secondary is expected to complete within one learned tail-recovery
+///   window from launch.
+///
+/// The secondary is intentionally *not* required to have a lower unconditional latency score than
+/// the primary. `latency_aware_route_order` already places the lowest-score route first, so such a
+/// requirement would make hedging unreachable exactly when the selected primary becomes a tail
+/// outlier on the current request.
 #[must_use]
 pub fn hedge_decision(
     route_order: &[usize],
@@ -96,7 +102,7 @@ pub fn hedge_decision(
 
     let secondary_stats = stats.get(secondary_index).copied().unwrap_or_default();
     let secondary_expected_ms = expected_latency_ms(secondary_stats, latency_policy);
-    if secondary_expected_ms >= primary_expected_ms {
+    if secondary_expected_ms >= launch_after_ms {
         return None;
     }
 
@@ -112,7 +118,7 @@ pub fn hedge_decision(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::RouteRetryPolicy;
+    use crate::{RouteRetryPolicy, latency_aware_route_order};
 
     fn profile(id: &str) -> ProviderRouteProfile {
         ProviderRouteProfile {
@@ -138,32 +144,47 @@ mod tests {
     }
 
     #[test]
-    fn slow_primary_can_trigger_exactly_one_secondary() {
+    fn latency_ranked_primary_can_trigger_exactly_one_secondary() {
         let profiles = vec![profile("primary"), profile("secondary"), profile("third")];
-        let telemetry = vec![stats(4_000, 10), stats(500, 10), stats(100, 10)];
+        let telemetry = vec![stats(1_000, 10), stats(1_200, 10), stats(2_000, 10)];
+        let route_order = latency_aware_route_order(
+            &profiles,
+            &telemetry,
+            false,
+            false,
+            RouteLatencyPolicy::default(),
+        );
+        assert_eq!(route_order, vec![0, 1, 2]);
+
         let decision = hedge_decision(
-            &[0, 1, 2],
+            &route_order,
             &profiles,
             &telemetry,
             1_024,
-            HedgePolicy {
-                delay_multiplier_milli: 1_000,
-                ..HedgePolicy::default()
-            },
+            HedgePolicy::default(),
             RouteLatencyPolicy::default(),
         )
         .expect("hedge decision");
         assert_eq!(decision.primary_index, 0);
         assert_eq!(decision.secondary_index, 1);
+        assert_eq!(decision.launch_after_ms, 1_500);
     }
 
     #[test]
-    fn healthy_primary_does_not_launch_slower_secondary() {
+    fn secondary_outside_tail_recovery_window_is_not_launched() {
         let profiles = vec![profile("primary"), profile("secondary")];
-        let telemetry = vec![stats(400, 10), stats(800, 10)];
+        let telemetry = vec![stats(1_000, 10), stats(2_000, 10)];
+        let route_order = latency_aware_route_order(
+            &profiles,
+            &telemetry,
+            false,
+            false,
+            RouteLatencyPolicy::default(),
+        );
+        assert_eq!(route_order, vec![0, 1]);
         assert!(
             hedge_decision(
-                &[0, 1],
+                &route_order,
                 &profiles,
                 &telemetry,
                 1_024,
