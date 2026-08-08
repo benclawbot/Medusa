@@ -141,31 +141,35 @@ pub fn hedge_decision(
     let launch_after_ms = launch_after_ms.min(policy.max_delay_ms).max(1);
     let primary_expected_ms = expected_latency_ms(primary_stats, latency_policy);
 
-    route_order.iter().copied().skip(1).find_map(|secondary_index| {
-        let secondary_profile = profiles.get(secondary_index)?;
-        if primary_profile.tool_calling != secondary_profile.tool_calling {
-            return None;
-        }
-        let secondary_stats = stats.get(secondary_index).copied().unwrap_or_default();
-        let secondary_cost_microusd = secondary_stats.average_cost_microusd();
-        if let Some(max_cost) = policy.max_duplicate_cost_microusd
-            && secondary_cost_microusd.is_none_or(|cost| cost > max_cost)
-        {
-            return None;
-        }
-        let secondary_expected_ms = expected_latency_ms(secondary_stats, latency_policy);
-        if secondary_expected_ms >= launch_after_ms {
-            return None;
-        }
-        Some(HedgeDecision {
-            primary_index,
-            secondary_index,
-            launch_after_ms,
-            primary_expected_ms,
-            secondary_expected_ms,
-            secondary_cost_microusd,
+    route_order
+        .iter()
+        .copied()
+        .skip(1)
+        .find_map(|secondary_index| {
+            let secondary_profile = profiles.get(secondary_index)?;
+            if primary_profile.tool_calling != secondary_profile.tool_calling {
+                return None;
+            }
+            let secondary_stats = stats.get(secondary_index).copied().unwrap_or_default();
+            let secondary_cost_microusd = secondary_stats.average_cost_microusd();
+            if let Some(max_cost) = policy.max_duplicate_cost_microusd
+                && secondary_cost_microusd.is_none_or(|cost| cost > max_cost)
+            {
+                return None;
+            }
+            let secondary_expected_ms = expected_latency_ms(secondary_stats, latency_policy);
+            if secondary_expected_ms >= launch_after_ms {
+                return None;
+            }
+            Some(HedgeDecision {
+                primary_index,
+                secondary_index,
+                launch_after_ms,
+                primary_expected_ms,
+                secondary_expected_ms,
+                secondary_cost_microusd,
+            })
         })
-    })
 }
 
 #[cfg(test)]
@@ -342,11 +346,7 @@ mod tests {
 
     #[test]
     fn over_budget_secondary_does_not_hide_later_eligible_route() {
-        let profiles = vec![
-            profile("primary"),
-            profile("expensive"),
-            profile("bounded"),
-        ];
+        let profiles = vec![profile("primary"), profile("expensive"), profile("bounded")];
         let primary = stats(4_000, 10);
         let expensive = RouteLatencyStats {
             cost_microusd_total: 6_000,
