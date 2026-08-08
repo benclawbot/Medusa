@@ -134,10 +134,43 @@ impl ProviderRouteLatencyStore {
     }
 
     pub fn record_failure(&self, index: usize, duration_ms: u64) -> MedusaResult<()> {
+        self.record_failure_with_category(index, duration_ms, None)
+    }
+
+    pub fn record_failure_with_category(
+        &self,
+        index: usize,
+        duration_ms: u64,
+        category: Option<ErrorCategory>,
+    ) -> MedusaResult<()> {
         self.update(index, |stats| {
             stats.samples = stats.samples.saturating_add(1);
             stats.failures = stats.failures.saturating_add(1);
             stats.total_duration_ms = stats.total_duration_ms.saturating_add(duration_ms);
+            match category {
+                Some(ErrorCategory::Validation) => {
+                    stats.validation_errors = stats.validation_errors.saturating_add(1);
+                }
+                Some(ErrorCategory::Policy) => {
+                    stats.policy_errors = stats.policy_errors.saturating_add(1);
+                }
+                Some(ErrorCategory::Environment) => {
+                    stats.environment_errors = stats.environment_errors.saturating_add(1);
+                }
+                Some(ErrorCategory::Execution) => {
+                    stats.execution_errors = stats.execution_errors.saturating_add(1);
+                }
+                Some(ErrorCategory::Transient) => {
+                    stats.transient_errors = stats.transient_errors.saturating_add(1);
+                }
+                Some(ErrorCategory::Persistence) => {
+                    stats.persistence_errors = stats.persistence_errors.saturating_add(1);
+                }
+                Some(ErrorCategory::Internal) => {
+                    stats.internal_errors = stats.internal_errors.saturating_add(1);
+                }
+                None => {}
+            }
         })
     }
 
@@ -355,6 +388,18 @@ mod tests {
         assert_eq!(stats.cache_reuse_milli(), 900);
         assert_eq!(stats.output_tokens, 0);
         assert_eq!(stats.generation_total_ms, 0);
+
+        first
+            .record_failure_with_category(0, 25, Some(ErrorCategory::Transient))
+            .expect("record categorized failure");
+        first
+            .record_failure_with_category(0, 30, Some(ErrorCategory::Environment))
+            .expect("record environment failure");
+        let categorized = second.stats().expect("categorized stats")[0];
+        assert_eq!(categorized.failures, 2);
+        assert_eq!(categorized.transient_errors, 1);
+        assert_eq!(categorized.environment_errors, 1);
+        assert_eq!(categorized.execution_errors, 0);
 
         let changed = ProviderRouteLatencyStore::at(directory.path(), &[profile("gpt-6")])
             .expect("changed route");

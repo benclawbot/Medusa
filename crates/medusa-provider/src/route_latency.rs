@@ -24,6 +24,20 @@ pub struct RouteLatencyStats {
     pub retry_attempts: u64,
     #[serde(default)]
     pub retry_recoveries: u64,
+    #[serde(default)]
+    pub validation_errors: u64,
+    #[serde(default)]
+    pub policy_errors: u64,
+    #[serde(default)]
+    pub environment_errors: u64,
+    #[serde(default)]
+    pub execution_errors: u64,
+    #[serde(default)]
+    pub transient_errors: u64,
+    #[serde(default)]
+    pub persistence_errors: u64,
+    #[serde(default)]
+    pub internal_errors: u64,
 }
 
 impl RouteLatencyStats {
