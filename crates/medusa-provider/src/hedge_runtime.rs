@@ -52,7 +52,9 @@ enum CandidateMessage {
 /// Candidate stream events are buffered independently until a candidate emits an authoritative
 /// output signal. At that instant only the winner's buffered events are released to the caller and
 /// the losing request is cooperatively cancelled. A non-streaming successful response becomes
-/// authoritative when it completes.
+/// authoritative when it completes. If an authoritative streaming candidate fails after output has
+/// been published, that error is returned immediately so no second provider stream can be appended
+/// to the caller-visible partial response.
 pub(crate) fn race_provider_candidates<P: ModelProvider + Sync>(
     providers: &[P],
     profiles: &[ProviderRouteProfile],
@@ -162,6 +164,13 @@ pub(crate) fn race_provider_candidates<P: ModelProvider + Sync>(
                 Ok(CandidateMessage::Finished(outcome)) => {
                     let index = outcome.index;
                     let successful = outcome.result.is_ok();
+                    if authoritative_index == Some(index)
+                        && let Err(error) = &outcome.result
+                    {
+                        primary_cancel.store(true, Ordering::SeqCst);
+                        secondary_cancel.store(true, Ordering::SeqCst);
+                        return Err(error.clone());
+                    }
                     if index == plan.primary_index {
                         primary_outcome = Some(outcome);
                     } else if index == plan.secondary_index {
@@ -369,6 +378,7 @@ mod tests {
         calls: Arc<AtomicUsize>,
         cancellations: Arc<AtomicUsize>,
         fail: bool,
+        fail_after_output: bool,
     }
 
     impl ModelProvider for DelayedProvider {
@@ -399,6 +409,9 @@ mod tests {
                 return Err(race_error(format!("{} failed", self.id)));
             }
             sink(ProviderStreamEvent::OutputStarted)?;
+            if self.fail_after_output {
+                return Err(race_error(format!("{} failed after output", self.id)));
+            }
             let response = response(self.id);
             sink(ProviderStreamEvent::Completed {
                 response: response.clone(),
@@ -420,7 +433,7 @@ mod tests {
                 }
                 thread::sleep(Duration::from_millis(1));
             }
-            if self.fail {
+            if self.fail || self.fail_after_output {
                 Err(race_error(format!("{} failed", self.id)))
             } else {
                 Ok(response(self.id))
@@ -443,6 +456,7 @@ mod tests {
             calls: Arc::new(AtomicUsize::new(0)),
             cancellations: Arc::new(AtomicUsize::new(0)),
             fail: false,
+            fail_after_output: false,
         }
     }
 
@@ -551,6 +565,48 @@ mod tests {
             ProviderStreamEvent::ResponseStarted { response_id: Some(id) } if id == "primary"
         )));
         assert!(events.iter().any(|event| matches!(
+            event,
+            ProviderStreamEvent::ResponseStarted { response_id: Some(id) } if id == "secondary"
+        )));
+    }
+
+    #[test]
+    fn authoritative_stream_failure_is_returned_without_exposing_secondary_output() {
+        let mut primary = provider("primary", 30);
+        primary.fail_after_output = true;
+        let secondary = provider("secondary", 100);
+        let secondary_cancellations = Arc::clone(&secondary.cancellations);
+        let providers = vec![primary, secondary];
+        let profiles = vec![profile("primary"), profile("secondary")];
+        let mut events = Vec::new();
+        let mut record = |event| {
+            events.push(event);
+            Ok(())
+        };
+        let mut sink: Option<&mut dyn FnMut(ProviderStreamEvent) -> MedusaResult<()>> =
+            Some(&mut record);
+
+        let error = race_provider_candidates(
+            &providers,
+            &profiles,
+            &request(),
+            HedgeRacePlan {
+                primary_index: 0,
+                secondary_index: 1,
+                launch_after_ms: 20,
+            },
+            None,
+            &mut sink,
+        )
+        .expect_err("authoritative stream failure must terminate the race");
+
+        assert!(error.to_string().contains("failed after output"));
+        assert_eq!(secondary_cancellations.load(Ordering::SeqCst), 1);
+        assert!(events.iter().any(|event| matches!(
+            event,
+            ProviderStreamEvent::OutputStarted
+        )));
+        assert!(events.iter().all(|event| !matches!(
             event,
             ProviderStreamEvent::ResponseStarted { response_id: Some(id) } if id == "secondary"
         )));
