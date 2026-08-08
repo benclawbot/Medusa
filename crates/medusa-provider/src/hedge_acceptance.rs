@@ -45,12 +45,14 @@ pub fn assess_hedge_latency_acceptance(
 
     let baseline_p95_ms = percentile_95(baseline_ms);
     let hedged_p95_ms = percentile_95(hedged_ms);
-    let improvement_bps = baseline_p95_ms.zip(hedged_p95_ms).and_then(|(baseline, hedged)| {
-        if baseline == 0 || hedged >= baseline {
-            return None;
-        }
-        Some(baseline.saturating_sub(hedged).saturating_mul(10_000) / baseline)
-    });
+    let improvement_bps = baseline_p95_ms
+        .zip(hedged_p95_ms)
+        .and_then(|(baseline, hedged)| {
+            if baseline == 0 || hedged >= baseline {
+                return None;
+            }
+            Some(baseline.saturating_sub(hedged).saturating_mul(10_000) / baseline)
+        });
 
     if reasons.is_empty() {
         match (baseline_p95_ms, hedged_p95_ms) {
