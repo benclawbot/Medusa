@@ -9,10 +9,12 @@ repository.workspace = true
 [dependencies]
 medusa-config = { path = "../medusa-config" }
 medusa-core.workspace = true
+medusa-prompt-cache = { path = "../medusa-prompt-cache" }
 reqwest = { version = "0.12", default-features = false, features = ["blocking", "json", "rustls-tls", "stream"] }
 serde.workspace = true
 serde_json.workspace = true
 tokio = { version = "1.47", features = ["macros", "net", "rt", "time"] }
+time.workspace = true
 
 [lints]
 workspace = true

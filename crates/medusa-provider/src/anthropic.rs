@@ -64,11 +64,21 @@ impl MiniMaxProvider {
     }
 
     fn request_body(&self, request: &ModelRequest) -> Value {
+        let mut tools = json!(request.tools);
+        if let Some(last) = tools.as_array_mut().and_then(|items| items.last_mut())
+            && let Some(object) = last.as_object_mut()
+        {
+            object.insert("cache_control".to_owned(), json!({"type": "ephemeral"}));
+        }
         json!({
             "model": self.model,
-            "system": request.system,
+            "system": [{
+                "type": "text",
+                "text": request.system,
+                "cache_control": {"type": "ephemeral"}
+            }],
             "messages": request.messages,
-            "tools": request.tools,
+            "tools": tools,
             "max_tokens": request.max_tokens,
             "temperature": f64::from(request.temperature_milli) / 1000.0,
             "stream": false
@@ -333,6 +343,27 @@ mod tests {
             max_tokens: 100,
             temperature_milli: 0,
         }
+    }
+
+    #[test]
+    fn request_marks_stable_system_and_tool_prefix_for_native_caching() {
+        let provider = MiniMaxProvider {
+            blocking_client: shared_blocking_http_client().expect("blocking client"),
+            async_client: shared_async_http_client().expect("async client"),
+            base_url: "https://example.invalid".to_owned(),
+            api_key: "test".to_owned(),
+            model: "test-model".to_owned(),
+            capabilities: anthropic_capabilities(),
+        };
+        let mut request = empty_request();
+        request.tools.push(crate::ToolDefinition {
+            name: "fs_read".to_owned(),
+            description: "read".to_owned(),
+            input_schema: json!({"type": "object"}),
+        });
+        let body = provider.request_body(&request);
+        assert_eq!(body["system"][0]["cache_control"]["type"], "ephemeral");
+        assert_eq!(body["tools"][0]["cache_control"]["type"], "ephemeral");
     }
 
     #[test]
