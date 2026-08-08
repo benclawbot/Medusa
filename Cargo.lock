@@ -1624,9 +1624,11 @@ version = "1.0.0"
 dependencies = [
  "medusa-config",
  "medusa-core",
+ "medusa-prompt-cache",
  "reqwest",
  "serde",
  "serde_json",
+ "time",
  "tokio",
 ]
 
