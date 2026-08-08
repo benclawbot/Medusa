@@ -1,4 +1,7 @@
-use std::sync::{Arc, Mutex, atomic::{AtomicUsize, Ordering}};
+use std::sync::{
+    Arc, Mutex,
+    atomic::{AtomicUsize, Ordering},
+};
 
 use medusa_core::{ErrorCategory, ErrorCode, MedusaError, MedusaResult};
 use medusa_provider::{
@@ -164,7 +167,11 @@ fn manager_does_not_fail_over_after_stream_output_is_exposed() {
     assert_eq!(error.category, ErrorCategory::Transient);
     assert_eq!(first_calls.load(Ordering::SeqCst), 1);
     assert_eq!(second_calls.load(Ordering::SeqCst), 0);
-    assert!(events.iter().any(|event| matches!(event, ProviderStreamEvent::TextDelta { .. })));
+    assert!(
+        events
+            .iter()
+            .any(|event| matches!(event, ProviderStreamEvent::TextDelta { .. }))
+    );
 }
 
 #[test]

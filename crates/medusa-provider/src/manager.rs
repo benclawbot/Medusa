@@ -251,7 +251,24 @@ fn normalized_profiles(
 
 impl<P: ModelProvider> ModelProvider for ProviderManager<P> {
     fn complete(&self, request: &ModelRequest) -> MedusaResult<ModelResponse> {
-        self.complete_with_cancel(request, None)
+        self.complete_with_cancel_and_sink(request, None, None)
+    }
+
+    fn complete_streaming(
+        &self,
+        request: &ModelRequest,
+        sink: &mut dyn FnMut(ProviderStreamEvent) -> MedusaResult<()>,
+    ) -> MedusaResult<ModelResponse> {
+        self.complete_with_cancel_and_sink(request, None, Some(sink))
+    }
+
+    fn complete_streaming_cancellable(
+        &self,
+        request: &ModelRequest,
+        cancel: &AtomicBool,
+        sink: &mut dyn FnMut(ProviderStreamEvent) -> MedusaResult<()>,
+    ) -> MedusaResult<ModelResponse> {
+        self.complete_with_cancel_and_sink(request, Some(cancel), Some(sink))
     }
 
     fn complete_cancellable(
@@ -259,13 +276,21 @@ impl<P: ModelProvider> ModelProvider for ProviderManager<P> {
         request: &ModelRequest,
         cancel: &AtomicBool,
     ) -> MedusaResult<ModelResponse> {
-        self.complete_with_cancel(request, Some(cancel))
+        self.complete_with_cancel_and_sink(request, Some(cancel), None)
     }
 
     fn capabilities(&self) -> ProviderCapabilities {
-        self.providers
+        let mut capabilities = self
+            .providers
             .first()
-            .map_or_else(ProviderCapabilities::default, ModelProvider::capabilities)
+            .map_or_else(ProviderCapabilities::default, ModelProvider::capabilities);
+        capabilities.streaming = self.providers.iter().enumerate().any(|(index, provider)| {
+            self.profiles
+                .get(index)
+                .is_some_and(|profile| profile.streaming)
+                && provider.capabilities().streaming
+        });
+        capabilities
     }
 
     fn execution_status(&self) -> Option<Value> {
@@ -274,10 +299,11 @@ impl<P: ModelProvider> ModelProvider for ProviderManager<P> {
 }
 
 impl<P: ModelProvider> ProviderManager<P> {
-    fn complete_with_cancel(
+    fn complete_with_cancel_and_sink(
         &self,
         request: &ModelRequest,
         cancel: Option<&AtomicBool>,
+        mut sink: Option<&mut dyn FnMut(ProviderStreamEvent) -> MedusaResult<()>>,
     ) -> MedusaResult<ModelResponse> {
         let key = serde_json::to_string(request).map_err(|error| {
             MedusaError::new(
@@ -290,6 +316,11 @@ impl<P: ModelProvider> ProviderManager<P> {
             && let Some(response) = cache.get(&key)
         {
             self.record_cache_hit()?;
+            if let Some(sink) = sink.as_deref_mut() {
+                sink(ProviderStreamEvent::Completed {
+                    response: response.clone(),
+                })?;
+            }
             return Ok(response.clone());
         }
 
@@ -318,11 +349,16 @@ impl<P: ModelProvider> ProviderManager<P> {
                     .is_some_and(|profile| profile.streaming)
                     && provider.capabilities().streaming;
                 let mut first_token_ms = None;
+                let mut route_stream_started = false;
                 let mut stream_sink = |event: ProviderStreamEvent| {
                     if first_token_ms.is_none()
                         && matches!(event, ProviderStreamEvent::OutputStarted)
                     {
                         first_token_ms = Some(elapsed_ms(started));
+                    }
+                    route_stream_started = true;
+                    if let Some(sink) = sink.as_deref_mut() {
+                        sink(event)?;
                     }
                     Ok(())
                 };
@@ -349,12 +385,20 @@ impl<P: ModelProvider> ProviderManager<P> {
                             response.usage,
                         )?;
                         self.record_success(index)?;
+                        if !streaming && let Some(sink) = sink.as_deref_mut() {
+                            sink(ProviderStreamEvent::Completed {
+                                response: response.clone(),
+                            })?;
+                        }
                         if let Ok(mut cache) = self.cache.lock() {
                             cache.insert(key.clone(), response.clone());
                         }
                         return Ok(response);
                     }
                     Err(error) => {
+                        if route_stream_started {
+                            return Err(error);
+                        }
                         let duration_ms = elapsed_ms(started);
                         self.latency.record_failure(index, duration_ms)?;
                         self.record_error(index, &error)?;
