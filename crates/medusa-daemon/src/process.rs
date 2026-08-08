@@ -367,14 +367,23 @@ fn configure_process_group(command: &mut Command) {
 fn try_wait_preserving_unix_group_identity(
     process: &mut Child,
 ) -> MedusaResult<Option<ExitStatus>> {
-    // Do not reap a Linux group leader while descendants remain. Keeping the leader PID allocated
-    // preserves the process-group identity until the complete tree exits, preventing PID/PGID reuse
-    // from racing a later cancellation request.
-    if process_group_alive(process.id()) {
-        Ok(None)
-    } else {
-        Ok(process.try_wait()?)
+    let pid = process.id();
+    match linux_process_state(pid) {
+        Some(state) if !matches!(state, 'Z' | 'X' | 'x') => Ok(None),
+        Some(_) if process_group_alive(pid) => Ok(None),
+        Some(_) | None => Ok(process.try_wait()?),
     }
+}
+
+#[cfg(target_os = "linux")]
+fn linux_process_state(pid: u32) -> Option<char> {
+    let stat = fs::read_to_string(format!("/proc/{pid}/stat")).ok()?;
+    let command_end = stat.rfind(')')?;
+    stat[command_end + 1..]
+        .split_whitespace()
+        .next()?
+        .chars()
+        .next()
 }
 
 #[cfg(not(target_os = "linux"))]
@@ -603,6 +612,18 @@ mod tests {
     }
 
     #[cfg(target_os = "linux")]
+    fn spawn_exiting_leader_tree() -> Child {
+        let mut command = Command::new("sh");
+        command
+            .args(["-c", "(sleep 30) &"])
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null());
+        configure_process_group(&mut command);
+        command.spawn().expect("spawn exiting leader tree")
+    }
+
+    #[cfg(target_os = "linux")]
     fn linux_group_member_count(group_id: u32) -> usize {
         fs::read_dir("/proc")
             .into_iter()
@@ -671,6 +692,31 @@ mod tests {
             "stale identity unexpectedly signalled the contained process tree"
         );
 
+        terminate_process_tree(&mut child, &receipt).expect("cleanup verified process tree");
+        assert!(!process_group_alive(child.id()));
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn exited_leader_remains_identity_anchor_while_descendant_runs() {
+        let mut child = spawn_exiting_leader_tree();
+        let receipt = ProcessOwnershipReceipt::capture(child.id()).expect("capture receipt");
+        let deadline = Instant::now() + Duration::from_secs(1);
+        loop {
+            assert!(
+                try_wait_preserving_unix_group_identity(&mut child)
+                    .expect("preserve leader")
+                    .is_none(),
+                "leader was reaped while its process group still had a live descendant"
+            );
+            if linux_process_state(child.id()).is_some_and(|state| matches!(state, 'Z' | 'X' | 'x'))
+            {
+                break;
+            }
+            assert!(Instant::now() < deadline, "leader did not exit in time");
+            thread::sleep(PROCESS_POLL_INTERVAL);
+        }
+        assert_eq!(receipt.verify(), ProcessOwnershipVerification::VerifiedCurrent);
         terminate_process_tree(&mut child, &receipt).expect("cleanup verified process tree");
         assert!(!process_group_alive(child.id()));
     }
