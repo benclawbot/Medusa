@@ -69,7 +69,10 @@ pub fn mark_pending_route_mutation(session_id: &str) {
 pub fn record_pending_route_verification(session_id: &str, passed: bool) -> MedusaResult<bool> {
     ROUTE_VERIFICATION_CONTEXT.with(|context| {
         let mut context = context.borrow_mut();
-        let observations = context.mutation_routes.remove(session_id).unwrap_or_default();
+        let observations = context
+            .mutation_routes
+            .remove(session_id)
+            .unwrap_or_default();
         context.latest_completion = None;
         if observations.is_empty() {
             return Ok(false);
@@ -122,8 +125,7 @@ mod tests {
         register_pending_route_completion(store.clone(), 1);
 
         assert!(
-            record_pending_route_verification("session-a", true)
-                .expect("verification observation")
+            record_pending_route_verification("session-a", true).expect("verification observation")
         );
         let stats = store.stats().expect("stats");
         assert_eq!(stats[0].verified_successes, 1);
@@ -142,8 +144,7 @@ mod tests {
         mark_pending_route_mutation("session-a");
 
         assert!(
-            record_pending_route_verification("session-a", true)
-                .expect("verification observation")
+            record_pending_route_verification("session-a", true).expect("verification observation")
         );
         assert_eq!(store.stats().expect("stats")[0].verified_successes, 1);
     }
@@ -178,8 +179,7 @@ mod tests {
         mark_pending_route_mutation("session-later");
 
         assert!(
-            record_pending_route_verification("session-later", true)
-                .expect("later verification")
+            record_pending_route_verification("session-later", true).expect("later verification")
         );
         let stats = store.stats().expect("stats");
         assert_eq!(stats[0].verified_successes, 0);
