@@ -4,24 +4,25 @@ use medusa_provider::{OpenAiStreamAccumulator, ProviderStreamEvent, ResponseBloc
 fn fragmented_tool_call_becomes_ready_before_stream_completion() {
     let mut accumulator = OpenAiStreamAccumulator::default();
     let mut events = Vec::new();
-    let mut sink = |event| {
-        events.push(event);
-        Ok(())
-    };
+    {
+        let mut sink = |event| {
+            events.push(event);
+            Ok(())
+        };
 
-    accumulator
-        .push_sse_data(
-            r#"{"id":"resp-1","choices":[{"delta":{"tool_calls":[{"index":0,"id":"call-1","function":{"name":"fs_read","arguments":"{\"pa"}}]},"finish_reason":null}],"usage":null}"#,
-            &mut sink,
-        )
-        .expect("first tool fragment");
-    accumulator
-        .push_sse_data(
-            r#"{"id":"resp-1","choices":[{"delta":{"tool_calls":[{"index":0,"id":null,"function":{"name":null,"arguments":"th\":\"README.md\"}"}}]},"finish_reason":"tool_calls"}],"usage":null}"#,
-            &mut sink,
-        )
-        .expect("second tool fragment");
-    drop(sink);
+        accumulator
+            .push_sse_data(
+                r#"{"id":"resp-1","choices":[{"delta":{"tool_calls":[{"index":0,"id":"call-1","function":{"name":"fs_read","arguments":"{\"pa"}}]},"finish_reason":null}],"usage":null}"#,
+                &mut sink,
+            )
+            .expect("first tool fragment");
+        accumulator
+            .push_sse_data(
+                r#"{"id":"resp-1","choices":[{"delta":{"tool_calls":[{"index":0,"id":null,"function":{"name":null,"arguments":"th\":\"README.md\"}"}}]},"finish_reason":"tool_calls"}],"usage":null}"#,
+                &mut sink,
+            )
+            .expect("second tool fragment");
+    }
 
     let ready_position = events
         .iter()
@@ -34,15 +35,16 @@ fn fragmented_tool_call_becomes_ready_before_stream_completion() {
         "completion must not be emitted until the provider terminates the stream"
     );
 
-    let mut sink = |event| {
-        events.push(event);
-        Ok(())
+    let response = {
+        let mut sink = |event| {
+            events.push(event);
+            Ok(())
+        };
+        accumulator
+            .push_sse_data("[DONE]", &mut sink)
+            .expect("done marker")
+            .expect("completed response")
     };
-    let response = accumulator
-        .push_sse_data("[DONE]", &mut sink)
-        .expect("done marker")
-        .expect("completed response");
-    drop(sink);
     let completed_position = events
         .iter()
         .position(|event| matches!(event, ProviderStreamEvent::Completed { .. }))
