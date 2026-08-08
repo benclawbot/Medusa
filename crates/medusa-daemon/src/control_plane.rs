@@ -7,7 +7,7 @@ use std::{
 use medusa_process_containment::{NativeProcessStartMarker, process_start_marker};
 use medusa_process_registry::{
     IdentityVerification, ProcessId, ProcessIdentity, ProcessRecord, ProcessRegistry, ProcessSpec,
-    ProcessStartMarker, ProcessState, RegistryError, REGISTRY_SCHEMA_VERSION,
+    ProcessStartMarker, ProcessState, REGISTRY_SCHEMA_VERSION, RegistryError,
 };
 use medusa_recovery_coordinator::{
     RecoveryAction, RecoveryCandidate, RecoveryCoordinator, RecoveryDecision, RecoveryError,
@@ -236,17 +236,16 @@ impl SupervisionControlPlane {
         heartbeat_timeout: Duration,
         is_alive: impl Fn(u32) -> bool,
     ) -> Result<Vec<RecoveryDecision>, ControlPlaneError> {
-        let orphaned = self.state.registry.reconcile_with_identity(
-            now,
-            heartbeat_timeout,
-            |identity| {
-                if is_alive(identity.pid) {
-                    verify_native_identity(Some(identity))
-                } else {
-                    IdentityVerification::ProcessMissing
-                }
-            },
-        );
+        let orphaned =
+            self.state
+                .registry
+                .reconcile_with_identity(now, heartbeat_timeout, |identity| {
+                    if is_alive(identity.pid) {
+                        verify_native_identity(Some(identity))
+                    } else {
+                        IdentityVerification::ProcessMissing
+                    }
+                });
         let mut decisions = Vec::new();
         for process_id in orphaned {
             let record = self
@@ -360,8 +359,8 @@ impl SupervisionControlPlane {
 }
 
 fn acquire_start_marker(pid: u32) -> Result<ProcessStartMarker, ControlPlaneError> {
-    let native = process_start_marker(pid)?
-        .ok_or(ControlPlaneError::ProcessIdentityUnavailable(pid))?;
+    let native =
+        process_start_marker(pid)?.ok_or(ControlPlaneError::ProcessIdentityUnavailable(pid))?;
     ProcessStartMarker::new(native.platform, native.value, native.boot_id).map_err(Into::into)
 }
 
@@ -575,14 +574,7 @@ mod tests {
         let now = datetime!(2026-07-26 07:00 UTC);
         let mut plane = SupervisionControlPlane::load(&path, "install-a").expect("control plane");
         plane
-            .register_runtime(
-                "exec-1",
-                process_id(),
-                spec(true),
-                current_pid(),
-                None,
-                now,
-            )
+            .register_runtime("exec-1", process_id(), spec(true), current_pid(), None, now)
             .expect("register");
         let first = plane
             .reconcile(now + Duration::minutes(10), Duration::minutes(5), |_| false)
@@ -605,14 +597,7 @@ mod tests {
         let now = datetime!(2026-07-26 07:00 UTC);
         let mut plane = SupervisionControlPlane::load(&path, "install-a").expect("control plane");
         plane
-            .register_runtime(
-                "exec-1",
-                process_id(),
-                spec(true),
-                current_pid(),
-                None,
-                now,
-            )
+            .register_runtime("exec-1", process_id(), spec(true), current_pid(), None, now)
             .expect("register");
 
         let mut foreign =
@@ -657,14 +642,7 @@ mod tests {
         let now = datetime!(2026-07-26 07:00 UTC);
         let mut plane = SupervisionControlPlane::load(&path, "install-a").expect("control plane");
         plane
-            .register_runtime(
-                "exec-1",
-                process_id(),
-                spec(true),
-                current_pid(),
-                None,
-                now,
-            )
+            .register_runtime("exec-1", process_id(), spec(true), current_pid(), None, now)
             .expect("register");
         plane
             .request_shutdown(&process_id(), now + Duration::minutes(1))
