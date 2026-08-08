@@ -336,6 +336,14 @@ struct OpenAiUsage {
     prompt_tokens: u64,
     #[serde(default)]
     completion_tokens: u64,
+    #[serde(default)]
+    prompt_tokens_details: OpenAiPromptTokenDetails,
+}
+
+#[derive(Debug, Default, Deserialize)]
+struct OpenAiPromptTokenDetails {
+    #[serde(default)]
+    cached_tokens: u64,
 }
 
 impl OpenAiWireResponse {
@@ -367,6 +375,7 @@ impl OpenAiWireResponse {
             usage: Usage {
                 input_tokens: self.usage.prompt_tokens,
                 output_tokens: self.usage.completion_tokens,
+                cache_read_input_tokens: self.usage.prompt_tokens_details.cached_tokens,
                 ..Usage::default()
             },
         })
@@ -443,6 +452,26 @@ mod tests {
             max_tokens: 100,
             temperature_milli: 0,
         }
+    }
+
+    #[test]
+    fn non_streaming_usage_preserves_openai_cached_prompt_tokens() {
+        let wire: OpenAiWireResponse = serde_json::from_value(json!({
+            "id": "response-1",
+            "choices": [{
+                "message": {"content": "ok", "tool_calls": []},
+                "finish_reason": "stop"
+            }],
+            "usage": {
+                "prompt_tokens": 100,
+                "completion_tokens": 4,
+                "prompt_tokens_details": {"cached_tokens": 90}
+            }
+        }))
+        .expect("wire response");
+        let response = wire.into_model_response().expect("model response");
+        assert_eq!(response.usage.input_tokens, 100);
+        assert_eq!(response.usage.cache_read_input_tokens, 90);
     }
 
     #[test]
