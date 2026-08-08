@@ -18,12 +18,12 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use time::OffsetDateTime;
 
+use crate::hedge_runtime::{HedgeCandidateOutcome, HedgeRacePlan, race_provider_candidates};
 use crate::{
     HedgePolicy, ModelProvider, ModelRequest, ModelResponse, ProviderCapabilities,
     ProviderHealthStore, ProviderRouteLatencyStore, ProviderStreamEvent, RouteLatencyPolicy,
     RouteLatencyStats, hedge_decision, latency_aware_route_order,
 };
-use crate::hedge_runtime::{HedgeCandidateOutcome, HedgeRacePlan, race_provider_candidates};
 
 /// Observable health state for a configured provider position.
 #[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
@@ -585,11 +585,8 @@ impl<P: ModelProvider + Sync> ProviderManager<P> {
                 request,
             )?;
             if let Some(secondary) = outcome.secondary.as_ref()
-                && let Some(authoritative) = self.record_hedge_candidate(
-                    secondary,
-                    outcome.authoritative_index,
-                    request,
-                )?
+                && let Some(authoritative) =
+                    self.record_hedge_candidate(secondary, outcome.authoritative_index, request)?
             {
                 response = Some(authoritative);
             }
