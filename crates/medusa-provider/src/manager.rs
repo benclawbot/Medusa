@@ -452,8 +452,11 @@ impl<P: ModelProvider> ProviderManager<P> {
                     return Ok(Some(response.clone()));
                 }
                 Err(error) => {
-                    self.latency
-                        .record_failure(candidate.index, candidate.duration_ms)?;
+                    self.latency.record_failure_with_category(
+                        candidate.index,
+                        candidate.duration_ms,
+                        Some(error.category),
+                    )?;
                     self.record_error(candidate.index, error)?;
                 }
             }
@@ -461,8 +464,11 @@ impl<P: ModelProvider> ProviderManager<P> {
             self.latency
                 .record_cancellation(candidate.index, candidate.duration_ms)?;
         } else if let Err(error) = &candidate.result {
-            self.latency
-                .record_failure(candidate.index, candidate.duration_ms)?;
+            self.latency.record_failure_with_category(
+                candidate.index,
+                candidate.duration_ms,
+                Some(error.category),
+            )?;
             self.record_error(candidate.index, error)?;
         }
         Ok(None)
@@ -671,9 +677,6 @@ impl<P: ModelProvider + Sync> ProviderManager<P> {
                         return Ok(response);
                     }
                     Err(error) => {
-                        if route_stream_started {
-                            return Err(error);
-                        }
                         let duration_ms = elapsed_ms(started);
                         self.latency.record_failure_with_category(
                             index,
@@ -681,6 +684,9 @@ impl<P: ModelProvider + Sync> ProviderManager<P> {
                             Some(error.category),
                         )?;
                         self.record_error(index, &error)?;
+                        if route_stream_started {
+                            return Err(error);
+                        }
                         final_error = Some(error.clone());
                         match classify_error(&error, has_fallback) {
                             RetryDisposition::Retry if attempt < policy.max_retries => {
@@ -945,6 +951,7 @@ mod tests {
         assert_eq!(cached["cache_hit"], json!(true));
         assert_eq!(cached["cache_hits"], json!(1));
         assert_eq!(manager.route_latency()[0].failures, 2);
+        assert_eq!(manager.route_latency()[0].transient_errors, 2);
         assert_eq!(manager.route_latency()[0].retry_attempts, 1);
         assert_eq!(manager.route_latency()[0].retry_recoveries, 0);
         assert_eq!(manager.route_latency()[1].successes, 1);
@@ -977,6 +984,7 @@ mod tests {
         assert_eq!(fallback_calls.load(Ordering::SeqCst), 0);
         assert_eq!(manager.last_completed_provider(), None);
         assert_eq!(manager.execution_status(), None);
+        assert_eq!(manager.route_latency()[0].validation_errors, 1);
     }
 
     #[test]
@@ -990,6 +998,7 @@ mod tests {
         assert_eq!(fallback_calls.load(Ordering::SeqCst), 1);
         assert_eq!(manager.health()[0].failovers, 1);
         assert_eq!(manager.last_completed_provider(), Some(1));
+        assert_eq!(manager.route_latency()[0].environment_errors, 1);
         let status = manager.execution_status().expect("execution status");
         assert_eq!(status["provider_index"], json!(1));
         assert_eq!(status["cache_hit"], json!(false));
