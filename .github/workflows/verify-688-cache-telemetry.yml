@@ -23,6 +23,18 @@ jobs:
       - uses: dtolnay/rust-toolchain@39b0b3842c7e8bbf6904c0bfc3d9006fdd4dc4e0
         with:
           components: rustfmt,clippy
+      - name: Align patcher with current manifest
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          path = Path('.github/scripts/apply-688-cache-telemetry.py')
+          text = path.read_text()
+          text = text.replace('medusa-core = { path = \\"../medusa-core\\" }', 'medusa-core.workspace = true')
+          text = text.replace('tokio.workspace = true', 'tokio = { version = \\"1.47\\", features = [\\"macros\\", \\"net\\", \\"rt\\", \\"time\\"] }')
+          text = text.replace('        let mut config = Config::default();\n        config.model.provider = "anthropic".to_owned();\n', '')
+          text = text.replace('serde_json::to_value(&request.tools).unwrap_or_else(|_| json!([]))', 'json!(request.tools)')
+          path.write_text(text)
+          PY
       - name: Apply cache telemetry wiring
         run: python3 .github/scripts/apply-688-cache-telemetry.py
       - name: Refresh lock
