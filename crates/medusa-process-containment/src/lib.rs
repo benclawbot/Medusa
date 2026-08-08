@@ -9,6 +9,9 @@ extern crate self as flatbuffers;
 mod base_container;
 #[cfg(windows)]
 mod flatbuffer_builder;
+// SAFETY: reviewed native process-identity FFI is isolated in this low-level crate.
+#[allow(unsafe_code)]
+mod process_identity;
 #[cfg(windows)]
 // SAFETY: reviewed Windows Job Object/process FFI; see the checked allowlist.
 #[allow(unsafe_code)]
@@ -24,6 +27,10 @@ pub use base_container::{
 };
 #[cfg(windows)]
 pub(crate) use flatbuffer_builder::FlatBufferBuilder;
+pub use process_identity::{
+    NativeProcessStartMarker, ProcessOwnershipReceipt, ProcessOwnershipVerification,
+    process_start_marker,
+};
 #[cfg(windows)]
 pub use windows::{WindowsJob, process_is_alive};
 #[cfg(windows)]

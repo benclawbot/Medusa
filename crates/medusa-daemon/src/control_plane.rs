@@ -4,8 +4,10 @@ use std::{
     path::PathBuf,
 };
 
+use medusa_process_containment::{NativeProcessStartMarker, process_start_marker};
 use medusa_process_registry::{
-    ProcessId, ProcessRecord, ProcessRegistry, ProcessSpec, ProcessState, RegistryError,
+    IdentityVerification, ProcessId, ProcessIdentity, ProcessRecord, ProcessRegistry, ProcessSpec,
+    ProcessStartMarker, ProcessState, REGISTRY_SCHEMA_VERSION, RegistryError,
 };
 use medusa_recovery_coordinator::{
     RecoveryAction, RecoveryCandidate, RecoveryCoordinator, RecoveryDecision, RecoveryError,
@@ -16,11 +18,13 @@ use medusa_wakeup::{
     SubscriptionId, WakeupDelivery, WakeupEvent, WakeupRouter, WakeupSource, WakeupSubscription,
 };
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
 use sha2::{Digest, Sha256};
 use thiserror::Error;
 use time::{Duration, OffsetDateTime};
 
 const CONTROL_SCHEMA_VERSION: u32 = 1;
+const LEGACY_REGISTRY_SCHEMA_VERSION: u32 = 1;
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct RuntimeBinding {
@@ -37,6 +41,8 @@ pub enum SupervisionEvent {
         execution_id: String,
         process_id: String,
         generation: u64,
+        #[serde(default)]
+        start_marker: Option<ProcessStartMarker>,
     },
     HeartbeatRecorded {
         execution_id: String,
@@ -49,6 +55,10 @@ pub enum SupervisionEvent {
         action: RecoveryAction,
         reason: String,
         evidence_fingerprint: String,
+    },
+    IdentityRejected {
+        process_id: String,
+        verification: IdentityVerification,
     },
     ForeignOwnershipIgnored {
         process_id: String,
@@ -102,7 +112,9 @@ impl SupervisionControlPlane {
         }
         let state = if path.exists() {
             let bytes = fs::read(&path)?;
-            let state: DurableControlState = serde_json::from_slice(&bytes)?;
+            let mut value: Value = serde_json::from_slice(&bytes)?;
+            migrate_embedded_registry(&mut value)?;
+            let state: DurableControlState = serde_json::from_value(value)?;
             validate_state(&state)?;
             state
         } else {
@@ -128,13 +140,14 @@ impl SupervisionControlPlane {
         if execution_id.trim().is_empty() {
             return Err(ControlPlaneError::InvalidExecutionId);
         }
+        let start_marker = acquire_start_marker(pid)?;
         let mut record = ProcessRecord::new(
             process_id.clone(),
             spec,
             now,
             Some(self.installation_session.clone()),
         )?;
-        record.mark_running(pid, now)?;
+        record.mark_running_with_marker(pid, Some(start_marker.clone()), now)?;
         let generation = record.generation;
         self.state.registry.register(record)?;
         self.state.bindings.insert(
@@ -163,6 +176,7 @@ impl SupervisionControlPlane {
             execution_id,
             process_id: process_id.as_str().to_owned(),
             generation,
+            start_marker: Some(start_marker),
         });
         self.persist()
     }
@@ -194,6 +208,14 @@ impl SupervisionControlPlane {
         now: OffsetDateTime,
     ) -> Result<(), ControlPlaneError> {
         let record = self.state.registry.get_mut(process_id)?;
+        let verification = verify_native_identity(record.identity.as_ref());
+        record.last_identity_verification = Some(verification);
+        if !verification.permits_destructive_action() {
+            return Err(ControlPlaneError::UnsafeProcessIdentity {
+                process_id: process_id.as_str().to_owned(),
+                verification,
+            });
+        }
         record.transition(ProcessState::Stopping, now)?;
         let binding = self
             .state
@@ -214,10 +236,16 @@ impl SupervisionControlPlane {
         heartbeat_timeout: Duration,
         is_alive: impl Fn(u32) -> bool,
     ) -> Result<Vec<RecoveryDecision>, ControlPlaneError> {
-        let orphaned = self
-            .state
-            .registry
-            .reconcile(now, heartbeat_timeout, is_alive);
+        let orphaned =
+            self.state
+                .registry
+                .reconcile_with_identity(now, heartbeat_timeout, |identity| {
+                    if is_alive(identity.pid) {
+                        verify_native_identity(Some(identity))
+                    } else {
+                        IdentityVerification::ProcessMissing
+                    }
+                });
         let mut decisions = Vec::new();
         for process_id in orphaned {
             let record = self
@@ -226,6 +254,14 @@ impl SupervisionControlPlane {
                 .get(&process_id)
                 .ok_or_else(|| ControlPlaneError::MissingBinding(process_id.as_str().to_owned()))?
                 .clone();
+            if let Some(verification) = record.last_identity_verification
+                && verification != IdentityVerification::ProcessMissing
+            {
+                self.state.events.push(SupervisionEvent::IdentityRejected {
+                    process_id: process_id.as_str().to_owned(),
+                    verification,
+                });
+            }
             if record.owner_session.as_deref() != Some(self.installation_session.as_str()) {
                 self.state
                     .events
@@ -322,6 +358,37 @@ impl SupervisionControlPlane {
     }
 }
 
+fn acquire_start_marker(pid: u32) -> Result<ProcessStartMarker, ControlPlaneError> {
+    let native =
+        process_start_marker(pid)?.ok_or(ControlPlaneError::ProcessIdentityUnavailable(pid))?;
+    ProcessStartMarker::new(native.platform, native.value, native.boot_id).map_err(Into::into)
+}
+
+fn observed_marker(native: NativeProcessStartMarker) -> ProcessStartMarker {
+    ProcessStartMarker {
+        platform: native.platform.to_owned(),
+        value: native.value,
+        boot_id: native.boot_id,
+    }
+}
+
+fn verify_native_identity(identity: Option<&ProcessIdentity>) -> IdentityVerification {
+    let Some(identity) = identity else {
+        return IdentityVerification::IdentityUnavailable;
+    };
+    if identity.start_marker.is_none() {
+        return IdentityVerification::IdentityUnavailable;
+    }
+    match process_start_marker(identity.pid) {
+        Ok(Some(native)) => {
+            let observed = observed_marker(native);
+            identity.verify_start_marker(Some(&observed))
+        }
+        Ok(None) => IdentityVerification::ProcessMissing,
+        Err(_) => IdentityVerification::IdentityUnavailable,
+    }
+}
+
 fn decide_recovery(
     record: &ProcessRecord,
     binding: &RuntimeBinding,
@@ -365,6 +432,60 @@ fn digest(value: &str) -> String {
     hex::encode(Sha256::digest(value.as_bytes()))
 }
 
+fn migrate_embedded_registry(value: &mut Value) -> Result<(), ControlPlaneError> {
+    let Some(root) = value.as_object_mut() else {
+        return Err(ControlPlaneError::InvalidDurableState);
+    };
+    let Some(registry) = root.get_mut("registry").and_then(Value::as_object_mut) else {
+        return Err(ControlPlaneError::InvalidDurableState);
+    };
+    let schema_version = registry
+        .get("schema_version")
+        .and_then(Value::as_u64)
+        .ok_or(ControlPlaneError::InvalidDurableState)? as u32;
+    if schema_version == REGISTRY_SCHEMA_VERSION {
+        return Ok(());
+    }
+    if schema_version != LEGACY_REGISTRY_SCHEMA_VERSION {
+        return Err(ControlPlaneError::UnsupportedRegistrySchema(schema_version));
+    }
+    let Some(records) = registry.get_mut("records").and_then(Value::as_object_mut) else {
+        return Err(ControlPlaneError::InvalidDurableState);
+    };
+    for record in records.values_mut() {
+        let Some(record) = record.as_object_mut() else {
+            return Err(ControlPlaneError::InvalidDurableState);
+        };
+        let pid = record
+            .get("pid")
+            .and_then(Value::as_u64)
+            .map(|pid| pid as u32);
+        let generation = record
+            .get("generation")
+            .and_then(Value::as_u64)
+            .ok_or(ControlPlaneError::InvalidDurableState)?;
+        if let Some(pid) = pid {
+            record.insert(
+                "identity".to_owned(),
+                serde_json::json!({
+                    "pid": pid,
+                    "generation": generation,
+                    "start_marker": null
+                }),
+            );
+            record.insert(
+                "last_identity_verification".to_owned(),
+                Value::String("identity_unavailable".to_owned()),
+            );
+        }
+    }
+    registry.insert(
+        "schema_version".to_owned(),
+        Value::from(REGISTRY_SCHEMA_VERSION),
+    );
+    Ok(())
+}
+
 fn validate_state(state: &DurableControlState) -> Result<(), ControlPlaneError> {
     if state.schema_version != CONTROL_SCHEMA_VERSION {
         return Err(ControlPlaneError::UnsupportedSchema(state.schema_version));
@@ -390,10 +511,21 @@ pub enum ControlPlaneError {
     InvalidExecutionId,
     #[error("invalid runtime binding")]
     InvalidBinding,
+    #[error("invalid durable supervision state")]
+    InvalidDurableState,
     #[error("missing runtime binding for process {0}")]
     MissingBinding(String),
+    #[error("process {0} has no native start identity")]
+    ProcessIdentityUnavailable(u32),
+    #[error("unsafe process identity for {process_id}: {verification:?}")]
+    UnsafeProcessIdentity {
+        process_id: String,
+        verification: IdentityVerification,
+    },
     #[error("unsupported supervision schema version {0}")]
     UnsupportedSchema(u32),
+    #[error("unsupported embedded registry schema version {0}")]
+    UnsupportedRegistrySchema(u32),
     #[error("supervision state path has no parent directory")]
     MissingParentDirectory,
     #[error("wakeup sequence overflow")]
@@ -422,6 +554,10 @@ mod tests {
         ProcessId::parse("runtime-1").expect("process id")
     }
 
+    fn current_pid() -> u32 {
+        std::process::id()
+    }
+
     fn spec(restartable: bool) -> ProcessSpec {
         ProcessSpec {
             program: "medusa-runtime".to_owned(),
@@ -438,7 +574,7 @@ mod tests {
         let now = datetime!(2026-07-26 07:00 UTC);
         let mut plane = SupervisionControlPlane::load(&path, "install-a").expect("control plane");
         plane
-            .register_runtime("exec-1", process_id(), spec(true), 42, None, now)
+            .register_runtime("exec-1", process_id(), spec(true), current_pid(), None, now)
             .expect("register");
         let first = plane
             .reconcile(now + Duration::minutes(10), Duration::minutes(5), |_| false)
@@ -461,7 +597,7 @@ mod tests {
         let now = datetime!(2026-07-26 07:00 UTC);
         let mut plane = SupervisionControlPlane::load(&path, "install-a").expect("control plane");
         plane
-            .register_runtime("exec-1", process_id(), spec(true), 42, None, now)
+            .register_runtime("exec-1", process_id(), spec(true), current_pid(), None, now)
             .expect("register");
 
         let mut foreign =
@@ -483,12 +619,37 @@ mod tests {
         let now = datetime!(2026-07-26 07:00 UTC);
         let mut plane = SupervisionControlPlane::load(&path, "install-a").expect("control plane");
         plane
-            .register_runtime("exec-1", process_id(), spec(false), 42, None, now)
+            .register_runtime(
+                "exec-1",
+                process_id(),
+                spec(false),
+                current_pid(),
+                None,
+                now,
+            )
             .expect("register");
         let decisions = plane
             .reconcile(now + Duration::minutes(10), Duration::minutes(5), |_| false)
             .expect("reconcile");
         assert_eq!(decisions[0].action, RecoveryAction::Quarantine);
         assert!(decisions[0].reason.contains("operator"));
+    }
+
+    #[test]
+    fn shutdown_reverifies_native_identity() {
+        let directory = tempdir().expect("tempdir");
+        let path = directory.path().join("supervision.json");
+        let now = datetime!(2026-07-26 07:00 UTC);
+        let mut plane = SupervisionControlPlane::load(&path, "install-a").expect("control plane");
+        plane
+            .register_runtime("exec-1", process_id(), spec(true), current_pid(), None, now)
+            .expect("register");
+        plane
+            .request_shutdown(&process_id(), now + Duration::minutes(1))
+            .expect("verified shutdown");
+        assert!(matches!(
+            plane.events().last(),
+            Some(SupervisionEvent::ShutdownRecorded { .. })
+        ));
     }
 }
