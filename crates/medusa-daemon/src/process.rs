@@ -17,9 +17,9 @@ use std::os::unix::process::CommandExt;
 use std::os::windows::process::CommandExt;
 
 use medusa_core::{ErrorCategory, ErrorCode, MedusaError, MedusaResult};
-use medusa_process_containment::{ProcessOwnershipReceipt, ProcessOwnershipVerification};
 #[cfg(windows)]
 use medusa_process_containment::WindowsJob;
+use medusa_process_containment::{ProcessOwnershipReceipt, ProcessOwnershipVerification};
 
 const PROCESS_POLL_INTERVAL: Duration = Duration::from_millis(20);
 const TERMINATION_GRACE: Duration = Duration::from_secs(1);
@@ -347,9 +347,7 @@ fn ownership_error(
     MedusaError::new(
         ErrorCode::ToolExecutionFailed,
         ErrorCategory::Execution,
-        format!(
-            "refusing to {action} process tree {pid}: ownership identity is {verification:?}"
-        ),
+        format!("refusing to {action} process tree {pid}: ownership identity is {verification:?}"),
     )
 }
 
@@ -366,7 +364,9 @@ fn configure_process_group(command: &mut Command) {
 }
 
 #[cfg(target_os = "linux")]
-fn try_wait_preserving_unix_group_identity(process: &mut Child) -> MedusaResult<Option<ExitStatus>> {
+fn try_wait_preserving_unix_group_identity(
+    process: &mut Child,
+) -> MedusaResult<Option<ExitStatus>> {
     // Do not reap a Linux group leader while descendants remain. Keeping the leader PID allocated
     // preserves the process-group identity until the complete tree exits, preventing PID/PGID reuse
     // from racing a later cancellation request.
@@ -378,7 +378,9 @@ fn try_wait_preserving_unix_group_identity(process: &mut Child) -> MedusaResult<
 }
 
 #[cfg(not(target_os = "linux"))]
-fn try_wait_preserving_unix_group_identity(process: &mut Child) -> MedusaResult<Option<ExitStatus>> {
+fn try_wait_preserving_unix_group_identity(
+    process: &mut Child,
+) -> MedusaResult<Option<ExitStatus>> {
     Ok(process.try_wait()?)
 }
 
@@ -579,7 +581,11 @@ mod tests {
 
     fn spawn_sleep() -> Child {
         let mut command = Command::new("sleep");
-        command.arg("30").stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null());
+        command
+            .arg("30")
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null());
         configure_process_group(&mut command);
         command.spawn().expect("spawn sleep")
     }
