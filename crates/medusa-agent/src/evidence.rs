@@ -27,7 +27,7 @@ pub(crate) fn append_event(
     journal::append_payload_committed(session, actor, payload)?;
 
     if cancellation_completed {
-        complete_running_cancel_action(session)?;
+        complete_running_cancel_actions(session)?;
     } else if runtime_failed {
         fail_inflight_actions(session)?;
     }
@@ -85,13 +85,12 @@ fn action_lifecycle(session: &AgentSession, action_id: &str) -> Option<SessionAc
     lifecycle
 }
 
-fn complete_running_cancel_action(session: &mut AgentSession) -> MedusaResult<()> {
+fn complete_running_cancel_actions(session: &mut AgentSession) -> MedusaResult<()> {
     let cancellation_event_sequence = session.events.last().map_or(0, |event| event.sequence);
-    let action_id = session
+    let action_ids = session
         .events
         .iter()
-        .rev()
-        .find_map(|event| match &event.payload {
+        .filter_map(|event| match &event.payload {
             EventPayload::SessionActionAccepted { action }
                 if action.kind == SessionActionKind::Cancel
                     && action_lifecycle(session, &action.action_id)
@@ -100,8 +99,9 @@ fn complete_running_cancel_action(session: &mut AgentSession) -> MedusaResult<()
                 Some(action.action_id.clone())
             }
             _ => None,
-        });
-    if let Some(action_id) = action_id {
+        })
+        .collect::<Vec<_>>();
+    for action_id in action_ids {
         transition(
             session,
             &action_id,
