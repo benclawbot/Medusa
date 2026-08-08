@@ -1,0 +1,40 @@
+name: Verify 688 Engine Stream Delivery
+
+on:
+  push:
+    branches: [perf/688-engine-stream-delivery]
+
+permissions:
+  contents: write
+
+jobs:
+  verify:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          ref: perf/688-engine-stream-delivery
+          fetch-depth: 0
+      - uses: dtolnay/rust-toolchain@39b0b3842c7e8bbf6904c0bfc3d9006fdd4dc4e0
+        with:
+          toolchain: 1.88.0
+          components: rustfmt,clippy
+      - name: Apply engine streaming delivery
+        run: python3 .github/scripts/apply-688-engine-stream-delivery.py
+      - name: Format
+        run: cargo fmt --all
+      - name: Agent and runtime tests
+        run: cargo test -p medusa-agent -p medusa-runtime -- --nocapture
+      - name: Agent and runtime Clippy
+        run: cargo clippy -p medusa-agent -p medusa-runtime --all-targets --all-features -- -D warnings
+      - name: Commit verified source
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add crates/medusa-agent
+          if git diff --cached --quiet; then
+            exit 0
+          fi
+          git commit -m "Stream provider text through the agent engine"
+          git push origin HEAD:perf/688-engine-stream-delivery
