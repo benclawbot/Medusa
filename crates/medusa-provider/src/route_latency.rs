@@ -297,7 +297,10 @@ mod tests {
 
     #[test]
     fn downstream_verification_failure_penalizes_nominally_equal_route() {
-        let profiles = vec![profile("unverified", true, true), profile("verified", true, true)];
+        let profiles = vec![
+            profile("unverified", true, true),
+            profile("verified", true, true),
+        ];
         let base = RouteLatencyStats {
             samples: 10,
             successes: 10,
@@ -326,7 +329,10 @@ mod tests {
 
     #[test]
     fn authoritative_cost_breaks_equal_verified_latency_tie() {
-        let profiles = vec![profile("expensive", true, true), profile("cheap", true, true)];
+        let profiles = vec![
+            profile("expensive", true, true),
+            profile("cheap", true, true),
+        ];
         let base = RouteLatencyStats {
             samples: 10,
             successes: 10,
