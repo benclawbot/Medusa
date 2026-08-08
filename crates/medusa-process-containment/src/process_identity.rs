@@ -7,6 +7,66 @@ pub struct NativeProcessStartMarker {
     pub boot_id: Option<String>,
 }
 
+/// A containment-side ownership receipt captured at process launch.
+///
+/// Keeping the numeric PID and native creation marker together prevents later
+/// cleanup code from treating a recycled PID as the process Medusa launched.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ProcessOwnershipReceipt {
+    pub pid: u32,
+    pub start_marker: NativeProcessStartMarker,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ProcessOwnershipVerification {
+    VerifiedCurrent,
+    VerifiedStale,
+    IdentityUnavailable,
+    ProcessMissing,
+}
+
+impl ProcessOwnershipVerification {
+    #[must_use]
+    pub const fn permits_destructive_action(self) -> bool {
+        matches!(self, Self::VerifiedCurrent)
+    }
+}
+
+impl ProcessOwnershipReceipt {
+    pub fn capture(pid: u32) -> io::Result<Self> {
+        let start_marker = process_start_marker(pid)?.ok_or_else(|| {
+            io::Error::new(
+                io::ErrorKind::NotFound,
+                format!("process {pid} exited before ownership identity was captured"),
+            )
+        })?;
+        Ok(Self { pid, start_marker })
+    }
+
+    #[must_use]
+    pub fn verify(&self) -> ProcessOwnershipVerification {
+        match process_start_marker(self.pid) {
+            Ok(Some(observed)) => verify_observed_marker(&self.start_marker, Some(&observed)),
+            Ok(None) => ProcessOwnershipVerification::ProcessMissing,
+            Err(_) => ProcessOwnershipVerification::IdentityUnavailable,
+        }
+    }
+}
+
+fn verify_observed_marker(
+    recorded: &NativeProcessStartMarker,
+    observed: Option<&NativeProcessStartMarker>,
+) -> ProcessOwnershipVerification {
+    let Some(observed) = observed else {
+        return ProcessOwnershipVerification::IdentityUnavailable;
+    };
+    if recorded == observed {
+        ProcessOwnershipVerification::VerifiedCurrent
+    } else {
+        ProcessOwnershipVerification::VerifiedStale
+    }
+}
+
 /// Acquires a process creation identity without invoking a shell on supported platforms.
 /// `Ok(None)` means the process no longer exists; other acquisition failures remain explicit.
 pub fn process_start_marker(pid: u32) -> io::Result<Option<NativeProcessStartMarker>> {
@@ -87,10 +147,13 @@ fn platform_process_start_marker(pid: u32) -> io::Result<Option<NativeProcessSta
     struct HandleGuard(HANDLE);
     impl Drop for HandleGuard {
         fn drop(&mut self) {
+            // SAFETY: the handle is returned by OpenProcess and this guard owns its close.
             let _ = unsafe { CloseHandle(self.0) };
         }
     }
 
+    // SAFETY: querying an existing PID does not transfer ownership of caller memory; the returned
+    // handle is immediately wrapped in HandleGuard and only used for process-time queries.
     let handle = match unsafe { OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, pid) } {
         Ok(handle) => HandleGuard(handle),
         Err(error) => {
@@ -105,6 +168,8 @@ fn platform_process_start_marker(pid: u32) -> io::Result<Option<NativeProcessSta
     let mut exit = FILETIME::default();
     let mut kernel = FILETIME::default();
     let mut user = FILETIME::default();
+    // SAFETY: handle.0 is live for this scope and each FILETIME output points to initialized,
+    // writable storage whose layout is defined by the Windows API.
     unsafe { GetProcessTimes(handle.0, &mut creation, &mut exit, &mut kernel, &mut user) }
         .map_err(io::Error::other)?;
     let creation_100ns =
@@ -160,6 +225,8 @@ fn platform_process_start_marker(pid: u32) -> io::Result<Option<NativeProcessSta
 
     let mut info = std::mem::MaybeUninit::<ProcBsdInfo>::zeroed();
     let expected = std::mem::size_of::<ProcBsdInfo>();
+    // SAFETY: `info` provides `expected` bytes of writable storage for PROC_PIDTBSDINFO and the
+    // buffer is not read unless libproc reports the complete structure size below.
     let written = unsafe {
         proc_pidinfo(
             pid as c_int,
@@ -182,6 +249,7 @@ fn platform_process_start_marker(pid: u32) -> io::Result<Option<NativeProcessSta
             format!("libproc returned {written} bytes, expected {expected}"),
         ));
     }
+    // SAFETY: proc_pidinfo reported exactly the complete ProcBsdInfo size above.
     let info = unsafe { info.assume_init() };
     Ok(Some(NativeProcessStartMarker {
         platform: "macos_libproc_bsdinfo_v1",
@@ -226,6 +294,41 @@ fn platform_process_start_marker(_pid: u32) -> io::Result<Option<NativeProcessSt
 mod tests {
     use super::*;
 
+    fn marker(value: &str) -> NativeProcessStartMarker {
+        NativeProcessStartMarker {
+            platform: "test_v1",
+            value: value.to_owned(),
+            boot_id: Some("boot-a".to_owned()),
+        }
+    }
+
+    #[test]
+    fn ownership_receipt_rejects_recycled_pid_marker() {
+        assert_eq!(
+            verify_observed_marker(&marker("100"), Some(&marker("200"))),
+            ProcessOwnershipVerification::VerifiedStale
+        );
+        assert!(!ProcessOwnershipVerification::VerifiedStale.permits_destructive_action());
+    }
+
+    #[test]
+    fn ownership_receipt_accepts_same_marker() {
+        let recorded = marker("100");
+        assert_eq!(
+            verify_observed_marker(&recorded, Some(&recorded)),
+            ProcessOwnershipVerification::VerifiedCurrent
+        );
+        assert!(ProcessOwnershipVerification::VerifiedCurrent.permits_destructive_action());
+    }
+
+    #[test]
+    fn missing_observation_is_explicitly_unavailable() {
+        assert_eq!(
+            verify_observed_marker(&marker("100"), None),
+            ProcessOwnershipVerification::IdentityUnavailable
+        );
+    }
+
     #[cfg(target_os = "linux")]
     #[test]
     fn linux_parser_handles_spaces_and_parentheses_in_command() {
@@ -249,6 +352,15 @@ mod tests {
                 .boot_id
                 .as_ref()
                 .is_some_and(|value| !value.is_empty())
+        );
+    }
+
+    #[test]
+    fn current_process_receipt_verifies_before_destructive_action() {
+        let receipt = ProcessOwnershipReceipt::capture(std::process::id()).expect("receipt");
+        assert_eq!(
+            receipt.verify(),
+            ProcessOwnershipVerification::VerifiedCurrent
         );
     }
 }
