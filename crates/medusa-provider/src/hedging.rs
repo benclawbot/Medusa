@@ -1,9 +1,6 @@
 use serde::{Deserialize, Serialize};
 
-use crate::{
-    ProviderRouteProfile, RouteLatencyPolicy, RouteLatencyStats, expected_latency_ms,
-    latency_aware_route_order,
-};
+use crate::{ProviderRouteProfile, RouteLatencyPolicy, RouteLatencyStats, expected_latency_ms};
 
 /// Explicit, bounded policy for deciding whether a secondary provider request may be started.
 ///
@@ -121,7 +118,7 @@ pub fn hedge_decision(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::RouteRetryPolicy;
+    use crate::{RouteRetryPolicy, latency_aware_route_order};
 
     fn profile(id: &str) -> ProviderRouteProfile {
         ProviderRouteProfile {
