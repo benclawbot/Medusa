@@ -496,8 +496,12 @@ mod tests {
             serde_json::from_str::<EventEnvelope>(&json).expect("deserialize action event"),
             event
         );
-        assert!(!SessionActionLifecycle::Committing.can_transition_to(SessionActionLifecycle::Queued));
-        assert!(SessionActionLifecycle::Committing.can_transition_to(SessionActionLifecycle::Running));
+        assert!(
+            !SessionActionLifecycle::Committing.can_transition_to(SessionActionLifecycle::Queued)
+        );
+        assert!(
+            SessionActionLifecycle::Committing.can_transition_to(SessionActionLifecycle::Running)
+        );
     }
 
     #[test]
