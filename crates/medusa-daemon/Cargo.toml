@@ -13,6 +13,7 @@ hex.workspace = true
 medusa-agent = { path = "../medusa-agent" }
 medusa-config = { path = "../medusa-config" }
 medusa-core.workspace = true
+medusa-process-containment.workspace = true
 medusa-process-registry = { path = "../medusa-process-registry" }
 medusa-protocol.workspace = true
 medusa-recovery-coordinator = { path = "../medusa-recovery-coordinator" }
@@ -30,7 +31,6 @@ ulid.workspace = true
 
 [target.'cfg(windows)'.dependencies]
 getrandom.workspace = true
-medusa-process-containment.workspace = true
 
 [dev-dependencies]
 medusa-provider = { path = "../medusa-provider" }
