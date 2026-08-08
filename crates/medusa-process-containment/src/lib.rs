@@ -27,7 +27,10 @@ pub use base_container::{
 };
 #[cfg(windows)]
 pub(crate) use flatbuffer_builder::FlatBufferBuilder;
-pub use process_identity::{NativeProcessStartMarker, process_start_marker};
+pub use process_identity::{
+    NativeProcessStartMarker, ProcessOwnershipReceipt, ProcessOwnershipVerification,
+    process_start_marker,
+};
 #[cfg(windows)]
 pub use windows::{WindowsJob, process_is_alive};
 #[cfg(windows)]
