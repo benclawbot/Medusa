@@ -84,7 +84,11 @@ impl ProcessStartMarker {
         if self.platform.trim().is_empty() || self.value.trim().is_empty() {
             return Err(RegistryError::InvalidStartMarker);
         }
-        if self.boot_id.as_ref().is_some_and(|boot_id| boot_id.trim().is_empty()) {
+        if self
+            .boot_id
+            .as_ref()
+            .is_some_and(|boot_id| boot_id.trim().is_empty())
+        {
             return Err(RegistryError::InvalidStartMarker);
         }
         Ok(())
@@ -119,6 +123,20 @@ impl ProcessIdentity {
             generation,
             start_marker,
         })
+    }
+
+    #[must_use]
+    pub fn verify_start_marker(
+        &self,
+        observed: Option<&ProcessStartMarker>,
+    ) -> IdentityVerification {
+        match (&self.start_marker, observed) {
+            (Some(expected), Some(actual)) if expected == actual => {
+                IdentityVerification::VerifiedCurrent
+            }
+            (Some(_), Some(_)) => IdentityVerification::VerifiedStale,
+            _ => IdentityVerification::IdentityUnavailable,
+        }
     }
 }
 
@@ -237,8 +255,8 @@ impl ProcessRecord {
         Ok(())
     }
 
-    /// Legacy launch path retained for callers that cannot yet acquire a native marker.
-    /// The resulting identity is explicitly unavailable rather than being fabricated.
+    /// Registers a live PID whose start marker could not be acquired.
+    /// Ownership remains explicitly unavailable until a marker is durably bound.
     pub fn mark_running(&mut self, pid: u32, now: OffsetDateTime) -> Result<(), RegistryError> {
         self.mark_running_with_marker(pid, None, now)
     }
@@ -254,7 +272,6 @@ impl ProcessRecord {
         self.pid = Some(pid);
         self.last_identity_verification = identity
             .start_marker
-            .as_ref()
             .is_none()
             .then_some(IdentityVerification::IdentityUnavailable);
         self.identity = Some(identity);
@@ -266,7 +283,10 @@ impl ProcessRecord {
         if self.state != ProcessState::Running {
             return Err(RegistryError::HeartbeatForInactiveProcess);
         }
-        if self.last_heartbeat_at.is_some_and(|previous| now < previous) {
+        if self
+            .last_heartbeat_at
+            .is_some_and(|previous| now < previous)
+        {
             return Err(RegistryError::TimestampRegression);
         }
         self.last_heartbeat_at = Some(now);
@@ -339,27 +359,21 @@ impl ProcessRegistry {
         self.records.values()
     }
 
-    /// Compatibility reconciliation for old callers. New ownership-sensitive code must use
-    /// `reconcile_with_identity`, because a PID-only liveness probe cannot prove ownership.
+    /// PID-only liveness cannot prove ownership. This compatibility path therefore marks every
+    /// still-live process as identity-unavailable and orphans it conservatively.
     pub fn reconcile(
         &mut self,
         now: OffsetDateTime,
         heartbeat_timeout: Duration,
         is_alive: impl Fn(u32) -> bool,
     ) -> Vec<ProcessId> {
-        let mut orphaned = Vec::new();
-        for record in self.records.values_mut() {
-            if !is_reconcilable(record.state) {
-                continue;
+        self.reconcile_with_identity(now, heartbeat_timeout, |identity| {
+            if is_alive(identity.pid) {
+                IdentityVerification::IdentityUnavailable
+            } else {
+                IdentityVerification::ProcessMissing
             }
-            let alive = record.pid.is_some_and(&is_alive);
-            let heartbeat_expired = heartbeat_expired(record, now, heartbeat_timeout);
-            if !alive || heartbeat_expired {
-                orphan(record, now, if alive { None } else { Some(IdentityVerification::ProcessMissing) });
-                orphaned.push(record.id.clone());
-            }
-        }
-        orphaned
+        })
     }
 
     pub fn reconcile_with_identity(
@@ -373,14 +387,14 @@ impl ProcessRegistry {
             if !is_reconcilable(record.state) {
                 continue;
             }
-            let verification = record
-                .identity
-                .as_ref()
-                .map_or(IdentityVerification::IdentityUnavailable, &verify);
+            let verification = match record.identity.as_ref() {
+                Some(identity) if identity.start_marker.is_some() => verify(identity),
+                _ => IdentityVerification::IdentityUnavailable,
+            };
             record.last_identity_verification = Some(verification);
             let heartbeat_expired = heartbeat_expired(record, now, heartbeat_timeout);
             if verification != IdentityVerification::VerifiedCurrent || heartbeat_expired {
-                orphan(record, now, Some(verification));
+                orphan(record, now, verification);
                 orphaned.push(record.id.clone());
             }
         }
@@ -444,7 +458,10 @@ impl ProcessRegistry {
 }
 
 fn is_reconcilable(state: ProcessState) -> bool {
-    matches!(state, ProcessState::Starting | ProcessState::Running | ProcessState::Stopping)
+    matches!(
+        state,
+        ProcessState::Starting | ProcessState::Running | ProcessState::Stopping
+    )
 }
 
 fn heartbeat_expired(record: &ProcessRecord, now: OffsetDateTime, timeout: Duration) -> bool {
@@ -453,12 +470,10 @@ fn heartbeat_expired(record: &ProcessRecord, now: OffsetDateTime, timeout: Durat
         .is_some_and(|heartbeat| now - heartbeat > timeout)
 }
 
-fn orphan(record: &mut ProcessRecord, now: OffsetDateTime, verification: Option<IdentityVerification>) {
+fn orphan(record: &mut ProcessRecord, now: OffsetDateTime, verification: IdentityVerification) {
     record.state = ProcessState::Orphaned;
     record.updated_at = now;
-    if let Some(verification) = verification {
-        record.last_identity_verification = Some(verification);
-    }
+    record.last_identity_verification = Some(verification);
 }
 
 fn migrate_legacy_registry(value: &mut Value) -> Result<(), RegistryError> {
@@ -492,7 +507,10 @@ fn migrate_legacy_registry(value: &mut Value) -> Result<(), RegistryError> {
 }
 
 fn migrate_legacy_record(record: &mut Map<String, Value>) -> Result<(), RegistryError> {
-    let pid = record.get("pid").and_then(Value::as_u64).map(|pid| pid as u32);
+    let pid = record
+        .get("pid")
+        .and_then(Value::as_u64)
+        .map(|pid| pid as u32);
     let generation = record
         .get("generation")
         .and_then(Value::as_u64)
@@ -530,7 +548,10 @@ pub enum RegistryError {
     #[error("unknown process: {0:?}")]
     UnknownProcess(ProcessId),
     #[error("invalid process transition from {from:?} to {to:?}")]
-    InvalidTransition { from: ProcessState, to: ProcessState },
+    InvalidTransition {
+        from: ProcessState,
+        to: ProcessState,
+    },
     #[error("heartbeat recorded for an inactive process")]
     HeartbeatForInactiveProcess,
     #[error("timestamp regressed")]
@@ -558,11 +579,11 @@ pub enum RegistryError {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use tempfile::tempdir;
     use time::macros::datetime;
 
     fn marker(value: &str) -> ProcessStartMarker {
-        ProcessStartMarker::new("linux_proc_stat", value, Some("boot-a".to_owned())).expect("marker")
+        ProcessStartMarker::new("linux_proc_stat", value, Some("boot-a".to_owned()))
+            .expect("marker")
     }
 
     fn record(id: &str) -> ProcessRecord {
@@ -583,7 +604,11 @@ mod tests {
     fn running(id: &str, pid: u32, start: &str) -> ProcessRecord {
         let mut process = record(id);
         process
-            .mark_running_with_marker(pid, Some(marker(start)), datetime!(2026-07-24 12:01 UTC))
+            .mark_running_with_marker(
+                pid,
+                Some(marker(start)),
+                datetime!(2026-07-24 12:01 UTC),
+            )
             .expect("running");
         process
     }
@@ -592,47 +617,68 @@ mod tests {
     fn process_lifecycle_is_strict() {
         let mut process = running("tests", 42, "100");
         assert_eq!(process.state, ProcessState::Running);
-        assert!(process.transition(ProcessState::Starting, datetime!(2026-07-24 12:02 UTC)).is_err());
+        assert!(
+            process
+                .transition(ProcessState::Starting, datetime!(2026-07-24 12:02 UTC))
+                .is_err()
+        );
     }
 
     #[test]
     fn synthetic_pid_reuse_is_rejected() {
         let mut registry = ProcessRegistry::default();
-        registry.register(running("server", 99, "100")).expect("register");
+        registry
+            .register(running("server", 99, "100"))
+            .expect("register");
+        let observed = marker("200");
         let changed = registry.reconcile_with_identity(
             datetime!(2026-07-24 12:02 UTC),
             Duration::minutes(5),
-            |_| IdentityVerification::VerifiedStale,
+            |identity| identity.verify_start_marker(Some(&observed)),
         );
         assert_eq!(changed.len(), 1);
-        let record = registry.get(&ProcessId::parse("server").expect("id")).expect("record");
-        assert_eq!(record.state, ProcessState::Orphaned);
-        assert!(!record.destructive_action_allowed());
+        let process = registry
+            .get(&ProcessId::parse("server").expect("id"))
+            .expect("record");
+        assert_eq!(process.state, ProcessState::Orphaned);
+        assert_eq!(
+            process.last_identity_verification,
+            Some(IdentityVerification::VerifiedStale)
+        );
+        assert!(!process.destructive_action_allowed());
     }
 
     #[test]
     fn matching_identity_is_accepted() {
         let mut registry = ProcessRegistry::default();
-        registry.register(running("server", 99, "100")).expect("register");
+        registry
+            .register(running("server", 99, "100"))
+            .expect("register");
+        let observed = marker("100");
         let changed = registry.reconcile_with_identity(
             datetime!(2026-07-24 12:02 UTC),
             Duration::minutes(5),
-            |_| IdentityVerification::VerifiedCurrent,
+            |identity| identity.verify_start_marker(Some(&observed)),
         );
         assert!(changed.is_empty());
-        let record = registry.get(&ProcessId::parse("server").expect("id")).expect("record");
-        assert_eq!(record.state, ProcessState::Running);
-        assert!(record.destructive_action_allowed());
+        let process = registry
+            .get(&ProcessId::parse("server").expect("id"))
+            .expect("record");
+        assert_eq!(process.state, ProcessState::Running);
+        assert!(process.destructive_action_allowed());
     }
 
     #[test]
     fn heartbeat_cannot_override_identity_mismatch() {
         let mut registry = ProcessRegistry::default();
-        registry.register(running("server", 99, "100")).expect("register");
+        registry
+            .register(running("server", 99, "100"))
+            .expect("register");
+        let observed = marker("200");
         let changed = registry.reconcile_with_identity(
             datetime!(2026-07-24 12:01:30 UTC),
             Duration::minutes(5),
-            |_| IdentityVerification::VerifiedStale,
+            |identity| identity.verify_start_marker(Some(&observed)),
         );
         assert_eq!(changed.len(), 1);
     }
@@ -653,61 +699,92 @@ mod tests {
     }
 
     #[test]
-    fn missing_identity_is_explicitly_unknown_and_fails_safe() {
+    fn missing_marker_is_explicitly_unknown_and_fails_safe() {
         let mut registry = ProcessRegistry::default();
         let mut process = record("legacy");
-        process.mark_running(7, datetime!(2026-07-24 12:01 UTC)).expect("running");
+        process
+            .mark_running(7, datetime!(2026-07-24 12:01 UTC))
+            .expect("running");
         registry.register(process).expect("register");
         let changed = registry.reconcile_with_identity(
             datetime!(2026-07-24 12:02 UTC),
             Duration::minutes(5),
             |_| IdentityVerification::VerifiedCurrent,
         );
-        assert!(changed.is_empty(), "typed identity still exists even when its marker is unavailable");
-        let record = registry.get(&ProcessId::parse("legacy").expect("id")).expect("record");
-        assert!(record.destructive_action_allowed());
+        assert_eq!(changed.len(), 1);
+        let process = registry
+            .get(&ProcessId::parse("legacy").expect("id"))
+            .expect("record");
+        assert_eq!(
+            process.last_identity_verification,
+            Some(IdentityVerification::IdentityUnavailable)
+        );
+        assert!(!process.destructive_action_allowed());
     }
 
     #[test]
     fn schema_one_migrates_marker_to_explicit_unavailable() {
-        let directory = tempdir().expect("tempdir");
-        let path = directory.path().join("registry.json");
-        let json = r#"{
-          "schema_version": 1,
-          "records": {
-            "legacy": {
-              "id": "legacy",
-              "spec": {"program":"cargo","args":[],"working_directory":null,"restartable":true},
-              "state":"running",
-              "generation":1,
-              "created_at":[2026,205,12,0,0,0,0,0,0],
-              "updated_at":[2026,205,12,1,0,0,0,0,0],
-              "pid":7,
-              "exit_code":null,
-              "last_heartbeat_at":null,
-              "owner_session":"session-1",
-              "failure":null
-            }
-          }
-        }"#;
-        fs::write(&path, json).expect("write");
-        let registry = ProcessRegistry::load(&path).expect("migrate");
-        assert_eq!(registry.schema_version, REGISTRY_SCHEMA_VERSION);
-        let record = registry.get(&ProcessId::parse("legacy").expect("id")).expect("record");
-        assert_eq!(record.identity.as_ref().expect("identity").start_marker, None);
-        assert_eq!(record.last_identity_verification, Some(IdentityVerification::IdentityUnavailable));
+        let path = std::env::temp_dir().join(format!(
+            "medusa-process-registry-migration-{}.json",
+            std::process::id()
+        ));
+        let mut registry = ProcessRegistry::default();
+        registry
+            .register(running("legacy", 7, "100"))
+            .expect("register");
+        let mut legacy = serde_json::to_value(registry).expect("serialize registry");
+        let object = legacy.as_object_mut().expect("registry object");
+        object.insert(
+            "schema_version".to_owned(),
+            Value::from(LEGACY_REGISTRY_SCHEMA_VERSION),
+        );
+        let record = object
+            .get_mut("records")
+            .and_then(Value::as_object_mut)
+            .and_then(|records| records.get_mut("legacy"))
+            .and_then(Value::as_object_mut)
+            .expect("legacy record");
+        record.remove("identity");
+        record.remove("last_identity_verification");
+        fs::write(&path, serde_json::to_vec(&legacy).expect("serialize legacy"))
+            .expect("write legacy registry");
+
+        let migrated = ProcessRegistry::load(&path).expect("migrate");
+        let _ = fs::remove_file(&path);
+        assert_eq!(migrated.schema_version, REGISTRY_SCHEMA_VERSION);
+        let process = migrated
+            .get(&ProcessId::parse("legacy").expect("id"))
+            .expect("record");
+        assert_eq!(
+            process.identity.as_ref().expect("identity").start_marker,
+            None
+        );
+        assert_eq!(
+            process.last_identity_verification,
+            Some(IdentityVerification::IdentityUnavailable)
+        );
+        assert!(!process.destructive_action_allowed());
     }
 
     #[test]
-    fn dead_process_is_reconciled_as_orphaned() {
+    fn pid_only_reconciliation_fails_safe() {
         let mut registry = ProcessRegistry::default();
-        registry.register(running("server", 99, "100")).expect("register");
+        registry
+            .register(running("server", 99, "100"))
+            .expect("register");
         let changed = registry.reconcile(
             datetime!(2026-07-24 12:02 UTC),
             Duration::minutes(5),
-            |_| false,
+            |_| true,
         );
         assert_eq!(changed.len(), 1);
+        let process = registry
+            .get(&ProcessId::parse("server").expect("id"))
+            .expect("record");
+        assert_eq!(
+            process.last_identity_verification,
+            Some(IdentityVerification::IdentityUnavailable)
+        );
     }
 
     #[test]
