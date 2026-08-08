@@ -1,4 +1,4 @@
-use std::cell::RefCell;
+use std::{cell::RefCell, collections::BTreeMap};
 
 use medusa_core::MedusaResult;
 
@@ -6,14 +6,16 @@ use crate::ProviderRouteLatencyStore;
 
 #[derive(Clone)]
 struct PendingRouteObservation {
+    completion_id: u64,
     store: ProviderRouteLatencyStore,
     index: usize,
 }
 
 #[derive(Default)]
 struct RouteVerificationContext {
+    next_completion_id: u64,
     latest_completion: Option<PendingRouteObservation>,
-    mutation_routes: Vec<PendingRouteObservation>,
+    mutation_routes: BTreeMap<String, Vec<PendingRouteObservation>>,
 }
 
 thread_local! {
@@ -23,37 +25,51 @@ thread_local! {
 
 pub(crate) fn register_pending_route_completion(store: ProviderRouteLatencyStore, index: usize) {
     ROUTE_VERIFICATION_CONTEXT.with(|context| {
-        context.borrow_mut().latest_completion = Some(PendingRouteObservation { store, index });
+        let mut context = context.borrow_mut();
+        context.next_completion_id = context.next_completion_id.saturating_add(1);
+        context.latest_completion = Some(PendingRouteObservation {
+            completion_id: context.next_completion_id,
+            store,
+            index,
+        });
     });
 }
 
-/// Freezes the route that most recently completed when one of its tool calls commits a repository
-/// mutation.
+/// Freezes the route completion that produced a successful repository mutation for one session.
 ///
-/// Later model calls may complete before final verification, and several mutation-producing model
-/// turns may contribute to one combined verification. Each committed mutation therefore captures
-/// the route completion that caused it instead of relying on whichever route happened to answer
-/// last at verification time.
+/// Several mutating tool calls can originate from one model response, so each provider completion
+/// is frozen at most once. Distinct mutation-producing model responses are retained independently
+/// until that session reaches authoritative final verification.
 #[doc(hidden)]
-pub fn mark_pending_route_mutation() {
+pub fn mark_pending_route_mutation(session_id: &str) {
     ROUTE_VERIFICATION_CONTEXT.with(|context| {
         let mut context = context.borrow_mut();
-        if let Some(latest) = context.latest_completion.clone() {
-            context.mutation_routes.push(latest);
+        let Some(latest) = context.latest_completion.clone() else {
+            return;
+        };
+        let observations = context
+            .mutation_routes
+            .entry(session_id.to_owned())
+            .or_default();
+        if observations
+            .iter()
+            .any(|observation| observation.completion_id == latest.completion_id)
+        {
+            return;
         }
+        observations.push(latest);
     });
 }
 
-/// Records one authoritative downstream verification result for every mutation-producing route
-/// completion captured since the previous final verification.
+/// Records one authoritative downstream verification result for every distinct mutation-producing
+/// provider completion captured for `session_id`.
 ///
-/// Returns `true` when at least one attributed route observation was consumed. The context is
-/// one-shot: all frozen mutation routes and the latest completion are cleared after every final
-/// verification event so stale attribution cannot leak into a later turn.
-pub fn record_pending_route_verification(passed: bool) -> MedusaResult<bool> {
+/// Only the named session is consumed, so an abandoned session can never leak attribution into a
+/// later session sharing the same worker thread.
+pub fn record_pending_route_verification(session_id: &str, passed: bool) -> MedusaResult<bool> {
     ROUTE_VERIFICATION_CONTEXT.with(|context| {
         let mut context = context.borrow_mut();
-        let observations = std::mem::take(&mut context.mutation_routes);
+        let observations = context.mutation_routes.remove(session_id).unwrap_or_default();
         context.latest_completion = None;
         if observations.is_empty() {
             return Ok(false);
@@ -65,6 +81,16 @@ pub fn record_pending_route_verification(passed: bool) -> MedusaResult<bool> {
         }
         Ok(true)
     })
+}
+
+/// Clears pending attribution for a session that will not reach final verification.
+#[doc(hidden)]
+pub fn clear_pending_route_verification(session_id: &str) {
+    ROUTE_VERIFICATION_CONTEXT.with(|context| {
+        let mut context = context.borrow_mut();
+        context.mutation_routes.remove(session_id);
+        context.latest_completion = None;
+    });
 }
 
 #[cfg(test)]
@@ -92,10 +118,13 @@ mod tests {
         let store = ProviderRouteLatencyStore::in_memory(&profiles);
 
         register_pending_route_completion(store.clone(), 0);
-        mark_pending_route_mutation();
+        mark_pending_route_mutation("session-a");
         register_pending_route_completion(store.clone(), 1);
 
-        assert!(record_pending_route_verification(true).expect("verification observation"));
+        assert!(
+            record_pending_route_verification("session-a", true)
+                .expect("verification observation")
+        );
         let stats = store.stats().expect("stats");
         assert_eq!(stats[0].verified_successes, 1);
         assert_eq!(stats[0].verified_failures, 0);
@@ -103,19 +132,59 @@ mod tests {
     }
 
     #[test]
-    fn combined_verification_attributes_each_mutation_producing_completion() {
+    fn multiple_mutations_from_one_completion_count_once() {
+        let profiles = vec![profile("mutation")];
+        let store = ProviderRouteLatencyStore::in_memory(&profiles);
+
+        register_pending_route_completion(store.clone(), 0);
+        mark_pending_route_mutation("session-a");
+        mark_pending_route_mutation("session-a");
+        mark_pending_route_mutation("session-a");
+
+        assert!(
+            record_pending_route_verification("session-a", true)
+                .expect("verification observation")
+        );
+        assert_eq!(store.stats().expect("stats")[0].verified_successes, 1);
+    }
+
+    #[test]
+    fn combined_verification_attributes_distinct_mutation_completions() {
         let profiles = vec![profile("first"), profile("second")];
         let store = ProviderRouteLatencyStore::in_memory(&profiles);
 
         register_pending_route_completion(store.clone(), 0);
-        mark_pending_route_mutation();
+        mark_pending_route_mutation("session-a");
         register_pending_route_completion(store.clone(), 1);
-        mark_pending_route_mutation();
+        mark_pending_route_mutation("session-a");
 
-        assert!(record_pending_route_verification(false).expect("verification observation"));
+        assert!(
+            record_pending_route_verification("session-a", false)
+                .expect("verification observation")
+        );
         let stats = store.stats().expect("stats");
         assert_eq!(stats[0].verified_failures, 1);
         assert_eq!(stats[1].verified_failures, 1);
+    }
+
+    #[test]
+    fn abandoned_session_cannot_leak_into_later_session() {
+        let profiles = vec![profile("abandoned"), profile("later")];
+        let store = ProviderRouteLatencyStore::in_memory(&profiles);
+
+        register_pending_route_completion(store.clone(), 0);
+        mark_pending_route_mutation("session-abandoned");
+        register_pending_route_completion(store.clone(), 1);
+        mark_pending_route_mutation("session-later");
+
+        assert!(
+            record_pending_route_verification("session-later", true)
+                .expect("later verification")
+        );
+        let stats = store.stats().expect("stats");
+        assert_eq!(stats[0].verified_successes, 0);
+        assert_eq!(stats[1].verified_successes, 1);
+        clear_pending_route_verification("session-abandoned");
     }
 
     #[test]
@@ -124,7 +193,10 @@ mod tests {
         let store = ProviderRouteLatencyStore::in_memory(&profiles);
         register_pending_route_completion(store.clone(), 0);
 
-        assert!(!record_pending_route_verification(false).expect("no mutation attribution"));
+        assert!(
+            !record_pending_route_verification("session-read-only", false)
+                .expect("no mutation attribution")
+        );
         let stats = store.stats().expect("stats")[0];
         assert_eq!(stats.verified_successes, 0);
         assert_eq!(stats.verified_failures, 0);
