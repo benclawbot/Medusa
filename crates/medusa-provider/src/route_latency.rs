@@ -16,6 +16,14 @@ pub struct RouteLatencyStats {
     pub cancellation_samples: u64,
     pub cached_input_tokens: u64,
     pub input_tokens: u64,
+    #[serde(default)]
+    pub output_tokens: u64,
+    #[serde(default)]
+    pub generation_total_ms: u64,
+    #[serde(default)]
+    pub retry_attempts: u64,
+    #[serde(default)]
+    pub retry_recoveries: u64,
 }
 
 impl RouteLatencyStats {
@@ -52,6 +60,27 @@ impl RouteLatencyStats {
             return 1_000;
         }
         ((u128::from(self.successes) * 1_000 / u128::from(attempts)) as u16).min(1_000)
+    }
+
+    /// Observed output throughput in milli-tokens per second.
+    #[must_use]
+    pub fn output_tokens_per_second_milli(self) -> Option<u64> {
+        (self.generation_total_ms > 0 && self.output_tokens > 0).then(|| {
+            let scaled = u128::from(self.output_tokens).saturating_mul(1_000_000)
+                / u128::from(self.generation_total_ms);
+            scaled.min(u128::from(u64::MAX)) as u64
+        })
+    }
+
+    /// Share of retry attempts that eventually recovered on the same route.
+    #[must_use]
+    pub fn retry_recovery_milli(self) -> u16 {
+        if self.retry_attempts == 0 {
+            return 1_000;
+        }
+        ((u128::from(self.retry_recoveries.min(self.retry_attempts)) * 1_000
+            / u128::from(self.retry_attempts)) as u16)
+            .min(1_000)
     }
 }
 
@@ -101,11 +130,26 @@ pub fn latency_aware_route_order(
         .filter(|(_, profile)| !require_streaming || profile.streaming)
         .map(|(index, _)| {
             let stats = stats.get(index).copied().unwrap_or_default();
-            (index, expected_latency_ms(stats, policy))
+            (
+                index,
+                expected_latency_ms(stats, policy),
+                stats.output_tokens_per_second_milli().unwrap_or_default(),
+                stats.retry_recovery_milli(),
+            )
         })
         .collect::<Vec<_>>();
-    candidates.sort_by_key(|(index, score)| (*score, *index));
-    candidates.into_iter().map(|(index, _)| index).collect()
+    candidates.sort_by_key(|(index, score, throughput, recovery)| {
+        (
+            *score,
+            std::cmp::Reverse(*throughput),
+            std::cmp::Reverse(*recovery),
+            *index,
+        )
+    });
+    candidates
+        .into_iter()
+        .map(|(index, _, _, _)| index)
+        .collect()
 }
 
 #[must_use]
@@ -225,5 +269,41 @@ mod tests {
             latency_aware_route_order(&profiles, &[], true, false, RouteLatencyPolicy::default()),
             vec![0, 1]
         );
+    }
+
+    #[test]
+    fn equal_latency_prefers_throughput_then_retry_recovery() {
+        let profiles = vec![
+            profile("slow-output", true, true),
+            profile("fast-output", true, true),
+            profile("recovered", true, true),
+        ];
+        let base = RouteLatencyStats {
+            samples: 10,
+            successes: 10,
+            total_duration_ms: 10_000,
+            output_tokens: 1_000,
+            generation_total_ms: 10_000,
+            retry_attempts: 10,
+            retry_recoveries: 5,
+            ..RouteLatencyStats::default()
+        };
+        let stats = vec![
+            base,
+            RouteLatencyStats {
+                output_tokens: 2_000,
+                ..base
+            },
+            RouteLatencyStats {
+                retry_recoveries: 10,
+                ..base
+            },
+        ];
+        assert_eq!(
+            latency_aware_route_order(&profiles, &stats, true, true, RouteLatencyPolicy::default()),
+            vec![1, 2, 0]
+        );
+        assert_eq!(stats[1].output_tokens_per_second_milli(), Some(200_000));
+        assert_eq!(stats[2].retry_recovery_milli(), 1_000);
     }
 }

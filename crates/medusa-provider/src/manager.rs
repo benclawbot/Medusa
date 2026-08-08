@@ -644,6 +644,9 @@ impl<P: ModelProvider + Sync> ProviderManager<P> {
                 match result {
                     Ok(response) => {
                         let duration_ms = elapsed_ms(started);
+                        if attempt > 0 {
+                            self.latency.record_retry_recovery(index)?;
+                        }
                         self.latency.record_success_with_first_token(
                             index,
                             duration_ms,
@@ -679,6 +682,7 @@ impl<P: ModelProvider + Sync> ProviderManager<P> {
                             RetryDisposition::Retry if attempt < policy.max_retries => {
                                 let delay_ms = policy.delay_ms(&error, index, attempt);
                                 self.record_retry(index, delay_ms)?;
+                                self.latency.record_retry_attempt(index)?;
                                 if let Some(flag) = cancel {
                                     let deadline = Instant::now() + Duration::from_millis(delay_ms);
                                     while Instant::now() < deadline {
@@ -937,6 +941,8 @@ mod tests {
         assert_eq!(cached["cache_hit"], json!(true));
         assert_eq!(cached["cache_hits"], json!(1));
         assert_eq!(manager.route_latency()[0].failures, 2);
+        assert_eq!(manager.route_latency()[0].retry_attempts, 1);
+        assert_eq!(manager.route_latency()[0].retry_recoveries, 0);
         assert_eq!(manager.route_latency()[1].successes, 1);
     }
 
