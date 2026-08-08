@@ -8,6 +8,7 @@ mod http;
 mod manager;
 mod openai;
 mod openai_streaming;
+mod openai_transport;
 mod route_latency;
 mod route_metrics_store;
 mod streaming;

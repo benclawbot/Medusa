@@ -90,10 +90,25 @@ impl ProviderRouteLatencyStore {
     }
 
     pub fn record_success(&self, index: usize, duration_ms: u64, usage: Usage) -> MedusaResult<()> {
+        self.record_success_with_first_token(index, duration_ms, None, usage)
+    }
+
+    pub fn record_success_with_first_token(
+        &self,
+        index: usize,
+        duration_ms: u64,
+        first_token_ms: Option<u64>,
+        usage: Usage,
+    ) -> MedusaResult<()> {
         self.update(index, |stats| {
             stats.samples = stats.samples.saturating_add(1);
             stats.successes = stats.successes.saturating_add(1);
             stats.total_duration_ms = stats.total_duration_ms.saturating_add(duration_ms);
+            if let Some(first_token_ms) = first_token_ms {
+                stats.first_token_samples = stats.first_token_samples.saturating_add(1);
+                stats.total_first_token_ms =
+                    stats.total_first_token_ms.saturating_add(first_token_ms);
+            }
             stats.input_tokens = stats.input_tokens.saturating_add(usage.input_tokens);
             stats.cached_input_tokens = stats
                 .cached_input_tokens
@@ -244,13 +259,14 @@ fn lock_is_stale(path: &Path) -> bool {
 
 fn route_key(profile: &ProviderRouteProfile) -> String {
     format!(
-        "{}\u{1f}{}\u{1f}{}\u{1f}{}\u{1f}{}\u{1f}{}",
+        "{}\u{1f}{}\u{1f}{}\u{1f}{}\u{1f}{}\u{1f}{}\u{1f}{}",
         profile.id,
         profile.provider,
         profile.model,
         profile.protocol,
         profile.endpoint.as_deref().unwrap_or_default(),
         profile.auth_source,
+        profile.streaming,
     )
 }
 

@@ -15,6 +15,7 @@ pub struct OpenAiStreamAccumulator {
     pending_tool_indices: BTreeSet<u32>,
     tool_blocks: Vec<ResponseBlock>,
     usage: Usage,
+    output_started: bool,
     completed: bool,
 }
 
@@ -50,6 +51,16 @@ impl OpenAiStreamAccumulator {
         }
 
         for choice in chunk.choices {
+            let has_output = choice
+                .delta
+                .content
+                .as_ref()
+                .is_some_and(|value| !value.is_empty())
+                || !choice.delta.tool_calls.is_empty();
+            if has_output && !self.output_started {
+                self.output_started = true;
+                sink(ProviderStreamEvent::OutputStarted)?;
+            }
             if let Some(content) = choice.delta.content.filter(|value| !value.is_empty()) {
                 self.text.push_str(&content);
                 sink(ProviderStreamEvent::TextDelta { text: content })?;

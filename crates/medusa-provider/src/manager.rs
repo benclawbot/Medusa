@@ -16,7 +16,8 @@ use serde_json::{Value, json};
 
 use crate::{
     ModelProvider, ModelRequest, ModelResponse, ProviderCapabilities, ProviderHealthStore,
-    ProviderRouteLatencyStore, RouteLatencyPolicy, RouteLatencyStats, latency_aware_route_order,
+    ProviderRouteLatencyStore, ProviderStreamEvent, RouteLatencyPolicy, RouteLatencyStats,
+    latency_aware_route_order,
 };
 
 /// Observable health state for a configured provider position.
@@ -311,14 +312,42 @@ impl<P: ModelProvider> ProviderManager<P> {
             for attempt in 0..=policy.max_retries {
                 self.record_attempt(index)?;
                 let started = Instant::now();
-                match cancel.map_or_else(
-                    || provider.complete(request),
-                    |flag| provider.complete_cancellable(request, flag),
-                ) {
+                let streaming = self
+                    .profiles
+                    .get(index)
+                    .is_some_and(|profile| profile.streaming)
+                    && provider.capabilities().streaming;
+                let mut first_token_ms = None;
+                let mut stream_sink = |event: ProviderStreamEvent| {
+                    if first_token_ms.is_none()
+                        && matches!(event, ProviderStreamEvent::OutputStarted)
+                    {
+                        first_token_ms = Some(elapsed_ms(started));
+                    }
+                    Ok(())
+                };
+                let result = if streaming {
+                    match cancel {
+                        Some(flag) => {
+                            provider.complete_streaming_cancellable(request, flag, &mut stream_sink)
+                        }
+                        None => provider.complete_streaming(request, &mut stream_sink),
+                    }
+                } else {
+                    match cancel {
+                        Some(flag) => provider.complete_cancellable(request, flag),
+                        None => provider.complete(request),
+                    }
+                };
+                match result {
                     Ok(response) => {
                         let duration_ms = elapsed_ms(started);
-                        self.latency
-                            .record_success(index, duration_ms, response.usage)?;
+                        self.latency.record_success_with_first_token(
+                            index,
+                            duration_ms,
+                            first_token_ms,
+                            response.usage,
+                        )?;
                         self.record_success(index)?;
                         if let Ok(mut cache) = self.cache.lock() {
                             cache.insert(key.clone(), response.clone());

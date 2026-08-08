@@ -13,6 +13,8 @@ pub enum ProviderStreamEvent {
     ResponseStarted {
         response_id: Option<String>,
     },
+    /// First provider output fragment observed on the wire. Carries no unvalidated text.
+    OutputStarted,
     TextDelta {
         text: String,
     },
