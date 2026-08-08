@@ -5,7 +5,7 @@ def replace(path: str, old: str, new: str) -> None:
     target = Path(path)
     text = target.read_text()
     if old not in text:
-        raise SystemExit(f"expected source fragment missing in {path}")
+        raise SystemExit(f"expected source fragment missing in {path}: {old[:80]!r}")
     target.write_text(text.replace(old, new, 1))
 
 MANAGER = "crates/medusa-provider/src/manager.rs"
@@ -49,7 +49,6 @@ fn provider_cache_outcome(total_input_tokens: u64, usage: crate::Usage) -> Cache
 }
 ''',
 )
-
 replace(
     MANAGER,
     '''        let total_input_tokens = usage
@@ -80,55 +79,21 @@ replace(
                         self.record_success(index)?;
 ''',
 )
-
 replace(
     MANAGER,
-    '''    fn provider_native_cache_usage_is_recorded_in_execution_status() {
-        let response = ModelResponse {
-            response_id: Some("cached-response".into()),
-            stop_reason: Some("end_turn".into()),
-            blocks: Vec::new(),
-            usage: Usage {
-                input_tokens: 20,
-                output_tokens: 4,
-                cache_read_input_tokens: 80,
-                cache_creation_input_tokens: 0,
-            },
-        };
-        let (provider, _) = provider(Ok(response));
-        let manager = ProviderManager::new_with_profiles(vec![provider], vec![profile("cached")]);
-        manager.complete(&request()).expect("cached provider response");
-        let status = manager.execution_status().expect("execution status");
-        assert_eq!(status["prompt_cache"]["requests"], json!(1));
-        assert_eq!(status["prompt_cache"]["hits"], json!(1));
+    '''        assert_eq!(status["prompt_cache"]["hits"], json!(1));
         assert_eq!(status["prompt_cache"]["cached_input_tokens"], json!(80));
-        assert_eq!(status["prompt_cache"]["reuse_basis_points"], json!(8_000));
-    }
 ''',
-    '''    fn provider_native_cache_usage_is_recorded_in_execution_status() {
-        let response = ModelResponse {
-            response_id: Some("cached-response".into()),
-            stop_reason: Some("end_turn".into()),
-            blocks: Vec::new(),
-            usage: Usage {
-                input_tokens: 20,
-                output_tokens: 4,
-                cache_read_input_tokens: 80,
-                cache_creation_input_tokens: 0,
-            },
-        };
-        let (provider, _) = provider(Ok(response));
-        let manager = ProviderManager::new_with_profiles(vec![provider], vec![profile("cached")]);
-        manager.complete(&request()).expect("cached provider response");
-        let status = manager.execution_status().expect("execution status");
-        assert_eq!(status["prompt_cache"]["requests"], json!(1));
-        assert_eq!(status["prompt_cache"]["hits"], json!(0));
+    '''        assert_eq!(status["prompt_cache"]["hits"], json!(0));
         assert_eq!(status["prompt_cache"]["partial_hits"], json!(1));
         assert_eq!(status["prompt_cache"]["cached_input_tokens"], json!(80));
-        assert_eq!(status["prompt_cache"]["reuse_basis_points"], json!(8_000));
-    }
-
-    #[test]
+''',
+)
+replace(
+    MANAGER,
+    '''    #[test]
+    fn retryable_primary_failure_falls_back_and_caches_response() {''',
+    '''    #[test]
     fn openai_prompt_total_is_not_double_counted_with_cached_tokens() {
         let mut openai = profile("openai-cache");
         openai.protocol = "openai".to_owned();
@@ -154,7 +119,9 @@ replace(
             .expect("provider success survives telemetry failure");
         assert_eq!(manager.health()[0].successes, 1);
     }
-''',
+
+    #[test]
+    fn retryable_primary_failure_falls_back_and_caches_response() {''',
 )
 
 replace(
