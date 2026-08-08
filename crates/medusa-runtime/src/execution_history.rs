@@ -462,6 +462,7 @@ fn payload_kind(payload: &EventPayload) -> &'static str {
         EventPayload::SessionCreated { .. } => "session_created",
         EventPayload::SessionStateChanged { .. } => "session_state_changed",
         EventPayload::SessionActionAccepted { .. } => "session_action_accepted",
+        EventPayload::SessionActionRejected { .. } => "session_action_rejected",
         EventPayload::SessionActionLifecycleChanged { .. } => "session_action_lifecycle_changed",
         EventPayload::SessionActionTranscriptLinked { .. } => "session_action_transcript_linked",
         EventPayload::UserPromptReceived { .. } => "user_prompt_received",
