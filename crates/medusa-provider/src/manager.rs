@@ -12,7 +12,8 @@ use std::{
 
 use medusa_core::{ErrorCategory, ErrorCode, MedusaError, MedusaResult};
 use medusa_prompt_cache::{
-    CacheObservation, CacheOutcome, CacheSummary, CacheTelemetry, PromptEnvelope, PromptSegment,
+    CacheObservation, CacheOutcome, CachePerformanceAssessment, CachePerformancePolicy,
+    CacheSummary, CacheTelemetry, PromptEnvelope, PromptSegment,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -217,10 +218,28 @@ impl<P> ProviderManager<P> {
         )
     }
 
+    /// Evaluates warm prompt-cache acceptance against provider observations recorded by this manager.
+    pub fn prompt_cache_performance_assessment(
+        &self,
+        policy: CachePerformancePolicy,
+    ) -> MedusaResult<CachePerformanceAssessment> {
+        let telemetry = self.prompt_cache.lock().map_err(|_| {
+            MedusaError::new(
+                ErrorCode::InternalInvariant,
+                ErrorCategory::Internal,
+                "prompt cache telemetry lock was poisoned",
+            )
+        })?;
+        Ok(telemetry.performance_assessment(policy))
+    }
+
     /// Returns the latest completed request snapshot from shared durable state.
     #[must_use]
     pub fn execution_status(&self) -> Option<Value> {
         let summary = self.prompt_cache_summary();
+        let performance = self
+            .prompt_cache_performance_assessment(CachePerformancePolicy::default())
+            .ok();
         match self.state.execution_status() {
             Ok(Some(mut status)) => {
                 if let Some(object) = status.as_object_mut() {
@@ -234,6 +253,7 @@ impl<P> ProviderManager<P> {
                             "cached_input_tokens": summary.cached_input_tokens,
                             "reuse_basis_points": summary.reuse_basis_points(),
                             "prefix_changes": summary.prefix_changes,
+                            "performance_gate": performance,
                         }),
                     );
                 }
@@ -1002,6 +1022,49 @@ mod tests {
         assert!(manager.complete(&request()).is_err());
         assert_eq!(manager.health()[0].last_delay_ms, Some(3_000));
         assert_eq!(manager.execution_status(), None);
+    }
+
+    #[test]
+    fn real_provider_observations_feed_prompt_cache_performance_gate() {
+        let response = ModelResponse {
+            response_id: Some("cache-performance".into()),
+            stop_reason: Some("end_turn".into()),
+            blocks: Vec::new(),
+            usage: Usage {
+                input_tokens: 100,
+                output_tokens: 4,
+                cache_read_input_tokens: 95,
+                cache_creation_input_tokens: 0,
+            },
+        };
+        let (provider, _) = provider(Ok(response));
+        let mut cache_profile = profile("cache-performance");
+        cache_profile.protocol = "openai".to_owned();
+        let manager = ProviderManager::new_with_profiles(vec![provider], vec![cache_profile]);
+        for message in ["first", "second", "third"] {
+            let mut request = request();
+            request.messages[0].content = vec![MessageBlock::Text {
+                text: message.to_owned(),
+            }];
+            manager.complete(&request).expect("provider response");
+        }
+
+        let assessment = manager
+            .prompt_cache_performance_assessment(CachePerformancePolicy {
+                min_warm_requests: 2,
+                min_warm_reuse_basis_points: 9_000,
+                max_route_prefix_changes: 0,
+            })
+            .expect("cache assessment");
+        assert!(assessment.passed(), "{:?}", assessment.failures);
+        assert_eq!(assessment.warm_requests, 2);
+        assert_eq!(assessment.warm_reuse_basis_points, 9_500);
+        assert_eq!(assessment.route_prefix_changes, 0);
+        let status = manager.execution_status().expect("execution status");
+        assert_eq!(
+            status["prompt_cache"]["performance_gate"]["warm_requests"],
+            json!(2)
+        );
     }
 
     #[test]

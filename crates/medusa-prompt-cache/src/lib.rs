@@ -1,6 +1,6 @@
 //! Stable prompt-prefix construction and cache observability.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -239,6 +239,81 @@ impl CacheTelemetry {
             prefix_changes,
         }
     }
+
+    /// Evaluates warm-cache reuse and stable-prefix churn using route-scoped evidence.
+    ///
+    /// The first observation for each provider/model/prefix tuple is treated as the cold prime and
+    /// excluded from the warm reuse ratio. Prefix churn is counted only when the stable prefix
+    /// changes on the same provider/model route, so normal route switches cannot create false
+    /// churn failures.
+    #[must_use]
+    pub fn performance_assessment(
+        &self,
+        policy: CachePerformancePolicy,
+    ) -> CachePerformanceAssessment {
+        let mut seen_prefixes = BTreeSet::<(String, String, String)>::new();
+        let mut last_route_prefix = BTreeMap::<(String, String), String>::new();
+        let mut warm_requests = 0_u64;
+        let mut warm_input_tokens = 0_u64;
+        let mut warm_cached_input_tokens = 0_u64;
+        let mut route_prefix_changes = 0_u64;
+
+        for observation in &self.observations {
+            let route = (observation.provider.clone(), observation.model.clone());
+            if let Some(previous) = last_route_prefix.get(&route)
+                && previous != &observation.prefix_fingerprint
+            {
+                route_prefix_changes = route_prefix_changes.saturating_add(1);
+            }
+            last_route_prefix.insert(route.clone(), observation.prefix_fingerprint.clone());
+
+            let warm_key = (route.0, route.1, observation.prefix_fingerprint.clone());
+            if !seen_prefixes.insert(warm_key) {
+                warm_requests = warm_requests.saturating_add(1);
+                warm_input_tokens = warm_input_tokens.saturating_add(observation.input_tokens);
+                warm_cached_input_tokens =
+                    warm_cached_input_tokens.saturating_add(observation.cached_input_tokens);
+            }
+        }
+
+        let warm_reuse_basis_points = if warm_input_tokens == 0 {
+            0
+        } else {
+            ((warm_cached_input_tokens.saturating_mul(10_000) / warm_input_tokens).min(10_000))
+                as u16
+        };
+        let mut failures = Vec::new();
+        if policy.min_warm_reuse_basis_points > 10_000 {
+            failures.push("minimum warm reuse cannot exceed 10000 basis points".to_owned());
+        }
+        if warm_requests < policy.min_warm_requests {
+            failures.push(format!(
+                "warm cache evidence is insufficient: {warm_requests} requests observed, {} required",
+                policy.min_warm_requests
+            ));
+        }
+        if warm_reuse_basis_points < policy.min_warm_reuse_basis_points {
+            failures.push(format!(
+                "warm cache reuse is {warm_reuse_basis_points} basis points, below required {}",
+                policy.min_warm_reuse_basis_points
+            ));
+        }
+        if route_prefix_changes > policy.max_route_prefix_changes {
+            failures.push(format!(
+                "stable prefix changed {route_prefix_changes} times within a route, above allowed {}",
+                policy.max_route_prefix_changes
+            ));
+        }
+
+        CachePerformanceAssessment {
+            warm_requests,
+            warm_input_tokens,
+            warm_cached_input_tokens,
+            warm_reuse_basis_points,
+            route_prefix_changes,
+            failures,
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -261,6 +336,45 @@ impl CacheSummary {
     }
 }
 
+/// Acceptance thresholds for repeated warm prompt-cache measurements.
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct CachePerformancePolicy {
+    /// Minimum number of warm requests required before the gate may pass.
+    pub min_warm_requests: u64,
+    /// Minimum cached-input reuse ratio, in basis points, across warm requests.
+    pub min_warm_reuse_basis_points: u16,
+    /// Maximum allowed stable-prefix changes within a single provider/model route.
+    pub max_route_prefix_changes: u64,
+}
+
+impl Default for CachePerformancePolicy {
+    fn default() -> Self {
+        Self {
+            min_warm_requests: 3,
+            min_warm_reuse_basis_points: 9_000,
+            max_route_prefix_changes: 0,
+        }
+    }
+}
+
+/// Evidence produced by the warm prompt-cache acceptance gate.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct CachePerformanceAssessment {
+    pub warm_requests: u64,
+    pub warm_input_tokens: u64,
+    pub warm_cached_input_tokens: u64,
+    pub warm_reuse_basis_points: u16,
+    pub route_prefix_changes: u64,
+    pub failures: Vec<String>,
+}
+
+impl CachePerformanceAssessment {
+    #[must_use]
+    pub fn passed(&self) -> bool {
+        self.failures.is_empty()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -276,6 +390,36 @@ mod tests {
                 PromptSegment::new("tools", "stable tools", true).expect("segment"),
                 PromptSegment::new("task", dynamic, false).expect("segment"),
             ],
+        }
+    }
+
+    fn observation(
+        sequence: u64,
+        provider: &str,
+        model: &str,
+        prefix: char,
+        input_tokens: u64,
+        cached_input_tokens: u64,
+    ) -> CacheObservation {
+        CacheObservation {
+            sequence,
+            recorded_at: datetime!(2026-07-24 12:00 UTC),
+            provider: provider.to_owned(),
+            model: model.to_owned(),
+            prefix_fingerprint: prefix.to_string().repeat(64),
+            prompt_fingerprint: format!("{sequence:0<64}"),
+            stable_prefix_bytes: 100,
+            prompt_bytes: 200,
+            input_tokens,
+            cached_input_tokens,
+            outcome: if cached_input_tokens >= input_tokens && input_tokens > 0 {
+                CacheOutcome::Hit
+            } else if cached_input_tokens > 0 {
+                CacheOutcome::PartialHit
+            } else {
+                CacheOutcome::Miss
+            },
+            provider_metadata: BTreeMap::new(),
         }
     }
 
@@ -306,33 +450,87 @@ mod tests {
     #[test]
     fn telemetry_detects_prefix_changes_and_reuse() {
         let mut telemetry = CacheTelemetry::default();
-        for (sequence, prefix, cached) in [(1, "a", 80), (2, "a", 100), (3, "b", 0)] {
+        for (sequence, prefix, cached) in [(1, 'a', 80), (2, 'a', 100), (3, 'b', 0)] {
             telemetry
-                .append(CacheObservation {
-                    sequence,
-                    recorded_at: datetime!(2026-07-24 12:00 UTC),
-                    provider: "provider".to_owned(),
-                    model: "model".to_owned(),
-                    prefix_fingerprint: format!("{prefix:0<64}"),
-                    prompt_fingerprint: format!("{sequence:0<64}"),
-                    stable_prefix_bytes: 100,
-                    prompt_bytes: 200,
-                    input_tokens: 100,
-                    cached_input_tokens: cached,
-                    outcome: if cached == 100 {
-                        CacheOutcome::Hit
-                    } else if cached > 0 {
-                        CacheOutcome::PartialHit
-                    } else {
-                        CacheOutcome::Miss
-                    },
-                    provider_metadata: BTreeMap::new(),
-                })
+                .append(observation(
+                    sequence, "provider", "model", prefix, 100, cached,
+                ))
                 .expect("append");
         }
         let summary = telemetry.summary();
         assert_eq!(summary.prefix_changes, 1);
         assert_eq!(summary.reuse_basis_points(), 6_000);
+    }
+
+    #[test]
+    fn warm_gate_excludes_cold_primes_and_route_switches() {
+        let mut telemetry = CacheTelemetry::default();
+        for observation in [
+            observation(1, "provider-a", "model", 'a', 100, 0),
+            observation(2, "provider-a", "model", 'a', 100, 95),
+            observation(3, "provider-b", "model", 'a', 100, 0),
+            observation(4, "provider-b", "model", 'a', 100, 100),
+            observation(5, "provider-a", "model", 'a', 100, 100),
+        ] {
+            telemetry.append(observation).expect("append");
+        }
+
+        let assessment = telemetry.performance_assessment(CachePerformancePolicy::default());
+        assert!(assessment.passed(), "{:?}", assessment.failures);
+        assert_eq!(assessment.warm_requests, 3);
+        assert_eq!(assessment.warm_input_tokens, 300);
+        assert_eq!(assessment.warm_cached_input_tokens, 295);
+        assert_eq!(assessment.warm_reuse_basis_points, 9_833);
+        assert_eq!(assessment.route_prefix_changes, 0);
+    }
+
+    #[test]
+    fn route_scoped_prefix_churn_fails_the_gate() {
+        let mut telemetry = CacheTelemetry::default();
+        for observation in [
+            observation(1, "provider", "model", 'a', 100, 0),
+            observation(2, "provider", "model", 'a', 100, 100),
+            observation(3, "provider", "model", 'b', 100, 0),
+            observation(4, "provider", "model", 'b', 100, 100),
+            observation(5, "provider", "model", 'b', 100, 100),
+        ] {
+            telemetry.append(observation).expect("append");
+        }
+
+        let assessment = telemetry.performance_assessment(CachePerformancePolicy {
+            min_warm_requests: 3,
+            min_warm_reuse_basis_points: 9_000,
+            max_route_prefix_changes: 0,
+        });
+        assert!(!assessment.passed());
+        assert_eq!(assessment.route_prefix_changes, 1);
+        assert!(
+            assessment
+                .failures
+                .iter()
+                .any(|failure| failure.contains("stable prefix changed"))
+        );
+    }
+
+    #[test]
+    fn insufficient_warm_evidence_fails_closed() {
+        let mut telemetry = CacheTelemetry::default();
+        telemetry
+            .append(observation(1, "provider", "model", 'a', 100, 0))
+            .expect("append");
+        telemetry
+            .append(observation(2, "provider", "model", 'a', 100, 100))
+            .expect("append");
+
+        let assessment = telemetry.performance_assessment(CachePerformancePolicy::default());
+        assert!(!assessment.passed());
+        assert_eq!(assessment.warm_requests, 1);
+        assert!(
+            assessment
+                .failures
+                .iter()
+                .any(|failure| failure.contains("evidence is insufficient"))
+        );
     }
 
     #[test]
