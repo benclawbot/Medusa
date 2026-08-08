@@ -173,7 +173,9 @@ impl RuntimeSessionAttachment {
     /// Starts the production controller only when this client is the current owner.
     pub fn into_controller(self) -> Result<RuntimeController, RuntimeError> {
         self.validate_owner()?;
-        RuntimeController::start_resumed(self.repo, &self.session.id.to_string())
+        let controller = RuntimeController::start_resumed(self.repo, &self.session.id.to_string())?;
+        controller.recover_session_actions()?;
+        Ok(controller)
     }
 
     /// Starts the production controller with an explicit configuration for tests and embedders.
@@ -182,11 +184,13 @@ impl RuntimeSessionAttachment {
         config: medusa_config::Config,
     ) -> Result<RuntimeController, RuntimeError> {
         self.validate_owner()?;
-        RuntimeController::start_resumed_with_config(
+        let controller = RuntimeController::start_resumed_with_config(
             self.repo,
             &self.session.id.to_string(),
             config,
-        )
+        )?;
+        controller.recover_session_actions()?;
+        Ok(controller)
     }
 
     #[must_use]
