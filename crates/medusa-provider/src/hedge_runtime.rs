@@ -17,12 +17,18 @@ use crate::{
 
 const CANCEL_POLL_INTERVAL: Duration = Duration::from_millis(10);
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct HedgeRacePlan {
+    pub primary_index: usize,
+    pub secondary_index: usize,
+    pub launch_after_ms: u64,
+}
+
 #[derive(Debug)]
 pub(crate) struct HedgeCandidateOutcome {
     pub index: usize,
     pub duration_ms: u64,
     pub first_token_ms: Option<u64>,
-    pub output_started: bool,
     pub result: MedusaResult<ModelResponse>,
 }
 
@@ -51,23 +57,25 @@ pub(crate) fn race_provider_candidates<P: ModelProvider + Sync>(
     providers: &[P],
     profiles: &[ProviderRouteProfile],
     request: &ModelRequest,
-    primary_index: usize,
-    secondary_index: usize,
-    launch_after_ms: u64,
+    plan: HedgeRacePlan,
     outer_cancel: Option<&AtomicBool>,
     sink: &mut Option<&mut dyn FnMut(ProviderStreamEvent) -> MedusaResult<()>>,
 ) -> MedusaResult<HedgeRaceOutcome> {
-    let primary = providers
-        .get(primary_index)
-        .ok_or_else(|| race_error(format!("hedge primary provider {primary_index} is missing")))?;
-    let secondary = providers.get(secondary_index).ok_or_else(|| {
+    let primary = providers.get(plan.primary_index).ok_or_else(|| {
         race_error(format!(
-            "hedge secondary provider {secondary_index} is missing"
+            "hedge primary provider {} is missing",
+            plan.primary_index
         ))
     })?;
-    let primary_streaming = route_streaming(profiles, primary_index, primary);
-    let secondary_streaming = route_streaming(profiles, secondary_index, secondary);
-    let launch_after = Duration::from_millis(launch_after_ms.max(1));
+    let secondary = providers.get(plan.secondary_index).ok_or_else(|| {
+        race_error(format!(
+            "hedge secondary provider {} is missing",
+            plan.secondary_index
+        ))
+    })?;
+    let primary_streaming = route_streaming(profiles, plan.primary_index, primary);
+    let secondary_streaming = route_streaming(profiles, plan.secondary_index, secondary);
+    let launch_after = Duration::from_millis(plan.launch_after_ms.max(1));
     let primary_cancel = Arc::new(AtomicBool::new(false));
     let secondary_cancel = Arc::new(AtomicBool::new(false));
 
@@ -79,7 +87,7 @@ pub(crate) fn race_provider_candidates<P: ModelProvider + Sync>(
             run_candidate(
                 primary,
                 request,
-                primary_index,
+                plan.primary_index,
                 primary_streaming,
                 &primary_cancel_for_worker,
                 primary_tx,
@@ -112,7 +120,7 @@ pub(crate) fn race_provider_candidates<P: ModelProvider + Sync>(
                     run_candidate(
                         secondary,
                         request,
-                        secondary_index,
+                        plan.secondary_index,
                         secondary_streaming,
                         &secondary_cancel_for_worker,
                         secondary_tx,
@@ -142,30 +150,40 @@ pub(crate) fn race_provider_candidates<P: ModelProvider + Sync>(
                     buffers.entry(index).or_default().push(event);
                     if authoritative {
                         authoritative_index = Some(index);
-                        cancel_loser(index, primary_index, &primary_cancel, &secondary_cancel);
+                        cancel_loser(
+                            index,
+                            plan.primary_index,
+                            &primary_cancel,
+                            &secondary_cancel,
+                        );
                         flush_candidate_events(sink, &mut buffers, index)?;
                     }
                 }
                 Ok(CandidateMessage::Finished(outcome)) => {
                     let index = outcome.index;
                     let successful = outcome.result.is_ok();
-                    if index == primary_index {
+                    if index == plan.primary_index {
                         primary_outcome = Some(outcome);
-                    } else if index == secondary_index {
+                    } else if index == plan.secondary_index {
                         secondary_outcome = Some(outcome);
                     }
 
                     if authoritative_index.is_none() && successful {
                         authoritative_index = Some(index);
-                        cancel_loser(index, primary_index, &primary_cancel, &secondary_cancel);
+                        cancel_loser(
+                            index,
+                            plan.primary_index,
+                            &primary_cancel,
+                            &secondary_cancel,
+                        );
                         flush_candidate_events(sink, &mut buffers, index)?;
-                        let streaming = if index == primary_index {
+                        let streaming = if index == plan.primary_index {
                             primary_streaming
                         } else {
                             secondary_streaming
                         };
                         if !streaming {
-                            let response = if index == primary_index {
+                            let response = if index == plan.primary_index {
                                 primary_outcome
                                     .as_ref()
                                     .and_then(|candidate| candidate.result.as_ref().ok())
@@ -208,7 +226,7 @@ pub(crate) fn race_provider_candidates<P: ModelProvider + Sync>(
             }
 
             let winner_finished = authoritative_index.is_some_and(|index| {
-                if index == primary_index {
+                if index == plan.primary_index {
                     primary_outcome.is_some()
                 } else {
                     secondary_outcome.is_some()
@@ -251,12 +269,10 @@ fn run_candidate<P: ModelProvider>(
 ) {
     let started = Instant::now();
     let mut first_token_ms = None;
-    let mut output_started = false;
     let result = if streaming {
         let mut candidate_sink = |event: ProviderStreamEvent| {
             if matches!(event, ProviderStreamEvent::OutputStarted) && first_token_ms.is_none() {
                 first_token_ms = Some(elapsed_ms(started));
-                output_started = true;
             }
             tx.send(CandidateMessage::Event { index, event })
                 .map_err(|_| race_error("hedge coordinator stopped receiving provider events"))
@@ -269,7 +285,6 @@ fn run_candidate<P: ModelProvider>(
         index,
         duration_ms: elapsed_ms(started),
         first_token_ms,
-        output_started,
         result,
     }));
 }
@@ -480,9 +495,19 @@ mod tests {
         };
         let mut sink: Option<&mut dyn FnMut(ProviderStreamEvent) -> MedusaResult<()>> =
             Some(&mut record);
-        let outcome =
-            race_provider_candidates(&providers, &profiles, &request(), 0, 1, 20, None, &mut sink)
-                .expect("race");
+        let outcome = race_provider_candidates(
+            &providers,
+            &profiles,
+            &request(),
+            HedgeRacePlan {
+                primary_index: 0,
+                secondary_index: 1,
+                launch_after_ms: 20,
+            },
+            None,
+            &mut sink,
+        )
+        .expect("race");
         assert_eq!(outcome.authoritative_index, Some(0));
         assert!(outcome.secondary.is_none());
         assert_eq!(secondary_calls.load(Ordering::SeqCst), 0);
@@ -506,9 +531,19 @@ mod tests {
         };
         let mut sink: Option<&mut dyn FnMut(ProviderStreamEvent) -> MedusaResult<()>> =
             Some(&mut record);
-        let outcome =
-            race_provider_candidates(&providers, &profiles, &request(), 0, 1, 20, None, &mut sink)
-                .expect("race");
+        let outcome = race_provider_candidates(
+            &providers,
+            &profiles,
+            &request(),
+            HedgeRacePlan {
+                primary_index: 0,
+                secondary_index: 1,
+                launch_after_ms: 20,
+            },
+            None,
+            &mut sink,
+        )
+        .expect("race");
         assert_eq!(outcome.authoritative_index, Some(1));
         assert_eq!(primary_cancellations.load(Ordering::SeqCst), 1);
         assert!(events.iter().all(|event| !matches!(
