@@ -4,6 +4,7 @@ mod anthropic;
 mod configured;
 mod contracts;
 mod health_store;
+mod hedging;
 mod http;
 mod manager;
 mod openai;
@@ -21,6 +22,7 @@ pub use contracts::{
     ProviderCapabilities, ResponseBlock, Role, ToolDefinition, Usage,
 };
 pub use health_store::ProviderHealthStore;
+pub use hedging::{HedgeDecision, HedgePolicy, hedge_decision};
 pub use manager::{ProviderHealth, ProviderManager, ProviderRouteProfile, RouteRetryPolicy};
 pub use openai::OpenAiProvider;
 pub use openai_streaming::OpenAiStreamAccumulator;
