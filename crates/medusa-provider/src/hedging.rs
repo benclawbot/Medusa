@@ -1,6 +1,6 @@
 use serde::{Deserialize, Serialize};
 
-use crate::{RouteLatencyPolicy, RouteLatencyStats, ProviderRouteProfile, expected_latency_ms};
+use crate::{ProviderRouteProfile, RouteLatencyPolicy, RouteLatencyStats, expected_latency_ms};
 
 /// Explicit, bounded policy for deciding whether a secondary provider request may be started.
 ///
@@ -89,9 +89,8 @@ pub fn hedge_decision(
         return None;
     }
     let primary_observed_ms = primary_stats.average_duration_ms()?;
-    let launch_after_ms = primary_observed_ms
-        .saturating_mul(u64::from(policy.delay_multiplier_milli))
-        / 1_000;
+    let launch_after_ms =
+        primary_observed_ms.saturating_mul(u64::from(policy.delay_multiplier_milli)) / 1_000;
     let launch_after_ms = launch_after_ms.min(policy.max_delay_ms).max(1);
     let primary_expected_ms = expected_latency_ms(primary_stats, latency_policy);
 
