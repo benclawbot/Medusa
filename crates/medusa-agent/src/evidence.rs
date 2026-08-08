@@ -20,7 +20,16 @@ pub(crate) fn append_event(
         deliver_queued_action(session, actor, payload, &action)?;
         return Ok(());
     }
+
+    let cancellation_completed = matches!(payload, EventPayload::CancellationCompleted);
+    let runtime_failed = matches!(payload, EventPayload::RuntimeFailed { .. });
     journal::append_payload_committed(session, actor, payload)?;
+
+    if cancellation_completed {
+        complete_running_cancel_action(session)?;
+    } else if runtime_failed {
+        fail_inflight_actions(session)?;
+    }
     Ok(())
 }
 
@@ -31,6 +40,92 @@ fn accepted_action<'a>(session: &'a AgentSession, action_id: &str) -> Option<&'a
         }
         _ => None,
     })
+}
+
+fn action_lifecycle(session: &AgentSession, action_id: &str) -> Option<SessionActionLifecycle> {
+    let mut lifecycle = None;
+    for event in &session.events {
+        match &event.payload {
+            EventPayload::SessionActionAccepted { action } if action.action_id == action_id => {
+                lifecycle = Some(SessionActionLifecycle::Queued);
+            }
+            EventPayload::SessionActionLifecycleChanged {
+                action_id: changed,
+                from,
+                to,
+                ..
+            } if changed == action_id && lifecycle == Some(*from) => lifecycle = Some(*to),
+            _ => {}
+        }
+    }
+    lifecycle
+}
+
+fn complete_running_cancel_action(session: &mut AgentSession) -> MedusaResult<()> {
+    let cancellation_event_sequence = session.events.last().map_or(0, |event| event.sequence);
+    let action_id = session.events.iter().rev().find_map(|event| match &event.payload {
+        EventPayload::SessionActionAccepted { action }
+            if action.kind == SessionActionKind::Cancel
+                && action_lifecycle(session, &action.action_id)
+                    == Some(SessionActionLifecycle::Running) =>
+        {
+            Some(action.action_id.clone())
+        }
+        _ => None,
+    });
+    if let Some(action_id) = action_id {
+        transition(
+            session,
+            &action_id,
+            SessionActionLifecycle::Running,
+            SessionActionLifecycle::Completed,
+            Some(serde_json::json!({
+                "delivery": "cancellation_completed",
+                "cancellation_event_sequence": cancellation_event_sequence,
+            })),
+        )?;
+    }
+    Ok(())
+}
+
+fn fail_inflight_actions(session: &mut AgentSession) -> MedusaResult<()> {
+    let failure_event_sequence = session.events.last().map_or(0, |event| event.sequence);
+    let action_ids = session
+        .events
+        .iter()
+        .filter_map(|event| match &event.payload {
+            EventPayload::SessionActionAccepted { action } => Some(action.action_id.clone()),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    for action_id in action_ids {
+        let Some(lifecycle) = action_lifecycle(session, &action_id) else {
+            continue;
+        };
+        let terminal = match lifecycle {
+            SessionActionLifecycle::Selected => Some(SessionActionLifecycle::Cancelled),
+            SessionActionLifecycle::Preparing
+            | SessionActionLifecycle::Committing
+            | SessionActionLifecycle::Running => Some(SessionActionLifecycle::Failed),
+            SessionActionLifecycle::Queued
+            | SessionActionLifecycle::Completed
+            | SessionActionLifecycle::Failed
+            | SessionActionLifecycle::Cancelled => None,
+        };
+        if let Some(terminal) = terminal {
+            transition(
+                session,
+                &action_id,
+                lifecycle,
+                terminal,
+                Some(serde_json::json!({
+                    "reason": "runtime_failed",
+                    "runtime_failure_event_sequence": failure_event_sequence,
+                })),
+            )?;
+        }
+    }
+    Ok(())
 }
 
 fn deliver_queued_action(
