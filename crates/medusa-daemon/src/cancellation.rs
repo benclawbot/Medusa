@@ -23,11 +23,16 @@ pub(crate) fn cancel_job(
 ) -> MedusaResult<Response> {
     let current = lock_jobs(jobs)?.get(job_id).cloned();
     let Some(current) = current else {
+        eprintln!("cancel diagnostic: {job_id} missing from job registry");
         return Ok(Response::Cancelled { job: None });
     };
     match current.state {
         JobState::Interrupted => return Ok(Response::Cancelled { job: Some(current) }),
         JobState::Succeeded | JobState::Failed => {
+            eprintln!(
+                "cancel diagnostic: {job_id} already terminal in state {:?}",
+                current.state
+            );
             return Ok(Response::Error {
                 code: "job_not_cancellable".into(),
                 message: format!("daemon job {job_id} is already terminal"),
@@ -40,12 +45,14 @@ pub(crate) fn cancel_job(
     match processes.cancel(job_id) {
         Ok(true) => {}
         Ok(false) => {
+            eprintln!("cancel diagnostic: {job_id} has no active process control");
             return Ok(Response::Error {
                 code: "job_not_cancellable".into(),
                 message: format!("daemon job {job_id} no longer has an active process control"),
             });
         }
         Err(error) => {
+            eprintln!("cancel diagnostic: {job_id} process cancellation failed: {error}");
             return Ok(Response::Error {
                 code: "cancellation_failed".into(),
                 message: error.to_string(),
