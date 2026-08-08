@@ -561,21 +561,21 @@ impl<P: ModelProvider + Sync> ProviderManager<P> {
             self.latency_policy,
         ) {
             self.record_attempt(decision.primary_index)?;
-            let outcome = {
-                let mut race_sink = sink.as_deref_mut();
-                race_provider_candidates(
-                    &self.providers,
-                    &self.profiles,
-                    request,
-                    HedgeRacePlan {
-                        primary_index: decision.primary_index,
-                        secondary_index: decision.secondary_index,
-                        launch_after_ms: decision.launch_after_ms,
-                    },
-                    cancel,
-                    &mut race_sink,
-                )?
-            };
+            let mut race_sink = sink.take();
+            let race_result = race_provider_candidates(
+                &self.providers,
+                &self.profiles,
+                request,
+                HedgeRacePlan {
+                    primary_index: decision.primary_index,
+                    secondary_index: decision.secondary_index,
+                    launch_after_ms: decision.launch_after_ms,
+                },
+                cancel,
+                &mut race_sink,
+            );
+            sink = race_sink;
+            let outcome = race_result?;
             if outcome.secondary.is_some() {
                 self.record_attempt(decision.secondary_index)?;
             }
