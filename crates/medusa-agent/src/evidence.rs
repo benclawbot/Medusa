@@ -14,11 +14,12 @@ pub(crate) fn append_event(
     actor: Actor,
     payload: EventPayload,
 ) -> MedusaResult<()> {
-    if let EventPayload::UserFollowupDequeued { command_id, .. } = &payload
-        && let Some(action) = accepted_action(session, command_id).cloned()
-    {
-        deliver_queued_action(session, actor, payload, &action)?;
-        return Ok(());
+    if let EventPayload::UserFollowupDequeued { command_id, .. } = &payload {
+        refresh_committed_events(session)?;
+        if let Some(action) = accepted_action(session, command_id).cloned() {
+            deliver_queued_action(session, actor, payload, &action)?;
+            return Ok(());
+        }
     }
 
     let cancellation_completed = matches!(payload, EventPayload::CancellationCompleted);
@@ -29,6 +30,25 @@ pub(crate) fn append_event(
         complete_running_cancel_action(session)?;
     } else if runtime_failed {
         fail_inflight_actions(session)?;
+    }
+    Ok(())
+}
+
+fn refresh_committed_events(session: &mut AgentSession) -> MedusaResult<()> {
+    let committed = crate::session::load(&session.repo, session.id.as_str())?;
+    if session.events.len() > committed.events.len()
+        || session.events.as_slice() != &committed.events[..session.events.len()]
+    {
+        return Err(MedusaError::new(
+            ErrorCode::InternalInvariant,
+            ErrorCategory::Persistence,
+            "worker session events diverge from the committed action journal",
+        ));
+    }
+    if committed.events.len() > session.events.len() {
+        session
+            .events
+            .extend_from_slice(&committed.events[session.events.len()..]);
     }
     Ok(())
 }
@@ -134,27 +154,76 @@ fn deliver_queued_action(
     transcript_payload: EventPayload,
     action: &SessionAction,
 ) -> MedusaResult<()> {
-    transition(
-        session,
-        &action.action_id,
-        SessionActionLifecycle::Queued,
-        SessionActionLifecycle::Selected,
-        None,
-    )?;
-    transition(
-        session,
-        &action.action_id,
-        SessionActionLifecycle::Selected,
-        SessionActionLifecycle::Preparing,
-        None,
-    )?;
-    transition(
-        session,
-        &action.action_id,
-        SessionActionLifecycle::Preparing,
-        SessionActionLifecycle::Committing,
-        None,
-    )?;
+    match action_lifecycle(session, &action.action_id) {
+        Some(SessionActionLifecycle::Queued) => {
+            transition(
+                session,
+                &action.action_id,
+                SessionActionLifecycle::Queued,
+                SessionActionLifecycle::Selected,
+                None,
+            )?;
+            transition(
+                session,
+                &action.action_id,
+                SessionActionLifecycle::Selected,
+                SessionActionLifecycle::Preparing,
+                None,
+            )?;
+            transition(
+                session,
+                &action.action_id,
+                SessionActionLifecycle::Preparing,
+                SessionActionLifecycle::Committing,
+                None,
+            )?;
+        }
+        Some(SessionActionLifecycle::Selected) => {
+            transition(
+                session,
+                &action.action_id,
+                SessionActionLifecycle::Selected,
+                SessionActionLifecycle::Preparing,
+                None,
+            )?;
+            transition(
+                session,
+                &action.action_id,
+                SessionActionLifecycle::Preparing,
+                SessionActionLifecycle::Committing,
+                None,
+            )?;
+        }
+        Some(SessionActionLifecycle::Preparing) => {
+            transition(
+                session,
+                &action.action_id,
+                SessionActionLifecycle::Preparing,
+                SessionActionLifecycle::Committing,
+                None,
+            )?;
+        }
+        Some(SessionActionLifecycle::Committing) => {}
+        Some(
+            SessionActionLifecycle::Running
+            | SessionActionLifecycle::Completed
+            | SessionActionLifecycle::Failed
+            | SessionActionLifecycle::Cancelled,
+        ) => {
+            return Err(MedusaError::new(
+                ErrorCode::InvalidEvent,
+                ErrorCategory::Persistence,
+                "session action delivery was replayed after leaving committing state",
+            ));
+        }
+        None => {
+            return Err(MedusaError::new(
+                ErrorCode::InvalidEvent,
+                ErrorCategory::Persistence,
+                "queued session action has no durable admission",
+            ));
+        }
+    }
 
     if action.kind == SessionActionKind::GoalAdjustment {
         let objective = action
