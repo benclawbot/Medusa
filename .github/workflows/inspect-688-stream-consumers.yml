@@ -5,16 +5,29 @@ on:
     branches: [perf/688-engine-stream-delivery]
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
   inspect:
+    if: github.actor != 'github-actions[bot]'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
-      - name: Locate AgentUpdate consumers
+        with:
+          ref: perf/688-engine-stream-delivery
+          fetch-depth: 0
+      - name: Capture consumer map
         run: |
-          echo '=== AgentUpdate references ==='
-          rg -n 'AgentUpdate|AssistantText' crates apps . --glob '!target/**' | head -400 || true
-          echo '=== provider streaming references ==='
-          rg -n 'ProviderStreamEvent|complete_streaming' crates apps . --glob '!target/**' | head -400 || true
+          {
+            echo '=== AgentUpdate references ==='
+            rg -n 'AgentUpdate|AssistantText' crates apps . --glob '!target/**' | head -500 || true
+            echo '=== provider streaming references ==='
+            rg -n 'ProviderStreamEvent|complete_streaming' crates apps . --glob '!target/**' | head -500 || true
+          } > .github/inspect-688-stream-consumers.txt
+      - name: Commit map
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add .github/inspect-688-stream-consumers.txt
+          git commit -m "Capture 688 streaming consumer map"
+          git push origin HEAD:perf/688-engine-stream-delivery
