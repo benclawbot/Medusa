@@ -604,11 +604,7 @@ mod tests {
     fn running(id: &str, pid: u32, start: &str) -> ProcessRecord {
         let mut process = record(id);
         process
-            .mark_running_with_marker(
-                pid,
-                Some(marker(start)),
-                datetime!(2026-07-24 12:01 UTC),
-            )
+            .mark_running_with_marker(pid, Some(marker(start)), datetime!(2026-07-24 12:01 UTC))
             .expect("running");
         process
     }
@@ -746,8 +742,11 @@ mod tests {
             .expect("legacy record");
         record.remove("identity");
         record.remove("last_identity_verification");
-        fs::write(&path, serde_json::to_vec(&legacy).expect("serialize legacy"))
-            .expect("write legacy registry");
+        fs::write(
+            &path,
+            serde_json::to_vec(&legacy).expect("serialize legacy"),
+        )
+        .expect("write legacy registry");
 
         let migrated = ProcessRegistry::load(&path).expect("migrate");
         let _ = fs::remove_file(&path);
