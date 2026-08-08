@@ -13,7 +13,7 @@ struct PendingRouteObservation {
 #[derive(Default)]
 struct RouteVerificationContext {
     latest_completion: Option<PendingRouteObservation>,
-    mutation_route: Option<PendingRouteObservation>,
+    mutation_routes: Vec<PendingRouteObservation>,
 }
 
 thread_local! {
@@ -27,38 +27,42 @@ pub(crate) fn register_pending_route_completion(store: ProviderRouteLatencyStore
     });
 }
 
-/// Freezes the route that most recently completed when a repository mutation is committed.
+/// Freezes the route that most recently completed when one of its tool calls commits a repository
+/// mutation.
 ///
-/// Later model calls may complete before final verification (for example, a summarization turn),
-/// so verification attribution must retain the route that actually produced the mutation rather
-/// than whichever route happened to answer last.
+/// Later model calls may complete before final verification, and several mutation-producing model
+/// turns may contribute to one combined verification. Each committed mutation therefore captures
+/// the route completion that caused it instead of relying on whichever route happened to answer
+/// last at verification time.
 #[doc(hidden)]
 pub fn mark_pending_route_mutation() {
     ROUTE_VERIFICATION_CONTEXT.with(|context| {
         let mut context = context.borrow_mut();
         if let Some(latest) = context.latest_completion.clone() {
-            context.mutation_route = Some(latest);
+            context.mutation_routes.push(latest);
         }
     });
 }
 
-/// Records one authoritative downstream verification result for the route that produced the
-/// mutation under verification.
+/// Records one authoritative downstream verification result for every mutation-producing route
+/// completion captured since the previous final verification.
 ///
-/// Returns `true` when an attributed route observation was consumed. The context is one-shot: the
-/// frozen mutation route and latest completion are cleared after every final verification event so
-/// stale attribution cannot leak into a later turn.
+/// Returns `true` when at least one attributed route observation was consumed. The context is
+/// one-shot: all frozen mutation routes and the latest completion are cleared after every final
+/// verification event so stale attribution cannot leak into a later turn.
 pub fn record_pending_route_verification(passed: bool) -> MedusaResult<bool> {
     ROUTE_VERIFICATION_CONTEXT.with(|context| {
         let mut context = context.borrow_mut();
-        let observation = context.mutation_route.take();
+        let observations = std::mem::take(&mut context.mutation_routes);
         context.latest_completion = None;
-        let Some(observation) = observation else {
+        if observations.is_empty() {
             return Ok(false);
-        };
-        observation
-            .store
-            .record_verified_success(observation.index, passed)?;
+        }
+        for observation in observations {
+            observation
+                .store
+                .record_verified_success(observation.index, passed)?;
+        }
         Ok(true)
     })
 }
@@ -96,6 +100,22 @@ mod tests {
         assert_eq!(stats[0].verified_successes, 1);
         assert_eq!(stats[0].verified_failures, 0);
         assert_eq!(stats[1].verified_successes, 0);
+    }
+
+    #[test]
+    fn combined_verification_attributes_each_mutation_producing_completion() {
+        let profiles = vec![profile("first"), profile("second")];
+        let store = ProviderRouteLatencyStore::in_memory(&profiles);
+
+        register_pending_route_completion(store.clone(), 0);
+        mark_pending_route_mutation();
+        register_pending_route_completion(store.clone(), 1);
+        mark_pending_route_mutation();
+
+        assert!(record_pending_route_verification(false).expect("verification observation"));
+        let stats = store.stats().expect("stats");
+        assert_eq!(stats[0].verified_failures, 1);
+        assert_eq!(stats[1].verified_failures, 1);
     }
 
     #[test]
