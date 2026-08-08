@@ -7,7 +7,9 @@ use std::{
 };
 
 use medusa_core::{CorrelationId, ErrorCategory, ErrorCode, MedusaError, MedusaResult, SessionId};
-use medusa_protocol::{Actor, EventEnvelope, EventPayload};
+use medusa_protocol::{
+    Actor, EventEnvelope, EventPayload, SessionAction, SessionActionKind, SessionActionLifecycle,
+};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use time::OffsetDateTime;
@@ -63,6 +65,12 @@ pub(crate) fn append_payload_committed(
     let state = read_journal(&path, &session.id, true, true)?;
     merge_committed_events(session, &state.events)?;
 
+    if let EventPayload::SessionActionAccepted { action } = &payload
+        && let Some(existing) = replayed_action_admission(&session.events, action)?
+    {
+        return Ok(existing);
+    }
+    let payload = normalize_action_admission(&session.events, payload)?;
     let event = EventEnvelope::new(
         u64::try_from(session.events.len())
             .unwrap_or(u64::MAX)
@@ -83,6 +91,136 @@ pub(crate) fn append_payload_committed(
     session.events.push(event.clone());
     append_record(&path, &snapshot_record(session))?;
     Ok(event)
+}
+
+fn replayed_action_admission(
+    events: &[EventEnvelope],
+    action: &SessionAction,
+) -> MedusaResult<Option<EventEnvelope>> {
+    for event in events {
+        let existing = match &event.payload {
+            EventPayload::SessionActionAccepted { action }
+            | EventPayload::SessionActionRejected { action, .. } => action,
+            _ => continue,
+        };
+        if existing.action_id == action.action_id
+            || existing.idempotency_key == action.idempotency_key
+        {
+            if existing == action {
+                return Ok(Some(event.clone()));
+            }
+            return Err(persistence_error(
+                "session action idempotency identity was reused with conflicting content",
+            ));
+        }
+    }
+    Ok(None)
+}
+
+fn normalize_action_admission(
+    events: &[EventEnvelope],
+    payload: EventPayload,
+) -> MedusaResult<EventPayload> {
+    let EventPayload::SessionActionAccepted { action } = payload else {
+        return Ok(payload);
+    };
+    action.validate().map_err(persistence_error)?;
+    let authoritative_revision = u64::try_from(events.len()).unwrap_or(u64::MAX);
+    if action.expected_session_revision != authoritative_revision {
+        return Ok(EventPayload::SessionActionRejected {
+            action,
+            authoritative_revision,
+            reason: "stale_revision".to_owned(),
+        });
+    }
+    if action.kind != SessionActionKind::ReplaceFollowUp {
+        return Ok(EventPayload::SessionActionAccepted { action });
+    }
+    let Some(replaces_action_id) = replacement_target_id(&action) else {
+        return Ok(EventPayload::SessionActionRejected {
+            action,
+            authoritative_revision,
+            reason: "replacement_target_missing".to_owned(),
+        });
+    };
+    let replaceable = action_state(events, replaces_action_id)?.is_some_and(|(kind, lifecycle)| {
+        matches!(kind, SessionActionKind::FollowUp | SessionActionKind::ReplaceFollowUp)
+            && lifecycle == SessionActionLifecycle::Queued
+    });
+    if !replaceable {
+        return Ok(EventPayload::SessionActionRejected {
+            action,
+            authoritative_revision,
+            reason: "replacement_target_not_queued_follow_up".to_owned(),
+        });
+    }
+    Ok(EventPayload::SessionActionAccepted { action })
+}
+
+fn replacement_target_id(action: &SessionAction) -> Option<&str> {
+    (action.kind == SessionActionKind::ReplaceFollowUp)
+        .then(|| action.payload.get("replaces_action_id"))
+        .flatten()
+        .and_then(serde_json::Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+}
+
+fn action_state(
+    events: &[EventEnvelope],
+    action_id: &str,
+) -> MedusaResult<Option<(SessionActionKind, SessionActionLifecycle)>> {
+    let mut state = None;
+    for event in events {
+        match &event.payload {
+            EventPayload::SessionActionAccepted { action } if action.action_id == action_id => {
+                state = Some((action.kind, SessionActionLifecycle::Queued));
+            }
+            EventPayload::SessionActionRejected { action, .. } if action.action_id == action_id => {
+                state = Some((action.kind, SessionActionLifecycle::Failed));
+            }
+            EventPayload::SessionActionLifecycleChanged {
+                action_id: changed,
+                from,
+                to,
+                ..
+            } if changed == action_id => {
+                let Some((kind, lifecycle)) = state else {
+                    return Err(persistence_error(
+                        "session action lifecycle has no prior admission",
+                    ));
+                };
+                if lifecycle != *from || !from.can_transition_to(*to) {
+                    return Err(persistence_error(
+                        "session action lifecycle is invalid while evaluating admission",
+                    ));
+                }
+                state = Some((kind, *to));
+            }
+            EventPayload::SessionActionAccepted { action }
+                if replacement_target_id(action) == Some(action_id) =>
+            {
+                let Some((kind, lifecycle)) = state else {
+                    return Err(persistence_error(
+                        "replacement action targets a missing prior admission",
+                    ));
+                };
+                if lifecycle != SessionActionLifecycle::Queued
+                    || !matches!(
+                        kind,
+                        SessionActionKind::FollowUp | SessionActionKind::ReplaceFollowUp
+                    )
+                {
+                    return Err(persistence_error(
+                        "replacement action supersedes a non-queued follow-up",
+                    ));
+                }
+                state = Some((kind, SessionActionLifecycle::Cancelled));
+            }
+            _ => {}
+        }
+    }
+    Ok(state)
 }
 
 fn merge_committed_events(
@@ -662,8 +800,12 @@ fn persistence_error(message: impl Into<String>) -> MedusaError {
 #[cfg(test)]
 mod tests {
     use medusa_core::CorrelationId;
-    use medusa_protocol::{Actor, EventPayload};
+    use medusa_protocol::{
+        Actor, EventPayload, SessionAction, SessionActionDeliveryPolicy, SessionActionKind,
+        SessionActionWakePolicy,
+    };
     use medusa_provider::{Message, MessageBlock, Role};
+    use serde_json::json;
     use time::OffsetDateTime;
 
     use super::*;
@@ -708,6 +850,30 @@ mod tests {
             OffsetDateTime::UNIX_EPOCH,
         )
         .expect("event")
+    }
+
+    fn action(
+        session: &AgentSession,
+        id: &str,
+        expected_session_revision: u64,
+        kind: SessionActionKind,
+        payload: serde_json::Value,
+    ) -> SessionAction {
+        SessionAction {
+            action_id: format!("action-{id}"),
+            idempotency_key: format!("idem-{id}"),
+            source: "test".to_owned(),
+            target_session_id: session.id.to_string(),
+            expected_session_revision,
+            kind,
+            delivery_policy: if kind == SessionActionKind::Steer {
+                SessionActionDeliveryPolicy::NextSafeTurnBoundary
+            } else {
+                SessionActionDeliveryPolicy::WhenIdle
+            },
+            wake_policy: SessionActionWakePolicy::OnBoundary,
+            payload,
+        }
     }
 
     fn append_and_materialize(session: &mut AgentSession, event: EventEnvelope) {
@@ -857,6 +1023,145 @@ mod tests {
         );
         let replay = replay_from_cursor(directory.path(), &stale.id, 0).expect("replay");
         assert_eq!(replay, stale.events);
+    }
+
+    #[test]
+    fn action_cas_accepts_one_writer_and_audits_the_stale_writer() {
+        let directory = tempfile::tempdir().expect("repository");
+        let mut first = session(directory.path());
+        let objective = first.objective.clone();
+        append_payload_committed(
+            &mut first,
+            Actor::Coordinator,
+            EventPayload::SessionCreated { objective },
+        )
+        .expect("session created");
+        let mut second = first.clone();
+        let first_action = action(
+            &first,
+            "first",
+            1,
+            SessionActionKind::FollowUp,
+            json!({"text":"first"}),
+        );
+        let second_action = action(
+            &second,
+            "second",
+            1,
+            SessionActionKind::FollowUp,
+            json!({"text":"second"}),
+        );
+
+        let accepted = append_payload_committed(
+            &mut first,
+            Actor::User,
+            EventPayload::SessionActionAccepted {
+                action: first_action,
+            },
+        )
+        .expect("first admission");
+        assert!(matches!(accepted.payload, EventPayload::SessionActionAccepted { .. }));
+        let rejected = append_payload_committed(
+            &mut second,
+            Actor::User,
+            EventPayload::SessionActionAccepted {
+                action: second_action,
+            },
+        )
+        .expect("stale admission is audited");
+        assert!(matches!(
+            rejected.payload,
+            EventPayload::SessionActionRejected {
+                authoritative_revision: 2,
+                ref reason,
+                ..
+            } if reason == "stale_revision"
+        ));
+        assert_eq!(second.events.len(), 3);
+    }
+
+    #[test]
+    fn identical_action_admission_is_idempotent_under_the_journal_lock() {
+        let directory = tempfile::tempdir().expect("repository");
+        let mut first = session(directory.path());
+        let objective = first.objective.clone();
+        append_payload_committed(
+            &mut first,
+            Actor::Coordinator,
+            EventPayload::SessionCreated { objective },
+        )
+        .expect("session created");
+        let mut second = first.clone();
+        let action = action(
+            &first,
+            "same",
+            1,
+            SessionActionKind::FollowUp,
+            json!({"text":"same"}),
+        );
+        let accepted = append_payload_committed(
+            &mut first,
+            Actor::User,
+            EventPayload::SessionActionAccepted {
+                action: action.clone(),
+            },
+        )
+        .expect("first admission");
+        let replayed = append_payload_committed(
+            &mut second,
+            Actor::User,
+            EventPayload::SessionActionAccepted { action },
+        )
+        .expect("duplicate admission");
+        assert_eq!(accepted, replayed);
+        assert_eq!(second.events.len(), 2);
+    }
+
+    #[test]
+    fn replacement_requires_a_current_queued_followup() {
+        let directory = tempfile::tempdir().expect("repository");
+        let mut current = session(directory.path());
+        let objective = current.objective.clone();
+        append_payload_committed(
+            &mut current,
+            Actor::Coordinator,
+            EventPayload::SessionCreated { objective },
+        )
+        .expect("session created");
+        let original = action(
+            &current,
+            "original",
+            1,
+            SessionActionKind::FollowUp,
+            json!({"text":"original"}),
+        );
+        append_payload_committed(
+            &mut current,
+            Actor::User,
+            EventPayload::SessionActionAccepted {
+                action: original.clone(),
+            },
+        )
+        .expect("original admission");
+        let replacement = action(
+            &current,
+            "replacement",
+            2,
+            SessionActionKind::ReplaceFollowUp,
+            json!({
+                "text":"replacement",
+                "replaces_action_id": original.action_id,
+            }),
+        );
+        let accepted = append_payload_committed(
+            &mut current,
+            Actor::User,
+            EventPayload::SessionActionAccepted {
+                action: replacement,
+            },
+        )
+        .expect("replacement admission");
+        assert!(matches!(accepted.payload, EventPayload::SessionActionAccepted { .. }));
     }
 
     #[test]
