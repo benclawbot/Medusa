@@ -161,8 +161,8 @@ impl Default for RouteLatencyPolicy {
 /// Returns route indices ordered by expected verified completion latency.
 ///
 /// Capability-incompatible routes are excluded before scoring. Ties prefer lower authoritative
-/// observed cost, then output throughput and retry recovery. Otherwise configured route order is
-/// retained.
+/// observed cost only when both routes have comparable cost observations, then output throughput
+/// and retry recovery. Otherwise configured route order is retained.
 #[must_use]
 pub fn latency_aware_route_order(
     profiles: &[ProviderRouteProfile],
@@ -181,20 +181,22 @@ pub fn latency_aware_route_order(
             (
                 index,
                 expected_latency_ms(stats, policy),
-                stats.average_cost_microusd().unwrap_or(u64::MAX),
+                stats.average_cost_microusd(),
                 stats.output_tokens_per_second_milli().unwrap_or_default(),
                 stats.retry_recovery_milli(),
             )
         })
         .collect::<Vec<_>>();
-    candidates.sort_by_key(|(index, score, cost, throughput, recovery)| {
-        (
-            *score,
-            *cost,
-            std::cmp::Reverse(*throughput),
-            std::cmp::Reverse(*recovery),
-            *index,
-        )
+    candidates.sort_by(|left, right| {
+        left.1
+            .cmp(&right.1)
+            .then_with(|| match (left.2, right.2) {
+                (Some(left_cost), Some(right_cost)) => left_cost.cmp(&right_cost),
+                _ => std::cmp::Ordering::Equal,
+            })
+            .then_with(|| right.3.cmp(&left.3))
+            .then_with(|| right.4.cmp(&left.4))
+            .then_with(|| left.0.cmp(&right.0))
     });
     candidates
         .into_iter()
@@ -207,7 +209,9 @@ pub fn expected_latency_ms(stats: RouteLatencyStats, policy: RouteLatencyPolicy)
     let base = stats
         .average_duration_ms()
         .unwrap_or(policy.cold_start_duration_ms);
-    let verified_success = stats.success_milli().min(stats.verified_success_milli());
+    let verified_success = ((u32::from(stats.success_milli())
+        * u32::from(stats.verified_success_milli()))
+        / 1_000) as u16;
     let failure_penalty = u64::from(1_000_u16.saturating_sub(verified_success))
         .saturating_mul(policy.failure_penalty_ms_per_mille);
     let cache_credit = policy
@@ -328,6 +332,26 @@ mod tests {
     }
 
     #[test]
+    fn transport_and_verification_success_are_sequential_probabilities() {
+        let policy = RouteLatencyPolicy {
+            failure_penalty_ms_per_mille: 10,
+            ..RouteLatencyPolicy::default()
+        };
+        let stats = RouteLatencyStats {
+            samples: 10,
+            successes: 5,
+            failures: 5,
+            total_duration_ms: 10_000,
+            verified_successes: 5,
+            verified_failures: 5,
+            ..RouteLatencyStats::default()
+        };
+        assert_eq!(stats.success_milli(), 500);
+        assert_eq!(stats.verified_success_milli(), 500);
+        assert_eq!(expected_latency_ms(stats, policy), 8_500);
+    }
+
+    #[test]
     fn authoritative_cost_breaks_equal_verified_latency_tie() {
         let profiles = vec![
             profile("expensive", true, true),
@@ -358,6 +382,38 @@ mod tests {
         assert_eq!(
             latency_aware_route_order(&profiles, &stats, true, true, RouteLatencyPolicy::default()),
             vec![1, 0]
+        );
+    }
+
+    #[test]
+    fn unknown_cost_remains_neutral_during_tie_breaking() {
+        let profiles = vec![
+            profile("unknown-fast-output", true, true),
+            profile("known-slow-output", true, true),
+        ];
+        let base = RouteLatencyStats {
+            samples: 10,
+            successes: 10,
+            total_duration_ms: 10_000,
+            verified_successes: 10,
+            output_tokens: 1_000,
+            generation_total_ms: 10_000,
+            ..RouteLatencyStats::default()
+        };
+        let stats = vec![
+            RouteLatencyStats {
+                output_tokens: 2_000,
+                ..base
+            },
+            RouteLatencyStats {
+                cost_microusd_total: 1_000,
+                cost_samples: 10,
+                ..base
+            },
+        ];
+        assert_eq!(
+            latency_aware_route_order(&profiles, &stats, true, true, RouteLatencyPolicy::default()),
+            vec![0, 1]
         );
     }
 
