@@ -1,6 +1,12 @@
+use std::env;
+
 use serde::{Deserialize, Serialize};
 
 use crate::{ProviderRouteProfile, RouteLatencyPolicy, RouteLatencyStats, expected_latency_ms};
+
+const HEDGE_ENABLED_ENV: &str = "MEDUSA_PROVIDER_HEDGE_ENABLED";
+const HEDGE_MAX_DUPLICATE_OUTPUT_TOKENS_ENV: &str =
+    "MEDUSA_PROVIDER_HEDGE_MAX_DUPLICATE_OUTPUT_TOKENS";
 
 /// Explicit, bounded policy for deciding whether a secondary provider request may be started.
 ///
@@ -32,11 +38,32 @@ impl HedgePolicy {
             max_duplicate_output_tokens: 8_192,
         }
     }
+
+    /// Applies production operator gates from the process environment.
+    ///
+    /// `MEDUSA_PROVIDER_HEDGE_ENABLED` accepts `1`, `true`, `yes`, or `on` (case-insensitive).
+    /// Any other explicitly supplied value disables hedging fail-closed. The duplicate-output cap
+    /// can be overridden with `MEDUSA_PROVIDER_HEDGE_MAX_DUPLICATE_OUTPUT_TOKENS`; an invalid
+    /// explicit value becomes zero, also failing closed for non-zero-output requests.
+    #[must_use]
+    pub fn from_environment() -> Self {
+        let mut policy = Self::production_default();
+        if let Ok(value) = env::var(HEDGE_ENABLED_ENV) {
+            policy.enabled = matches!(
+                value.trim().to_ascii_lowercase().as_str(),
+                "1" | "true" | "yes" | "on"
+            );
+        }
+        if let Ok(value) = env::var(HEDGE_MAX_DUPLICATE_OUTPUT_TOKENS_ENV) {
+            policy.max_duplicate_output_tokens = value.trim().parse::<u32>().unwrap_or(0);
+        }
+        policy
+    }
 }
 
 impl Default for HedgePolicy {
     fn default() -> Self {
-        Self::production_default()
+        Self::from_environment()
     }
 }
 
@@ -161,7 +188,7 @@ mod tests {
             &profiles,
             &telemetry,
             1_024,
-            HedgePolicy::default(),
+            HedgePolicy::production_default(),
             RouteLatencyPolicy::default(),
         )
         .expect("hedge decision");
@@ -188,7 +215,7 @@ mod tests {
                 &profiles,
                 &telemetry,
                 1_024,
-                HedgePolicy::default(),
+                HedgePolicy::production_default(),
                 RouteLatencyPolicy::default(),
             )
             .is_none()
@@ -205,18 +232,19 @@ mod tests {
                 &profiles,
                 &telemetry,
                 1_024,
-                HedgePolicy::default(),
+                HedgePolicy::production_default(),
                 RouteLatencyPolicy::default(),
             )
             .is_none()
         );
+        let policy = HedgePolicy::production_default();
         assert!(
             hedge_decision(
                 &[0, 1],
                 &profiles,
                 &[stats(4_000, 10), stats(100, 10)],
-                HedgePolicy::default().max_duplicate_output_tokens + 1,
-                HedgePolicy::default(),
+                policy.max_duplicate_output_tokens + 1,
+                policy,
                 RouteLatencyPolicy::default(),
             )
             .is_none()
@@ -234,7 +262,7 @@ mod tests {
                 1_024,
                 HedgePolicy {
                     enabled: false,
-                    ..HedgePolicy::default()
+                    ..HedgePolicy::production_default()
                 },
                 RouteLatencyPolicy::default(),
             )
