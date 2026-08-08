@@ -17,7 +17,10 @@ use medusa_runtime::{
     commands::{
         Effort, ModelCommand, ModelConfiguration, SlashCommand, TeamCommand, parse_slash_command,
     },
-    frontend::{SessionActionAdmission, SessionActionRequest, SessionActionSnapshot, session_action_snapshot},
+    frontend::{
+        SessionActionAdmission, SessionActionRequest, SessionActionSnapshot,
+        session_action_snapshot,
+    },
     prompt::PromptDraft,
     recovery_action_context,
 };
@@ -437,18 +440,18 @@ impl FrontendControlPlane {
             } => {
                 let session_id = required_session_id(envelope)?;
                 self.authorize_control(&session_id, &envelope.client_id)?;
-                let admission = self.controller(&session_id)?.submit_session_action(
-                    SessionActionRequest {
-                        idempotency_key: envelope.idempotency_key.clone(),
-                        source: frontend_source(envelope.frontend, &envelope.client_id),
-                        target_session_id: session_id.clone(),
-                        expected_session_revision: *expected_session_revision,
-                        kind: *kind,
-                        delivery_policy: *delivery_policy,
-                        wake_policy: *wake_policy,
-                        payload: payload.clone(),
-                    },
-                )?;
+                let admission =
+                    self.controller(&session_id)?
+                        .submit_session_action(SessionActionRequest {
+                            idempotency_key: envelope.idempotency_key.clone(),
+                            source: frontend_source(envelope.frontend, &envelope.client_id),
+                            target_session_id: session_id.clone(),
+                            expected_session_revision: *expected_session_revision,
+                            kind: *kind,
+                            delivery_policy: *delivery_policy,
+                            wake_policy: *wake_policy,
+                            payload: payload.clone(),
+                        })?;
                 Ok(FrontendControlResult::SessionActionAccepted {
                     session_id,
                     admission,
@@ -459,7 +462,8 @@ impl FrontendControlPlane {
                 let replay = self.replay_events(&envelope.client_id, 0)?;
                 if replay.session_id != session_id {
                     return Err(FrontendControlError::InvalidCommand(
-                        "frontend attachment does not belong to requested action session".to_owned(),
+                        "frontend attachment does not belong to requested action session"
+                            .to_owned(),
                     ));
                 }
                 let snapshot = session_action_snapshot(&self.repo, &session_id)?;
