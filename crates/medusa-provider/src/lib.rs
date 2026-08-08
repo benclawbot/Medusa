@@ -4,6 +4,7 @@ mod anthropic;
 mod configured;
 mod contracts;
 mod health_store;
+mod hedge_acceptance;
 mod hedge_runtime;
 mod hedging;
 mod http;
@@ -24,6 +25,9 @@ pub use contracts::{
     ProviderCapabilities, ResponseBlock, Role, ToolDefinition, Usage,
 };
 pub use health_store::ProviderHealthStore;
+pub use hedge_acceptance::{
+    HEDGE_ACCEPTANCE_MIN_SAMPLES, HedgeLatencyAcceptance, assess_hedge_latency_acceptance,
+};
 pub use hedging::{HedgeDecision, HedgePolicy, hedge_decision};
 pub use manager::{ProviderHealth, ProviderManager, ProviderRouteProfile, RouteRetryPolicy};
 pub use openai::OpenAiProvider;
