@@ -770,7 +770,11 @@ mod tests {
                 panic!("expected action notice")
             };
             assert!(details.iter().any(|detail| detail.contains("action-1")));
-            assert!(details.iter().all(|detail| !detail.contains("do not expose")));
+            assert!(
+                details
+                    .iter()
+                    .all(|detail| !detail.contains("do not expose"))
+            );
         }
 
         let lifecycle = project_event(
