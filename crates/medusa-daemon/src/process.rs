@@ -716,7 +716,10 @@ mod tests {
             assert!(Instant::now() < deadline, "leader did not exit in time");
             thread::sleep(PROCESS_POLL_INTERVAL);
         }
-        assert_eq!(receipt.verify(), ProcessOwnershipVerification::VerifiedCurrent);
+        assert_eq!(
+            receipt.verify(),
+            ProcessOwnershipVerification::VerifiedCurrent
+        );
         terminate_process_tree(&mut child, &receipt).expect("cleanup verified process tree");
         assert!(!process_group_alive(child.id()));
     }
