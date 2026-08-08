@@ -675,7 +675,11 @@ impl<P: ModelProvider + Sync> ProviderManager<P> {
                             return Err(error);
                         }
                         let duration_ms = elapsed_ms(started);
-                        self.latency.record_failure(index, duration_ms)?;
+                        self.latency.record_failure_with_category(
+                            index,
+                            duration_ms,
+                            Some(error.category),
+                        )?;
                         self.record_error(index, &error)?;
                         final_error = Some(error.clone());
                         match classify_error(&error, has_fallback) {
