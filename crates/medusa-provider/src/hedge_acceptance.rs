@@ -90,15 +90,16 @@ mod tests {
 
     #[test]
     fn injected_tail_latency_fixture_must_lower_p95() {
-        let mut baseline = vec![40; 19];
-        baseline.push(200);
-        let mut hedged = vec![40; 19];
-        hedged.push(80);
+        let mut baseline = vec![40; 18];
+        baseline.extend([200, 220]);
+        let mut hedged = vec![40; 18];
+        hedged.extend([80, 90]);
 
         let assessment = assess_hedge_latency_acceptance(&baseline, &hedged);
         assert!(assessment.passed, "{:?}", assessment.reasons);
-        assert_eq!(assessment.baseline_p95_ms, Some(40));
-        assert_eq!(assessment.hedged_p95_ms, Some(40));
+        assert_eq!(assessment.baseline_p95_ms, Some(200));
+        assert_eq!(assessment.hedged_p95_ms, Some(80));
+        assert_eq!(assessment.improvement_bps, Some(6_000));
     }
 
     #[test]
