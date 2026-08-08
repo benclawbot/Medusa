@@ -822,15 +822,17 @@ mod tests {
         assert!(desktop.event_id.ends_with(":desktop"));
         assert!(telegram.event_id.ends_with(":telegram"));
         let FrontendEvent::Notice {
-            severity,
-            details,
-            ..
+            severity, details, ..
         } = desktop.event
         else {
             panic!("expected rejection notice")
         };
         assert_eq!(severity, "warning");
-        assert!(details.iter().any(|detail| detail.contains("stale_revision")));
+        assert!(
+            details
+                .iter()
+                .any(|detail| detail.contains("stale_revision"))
+        );
         assert!(details.iter().any(|detail| detail.contains("9")));
     }
 
