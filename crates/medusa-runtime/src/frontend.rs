@@ -4,7 +4,13 @@
 //! frontends consume the versioned protocol projected from committed journal events. This keeps
 //! replay, ordering, verification, and terminal state identical across CLI and remote clients.
 
-use std::{collections::VecDeque, path::PathBuf, sync::atomic::Ordering};
+use std::{
+    collections::VecDeque,
+    path::PathBuf,
+    sync::{Arc, atomic::Ordering, mpsc},
+    thread,
+    time::Duration,
+};
 
 use medusa_agent::session_browser::{load_session, replay_events};
 use medusa_protocol::{
@@ -18,8 +24,8 @@ use sha2::{Digest, Sha256};
 use time::OffsetDateTime;
 
 use crate::{
-    QueuedFollowup, RuntimeCommand, RuntimeController, RuntimeError, SubmitDisposition,
-    lock_submission, record_controller_event,
+    QueuedFollowup, RuntimeCommand, RuntimeController, RuntimeError, RuntimeEvent, lock_submission,
+    mark_idle, record_controller_event,
     prompt::PromptDraft,
 };
 
@@ -47,8 +53,9 @@ impl SessionActionRequest {
     }
 
     fn into_action(self) -> SessionAction {
+        let action_id = self.action_id();
         SessionAction {
-            action_id: self.action_id(),
+            action_id,
             idempotency_key: self.idempotency_key,
             source: self.source,
             target_session_id: self.target_session_id,
@@ -193,9 +200,6 @@ pub fn session_action_snapshot(
 
 impl RuntimeController {
     /// Admits one action through the existing session journal and runtime authority.
-    ///
-    /// The action itself is complete when its requested control/message delivery is durably applied;
-    /// any model/tool work caused by that delivery remains governed by the normal runtime lifecycle.
     pub fn submit_session_action(
         &self,
         request: SessionActionRequest,
@@ -241,26 +245,33 @@ impl RuntimeController {
 
         match action.kind {
             SessionActionKind::Cancel => self.deliver_cancel_action(&action)?,
-            SessionActionKind::GoalAdjustment if !self.is_busy() => {
-                self.deliver_idle_goal_action(&action)?;
+            SessionActionKind::FollowUp => {
+                if action.wake_policy == SessionActionWakePolicy::ExternalResume {
+                    // Admission is durable. Explicit session resume calls recover_session_actions.
+                } else if self.is_busy() {
+                    self.spawn_when_idle_action(action.clone())?;
+                } else {
+                    self.deliver_idle_message_action(&action)?;
+                }
             }
-            SessionActionKind::Steer
-            | SessionActionKind::FollowUp
-            | SessionActionKind::GoalAdjustment => {
-                self.deliver_message_action(&action)?;
+            SessionActionKind::Steer => self.deliver_safe_boundary_message_action(&action)?,
+            SessionActionKind::GoalAdjustment => {
+                if self.is_busy() {
+                    match action.delivery_policy {
+                        SessionActionDeliveryPolicy::NextSafeTurnBoundary => {
+                            self.deliver_safe_boundary_message_action(&action)?;
+                        }
+                        SessionActionDeliveryPolicy::WhenIdle => {
+                            self.spawn_when_idle_action(action.clone())?;
+                        }
+                    }
+                } else {
+                    self.deliver_idle_goal_action(&action)?;
+                }
             }
         }
 
-        let snapshot = session_action_snapshot(&self.repo, &action.target_session_id)?;
-        let view = snapshot
-            .actions
-            .into_iter()
-            .find(|candidate| candidate.action.action_id == action.action_id)
-            .ok_or_else(|| RuntimeError::agent("accepted session action disappeared from replay"))?;
-        Ok(SessionActionAdmission {
-            action: view,
-            coalesced: false,
-        })
+        action_admission(&self.repo, &action, false)
     }
 
     /// Returns the canonical action projection for the active durable session.
@@ -271,9 +282,74 @@ impl RuntimeController {
         session_action_snapshot(&self.repo, &session_id).map(Some)
     }
 
-    fn deliver_message_action(&self, action: &SessionAction) -> Result<(), RuntimeError> {
-        let draft = action_draft(action)?;
+    /// Restores queued or interrupted action delivery after a controller/session resume.
+    /// Recovery only moves forward from the journaled lifecycle; it never rewinds committing.
+    pub fn recover_session_actions(&self) -> Result<(), RuntimeError> {
+        let Some(session_id) = self.active_session_id() else {
+            return Ok(());
+        };
+        let snapshot = session_action_snapshot(&self.repo, &session_id)?;
+        for view in snapshot.actions {
+            if view.lifecycle.terminal() {
+                continue;
+            }
+            match view.action.kind {
+                SessionActionKind::Cancel if view.lifecycle == SessionActionLifecycle::Running => {
+                    // The original runtime died while cancellation was in flight. Its process
+                    // containment is recovered separately; the action receipt must not pretend a
+                    // cancellation completed without the canonical cancellation event.
+                }
+                SessionActionKind::Cancel => {}
+                SessionActionKind::FollowUp => self.spawn_when_idle_action(view.action)?,
+                SessionActionKind::Steer | SessionActionKind::GoalAdjustment
+                    if view.lifecycle == SessionActionLifecycle::Committing
+                        || view.lifecycle == SessionActionLifecycle::Running =>
+                {
+                    reconcile_interrupted_delivery(&self.repo, &view.action)?;
+                }
+                SessionActionKind::Steer | SessionActionKind::GoalAdjustment => {
+                    if self.is_busy()
+                        && view.action.delivery_policy
+                            == SessionActionDeliveryPolicy::NextSafeTurnBoundary
+                    {
+                        self.ensure_safe_boundary_queue(&view.action)?;
+                    } else if view.action.kind == SessionActionKind::GoalAdjustment
+                        && !self.is_busy()
+                    {
+                        self.deliver_idle_goal_action(&view.action)?;
+                    } else {
+                        self.spawn_when_idle_action(view.action)?;
+                    }
+                }
+            }
+        }
+        Ok(())
+    }
+
+    fn deliver_safe_boundary_message_action(
+        &self,
+        action: &SessionAction,
+    ) -> Result<(), RuntimeError> {
         if self.is_busy() {
+            return self.ensure_safe_boundary_queue(action);
+        }
+        self.deliver_idle_message_action(action)
+    }
+
+    fn ensure_safe_boundary_queue(&self, action: &SessionAction) -> Result<(), RuntimeError> {
+        let draft = action_draft(action)?;
+        let session = load_session(&self.repo, &action.target_session_id).map_err(RuntimeError::agent)?;
+        let already_queued = session.events.iter().rev().any(|event| match &event.payload {
+            EventPayload::UserFollowupQueued { command_id, .. } => command_id == &action.action_id,
+            EventPayload::UserFollowupDequeued { command_id, .. } => {
+                if command_id == &action.action_id {
+                    return false;
+                }
+                false
+            }
+            _ => false,
+        });
+        if !already_queued {
             record_controller_event(
                 &self.repo,
                 &action.target_session_id,
@@ -283,171 +359,107 @@ impl RuntimeController {
                     prompt: serde_json::to_value(&draft).map_err(RuntimeError::agent)?,
                 },
             )?;
-            lock_submission(&self.submission)
-                .followups
-                .push_back(QueuedFollowup {
-                    command_id: action.action_id.clone(),
-                    draft,
-                    durably_recorded: true,
-                });
-            return Ok(());
         }
-
-        transition_action(
-            &self.repo,
-            &action.target_session_id,
-            &action.action_id,
-            SessionActionLifecycle::Queued,
-            SessionActionLifecycle::Selected,
-            None,
-        )?;
-        transition_action(
-            &self.repo,
-            &action.target_session_id,
-            &action.action_id,
-            SessionActionLifecycle::Selected,
-            SessionActionLifecycle::Preparing,
-            None,
-        )?;
-        transition_action(
-            &self.repo,
-            &action.target_session_id,
-            &action.action_id,
-            SessionActionLifecycle::Preparing,
-            SessionActionLifecycle::Committing,
-            None,
-        )?;
-
-        let before = session_action_snapshot(&self.repo, &action.target_session_id)?.revision;
-        let disposition = self.submit(draft)?;
-        if disposition != SubmitDisposition::Started {
-            return Err(RuntimeError::agent(
-                "idle session action unexpectedly entered the legacy queued path",
-            ));
-        }
-        let session = load_session(&self.repo, &action.target_session_id).map_err(RuntimeError::agent)?;
-        let transcript_event_sequence = session
-            .events
+        let mut submission = lock_submission(&self.submission);
+        if !submission
+            .followups
             .iter()
-            .rev()
-            .find(|event| {
-                event.sequence > before && matches!(event.payload, EventPayload::UserPromptReceived { .. })
-            })
-            .map(|event| event.sequence)
-            .ok_or_else(|| RuntimeError::agent("session action submission produced no durable user message"))?;
-        record_controller_event(
-            &self.repo,
-            &action.target_session_id,
-            Actor::Coordinator,
-            EventPayload::SessionActionTranscriptLinked {
-                action_id: action.action_id.clone(),
-                transcript_event_sequence,
-            },
-        )?;
-        transition_action(
-            &self.repo,
-            &action.target_session_id,
-            &action.action_id,
-            SessionActionLifecycle::Committing,
-            SessionActionLifecycle::Running,
-            Some(serde_json::json!({"transcript_event_sequence": transcript_event_sequence})),
-        )?;
-        transition_action(
-            &self.repo,
-            &action.target_session_id,
-            &action.action_id,
-            SessionActionLifecycle::Running,
-            SessionActionLifecycle::Completed,
-            Some(serde_json::json!({
-                "delivery": "authoritative_transcript",
-                "transcript_event_sequence": transcript_event_sequence,
-            })),
-        )?;
+            .any(|queued| queued.command_id == action.action_id)
+        {
+            submission.followups.push_back(QueuedFollowup {
+                command_id: action.action_id.clone(),
+                draft,
+                durably_recorded: true,
+            });
+        }
         Ok(())
+    }
+
+    fn deliver_idle_message_action(&self, action: &SessionAction) -> Result<(), RuntimeError> {
+        dispatch_when_idle(
+            self.repo.clone(),
+            self.commands.clone(),
+            Arc::clone(&self.cancel),
+            Arc::clone(&self.submission),
+            self.event_sender.clone(),
+            action.clone(),
+        )
+    }
+
+    fn spawn_when_idle_action(&self, action: SessionAction) -> Result<(), RuntimeError> {
+        let repo = self.repo.clone();
+        let commands = self.commands.clone();
+        let cancel = Arc::clone(&self.cancel);
+        let submission = Arc::clone(&self.submission);
+        let event_sender = self.event_sender.clone();
+        thread::Builder::new()
+            .name(format!("medusa-session-action-{}", short_action_id(&action.action_id)))
+            .spawn(move || loop {
+                match session_action_snapshot(&repo, &action.target_session_id) {
+                    Ok(snapshot) => {
+                        let Some(view) = snapshot
+                            .actions
+                            .iter()
+                            .find(|view| view.action.action_id == action.action_id)
+                        else {
+                            return;
+                        };
+                        if view.lifecycle.terminal() {
+                            return;
+                        }
+                        if view.lifecycle == SessionActionLifecycle::Committing
+                            || view.lifecycle == SessionActionLifecycle::Running
+                        {
+                            if let Err(error) = reconcile_interrupted_delivery(&repo, &action) {
+                                let _ = event_sender.send(RuntimeEvent::Notice {
+                                    title: "Session action recovery failed".to_owned(),
+                                    details: vec![error.to_string()],
+                                });
+                            }
+                            return;
+                        }
+                    }
+                    Err(error) => {
+                        let _ = event_sender.send(RuntimeEvent::Notice {
+                            title: "Session action projection failed".to_owned(),
+                            details: vec![error.to_string()],
+                        });
+                        return;
+                    }
+                }
+                if !lock_submission(&submission).busy {
+                    let result = if action.kind == SessionActionKind::GoalAdjustment {
+                        deliver_goal_when_idle(&repo, &submission, &action)
+                    } else {
+                        dispatch_when_idle(
+                            repo.clone(),
+                            commands.clone(),
+                            Arc::clone(&cancel),
+                            Arc::clone(&submission),
+                            event_sender.clone(),
+                            action.clone(),
+                        )
+                    };
+                    if let Err(error) = result {
+                        let _ = event_sender.send(RuntimeEvent::Notice {
+                            title: "Session action delivery failed".to_owned(),
+                            details: vec![error.to_string()],
+                        });
+                    }
+                    return;
+                }
+                thread::sleep(Duration::from_millis(10));
+            })
+            .map(|_| ())
+            .map_err(|error| RuntimeError::agent(format!("failed to spawn session action delivery: {error}")))
     }
 
     fn deliver_idle_goal_action(&self, action: &SessionAction) -> Result<(), RuntimeError> {
-        let objective = action_objective(action)?;
-        transition_action(
-            &self.repo,
-            &action.target_session_id,
-            &action.action_id,
-            SessionActionLifecycle::Queued,
-            SessionActionLifecycle::Selected,
-            None,
-        )?;
-        transition_action(
-            &self.repo,
-            &action.target_session_id,
-            &action.action_id,
-            SessionActionLifecycle::Selected,
-            SessionActionLifecycle::Preparing,
-            None,
-        )?;
-        transition_action(
-            &self.repo,
-            &action.target_session_id,
-            &action.action_id,
-            SessionActionLifecycle::Preparing,
-            SessionActionLifecycle::Committing,
-            None,
-        )?;
-        let mut session = load_session(&self.repo, &action.target_session_id).map_err(RuntimeError::agent)?;
-        medusa_agent::update_session_objective(&mut session, objective).map_err(RuntimeError::agent)?;
-        let linked_sequence = session.events.last().map_or(0, |event| event.sequence);
-        record_controller_event(
-            &self.repo,
-            &action.target_session_id,
-            Actor::Coordinator,
-            EventPayload::SessionActionTranscriptLinked {
-                action_id: action.action_id.clone(),
-                transcript_event_sequence: linked_sequence,
-            },
-        )?;
-        transition_action(
-            &self.repo,
-            &action.target_session_id,
-            &action.action_id,
-            SessionActionLifecycle::Committing,
-            SessionActionLifecycle::Running,
-            Some(serde_json::json!({"goal_event_sequence": linked_sequence})),
-        )?;
-        transition_action(
-            &self.repo,
-            &action.target_session_id,
-            &action.action_id,
-            SessionActionLifecycle::Running,
-            SessionActionLifecycle::Completed,
-            Some(serde_json::json!({"delivery": "authoritative_goal"})),
-        )?;
-        Ok(())
+        deliver_goal_when_idle(&self.repo, &self.submission, action)
     }
 
     fn deliver_cancel_action(&self, action: &SessionAction) -> Result<(), RuntimeError> {
-        transition_action(
-            &self.repo,
-            &action.target_session_id,
-            &action.action_id,
-            SessionActionLifecycle::Queued,
-            SessionActionLifecycle::Selected,
-            None,
-        )?;
-        transition_action(
-            &self.repo,
-            &action.target_session_id,
-            &action.action_id,
-            SessionActionLifecycle::Selected,
-            SessionActionLifecycle::Preparing,
-            None,
-        )?;
-        transition_action(
-            &self.repo,
-            &action.target_session_id,
-            &action.action_id,
-            SessionActionLifecycle::Preparing,
-            SessionActionLifecycle::Committing,
-            None,
-        )?;
+        advance_to_committing(&self.repo, action, None)?;
         let busy = lock_submission(&self.submission).busy;
         record_controller_event(
             &self.repo,
@@ -481,6 +493,348 @@ impl RuntimeController {
     }
 }
 
+fn action_admission(
+    repo: &std::path::Path,
+    action: &SessionAction,
+    coalesced: bool,
+) -> Result<SessionActionAdmission, RuntimeError> {
+    let snapshot = session_action_snapshot(repo, &action.target_session_id)?;
+    let view = snapshot
+        .actions
+        .into_iter()
+        .find(|candidate| candidate.action.action_id == action.action_id)
+        .ok_or_else(|| RuntimeError::agent("accepted session action disappeared from replay"))?;
+    Ok(SessionActionAdmission {
+        action: view,
+        coalesced,
+    })
+}
+
+fn dispatch_when_idle(
+    repo: PathBuf,
+    commands: std::sync::mpsc::Sender<RuntimeCommand>,
+    cancel: Arc<std::sync::atomic::AtomicBool>,
+    submission: Arc<std::sync::Mutex<crate::SubmissionState>>,
+    event_sender: std::sync::mpsc::Sender<RuntimeEvent>,
+    action: SessionAction,
+) -> Result<(), RuntimeError> {
+    {
+        let mut state = lock_submission(&submission);
+        if state.busy {
+            return Err(RuntimeError::Busy);
+        }
+        if state.active_session_id.as_deref() != Some(action.target_session_id.as_str()) {
+            return Err(RuntimeError::InvalidCommand(
+                "session action target changed before delivery".to_owned(),
+            ));
+        }
+        state.busy = true;
+    }
+    cancel.store(false, Ordering::SeqCst);
+
+    let result = (|| {
+        if reconcile_interrupted_delivery(&repo, &action)? {
+            return Ok(());
+        }
+        let expected_transcript_sequence = advance_to_committing(&repo, &action, None)?;
+        if let Some(sequence) = find_committed_delivery(
+            &repo,
+            &action,
+            expected_transcript_sequence,
+        )? {
+            finish_message_delivery(&repo, &action, sequence)?;
+            return Ok(());
+        }
+
+        let draft = action_draft(&action)?;
+        let (accepted_tx, accepted_rx) = mpsc::channel();
+        commands
+            .send(RuntimeCommand::Submit {
+                draft,
+                accepted: accepted_tx,
+            })
+            .map_err(|_| RuntimeError::WorkerStopped)?;
+        accepted_rx.recv().map_err(|_| {
+            RuntimeError::agent("runtime prompt ended before a durable session accepted the action")
+        })?;
+        let sequence = find_committed_delivery(
+            &repo,
+            &action,
+            expected_transcript_sequence,
+        )?
+        .ok_or_else(|| {
+            RuntimeError::agent("session action submission produced no provable durable user message")
+        })?;
+        finish_message_delivery(&repo, &action, sequence)
+    })();
+
+    if let Err(error) = &result {
+        let lifecycle = action_view(&repo, &action)?.lifecycle;
+        if lifecycle == SessionActionLifecycle::Committing {
+            let _ = transition_action(
+                &repo,
+                &action.target_session_id,
+                &action.action_id,
+                SessionActionLifecycle::Committing,
+                SessionActionLifecycle::Failed,
+                Some(serde_json::json!({"reason": error.to_string()})),
+            );
+        }
+        let _ = event_sender.send(RuntimeEvent::Notice {
+            title: "Session action failed".to_owned(),
+            details: vec![error.to_string()],
+        });
+        mark_idle(&submission, false);
+    }
+    result
+}
+
+fn deliver_goal_when_idle(
+    repo: &std::path::Path,
+    submission: &std::sync::Mutex<crate::SubmissionState>,
+    action: &SessionAction,
+) -> Result<(), RuntimeError> {
+    if lock_submission(submission).busy {
+        return Err(RuntimeError::Busy);
+    }
+    advance_to_committing(repo, action, None)?;
+    let objective = action_objective(action)?.to_owned();
+    let mut session = load_session(repo, &action.target_session_id).map_err(RuntimeError::agent)?;
+    medusa_agent::update_session_objective(&mut session, objective).map_err(RuntimeError::agent)?;
+    let linked_sequence = session.events.last().map_or(0, |event| event.sequence);
+    record_controller_event(
+        repo,
+        &action.target_session_id,
+        Actor::Coordinator,
+        EventPayload::SessionActionTranscriptLinked {
+            action_id: action.action_id.clone(),
+            transcript_event_sequence: linked_sequence,
+        },
+    )?;
+    transition_action(
+        repo,
+        &action.target_session_id,
+        &action.action_id,
+        SessionActionLifecycle::Committing,
+        SessionActionLifecycle::Running,
+        Some(serde_json::json!({"goal_event_sequence": linked_sequence})),
+    )?;
+    transition_action(
+        repo,
+        &action.target_session_id,
+        &action.action_id,
+        SessionActionLifecycle::Running,
+        SessionActionLifecycle::Completed,
+        Some(serde_json::json!({"delivery": "authoritative_goal"})),
+    )
+}
+
+fn advance_to_committing(
+    repo: &std::path::Path,
+    action: &SessionAction,
+    expected_override: Option<u64>,
+) -> Result<Option<u64>, RuntimeError> {
+    let mut lifecycle = action_view(repo, action)?.lifecycle;
+    if lifecycle == SessionActionLifecycle::Queued {
+        transition_action(
+            repo,
+            &action.target_session_id,
+            &action.action_id,
+            SessionActionLifecycle::Queued,
+            SessionActionLifecycle::Selected,
+            None,
+        )?;
+        lifecycle = SessionActionLifecycle::Selected;
+    }
+    if lifecycle == SessionActionLifecycle::Selected {
+        transition_action(
+            repo,
+            &action.target_session_id,
+            &action.action_id,
+            SessionActionLifecycle::Selected,
+            SessionActionLifecycle::Preparing,
+            None,
+        )?;
+        lifecycle = SessionActionLifecycle::Preparing;
+    }
+    if lifecycle == SessionActionLifecycle::Preparing {
+        let revision = session_action_snapshot(repo, &action.target_session_id)?.revision;
+        let expected = expected_override.unwrap_or_else(|| revision.saturating_add(2));
+        transition_action(
+            repo,
+            &action.target_session_id,
+            &action.action_id,
+            SessionActionLifecycle::Preparing,
+            SessionActionLifecycle::Committing,
+            Some(serde_json::json!({
+                "expected_transcript_event_sequence": expected,
+            })),
+        )?;
+        return Ok(Some(expected));
+    }
+    if lifecycle == SessionActionLifecycle::Committing {
+        return committing_expected_sequence(repo, action).map(Some);
+    }
+    Ok(None)
+}
+
+fn committing_expected_sequence(
+    repo: &std::path::Path,
+    action: &SessionAction,
+) -> Result<u64, RuntimeError> {
+    let session = load_session(repo, &action.target_session_id).map_err(RuntimeError::agent)?;
+    session
+        .events
+        .iter()
+        .rev()
+        .find_map(|event| match &event.payload {
+            EventPayload::SessionActionLifecycleChanged {
+                action_id,
+                to: SessionActionLifecycle::Committing,
+                evidence: Some(evidence),
+                ..
+            } if action_id == &action.action_id => evidence
+                .get("expected_transcript_event_sequence")
+                .and_then(Value::as_u64),
+            _ => None,
+        })
+        .ok_or_else(|| RuntimeError::agent("committing action lacks dispatch proof metadata"))
+}
+
+fn reconcile_interrupted_delivery(
+    repo: &std::path::Path,
+    action: &SessionAction,
+) -> Result<bool, RuntimeError> {
+    let view = action_view(repo, action)?;
+    match view.lifecycle {
+        SessionActionLifecycle::Completed
+        | SessionActionLifecycle::Failed
+        | SessionActionLifecycle::Cancelled => Ok(true),
+        SessionActionLifecycle::Running => {
+            if action.kind == SessionActionKind::Cancel {
+                return Ok(true);
+            }
+            let sequence = view.transcript_event_sequence.ok_or_else(|| {
+                RuntimeError::agent("running action has no authoritative transcript linkage")
+            })?;
+            transition_action(
+                repo,
+                &action.target_session_id,
+                &action.action_id,
+                SessionActionLifecycle::Running,
+                SessionActionLifecycle::Completed,
+                Some(serde_json::json!({
+                    "delivery": "recovered_authoritative_transcript",
+                    "transcript_event_sequence": sequence,
+                })),
+            )?;
+            Ok(true)
+        }
+        SessionActionLifecycle::Committing => {
+            if let Some(sequence) = view.transcript_event_sequence.or(find_committed_delivery(
+                repo,
+                action,
+                Some(committing_expected_sequence(repo, action)?),
+            )?) {
+                finish_message_delivery(repo, action, sequence)?;
+                Ok(true)
+            } else {
+                Ok(false)
+            }
+        }
+        SessionActionLifecycle::Queued
+        | SessionActionLifecycle::Selected
+        | SessionActionLifecycle::Preparing => Ok(false),
+    }
+}
+
+fn find_committed_delivery(
+    repo: &std::path::Path,
+    action: &SessionAction,
+    expected_sequence: Option<u64>,
+) -> Result<Option<u64>, RuntimeError> {
+    let session = load_session(repo, &action.target_session_id).map_err(RuntimeError::agent)?;
+    if let Some(sequence) = session.events.iter().find_map(|event| match &event.payload {
+        EventPayload::UserFollowupDequeued { command_id, .. }
+            if command_id == &action.action_id => Some(event.sequence),
+        _ => None,
+    }) {
+        return Ok(Some(sequence));
+    }
+    let Some(expected) = expected_sequence else {
+        return Ok(None);
+    };
+    let event = session.events.iter().find(|event| event.sequence == expected);
+    let Some(event) = event else {
+        return Ok(None);
+    };
+    match &event.payload {
+        EventPayload::UserPromptReceived { text }
+            if action_delivery_text(action).is_ok_and(|needle| text.contains(needle)) =>
+        {
+            Ok(Some(event.sequence))
+        }
+        _ => Err(RuntimeError::agent(
+            "committing action dispatch sequence is occupied by unrelated authoritative state",
+        )),
+    }
+}
+
+fn finish_message_delivery(
+    repo: &std::path::Path,
+    action: &SessionAction,
+    transcript_event_sequence: u64,
+) -> Result<(), RuntimeError> {
+    let view = action_view(repo, action)?;
+    if view.transcript_event_sequence.is_none() {
+        record_controller_event(
+            repo,
+            &action.target_session_id,
+            Actor::Coordinator,
+            EventPayload::SessionActionTranscriptLinked {
+                action_id: action.action_id.clone(),
+                transcript_event_sequence,
+            },
+        )?;
+    }
+    let lifecycle = action_view(repo, action)?.lifecycle;
+    if lifecycle == SessionActionLifecycle::Committing {
+        transition_action(
+            repo,
+            &action.target_session_id,
+            &action.action_id,
+            SessionActionLifecycle::Committing,
+            SessionActionLifecycle::Running,
+            Some(serde_json::json!({"transcript_event_sequence": transcript_event_sequence})),
+        )?;
+    }
+    if action_view(repo, action)?.lifecycle == SessionActionLifecycle::Running {
+        transition_action(
+            repo,
+            &action.target_session_id,
+            &action.action_id,
+            SessionActionLifecycle::Running,
+            SessionActionLifecycle::Completed,
+            Some(serde_json::json!({
+                "delivery": "authoritative_transcript",
+                "transcript_event_sequence": transcript_event_sequence,
+            })),
+        )?;
+    }
+    Ok(())
+}
+
+fn action_view(
+    repo: &std::path::Path,
+    action: &SessionAction,
+) -> Result<SessionActionView, RuntimeError> {
+    session_action_snapshot(repo, &action.target_session_id)?
+        .actions
+        .into_iter()
+        .find(|view| view.action.action_id == action.action_id)
+        .ok_or_else(|| RuntimeError::agent("session action disappeared from canonical replay"))
+}
+
 fn validate_action_request(request: &SessionActionRequest) -> Result<(), RuntimeError> {
     if request.idempotency_key.trim().is_empty()
         || request.source.trim().is_empty()
@@ -505,7 +859,9 @@ fn validate_action_request(request: &SessionActionRequest) -> Result<(), Runtime
                 "follow-up actions must use the when-idle delivery policy".to_owned(),
             ))
         }
-        SessionActionKind::Cancel if request.payload != Value::Null && request.payload != serde_json::json!({}) => {
+        SessionActionKind::Cancel
+            if request.payload != Value::Null && request.payload != serde_json::json!({}) =>
+        {
             Err(RuntimeError::InvalidCommand(
                 "cancel actions do not accept a free-form payload".to_owned(),
             ))
@@ -519,22 +875,22 @@ fn validate_action_request(request: &SessionActionRequest) -> Result<(), Runtime
 }
 
 fn action_draft(action: &SessionAction) -> Result<PromptDraft, RuntimeError> {
-    let text = match action.kind {
-        SessionActionKind::Steer | SessionActionKind::FollowUp => {
-            action_text_payload(&action.payload)?.to_owned()
-        }
-        SessionActionKind::GoalAdjustment => action_objective(action)?.to_owned(),
-        SessionActionKind::Cancel => {
-            return Err(RuntimeError::InvalidCommand(
-                "cancel action cannot be converted to a prompt".to_owned(),
-            ));
-        }
-    };
+    let text = action_delivery_text(action)?.to_owned();
     Ok(PromptDraft {
         text,
         attachments: Vec::new(),
         revision: action.expected_session_revision,
     })
+}
+
+fn action_delivery_text(action: &SessionAction) -> Result<&str, RuntimeError> {
+    match action.kind {
+        SessionActionKind::Steer | SessionActionKind::FollowUp => action_text_payload(&action.payload),
+        SessionActionKind::GoalAdjustment => action_objective(action),
+        SessionActionKind::Cancel => Err(RuntimeError::InvalidCommand(
+            "cancel action cannot become a prompt".to_owned(),
+        )),
+    }
 }
 
 fn action_text_payload(payload: &Value) -> Result<&str, RuntimeError> {
@@ -581,6 +937,14 @@ fn transition_action(
             evidence,
         },
     )
+}
+
+fn short_action_id(action_id: &str) -> &str {
+    action_id
+        .strip_prefix("action-")
+        .unwrap_or(action_id)
+        .get(..12)
+        .unwrap_or(action_id)
 }
 
 /// Cursor-bearing projection of one authoritative runtime session for one frontend kind.
