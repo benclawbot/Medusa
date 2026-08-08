@@ -17,6 +17,7 @@ use medusa_runtime::{
     commands::{
         Effort, ModelCommand, ModelConfiguration, SlashCommand, TeamCommand, parse_slash_command,
     },
+    frontend::{SessionActionAdmission, SessionActionRequest, SessionActionSnapshot, session_action_snapshot},
     prompt::PromptDraft,
     recovery_action_context,
 };
@@ -101,6 +102,14 @@ pub enum FrontendControlResult {
     SubmissionAccepted {
         session_id: String,
         queued: bool,
+    },
+    SessionActionAccepted {
+        session_id: String,
+        admission: SessionActionAdmission,
+    },
+    SessionActions {
+        session_id: String,
+        snapshot: SessionActionSnapshot,
     },
     CancellationRequested {
         session_id: String,
@@ -418,6 +427,46 @@ impl FrontendControlPlane {
                         revision: 0,
                     },
                 )
+            }
+            FrontendCommand::SubmitSessionAction {
+                kind,
+                delivery_policy,
+                wake_policy,
+                expected_session_revision,
+                payload,
+            } => {
+                let session_id = required_session_id(envelope)?;
+                self.authorize_control(&session_id, &envelope.client_id)?;
+                let admission = self.controller(&session_id)?.submit_session_action(
+                    SessionActionRequest {
+                        idempotency_key: envelope.idempotency_key.clone(),
+                        source: frontend_source(envelope.frontend, &envelope.client_id),
+                        target_session_id: session_id.clone(),
+                        expected_session_revision: *expected_session_revision,
+                        kind: *kind,
+                        delivery_policy: *delivery_policy,
+                        wake_policy: *wake_policy,
+                        payload: payload.clone(),
+                    },
+                )?;
+                Ok(FrontendControlResult::SessionActionAccepted {
+                    session_id,
+                    admission,
+                })
+            }
+            FrontendCommand::ShowSessionActions => {
+                let session_id = required_session_id(envelope)?;
+                let replay = self.replay_events(&envelope.client_id, 0)?;
+                if replay.session_id != session_id {
+                    return Err(FrontendControlError::InvalidCommand(
+                        "frontend attachment does not belong to requested action session".to_owned(),
+                    ));
+                }
+                let snapshot = session_action_snapshot(&self.repo, &session_id)?;
+                Ok(FrontendControlResult::SessionActions {
+                    session_id,
+                    snapshot,
+                })
             }
             FrontendCommand::AnswerQuestion { answer, .. } => self.submit_text(envelope, answer),
             FrontendCommand::ResolveApproval { decision, .. } => self.submit_text(
@@ -801,6 +850,7 @@ fn command_is_cacheable(command: &FrontendCommand) -> bool {
         FrontendCommand::ListSessions
             | FrontendCommand::Replay { .. }
             | FrontendCommand::PollTransient
+            | FrontendCommand::ShowSessionActions
             | FrontendCommand::ShowStatus
     )
 }
@@ -866,6 +916,17 @@ fn command_session_id(envelope: &FrontendCommandEnvelope) -> Option<String> {
 
 fn required_session_id(envelope: &FrontendCommandEnvelope) -> Result<String, FrontendControlError> {
     command_session_id(envelope).ok_or(FrontendControlError::SessionRequired)
+}
+
+fn frontend_source(kind: FrontendKind, client_id: &str) -> String {
+    let kind = match kind {
+        FrontendKind::Tui => "tui",
+        FrontendKind::Desktop => "desktop",
+        FrontendKind::Telegram => "telegram",
+        FrontendKind::Headless => "headless",
+        FrontendKind::Other => "other",
+    };
+    format!("frontend:{kind}:{client_id}")
 }
 
 fn client_kind(kind: FrontendKind) -> ClientKind {
@@ -940,6 +1001,7 @@ mod tests {
             after_cursor: 0
         }));
         assert!(!command_is_cacheable(&FrontendCommand::PollTransient));
+        assert!(!command_is_cacheable(&FrontendCommand::ShowSessionActions));
         assert!(command_is_cacheable(&FrontendCommand::CancelTurn));
     }
 
