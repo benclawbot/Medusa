@@ -4,6 +4,7 @@ mod anthropic;
 mod configured;
 mod contracts;
 mod health_store;
+mod hedge_runtime;
 mod hedging;
 mod http;
 mod manager;
