@@ -118,6 +118,29 @@ pub fn session_action_snapshot(
                         "session action journal entry targets a different session",
                     ));
                 }
+                if action.kind == SessionActionKind::ReplaceFollowUp {
+                    let replaced_action_id = replacement_target(action)?;
+                    let replaced = actions
+                        .iter_mut()
+                        .find(|candidate| candidate.action.action_id == replaced_action_id)
+                        .ok_or_else(|| RuntimeError::agent("replacement action targets no admission"))?;
+                    if replaced.lifecycle != SessionActionLifecycle::Queued
+                        || !matches!(
+                            replaced.action.kind,
+                            SessionActionKind::FollowUp | SessionActionKind::ReplaceFollowUp
+                        )
+                    {
+                        return Err(RuntimeError::agent(
+                            "replacement action targets a non-queued follow-up",
+                        ));
+                    }
+                    replaced.lifecycle = SessionActionLifecycle::Cancelled;
+                    replaced.completed_at = Some(event.timestamp);
+                    replaced.terminal_evidence = Some(serde_json::json!({
+                        "reason": "superseded",
+                        "superseded_by": action.action_id,
+                    }));
+                }
                 if actions.iter().any(|candidate| {
                     candidate.action.action_id == action.action_id
                         || candidate.action.idempotency_key == action.idempotency_key
@@ -135,6 +158,39 @@ pub fn session_action_snapshot(
                     completed_at: None,
                     transcript_event_sequence: None,
                     terminal_evidence: None,
+                });
+            }
+            EventPayload::SessionActionRejected {
+                action,
+                authoritative_revision,
+                reason,
+            } => {
+                action.validate().map_err(RuntimeError::agent)?;
+                if action.target_session_id != session_id {
+                    return Err(RuntimeError::agent(
+                        "rejected session action targets a different session",
+                    ));
+                }
+                if actions.iter().any(|candidate| {
+                    candidate.action.action_id == action.action_id
+                        || candidate.action.idempotency_key == action.idempotency_key
+                }) {
+                    return Err(RuntimeError::agent(
+                        "session action journal contains duplicate admission identity",
+                    ));
+                }
+                actions.push(SessionActionView {
+                    action: action.clone(),
+                    lifecycle: SessionActionLifecycle::Failed,
+                    accepted_sequence: event.sequence,
+                    accepted_at: event.timestamp,
+                    delivered_at: None,
+                    completed_at: Some(event.timestamp),
+                    transcript_event_sequence: None,
+                    terminal_evidence: Some(serde_json::json!({
+                        "reason": reason,
+                        "authoritative_revision": authoritative_revision,
+                    })),
                 });
             }
             EventPayload::SessionActionLifecycleChanged {
@@ -206,6 +262,12 @@ impl RuntimeController {
     ) -> Result<SessionActionAdmission, RuntimeError> {
         validate_action_request(&request)?;
         let action = request.into_action();
+        let mut submission = lock_submission(&self.submission);
+        if submission.active_session_id.as_deref() != Some(action.target_session_id.as_str()) {
+            return Err(RuntimeError::InvalidCommand(
+                "session action target is not the controller's active session".to_owned(),
+            ));
+        }
         let snapshot = session_action_snapshot(&self.repo, &action.target_session_id)?;
         if let Some(existing) = snapshot
             .actions
@@ -222,17 +284,6 @@ impl RuntimeController {
                 coalesced: true,
             });
         }
-        if snapshot.revision != action.expected_session_revision {
-            return Err(RuntimeError::InvalidCommand(format!(
-                "stale session action revision: expected {}, authoritative revision is {}",
-                action.expected_session_revision, snapshot.revision
-            )));
-        }
-        if self.active_session_id().as_deref() != Some(action.target_session_id.as_str()) {
-            return Err(RuntimeError::InvalidCommand(
-                "session action target is not the controller's active session".to_owned(),
-            ));
-        }
 
         record_controller_event(
             &self.repo,
@@ -242,13 +293,19 @@ impl RuntimeController {
                 action: action.clone(),
             },
         )?;
+        let admission = action_admission(&self.repo, &action, false)?;
+        let busy = submission.busy;
+        drop(submission);
+        if admission.action.lifecycle.terminal() {
+            return Ok(admission);
+        }
 
         match action.kind {
             SessionActionKind::Cancel => self.deliver_cancel_action(&action)?,
-            SessionActionKind::FollowUp => {
+            SessionActionKind::FollowUp | SessionActionKind::ReplaceFollowUp => {
                 if action.wake_policy == SessionActionWakePolicy::ExternalResume {
                     // Admission is durable. Explicit session resume calls recover_session_actions.
-                } else if self.is_busy() {
+                } else if busy {
                     self.spawn_when_idle_action(action.clone())?;
                 } else {
                     self.deliver_idle_message_action(&action)?;
@@ -256,7 +313,7 @@ impl RuntimeController {
             }
             SessionActionKind::Steer => self.deliver_safe_boundary_message_action(&action)?,
             SessionActionKind::GoalAdjustment => {
-                if self.is_busy() {
+                if busy {
                     match action.delivery_policy {
                         SessionActionDeliveryPolicy::NextSafeTurnBoundary => {
                             self.deliver_safe_boundary_message_action(&action)?;
@@ -300,7 +357,9 @@ impl RuntimeController {
                     // cancellation completed without the canonical cancellation event.
                 }
                 SessionActionKind::Cancel => {}
-                SessionActionKind::FollowUp => self.spawn_when_idle_action(view.action)?,
+                SessionActionKind::FollowUp | SessionActionKind::ReplaceFollowUp => {
+                    self.spawn_when_idle_action(view.action)?;
+                }
                 SessionActionKind::Steer | SessionActionKind::GoalAdjustment
                     if view.lifecycle == SessionActionLifecycle::Committing
                         || view.lifecycle == SessionActionLifecycle::Running =>
@@ -503,7 +562,7 @@ fn action_admission(
         .actions
         .into_iter()
         .find(|candidate| candidate.action.action_id == action.action_id)
-        .ok_or_else(|| RuntimeError::agent("accepted session action disappeared from replay"))?;
+        .ok_or_else(|| RuntimeError::agent("session action disappeared from canonical replay"))?;
     Ok(SessionActionAdmission {
         action: view,
         coalesced,
@@ -852,7 +911,7 @@ fn validate_action_request(request: &SessionActionRequest) -> Result<(), Runtime
                 "steering must use the next-safe-turn-boundary delivery policy".to_owned(),
             ))
         }
-        SessionActionKind::FollowUp
+        SessionActionKind::FollowUp | SessionActionKind::ReplaceFollowUp
             if request.delivery_policy != SessionActionDeliveryPolicy::WhenIdle =>
         {
             Err(RuntimeError::InvalidCommand(
@@ -868,6 +927,10 @@ fn validate_action_request(request: &SessionActionRequest) -> Result<(), Runtime
         }
         SessionActionKind::Steer | SessionActionKind::FollowUp => {
             action_text_payload(&request.payload).map(|_| ())
+        }
+        SessionActionKind::ReplaceFollowUp => {
+            action_text_payload(&request.payload)?;
+            replacement_target_payload(&request.payload).map(|_| ())
         }
         SessionActionKind::GoalAdjustment => action_objective_payload(&request.payload).map(|_| ()),
         SessionActionKind::Cancel => Ok(()),
@@ -885,7 +948,9 @@ fn action_draft(action: &SessionAction) -> Result<PromptDraft, RuntimeError> {
 
 fn action_delivery_text(action: &SessionAction) -> Result<&str, RuntimeError> {
     match action.kind {
-        SessionActionKind::Steer | SessionActionKind::FollowUp => action_text_payload(&action.payload),
+        SessionActionKind::Steer
+        | SessionActionKind::FollowUp
+        | SessionActionKind::ReplaceFollowUp => action_text_payload(&action.payload),
         SessionActionKind::GoalAdjustment => action_objective(action),
         SessionActionKind::Cancel => Err(RuntimeError::InvalidCommand(
             "cancel action cannot become a prompt".to_owned(),
@@ -900,6 +965,23 @@ fn action_text_payload(payload: &Value) -> Result<&str, RuntimeError> {
         .map(str::trim)
         .filter(|text| !text.is_empty())
         .ok_or_else(|| RuntimeError::InvalidCommand("session action requires non-empty text".to_owned()))
+}
+
+fn replacement_target(action: &SessionAction) -> Result<&str, RuntimeError> {
+    replacement_target_payload(&action.payload)
+}
+
+fn replacement_target_payload(payload: &Value) -> Result<&str, RuntimeError> {
+    payload
+        .get("replaces_action_id")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|action_id| !action_id.is_empty())
+        .ok_or_else(|| {
+            RuntimeError::InvalidCommand(
+                "replacement follow-up requires a non-empty replaces_action_id".to_owned(),
+            )
+        })
 }
 
 fn action_objective(action: &SessionAction) -> Result<&str, RuntimeError> {
@@ -1018,7 +1100,8 @@ mod tests {
     use medusa_agent::{AgentSession, record_session_event};
     use medusa_core::SessionId;
     use medusa_protocol::{
-        Actor, EventPayload,
+        Actor, EventPayload, SessionAction, SessionActionDeliveryPolicy, SessionActionKind,
+        SessionActionLifecycle, SessionActionWakePolicy,
         frontend::{FrontendEvent, FrontendKind},
     };
     use serde_json::json;
@@ -1046,6 +1129,30 @@ mod tests {
             approval_grants: Vec::new(),
             approval_receipts: Vec::new(),
             rollback_receipts: Vec::new(),
+        }
+    }
+
+    fn action(
+        session_id: &str,
+        id: &str,
+        expected_session_revision: u64,
+        kind: SessionActionKind,
+        payload: serde_json::Value,
+    ) -> SessionAction {
+        SessionAction {
+            action_id: format!("action-{id}"),
+            idempotency_key: format!("idem-{id}"),
+            source: "test".to_owned(),
+            target_session_id: session_id.to_owned(),
+            expected_session_revision,
+            kind,
+            delivery_policy: if kind == SessionActionKind::Steer {
+                SessionActionDeliveryPolicy::NextSafeTurnBoundary
+            } else {
+                SessionActionDeliveryPolicy::WhenIdle
+            },
+            wake_policy: SessionActionWakePolicy::OnBoundary,
+            payload,
         }
     }
 
@@ -1111,17 +1218,13 @@ mod tests {
         let directory = tempdir().expect("temporary repository");
         let mut session = durable_session(directory.path());
         let session_id = session.id.to_string();
-        let action = medusa_protocol::SessionAction {
-            action_id: "action-1".to_owned(),
-            idempotency_key: "idem-1".to_owned(),
-            source: "test".to_owned(),
-            target_session_id: session_id.clone(),
-            expected_session_revision: 0,
-            kind: medusa_protocol::SessionActionKind::Steer,
-            delivery_policy: medusa_protocol::SessionActionDeliveryPolicy::NextSafeTurnBoundary,
-            wake_policy: medusa_protocol::SessionActionWakePolicy::OnBoundary,
-            payload: json!({"text":"steer"}),
-        };
+        let action = action(
+            &session_id,
+            "1",
+            0,
+            SessionActionKind::Steer,
+            json!({"text":"steer"}),
+        );
         record_session_event(
             &mut session,
             Actor::User,
@@ -1129,17 +1232,11 @@ mod tests {
         )
         .expect("accept action");
         for (from, to) in [
+            (SessionActionLifecycle::Queued, SessionActionLifecycle::Selected),
+            (SessionActionLifecycle::Selected, SessionActionLifecycle::Preparing),
             (
-                medusa_protocol::SessionActionLifecycle::Queued,
-                medusa_protocol::SessionActionLifecycle::Selected,
-            ),
-            (
-                medusa_protocol::SessionActionLifecycle::Selected,
-                medusa_protocol::SessionActionLifecycle::Preparing,
-            ),
-            (
-                medusa_protocol::SessionActionLifecycle::Preparing,
-                medusa_protocol::SessionActionLifecycle::Committing,
+                SessionActionLifecycle::Preparing,
+                SessionActionLifecycle::Committing,
             ),
         ] {
             record_session_event(
@@ -1159,12 +1256,129 @@ mod tests {
             Actor::Coordinator,
             EventPayload::SessionActionLifecycleChanged {
                 action_id: "action-1".to_owned(),
-                from: medusa_protocol::SessionActionLifecycle::Committing,
-                to: medusa_protocol::SessionActionLifecycle::Queued,
+                from: SessionActionLifecycle::Committing,
+                to: SessionActionLifecycle::Queued,
                 evidence: None,
             },
         )
         .expect("journal corrupt transition for projection test");
         assert!(session_action_snapshot(directory.path(), &session_id).is_err());
+    }
+
+    #[test]
+    fn replacement_supersedes_exactly_one_queued_followup() {
+        let directory = tempdir().expect("temporary repository");
+        let mut session = durable_session(directory.path());
+        let session_id = session.id.to_string();
+        let original = action(
+            &session_id,
+            "original",
+            0,
+            SessionActionKind::FollowUp,
+            json!({"text":"original"}),
+        );
+        record_session_event(
+            &mut session,
+            Actor::User,
+            EventPayload::SessionActionAccepted {
+                action: original.clone(),
+            },
+        )
+        .expect("original admission");
+        let replacement = action(
+            &session_id,
+            "replacement",
+            1,
+            SessionActionKind::ReplaceFollowUp,
+            json!({
+                "text":"replacement",
+                "replaces_action_id": original.action_id,
+            }),
+        );
+        record_session_event(
+            &mut session,
+            Actor::User,
+            EventPayload::SessionActionAccepted {
+                action: replacement.clone(),
+            },
+        )
+        .expect("replacement admission");
+
+        let snapshot = session_action_snapshot(directory.path(), &session_id).expect("snapshot");
+        assert_eq!(snapshot.queued_count, 1);
+        let superseded = snapshot
+            .actions
+            .iter()
+            .find(|view| view.action.action_id == original.action_id)
+            .expect("original action");
+        assert_eq!(superseded.lifecycle, SessionActionLifecycle::Cancelled);
+        assert_eq!(
+            superseded
+                .terminal_evidence
+                .as_ref()
+                .and_then(|value| value.get("superseded_by"))
+                .and_then(Value::as_str),
+            Some(replacement.action_id.as_str())
+        );
+        assert_eq!(
+            snapshot
+                .actions
+                .iter()
+                .find(|view| view.action.action_id == replacement.action_id)
+                .expect("replacement action")
+                .lifecycle,
+            SessionActionLifecycle::Queued
+        );
+    }
+
+    #[test]
+    fn stale_revision_is_audited_as_failed_action() {
+        let directory = tempdir().expect("temporary repository");
+        let mut session = durable_session(directory.path());
+        let session_id = session.id.to_string();
+        let first = action(
+            &session_id,
+            "first",
+            0,
+            SessionActionKind::FollowUp,
+            json!({"text":"first"}),
+        );
+        record_session_event(
+            &mut session,
+            Actor::User,
+            EventPayload::SessionActionAccepted { action: first },
+        )
+        .expect("first admission");
+        let stale = action(
+            &session_id,
+            "stale",
+            0,
+            SessionActionKind::FollowUp,
+            json!({"text":"stale"}),
+        );
+        record_session_event(
+            &mut session,
+            Actor::User,
+            EventPayload::SessionActionAccepted {
+                action: stale.clone(),
+            },
+        )
+        .expect("stale attempt is journaled");
+
+        let snapshot = session_action_snapshot(directory.path(), &session_id).expect("snapshot");
+        let rejected = snapshot
+            .actions
+            .iter()
+            .find(|view| view.action.action_id == stale.action_id)
+            .expect("stale action");
+        assert_eq!(rejected.lifecycle, SessionActionLifecycle::Failed);
+        assert_eq!(
+            rejected
+                .terminal_evidence
+                .as_ref()
+                .and_then(|value| value.get("reason"))
+                .and_then(Value::as_str),
+            Some("stale_revision")
+        );
     }
 }
