@@ -129,10 +129,7 @@ fn data_after_done_marker_is_rejected() {
         .expect("completed response");
 
     let error = accumulator
-        .push_sse_data(
-            r#"{"id":"resp-done","choices":[],"usage":null}"#,
-            &mut sink,
-        )
+        .push_sse_data(r#"{"id":"resp-done","choices":[],"usage":null}"#, &mut sink)
         .expect_err("post-completion output must be rejected");
 
     assert!(error.to_string().contains("after completion"));
