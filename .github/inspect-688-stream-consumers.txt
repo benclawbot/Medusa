@@ -75,6 +75,22 @@ apps/medusa-desktop/src-tauri/src/desktop_projection.rs:103:            events.p
 apps/medusa-desktop/src-tauri/src/dto.rs:88:    AssistantText {
 apps/medusa-desktop/src-tauri/src/dto.rs:221:            RuntimeEvent::AssistantText(text) => Self::AssistantText { text },
 === provider streaming references ===
+crates/medusa-provider/tests/manager_streaming.rs:6:    ProviderManager, ProviderRouteProfile, ProviderStreamEvent, ResponseBlock, Role,
+crates/medusa-provider/tests/manager_streaming.rs:25:        panic!("streaming route should use complete_streaming")
+crates/medusa-provider/tests/manager_streaming.rs:28:    fn complete_streaming(
+crates/medusa-provider/tests/manager_streaming.rs:31:        sink: &mut dyn FnMut(ProviderStreamEvent) -> MedusaResult<()>,
+crates/medusa-provider/tests/manager_streaming.rs:34:        sink(ProviderStreamEvent::OutputStarted)?;
+crates/medusa-provider/tests/manager_streaming.rs:35:        sink(ProviderStreamEvent::TextDelta {
+crates/medusa-provider/tests/manager_streaming.rs:41:                sink(ProviderStreamEvent::Completed {
+crates/medusa-provider/tests/manager_streaming.rs:125:        .complete_streaming(&request(), &mut sink)
+crates/medusa-provider/tests/manager_streaming.rs:130:    assert!(matches!(events[0], ProviderStreamEvent::OutputStarted));
+crates/medusa-provider/tests/manager_streaming.rs:133:        ProviderStreamEvent::TextDelta { text } if text == "delta"
+crates/medusa-provider/tests/manager_streaming.rs:135:    assert!(matches!(events[2], ProviderStreamEvent::Completed { .. }));
+crates/medusa-provider/tests/manager_streaming.rs:159:        .complete_streaming(&request(), &mut |event| {
+crates/medusa-provider/tests/manager_streaming.rs:167:    assert!(events.iter().any(|event| matches!(event, ProviderStreamEvent::TextDelta { .. })));
+crates/medusa-provider/tests/manager_streaming.rs:182:        .complete_streaming(&request(), &mut |_| Ok(()))
+crates/medusa-provider/tests/manager_streaming.rs:186:        .complete_streaming(&request(), &mut |event| {
+crates/medusa-provider/tests/manager_streaming.rs:194:    assert!(matches!(events[0], ProviderStreamEvent::Completed { .. }));
 crates/medusa-provider/src/openai_transport.rs:12:    ModelResponse, OpenAiStreamAccumulator, ProviderStreamEvent, async_response_error,
 crates/medusa-provider/src/openai_transport.rs:23:    sink: &mut dyn FnMut(ProviderStreamEvent) -> MedusaResult<()>,
 crates/medusa-provider/src/openai_transport.rs:67:    sink: &mut dyn FnMut(ProviderStreamEvent) -> MedusaResult<()>,
