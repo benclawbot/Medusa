@@ -57,11 +57,13 @@ pub(crate) fn race_provider_candidates<P: ModelProvider + Sync>(
     outer_cancel: Option<&AtomicBool>,
     sink: &mut Option<&mut dyn FnMut(ProviderStreamEvent) -> MedusaResult<()>>,
 ) -> MedusaResult<HedgeRaceOutcome> {
-    let primary = providers.get(primary_index).ok_or_else(|| {
-        race_error(format!("hedge primary provider {primary_index} is missing"))
-    })?;
+    let primary = providers
+        .get(primary_index)
+        .ok_or_else(|| race_error(format!("hedge primary provider {primary_index} is missing")))?;
     let secondary = providers.get(secondary_index).ok_or_else(|| {
-        race_error(format!("hedge secondary provider {secondary_index} is missing"))
+        race_error(format!(
+            "hedge secondary provider {secondary_index} is missing"
+        ))
     })?;
     let primary_streaming = route_streaming(profiles, primary_index, primary);
     let secondary_streaming = route_streaming(profiles, secondary_index, secondary);
@@ -140,12 +142,7 @@ pub(crate) fn race_provider_candidates<P: ModelProvider + Sync>(
                     buffers.entry(index).or_default().push(event);
                     if authoritative {
                         authoritative_index = Some(index);
-                        cancel_loser(
-                            index,
-                            primary_index,
-                            &primary_cancel,
-                            &secondary_cancel,
-                        );
+                        cancel_loser(index, primary_index, &primary_cancel, &secondary_cancel);
                         flush_candidate_events(sink, &mut buffers, index)?;
                     }
                 }
@@ -160,12 +157,7 @@ pub(crate) fn race_provider_candidates<P: ModelProvider + Sync>(
 
                     if authoritative_index.is_none() && successful {
                         authoritative_index = Some(index);
-                        cancel_loser(
-                            index,
-                            primary_index,
-                            &primary_cancel,
-                            &secondary_cancel,
-                        );
+                        cancel_loser(index, primary_index, &primary_cancel, &secondary_cancel);
                         flush_candidate_events(sink, &mut buffers, index)?;
                         let streaming = if index == primary_index {
                             primary_streaming
@@ -199,17 +191,20 @@ pub(crate) fn race_provider_candidates<P: ModelProvider + Sync>(
                 }
             }
 
-            if !secondary_started {
-                if let Some(primary) = primary_outcome.as_ref()
-                    && primary.result.is_err()
-                    && authoritative_index.is_none()
-                {
-                    return Ok(HedgeRaceOutcome {
-                        authoritative_index,
-                        primary: primary_outcome.take().expect("primary outcome checked"),
-                        secondary: None,
-                    });
-                }
+            if !secondary_started
+                && primary_outcome
+                    .as_ref()
+                    .is_some_and(|primary| primary.result.is_err())
+                && authoritative_index.is_none()
+            {
+                let primary = primary_outcome
+                    .take()
+                    .ok_or_else(|| race_error("hedge primary produced no outcome"))?;
+                return Ok(HedgeRaceOutcome {
+                    authoritative_index,
+                    primary,
+                    secondary: None,
+                });
             }
 
             let winner_finished = authoritative_index.is_some_and(|index| {
@@ -485,17 +480,9 @@ mod tests {
         };
         let mut sink: Option<&mut dyn FnMut(ProviderStreamEvent) -> MedusaResult<()>> =
             Some(&mut record);
-        let outcome = race_provider_candidates(
-            &providers,
-            &profiles,
-            &request(),
-            0,
-            1,
-            20,
-            None,
-            &mut sink,
-        )
-        .expect("race");
+        let outcome =
+            race_provider_candidates(&providers, &profiles, &request(), 0, 1, 20, None, &mut sink)
+                .expect("race");
         assert_eq!(outcome.authoritative_index, Some(0));
         assert!(outcome.secondary.is_none());
         assert_eq!(secondary_calls.load(Ordering::SeqCst), 0);
@@ -519,17 +506,9 @@ mod tests {
         };
         let mut sink: Option<&mut dyn FnMut(ProviderStreamEvent) -> MedusaResult<()>> =
             Some(&mut record);
-        let outcome = race_provider_candidates(
-            &providers,
-            &profiles,
-            &request(),
-            0,
-            1,
-            20,
-            None,
-            &mut sink,
-        )
-        .expect("race");
+        let outcome =
+            race_provider_candidates(&providers, &profiles, &request(), 0, 1, 20, None, &mut sink)
+                .expect("race");
         assert_eq!(outcome.authoritative_index, Some(1));
         assert_eq!(primary_cancellations.load(Ordering::SeqCst), 1);
         assert!(events.iter().all(|event| !matches!(
