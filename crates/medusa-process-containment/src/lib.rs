@@ -21,13 +21,13 @@ mod windows;
 #[allow(unsafe_code)]
 mod windows_acl;
 
-pub use process_identity::{NativeProcessStartMarker, process_start_marker};
 #[cfg(windows)]
 pub use base_container::{
     WindowsSandboxRestrictions, run_appcontainer, run_appcontainer_cancellable,
 };
 #[cfg(windows)]
 pub(crate) use flatbuffer_builder::FlatBufferBuilder;
+pub use process_identity::{NativeProcessStartMarker, process_start_marker};
 #[cfg(windows)]
 pub use windows::{WindowsJob, process_is_alive};
 #[cfg(windows)]
