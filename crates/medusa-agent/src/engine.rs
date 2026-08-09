@@ -33,8 +33,8 @@ use medusa_core::{ErrorCategory, ErrorCode, MedusaError, MedusaResult, SessionId
 use medusa_extensions::{DesktopCommanderClient, DesktopCommanderSettings};
 use medusa_protocol::{Actor, EventPayload};
 use medusa_provider::{
-    Message, MessageBlock, ModelProvider, ModelRequest, ProviderStreamEvent,
-    ProviderStreamTranscript, ResponseBlock, Role,
+    Message, MessageBlock, ModelProvider, ModelRequest, ProviderExecutionPhase,
+    ProviderStreamEvent, ProviderStreamTranscript, ResponseBlock, Role,
 };
 use medusa_world_model::{WorkspaceModel, create_for_session, load as load_world_model};
 use time::OffsetDateTime;
@@ -73,6 +73,16 @@ const MAX_PARALLEL_TOOL_CALLS: usize = 8;
 
 pub(crate) fn parallel_tool_limit(configured_workers: u16) -> usize {
     usize::from(configured_workers).clamp(1, MAX_PARALLEL_TOOL_CALLS)
+}
+
+fn phase_output_token_budget(phase: ProviderExecutionPhase, configured: u32) -> u32 {
+    let divisor = match phase {
+        ProviderExecutionPhase::Default | ProviderExecutionPhase::Implementation => 1,
+        ProviderExecutionPhase::Repair => 2,
+        ProviderExecutionPhase::Planning | ProviderExecutionPhase::HighRiskReview => 4,
+        ProviderExecutionPhase::Summarization | ProviderExecutionPhase::Formatting => 8,
+    };
+    configured.div_ceil(divisor).max(1)
 }
 
 fn messages_with_turn_instruction(
@@ -602,8 +612,10 @@ impl<P: ModelProvider> AgentEngine<P> {
     }
 
     pub fn run_to_completion(&self, session: &mut AgentSession) -> MedusaResult<()> {
+        let default_phase = provider_execution_phase(self.config.agent.mode);
+        let mut phase = default_phase;
         while !session.completed && session.turn < self.config.agent.max_turns {
-            match self.step(session) {
+            match self.step_for_provider_phase(session, phase) {
                 Ok(StepOutcome::WaitingForUser) => {
                     let error = MedusaError::new(
                         ErrorCode::DependencyUnavailable,
@@ -614,10 +626,15 @@ impl<P: ModelProvider> AgentEngine<P> {
                     return Err(error);
                 }
                 Ok(StepOutcome::TurnComplete) => return Ok(()),
-                Ok(StepOutcome::Continue | StepOutcome::Completed) => {}
+                Ok(StepOutcome::Continue | StepOutcome::Completed) => {
+                    phase = default_phase;
+                }
                 Err(error) => match runtime_failure::handle(session, &error)? {
-                    runtime_failure::RuntimeFailureAction::Retry
-                    | runtime_failure::RuntimeFailureAction::Replan => continue,
+                    runtime_failure::RuntimeFailureAction::Retry => continue,
+                    runtime_failure::RuntimeFailureAction::Replan => {
+                        phase = ProviderExecutionPhase::Repair;
+                        continue;
+                    }
                     runtime_failure::RuntimeFailureAction::Stop => return Err(error),
                 },
             }
@@ -641,6 +658,20 @@ impl<P: ModelProvider> AgentEngine<P> {
 
     pub fn step(&self, session: &mut AgentSession) -> MedusaResult<StepOutcome> {
         self.step_with_observer(session, |_| {})
+    }
+
+    fn step_for_provider_phase(
+        &self,
+        session: &mut AgentSession,
+        phase: ProviderExecutionPhase,
+    ) -> MedusaResult<StepOutcome> {
+        self.step_with_observer_and_context_and_turn_instruction_for_phase(
+            session,
+            None,
+            None,
+            phase,
+            |_| {},
+        )
     }
 
     pub fn step_with_observer<F>(
@@ -679,6 +710,26 @@ impl<P: ModelProvider> AgentEngine<P> {
         session: &mut AgentSession,
         additional_system_context: Option<&str>,
         turn_instruction: Option<&str>,
+        observer: F,
+    ) -> MedusaResult<StepOutcome>
+    where
+        F: FnMut(&AgentUpdate),
+    {
+        self.step_with_observer_and_context_and_turn_instruction_for_phase(
+            session,
+            additional_system_context,
+            turn_instruction,
+            provider_execution_phase(self.config.agent.mode),
+            observer,
+        )
+    }
+
+    fn step_with_observer_and_context_and_turn_instruction_for_phase<F>(
+        &self,
+        session: &mut AgentSession,
+        additional_system_context: Option<&str>,
+        turn_instruction: Option<&str>,
+        phase: ProviderExecutionPhase,
         mut observer: F,
     ) -> MedusaResult<StepOutcome>
     where
@@ -730,11 +781,13 @@ impl<P: ModelProvider> AgentEngine<P> {
         tools.retain(|tool| self.execution_policy.allows(&tool.name));
         let mut request_messages = messages_with_turn_instruction(session, turn_instruction);
         validate_messages(&request_messages, &self.provider.capabilities())?;
+        let max_output_tokens =
+            phase_output_token_budget(phase, self.config.model.max_output_tokens);
         let mut budget = context_budget::PromptBudget::for_request(
             &system,
             &request_messages,
             &tools,
-            self.config.model.max_output_tokens,
+            max_output_tokens,
             context_budget::configured_context_window_tokens(),
         );
         let repository_capacity = budget
@@ -756,7 +809,7 @@ impl<P: ModelProvider> AgentEngine<P> {
                 &system,
                 &request_messages,
                 &tools,
-                self.config.model.max_output_tokens,
+                max_output_tokens,
                 context_budget::configured_context_window_tokens(),
             );
         }
@@ -780,7 +833,7 @@ impl<P: ModelProvider> AgentEngine<P> {
             system,
             messages: request_messages,
             tools,
-            max_tokens: self.config.model.max_output_tokens,
+            max_tokens: max_output_tokens,
             temperature_milli: self.config.model.temperature_milli,
         };
         let request_started = std::time::Instant::now();
@@ -790,7 +843,6 @@ impl<P: ModelProvider> AgentEngine<P> {
         let mut stream_text_rejected = false;
         let mut early_tool_executions = BTreeMap::<String, EarlyToolExecution>::new();
         let streaming_repo = session.repo.clone();
-        let phase = provider_execution_phase(self.config.agent.mode);
         let mut complete_request = |request: &ModelRequest| {
             if !streaming {
                 return self.provider.complete_cancellable_for_phase(
@@ -1620,6 +1672,102 @@ mod streaming_tool_dispatch_tests {
             AgentUpdate::ToolOutput { tool, output, is_error: false }
                 if tool == "fs_read" && output.contains("before-stream-complete")
         )));
+    }
+}
+
+#[cfg(test)]
+mod phase_budget_tests {
+    use std::sync::{Arc, Mutex};
+
+    use medusa_provider::{ModelResponse, Usage};
+
+    use super::*;
+
+    struct PhaseRecordingProvider {
+        phases: Arc<Mutex<Vec<(ProviderExecutionPhase, u32)>>>,
+    }
+
+    impl ModelProvider for PhaseRecordingProvider {
+        fn complete(&self, _request: &ModelRequest) -> MedusaResult<ModelResponse> {
+            unreachable!("phase-aware cancellable path must be used")
+        }
+
+        fn complete_cancellable_for_phase(
+            &self,
+            request: &ModelRequest,
+            phase: ProviderExecutionPhase,
+            _cancel: &AtomicBool,
+        ) -> MedusaResult<ModelResponse> {
+            self.phases
+                .lock()
+                .expect("phase lock")
+                .push((phase, request.max_tokens));
+            Ok(ModelResponse {
+                response_id: Some("phase-budget".to_owned()),
+                stop_reason: Some("stop".to_owned()),
+                blocks: Vec::new(),
+                usage: Usage::default(),
+            })
+        }
+    }
+
+    #[test]
+    fn phase_output_budgets_are_bounded_and_distinct() {
+        let configured = 32_768;
+        assert_eq!(
+            phase_output_token_budget(ProviderExecutionPhase::Implementation, configured),
+            configured
+        );
+        assert_eq!(
+            phase_output_token_budget(ProviderExecutionPhase::Repair, configured),
+            16_384
+        );
+        assert_eq!(
+            phase_output_token_budget(ProviderExecutionPhase::Planning, configured),
+            8_192
+        );
+        assert_eq!(
+            phase_output_token_budget(ProviderExecutionPhase::HighRiskReview, configured),
+            8_192
+        );
+        assert_eq!(
+            phase_output_token_budget(ProviderExecutionPhase::Summarization, configured),
+            4_096
+        );
+        assert_eq!(
+            phase_output_token_budget(ProviderExecutionPhase::Formatting, configured),
+            4_096
+        );
+    }
+
+    #[test]
+    fn repair_phase_and_budget_reach_provider_entrypoint() {
+        let directory = tempfile::tempdir().expect("temporary repository");
+        let phases = Arc::new(Mutex::new(Vec::new()));
+        let engine = AgentEngine::new(
+            PhaseRecordingProvider {
+                phases: Arc::clone(&phases),
+            },
+            Config::default(),
+        );
+        let mut session = engine
+            .create_session(directory.path(), "repair failed verification".to_owned())
+            .expect("create session");
+
+        engine
+            .step_for_provider_phase(&mut session, ProviderExecutionPhase::Repair)
+            .expect("repair step");
+
+        assert_eq!(
+            *phases.lock().expect("phase lock"),
+            vec![(
+                ProviderExecutionPhase::Repair,
+                phase_output_token_budget(
+                    ProviderExecutionPhase::Repair,
+                    Config::default().model.max_output_tokens,
+                ),
+            )]
+        );
     }
 }
 
