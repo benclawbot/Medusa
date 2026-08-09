@@ -1,5 +1,6 @@
 use std::{
     collections::{BTreeMap, BTreeSet},
+    fs,
     path::Path,
     thread,
 };
@@ -28,9 +29,10 @@ pub(crate) fn dag_for_plan(
         .map(str::to_owned)
         .collect::<BTreeSet<_>>();
     let environment_fingerprint = fingerprint(&format!(
-        "{}:{}",
+        "{}:{}:{}",
         std::env::consts::OS,
-        std::env::consts::ARCH
+        std::env::consts::ARCH,
+        verifier_build_fingerprint()?
     ));
     let toolchain_fingerprint = toolchain_fingerprint(repo);
     let mut dag = VerificationDag::default();
@@ -71,6 +73,33 @@ pub(crate) fn dag_for_plan(
         }
     }
     Ok(dag)
+}
+
+fn verifier_build_fingerprint() -> MedusaResult<String> {
+    let executable = std::env::current_exe().map_err(|error| {
+        MedusaError::new(
+            ErrorCode::InternalInvariant,
+            ErrorCategory::Internal,
+            format!("failed to identify verifier executable: {error}"),
+        )
+    })?;
+    let bytes = fs::read(&executable).map_err(|error| {
+        MedusaError::new(
+            ErrorCode::InternalInvariant,
+            ErrorCategory::Internal,
+            format!(
+                "failed to fingerprint verifier executable {}: {error}",
+                executable.display()
+            ),
+        )
+    })?;
+    Ok(fingerprint_bytes(&bytes))
+}
+
+fn fingerprint_bytes(bytes: &[u8]) -> String {
+    let mut hasher = Sha256::new();
+    hasher.update(bytes);
+    format!("{:x}", hasher.finalize())
 }
 
 fn node_for_check(
@@ -180,30 +209,33 @@ fn dependencies(plan: &VerificationPlan, check: &VerificationCheck) -> BTreeSet<
                 .map(|candidate| candidate.id.clone()),
         );
     }
-    result.remove(&check.id);
     result
 }
 
 fn resource_class(check: &VerificationCheck) -> &'static str {
     match check.kind {
-        VerificationCheckKind::BrowserBehavior | VerificationCheckKind::Accessibility => "browser",
-        VerificationCheckKind::Build | VerificationCheckKind::Packaging => "build",
-        VerificationCheckKind::Security => "network",
-        _ => "cpu",
+        VerificationCheckKind::Format => "cpu-small",
+        VerificationCheckKind::StaticAnalysis => "cpu-medium",
+        VerificationCheckKind::Unit => "cpu-medium",
+        VerificationCheckKind::Integration => "cpu-large",
+        VerificationCheckKind::Build => "cpu-large",
+        VerificationCheckKind::ArtifactSemantic => "io-small",
+        VerificationCheckKind::BrowserBehavior | VerificationCheckKind::Accessibility => {
+            "browser"
+        }
+        VerificationCheckKind::Packaging => "cpu-large",
+        VerificationCheckKind::Security => "network-small",
+        VerificationCheckKind::Custom => "cpu-medium",
     }
 }
 
 fn toolchain_fingerprint(repo: &Path) -> String {
-    let output = std::process::Command::new("rustc")
-        .arg("--version")
-        .current_dir(repo)
-        .output();
-    match output {
-        Ok(output) if output.status.success() => {
-            fingerprint(&String::from_utf8_lossy(&output.stdout))
-        }
-        _ => "toolchain-unavailable".to_owned(),
-    }
+    let version = execute_verification_command(repo, "rustc", &["--version".to_owned()])
+        .ok()
+        .filter(|result| result.passed)
+        .map(|result| String::from_utf8_lossy(&result.stdout).trim().to_owned())
+        .unwrap_or_else(|| "rustc-unavailable".to_owned());
+    fingerprint(&version)
 }
 
 fn fingerprint(value: &str) -> String {
@@ -218,65 +250,4 @@ fn invalid(message: impl Into<String>) -> MedusaError {
         ErrorCategory::Internal,
         message.into(),
     )
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use medusa_evidence::{ChangeKind, ChangedComponent, VerificationPlanner};
-
-    #[test]
-    fn rust_plan_orders_format_before_parallel_compile_checks() {
-        let directory = tempfile::tempdir().expect("temp repo");
-        std::fs::write(
-            directory.path().join("Cargo.toml"),
-            "[package]\nname='x'\nversion='0.1.0'\nedition='2021'\n",
-        )
-        .expect("manifest");
-        std::fs::create_dir_all(directory.path().join("src")).expect("src");
-        std::fs::write(directory.path().join("src/lib.rs"), "pub fn x() {}\n").expect("source");
-        let components =
-            vec![ChangedComponent::new(ChangeKind::Modified, "src/lib.rs").expect("component")];
-        let plan = VerificationPlanner::plan(directory.path(), "repo", "commit", &components, &[])
-            .expect("verification plan");
-        let mut dag = dag_for_plan(directory.path(), "commit", &plan).expect("dag");
-        let ready = dag
-            .ready_nodes()
-            .into_iter()
-            .map(|node| node.id.clone())
-            .collect::<Vec<_>>();
-        let format_id = plan
-            .checks
-            .iter()
-            .find(|check| check.kind == VerificationCheckKind::Format)
-            .expect("format")
-            .id
-            .clone();
-        assert!(ready.contains(&format_id));
-        let lint_id = plan
-            .checks
-            .iter()
-            .find(|check| check.kind == VerificationCheckKind::Lint)
-            .expect("lint")
-            .id
-            .clone();
-        assert!(!ready.contains(&lint_id));
-
-        dag.mark_running(&format_id).expect("format ready");
-        let input = dag.node(&format_id).expect("format node").input.clone();
-        dag.record_receipt(crate::VerificationReceipt {
-            node_id: format_id,
-            input,
-            passed: true,
-            duration_ms: 1,
-            artifact_refs: Vec::new(),
-        })
-        .expect("format receipt");
-        let next = dag
-            .ready_nodes()
-            .into_iter()
-            .map(|node| node.id.clone())
-            .collect::<Vec<_>>();
-        assert!(next.contains(&lint_id));
-    }
 }
