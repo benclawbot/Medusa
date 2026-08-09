@@ -5,8 +5,8 @@ text = path.read_text(encoding="utf-8")
 
 replacements = [
     (
-        "        let mut submission = lock_submission(&self.submission);\n",
-        "        let submission = lock_submission(&self.submission);\n",
+        "        let action = request.into_action();\n        let mut submission = lock_submission(&self.submission);\n",
+        "        let action = request.into_action();\n        let submission = lock_submission(&self.submission);\n",
     ),
     (
         "    use serde_json::json;\n",
