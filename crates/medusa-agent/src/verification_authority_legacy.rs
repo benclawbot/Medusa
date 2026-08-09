@@ -16,6 +16,8 @@ use medusa_intelligence::{RepositoryGraph, RepositoryGraphFreshness, ReviewImpac
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
+use super::verification_checkpoint::{VerificationCheckpoint, VerificationCheckpointStore};
+
 const COMMAND_PREVIEW_MAX_BYTES: usize = 4 * 1024;
 const COMMAND_PREVIEW_MAX_LINES: usize = 32;
 
@@ -27,7 +29,9 @@ use crate::{
         ExecutedVerificationCommand, VerificationResult, execute_verification_command,
         required_browser_verification,
     },
-    verification_dag::{VerificationDag, VerificationReceipt as DagReceipt},
+    verification_dag::{
+        VerificationDag, VerificationNodeState, VerificationReceipt as DagReceipt,
+    },
 };
 use verification_schedule::{dag_for_plan, execute_command_wave};
 
@@ -37,13 +41,43 @@ pub struct AuthoritativeVerificationResult {
     pub summary: Vec<String>,
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug, Deserialize, Serialize)]
 struct CheckMaterial {
     passed: bool,
     command: Option<CommandReceipt>,
     evidence_ids: Vec<medusa_evidence::EvidenceId>,
     artifact_ids: Vec<ArtifactId>,
     details: Vec<String>,
+}
+
+#[derive(Clone, Debug, Default, Deserialize, Serialize)]
+struct VerificationExecutionCheckpoint {
+    artifacts: Vec<ArtifactMetadata>,
+    reads: Vec<ArtifactReadReceipt>,
+    commands: Vec<CommandReceipt>,
+    records: Vec<EvidenceRecord>,
+    materials: BTreeMap<String, CheckMaterial>,
+    browser_material: Option<CheckMaterial>,
+}
+
+impl VerificationExecutionCheckpoint {
+    fn from_runtime(
+        artifacts: &BTreeMap<ArtifactId, ArtifactMetadata>,
+        reads: &[ArtifactReadReceipt],
+        commands: &[CommandReceipt],
+        records: &[EvidenceRecord],
+        materials: &BTreeMap<String, CheckMaterial>,
+        browser_material: &Option<CheckMaterial>,
+    ) -> Self {
+        Self {
+            artifacts: artifacts.values().cloned().collect(),
+            reads: reads.to_vec(),
+            commands: commands.to_vec(),
+            records: records.to_vec(),
+            materials: materials.clone(),
+            browser_material: browser_material.clone(),
+        }
+    }
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -178,31 +212,54 @@ pub fn authoritative_verification_for_components_at(
     let graph_details = graph_verification_assessment(repo, commit, &plan)?;
     let store_root = evidence_root.join(short_hash(&(repository_fingerprint.to_owned() + commit)));
     let store = ArtifactStore::open(&store_root).map_err(evidence_error)?;
-    let mut artifacts = BTreeMap::<ArtifactId, ArtifactMetadata>::new();
-    let mut reads = Vec::<ArtifactReadReceipt>::new();
-    let mut commands = Vec::<CommandReceipt>::new();
-    let mut records = Vec::<EvidenceRecord>::new();
+    let checkpoint_store = VerificationCheckpointStore::new(&store_root);
     let mut dag = dag_for_plan(repo, commit, &plan)?;
-    let repository_state_fingerprint = if persistent_reuse_allowed(&plan) {
-        Some(repository_state_fingerprint(repo, evidence_root)?)
-    } else {
-        None
-    };
-    if let Some(repository_state_fingerprint) = repository_state_fingerprint.as_deref()
+    let repository_state_fingerprint = repository_state_fingerprint(repo, evidence_root)?;
+
+    if persistent_reuse_allowed(&plan)
         && let Some(receipt) = load_exact_verification_reuse(
             &store,
             &store_root,
             &plan,
             &dag,
-            repository_state_fingerprint,
+            &repository_state_fingerprint,
         )?
     {
+        checkpoint_store
+            .remove()
+            .map_err(|error| invalid(format!("failed to remove completed checkpoint: {error}")))?;
         let mut summary = receipt.summary_lines();
         summary.push("verification_reuse=exact-persisted-receipt".to_owned());
         return Ok(AuthoritativeVerificationResult { receipt, summary });
     }
+
+    let mut artifacts = BTreeMap::<ArtifactId, ArtifactMetadata>::new();
+    let mut reads = Vec::<ArtifactReadReceipt>::new();
+    let mut commands = Vec::<CommandReceipt>::new();
+    let mut records = Vec::<EvidenceRecord>::new();
     let mut materials = BTreeMap::<String, CheckMaterial>::new();
     let mut browser_material: Option<CheckMaterial> = None;
+    let mut recovery_summary = None;
+
+    if let Some((checkpoint, summary)) = restore_verification_checkpoint(
+        &store,
+        &checkpoint_store,
+        &repository_state_fingerprint,
+        &plan,
+        &mut dag,
+    )? {
+        artifacts = checkpoint
+            .artifacts
+            .into_iter()
+            .map(|metadata| (metadata.id.clone(), metadata))
+            .collect();
+        reads = checkpoint.reads;
+        commands = checkpoint.commands;
+        records = checkpoint.records;
+        materials = checkpoint.materials;
+        browser_material = checkpoint.browser_material;
+        recovery_summary = Some(summary);
+    }
 
     while materials.len() < plan.checks.len() {
         let ready_ids = dag
@@ -229,10 +286,24 @@ pub fn authoritative_verification_for_components_at(
             .iter()
             .filter_map(|id| plan.checks.iter().find(|check| check.id == *id))
             .collect::<Vec<_>>();
-        let mut command_results = execute_command_wave(repo, &ready_checks);
 
-        for check in ready_checks {
+        for check in &ready_checks {
             dag.mark_running(&check.id).map_err(invalid)?;
+        }
+        persist_verification_checkpoint(
+            &checkpoint_store,
+            &repository_state_fingerprint,
+            &dag,
+            &artifacts,
+            &reads,
+            &commands,
+            &records,
+            &materials,
+            &browser_material,
+        )?;
+
+        let mut command_results = execute_command_wave(repo, &ready_checks);
+        for check in ready_checks {
             let material = match check.kind {
                 VerificationCheckKind::ArtifactSemantic => semantic_material(
                     repo,
@@ -301,6 +372,17 @@ pub fn authoritative_verification_for_components_at(
             })
             .map_err(invalid)?;
             materials.insert(check.id.clone(), material);
+            persist_verification_checkpoint(
+                &checkpoint_store,
+                &repository_state_fingerprint,
+                &dag,
+                &artifacts,
+                &reads,
+                &commands,
+                &records,
+                &materials,
+                &browser_material,
+            )?;
         }
     }
 
@@ -332,7 +414,10 @@ pub fn authoritative_verification_for_components_at(
     bundle.records = records;
     bundle.refresh();
     let receipt = VerificationReceipt::new(plan, checks, bundle).map_err(evidence_error)?;
-    let summary = receipt.summary_lines();
+    let mut summary = receipt.summary_lines();
+    if let Some(recovery_summary) = recovery_summary {
+        summary.push(recovery_summary);
+    }
     fs::create_dir_all(&store_root)?;
     fs::write(
         store_root.join("verification-receipt.json"),
@@ -345,9 +430,12 @@ pub fn authoritative_verification_for_components_at(
         })?,
     )?;
     let dag_path = store_root.join("verification-dag.json");
-    if let Some(repository_state_fingerprint) = repository_state_fingerprint.as_deref() {
-        let persisted_dag =
-            PersistedVerificationDag::new(dag, &receipt.fingerprint, repository_state_fingerprint)?;
+    if persistent_reuse_allowed(&receipt.plan) {
+        let persisted_dag = PersistedVerificationDag::new(
+            dag,
+            &receipt.fingerprint,
+            &repository_state_fingerprint,
+        )?;
         fs::write(
             &dag_path,
             serde_json::to_vec_pretty(&persisted_dag).map_err(|error| {
@@ -361,7 +449,141 @@ pub fn authoritative_verification_for_components_at(
     } else if dag_path.exists() {
         fs::remove_file(dag_path)?;
     }
+    checkpoint_store
+        .remove()
+        .map_err(|error| invalid(format!("failed to clear completed checkpoint: {error}")))?;
     Ok(AuthoritativeVerificationResult { receipt, summary })
+}
+
+#[allow(clippy::too_many_arguments)]
+fn persist_verification_checkpoint(
+    checkpoint_store: &VerificationCheckpointStore,
+    repository_state_fingerprint: &str,
+    dag: &VerificationDag,
+    artifacts: &BTreeMap<ArtifactId, ArtifactMetadata>,
+    reads: &[ArtifactReadReceipt],
+    commands: &[CommandReceipt],
+    records: &[EvidenceRecord],
+    materials: &BTreeMap<String, CheckMaterial>,
+    browser_material: &Option<CheckMaterial>,
+) -> MedusaResult<()> {
+    let payload = VerificationExecutionCheckpoint::from_runtime(
+        artifacts,
+        reads,
+        commands,
+        records,
+        materials,
+        browser_material,
+    );
+    let checkpoint = VerificationCheckpoint::new(
+        repository_state_fingerprint,
+        dag.clone(),
+        payload,
+    )
+    .map_err(|error| invalid(format!("failed to seal verification checkpoint: {error}")))?;
+    checkpoint_store
+        .save(&checkpoint)
+        .map_err(|error| invalid(format!("failed to persist verification checkpoint: {error}")))
+}
+
+fn restore_verification_checkpoint(
+    store: &ArtifactStore,
+    checkpoint_store: &VerificationCheckpointStore,
+    repository_state_fingerprint: &str,
+    plan: &VerificationPlan,
+    dag: &mut VerificationDag,
+) -> MedusaResult<Option<(VerificationExecutionCheckpoint, String)>> {
+    let Some(checkpoint) = checkpoint_store
+        .load::<VerificationExecutionCheckpoint>(repository_state_fingerprint)
+        .map_err(|error| invalid(format!("failed to load verification checkpoint: {error}")))?
+    else {
+        return Ok(None);
+    };
+
+    let recovery = match dag.recover_for_restart(&checkpoint.dag) {
+        Ok(recovery) => recovery,
+        Err(_) => {
+            checkpoint_store.remove().map_err(|error| {
+                invalid(format!("failed to discard drifted verification checkpoint: {error}"))
+            })?;
+            return Ok(None);
+        }
+    };
+    let mut payload = checkpoint.payload;
+    payload.materials.retain(|id, material| {
+        dag.node(id).is_some_and(|node| match node.state {
+            VerificationNodeState::Passed => material.passed,
+            VerificationNodeState::Failed => !material.passed,
+            _ => false,
+        })
+    });
+    let completed_materials_match = plan.checks.iter().all(|check| {
+        let Some(node) = dag.node(&check.id) else {
+            return false;
+        };
+        match node.state {
+            VerificationNodeState::Passed => payload
+                .materials
+                .get(&check.id)
+                .is_some_and(|material| material.passed),
+            VerificationNodeState::Failed => payload
+                .materials
+                .get(&check.id)
+                .is_some_and(|material| !material.passed),
+            _ => !payload.materials.contains_key(&check.id),
+        }
+    });
+    if !completed_materials_match || !checkpoint_artifacts_available(store, &payload) {
+        checkpoint_store.remove().map_err(|error| {
+            invalid(format!("failed to discard unsafe verification checkpoint: {error}"))
+        })?;
+        *dag = dag_for_plan(store.root(), "checkpoint-reset", plan).unwrap_or_default();
+        return Ok(None);
+    }
+
+    let summary = format!(
+        "verification_recovery=restored_passed:{};restored_failed:{};requeued_running:{};restored_stale:{};restored_pending:{};restored_cancelled:{}",
+        recovery.restored_passed,
+        recovery.restored_failed,
+        recovery.requeued_running,
+        recovery.restored_stale,
+        recovery.restored_pending,
+        recovery.restored_cancelled
+    );
+    Ok(Some((payload, summary)))
+}
+
+fn checkpoint_artifacts_available(
+    store: &ArtifactStore,
+    payload: &VerificationExecutionCheckpoint,
+) -> bool {
+    let metadata_by_id = payload
+        .artifacts
+        .iter()
+        .map(|metadata| (&metadata.id, metadata))
+        .collect::<BTreeMap<_, _>>();
+    if payload
+        .materials
+        .values()
+        .flat_map(|material| material.artifact_ids.iter())
+        .chain(
+            payload
+                .browser_material
+                .iter()
+                .flat_map(|material| material.artifact_ids.iter()),
+        )
+        .any(|id| !metadata_by_id.contains_key(id))
+    {
+        return false;
+    }
+    payload.artifacts.iter().all(|expected| match store.metadata(&expected.id) {
+        Ok(actual) if actual == *expected => true,
+        Ok(_) => false,
+        Err(_) => {
+            remove_invalid_cached_artifact(store, &expected.id);
+            false
+        }
+    })
 }
 
 fn load_exact_verification_reuse(
@@ -1299,6 +1521,48 @@ mod tests {
                 .iter()
                 .any(|line| line == "verification_reuse=exact-persisted-receipt")
         );
+    }
+
+    #[test]
+    fn restart_checkpoint_requeues_interrupted_running_work() {
+        let directory = tempfile::tempdir().expect("directory");
+        fs::write(directory.path().join("artifact.json"), "{\"ok\":true}\n").expect("artifact");
+        let component =
+            ChangedComponent::new(ChangeKind::Modified, "artifact.json").expect("component");
+        let plan = VerificationPlanner::plan(directory.path(), "repo", "commit", &[component], &[])
+            .expect("plan");
+        let mut interrupted = dag_for_plan(directory.path(), "commit", &plan).expect("dag");
+        let check_id = interrupted.ready_nodes()[0].id.clone();
+        interrupted.mark_running(&check_id).expect("running");
+        let store_root = directory.path().join("evidence-store");
+        let store = ArtifactStore::open(&store_root).expect("store");
+        let checkpoints = VerificationCheckpointStore::new(&store_root);
+        checkpoints
+            .save(
+                &VerificationCheckpoint::new(
+                    "state",
+                    interrupted,
+                    VerificationExecutionCheckpoint::default(),
+                )
+                .expect("checkpoint"),
+            )
+            .expect("save");
+
+        let mut fresh = dag_for_plan(directory.path(), "commit", &plan).expect("fresh dag");
+        let (_, summary) = restore_verification_checkpoint(
+            &store,
+            &checkpoints,
+            "state",
+            &plan,
+            &mut fresh,
+        )
+        .expect("restore")
+        .expect("checkpoint");
+        assert_eq!(
+            fresh.node(&check_id).expect("node").state,
+            VerificationNodeState::Pending
+        );
+        assert!(summary.contains("requeued_running:1"));
     }
 
     #[test]
