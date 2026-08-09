@@ -61,6 +61,20 @@ pub struct Message {
     pub content: Vec<MessageBlock>,
 }
 
+/// Execution phase used by routing policy without contaminating provider request payloads.
+#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ProviderExecutionPhase {
+    #[default]
+    Default,
+    Planning,
+    Implementation,
+    HighRiskReview,
+    Repair,
+    Summarization,
+    Formatting,
+}
+
 /// One model request.
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
 pub struct ModelRequest {
@@ -153,6 +167,18 @@ pub trait ModelProvider {
         Ok(response)
     }
 
+    /// Streams with an explicit execution phase for phase-aware route selection.
+    /// Providers that do not route internally can ignore the phase and preserve existing behavior.
+    fn complete_streaming_cancellable_for_phase(
+        &self,
+        request: &ModelRequest,
+        _phase: ProviderExecutionPhase,
+        cancel: &AtomicBool,
+        sink: &mut dyn FnMut(ProviderStreamEvent) -> MedusaResult<()>,
+    ) -> MedusaResult<ModelResponse> {
+        self.complete_streaming_cancellable(request, cancel, sink)
+    }
+
     fn complete_cancellable(
         &self,
         request: &ModelRequest,
@@ -166,6 +192,17 @@ pub trait ModelProvider {
             return Err(cancelled_provider_error());
         }
         Ok(response)
+    }
+
+    /// Completes with an explicit execution phase for phase-aware route selection.
+    /// Providers that do not route internally can ignore the phase and preserve existing behavior.
+    fn complete_cancellable_for_phase(
+        &self,
+        request: &ModelRequest,
+        _phase: ProviderExecutionPhase,
+        cancel: &AtomicBool,
+    ) -> MedusaResult<ModelResponse> {
+        self.complete_cancellable(request, cancel)
     }
 
     fn capabilities(&self) -> ProviderCapabilities {
