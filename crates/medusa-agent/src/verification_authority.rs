@@ -10,6 +10,9 @@ use sha2::{Digest, Sha256};
 
 use crate::verification::VerificationResult;
 
+#[path = "verification_checkpoint.rs"]
+pub(crate) mod verification_checkpoint;
+
 #[allow(dead_code)]
 #[path = "verification_authority_legacy.rs"]
 mod legacy;
