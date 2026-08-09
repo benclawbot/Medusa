@@ -262,7 +262,7 @@ impl RuntimeController {
     ) -> Result<SessionActionAdmission, RuntimeError> {
         validate_action_request(&request)?;
         let action = request.into_action();
-        let mut submission = lock_submission(&self.submission);
+        let submission = lock_submission(&self.submission);
         if submission.active_session_id.as_deref() != Some(action.target_session_id.as_str()) {
             return Err(RuntimeError::InvalidCommand(
                 "session action target is not the controller's active session".to_owned(),
@@ -364,7 +364,10 @@ impl RuntimeController {
                     if view.lifecycle == SessionActionLifecycle::Committing
                         || view.lifecycle == SessionActionLifecycle::Running =>
                 {
-                    reconcile_interrupted_delivery(&self.repo, &view.action)?;
+                    if !reconcile_interrupted_delivery(&self.repo, &view.action)? {
+                        self.consume_restored_safe_boundary_entry(&view.action);
+                        self.spawn_when_idle_action(view.action)?;
+                    }
                 }
                 SessionActionKind::Steer | SessionActionKind::GoalAdjustment => {
                     if self.is_busy()
@@ -375,8 +378,12 @@ impl RuntimeController {
                     } else if view.action.kind == SessionActionKind::GoalAdjustment
                         && !self.is_busy()
                     {
+                        self.consume_restored_safe_boundary_entry(&view.action);
                         self.deliver_idle_goal_action(&view.action)?;
                     } else {
+                        if !self.is_busy() {
+                            self.consume_restored_safe_boundary_entry(&view.action);
+                        }
                         self.spawn_when_idle_action(view.action)?;
                     }
                 }
@@ -434,6 +441,20 @@ impl RuntimeController {
         Ok(())
     }
 
+    fn consume_restored_safe_boundary_entry(&self, action: &SessionAction) {
+        if action.delivery_policy != SessionActionDeliveryPolicy::NextSafeTurnBoundary {
+            return;
+        }
+        let mut submission = lock_submission(&self.submission);
+        if let Some(index) = submission
+            .followups
+            .iter()
+            .position(|queued| queued.command_id == action.action_id)
+        {
+            submission.followups.remove(index);
+        }
+    }
+
     fn deliver_idle_message_action(&self, action: &SessionAction) -> Result<(), RuntimeError> {
         dispatch_when_idle(
             self.repo.clone(),
@@ -469,13 +490,17 @@ impl RuntimeController {
                         if view.lifecycle == SessionActionLifecycle::Committing
                             || view.lifecycle == SessionActionLifecycle::Running
                         {
-                            if let Err(error) = reconcile_interrupted_delivery(&repo, &action) {
-                                let _ = event_sender.send(RuntimeEvent::Notice {
-                                    title: "Session action recovery failed".to_owned(),
-                                    details: vec![error.to_string()],
-                                });
+                            match reconcile_interrupted_delivery(&repo, &action) {
+                                Ok(true) => return,
+                                Ok(false) => {}
+                                Err(error) => {
+                                    let _ = event_sender.send(RuntimeEvent::Notice {
+                                        title: "Session action recovery failed".to_owned(),
+                                        details: vec![error.to_string()],
+                                    });
+                                    return;
+                                }
                             }
-                            return;
                         }
                     }
                     Err(error) => {
@@ -499,13 +524,20 @@ impl RuntimeController {
                             action.clone(),
                         )
                     };
-                    if let Err(error) = result {
-                        let _ = event_sender.send(RuntimeEvent::Notice {
-                            title: "Session action delivery failed".to_owned(),
-                            details: vec![error.to_string()],
-                        });
+                    match result {
+                        Ok(()) => return,
+                        Err(RuntimeError::Busy) => {
+                            thread::sleep(Duration::from_millis(10));
+                            continue;
+                        }
+                        Err(error) => {
+                            let _ = event_sender.send(RuntimeEvent::Notice {
+                                title: "Session action delivery failed".to_owned(),
+                                details: vec![error.to_string()],
+                            });
+                            return;
+                        }
                     }
-                    return;
                 }
                 thread::sleep(Duration::from_millis(10));
             })
@@ -1104,7 +1136,7 @@ mod tests {
         SessionActionLifecycle, SessionActionWakePolicy,
         frontend::{FrontendEvent, FrontendKind},
     };
-    use serde_json::json;
+    use serde_json::{Value, json};
     use tempfile::tempdir;
     use time::OffsetDateTime;
 
