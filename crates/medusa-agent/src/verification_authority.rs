@@ -183,14 +183,20 @@ pub fn authoritative_verification_for_components_at(
     let mut commands = Vec::<CommandReceipt>::new();
     let mut records = Vec::<EvidenceRecord>::new();
     let mut dag = dag_for_plan(repo, commit, &plan)?;
-    let repository_state_fingerprint = repository_state_fingerprint(repo, evidence_root)?;
-    if let Some(receipt) = load_exact_verification_reuse(
-        &store,
-        &store_root,
-        &plan,
-        &dag,
-        &repository_state_fingerprint,
-    )? {
+    let repository_state_fingerprint = if persistent_reuse_allowed(&plan) {
+        Some(repository_state_fingerprint(repo, evidence_root)?)
+    } else {
+        None
+    };
+    if let Some(repository_state_fingerprint) = repository_state_fingerprint.as_deref()
+        && let Some(receipt) = load_exact_verification_reuse(
+            &store,
+            &store_root,
+            &plan,
+            &dag,
+            repository_state_fingerprint,
+        )?
+    {
         let mut summary = receipt.summary_lines();
         summary.push("verification_reuse=exact-persisted-receipt".to_owned());
         return Ok(AuthoritativeVerificationResult { receipt, summary });
@@ -338,18 +344,23 @@ pub fn authoritative_verification_for_components_at(
             )
         })?,
     )?;
-    let persisted_dag =
-        PersistedVerificationDag::new(dag, &receipt.fingerprint, &repository_state_fingerprint)?;
-    fs::write(
-        store_root.join("verification-dag.json"),
-        serde_json::to_vec_pretty(&persisted_dag).map_err(|error| {
-            MedusaError::new(
-                ErrorCode::InternalInvariant,
-                ErrorCategory::Internal,
-                error.to_string(),
-            )
-        })?,
-    )?;
+    let dag_path = store_root.join("verification-dag.json");
+    if let Some(repository_state_fingerprint) = repository_state_fingerprint.as_deref() {
+        let persisted_dag =
+            PersistedVerificationDag::new(dag, &receipt.fingerprint, repository_state_fingerprint)?;
+        fs::write(
+            &dag_path,
+            serde_json::to_vec_pretty(&persisted_dag).map_err(|error| {
+                MedusaError::new(
+                    ErrorCode::InternalInvariant,
+                    ErrorCategory::Internal,
+                    error.to_string(),
+                )
+            })?,
+        )?;
+    } else if dag_path.exists() {
+        fs::remove_file(dag_path)?;
+    }
     Ok(AuthoritativeVerificationResult { receipt, summary })
 }
 
@@ -415,11 +426,23 @@ fn persistent_reuse_allowed(plan: &VerificationPlan) -> bool {
 }
 
 fn receipt_artifacts_available(store: &ArtifactStore, receipt: &VerificationReceipt) -> bool {
-    receipt.evidence.artifacts.iter().all(|expected| {
-        store
-            .metadata(&expected.id)
-            .is_ok_and(|actual| actual == *expected)
-    })
+    let mut available = true;
+    for expected in &receipt.evidence.artifacts {
+        match store.metadata(&expected.id) {
+            Ok(actual) if actual == *expected => {}
+            Ok(_) => available = false,
+            Err(_) => {
+                remove_invalid_cached_artifact(store, &expected.id);
+                available = false;
+            }
+        }
+    }
+    available
+}
+
+fn remove_invalid_cached_artifact(store: &ArtifactStore, id: &ArtifactId) {
+    let _ = fs::remove_file(store.root().join("objects").join(format!("{}.bin", id.0)));
+    let _ = fs::remove_file(store.root().join("metadata").join(format!("{}.json", id.0)));
 }
 
 fn repository_state_fingerprint(repo: &Path, evidence_root: &Path) -> MedusaResult<String> {
@@ -1217,8 +1240,31 @@ mod tests {
             .unwrap()
             .unwrap()
             .path();
-        fs::remove_file(object).unwrap();
-        let rerun_after_artifact_loss = authoritative_verification_for_components_at(
+        fs::write(&object, b"corrupted-object").unwrap();
+        let rerun_after_artifact_corruption = authoritative_verification_for_components_at(
+            directory.path(),
+            &evidence_root,
+            "repo",
+            "commit",
+            &[component.clone()],
+        )
+        .unwrap();
+        assert!(rerun_after_artifact_corruption.receipt.passed);
+        assert!(
+            !rerun_after_artifact_corruption
+                .summary
+                .iter()
+                .any(|line| line == "verification_reuse=exact-persisted-receipt")
+        );
+
+        let metadata = fs::read_dir(store_root.join("metadata"))
+            .unwrap()
+            .next()
+            .unwrap()
+            .unwrap()
+            .path();
+        fs::write(&metadata, b"{broken-metadata").unwrap();
+        let rerun_after_metadata_corruption = authoritative_verification_for_components_at(
             directory.path(),
             &evidence_root,
             "repo",
@@ -1226,9 +1272,9 @@ mod tests {
             &[component],
         )
         .unwrap();
-        assert!(rerun_after_artifact_loss.receipt.passed);
+        assert!(rerun_after_metadata_corruption.receipt.passed);
         assert!(
-            !rerun_after_artifact_loss
+            !rerun_after_metadata_corruption
                 .summary
                 .iter()
                 .any(|line| line == "verification_reuse=exact-persisted-receipt")
