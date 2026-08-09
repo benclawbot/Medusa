@@ -4,8 +4,8 @@ use medusa_agent::authoritative_verification_for_components_at;
 use medusa_evidence::{ChangeKind, ChangedComponent};
 use serde_json::json;
 
-const FIXTURE_COUNT: usize = 128;
-const VALUES_PER_FIXTURE: usize = 16_384;
+const FIXTURE_COUNT: usize = 16;
+const VALUES_PER_FIXTURE: usize = 131_072;
 const SAMPLE_COUNT: usize = 7;
 
 fn components() -> Vec<ChangedComponent> {
@@ -116,6 +116,7 @@ fn exact_authoritative_reuse_reduces_runtime_and_stale_input_reruns() {
             "schema_version": 1,
             "fixture_count": FIXTURE_COUNT,
             "values_per_fixture": VALUES_PER_FIXTURE,
+            "total_values": FIXTURE_COUNT * VALUES_PER_FIXTURE,
             "sample_count": SAMPLE_COUNT,
             "cold_ns": cold_ns,
             "warm_ns": warm_ns,
