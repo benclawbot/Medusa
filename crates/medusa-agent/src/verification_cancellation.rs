@@ -1,10 +1,7 @@
 use std::{
     collections::BTreeMap,
     path::{Path, PathBuf},
-    sync::{
-        Arc, Mutex, OnceLock,
-        atomic::AtomicBool,
-    },
+    sync::{Arc, Mutex, OnceLock, atomic::AtomicBool},
 };
 
 #[derive(Debug)]
@@ -56,11 +53,15 @@ pub(crate) fn register_verification_cancellation(
     repo: &Path,
 ) -> VerificationCancellationRegistration {
     let root = normalized(repo);
-    let mut active = active().lock().unwrap_or_else(|poisoned| poisoned.into_inner());
-    let entry = active.entry(root.clone()).or_insert_with(|| ActiveCancellation {
-        token: Arc::new(AtomicBool::new(false)),
-        registrations: 0,
-    });
+    let mut active = active()
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let entry = active
+        .entry(root.clone())
+        .or_insert_with(|| ActiveCancellation {
+            token: Arc::new(AtomicBool::new(false)),
+            registrations: 0,
+        });
     entry.registrations += 1;
     VerificationCancellationRegistration {
         root,
@@ -70,7 +71,9 @@ pub(crate) fn register_verification_cancellation(
 
 pub(crate) fn active_verification_cancellation(path: &Path) -> Option<Arc<AtomicBool>> {
     let path = normalized(path);
-    let active = active().lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+    let active = active()
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
     active
         .iter()
         .filter(|(root, _)| path.starts_with(root))
