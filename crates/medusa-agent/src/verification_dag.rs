@@ -104,10 +104,8 @@ impl VerificationDag {
         if !ready {
             return Err(format!("verification node {id} is not ready"));
         }
-        self.nodes
-            .get_mut(id)
-            .expect("ready node must exist")
-            .state = VerificationNodeState::Running;
+        self.nodes.get_mut(id).expect("ready node must exist").state =
+            VerificationNodeState::Running;
         Ok(())
     }
 
@@ -337,9 +335,18 @@ mod tests {
         pass(&mut dag, "test-b");
 
         assert_eq!(dag.invalidate_paths(["a.rs"]), 2);
-        assert_eq!(dag.node("format-a").unwrap().state, VerificationNodeState::Stale);
-        assert_eq!(dag.node("test-a").unwrap().state, VerificationNodeState::Stale);
-        assert_eq!(dag.node("test-b").unwrap().state, VerificationNodeState::Passed);
+        assert_eq!(
+            dag.node("format-a").unwrap().state,
+            VerificationNodeState::Stale
+        );
+        assert_eq!(
+            dag.node("test-a").unwrap().state,
+            VerificationNodeState::Stale
+        );
+        assert_eq!(
+            dag.node("test-b").unwrap().state,
+            VerificationNodeState::Passed
+        );
         assert!(dag.reusable_receipt("test-b", &input(&["b.rs"])).is_some());
     }
 
@@ -366,7 +373,10 @@ mod tests {
             })
             .expect_err("mismatch rejected");
         assert!(error.contains("input mismatch"));
-        assert_eq!(dag.node("unit").unwrap().state, VerificationNodeState::Stale);
+        assert_eq!(
+            dag.node("unit").unwrap().state,
+            VerificationNodeState::Stale
+        );
         assert!(!dag.authoritative_complete());
     }
 }
