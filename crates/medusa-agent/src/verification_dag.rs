@@ -2,6 +2,9 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use serde::{Deserialize, Serialize};
 
+#[path = "verification_resource_pool.rs"]
+pub mod resource_pool;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum VerificationAuthority {
     Diagnostic,
@@ -168,53 +171,30 @@ impl VerificationDag {
         if changed.is_empty() {
             return 0;
         }
-
         let mut invalidated = BTreeSet::new();
         for node in self.nodes.values() {
-            if node
-                .input
-                .changed_paths
-                .iter()
-                .any(|path| changed.contains(path.as_str()))
-            {
+            if node.input.changed_paths.iter().any(|path| changed.contains(path.as_str())) {
                 invalidated.insert(node.id.clone());
             }
         }
-
         loop {
             let before = invalidated.len();
             for node in self.nodes.values() {
-                if node
-                    .dependencies
-                    .iter()
-                    .any(|dependency| invalidated.contains(dependency))
-                {
+                if node.dependencies.iter().any(|dependency| invalidated.contains(dependency)) {
                     invalidated.insert(node.id.clone());
                 }
             }
-            if invalidated.len() == before {
-                break;
-            }
+            if invalidated.len() == before { break; }
         }
-
         for id in &invalidated {
-            if let Some(node) = self.nodes.get_mut(id) {
-                node.state = VerificationNodeState::Stale;
-            }
+            if let Some(node) = self.nodes.get_mut(id) { node.state = VerificationNodeState::Stale; }
             self.receipts.remove(id);
         }
         invalidated.len()
     }
 
-    pub fn refresh_stale_input(
-        &mut self,
-        id: &str,
-        input: VerificationInputKey,
-    ) -> Result<(), String> {
-        let node = self
-            .nodes
-            .get_mut(id)
-            .ok_or_else(|| format!("unknown verification node {id}"))?;
+    pub fn refresh_stale_input(&mut self, id: &str, input: VerificationInputKey) -> Result<(), String> {
+        let node = self.nodes.get_mut(id).ok_or_else(|| format!("unknown verification node {id}"))?;
         if node.state != VerificationNodeState::Stale {
             return Err(format!("verification node {id} is not stale"));
         }
@@ -228,9 +208,7 @@ impl VerificationDag {
         !self.nodes.is_empty()
             && self.nodes.len() == prior.nodes.len()
             && self.nodes.iter().all(|(id, node)| {
-                prior
-                    .reusable_receipt(id, &node.input)
-                    .is_some_and(|receipt| receipt.node_id == *id)
+                prior.reusable_receipt(id, &node.input).is_some_and(|receipt| receipt.node_id == *id)
                     && prior.nodes.get(id).is_some_and(|prior_node| {
                         prior_node.command == node.command
                             && prior_node.dependencies == node.dependencies
@@ -241,18 +219,11 @@ impl VerificationDag {
     }
 
     pub fn authoritative_complete(&self) -> bool {
-        let authoritative = self
-            .nodes
-            .values()
-            .filter(|node| node.authority == VerificationAuthority::IndependentAcceptance)
-            .collect::<Vec<_>>();
+        let authoritative = self.nodes.values().filter(|node| node.authority == VerificationAuthority::IndependentAcceptance).collect::<Vec<_>>();
         !authoritative.is_empty()
             && authoritative.iter().all(|node| {
                 node.state == VerificationNodeState::Passed
-                    && self
-                        .receipts
-                        .get(&node.id)
-                        .is_some_and(|receipt| receipt.passed && receipt.input == node.input)
+                    && self.receipts.get(&node.id).is_some_and(|receipt| receipt.passed && receipt.input == node.input)
             })
     }
 }
@@ -272,19 +243,11 @@ mod tests {
         }
     }
 
-    fn node(
-        id: &str,
-        dependencies: &[&str],
-        authority: VerificationAuthority,
-        paths: &[&str],
-    ) -> VerificationNode {
+    fn node(id: &str, dependencies: &[&str], authority: VerificationAuthority, paths: &[&str]) -> VerificationNode {
         VerificationNode {
             id: id.to_owned(),
             command: format!("check-{id}"),
-            dependencies: dependencies
-                .iter()
-                .map(|dependency| (*dependency).to_owned())
-                .collect(),
+            dependencies: dependencies.iter().map(|dependency| (*dependency).to_owned()).collect(),
             authority,
             expected_duration_ms: 10,
             resource_class: "cpu".to_owned(),
@@ -297,40 +260,17 @@ mod tests {
         dag.mark_running(id).expect("node ready");
         let input = dag.node(id).expect("node exists").input.clone();
         dag.record_receipt(VerificationReceipt {
-            node_id: id.to_owned(),
-            input,
-            passed: true,
-            duration_ms: 4,
+            node_id: id.to_owned(), input, passed: true, duration_ms: 4,
             artifact_refs: vec![format!("artifact:{id}")],
-        })
-        .expect("receipt accepted");
+        }).expect("receipt accepted");
     }
 
     #[test]
     fn dependencies_gate_parallel_readiness_and_authority() {
         let mut dag = VerificationDag::default();
-        dag.insert(node(
-            "format",
-            &[],
-            VerificationAuthority::Diagnostic,
-            &["src/lib.rs"],
-        ))
-        .expect("format node");
-        dag.insert(node(
-            "unit",
-            &["format"],
-            VerificationAuthority::IndependentAcceptance,
-            &["src/lib.rs"],
-        ))
-        .expect("unit node");
-
-        assert_eq!(
-            dag.ready_nodes()
-                .iter()
-                .map(|node| node.id.as_str())
-                .collect::<Vec<_>>(),
-            vec!["format"]
-        );
+        dag.insert(node("format", &[], VerificationAuthority::Diagnostic, &["src/lib.rs"])).expect("format node");
+        dag.insert(node("unit", &["format"], VerificationAuthority::IndependentAcceptance, &["src/lib.rs"])).expect("unit node");
+        assert_eq!(dag.ready_nodes().iter().map(|node| node.id.as_str()).collect::<Vec<_>>(), vec!["format"]);
         assert!(!dag.authoritative_complete());
         pass(&mut dag, "format");
         assert_eq!(dag.ready_nodes()[0].id, "unit");
@@ -341,15 +281,8 @@ mod tests {
     #[test]
     fn exact_input_receipts_are_reusable_but_drift_fails_closed() {
         let mut dag = VerificationDag::default();
-        dag.insert(node(
-            "unit",
-            &[],
-            VerificationAuthority::IndependentAcceptance,
-            &["src/lib.rs"],
-        ))
-        .expect("unit node");
+        dag.insert(node("unit", &[], VerificationAuthority::IndependentAcceptance, &["src/lib.rs"])).expect("unit node");
         pass(&mut dag, "unit");
-
         let exact = input(&["src/lib.rs"]);
         assert!(dag.reusable_receipt("unit", &exact).is_some());
         let mut drifted = exact.clone();
@@ -360,133 +293,53 @@ mod tests {
     #[test]
     fn complete_exact_receipt_set_is_reusable_but_command_or_input_drift_is_not() {
         let mut prior = VerificationDag::default();
-        prior
-            .insert(node(
-                "unit",
-                &[],
-                VerificationAuthority::IndependentAcceptance,
-                &["src/lib.rs"],
-            ))
-            .expect("unit node");
+        prior.insert(node("unit", &[], VerificationAuthority::IndependentAcceptance, &["src/lib.rs"])).expect("unit node");
         pass(&mut prior, "unit");
-
         let mut current = VerificationDag::default();
-        current
-            .insert(node(
-                "unit",
-                &[],
-                VerificationAuthority::IndependentAcceptance,
-                &["src/lib.rs"],
-            ))
-            .expect("unit node");
+        current.insert(node("unit", &[], VerificationAuthority::IndependentAcceptance, &["src/lib.rs"])).expect("unit node");
         assert!(current.exact_receipts_reusable_from(&prior));
-
         current.nodes.get_mut("unit").unwrap().command = "different-command".to_owned();
         assert!(!current.exact_receipts_reusable_from(&prior));
         current.nodes.get_mut("unit").unwrap().command = "check-unit".to_owned();
-        current
-            .nodes
-            .get_mut("unit")
-            .unwrap()
-            .input
-            .environment_fingerprint = "env-b".to_owned();
+        current.nodes.get_mut("unit").unwrap().input.environment_fingerprint = "env-b".to_owned();
         assert!(!current.exact_receipts_reusable_from(&prior));
     }
 
     #[test]
     fn path_invalidation_can_rearm_affected_nodes_without_losing_unrelated_receipts() {
         let mut dag = VerificationDag::default();
-        dag.insert(node(
-            "format-a",
-            &[],
-            VerificationAuthority::Diagnostic,
-            &["a.rs"],
-        ))
-        .expect("format a");
-        dag.insert(node(
-            "test-a",
-            &["format-a"],
-            VerificationAuthority::IndependentAcceptance,
-            &["a.rs"],
-        ))
-        .expect("test a");
-        dag.insert(node(
-            "test-b",
-            &[],
-            VerificationAuthority::IndependentAcceptance,
-            &["b.rs"],
-        ))
-        .expect("test b");
-        pass(&mut dag, "format-a");
-        pass(&mut dag, "test-a");
-        pass(&mut dag, "test-b");
-
+        dag.insert(node("format-a", &[], VerificationAuthority::Diagnostic, &["a.rs"])).expect("format a");
+        dag.insert(node("test-a", &["format-a"], VerificationAuthority::IndependentAcceptance, &["a.rs"])).expect("test a");
+        dag.insert(node("test-b", &[], VerificationAuthority::IndependentAcceptance, &["b.rs"])).expect("test b");
+        pass(&mut dag, "format-a"); pass(&mut dag, "test-a"); pass(&mut dag, "test-b");
         assert_eq!(dag.invalidate_paths(["a.rs"]), 2);
-        assert_eq!(
-            dag.node("format-a").unwrap().state,
-            VerificationNodeState::Stale
-        );
-        assert_eq!(
-            dag.node("test-a").unwrap().state,
-            VerificationNodeState::Stale
-        );
-        assert_eq!(
-            dag.node("test-b").unwrap().state,
-            VerificationNodeState::Passed
-        );
+        assert_eq!(dag.node("format-a").unwrap().state, VerificationNodeState::Stale);
+        assert_eq!(dag.node("test-a").unwrap().state, VerificationNodeState::Stale);
+        assert_eq!(dag.node("test-b").unwrap().state, VerificationNodeState::Passed);
         assert!(dag.reusable_receipt("test-b", &input(&["b.rs"])).is_some());
-
-        let mut refreshed = input(&["a.rs"]);
-        refreshed.tree_fingerprint = "tree-b".to_owned();
-        dag.refresh_stale_input("format-a", refreshed.clone())
-            .expect("format rearmed");
-        dag.refresh_stale_input("test-a", refreshed)
-            .expect("test rearmed");
-        assert_eq!(dag.ready_nodes()[0].id, "format-a");
-        pass(&mut dag, "format-a");
+        let mut refreshed = input(&["a.rs"]); refreshed.tree_fingerprint = "tree-b".to_owned();
+        dag.refresh_stale_input("format-a", refreshed.clone()).expect("format rearmed");
+        dag.refresh_stale_input("test-a", refreshed).expect("test rearmed");
+        assert_eq!(dag.ready_nodes()[0].id, "format-a"); pass(&mut dag, "format-a");
         assert_eq!(dag.ready_nodes()[0].id, "test-a");
     }
 
     #[test]
     fn mismatched_receipt_marks_running_node_stale() {
         let mut dag = VerificationDag::default();
-        dag.insert(node(
-            "unit",
-            &[],
-            VerificationAuthority::IndependentAcceptance,
-            &["src/lib.rs"],
-        ))
-        .expect("unit node");
+        dag.insert(node("unit", &[], VerificationAuthority::IndependentAcceptance, &["src/lib.rs"])).expect("unit node");
         dag.mark_running("unit").expect("ready");
-        let mut mismatched = input(&["src/lib.rs"]);
-        mismatched.repository_revision = "rev-b".to_owned();
-        let error = dag
-            .record_receipt(VerificationReceipt {
-                node_id: "unit".to_owned(),
-                input: mismatched,
-                passed: true,
-                duration_ms: 1,
-                artifact_refs: Vec::new(),
-            })
-            .expect_err("mismatch rejected");
+        let mut mismatched = input(&["src/lib.rs"]); mismatched.repository_revision = "rev-b".to_owned();
+        let error = dag.record_receipt(VerificationReceipt { node_id: "unit".to_owned(), input: mismatched, passed: true, duration_ms: 1, artifact_refs: Vec::new() }).expect_err("mismatch rejected");
         assert!(error.contains("input mismatch"));
-        assert_eq!(
-            dag.node("unit").unwrap().state,
-            VerificationNodeState::Stale
-        );
+        assert_eq!(dag.node("unit").unwrap().state, VerificationNodeState::Stale);
         assert!(!dag.authoritative_complete());
     }
 
     #[test]
     fn authoritative_completion_requires_matching_receipts_even_after_deserialization() {
         let mut dag = VerificationDag::default();
-        dag.insert(node(
-            "unit",
-            &[],
-            VerificationAuthority::IndependentAcceptance,
-            &["src/lib.rs"],
-        ))
-        .expect("unit node");
+        dag.insert(node("unit", &[], VerificationAuthority::IndependentAcceptance, &["src/lib.rs"])).expect("unit node");
         let mut serialized = serde_json::to_value(&dag).expect("serialize dag");
         serialized["nodes"]["unit"]["state"] = serde_json::json!("Passed");
         let restored: VerificationDag = serde_json::from_value(serialized).expect("restore dag");
@@ -496,12 +349,7 @@ mod tests {
     #[test]
     fn insert_rejects_prepassed_nodes_without_receipts() {
         let mut dag = VerificationDag::default();
-        let mut prepassed = node(
-            "unit",
-            &[],
-            VerificationAuthority::IndependentAcceptance,
-            &["src/lib.rs"],
-        );
+        let mut prepassed = node("unit", &[], VerificationAuthority::IndependentAcceptance, &["src/lib.rs"]);
         prepassed.state = VerificationNodeState::Passed;
         assert!(dag.insert(prepassed).is_err());
     }
