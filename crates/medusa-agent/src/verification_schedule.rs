@@ -220,9 +220,7 @@ fn resource_class(check: &VerificationCheck) -> &'static str {
         VerificationCheckKind::Integration => "cpu-large",
         VerificationCheckKind::Build => "cpu-large",
         VerificationCheckKind::ArtifactSemantic => "io-small",
-        VerificationCheckKind::BrowserBehavior | VerificationCheckKind::Accessibility => {
-            "browser"
-        }
+        VerificationCheckKind::BrowserBehavior | VerificationCheckKind::Accessibility => "browser",
         VerificationCheckKind::Packaging => "cpu-large",
         VerificationCheckKind::Security => "network-small",
         VerificationCheckKind::Custom => "cpu-medium",
