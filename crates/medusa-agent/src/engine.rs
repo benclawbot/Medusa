@@ -33,8 +33,8 @@ use medusa_core::{ErrorCategory, ErrorCode, MedusaError, MedusaResult, SessionId
 use medusa_extensions::{DesktopCommanderClient, DesktopCommanderSettings};
 use medusa_protocol::{Actor, EventPayload};
 use medusa_provider::{
-    Message, MessageBlock, ModelProvider, ModelRequest, ProviderStreamEvent,
-    ProviderStreamTranscript, ResponseBlock, Role,
+    Message, MessageBlock, ModelProvider, ModelRequest, ProviderExecutionPhase,
+    ProviderStreamEvent, ProviderStreamTranscript, ResponseBlock, Role,
 };
 use medusa_world_model::{WorkspaceModel, create_for_session, load as load_world_model};
 use time::OffsetDateTime;
@@ -790,11 +790,18 @@ impl<P: ModelProvider> AgentEngine<P> {
         let mut stream_text_rejected = false;
         let mut early_tool_executions = BTreeMap::<String, EarlyToolExecution>::new();
         let streaming_repo = session.repo.clone();
+        let phase = if self.config.agent.mode == Mode::ReadOnly {
+            ProviderExecutionPhase::Planning
+        } else {
+            ProviderExecutionPhase::Implementation
+        };
         let mut complete_request = |request: &ModelRequest| {
             if !streaming {
-                return self
-                    .provider
-                    .complete_cancellable(request, &self.cancellation);
+                return self.provider.complete_cancellable_for_phase(
+                    request,
+                    phase,
+                    &self.cancellation,
+                );
             }
             let mut sink = |event: ProviderStreamEvent| {
                 stream_transcript.push(event.clone())?;
@@ -845,8 +852,12 @@ impl<P: ModelProvider> AgentEngine<P> {
                 }
                 Ok(())
             };
-            self.provider
-                .complete_streaming_cancellable(request, &self.cancellation, &mut sink)
+            self.provider.complete_streaming_cancellable_for_phase(
+                request,
+                phase,
+                &self.cancellation,
+                &mut sink,
+            )
         };
         let response = match complete_request(&request) {
             Ok(response) => response,

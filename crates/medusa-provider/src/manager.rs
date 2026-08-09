@@ -22,8 +22,8 @@ use time::OffsetDateTime;
 use crate::hedge_runtime::{HedgeCandidateOutcome, HedgeRacePlan, race_provider_candidates};
 use crate::{
     HedgePolicy, ModelProvider, ModelRequest, ModelResponse, ProviderCapabilities,
-    ProviderHealthStore, ProviderRouteLatencyStore, ProviderStreamEvent, RouteLatencyPolicy,
-    RouteLatencyStats, hedge_decision, latency_aware_route_order,
+    ProviderExecutionPhase, ProviderHealthStore, ProviderRouteLatencyStore, ProviderStreamEvent,
+    RouteLatencyPolicy, RouteLatencyStats, hedge_decision, latency_aware_route_order,
 };
 
 /// Observable health state for a configured provider position.
@@ -497,7 +497,7 @@ impl<P: ModelProvider> ProviderManager<P> {
 
 impl<P: ModelProvider + Sync> ModelProvider for ProviderManager<P> {
     fn complete(&self, request: &ModelRequest) -> MedusaResult<ModelResponse> {
-        self.complete_with_cancel_and_sink(request, None, None)
+        self.complete_with_cancel_and_sink(request, ProviderExecutionPhase::Default, None, None)
     }
 
     fn complete_streaming(
@@ -505,7 +505,12 @@ impl<P: ModelProvider + Sync> ModelProvider for ProviderManager<P> {
         request: &ModelRequest,
         sink: &mut dyn FnMut(ProviderStreamEvent) -> MedusaResult<()>,
     ) -> MedusaResult<ModelResponse> {
-        self.complete_with_cancel_and_sink(request, None, Some(sink))
+        self.complete_with_cancel_and_sink(
+            request,
+            ProviderExecutionPhase::Default,
+            None,
+            Some(sink),
+        )
     }
 
     fn complete_streaming_cancellable(
@@ -514,7 +519,12 @@ impl<P: ModelProvider + Sync> ModelProvider for ProviderManager<P> {
         cancel: &AtomicBool,
         sink: &mut dyn FnMut(ProviderStreamEvent) -> MedusaResult<()>,
     ) -> MedusaResult<ModelResponse> {
-        self.complete_with_cancel_and_sink(request, Some(cancel), Some(sink))
+        self.complete_with_cancel_and_sink(
+            request,
+            ProviderExecutionPhase::Default,
+            Some(cancel),
+            Some(sink),
+        )
     }
 
     fn complete_cancellable(
@@ -522,7 +532,31 @@ impl<P: ModelProvider + Sync> ModelProvider for ProviderManager<P> {
         request: &ModelRequest,
         cancel: &AtomicBool,
     ) -> MedusaResult<ModelResponse> {
-        self.complete_with_cancel_and_sink(request, Some(cancel), None)
+        self.complete_with_cancel_and_sink(
+            request,
+            ProviderExecutionPhase::Default,
+            Some(cancel),
+            None,
+        )
+    }
+
+    fn complete_cancellable_for_phase(
+        &self,
+        request: &ModelRequest,
+        phase: ProviderExecutionPhase,
+        cancel: &AtomicBool,
+    ) -> MedusaResult<ModelResponse> {
+        self.complete_with_cancel_and_sink(request, phase, Some(cancel), None)
+    }
+
+    fn complete_streaming_cancellable_for_phase(
+        &self,
+        request: &ModelRequest,
+        phase: ProviderExecutionPhase,
+        cancel: &AtomicBool,
+        sink: &mut dyn FnMut(ProviderStreamEvent) -> MedusaResult<()>,
+    ) -> MedusaResult<ModelResponse> {
+        self.complete_with_cancel_and_sink(request, phase, Some(cancel), Some(sink))
     }
 
     fn capabilities(&self) -> ProviderCapabilities {
@@ -548,6 +582,7 @@ impl<P: ModelProvider + Sync> ProviderManager<P> {
     fn complete_with_cancel_and_sink(
         &self,
         request: &ModelRequest,
+        phase: ProviderExecutionPhase,
         cancel: Option<&AtomicBool>,
         mut sink: Option<&mut dyn FnMut(ProviderStreamEvent) -> MedusaResult<()>>,
     ) -> MedusaResult<ModelResponse> {
@@ -571,12 +606,13 @@ impl<P: ModelProvider + Sync> ProviderManager<P> {
         }
 
         let stats = self.latency.stats()?;
+        let phase_latency_policy = self.latency_policy.for_phase(phase);
         let route_order = latency_aware_route_order(
             &self.profiles,
             &stats,
             !request.tools.is_empty(),
             false,
-            self.latency_policy,
+            phase_latency_policy,
         );
         if let Some(decision) = hedge_decision(
             &route_order,
@@ -584,7 +620,7 @@ impl<P: ModelProvider + Sync> ProviderManager<P> {
             &stats,
             request.max_tokens,
             self.hedge_policy,
-            self.latency_policy,
+            phase_latency_policy,
         ) {
             self.record_attempt(decision.primary_index)?;
             let mut race_sink = sink.take();

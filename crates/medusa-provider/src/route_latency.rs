@@ -1,6 +1,6 @@
 use serde::{Deserialize, Serialize};
 
-use crate::ProviderRouteProfile;
+use crate::{ProviderExecutionPhase, ProviderRouteProfile};
 
 /// Rolling route measurements used to choose the lowest expected verified latency.
 #[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
@@ -150,6 +150,35 @@ impl RouteLatencyPolicy {
             max_cache_credit_ms: 2_000,
         }
     }
+
+    /// Derives deterministic route-scoring policy for the current execution phase.
+    #[must_use]
+    pub fn for_phase(self, phase: ProviderExecutionPhase) -> Self {
+        match phase {
+            ProviderExecutionPhase::Default | ProviderExecutionPhase::Implementation => self,
+            ProviderExecutionPhase::Planning => Self {
+                cold_start_duration_ms: self.cold_start_duration_ms.saturating_mul(3) / 4,
+                failure_penalty_ms_per_mille: self.failure_penalty_ms_per_mille,
+                max_cache_credit_ms: self.max_cache_credit_ms.saturating_mul(3) / 2,
+            },
+            ProviderExecutionPhase::HighRiskReview => Self {
+                cold_start_duration_ms: self.cold_start_duration_ms,
+                failure_penalty_ms_per_mille: self.failure_penalty_ms_per_mille.saturating_mul(2),
+                max_cache_credit_ms: self.max_cache_credit_ms / 2,
+            },
+            ProviderExecutionPhase::Repair => Self {
+                cold_start_duration_ms: self.cold_start_duration_ms,
+                failure_penalty_ms_per_mille: self.failure_penalty_ms_per_mille.saturating_mul(3)
+                    / 2,
+                max_cache_credit_ms: self.max_cache_credit_ms / 2,
+            },
+            ProviderExecutionPhase::Summarization | ProviderExecutionPhase::Formatting => Self {
+                cold_start_duration_ms: self.cold_start_duration_ms / 2,
+                failure_penalty_ms_per_mille: self.failure_penalty_ms_per_mille,
+                max_cache_credit_ms: self.max_cache_credit_ms.saturating_mul(2),
+            },
+        }
+    }
 }
 
 impl Default for RouteLatencyPolicy {
@@ -260,6 +289,53 @@ mod tests {
         ];
         assert_eq!(
             latency_aware_route_order(&profiles, &stats, true, true, RouteLatencyPolicy::default()),
+            vec![1, 0]
+        );
+    }
+
+    #[test]
+    fn execution_phase_can_change_route_order_without_changing_measurements() {
+        let profiles = vec![
+            profile("fast-less-verified", true, true),
+            profile("slower-verified", true, true),
+        ];
+        let stats = vec![
+            RouteLatencyStats {
+                samples: 10,
+                successes: 10,
+                total_duration_ms: 1_000,
+                verified_successes: 5,
+                verified_failures: 5,
+                ..RouteLatencyStats::default()
+            },
+            RouteLatencyStats {
+                samples: 10,
+                successes: 10,
+                total_duration_ms: 60_000,
+                verified_successes: 10,
+                ..RouteLatencyStats::default()
+            },
+        ];
+        let base = RouteLatencyPolicy::default();
+
+        assert_eq!(
+            latency_aware_route_order(
+                &profiles,
+                &stats,
+                true,
+                true,
+                base.for_phase(ProviderExecutionPhase::Planning),
+            ),
+            vec![0, 1]
+        );
+        assert_eq!(
+            latency_aware_route_order(
+                &profiles,
+                &stats,
+                true,
+                true,
+                base.for_phase(ProviderExecutionPhase::HighRiskReview),
+            ),
             vec![1, 0]
         );
     }
