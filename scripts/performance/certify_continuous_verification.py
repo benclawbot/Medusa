@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import statistics
 import subprocess
 import sys
@@ -19,7 +20,7 @@ def percentile_95(values: list[int]) -> float:
     ordered = sorted(values)
     if not ordered:
         raise RuntimeError("performance probe emitted no samples")
-    index = max(0, min(len(ordered) - 1, int((len(ordered) - 1) * 0.95)))
+    index = max(0, min(len(ordered) - 1, math.ceil(len(ordered) * 0.95) - 1))
     return float(ordered[index])
 
 
