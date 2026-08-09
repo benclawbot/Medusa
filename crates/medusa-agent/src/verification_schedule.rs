@@ -157,7 +157,9 @@ fn toolchain_fingerprint(repo: &Path) -> String {
         .current_dir(repo)
         .output();
     match output {
-        Ok(output) if output.status.success() => fingerprint(&String::from_utf8_lossy(&output.stdout)),
+        Ok(output) if output.status.success() => {
+            fingerprint(&String::from_utf8_lossy(&output.stdout))
+        }
         _ => "toolchain-unavailable".to_owned(),
     }
 }
@@ -191,9 +193,8 @@ mod tests {
         .expect("manifest");
         std::fs::create_dir_all(directory.path().join("src")).expect("src");
         std::fs::write(directory.path().join("src/lib.rs"), "pub fn x() {}\n").expect("source");
-        let components = vec![
-            ChangedComponent::new(ChangeKind::Modified, "src/lib.rs").expect("component"),
-        ];
+        let components =
+            vec![ChangedComponent::new(ChangeKind::Modified, "src/lib.rs").expect("component")];
         let plan = VerificationPlanner::plan(directory.path(), "repo", "commit", &components, &[])
             .expect("verification plan");
         let mut dag = dag_for_plan(directory.path(), "commit", &plan).expect("dag");
