@@ -91,7 +91,7 @@ impl ArtifactStore {
             id: id.clone(),
             media_type,
             byte_len: bytes.len() as u64,
-            sha256,
+            sha256: sha256.clone(),
             producer,
             created_at: OffsetDateTime::now_utc(),
             binary: is_binary(bytes),
@@ -106,23 +106,34 @@ impl ArtifactStore {
         metadata.fingerprint = metadata_fingerprint(&metadata);
         let object_path = self.object_path(&id);
         if object_path.is_file() {
-            if fs::read(&object_path)? != bytes {
-                return Err(EvidenceError::Validation(
-                    "content-addressed artifact collision".to_owned(),
-                ));
+            let existing = fs::read(&object_path)?;
+            if existing != bytes {
+                if hash_bytes(&existing) == sha256 {
+                    return Err(EvidenceError::Validation(
+                        "content-addressed artifact collision".to_owned(),
+                    ));
+                }
+                write_atomic(&object_path, bytes)?;
             }
         } else {
             write_atomic(&object_path, bytes)?;
         }
         let metadata_path = self.metadata_path(&id);
-        if metadata_path.is_file() {
-            return self.metadata(&id);
+        if metadata_path.is_file()
+            && let Ok(existing) = self.metadata(&id)
+        {
+            return Ok(existing);
         }
         write_json_atomic(&metadata_path, &metadata)?;
         Ok(metadata)
     }
 
     pub fn metadata(&self, id: &ArtifactId) -> Result<ArtifactMetadata> {
+        if !valid_artifact_id(id) {
+            return Err(EvidenceError::Validation(
+                "artifact id is incomplete or corrupted".to_owned(),
+            ));
+        }
         let path = self.metadata_path(id);
         if !path.is_file() {
             return Err(EvidenceError::NotFound(id.0.clone()));
@@ -136,7 +147,57 @@ impl ArtifactStore {
                 id.0
             )));
         }
+        self.repair_persisted_read_receipts(id, &bytes)?;
         Ok(metadata)
+    }
+
+    fn repair_persisted_read_receipts(&self, id: &ArtifactId, bytes: &[u8]) -> Result<()> {
+        let receipt_path = self.root.join("verification-receipt.json");
+        if !receipt_path.is_file() {
+            return Ok(());
+        }
+        let Ok(value) = serde_json::from_slice::<serde_json::Value>(&fs::read(receipt_path)?)
+        else {
+            return Ok(());
+        };
+        let Some(reads) = value
+            .get("evidence")
+            .and_then(|evidence| evidence.get("reads"))
+            .and_then(serde_json::Value::as_array)
+        else {
+            return Ok(());
+        };
+        for value in reads {
+            let Ok(expected) = serde_json::from_value::<ArtifactReadReceipt>(value.clone()) else {
+                continue;
+            };
+            if expected.artifact_id != *id || validate_read(&expected).is_err() {
+                continue;
+            }
+            let end = expected.offset.saturating_add(expected.length);
+            if end > bytes.len() as u64
+                || hash_bytes(&bytes[expected.offset as usize..end as usize])
+                    != expected.content_hash
+            {
+                return Err(EvidenceError::Validation(format!(
+                    "artifact read receipt {} does not match artifact bytes",
+                    expected.id
+                )));
+            }
+            if !self
+                .load_read_receipt(&expected.id)
+                .is_ok_and(|actual| actual == expected)
+            {
+                write_json_atomic(
+                    &self
+                        .root
+                        .join("reads")
+                        .join(format!("{}.json", expected.id)),
+                    &expected,
+                )?;
+            }
+        }
+        Ok(())
     }
 
     pub fn read_range(
@@ -245,6 +306,11 @@ impl ArtifactStore {
     }
 
     pub fn load_read_receipt(&self, id: &str) -> Result<ArtifactReadReceipt> {
+        if !valid_read_id(id) {
+            return Err(EvidenceError::Validation(
+                "artifact read receipt id is incomplete or corrupted".to_owned(),
+            ));
+        }
         let path = self.root.join("reads").join(format!("{id}.json"));
         if !path.is_file() {
             return Err(EvidenceError::NotFound(id.to_owned()));
@@ -265,6 +331,7 @@ impl ArtifactStore {
 
 pub(crate) fn validate_metadata(metadata: &ArtifactMetadata) -> Result<()> {
     if metadata.schema_version != SCHEMA_VERSION
+        || !valid_artifact_id(&metadata.id)
         || metadata.id.0 != format!("artifact-{}", metadata.sha256)
         || metadata.page_size == 0
         || metadata.page_count
@@ -282,9 +349,18 @@ pub(crate) fn validate_metadata(metadata: &ArtifactMetadata) -> Result<()> {
     Ok(())
 }
 
+fn valid_artifact_id(id: &ArtifactId) -> bool {
+    id.0.strip_prefix("artifact-").is_some_and(|hash| {
+        hash.len() == 64
+            && hash
+                .bytes()
+                .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+    })
+}
+
 pub(crate) fn validate_read(receipt: &ArtifactReadReceipt) -> Result<()> {
     if receipt.schema_version != SCHEMA_VERSION
-        || receipt.id.trim().is_empty()
+        || !valid_read_id(&receipt.id)
         || receipt.reader.trim().is_empty()
         || receipt.length == 0
         || receipt.fingerprint != read_fingerprint(receipt)
@@ -294,6 +370,11 @@ pub(crate) fn validate_read(receipt: &ArtifactReadReceipt) -> Result<()> {
         ));
     }
     Ok(())
+}
+
+fn valid_read_id(id: &str) -> bool {
+    id.strip_prefix("read-")
+        .is_some_and(|value| value.parse::<Ulid>().is_ok())
 }
 
 fn metadata_fingerprint(metadata: &ArtifactMetadata) -> String {
@@ -347,5 +428,95 @@ mod tests {
             .expect("range");
         assert_eq!(middle, bytes[40_000..40_128]);
         assert_eq!(store.load_read_receipt(&receipt.id).unwrap(), receipt);
+    }
+
+    #[test]
+    fn artifact_metadata_rejects_path_traversal_even_with_valid_fingerprint() {
+        let directory = tempfile::tempdir().expect("tempdir");
+        let store = ArtifactStore::open(directory.path()).expect("store");
+        let mut metadata = store
+            .put_bytes("text/plain", "test", b"authoritative evidence")
+            .expect("artifact");
+        metadata.sha256 = "../../../../../tmp/victim".to_owned();
+        metadata.id = ArtifactId(format!("artifact-{}", metadata.sha256));
+        metadata.fingerprint = metadata_fingerprint(&metadata);
+
+        assert!(validate_metadata(&metadata).is_err());
+        assert!(store.metadata(&metadata.id).is_err());
+    }
+
+    #[test]
+    fn read_receipt_id_rejects_path_traversal_even_with_valid_fingerprint() {
+        let directory = tempfile::tempdir().expect("tempdir");
+        let store = ArtifactStore::open(directory.path()).expect("store");
+        let bytes = b"authoritative evidence";
+        let artifact = store
+            .put_bytes("text/plain", "test", bytes)
+            .expect("artifact");
+        let (_, receipt) = store
+            .read_range(&artifact.id, 0, bytes.len() as u64, "reviewer")
+            .expect("read");
+        let mut malicious = receipt;
+        malicious.id = "../../victim".to_owned();
+        malicious.fingerprint = read_fingerprint(&malicious);
+
+        assert!(validate_read(&malicious).is_err());
+    }
+
+    #[test]
+    fn put_bytes_repairs_corrupted_cached_object_and_metadata() {
+        let directory = tempfile::tempdir().expect("tempdir");
+        let store = ArtifactStore::open(directory.path()).expect("store");
+        let bytes = b"authoritative evidence";
+        let artifact = store
+            .put_bytes("text/plain", "test", bytes)
+            .expect("artifact");
+        let object_path = store.object_path(&artifact.id);
+        let metadata_path = store.metadata_path(&artifact.id);
+
+        fs::write(&object_path, b"corrupted").expect("corrupt object");
+        let repaired_object = store
+            .put_bytes("text/plain", "test", bytes)
+            .expect("repair object");
+        assert_eq!(fs::read(&object_path).expect("object"), bytes);
+        assert_eq!(store.metadata(&artifact.id).unwrap(), repaired_object);
+
+        fs::write(&metadata_path, b"{broken-metadata").expect("corrupt metadata");
+        let repaired_metadata = store
+            .put_bytes("text/plain", "test", bytes)
+            .expect("repair metadata");
+        assert_eq!(store.metadata(&artifact.id).unwrap(), repaired_metadata);
+    }
+
+    #[test]
+    fn metadata_repairs_persisted_read_receipt_from_authoritative_receipt() {
+        let directory = tempfile::tempdir().expect("tempdir");
+        let store = ArtifactStore::open(directory.path()).expect("store");
+        let bytes = b"authoritative evidence";
+        let artifact = store
+            .put_bytes("text/plain", "test", bytes)
+            .expect("artifact");
+        let (_, expected) = store
+            .read_range(&artifact.id, 0, bytes.len() as u64, "reviewer")
+            .expect("read");
+        fs::write(
+            store.root().join("verification-receipt.json"),
+            serde_json::to_vec_pretty(&serde_json::json!({
+                "evidence": { "reads": [expected.clone()] }
+            }))
+            .expect("receipt json"),
+        )
+        .expect("persist receipt");
+        fs::write(
+            store
+                .root()
+                .join("reads")
+                .join(format!("{}.json", expected.id)),
+            b"{broken-read-receipt",
+        )
+        .expect("corrupt read");
+
+        store.metadata(&artifact.id).expect("repair reads");
+        assert_eq!(store.load_read_receipt(&expected.id).unwrap(), expected);
     }
 }
