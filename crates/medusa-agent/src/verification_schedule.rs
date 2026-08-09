@@ -21,7 +21,6 @@ pub(crate) fn dag_for_plan(
     repo: &Path,
     commit: &str,
     plan: &VerificationPlan,
-    persistent_reuse: bool,
 ) -> MedusaResult<VerificationDag> {
     let changed_paths = plan
         .components
@@ -29,7 +28,7 @@ pub(crate) fn dag_for_plan(
         .flat_map(|component| component.all_paths())
         .map(str::to_owned)
         .collect::<BTreeSet<_>>();
-    let verifier_build = if persistent_reuse {
+    let verifier_build = if persistent_reuse_allowed(plan) {
         verifier_build_fingerprint()?
     } else {
         "not-persistently-reusable".to_owned()
@@ -79,6 +78,13 @@ pub(crate) fn dag_for_plan(
         }
     }
     Ok(dag)
+}
+
+fn persistent_reuse_allowed(plan: &VerificationPlan) -> bool {
+    !plan.checks.is_empty()
+        && plan.checks.iter().all(|check| {
+            check.kind == VerificationCheckKind::ArtifactSemantic && check.program.is_none()
+        })
 }
 
 fn verifier_build_fingerprint() -> MedusaResult<String> {
