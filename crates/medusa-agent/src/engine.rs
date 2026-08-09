@@ -724,7 +724,7 @@ impl<P: ModelProvider> AgentEngine<P> {
         )
     }
 
-    fn step_with_observer_and_context_and_turn_instruction_for_phase<F>(
+    pub fn step_with_observer_and_context_and_turn_instruction_for_phase<F>(
         &self,
         session: &mut AgentSession,
         additional_system_context: Option<&str>,

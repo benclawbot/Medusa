@@ -17,7 +17,9 @@ use medusa_agent::{
 use medusa_capabilities::CapabilityRegistry;
 use medusa_config::{Config, ConfigurationChanged, Mode};
 use medusa_protocol::{Actor, EventPayload};
-use medusa_provider::{ConfiguredProvider, Message, MessageBlock, ModelProvider, Role};
+use medusa_provider::{
+    ConfiguredProvider, Message, MessageBlock, ModelProvider, ProviderExecutionPhase, Role,
+};
 
 use crate::{
     commands::{
@@ -1272,6 +1274,11 @@ fn run_prompt(
             );
             let mut retry_guard = medusa_tool_control::RetryGuard::new(2);
             let mut next_attempt = 1_u8;
+            let mut provider_phase = match state.config.agent.mode {
+                Mode::ReadOnly => ProviderExecutionPhase::Planning,
+                Mode::Review => ProviderExecutionPhase::HighRiskReview,
+                Mode::Yolo => ProviderExecutionPhase::Implementation,
+            };
             let outcome = loop {
                 let attempt_signature = format!("{provider_signature}:attempt:{next_attempt}");
                 let attempt = retry_guard
@@ -1294,10 +1301,11 @@ fn run_prompt(
                     ],
                 }));
                 let provider_started_at = std::time::Instant::now();
-                match engine.step_with_observer_and_context_and_turn_instruction(
+                match engine.step_with_observer_and_context_and_turn_instruction_for_phase(
                     &mut session,
                     Some(skill_context.as_str()),
                     None,
+                    provider_phase,
                     |update| {
                         forward_update(update, events, &mut updates);
                     },
@@ -1346,6 +1354,7 @@ fn run_prompt(
                             ],
                         }));
                         if decision.action == medusa_tool_control::RetryAction::Retry {
+                            provider_phase = ProviderExecutionPhase::Repair;
                             continue;
                         }
                         return Err(RuntimeError::agent(error));
