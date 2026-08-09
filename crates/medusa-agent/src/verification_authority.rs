@@ -18,10 +18,17 @@ use sha2::{Digest, Sha256};
 const COMMAND_PREVIEW_MAX_BYTES: usize = 4 * 1024;
 const COMMAND_PREVIEW_MAX_LINES: usize = 32;
 
-use crate::verification::{
-    ExecutedVerificationCommand, VerificationResult, execute_verification_command,
-    required_browser_verification,
+#[path = "verification_schedule.rs"]
+mod verification_schedule;
+
+use crate::{
+    verification::{
+        ExecutedVerificationCommand, VerificationResult, execute_verification_command,
+        required_browser_verification,
+    },
+    verification_dag::VerificationReceipt as DagReceipt,
 };
+use verification_schedule::{dag_for_plan, execute_command_wave};
 
 #[derive(Clone, Debug)]
 pub struct AuthoritativeVerificationResult {
@@ -136,52 +143,113 @@ pub fn authoritative_verification_for_components_at(
     let mut reads = Vec::<ArtifactReadReceipt>::new();
     let mut commands = Vec::<CommandReceipt>::new();
     let mut records = Vec::<EvidenceRecord>::new();
-    let mut checks = Vec::with_capacity(plan.checks.len());
+    let mut dag = dag_for_plan(repo, commit, &plan)?;
+    let mut materials = BTreeMap::<String, CheckMaterial>::new();
     let mut browser_material: Option<CheckMaterial> = None;
 
-    for (check_index, check) in plan.checks.iter().enumerate() {
-        let material = match check.kind {
-            VerificationCheckKind::ArtifactSemantic => semantic_material(
-                repo,
-                repository_fingerprint,
-                commit,
-                &plan.components,
-                &store,
-                &mut artifacts,
-                &mut reads,
-                &mut records,
-            )?,
-            VerificationCheckKind::BrowserBehavior | VerificationCheckKind::Accessibility => {
-                if let Some(material) = browser_material.clone() {
-                    material
-                } else {
-                    let material = browser_material_for(
-                        repo,
+    while materials.len() < plan.checks.len() {
+        let ready_ids = dag
+            .ready_nodes()
+            .into_iter()
+            .map(|node| node.id.clone())
+            .collect::<Vec<_>>();
+        if ready_ids.is_empty() {
+            for check in plan
+                .checks
+                .iter()
+                .filter(|check| !materials.contains_key(&check.id))
+            {
+                materials.insert(
+                    check.id.clone(),
+                    rejected_material("verification blocked by failed prerequisite".to_owned()),
+                );
+            }
+            break;
+        }
+        let ready_checks = ready_ids
+            .iter()
+            .filter_map(|id| plan.checks.iter().find(|check| check.id == *id))
+            .collect::<Vec<_>>();
+        let mut command_results = execute_command_wave(repo, &ready_checks);
+
+        for check in ready_checks {
+            dag.mark_running(&check.id).map_err(invalid)?;
+            let material = match check.kind {
+                VerificationCheckKind::ArtifactSemantic => semantic_material(
+                    repo,
+                    repository_fingerprint,
+                    commit,
+                    &plan.components,
+                    &store,
+                    &mut artifacts,
+                    &mut reads,
+                    &mut records,
+                )?,
+                VerificationCheckKind::BrowserBehavior | VerificationCheckKind::Accessibility => {
+                    if let Some(material) = browser_material.clone() {
+                        material
+                    } else {
+                        let material = browser_material_for(
+                            repo,
+                            repository_fingerprint,
+                            commit,
+                            &store,
+                            &mut artifacts,
+                            &mut reads,
+                            &mut records,
+                        )?;
+                        browser_material = Some(material.clone());
+                        material
+                    }
+                }
+                _ => match command_results.remove(&check.id) {
+                    Some(Ok(executed)) => materialize_command(
                         repository_fingerprint,
                         commit,
+                        check,
+                        executed,
                         &store,
                         &mut artifacts,
                         &mut reads,
+                        &mut commands,
                         &mut records,
-                    )?;
-                    browser_material = Some(material.clone());
-                    material
-                }
-            }
-            _ => command_material(
-                repo,
-                repository_fingerprint,
-                commit,
-                check,
-                &store,
-                &mut artifacts,
-                &mut reads,
-                &mut commands,
-                &mut records,
-            )?,
-        };
+                    )?,
+                    Some(Err(error)) => rejected_material(error),
+                    None => rejected_material(format!(
+                        "verification check {} has no executable adapter",
+                        check.id
+                    )),
+                },
+            };
+            let input = dag
+                .node(&check.id)
+                .ok_or_else(|| invalid(format!("missing verification DAG node {}", check.id)))?
+                .input
+                .clone();
+            dag.record_receipt(DagReceipt {
+                node_id: check.id.clone(),
+                input,
+                passed: material.passed,
+                duration_ms: material.command.as_ref().map_or(0, |receipt| receipt.duration_ms),
+                artifact_refs: material
+                    .artifact_ids
+                    .iter()
+                    .map(ToString::to_string)
+                    .collect(),
+            })
+            .map_err(invalid)?;
+            materials.insert(check.id.clone(), material);
+        }
+    }
+
+    let mut checks = Vec::with_capacity(plan.checks.len());
+    for (check_index, check) in plan.checks.iter().enumerate() {
+        let material = materials
+            .remove(&check.id)
+            .ok_or_else(|| invalid(format!("missing verification material for {}", check.id)))?;
         let mut details = material.details;
         details.push(format!("planner_reason={}", check.reason));
+        details.push("verification_execution=dependency-dag".to_owned());
         if check_index == 0 {
             details.extend(graph_details.iter().cloned());
         }
@@ -403,46 +471,6 @@ fn git_repository(repo: &Path) -> bool {
         .current_dir(repo)
         .output()
         .is_ok_and(|output| output.status.success() && output.stdout.starts_with(b"true"))
-}
-
-#[allow(clippy::too_many_arguments)]
-fn command_material(
-    repo: &Path,
-    repository_fingerprint: &str,
-    commit: &str,
-    check: &VerificationCheck,
-    store: &ArtifactStore,
-    artifacts: &mut BTreeMap<ArtifactId, ArtifactMetadata>,
-    reads: &mut Vec<ArtifactReadReceipt>,
-    commands: &mut Vec<CommandReceipt>,
-    records: &mut Vec<EvidenceRecord>,
-) -> MedusaResult<CheckMaterial> {
-    let Some(program) = check.program.as_deref() else {
-        return Ok(rejected_material(format!(
-            "verification check {} has no executable adapter",
-            check.id
-        )));
-    };
-    let working_directory = if check.working_directory == "." {
-        repo.to_path_buf()
-    } else {
-        repo.join(&check.working_directory)
-    };
-    let executed = match execute_verification_command(&working_directory, program, &check.args) {
-        Ok(executed) => executed,
-        Err(error) => return Ok(rejected_material(error.to_string())),
-    };
-    materialize_command(
-        repository_fingerprint,
-        commit,
-        check,
-        executed,
-        store,
-        artifacts,
-        reads,
-        commands,
-        records,
-    )
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -934,6 +962,7 @@ mod tests {
         assert!(result.receipt.evidence.artifacts.len() >= 2);
         assert!(evidence_root.exists());
     }
+
     #[test]
     fn graph_selected_checks_and_public_api_risk_are_covered_by_authoritative_plan() {
         let directory = tempfile::tempdir().expect("repository");
