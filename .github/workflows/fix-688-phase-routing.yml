@@ -11,7 +11,9 @@ jobs:
         with:
           ref: perf/688-phase-aware-routing
           fetch-depth: 0
-      - run: python3 scripts/fix_688_phase_routing.py
+      - run: |
+          python3 scripts/fix_688_phase_routing.py
+          python3 scripts/fix_688_phase_routing_v2.py
       - run: |
           rustup component add rustfmt
           cargo fmt --all
