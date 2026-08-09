@@ -1,0 +1,14 @@
+{
+  "schema_version": 1,
+  "program_issue": 689,
+  "scenario": "exact authoritative verification reuse on a localized semantic-artifact workload",
+  "required_platforms": ["Linux", "macOS", "Windows"],
+  "minimum_fixture_count": 16,
+  "minimum_values_per_fixture": 131072,
+  "minimum_total_values": 2097152,
+  "minimum_samples": 7,
+  "minimum_warm_speedup_ratio": 0.10,
+  "maximum_exact_rerun_ratio": 0.0,
+  "required_verification_coverage": 1.0,
+  "require_stale_input_rerun": true
+}

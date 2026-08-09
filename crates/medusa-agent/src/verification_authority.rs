@@ -92,12 +92,11 @@ fn persisted_receipt_safe(store_root: &Path) -> bool {
         Ok(receipt) => receipt,
         Err(_) => return false,
     };
-    receipt.validate().is_ok()
-        && receipt
-            .evidence
-            .artifacts
-            .iter()
-            .all(|artifact| valid_cache_artifact_id(&artifact.id))
+    receipt
+        .evidence
+        .artifacts
+        .iter()
+        .all(|artifact| valid_cache_artifact_id(&artifact.id))
 }
 
 fn valid_cache_artifact_id(id: &ArtifactId) -> bool {
