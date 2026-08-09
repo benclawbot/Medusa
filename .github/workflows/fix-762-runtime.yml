@@ -2,10 +2,8 @@ name: Fix PR 762 runtime
 
 on:
   push:
-    branches:
-      - issue-752-durable-session-actions
-    paths:
-      - '.github/workflows/fix-762-runtime.yml'
+    branches: [issue-752-durable-session-actions]
+    paths: ['.github/workflows/fix-762-runtime.yml']
 
 permissions:
   contents: write
@@ -18,45 +16,22 @@ jobs:
         with:
           ref: issue-752-durable-session-actions
           fetch-depth: 0
-      - uses: dtolnay/rust-toolchain@39b0b3842c7e8bbf6904c0bfc3d9006fdd4dc4e0
-        with:
-          toolchain: 1.88.0
-          components: rustfmt
-      - name: Apply exact runtime corrections
-        shell: bash
+      - name: Apply exact corrections
         run: |
-          python3 - <<'PY'
+          cat > /tmp/fix762.py <<'PY'
           from pathlib import Path
-
           path = Path('crates/medusa-runtime/src/frontend.rs')
-          text = path.read_text(encoding='utf-8')
-
-          def replace_once(old: str, new: str, label: str) -> None:
-              global text
-              count = text.count(old)
-              if count != 1:
-                  raise SystemExit(f'{label}: expected exactly one match, found {count}')
-              text = text.replace(old, new, 1)
-
-          replace_once(
-              '        let mut submission = lock_submission(&self.submission);\n',
-              '        let submission = lock_submission(&self.submission);\n',
-              'unused mut',
-          )
-          replace_once(
-              '    use serde_json::json;\n',
-              '    use serde_json::{Value, json};\n',
-              'test Value import',
-          )
-          replace_once(
-              '''                SessionActionKind::Steer | SessionActionKind::GoalAdjustment
+          text = path.read_text()
+          replacements = [
+              ('        let mut submission = lock_submission(&self.submission);\n', '        let submission = lock_submission(&self.submission);\n'),
+              ('    use serde_json::json;\n', '    use serde_json::{Value, json};\n'),
+              ('''                SessionActionKind::Steer | SessionActionKind::GoalAdjustment
                     if view.lifecycle == SessionActionLifecycle::Committing
                         || view.lifecycle == SessionActionLifecycle::Running =>
                 {
                     reconcile_interrupted_delivery(&self.repo, &view.action)?;
                 }
-''',
-              '''                SessionActionKind::Steer | SessionActionKind::GoalAdjustment
+''', '''                SessionActionKind::Steer | SessionActionKind::GoalAdjustment
                     if view.lifecycle == SessionActionLifecycle::Committing
                         || view.lifecycle == SessionActionLifecycle::Running =>
                 {
@@ -65,19 +40,15 @@ jobs:
                         self.spawn_when_idle_action(view.action)?;
                     }
                 }
-''',
-              'resume committing recovery',
-          )
-          replace_once(
-              '''                    } else if view.action.kind == SessionActionKind::GoalAdjustment
+'''),
+              ('''                    } else if view.action.kind == SessionActionKind::GoalAdjustment
                         && !self.is_busy()
                     {
                         self.deliver_idle_goal_action(&view.action)?;
                     } else {
                         self.spawn_when_idle_action(view.action)?;
                     }
-''',
-              '''                    } else if view.action.kind == SessionActionKind::GoalAdjustment
+''', '''                    } else if view.action.kind == SessionActionKind::GoalAdjustment
                         && !self.is_busy()
                     {
                         self.consume_restored_safe_boundary_entry(&view.action);
@@ -88,14 +59,10 @@ jobs:
                         }
                         self.spawn_when_idle_action(view.action)?;
                     }
-''',
-              'consume restored safe-boundary entry',
-          )
-          replace_once(
-              '''    fn deliver_idle_message_action(&self, action: &SessionAction) -> Result<(), RuntimeError> {
+'''),
+              ('''    fn deliver_idle_message_action(&self, action: &SessionAction) -> Result<(), RuntimeError> {
         dispatch_when_idle(
-''',
-              '''    fn consume_restored_safe_boundary_entry(&self, action: &SessionAction) {
+''', '''    fn consume_restored_safe_boundary_entry(&self, action: &SessionAction) {
         if action.delivery_policy != SessionActionDeliveryPolicy::NextSafeTurnBoundary {
             return;
         }
@@ -111,11 +78,8 @@ jobs:
 
     fn deliver_idle_message_action(&self, action: &SessionAction) -> Result<(), RuntimeError> {
         dispatch_when_idle(
-''',
-              'restored queue helper',
-          )
-          replace_once(
-              '''                        if view.lifecycle == SessionActionLifecycle::Committing
+'''),
+              ('''                        if view.lifecycle == SessionActionLifecycle::Committing
                             || view.lifecycle == SessionActionLifecycle::Running
                         {
                             if let Err(error) = reconcile_interrupted_delivery(&repo, &action) {
@@ -126,8 +90,7 @@ jobs:
                             }
                             return;
                         }
-''',
-              '''                        if view.lifecycle == SessionActionLifecycle::Committing
+''', '''                        if view.lifecycle == SessionActionLifecycle::Committing
                             || view.lifecycle == SessionActionLifecycle::Running
                         {
                             match reconcile_interrupted_delivery(&repo, &action) {
@@ -142,19 +105,15 @@ jobs:
                                 }
                             }
                         }
-''',
-              'retry interrupted delivery',
-          )
-          replace_once(
-              '''                    if let Err(error) = result {
+'''),
+              ('''                    if let Err(error) = result {
                         let _ = event_sender.send(RuntimeEvent::Notice {
                             title: "Session action delivery failed".to_owned(),
                             details: vec![error.to_string()],
                         });
                     }
                     return;
-''',
-              '''                    match result {
+''', '''                    match result {
                         Ok(()) => return,
                         Err(RuntimeError::Busy) => {
                             thread::sleep(Duration::from_millis(10));
@@ -168,20 +127,22 @@ jobs:
                             return;
                         }
                     }
-''',
-              'when-idle race retry',
-          )
-
-          path.write_text(text, encoding='utf-8')
+'''),
+          ]
+          for index, (old, new) in enumerate(replacements, 1):
+              count = text.count(old)
+              if count != 1:
+                  raise SystemExit(f'replacement {index}: expected one match, got {count}')
+              text = text.replace(old, new, 1)
+          path.write_text(text)
           PY
+          python3 /tmp/fix762.py
+          rustup component add rustfmt
           cargo fmt --all
           git diff --check
-      - name: Commit correction
-        shell: bash
-        run: |
           git config user.name 'benclawbot'
           git config user.email '259942410+benclawbot@users.noreply.github.com'
           git add crates/medusa-runtime/src/frontend.rs
-          git diff --cached --quiet && { echo 'no patch produced'; exit 1; }
+          git diff --cached --quiet && exit 1
           git commit -m 'fix: resolve durable session action recovery races [patch-762]'
           git push origin HEAD:issue-752-durable-session-actions
