@@ -253,7 +253,10 @@ impl VerificationDag {
             })
     }
 
-    pub fn recover_for_restart(&mut self, persisted: &Self) -> Result<VerificationRecovery, String> {
+    pub fn recover_for_restart(
+        &mut self,
+        persisted: &Self,
+    ) -> Result<VerificationRecovery, String> {
         if self.nodes.len() != persisted.nodes.len()
             || !self.nodes.iter().all(|(id, node)| {
                 persisted.nodes.get(id).is_some_and(|persisted_node| {
@@ -521,8 +524,14 @@ mod tests {
         let recovery = current.recover_for_restart(&persisted).expect("recover");
         assert_eq!(recovery.restored_passed, 1);
         assert_eq!(recovery.requeued_running, 1);
-        assert_eq!(current.node("format").unwrap().state, VerificationNodeState::Passed);
-        assert_eq!(current.node("unit").unwrap().state, VerificationNodeState::Pending);
+        assert_eq!(
+            current.node("format").unwrap().state,
+            VerificationNodeState::Passed
+        );
+        assert_eq!(
+            current.node("unit").unwrap().state,
+            VerificationNodeState::Pending
+        );
         assert_eq!(current.ready_nodes()[0].id, "unit");
     }
 
@@ -576,7 +585,10 @@ mod tests {
             .expect("unit node");
         let recovery = current.recover_for_restart(&persisted).expect("recover");
         assert_eq!(recovery.restored_pending, 1);
-        assert_eq!(current.node("unit").unwrap().state, VerificationNodeState::Pending);
+        assert_eq!(
+            current.node("unit").unwrap().state,
+            VerificationNodeState::Pending
+        );
         assert!(!current.authoritative_complete());
     }
 
@@ -622,8 +634,14 @@ mod tests {
         let recovery = current.recover_for_restart(&persisted).expect("recover");
         assert_eq!(recovery.restored_stale, 1);
         assert_eq!(recovery.restored_pending, 1);
-        assert_eq!(current.node("stale").unwrap().state, VerificationNodeState::Stale);
-        assert_eq!(current.node("pending").unwrap().state, VerificationNodeState::Pending);
+        assert_eq!(
+            current.node("stale").unwrap().state,
+            VerificationNodeState::Stale
+        );
+        assert_eq!(
+            current.node("pending").unwrap().state,
+            VerificationNodeState::Pending
+        );
     }
 
     #[test]
