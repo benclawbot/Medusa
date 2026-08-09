@@ -123,9 +123,9 @@ fn run_with_repository_state_guard<T>(
     thread::scope(|scope| {
         let watcher_cancellation = Arc::clone(&cancellation);
         let watcher_stop = Arc::clone(&stop);
-        scope.spawn(move || {
+        let watcher = scope.spawn(move || {
             while !watcher_stop.load(Ordering::Acquire) {
-                thread::sleep(STATE_WATCH_INTERVAL);
+                thread::park_timeout(STATE_WATCH_INTERVAL);
                 if watcher_stop.load(Ordering::Acquire) {
                     break;
                 }
@@ -141,6 +141,8 @@ fn run_with_repository_state_guard<T>(
 
         let result = operation();
         stop.store(true, Ordering::Release);
+        watcher.thread().unpark();
+        let _ = watcher.join();
         GuardedVerification {
             result,
             cancelled: cancellation.load(Ordering::Acquire),
