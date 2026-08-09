@@ -5,6 +5,8 @@ on:
     paths:
       - 'benchmarks/performance/**'
       - 'scripts/performance/**'
+      - 'crates/medusa-provider/src/hedge_acceptance.rs'
+      - 'crates/medusa-provider/src/hedge_runtime.rs'
       - '.github/workflows/performance-scenario-corpus.yml'
   schedule:
     - cron: '17 3 * * 1'
@@ -26,6 +28,12 @@ jobs:
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: dtolnay/rust-toolchain@39b0b3842c7e8bbf6904c0bfc3d9006fdd4dc4e0
+      - name: Enforce measured hedge p95 improvement
+        run: >-
+          cargo test -p medusa-provider
+          injected_tail_latency_benchmark_enforces_p95_improvement
+          -- --nocapture
       - name: Validate representative corpus
         run: python scripts/performance/validate_scenarios.py
       - name: Validate telemetry and publish machine-readable summary
