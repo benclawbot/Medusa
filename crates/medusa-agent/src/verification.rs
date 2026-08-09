@@ -229,6 +229,9 @@ fn run_supervised_command<S: AsRef<std::ffi::OsStr>>(
     timeout: Duration,
     cancellation: &AtomicBool,
 ) -> MedusaResult<SupervisedOutput> {
+    if cancellation.load(Ordering::Acquire) {
+        return Err(cancelled_command(program));
+    }
     let id = ulid::Ulid::new();
     let stdout_path = std::env::temp_dir().join(format!("medusa-verify-{id}.stdout"));
     let stderr_path = std::env::temp_dir().join(format!("medusa-verify-{id}.stderr"));
