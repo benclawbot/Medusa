@@ -125,8 +125,7 @@ impl Drop for OwnedProcessTree {
 #[cfg(test)]
 mod tests {
     use std::{
-        fs,
-        thread,
+        fs, thread,
         time::{Duration, Instant},
     };
 
