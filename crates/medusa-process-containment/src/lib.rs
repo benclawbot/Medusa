@@ -12,6 +12,9 @@ mod flatbuffer_builder;
 // SAFETY: reviewed native process-identity FFI is isolated in this low-level crate.
 #[allow(unsafe_code)]
 mod process_identity;
+// SAFETY: reviewed process-group signal FFI is isolated in this low-level crate.
+#[allow(unsafe_code)]
+mod process_tree;
 #[cfg(windows)]
 // SAFETY: reviewed Windows Job Object/process FFI; see the checked allowlist.
 #[allow(unsafe_code)]
@@ -31,6 +34,7 @@ pub use process_identity::{
     NativeProcessStartMarker, ProcessOwnershipReceipt, ProcessOwnershipVerification,
     process_start_marker,
 };
+pub use process_tree::OwnedProcessTree;
 #[cfg(windows)]
 pub use windows::{WindowsJob, process_is_alive};
 #[cfg(windows)]
