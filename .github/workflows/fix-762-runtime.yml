@@ -1,0 +1,187 @@
+name: Fix PR 762 runtime
+
+on:
+  push:
+    branches:
+      - issue-752-durable-session-actions
+    paths:
+      - '.github/workflows/fix-762-runtime.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          ref: issue-752-durable-session-actions
+          fetch-depth: 0
+      - uses: dtolnay/rust-toolchain@39b0b3842c7e8bbf6904c0bfc3d9006fdd4dc4e0
+        with:
+          toolchain: 1.88.0
+          components: rustfmt
+      - name: Apply exact runtime corrections
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+
+          path = Path('crates/medusa-runtime/src/frontend.rs')
+          text = path.read_text(encoding='utf-8')
+
+          def replace_once(old: str, new: str, label: str) -> None:
+              global text
+              count = text.count(old)
+              if count != 1:
+                  raise SystemExit(f'{label}: expected exactly one match, found {count}')
+              text = text.replace(old, new, 1)
+
+          replace_once(
+              '        let mut submission = lock_submission(&self.submission);\n',
+              '        let submission = lock_submission(&self.submission);\n',
+              'unused mut',
+          )
+          replace_once(
+              '    use serde_json::json;\n',
+              '    use serde_json::{Value, json};\n',
+              'test Value import',
+          )
+          replace_once(
+              '''                SessionActionKind::Steer | SessionActionKind::GoalAdjustment
+                    if view.lifecycle == SessionActionLifecycle::Committing
+                        || view.lifecycle == SessionActionLifecycle::Running =>
+                {
+                    reconcile_interrupted_delivery(&self.repo, &view.action)?;
+                }
+''',
+              '''                SessionActionKind::Steer | SessionActionKind::GoalAdjustment
+                    if view.lifecycle == SessionActionLifecycle::Committing
+                        || view.lifecycle == SessionActionLifecycle::Running =>
+                {
+                    if !reconcile_interrupted_delivery(&self.repo, &view.action)? {
+                        self.consume_restored_safe_boundary_entry(&view.action);
+                        self.spawn_when_idle_action(view.action)?;
+                    }
+                }
+''',
+              'resume committing recovery',
+          )
+          replace_once(
+              '''                    } else if view.action.kind == SessionActionKind::GoalAdjustment
+                        && !self.is_busy()
+                    {
+                        self.deliver_idle_goal_action(&view.action)?;
+                    } else {
+                        self.spawn_when_idle_action(view.action)?;
+                    }
+''',
+              '''                    } else if view.action.kind == SessionActionKind::GoalAdjustment
+                        && !self.is_busy()
+                    {
+                        self.consume_restored_safe_boundary_entry(&view.action);
+                        self.deliver_idle_goal_action(&view.action)?;
+                    } else {
+                        if !self.is_busy() {
+                            self.consume_restored_safe_boundary_entry(&view.action);
+                        }
+                        self.spawn_when_idle_action(view.action)?;
+                    }
+''',
+              'consume restored safe-boundary entry',
+          )
+          replace_once(
+              '''    fn deliver_idle_message_action(&self, action: &SessionAction) -> Result<(), RuntimeError> {
+        dispatch_when_idle(
+''',
+              '''    fn consume_restored_safe_boundary_entry(&self, action: &SessionAction) {
+        if action.delivery_policy != SessionActionDeliveryPolicy::NextSafeTurnBoundary {
+            return;
+        }
+        let mut submission = lock_submission(&self.submission);
+        if let Some(index) = submission
+            .followups
+            .iter()
+            .position(|queued| queued.command_id == action.action_id)
+        {
+            submission.followups.remove(index);
+        }
+    }
+
+    fn deliver_idle_message_action(&self, action: &SessionAction) -> Result<(), RuntimeError> {
+        dispatch_when_idle(
+''',
+              'restored queue helper',
+          )
+          replace_once(
+              '''                        if view.lifecycle == SessionActionLifecycle::Committing
+                            || view.lifecycle == SessionActionLifecycle::Running
+                        {
+                            if let Err(error) = reconcile_interrupted_delivery(&repo, &action) {
+                                let _ = event_sender.send(RuntimeEvent::Notice {
+                                    title: "Session action recovery failed".to_owned(),
+                                    details: vec![error.to_string()],
+                                });
+                            }
+                            return;
+                        }
+''',
+              '''                        if view.lifecycle == SessionActionLifecycle::Committing
+                            || view.lifecycle == SessionActionLifecycle::Running
+                        {
+                            match reconcile_interrupted_delivery(&repo, &action) {
+                                Ok(true) => return,
+                                Ok(false) => {}
+                                Err(error) => {
+                                    let _ = event_sender.send(RuntimeEvent::Notice {
+                                        title: "Session action recovery failed".to_owned(),
+                                        details: vec![error.to_string()],
+                                    });
+                                    return;
+                                }
+                            }
+                        }
+''',
+              'retry interrupted delivery',
+          )
+          replace_once(
+              '''                    if let Err(error) = result {
+                        let _ = event_sender.send(RuntimeEvent::Notice {
+                            title: "Session action delivery failed".to_owned(),
+                            details: vec![error.to_string()],
+                        });
+                    }
+                    return;
+''',
+              '''                    match result {
+                        Ok(()) => return,
+                        Err(RuntimeError::Busy) => {
+                            thread::sleep(Duration::from_millis(10));
+                            continue;
+                        }
+                        Err(error) => {
+                            let _ = event_sender.send(RuntimeEvent::Notice {
+                                title: "Session action delivery failed".to_owned(),
+                                details: vec![error.to_string()],
+                            });
+                            return;
+                        }
+                    }
+''',
+              'when-idle race retry',
+          )
+
+          path.write_text(text, encoding='utf-8')
+          PY
+          cargo fmt --all
+          git diff --check
+      - name: Commit correction
+        shell: bash
+        run: |
+          git config user.name 'benclawbot'
+          git config user.email '259942410+benclawbot@users.noreply.github.com'
+          git add crates/medusa-runtime/src/frontend.rs
+          git diff --cached --quiet && { echo 'no patch produced'; exit 1; }
+          git commit -m 'fix: resolve durable session action recovery races [patch-762]'
+          git push origin HEAD:issue-752-durable-session-actions
