@@ -476,12 +476,9 @@ fn repository_state_fingerprint(repo: &Path, evidence_root: &Path) -> MedusaResu
                 ),
             },
             Ok(metadata) if metadata.is_file() => match fs::read(&path) {
-                Ok(bytes) => hash_repository_state_entry(
-                    &mut hasher,
-                    relative.as_bytes(),
-                    b"file",
-                    &bytes,
-                ),
+                Ok(bytes) => {
+                    hash_repository_state_entry(&mut hasher, relative.as_bytes(), b"file", &bytes)
+                }
                 Err(_) => hash_repository_state_entry(
                     &mut hasher,
                     relative.as_bytes(),
@@ -489,18 +486,10 @@ fn repository_state_fingerprint(repo: &Path, evidence_root: &Path) -> MedusaResu
                     b"unreadable",
                 ),
             },
-            Ok(_) => hash_repository_state_entry(
-                &mut hasher,
-                relative.as_bytes(),
-                b"other",
-                b"",
-            ),
-            Err(_) => hash_repository_state_entry(
-                &mut hasher,
-                relative.as_bytes(),
-                b"missing",
-                b"",
-            ),
+            Ok(_) => hash_repository_state_entry(&mut hasher, relative.as_bytes(), b"other", b""),
+            Err(_) => {
+                hash_repository_state_entry(&mut hasher, relative.as_bytes(), b"missing", b"")
+            }
         }
     }
     Ok(format!("{:x}", hasher.finalize()))
