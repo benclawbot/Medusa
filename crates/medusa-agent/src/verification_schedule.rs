@@ -177,8 +177,7 @@ pub(crate) fn execute_command_wave(
             handles.push((
                 id,
                 scope.spawn(move || {
-                    if let Some(cancellation) =
-                        active_verification_cancellation(&working_directory)
+                    if let Some(cancellation) = active_verification_cancellation(&working_directory)
                     {
                         execute_verification_command_cancellable(
                             &working_directory,
