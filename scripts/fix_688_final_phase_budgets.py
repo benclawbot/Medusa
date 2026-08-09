@@ -21,7 +21,7 @@ replace_once(
 replace_once(
     path,
     '''fn messages_with_turn_instruction(\n''',
-    '''const fn phase_output_token_budget(phase: ProviderExecutionPhase, configured: u32) -> u32 {\n    let divisor = match phase {\n        ProviderExecutionPhase::Default | ProviderExecutionPhase::Implementation => 1,\n        ProviderExecutionPhase::Repair => 2,\n        ProviderExecutionPhase::Planning | ProviderExecutionPhase::HighRiskReview => 4,\n        ProviderExecutionPhase::Summarization | ProviderExecutionPhase::Formatting => 8,\n    };\n    configured.div_ceil(divisor).max(1)\n}\n\nfn messages_with_turn_instruction(\n''',
+    '''fn phase_output_token_budget(phase: ProviderExecutionPhase, configured: u32) -> u32 {\n    let divisor = match phase {\n        ProviderExecutionPhase::Default | ProviderExecutionPhase::Implementation => 1,\n        ProviderExecutionPhase::Repair => 2,\n        ProviderExecutionPhase::Planning | ProviderExecutionPhase::HighRiskReview => 4,\n        ProviderExecutionPhase::Summarization | ProviderExecutionPhase::Formatting => 8,\n    };\n    configured.div_ceil(divisor).max(1)\n}\n\nfn messages_with_turn_instruction(\n''',
 )
 
 replace_once(
