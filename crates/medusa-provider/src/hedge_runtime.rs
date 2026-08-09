@@ -369,7 +369,10 @@ mod tests {
     use super::*;
     use std::sync::atomic::AtomicUsize;
 
-    use crate::{ProviderCapabilities, ResponseBlock, RouteRetryPolicy, Usage};
+    use crate::{
+        ProviderCapabilities, ResponseBlock, RouteRetryPolicy, Usage,
+        assess_hedge_latency_acceptance,
+    };
 
     #[derive(Clone)]
     struct DelayedProvider {
@@ -493,6 +496,56 @@ mod tests {
             }],
             usage: Usage::default(),
         }
+    }
+
+    #[test]
+    fn injected_tail_latency_benchmark_enforces_p95_improvement() {
+        let primary_delays = [
+            40, 40, 40, 40, 40, 40, 40, 40, 40, 40, 40, 40, 40, 40, 40, 40, 40, 40, 160, 180,
+        ];
+        let mut baseline_ms = Vec::with_capacity(primary_delays.len());
+        let mut hedged_ms = Vec::with_capacity(primary_delays.len());
+
+        for primary_delay_ms in primary_delays {
+            let baseline_provider = provider("baseline-primary", primary_delay_ms);
+            let baseline_started = Instant::now();
+            baseline_provider
+                .complete(&request())
+                .expect("baseline provider completion");
+            baseline_ms.push(elapsed_ms(baseline_started));
+
+            let providers = vec![
+                provider("hedged-primary", primary_delay_ms),
+                provider("hedged-secondary", 5),
+            ];
+            let profiles = vec![profile("hedged-primary"), profile("hedged-secondary")];
+            let mut sink: Option<&mut dyn FnMut(ProviderStreamEvent) -> MedusaResult<()>> = None;
+            let hedged_started = Instant::now();
+            race_provider_candidates(
+                &providers,
+                &profiles,
+                &request(),
+                HedgeRacePlan {
+                    primary_index: 0,
+                    secondary_index: 1,
+                    launch_after_ms: 15,
+                },
+                None,
+                &mut sink,
+            )
+            .expect("hedged provider completion");
+            hedged_ms.push(elapsed_ms(hedged_started));
+        }
+
+        let assessment = assess_hedge_latency_acceptance(&baseline_ms, &hedged_ms);
+        assert!(
+            assessment.passed,
+            "measured hedge p95 acceptance failed: {assessment:?}; baseline={baseline_ms:?}; hedged={hedged_ms:?}"
+        );
+        eprintln!(
+            "measured hedge acceptance: baseline_p95_ms={:?} hedged_p95_ms={:?} improvement_bps={:?}",
+            assessment.baseline_p95_ms, assessment.hedged_p95_ms, assessment.improvement_bps
+        );
     }
 
     #[test]
