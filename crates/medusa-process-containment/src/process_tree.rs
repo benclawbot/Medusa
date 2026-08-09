@@ -142,12 +142,15 @@ mod tests {
     const PID_FILE_ENV: &str = "MEDUSA_PROCESS_TREE_TEST_PID_FILE";
 
     #[test]
+    #[allow(clippy::zombie_processes)]
     fn process_tree_helper() {
         let Ok(role) = std::env::var(ROLE_ENV) else {
             return;
         };
         if role == "child" || role == "leader-exit" {
             let pid_file = std::env::var(PID_FILE_ENV).expect("pid file");
+            // Intentionally leave this handle unwaited: the parent test must prove that the
+            // enclosing OwnedProcessTree terminates this descendant independently of its leader.
             let grandchild = Command::new(std::env::current_exe().expect("test executable"))
                 .args([
                     "--exact",
