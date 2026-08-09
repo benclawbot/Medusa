@@ -161,7 +161,9 @@ impl WarmResourcePool {
 
         match self.get_unlocked(&receipt.key)? {
             Some((persisted, _)) => Ok(persisted),
-            None => Err("warm verification resource was immediately evicted by pool limits".to_owned()),
+            None => {
+                Err("warm verification resource was immediately evicted by pool limits".to_owned())
+            }
         }
     }
 
