@@ -41,6 +41,52 @@ pub fn project_event(
             FrontendEvent::Started
         }
         EventPayload::UserFollowupQueued { .. } => FrontendEvent::SubmissionQueued { position: 1 },
+        EventPayload::SessionActionAccepted { action } => FrontendEvent::Notice {
+            severity: "info".to_owned(),
+            title: "Session action accepted".to_owned(),
+            details: vec![
+                format!("Action: {}", action.action_id),
+                format!("Kind: {:?}", action.kind),
+                format!("Delivery: {:?}", action.delivery_policy),
+            ],
+        },
+        EventPayload::SessionActionRejected {
+            action,
+            authoritative_revision,
+            reason,
+        } => FrontendEvent::Notice {
+            severity: "warning".to_owned(),
+            title: "Session action rejected".to_owned(),
+            details: vec![
+                format!("Action: {}", action.action_id),
+                format!("Reason: {reason}"),
+                format!("Authoritative revision: {authoritative_revision}"),
+            ],
+        },
+        EventPayload::SessionActionLifecycleChanged {
+            action_id,
+            from,
+            to,
+            ..
+        } => FrontendEvent::Activity(activity(
+            event,
+            PresentationActivityKind::Progress,
+            lifecycle_for_action(*to),
+            format!("Session action {action_id}: {from:?} → {to:?}"),
+            Vec::new(),
+            None,
+        )),
+        EventPayload::SessionActionTranscriptLinked {
+            action_id,
+            transcript_event_sequence,
+        } => FrontendEvent::Notice {
+            severity: "info".to_owned(),
+            title: "Session action delivered".to_owned(),
+            details: vec![
+                format!("Action: {action_id}"),
+                format!("Authoritative event: {transcript_event_sequence}"),
+            ],
+        },
         EventPayload::GoalUpdated { objective } => FrontendEvent::Notice {
             severity: "info".to_owned(),
             title: "Goal updated".to_owned(),
@@ -624,6 +670,20 @@ fn lifecycle_for_state(state: crate::SessionState) -> PresentationLifecycle {
     }
 }
 
+fn lifecycle_for_action(state: crate::SessionActionLifecycle) -> PresentationLifecycle {
+    use crate::SessionActionLifecycle;
+    match state {
+        SessionActionLifecycle::Queued
+        | SessionActionLifecycle::Selected
+        | SessionActionLifecycle::Preparing
+        | SessionActionLifecycle::Committing => PresentationLifecycle::Waiting,
+        SessionActionLifecycle::Running => PresentationLifecycle::Active,
+        SessionActionLifecycle::Completed => PresentationLifecycle::Succeeded,
+        SessionActionLifecycle::Failed => PresentationLifecycle::Failed,
+        SessionActionLifecycle::Cancelled => PresentationLifecycle::Cancelled,
+    }
+}
+
 fn frontend_label(frontend: FrontendKind) -> &'static str {
     match frontend {
         FrontendKind::Tui => "tui",
@@ -654,7 +714,10 @@ fn lifecycle_for_frontend(event: &FrontendEvent) -> PresentationLifecycle {
 
 #[cfg(test)]
 mod tests {
-    use crate::{Actor, EventEnvelope, EventPayload};
+    use crate::{
+        Actor, EventEnvelope, EventPayload, SessionAction, SessionActionDeliveryPolicy,
+        SessionActionKind, SessionActionLifecycle, SessionActionWakePolicy,
+    };
     use medusa_core::{CorrelationId, SessionId};
     use serde_json::json;
     use time::OffsetDateTime;
@@ -672,6 +735,20 @@ mod tests {
             OffsetDateTime::UNIX_EPOCH,
         )
         .expect("event")
+    }
+
+    fn action() -> SessionAction {
+        SessionAction {
+            action_id: "action-1".to_owned(),
+            idempotency_key: "idempotency-1".to_owned(),
+            source: "test".to_owned(),
+            target_session_id: "session-1".to_owned(),
+            expected_session_revision: 4,
+            kind: SessionActionKind::Steer,
+            delivery_policy: SessionActionDeliveryPolicy::NextSafeTurnBoundary,
+            wake_policy: SessionActionWakePolicy::OnBoundary,
+            payload: json!({"text":"do not expose this payload"}),
+        }
     }
 
     #[test]
@@ -692,6 +769,71 @@ mod tests {
                 text: "Visible answer".to_owned()
             }
         );
+    }
+
+    #[test]
+    fn session_action_events_are_projected_for_every_frontend() {
+        let source = event(EventPayload::SessionActionAccepted { action: action() });
+        for frontend in [
+            FrontendKind::Tui,
+            FrontendKind::Desktop,
+            FrontendKind::Telegram,
+            FrontendKind::Headless,
+        ] {
+            let projected = project_event(&source, 4, frontend).expect("action projection");
+            let FrontendEvent::Notice { details, .. } = projected.event else {
+                panic!("expected action notice")
+            };
+            assert!(details.iter().any(|detail| detail.contains("action-1")));
+            assert!(
+                details
+                    .iter()
+                    .all(|detail| !detail.contains("do not expose"))
+            );
+        }
+
+        let lifecycle = project_event(
+            &event(EventPayload::SessionActionLifecycleChanged {
+                action_id: "action-1".to_owned(),
+                from: SessionActionLifecycle::Queued,
+                to: SessionActionLifecycle::Selected,
+                evidence: None,
+            }),
+            5,
+            FrontendKind::Tui,
+        )
+        .expect("lifecycle projection");
+        assert_eq!(lifecycle.lifecycle, PresentationLifecycle::Waiting);
+    }
+
+    #[test]
+    fn rejected_action_projection_is_identical_for_desktop_and_telegram() {
+        let source = event(EventPayload::SessionActionRejected {
+            action: action(),
+            authoritative_revision: 9,
+            reason: "stale_revision".to_owned(),
+        });
+        let desktop = project_event(&source, 7, FrontendKind::Desktop).expect("desktop projection");
+        let telegram =
+            project_event(&source, 7, FrontendKind::Telegram).expect("telegram projection");
+        assert_eq!(desktop.event, telegram.event);
+        assert_eq!(desktop.lifecycle, telegram.lifecycle);
+        assert_eq!(desktop.cursor, telegram.cursor);
+        assert!(desktop.event_id.ends_with(":desktop"));
+        assert!(telegram.event_id.ends_with(":telegram"));
+        let FrontendEvent::Notice {
+            severity, details, ..
+        } = desktop.event
+        else {
+            panic!("expected rejection notice")
+        };
+        assert_eq!(severity, "warning");
+        assert!(
+            details
+                .iter()
+                .any(|detail| detail.contains("stale_revision"))
+        );
+        assert!(details.iter().any(|detail| detail.contains("9")));
     }
 
     #[test]

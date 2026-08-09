@@ -1,7 +1,11 @@
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
 use time::OffsetDateTime;
 
-use crate::{CURRENT_PROTOCOL_VERSION, ProtocolVersion};
+use crate::{
+    CURRENT_PROTOCOL_VERSION, ProtocolVersion, SessionActionDeliveryPolicy, SessionActionKind,
+    SessionActionWakePolicy,
+};
 
 #[cfg(test)]
 use super::FRONTEND_PROTOCOL_VERSION;
@@ -67,6 +71,14 @@ pub enum FrontendCommand {
         #[serde(default)]
         attachment_ids: Vec<String>,
     },
+    SubmitSessionAction {
+        kind: SessionActionKind,
+        delivery_policy: SessionActionDeliveryPolicy,
+        wake_policy: SessionActionWakePolicy,
+        expected_session_revision: u64,
+        payload: Value,
+    },
+    ShowSessionActions,
     AnswerQuestion {
         question_id: String,
         answer: String,
@@ -119,6 +131,42 @@ impl FrontendCommand {
             } if text.trim().is_empty() && attachment_ids.is_empty() => {
                 Err("submission must contain text or an attachment")
             }
+            Self::SubmitSessionAction { kind, payload, .. } => match kind {
+                SessionActionKind::Steer | SessionActionKind::FollowUp
+                    if payload
+                        .get("text")
+                        .and_then(Value::as_str)
+                        .is_none_or(|text| text.trim().is_empty()) =>
+                {
+                    Err("steer/follow-up action requires non-empty text")
+                }
+                SessionActionKind::ReplaceFollowUp
+                    if payload
+                        .get("text")
+                        .and_then(Value::as_str)
+                        .is_none_or(|text| text.trim().is_empty())
+                        || payload
+                            .get("replaces_action_id")
+                            .and_then(Value::as_str)
+                            .is_none_or(|action_id| action_id.trim().is_empty()) =>
+                {
+                    Err("replacement follow-up requires text and replaces_action_id")
+                }
+                SessionActionKind::GoalAdjustment
+                    if payload
+                        .get("objective")
+                        .and_then(Value::as_str)
+                        .is_none_or(|text| text.trim().is_empty()) =>
+                {
+                    Err("goal-adjustment action requires a non-empty objective")
+                }
+                SessionActionKind::Cancel
+                    if *payload != Value::Null && *payload != serde_json::json!({}) =>
+                {
+                    Err("cancel action does not accept a payload")
+                }
+                _ => Ok(()),
+            },
             Self::AnswerQuestion {
                 question_id,
                 answer,
@@ -214,6 +262,38 @@ mod tests {
         assert_eq!(
             serde_json::from_str::<FrontendCommandEnvelope>(&encoded).expect("deserialize"),
             envelope
+        );
+    }
+
+    #[test]
+    fn session_action_command_round_trips() {
+        let envelope = command(FrontendCommand::SubmitSessionAction {
+            kind: SessionActionKind::Steer,
+            delivery_policy: SessionActionDeliveryPolicy::NextSafeTurnBoundary,
+            wake_policy: SessionActionWakePolicy::OnBoundary,
+            expected_session_revision: 7,
+            payload: serde_json::json!({"text":"use the new constraint"}),
+        });
+        envelope.validate().expect("valid action command");
+        let encoded = serde_json::to_string(&envelope).expect("serialize");
+        assert_eq!(
+            serde_json::from_str::<FrontendCommandEnvelope>(&encoded).expect("deserialize"),
+            envelope
+        );
+    }
+
+    #[test]
+    fn replacement_action_requires_target_identity() {
+        assert!(
+            command(FrontendCommand::SubmitSessionAction {
+                kind: SessionActionKind::ReplaceFollowUp,
+                delivery_policy: SessionActionDeliveryPolicy::WhenIdle,
+                wake_policy: SessionActionWakePolicy::OnBoundary,
+                expected_session_revision: 7,
+                payload: serde_json::json!({"text":"replace it"}),
+            })
+            .validate()
+            .is_err()
         );
     }
 
