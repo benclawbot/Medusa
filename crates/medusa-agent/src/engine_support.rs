@@ -5,7 +5,9 @@ use medusa_config::Mode;
 use medusa_core::{ErrorCategory, ErrorCode, MedusaError, MedusaResult};
 use medusa_extensions::{DesktopCommanderSettings, desktop_commander_tool_is_mutating};
 use medusa_protocol::{Actor, EventPayload};
-use medusa_provider::{ImageSource, Message, MessageBlock, ProviderCapabilities, Role};
+use medusa_provider::{
+    ImageSource, Message, MessageBlock, ProviderCapabilities, ProviderExecutionPhase, Role,
+};
 use time::OffsetDateTime;
 
 use crate::{
@@ -32,6 +34,14 @@ pub(crate) fn content_with_session_goal(
         },
     );
     content
+}
+
+pub(crate) const fn provider_execution_phase(mode: Mode) -> ProviderExecutionPhase {
+    match mode {
+        Mode::ReadOnly => ProviderExecutionPhase::Planning,
+        Mode::Review => ProviderExecutionPhase::HighRiskReview,
+        Mode::Yolo => ProviderExecutionPhase::Implementation,
+    }
 }
 
 pub(crate) fn system_prompt_with_context(
@@ -829,6 +839,22 @@ mod tests {
         let error = validate_user_content(&[image_block("image/tiff", "AAEC")], &capabilities)
             .expect_err("reject unsupported type");
         assert!(error.message.contains("image/tiff"));
+    }
+
+    #[test]
+    fn provider_phase_tracks_production_agent_mode() {
+        assert_eq!(
+            provider_execution_phase(Mode::ReadOnly),
+            ProviderExecutionPhase::Planning
+        );
+        assert_eq!(
+            provider_execution_phase(Mode::Review),
+            ProviderExecutionPhase::HighRiskReview
+        );
+        assert_eq!(
+            provider_execution_phase(Mode::Yolo),
+            ProviderExecutionPhase::Implementation
+        );
     }
 
     #[test]

@@ -17,8 +17,9 @@ use medusa_external_contracts::{
 use medusa_provider::ConfiguredProvider as LegacyConfiguredProvider;
 pub use medusa_provider::{
     ImageSource, Message, MessageBlock, MiniMaxProvider, ModelProvider, ModelRequest,
-    ModelResponse, OpenAiProvider, ProviderCapabilities, ProviderHealth, ProviderManager,
-    ProviderRouteProfile, ResponseBlock, Role, RouteRetryPolicy, ToolDefinition, Usage,
+    ModelResponse, OpenAiProvider, ProviderCapabilities, ProviderExecutionPhase, ProviderHealth,
+    ProviderManager, ProviderRouteProfile, ProviderStreamEvent, ResponseBlock, Role,
+    RouteRetryPolicy, ToolDefinition, Usage,
 };
 use serde_json::Value;
 
@@ -78,7 +79,7 @@ impl RouteState {
             max_image_bytes: capabilities.max_image_bytes,
             max_images_per_request: capabilities.max_images_per_request,
             tool_calling: capabilities.tool_calling,
-            streaming: false,
+            streaming: configured_streaming(&self.config),
         }
     }
 
@@ -135,7 +136,7 @@ impl RouteState {
             endpoint: Some(route_endpoint(&self.config)),
             auth_source: self.config.model.auth.clone(),
             tool_calling: capabilities.tool_calling,
-            streaming: false,
+            streaming: configured_streaming(&self.config),
             retry: RouteRetryPolicy {
                 max_retries: self.config.model.max_retries,
                 base_delay_ms: self.config.model.retry_base_delay_ms,
@@ -159,6 +160,17 @@ impl ModelProvider for LazyRoute {
         self.state
             .initialize()?
             .complete_cancellable(request, cancel)
+    }
+
+    fn complete_streaming_cancellable(
+        &self,
+        request: &ModelRequest,
+        cancel: &AtomicBool,
+        sink: &mut dyn FnMut(ProviderStreamEvent) -> MedusaResult<()>,
+    ) -> MedusaResult<ModelResponse> {
+        self.state
+            .initialize()?
+            .complete_streaming_cancellable(request, cancel, sink)
     }
 
     fn capabilities(&self) -> ProviderCapabilities {
@@ -280,6 +292,37 @@ impl ModelProvider for LazyConfiguredProviderManager {
         self.manager.complete_cancellable(request, cancel)
     }
 
+    fn complete_cancellable_for_phase(
+        &self,
+        request: &ModelRequest,
+        phase: ProviderExecutionPhase,
+        cancel: &AtomicBool,
+    ) -> MedusaResult<ModelResponse> {
+        self.manager
+            .complete_cancellable_for_phase(request, phase, cancel)
+    }
+
+    fn complete_streaming_cancellable(
+        &self,
+        request: &ModelRequest,
+        cancel: &AtomicBool,
+        sink: &mut dyn FnMut(ProviderStreamEvent) -> MedusaResult<()>,
+    ) -> MedusaResult<ModelResponse> {
+        self.manager
+            .complete_streaming_cancellable(request, cancel, sink)
+    }
+
+    fn complete_streaming_cancellable_for_phase(
+        &self,
+        request: &ModelRequest,
+        phase: ProviderExecutionPhase,
+        cancel: &AtomicBool,
+        sink: &mut dyn FnMut(ProviderStreamEvent) -> MedusaResult<()>,
+    ) -> MedusaResult<ModelResponse> {
+        self.manager
+            .complete_streaming_cancellable_for_phase(request, phase, cancel, sink)
+    }
+
     fn capabilities(&self) -> ProviderCapabilities {
         self.manager.capabilities()
     }
@@ -323,6 +366,10 @@ fn truthful_capabilities(config: &Config) -> ProviderCapabilitySet {
             10
         }),
     }
+}
+
+fn configured_streaming(config: &Config) -> bool {
+    config.model.streaming && config.model.protocol.eq_ignore_ascii_case("openai")
 }
 
 fn credential_present(config: &Config, session_api_key: Option<&str>) -> bool {
@@ -436,7 +483,7 @@ mod tests {
     }
 
     #[test]
-    fn configuration_cannot_invent_streaming_or_cancellation() {
+    fn configured_openai_streaming_reaches_runtime_without_overclaiming_readiness() {
         let mut config = Config::default();
         config.model.streaming = true;
         let manager = LazyConfiguredProviderManager::from_config_in_memory(
@@ -447,6 +494,21 @@ mod tests {
         let readiness = manager.route_readiness().unwrap();
         assert!(!readiness[0].capabilities.streaming_text);
         assert!(!readiness[0].capabilities.cancellation);
+        assert!(manager.capabilities().streaming);
+    }
+
+    #[test]
+    fn anthropic_routes_do_not_claim_unsupported_streaming() {
+        let mut config = Config::default();
+        config.model.protocol = "anthropic".to_owned();
+        config.model.streaming = true;
+        let manager = LazyConfiguredProviderManager::from_config_in_memory(
+            &config,
+            Some("session-key".to_owned()),
+        )
+        .unwrap();
+        let readiness = manager.route_readiness().unwrap();
+        assert!(!readiness[0].capabilities.streaming_text);
         assert!(!manager.capabilities().streaming);
     }
 
