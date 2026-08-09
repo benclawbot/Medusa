@@ -151,7 +151,8 @@ impl ArtifactStore {
         if !receipt_path.is_file() {
             return Ok(());
         }
-        let Ok(value) = serde_json::from_slice::<serde_json::Value>(&fs::read(receipt_path)?) else {
+        let Ok(value) = serde_json::from_slice::<serde_json::Value>(&fs::read(receipt_path)?)
+        else {
             return Ok(());
         };
         let Some(reads) = value
@@ -170,7 +171,8 @@ impl ArtifactStore {
             }
             let end = expected.offset.saturating_add(expected.length);
             if end > bytes.len() as u64
-                || hash_bytes(&bytes[expected.offset as usize..end as usize]) != expected.content_hash
+                || hash_bytes(&bytes[expected.offset as usize..end as usize])
+                    != expected.content_hash
             {
                 return Err(EvidenceError::Validation(format!(
                     "artifact read receipt {} does not match artifact bytes",
@@ -182,7 +184,10 @@ impl ArtifactStore {
                 .is_ok_and(|actual| actual == expected)
             {
                 write_json_atomic(
-                    &self.root.join("reads").join(format!("{}.json", expected.id)),
+                    &self
+                        .root
+                        .join("reads")
+                        .join(format!("{}.json", expected.id)),
                     &expected,
                 )?;
             }
@@ -445,7 +450,10 @@ mod tests {
         )
         .expect("persist receipt");
         fs::write(
-            store.root().join("reads").join(format!("{}.json", expected.id)),
+            store
+                .root()
+                .join("reads")
+                .join(format!("{}.json", expected.id)),
             b"{broken-read-receipt",
         )
         .expect("corrupt read");
