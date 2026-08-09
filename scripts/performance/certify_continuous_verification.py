@@ -66,10 +66,18 @@ def main() -> int:
         sys.stderr.write(completed.stdout)
         raise RuntimeError("continuous verification performance marker was not emitted")
 
+    fixture_count = int(payload["fixture_count"])
+    values_per_fixture = int(payload["values_per_fixture"])
+    total_values = fixture_count * values_per_fixture
     cold = [int(value) for value in payload["cold_ns"]]
     warm = [int(value) for value in payload["warm_ns"]]
-    if int(payload["fixture_count"]) < int(baseline["minimum_fixture_count"]):
+
+    if fixture_count < int(baseline["minimum_fixture_count"]):
         raise RuntimeError("performance fixture count is below acceptance threshold")
+    if values_per_fixture < int(baseline["minimum_values_per_fixture"]):
+        raise RuntimeError("semantic payload per fixture is below acceptance threshold")
+    if total_values < int(baseline["minimum_total_values"]):
+        raise RuntimeError("total semantic workload is below acceptance threshold")
     if len(cold) < int(baseline["minimum_samples"]) or len(warm) < int(
         baseline["minimum_samples"]
     ):
@@ -111,7 +119,9 @@ def main() -> int:
         ).strip(),
         "verified_success": True,
         "verification_coverage": float(payload["verification_coverage"]),
-        "fixture_count": int(payload["fixture_count"]),
+        "fixture_count": fixture_count,
+        "values_per_fixture": values_per_fixture,
+        "total_values": total_values,
         "sample_count": len(cold),
         "cold_median_ns": int(cold_median),
         "warm_median_ns": int(warm_median),
