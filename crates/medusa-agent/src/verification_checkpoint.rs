@@ -6,11 +6,11 @@ use std::{
     time::{SystemTime, UNIX_EPOCH},
 };
 
-#[cfg(windows)]
-use std::os::windows::fs::OpenOptionsExt;
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use serde_json::Value;
 use sha2::{Digest, Sha256};
+#[cfg(windows)]
+use std::os::windows::fs::OpenOptionsExt;
 
 use crate::verification_dag::VerificationDag;
 
