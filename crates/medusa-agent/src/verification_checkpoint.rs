@@ -10,6 +10,8 @@ use sha2::{Digest, Sha256};
 use crate::verification_dag::VerificationDag;
 
 const CHECKPOINT_SCHEMA_VERSION: u16 = 1;
+const CHECKPOINT_PREFIX: &str = "verification-checkpoint-";
+const CHECKPOINT_SUFFIX: &str = ".json";
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct VerificationCheckpoint<T> {
@@ -55,13 +57,13 @@ where
 }
 
 pub struct VerificationCheckpointStore {
-    path: PathBuf,
+    root: PathBuf,
 }
 
 impl VerificationCheckpointStore {
     pub fn new(store_root: &Path) -> Self {
         Self {
-            path: store_root.join("verification-checkpoint.json"),
+            root: store_root.to_path_buf(),
         }
     }
 
@@ -72,49 +74,55 @@ impl VerificationCheckpointStore {
     where
         T: Clone + DeserializeOwned + Serialize,
     {
-        let bytes = match fs::read(&self.path) {
-            Ok(bytes) => bytes,
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
-            Err(error) => return Err(error.to_string()),
-        };
-        let checkpoint = match serde_json::from_slice::<VerificationCheckpoint<T>>(&bytes) {
-            Ok(checkpoint) => checkpoint,
-            Err(_) => {
-                self.remove()?;
-                return Ok(None);
+        let mut generations = self.generations()?;
+        generations.sort();
+        generations.reverse();
+        for path in generations {
+            let bytes = match fs::read(&path) {
+                Ok(bytes) => bytes,
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
+                Err(error) => return Err(error.to_string()),
+            };
+            let checkpoint = match serde_json::from_slice::<VerificationCheckpoint<T>>(&bytes) {
+                Ok(checkpoint) => checkpoint,
+                Err(_) => {
+                    remove_file_if_present(&path)?;
+                    continue;
+                }
+            };
+            if checkpoint
+                .validate(expected_repository_state_fingerprint)
+                .is_err()
+            {
+                remove_file_if_present(&path)?;
+                continue;
             }
-        };
-        if checkpoint
-            .validate(expected_repository_state_fingerprint)
-            .is_err()
-        {
-            self.remove()?;
-            return Ok(None);
+            return Ok(Some(checkpoint));
         }
-        Ok(Some(checkpoint))
+        Ok(None)
     }
 
     pub fn save<T>(&self, checkpoint: &VerificationCheckpoint<T>) -> Result<(), String>
     where
         T: Clone + Serialize,
     {
-        let parent = self
-            .path
-            .parent()
-            .ok_or_else(|| "verification checkpoint path has no parent".to_owned())?;
-        fs::create_dir_all(parent).map_err(|error| error.to_string())?;
+        fs::create_dir_all(&self.root).map_err(|error| error.to_string())?;
         let bytes = serde_json::to_vec_pretty(checkpoint).map_err(|error| error.to_string())?;
         let nonce = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .map_err(|error| error.to_string())?
             .as_nanos();
-        let temporary = parent.join(format!(
-            ".verification-checkpoint.tmp-{}-{nonce}",
-            std::process::id()
-        ));
+        let generation = format!("{nonce:039}-{:010}", std::process::id());
+        let temporary = self.root.join(format!(".{CHECKPOINT_PREFIX}{generation}.tmp"));
+        let published = self
+            .root
+            .join(format!("{CHECKPOINT_PREFIX}{generation}{CHECKPOINT_SUFFIX}"));
         fs::write(&temporary, bytes).map_err(|error| error.to_string())?;
-        match fs::rename(&temporary, &self.path) {
-            Ok(()) => Ok(()),
+        match fs::rename(&temporary, &published) {
+            Ok(()) => {
+                self.prune_except(&published)?;
+                Ok(())
+            }
             Err(error) => {
                 let _ = fs::remove_file(&temporary);
                 Err(error.to_string())
@@ -123,11 +131,53 @@ impl VerificationCheckpointStore {
     }
 
     pub fn remove(&self) -> Result<(), String> {
-        match fs::remove_file(&self.path) {
-            Ok(()) => Ok(()),
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
-            Err(error) => Err(error.to_string()),
+        for path in self.generations()? {
+            remove_file_if_present(&path)?;
         }
+        if self.root.is_dir() {
+            for entry in fs::read_dir(&self.root).map_err(|error| error.to_string())? {
+                let entry = entry.map_err(|error| error.to_string())?;
+                let name = entry.file_name();
+                let name = name.to_string_lossy();
+                if name.starts_with(&format!(".{CHECKPOINT_PREFIX}")) && name.ends_with(".tmp") {
+                    remove_file_if_present(&entry.path())?;
+                }
+            }
+        }
+        Ok(())
+    }
+
+    fn generations(&self) -> Result<Vec<PathBuf>, String> {
+        if !self.root.exists() {
+            return Ok(Vec::new());
+        }
+        let mut result = Vec::new();
+        for entry in fs::read_dir(&self.root).map_err(|error| error.to_string())? {
+            let entry = entry.map_err(|error| error.to_string())?;
+            let name = entry.file_name();
+            let name = name.to_string_lossy();
+            if name.starts_with(CHECKPOINT_PREFIX) && name.ends_with(CHECKPOINT_SUFFIX) {
+                result.push(entry.path());
+            }
+        }
+        Ok(result)
+    }
+
+    fn prune_except(&self, keep: &Path) -> Result<(), String> {
+        for path in self.generations()? {
+            if path != keep {
+                remove_file_if_present(&path)?;
+            }
+        }
+        Ok(())
+    }
+}
+
+fn remove_file_if_present(path: &Path) -> Result<(), String> {
+    match fs::remove_file(path) {
+        Ok(()) => Ok(()),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(error) => Err(error.to_string()),
     }
 }
 
@@ -192,11 +242,33 @@ mod tests {
     }
 
     #[test]
+    fn newer_generation_replaces_older_without_target_overwrite() {
+        let directory = tempfile::tempdir().expect("directory");
+        let store = VerificationCheckpointStore::new(directory.path());
+        store
+            .save(&VerificationCheckpoint::new("state", dag(), vec!["first"]).expect("first"))
+            .expect("save first");
+        store
+            .save(&VerificationCheckpoint::new("state", dag(), vec!["second"]).expect("second"))
+            .expect("save second");
+        let restored = store
+            .load::<Vec<String>>("state")
+            .expect("load")
+            .expect("checkpoint");
+        assert_eq!(restored.payload, vec!["second"]);
+        assert_eq!(store.generations().expect("generations").len(), 1);
+    }
+
+    #[test]
     fn corrupt_checkpoint_is_removed_and_fails_closed() {
         let directory = tempfile::tempdir().expect("directory");
         let store = VerificationCheckpointStore::new(directory.path());
-        fs::write(&store.path, b"{broken").expect("corrupt checkpoint");
+        fs::create_dir_all(directory.path()).expect("directory");
+        let corrupt = directory
+            .path()
+            .join("verification-checkpoint-000000000000000000000000000000000000001-0000000001.json");
+        fs::write(&corrupt, b"{broken").expect("corrupt checkpoint");
         assert!(store.load::<Vec<String>>("state").expect("load").is_none());
-        assert!(!store.path.exists());
+        assert!(!corrupt.exists());
     }
 }
