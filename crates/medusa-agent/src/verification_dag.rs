@@ -52,6 +52,16 @@ pub struct VerificationReceipt {
     pub artifact_refs: Vec<String>,
 }
 
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct VerificationRecovery {
+    pub restored_passed: usize,
+    pub restored_failed: usize,
+    pub requeued_running: usize,
+    pub restored_stale: usize,
+    pub restored_pending: usize,
+    pub restored_cancelled: usize,
+}
+
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct VerificationDag {
     nodes: BTreeMap<String, VerificationNode>,
@@ -243,6 +253,121 @@ impl VerificationDag {
             })
     }
 
+    pub fn recover_for_restart(
+        &mut self,
+        persisted: &Self,
+    ) -> Result<VerificationRecovery, String> {
+        if self.nodes.len() != persisted.nodes.len()
+            || !self.nodes.iter().all(|(id, node)| {
+                persisted.nodes.get(id).is_some_and(|persisted_node| {
+                    persisted_node.id == node.id
+                        && persisted_node.command == node.command
+                        && persisted_node.dependencies == node.dependencies
+                        && persisted_node.authority == node.authority
+                        && persisted_node.expected_duration_ms == node.expected_duration_ms
+                        && persisted_node.resource_class == node.resource_class
+                        && persisted_node.input == node.input
+                })
+            })
+        {
+            return Err("persisted verification DAG definition or inputs drifted".to_owned());
+        }
+
+        let mut recovery = VerificationRecovery::default();
+        self.receipts.clear();
+
+        for (id, node) in &mut self.nodes {
+            let persisted_node = persisted
+                .nodes
+                .get(id)
+                .ok_or_else(|| format!("persisted verification node {id} disappeared"))?;
+            match persisted_node.state {
+                VerificationNodeState::Passed => {
+                    if let Some(receipt) = persisted.receipts.get(id).filter(|receipt| {
+                        receipt.node_id == *id && receipt.input == node.input && receipt.passed
+                    }) {
+                        node.state = VerificationNodeState::Passed;
+                        self.receipts.insert(id.clone(), receipt.clone());
+                        recovery.restored_passed += 1;
+                    } else {
+                        node.state = VerificationNodeState::Pending;
+                        recovery.restored_pending += 1;
+                    }
+                }
+                VerificationNodeState::Failed => {
+                    if let Some(receipt) = persisted.receipts.get(id).filter(|receipt| {
+                        receipt.node_id == *id && receipt.input == node.input && !receipt.passed
+                    }) {
+                        node.state = VerificationNodeState::Failed;
+                        self.receipts.insert(id.clone(), receipt.clone());
+                        recovery.restored_failed += 1;
+                    } else {
+                        node.state = VerificationNodeState::Pending;
+                        recovery.restored_pending += 1;
+                    }
+                }
+                VerificationNodeState::Running => {
+                    node.state = VerificationNodeState::Pending;
+                    recovery.requeued_running += 1;
+                }
+                VerificationNodeState::Stale => {
+                    node.state = VerificationNodeState::Stale;
+                    recovery.restored_stale += 1;
+                }
+                VerificationNodeState::Pending => {
+                    node.state = VerificationNodeState::Pending;
+                    recovery.restored_pending += 1;
+                }
+                VerificationNodeState::Cancelled => {
+                    node.state = VerificationNodeState::Cancelled;
+                    recovery.restored_cancelled += 1;
+                }
+            }
+        }
+
+        loop {
+            let invalidated = self
+                .nodes
+                .values()
+                .filter(|node| {
+                    matches!(
+                        node.state,
+                        VerificationNodeState::Passed | VerificationNodeState::Failed
+                    ) && node.dependencies.iter().any(|dependency| {
+                        self.nodes.get(dependency).is_none_or(|dependency_node| {
+                            dependency_node.state != VerificationNodeState::Passed
+                                || self.receipts.get(dependency).is_none_or(|receipt| {
+                                    !receipt.passed || receipt.input != dependency_node.input
+                                })
+                        })
+                    })
+                })
+                .map(|node| node.id.clone())
+                .collect::<Vec<_>>();
+            if invalidated.is_empty() {
+                break;
+            }
+            for id in invalidated {
+                if let Some(node) = self.nodes.get_mut(&id) {
+                    match node.state {
+                        VerificationNodeState::Passed => {
+                            recovery.restored_passed = recovery.restored_passed.saturating_sub(1);
+                        }
+                        VerificationNodeState::Failed => {
+                            recovery.restored_failed = recovery.restored_failed.saturating_sub(1);
+                        }
+                        _ => {}
+                    }
+                    node.state = VerificationNodeState::Pending;
+                    recovery.restored_pending += 1;
+                }
+                self.receipts.remove(&id);
+            }
+        }
+
+        Ok(recovery)
+    }
+
     pub fn authoritative_complete(&self) -> bool {
         let authoritative = self
             .nodes
@@ -394,6 +519,235 @@ mod tests {
             .input
             .environment_fingerprint = "env-b".to_owned();
         assert!(!current.exact_receipts_reusable_from(&prior));
+    }
+
+    #[test]
+    fn restart_recovery_preserves_evidenced_completion_and_requeues_running_work() {
+        let mut persisted = VerificationDag::default();
+        persisted
+            .insert(node(
+                "format",
+                &[],
+                VerificationAuthority::Diagnostic,
+                &["src/lib.rs"],
+            ))
+            .expect("format node");
+        persisted
+            .insert(node(
+                "unit",
+                &["format"],
+                VerificationAuthority::IndependentAcceptance,
+                &["src/lib.rs"],
+            ))
+            .expect("unit node");
+        pass(&mut persisted, "format");
+        persisted.mark_running("unit").expect("unit running");
+
+        let mut current = VerificationDag::default();
+        current
+            .insert(node(
+                "format",
+                &[],
+                VerificationAuthority::Diagnostic,
+                &["src/lib.rs"],
+            ))
+            .expect("format node");
+        current
+            .insert(node(
+                "unit",
+                &["format"],
+                VerificationAuthority::IndependentAcceptance,
+                &["src/lib.rs"],
+            ))
+            .expect("unit node");
+
+        let recovery = current.recover_for_restart(&persisted).expect("recover");
+        assert_eq!(recovery.restored_passed, 1);
+        assert_eq!(recovery.requeued_running, 1);
+        assert_eq!(
+            current.node("format").unwrap().state,
+            VerificationNodeState::Passed
+        );
+        assert_eq!(
+            current.node("unit").unwrap().state,
+            VerificationNodeState::Pending
+        );
+        assert_eq!(current.ready_nodes()[0].id, "unit");
+    }
+
+    #[test]
+    fn restart_recovery_requeues_passed_descendants_of_interrupted_prerequisites() {
+        let mut persisted = VerificationDag::default();
+        persisted
+            .insert(node(
+                "format",
+                &[],
+                VerificationAuthority::Diagnostic,
+                &["src/lib.rs"],
+            ))
+            .expect("format node");
+        persisted
+            .insert(node(
+                "unit",
+                &["format"],
+                VerificationAuthority::IndependentAcceptance,
+                &["src/lib.rs"],
+            ))
+            .expect("unit node");
+        persisted.mark_running("format").expect("format running");
+        persisted.nodes.get_mut("unit").unwrap().state = VerificationNodeState::Passed;
+        let unit_input = persisted.node("unit").unwrap().input.clone();
+        persisted.receipts.insert(
+            "unit".to_owned(),
+            VerificationReceipt {
+                node_id: "unit".to_owned(),
+                input: unit_input,
+                passed: true,
+                duration_ms: 4,
+                artifact_refs: vec!["artifact:unit".to_owned()],
+            },
+        );
+
+        let mut current = VerificationDag::default();
+        current
+            .insert(node(
+                "format",
+                &[],
+                VerificationAuthority::Diagnostic,
+                &["src/lib.rs"],
+            ))
+            .expect("format node");
+        current
+            .insert(node(
+                "unit",
+                &["format"],
+                VerificationAuthority::IndependentAcceptance,
+                &["src/lib.rs"],
+            ))
+            .expect("unit node");
+
+        let recovery = current.recover_for_restart(&persisted).expect("recover");
+        assert_eq!(recovery.requeued_running, 1);
+        assert_eq!(recovery.restored_passed, 0);
+        assert_eq!(recovery.restored_pending, 1);
+        assert_eq!(
+            current.node("format").unwrap().state,
+            VerificationNodeState::Pending
+        );
+        assert_eq!(
+            current.node("unit").unwrap().state,
+            VerificationNodeState::Pending
+        );
+        assert!(!current.authoritative_complete());
+    }
+
+    #[test]
+    fn restart_recovery_rejects_definition_or_input_drift() {
+        let mut persisted = VerificationDag::default();
+        persisted
+            .insert(node(
+                "unit",
+                &[],
+                VerificationAuthority::IndependentAcceptance,
+                &["src/lib.rs"],
+            ))
+            .expect("unit node");
+
+        let mut current = persisted.clone();
+        current.nodes.get_mut("unit").unwrap().command = "different-command".to_owned();
+        assert!(current.recover_for_restart(&persisted).is_err());
+
+        let mut current = persisted.clone();
+        current
+            .nodes
+            .get_mut("unit")
+            .unwrap()
+            .input
+            .tree_fingerprint = "tree-b".to_owned();
+        assert!(current.recover_for_restart(&persisted).is_err());
+    }
+
+    #[test]
+    fn restart_recovery_does_not_trust_passed_state_without_matching_receipt() {
+        let mut persisted = VerificationDag::default();
+        persisted
+            .insert(node(
+                "unit",
+                &[],
+                VerificationAuthority::IndependentAcceptance,
+                &["src/lib.rs"],
+            ))
+            .expect("unit node");
+        persisted.nodes.get_mut("unit").unwrap().state = VerificationNodeState::Passed;
+
+        let mut current = VerificationDag::default();
+        current
+            .insert(node(
+                "unit",
+                &[],
+                VerificationAuthority::IndependentAcceptance,
+                &["src/lib.rs"],
+            ))
+            .expect("unit node");
+        let recovery = current.recover_for_restart(&persisted).expect("recover");
+        assert_eq!(recovery.restored_pending, 1);
+        assert_eq!(
+            current.node("unit").unwrap().state,
+            VerificationNodeState::Pending
+        );
+        assert!(!current.authoritative_complete());
+    }
+
+    #[test]
+    fn restart_recovery_preserves_stale_and_pending_states_explicitly() {
+        let mut persisted = VerificationDag::default();
+        persisted
+            .insert(node(
+                "stale",
+                &[],
+                VerificationAuthority::Diagnostic,
+                &["a.rs"],
+            ))
+            .expect("stale node");
+        persisted
+            .insert(node(
+                "pending",
+                &[],
+                VerificationAuthority::IndependentAcceptance,
+                &["b.rs"],
+            ))
+            .expect("pending node");
+        persisted.nodes.get_mut("stale").unwrap().state = VerificationNodeState::Stale;
+
+        let mut current = VerificationDag::default();
+        current
+            .insert(node(
+                "stale",
+                &[],
+                VerificationAuthority::Diagnostic,
+                &["a.rs"],
+            ))
+            .expect("stale node");
+        current
+            .insert(node(
+                "pending",
+                &[],
+                VerificationAuthority::IndependentAcceptance,
+                &["b.rs"],
+            ))
+            .expect("pending node");
+
+        let recovery = current.recover_for_restart(&persisted).expect("recover");
+        assert_eq!(recovery.restored_stale, 1);
+        assert_eq!(recovery.restored_pending, 1);
+        assert_eq!(
+            current.node("stale").unwrap().state,
+            VerificationNodeState::Stale
+        );
+        assert_eq!(
+            current.node("pending").unwrap().state,
+            VerificationNodeState::Pending
+        );
     }
 
     #[test]
