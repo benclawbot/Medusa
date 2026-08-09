@@ -230,7 +230,10 @@ pub fn authoritative_verification_for_components_at(
                 node_id: check.id.clone(),
                 input,
                 passed: material.passed,
-                duration_ms: material.command.as_ref().map_or(0, |receipt| receipt.duration_ms),
+                duration_ms: material
+                    .command
+                    .as_ref()
+                    .map_or(0, |receipt| receipt.duration_ms),
                 artifact_refs: material
                     .artifact_ids
                     .iter()
