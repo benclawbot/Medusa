@@ -154,13 +154,15 @@ pub fn authoritative_verification_for_components_at(
             .map(|node| node.id.clone())
             .collect::<Vec<_>>();
         if ready_ids.is_empty() {
-            for check in plan
+            let blocked_ids = plan
                 .checks
                 .iter()
                 .filter(|check| !materials.contains_key(&check.id))
-            {
+                .map(|check| check.id.clone())
+                .collect::<Vec<_>>();
+            for check_id in blocked_ids {
                 materials.insert(
-                    check.id.clone(),
+                    check_id,
                     rejected_material("verification blocked by failed prerequisite".to_owned()),
                 );
             }
