@@ -340,7 +340,7 @@ pub(crate) fn validate_metadata(metadata: &ArtifactMetadata) -> Result<()> {
 
 pub(crate) fn validate_read(receipt: &ArtifactReadReceipt) -> Result<()> {
     if receipt.schema_version != SCHEMA_VERSION
-        || receipt.id.trim().is_empty()
+        || !valid_read_id(&receipt.id)
         || receipt.reader.trim().is_empty()
         || receipt.length == 0
         || receipt.fingerprint != read_fingerprint(receipt)
@@ -350,6 +350,11 @@ pub(crate) fn validate_read(receipt: &ArtifactReadReceipt) -> Result<()> {
         ));
     }
     Ok(())
+}
+
+fn valid_read_id(id: &str) -> bool {
+    id.strip_prefix("read-")
+        .is_some_and(|value| value.parse::<Ulid>().is_ok())
 }
 
 fn metadata_fingerprint(metadata: &ArtifactMetadata) -> String {
@@ -403,6 +408,24 @@ mod tests {
             .expect("range");
         assert_eq!(middle, bytes[40_000..40_128]);
         assert_eq!(store.load_read_receipt(&receipt.id).unwrap(), receipt);
+    }
+
+    #[test]
+    fn read_receipt_id_rejects_path_traversal_even_with_valid_fingerprint() {
+        let directory = tempfile::tempdir().expect("tempdir");
+        let store = ArtifactStore::open(directory.path()).expect("store");
+        let bytes = b"authoritative evidence";
+        let artifact = store
+            .put_bytes("text/plain", "test", bytes)
+            .expect("artifact");
+        let (_, receipt) = store
+            .read_range(&artifact.id, 0, bytes.len() as u64, "reviewer")
+            .expect("read");
+        let mut malicious = receipt;
+        malicious.id = "../../victim".to_owned();
+        malicious.fingerprint = read_fingerprint(&malicious);
+
+        assert!(validate_read(&malicious).is_err());
     }
 
     #[test]
