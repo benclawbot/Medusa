@@ -1,6 +1,6 @@
 use std::{
     collections::BTreeMap,
-    fs::{self, File, OpenOptions},
+    fs::{self, OpenOptions},
     io::Write,
     path::{Path, PathBuf},
     time::{SystemTime, UNIX_EPOCH},
@@ -208,27 +208,27 @@ fn remove_file_if_present(path: &Path) -> Result<(), String> {
     }
 }
 
+#[cfg(unix)]
 fn sync_directory(path: &Path) -> Result<(), String> {
-    #[cfg(unix)]
-    {
-        return File::open(path)
-            .and_then(|directory| directory.sync_all())
-            .map_err(|error| error.to_string());
-    }
-    #[cfg(windows)]
-    {
-        return OpenOptions::new()
-            .read(true)
-            .custom_flags(FILE_FLAG_BACKUP_SEMANTICS)
-            .open(path)
-            .and_then(|directory| directory.sync_all())
-            .map_err(|error| error.to_string());
-    }
-    #[cfg(not(any(unix, windows)))]
-    {
-        let _ = path;
-        Ok(())
-    }
+    std::fs::File::open(path)
+        .and_then(|directory| directory.sync_all())
+        .map_err(|error| error.to_string())
+}
+
+#[cfg(windows)]
+fn sync_directory(path: &Path) -> Result<(), String> {
+    OpenOptions::new()
+        .read(true)
+        .custom_flags(FILE_FLAG_BACKUP_SEMANTICS)
+        .open(path)
+        .and_then(|directory| directory.sync_all())
+        .map_err(|error| error.to_string())
+}
+
+#[cfg(not(any(unix, windows)))]
+fn sync_directory(path: &Path) -> Result<(), String> {
+    let _ = path;
+    Ok(())
 }
 
 fn checkpoint_fingerprint<T>(checkpoint: &VerificationCheckpoint<T>) -> Result<String, String>
