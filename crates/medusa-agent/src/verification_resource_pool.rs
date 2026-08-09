@@ -161,9 +161,7 @@ impl WarmResourcePool {
 
         match self.get_unlocked(&receipt.key)? {
             Some((persisted, _)) => Ok(persisted),
-            None => {
-                Err("warm verification resource was immediately evicted by pool limits".to_owned())
-            }
+            None => Err("warm verification resource was immediately evicted by pool limits".to_owned()),
         }
     }
 
@@ -512,7 +510,9 @@ mod tests {
     fn prune_removes_stale_temporary_files() {
         let directory = tempfile::tempdir().expect("directory");
         let pool = pool(directory.path(), 4, 1024);
-        let temporary = directory.path().join(".orphan.bin.tmp-01H00000000000000000000000");
+        let temporary = directory
+            .path()
+            .join(".orphan.bin.tmp-01H00000000000000000000000");
         fs::write(&temporary, b"orphan").expect("temporary");
 
         assert_eq!(pool.prune().expect("prune temporary"), 1);
