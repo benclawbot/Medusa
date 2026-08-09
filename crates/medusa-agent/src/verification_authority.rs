@@ -177,7 +177,10 @@ fn complete_repository_state_fingerprint(
     Ok(format!("{:x}", hasher.finalize()))
 }
 
-fn repository_state_paths(repo: &Path, components: &[ChangedComponent]) -> MedusaResult<Vec<PathBuf>> {
+fn repository_state_paths(
+    repo: &Path,
+    components: &[ChangedComponent],
+) -> MedusaResult<Vec<PathBuf>> {
     let mut result = if git_repository(repo) {
         let output = Command::new("git")
             .args([
@@ -322,8 +325,8 @@ mod tests {
         git(&["init", "-q"]);
         fs::write(directory.path().join(".gitignore"), "artifact.json\n").expect("gitignore");
         fs::write(directory.path().join("artifact.json"), "{\"ok\":true}\n").expect("artifact");
-        let component = ChangedComponent::new(ChangeKind::Modified, "artifact.json")
-            .expect("component");
+        let component =
+            ChangedComponent::new(ChangeKind::Modified, "artifact.json").expect("component");
         let evidence_root = directory.path().join(".medusa/evidence");
         fs::create_dir_all(&evidence_root).expect("evidence root");
 
@@ -334,12 +337,9 @@ mod tests {
         )
         .expect("before fingerprint");
         fs::write(directory.path().join("artifact.json"), "{broken}\n").expect("mutate");
-        let after = complete_repository_state_fingerprint(
-            directory.path(),
-            &evidence_root,
-            &[component],
-        )
-        .expect("after fingerprint");
+        let after =
+            complete_repository_state_fingerprint(directory.path(), &evidence_root, &[component])
+                .expect("after fingerprint");
 
         assert_ne!(before, after);
     }
@@ -359,8 +359,8 @@ mod tests {
     fn outer_state_guard_reuses_only_stable_semantic_inputs() {
         let directory = tempfile::tempdir().expect("repository");
         fs::write(directory.path().join("artifact.json"), "{\"ok\":true}\n").expect("artifact");
-        let component = ChangedComponent::new(ChangeKind::Modified, "artifact.json")
-            .expect("component");
+        let component =
+            ChangedComponent::new(ChangeKind::Modified, "artifact.json").expect("component");
         let evidence_root = directory.path().join("durable-evidence");
 
         let first = authoritative_verification_for_components_at(
