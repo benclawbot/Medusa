@@ -5,6 +5,7 @@ use medusa_evidence::{ChangeKind, ChangedComponent};
 use serde_json::json;
 
 const FIXTURE_COUNT: usize = 128;
+const VALUES_PER_FIXTURE: usize = 16_384;
 const SAMPLE_COUNT: usize = 7;
 
 fn components() -> Vec<ChangedComponent> {
@@ -18,10 +19,14 @@ fn components() -> Vec<ChangedComponent> {
 
 fn write_fixtures(repo: &std::path::Path) {
     fs::create_dir_all(repo.join("artifacts")).expect("artifact directory");
+    let values = (0..VALUES_PER_FIXTURE)
+        .map(|value| value.to_string())
+        .collect::<Vec<_>>()
+        .join(",");
     for index in 0..FIXTURE_COUNT {
         fs::write(
             repo.join(format!("artifacts/{index:03}.json")),
-            format!("{{\"index\":{index},\"ok\":true}}\n"),
+            format!("{{\"index\":{index},\"ok\":true,\"values\":[{values}]}}\n"),
         )
         .expect("artifact");
     }
@@ -88,8 +93,7 @@ fn exact_authoritative_reuse_reduces_runtime_and_stale_input_reruns() {
         );
     }
 
-    fs::write(repository.path().join("artifacts/000.json"), "{broken}\n")
-        .expect("mutate fixture");
+    fs::write(repository.path().join("artifacts/000.json"), "{broken}\n").expect("mutate fixture");
     let changed = authoritative_verification_for_components_at(
         repository.path(),
         &warm_root,
@@ -111,6 +115,7 @@ fn exact_authoritative_reuse_reduces_runtime_and_stale_input_reruns() {
         json!({
             "schema_version": 1,
             "fixture_count": FIXTURE_COUNT,
+            "values_per_fixture": VALUES_PER_FIXTURE,
             "sample_count": SAMPLE_COUNT,
             "cold_ns": cold_ns,
             "warm_ns": warm_ns,
