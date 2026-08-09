@@ -142,7 +142,52 @@ impl ArtifactStore {
                 id.0
             )));
         }
+        self.repair_persisted_read_receipts(id, &bytes)?;
         Ok(metadata)
+    }
+
+    fn repair_persisted_read_receipts(&self, id: &ArtifactId, bytes: &[u8]) -> Result<()> {
+        let receipt_path = self.root.join("verification-receipt.json");
+        if !receipt_path.is_file() {
+            return Ok(());
+        }
+        let Ok(value) = serde_json::from_slice::<serde_json::Value>(&fs::read(receipt_path)?) else {
+            return Ok(());
+        };
+        let Some(reads) = value
+            .get("evidence")
+            .and_then(|evidence| evidence.get("reads"))
+            .and_then(serde_json::Value::as_array)
+        else {
+            return Ok(());
+        };
+        for value in reads {
+            let Ok(expected) = serde_json::from_value::<ArtifactReadReceipt>(value.clone()) else {
+                continue;
+            };
+            if expected.artifact_id != *id || validate_read(&expected).is_err() {
+                continue;
+            }
+            let end = expected.offset.saturating_add(expected.length);
+            if end > bytes.len() as u64
+                || hash_bytes(&bytes[expected.offset as usize..end as usize]) != expected.content_hash
+            {
+                return Err(EvidenceError::Validation(format!(
+                    "artifact read receipt {} does not match artifact bytes",
+                    expected.id
+                )));
+            }
+            if !self
+                .load_read_receipt(&expected.id)
+                .is_ok_and(|actual| actual == expected)
+            {
+                write_json_atomic(
+                    &self.root.join("reads").join(format!("{}.json", expected.id)),
+                    &expected,
+                )?;
+            }
+        }
+        Ok(())
     }
 
     pub fn read_range(
@@ -378,5 +423,34 @@ mod tests {
             .put_bytes("text/plain", "test", bytes)
             .expect("repair metadata");
         assert_eq!(store.metadata(&artifact.id).unwrap(), repaired_metadata);
+    }
+
+    #[test]
+    fn metadata_repairs_persisted_read_receipt_from_authoritative_receipt() {
+        let directory = tempfile::tempdir().expect("tempdir");
+        let store = ArtifactStore::open(directory.path()).expect("store");
+        let bytes = b"authoritative evidence";
+        let artifact = store
+            .put_bytes("text/plain", "test", bytes)
+            .expect("artifact");
+        let (_, expected) = store
+            .read_range(&artifact.id, 0, bytes.len() as u64, "reviewer")
+            .expect("read");
+        fs::write(
+            store.root().join("verification-receipt.json"),
+            serde_json::to_vec_pretty(&serde_json::json!({
+                "evidence": { "reads": [expected.clone()] }
+            }))
+            .expect("receipt json"),
+        )
+        .expect("persist receipt");
+        fs::write(
+            store.root().join("reads").join(format!("{}.json", expected.id)),
+            b"{broken-read-receipt",
+        )
+        .expect("corrupt read");
+
+        store.metadata(&artifact.id).expect("repair reads");
+        assert_eq!(store.load_read_receipt(&expected.id).unwrap(), expected);
     }
 }
