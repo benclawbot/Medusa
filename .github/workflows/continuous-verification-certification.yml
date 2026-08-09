@@ -1,0 +1,63 @@
+name: Continuous Verification Certification
+
+on:
+  pull_request:
+    paths:
+      - 'crates/medusa-agent/**'
+      - 'benchmarks/performance/baselines/continuous-verification-v1.json'
+      - 'scripts/performance/certify_continuous_verification.py'
+      - '.github/workflows/continuous-verification-certification.yml'
+  schedule:
+    - cron: '17 4 * * 3'
+  workflow_dispatch:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: read
+
+jobs:
+  certify:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            platform: Linux
+          - os: macos-latest
+            platform: macOS
+          - os: windows-latest
+            platform: Windows
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: dtolnay/rust-toolchain@39b0b3842c7e8bbf6904c0bfc3d9006fdd4dc4e0
+      - name: Execute continuous verification certification
+        shell: bash
+        run: >-
+          python scripts/performance/certify_continuous_verification.py
+          --platform '${{ matrix.platform }}'
+          --output continuous-verification-certification.json
+      - name: Validate performance evidence
+        shell: bash
+        run: |
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          report = json.loads(Path('continuous-verification-certification.json').read_text(encoding='utf-8'))
+          assert report['verified_success'] is True
+          assert report['verification_coverage'] == 1.0
+          assert report['exact_check_rerun_ratio'] == 0.0
+          assert report['warm_median_speedup_ratio'] >= 0.10
+          assert report['warm_p95_speedup_ratio'] >= 0.10
+          assert report['exact_reuse_verified'] is True
+          assert report['stale_input_rerun_verified'] is True
+          PY
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: continuous-verification-certification-${{ matrix.platform }}
+          path: continuous-verification-certification.json
+          if-no-files-found: error
+          retention-days: 30
