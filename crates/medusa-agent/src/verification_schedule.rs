@@ -215,7 +215,7 @@ fn dependencies(plan: &VerificationPlan, check: &VerificationCheck) -> BTreeSet<
 fn resource_class(check: &VerificationCheck) -> &'static str {
     match check.kind {
         VerificationCheckKind::Format => "cpu-small",
-        VerificationCheckKind::StaticAnalysis => "cpu-medium",
+        VerificationCheckKind::Lint | VerificationCheckKind::Typecheck => "cpu-medium",
         VerificationCheckKind::Unit => "cpu-medium",
         VerificationCheckKind::Integration => "cpu-large",
         VerificationCheckKind::Build => "cpu-large",
@@ -223,7 +223,7 @@ fn resource_class(check: &VerificationCheck) -> &'static str {
         VerificationCheckKind::BrowserBehavior | VerificationCheckKind::Accessibility => "browser",
         VerificationCheckKind::Packaging => "cpu-large",
         VerificationCheckKind::Security => "network-small",
-        VerificationCheckKind::Custom => "cpu-medium",
+        VerificationCheckKind::RepositoryDefined => "cpu-medium",
     }
 }
 
