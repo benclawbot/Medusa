@@ -21,6 +21,7 @@ pub(crate) fn dag_for_plan(
     repo: &Path,
     commit: &str,
     plan: &VerificationPlan,
+    persistent_reuse: bool,
 ) -> MedusaResult<VerificationDag> {
     let changed_paths = plan
         .components
@@ -28,11 +29,16 @@ pub(crate) fn dag_for_plan(
         .flat_map(|component| component.all_paths())
         .map(str::to_owned)
         .collect::<BTreeSet<_>>();
+    let verifier_build = if persistent_reuse {
+        verifier_build_fingerprint()?
+    } else {
+        "not-persistently-reusable".to_owned()
+    };
     let environment_fingerprint = fingerprint(&format!(
         "{}:{}:{}",
         std::env::consts::OS,
         std::env::consts::ARCH,
-        verifier_build_fingerprint()?
+        verifier_build
     ));
     let toolchain_fingerprint = toolchain_fingerprint(repo);
     let mut dag = VerificationDag::default();
