@@ -1,4 +1,7 @@
-use std::{io, process::{Child, Command, ExitStatus}};
+use std::{
+    io,
+    process::{Child, Command, ExitStatus},
+};
 
 #[cfg(unix)]
 use std::os::unix::process::CommandExt;
@@ -33,7 +36,10 @@ impl OwnedProcessTree {
             command.process_group(0);
             let child = command.spawn()?;
             let process_group = i32::try_from(child.id()).map_err(|_| {
-                io::Error::new(io::ErrorKind::InvalidData, "child PID does not fit process-group ID")
+                io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    "child PID does not fit process-group ID",
+                )
             })?;
             Ok(Self {
                 child,
@@ -113,5 +119,97 @@ impl Drop for OwnedProcessTree {
             let _ = self.terminate();
             let _ = self.child.wait();
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::{
+        fs,
+        thread,
+        time::{Duration, Instant},
+    };
+
+    use super::*;
+
+    const ROLE_ENV: &str = "MEDUSA_PROCESS_TREE_TEST_ROLE";
+    const PID_FILE_ENV: &str = "MEDUSA_PROCESS_TREE_TEST_PID_FILE";
+
+    #[test]
+    fn process_tree_helper() {
+        let Ok(role) = std::env::var(ROLE_ENV) else {
+            return;
+        };
+        if role == "child" {
+            let pid_file = std::env::var(PID_FILE_ENV).expect("pid file");
+            let grandchild = Command::new(std::env::current_exe().expect("test executable"))
+                .args([
+                    "--exact",
+                    "process_tree::tests::process_tree_helper",
+                    "--nocapture",
+                ])
+                .env(ROLE_ENV, "grandchild")
+                .spawn()
+                .expect("grandchild");
+            fs::write(pid_file, grandchild.id().to_string()).expect("record grandchild pid");
+            thread::sleep(Duration::from_secs(30));
+        } else if role == "grandchild" {
+            thread::sleep(Duration::from_secs(30));
+        }
+    }
+
+    #[test]
+    fn terminate_kills_descendant_process_tree() {
+        let directory = tempfile::tempdir().expect("directory");
+        let pid_file = directory.path().join("grandchild.pid");
+        let mut command = Command::new(std::env::current_exe().expect("test executable"));
+        command
+            .args([
+                "--exact",
+                "process_tree::tests::process_tree_helper",
+                "--nocapture",
+            ])
+            .env(ROLE_ENV, "child")
+            .env(PID_FILE_ENV, &pid_file);
+        let mut tree = OwnedProcessTree::spawn(&mut command).expect("owned process tree");
+
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while !pid_file.exists() && Instant::now() < deadline {
+            thread::sleep(Duration::from_millis(20));
+        }
+        let grandchild_pid = fs::read_to_string(&pid_file)
+            .expect("grandchild pid")
+            .trim()
+            .parse::<u32>()
+            .expect("numeric pid");
+        assert!(process_alive(grandchild_pid));
+
+        tree.terminate().expect("terminate tree");
+        let _ = tree.wait().expect("wait tree");
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while process_alive(grandchild_pid) && Instant::now() < deadline {
+            thread::sleep(Duration::from_millis(20));
+        }
+        assert!(!process_alive(grandchild_pid));
+    }
+
+    #[cfg(unix)]
+    fn process_alive(pid: u32) -> bool {
+        let Ok(pid) = i32::try_from(pid) else {
+            return false;
+        };
+        // SAFETY: signal 0 performs existence/permission probing without sending a signal.
+        let result = unsafe { libc::kill(pid, 0) };
+        result == 0 || io::Error::last_os_error().raw_os_error() == Some(libc::EPERM)
+    }
+
+    #[cfg(windows)]
+    fn process_alive(pid: u32) -> bool {
+        crate::process_is_alive(pid)
+    }
+
+    #[cfg(not(any(unix, windows)))]
+    fn process_alive(_pid: u32) -> bool {
+        false
     }
 }
