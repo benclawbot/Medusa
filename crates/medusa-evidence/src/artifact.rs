@@ -91,7 +91,7 @@ impl ArtifactStore {
             id: id.clone(),
             media_type,
             byte_len: bytes.len() as u64,
-            sha256,
+            sha256: sha256.clone(),
             producer,
             created_at: OffsetDateTime::now_utc(),
             binary: is_binary(bytes),
