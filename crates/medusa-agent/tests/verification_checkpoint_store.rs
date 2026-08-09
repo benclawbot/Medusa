@@ -41,10 +41,7 @@ fn durable_checkpoint_generation_roundtrips() {
     let directory = tempfile::tempdir().expect("directory");
     let store = VerificationCheckpointStore::new(directory.path());
     store
-        .save(
-            &VerificationCheckpoint::new("state", dag(), vec!["completed"])
-                .expect("checkpoint"),
-        )
+        .save(&VerificationCheckpoint::new("state", dag(), vec!["completed"]).expect("checkpoint"))
         .expect("save checkpoint");
 
     let restored = store
@@ -52,5 +49,8 @@ fn durable_checkpoint_generation_roundtrips() {
         .expect("load")
         .expect("checkpoint");
     assert_eq!(restored.payload, vec!["completed"]);
-    assert_eq!(restored.dag.node("acceptance").expect("node").state, VerificationNodeState::Pending);
+    assert_eq!(
+        restored.dag.node("acceptance").expect("node").state,
+        VerificationNodeState::Pending
+    );
 }
