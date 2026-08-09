@@ -78,11 +78,17 @@ impl OwnedProcessTree {
     }
 
     pub fn try_wait(&mut self) -> io::Result<Option<ExitStatus>> {
-        self.child.try_wait()
+        let status = self.child.try_wait()?;
+        if status.is_some() {
+            self.terminate()?;
+        }
+        Ok(status)
     }
 
     pub fn wait(&mut self) -> io::Result<ExitStatus> {
-        self.child.wait()
+        let status = self.child.wait()?;
+        self.terminate()?;
+        Ok(status)
     }
 
     /// Force-terminates the owned process tree. Missing/already-exited groups are treated as success.
@@ -115,8 +121,9 @@ impl OwnedProcessTree {
 
 impl Drop for OwnedProcessTree {
     fn drop(&mut self) {
-        if self.child.try_wait().ok().flatten().is_none() {
-            let _ = self.terminate();
+        let running = self.child.try_wait().ok().flatten().is_none();
+        let _ = self.terminate();
+        if running {
             let _ = self.child.wait();
         }
     }
@@ -139,7 +146,7 @@ mod tests {
         let Ok(role) = std::env::var(ROLE_ENV) else {
             return;
         };
-        if role == "child" {
+        if role == "child" || role == "leader-exit" {
             let pid_file = std::env::var(PID_FILE_ENV).expect("pid file");
             let grandchild = Command::new(std::env::current_exe().expect("test executable"))
                 .args([
@@ -151,7 +158,9 @@ mod tests {
                 .spawn()
                 .expect("grandchild");
             fs::write(pid_file, grandchild.id().to_string()).expect("record grandchild pid");
-            thread::sleep(Duration::from_secs(30));
+            if role == "child" {
+                thread::sleep(Duration::from_secs(30));
+            }
         } else if role == "grandchild" {
             thread::sleep(Duration::from_secs(30));
         }
@@ -161,6 +170,34 @@ mod tests {
     fn terminate_kills_descendant_process_tree() {
         let directory = tempfile::tempdir().expect("directory");
         let pid_file = directory.path().join("grandchild.pid");
+        let mut command = helper_command(&pid_file, "child");
+        let mut tree = OwnedProcessTree::spawn(&mut command).expect("owned process tree");
+        let grandchild_pid = wait_for_grandchild(&pid_file);
+        assert!(process_alive(grandchild_pid));
+
+        tree.terminate().expect("terminate tree");
+        let _ = tree.wait().expect("wait tree");
+        wait_until_dead(grandchild_pid);
+    }
+
+    #[test]
+    fn completed_leader_does_not_leave_descendants_running() {
+        let directory = tempfile::tempdir().expect("directory");
+        let pid_file = directory.path().join("grandchild.pid");
+        let mut command = helper_command(&pid_file, "leader-exit");
+        let mut tree = OwnedProcessTree::spawn(&mut command).expect("owned process tree");
+        let grandchild_pid = wait_for_grandchild(&pid_file);
+        assert!(process_alive(grandchild_pid));
+
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while tree.try_wait().expect("poll tree").is_none() && Instant::now() < deadline {
+            thread::sleep(Duration::from_millis(20));
+        }
+        assert!(tree.try_wait().expect("completed tree").is_some());
+        wait_until_dead(grandchild_pid);
+    }
+
+    fn helper_command(pid_file: &std::path::Path, role: &str) -> Command {
         let mut command = Command::new(std::env::current_exe().expect("test executable"));
         command
             .args([
@@ -168,28 +205,29 @@ mod tests {
                 "process_tree::tests::process_tree_helper",
                 "--nocapture",
             ])
-            .env(ROLE_ENV, "child")
-            .env(PID_FILE_ENV, &pid_file);
-        let mut tree = OwnedProcessTree::spawn(&mut command).expect("owned process tree");
+            .env(ROLE_ENV, role)
+            .env(PID_FILE_ENV, pid_file);
+        command
+    }
 
+    fn wait_for_grandchild(pid_file: &std::path::Path) -> u32 {
         let deadline = Instant::now() + Duration::from_secs(5);
         while !pid_file.exists() && Instant::now() < deadline {
             thread::sleep(Duration::from_millis(20));
         }
-        let grandchild_pid = fs::read_to_string(&pid_file)
+        fs::read_to_string(pid_file)
             .expect("grandchild pid")
             .trim()
             .parse::<u32>()
-            .expect("numeric pid");
-        assert!(process_alive(grandchild_pid));
+            .expect("numeric pid")
+    }
 
-        tree.terminate().expect("terminate tree");
-        let _ = tree.wait().expect("wait tree");
+    fn wait_until_dead(pid: u32) {
         let deadline = Instant::now() + Duration::from_secs(5);
-        while process_alive(grandchild_pid) && Instant::now() < deadline {
+        while process_alive(pid) && Instant::now() < deadline {
             thread::sleep(Duration::from_millis(20));
         }
-        assert!(!process_alive(grandchild_pid));
+        assert!(!process_alive(pid));
     }
 
     #[cfg(unix)]
