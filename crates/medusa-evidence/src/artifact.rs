@@ -350,14 +350,12 @@ pub(crate) fn validate_metadata(metadata: &ArtifactMetadata) -> Result<()> {
 }
 
 fn valid_artifact_id(id: &ArtifactId) -> bool {
-    id.0
-        .strip_prefix("artifact-")
-        .is_some_and(|hash| {
-            hash.len() == 64
-                && hash
-                    .bytes()
-                    .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
-        })
+    id.0.strip_prefix("artifact-").is_some_and(|hash| {
+        hash.len() == 64
+            && hash
+                .bytes()
+                .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+    })
 }
 
 pub(crate) fn validate_read(receipt: &ArtifactReadReceipt) -> Result<()> {
