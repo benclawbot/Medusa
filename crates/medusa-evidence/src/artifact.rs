@@ -129,6 +129,11 @@ impl ArtifactStore {
     }
 
     pub fn metadata(&self, id: &ArtifactId) -> Result<ArtifactMetadata> {
+        if !valid_artifact_id(id) {
+            return Err(EvidenceError::Validation(
+                "artifact id is incomplete or corrupted".to_owned(),
+            ));
+        }
         let path = self.metadata_path(id);
         if !path.is_file() {
             return Err(EvidenceError::NotFound(id.0.clone()));
@@ -301,6 +306,11 @@ impl ArtifactStore {
     }
 
     pub fn load_read_receipt(&self, id: &str) -> Result<ArtifactReadReceipt> {
+        if !valid_read_id(id) {
+            return Err(EvidenceError::Validation(
+                "artifact read receipt id is incomplete or corrupted".to_owned(),
+            ));
+        }
         let path = self.root.join("reads").join(format!("{id}.json"));
         if !path.is_file() {
             return Err(EvidenceError::NotFound(id.to_owned()));
@@ -321,6 +331,7 @@ impl ArtifactStore {
 
 pub(crate) fn validate_metadata(metadata: &ArtifactMetadata) -> Result<()> {
     if metadata.schema_version != SCHEMA_VERSION
+        || !valid_artifact_id(&metadata.id)
         || metadata.id.0 != format!("artifact-{}", metadata.sha256)
         || metadata.page_size == 0
         || metadata.page_count
@@ -336,6 +347,17 @@ pub(crate) fn validate_metadata(metadata: &ArtifactMetadata) -> Result<()> {
         ));
     }
     Ok(())
+}
+
+fn valid_artifact_id(id: &ArtifactId) -> bool {
+    id.0
+        .strip_prefix("artifact-")
+        .is_some_and(|hash| {
+            hash.len() == 64
+                && hash
+                    .bytes()
+                    .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+        })
 }
 
 pub(crate) fn validate_read(receipt: &ArtifactReadReceipt) -> Result<()> {
@@ -408,6 +430,21 @@ mod tests {
             .expect("range");
         assert_eq!(middle, bytes[40_000..40_128]);
         assert_eq!(store.load_read_receipt(&receipt.id).unwrap(), receipt);
+    }
+
+    #[test]
+    fn artifact_metadata_rejects_path_traversal_even_with_valid_fingerprint() {
+        let directory = tempfile::tempdir().expect("tempdir");
+        let store = ArtifactStore::open(directory.path()).expect("store");
+        let mut metadata = store
+            .put_bytes("text/plain", "test", b"authoritative evidence")
+            .expect("artifact");
+        metadata.sha256 = "../../../../../tmp/victim".to_owned();
+        metadata.id = ArtifactId(format!("artifact-{}", metadata.sha256));
+        metadata.fingerprint = metadata_fingerprint(&metadata);
+
+        assert!(validate_metadata(&metadata).is_err());
+        assert!(store.metadata(&metadata.id).is_err());
     }
 
     #[test]
