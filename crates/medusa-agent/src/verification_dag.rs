@@ -224,6 +224,22 @@ impl VerificationDag {
         Ok(())
     }
 
+    pub fn exact_receipts_reusable_from(&self, prior: &Self) -> bool {
+        !self.nodes.is_empty()
+            && self.nodes.len() == prior.nodes.len()
+            && self.nodes.iter().all(|(id, node)| {
+                prior
+                    .reusable_receipt(id, &node.input)
+                    .is_some_and(|receipt| receipt.node_id == *id)
+                    && prior.nodes.get(id).is_some_and(|prior_node| {
+                        prior_node.command == node.command
+                            && prior_node.dependencies == node.dependencies
+                            && prior_node.authority == node.authority
+                            && prior_node.resource_class == node.resource_class
+                    })
+            })
+    }
+
     pub fn authoritative_complete(&self) -> bool {
         let authoritative = self
             .nodes
@@ -339,6 +355,42 @@ mod tests {
         let mut drifted = exact.clone();
         drifted.toolchain_fingerprint = "rust-b".to_owned();
         assert!(dag.reusable_receipt("unit", &drifted).is_none());
+    }
+
+    #[test]
+    fn complete_exact_receipt_set_is_reusable_but_command_or_input_drift_is_not() {
+        let mut prior = VerificationDag::default();
+        prior
+            .insert(node(
+                "unit",
+                &[],
+                VerificationAuthority::IndependentAcceptance,
+                &["src/lib.rs"],
+            ))
+            .expect("unit node");
+        pass(&mut prior, "unit");
+
+        let mut current = VerificationDag::default();
+        current
+            .insert(node(
+                "unit",
+                &[],
+                VerificationAuthority::IndependentAcceptance,
+                &["src/lib.rs"],
+            ))
+            .expect("unit node");
+        assert!(current.exact_receipts_reusable_from(&prior));
+
+        current.nodes.get_mut("unit").unwrap().command = "different-command".to_owned();
+        assert!(!current.exact_receipts_reusable_from(&prior));
+        current.nodes.get_mut("unit").unwrap().command = "check-unit".to_owned();
+        current
+            .nodes
+            .get_mut("unit")
+            .unwrap()
+            .input
+            .environment_fingerprint = "env-b".to_owned();
+        assert!(!current.exact_receipts_reusable_from(&prior));
     }
 
     #[test]
