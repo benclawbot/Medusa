@@ -66,6 +66,12 @@ impl VerificationDag {
         if node.dependencies.contains(&node.id) {
             return Err(format!("verification node {} depends on itself", node.id));
         }
+        if node.state != VerificationNodeState::Pending {
+            return Err(format!(
+                "verification node {} must be inserted pending",
+                node.id
+            ));
+        }
         if self.nodes.contains_key(&node.id) {
             return Err(format!("duplicate verification node {}", node.id));
         }
@@ -93,6 +99,9 @@ impl VerificationDag {
                     && node.dependencies.iter().all(|dependency| {
                         self.nodes.get(dependency).is_some_and(|dependency| {
                             dependency.state == VerificationNodeState::Passed
+                                && self.receipts.get(&dependency.id).is_some_and(|receipt| {
+                                    receipt.passed && receipt.input == dependency.input
+                                })
                         })
                     })
             })
@@ -125,6 +134,7 @@ impl VerificationDag {
         }
         if node.input != receipt.input {
             node.state = VerificationNodeState::Stale;
+            self.receipts.remove(&receipt.node_id);
             return Err(format!(
                 "verification receipt input mismatch for {}",
                 receipt.node_id
@@ -196,6 +206,24 @@ impl VerificationDag {
         invalidated.len()
     }
 
+    pub fn refresh_stale_input(
+        &mut self,
+        id: &str,
+        input: VerificationInputKey,
+    ) -> Result<(), String> {
+        let node = self
+            .nodes
+            .get_mut(id)
+            .ok_or_else(|| format!("unknown verification node {id}"))?;
+        if node.state != VerificationNodeState::Stale {
+            return Err(format!("verification node {id} is not stale"));
+        }
+        node.input = input;
+        node.state = VerificationNodeState::Pending;
+        self.receipts.remove(id);
+        Ok(())
+    }
+
     pub fn authoritative_complete(&self) -> bool {
         let authoritative = self
             .nodes
@@ -203,9 +231,12 @@ impl VerificationDag {
             .filter(|node| node.authority == VerificationAuthority::IndependentAcceptance)
             .collect::<Vec<_>>();
         !authoritative.is_empty()
-            && authoritative
-                .iter()
-                .all(|node| node.state == VerificationNodeState::Passed)
+            && authoritative.iter().all(|node| {
+                node.state == VerificationNodeState::Passed
+                    && self.receipts.get(&node.id).is_some_and(|receipt| {
+                        receipt.passed && receipt.input == node.input
+                    })
+            })
     }
 }
 
@@ -310,7 +341,7 @@ mod tests {
     }
 
     #[test]
-    fn path_invalidation_propagates_only_to_dependents() {
+    fn path_invalidation_can_rearm_affected_nodes_without_losing_unrelated_receipts() {
         let mut dag = VerificationDag::default();
         dag.insert(node(
             "format-a",
@@ -338,19 +369,20 @@ mod tests {
         pass(&mut dag, "test-b");
 
         assert_eq!(dag.invalidate_paths(["a.rs"]), 2);
-        assert_eq!(
-            dag.node("format-a").unwrap().state,
-            VerificationNodeState::Stale
-        );
-        assert_eq!(
-            dag.node("test-a").unwrap().state,
-            VerificationNodeState::Stale
-        );
-        assert_eq!(
-            dag.node("test-b").unwrap().state,
-            VerificationNodeState::Passed
-        );
+        assert_eq!(dag.node("format-a").unwrap().state, VerificationNodeState::Stale);
+        assert_eq!(dag.node("test-a").unwrap().state, VerificationNodeState::Stale);
+        assert_eq!(dag.node("test-b").unwrap().state, VerificationNodeState::Passed);
         assert!(dag.reusable_receipt("test-b", &input(&["b.rs"])).is_some());
+
+        let mut refreshed = input(&["a.rs"]);
+        refreshed.tree_fingerprint = "tree-b".to_owned();
+        dag.refresh_stale_input("format-a", refreshed.clone())
+            .expect("format rearmed");
+        dag.refresh_stale_input("test-a", refreshed)
+            .expect("test rearmed");
+        assert_eq!(dag.ready_nodes()[0].id, "format-a");
+        pass(&mut dag, "format-a");
+        assert_eq!(dag.ready_nodes()[0].id, "test-a");
     }
 
     #[test]
@@ -376,10 +408,36 @@ mod tests {
             })
             .expect_err("mismatch rejected");
         assert!(error.contains("input mismatch"));
-        assert_eq!(
-            dag.node("unit").unwrap().state,
-            VerificationNodeState::Stale
-        );
+        assert_eq!(dag.node("unit").unwrap().state, VerificationNodeState::Stale);
         assert!(!dag.authoritative_complete());
+    }
+
+    #[test]
+    fn authoritative_completion_requires_matching_receipts_even_after_deserialization() {
+        let mut dag = VerificationDag::default();
+        dag.insert(node(
+            "unit",
+            &[],
+            VerificationAuthority::IndependentAcceptance,
+            &["src/lib.rs"],
+        ))
+        .expect("unit node");
+        let mut serialized = serde_json::to_value(&dag).expect("serialize dag");
+        serialized["nodes"]["unit"]["state"] = serde_json::json!("Passed");
+        let restored: VerificationDag = serde_json::from_value(serialized).expect("restore dag");
+        assert!(!restored.authoritative_complete());
+    }
+
+    #[test]
+    fn insert_rejects_prepassed_nodes_without_receipts() {
+        let mut dag = VerificationDag::default();
+        let mut prepassed = node(
+            "unit",
+            &[],
+            VerificationAuthority::IndependentAcceptance,
+            &["src/lib.rs"],
+        );
+        prepassed.state = VerificationNodeState::Passed;
+        assert!(dag.insert(prepassed).is_err());
     }
 }
