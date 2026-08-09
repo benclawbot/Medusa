@@ -15,6 +15,7 @@ pub mod tools;
 mod transaction;
 mod verification;
 mod verification_authority;
+pub mod verification_dag;
 mod worker_execution;
 pub mod world_model_session;
 
@@ -43,6 +44,10 @@ pub use verification::VerificationResult;
 pub use verification_authority::{
     AuthoritativeVerificationResult, authoritative_verification_for_components,
     authoritative_verification_for_components_at, prepare_components_for_verification,
+};
+pub use verification_dag::{
+    VerificationAuthority, VerificationDag, VerificationInputKey, VerificationNode,
+    VerificationNodeState, VerificationReceipt,
 };
 pub use worker_execution::{
     LeasedAssignment, TeamTaskView, WorkerCompletion, WorkerExecutionController,
