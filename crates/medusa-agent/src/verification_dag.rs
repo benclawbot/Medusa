@@ -325,6 +325,46 @@ impl VerificationDag {
             }
         }
 
+        loop {
+            let invalidated = self
+                .nodes
+                .values()
+                .filter(|node| {
+                    matches!(
+                        node.state,
+                        VerificationNodeState::Passed | VerificationNodeState::Failed
+                    ) && node.dependencies.iter().any(|dependency| {
+                        self.nodes.get(dependency).is_none_or(|dependency_node| {
+                            dependency_node.state != VerificationNodeState::Passed
+                                || self.receipts.get(dependency).is_none_or(|receipt| {
+                                    !receipt.passed || receipt.input != dependency_node.input
+                                })
+                        })
+                    })
+                })
+                .map(|node| node.id.clone())
+                .collect::<Vec<_>>();
+            if invalidated.is_empty() {
+                break;
+            }
+            for id in invalidated {
+                if let Some(node) = self.nodes.get_mut(&id) {
+                    match node.state {
+                        VerificationNodeState::Passed => {
+                            recovery.restored_passed = recovery.restored_passed.saturating_sub(1);
+                        }
+                        VerificationNodeState::Failed => {
+                            recovery.restored_failed = recovery.restored_failed.saturating_sub(1);
+                        }
+                        _ => {}
+                    }
+                    node.state = VerificationNodeState::Pending;
+                    recovery.restored_pending += 1;
+                }
+                self.receipts.remove(&id);
+            }
+        }
+
         Ok(recovery)
     }
 
@@ -533,6 +573,66 @@ mod tests {
             VerificationNodeState::Pending
         );
         assert_eq!(current.ready_nodes()[0].id, "unit");
+    }
+
+    #[test]
+    fn restart_recovery_requeues_passed_descendants_of_interrupted_prerequisites() {
+        let mut persisted = VerificationDag::default();
+        persisted
+            .insert(node(
+                "format",
+                &[],
+                VerificationAuthority::Diagnostic,
+                &["src/lib.rs"],
+            ))
+            .expect("format node");
+        persisted
+            .insert(node(
+                "unit",
+                &["format"],
+                VerificationAuthority::IndependentAcceptance,
+                &["src/lib.rs"],
+            ))
+            .expect("unit node");
+        persisted.mark_running("format").expect("format running");
+        persisted.nodes.get_mut("unit").unwrap().state = VerificationNodeState::Passed;
+        let unit_input = persisted.node("unit").unwrap().input.clone();
+        persisted.receipts.insert(
+            "unit".to_owned(),
+            VerificationReceipt {
+                node_id: "unit".to_owned(),
+                input: unit_input,
+                passed: true,
+                duration_ms: 4,
+                artifact_refs: vec!["artifact:unit".to_owned()],
+            },
+        );
+
+        let mut current = VerificationDag::default();
+        current
+            .insert(node(
+                "format",
+                &[],
+                VerificationAuthority::Diagnostic,
+                &["src/lib.rs"],
+            ))
+            .expect("format node");
+        current
+            .insert(node(
+                "unit",
+                &["format"],
+                VerificationAuthority::IndependentAcceptance,
+                &["src/lib.rs"],
+            ))
+            .expect("unit node");
+
+        let recovery = current.recover_for_restart(&persisted).expect("recover");
+        assert_eq!(recovery.requeued_running, 1);
+        assert_eq!(recovery.restored_passed, 0);
+        assert_eq!(recovery.restored_pending, 1);
+        assert_eq!(current.node("format").unwrap().state, VerificationNodeState::Pending);
+        assert_eq!(current.node("unit").unwrap().state, VerificationNodeState::Pending);
+        assert!(!current.authoritative_complete());
     }
 
     #[test]
