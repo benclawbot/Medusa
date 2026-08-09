@@ -947,6 +947,8 @@ impl TelegramSessionService {
                 Some(attachment.session.id.clone())
             }
             FrontendControlResult::SubmissionAccepted { session_id, .. }
+            | FrontendControlResult::SessionActionAccepted { session_id, .. }
+            | FrontendControlResult::SessionActions { session_id, .. }
             | FrontendControlResult::CancellationRequested { session_id, .. }
             | FrontendControlResult::CommandAccepted { session_id, .. }
             | FrontendControlResult::Status { session_id, .. } => Some(session_id.clone()),
