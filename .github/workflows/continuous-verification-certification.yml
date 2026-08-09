@@ -4,6 +4,7 @@ on:
   pull_request:
     paths:
       - 'crates/medusa-agent/**'
+      - 'crates/medusa-evidence/**'
       - 'benchmarks/performance/baselines/continuous-verification-v1.json'
       - 'scripts/performance/certify_continuous_verification.py'
       - '.github/workflows/continuous-verification-certification.yml'
