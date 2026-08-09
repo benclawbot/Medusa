@@ -630,8 +630,14 @@ mod tests {
         assert_eq!(recovery.requeued_running, 1);
         assert_eq!(recovery.restored_passed, 0);
         assert_eq!(recovery.restored_pending, 1);
-        assert_eq!(current.node("format").unwrap().state, VerificationNodeState::Pending);
-        assert_eq!(current.node("unit").unwrap().state, VerificationNodeState::Pending);
+        assert_eq!(
+            current.node("format").unwrap().state,
+            VerificationNodeState::Pending
+        );
+        assert_eq!(
+            current.node("unit").unwrap().state,
+            VerificationNodeState::Pending
+        );
         assert!(!current.authoritative_complete());
     }
 
