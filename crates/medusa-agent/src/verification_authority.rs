@@ -207,7 +207,7 @@ fn repository_state_paths(
     };
 
     for component in components {
-        result.extend(component.all_paths().map(PathBuf::from));
+        result.extend(component.all_paths().into_iter().map(PathBuf::from));
     }
     Ok(result)
 }
