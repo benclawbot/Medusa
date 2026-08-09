@@ -411,7 +411,10 @@ mod tests {
             &cancellation,
         )
         .expect_err("cancelled");
-        assert_eq!(error.context.get("cancelled"), Some(&serde_json::Value::Bool(true)));
+        assert_eq!(
+            error.context.get("cancelled"),
+            Some(&serde_json::Value::Bool(true))
+        );
     }
 
     #[test]
