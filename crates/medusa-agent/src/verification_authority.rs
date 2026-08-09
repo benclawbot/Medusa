@@ -50,15 +50,21 @@ struct CheckMaterial {
 struct PersistedVerificationDag {
     schema_version: u16,
     verification_receipt_fingerprint: String,
+    repository_state_fingerprint: String,
     dag: VerificationDag,
     fingerprint: String,
 }
 
 impl PersistedVerificationDag {
-    fn new(dag: VerificationDag, verification_receipt_fingerprint: &str) -> MedusaResult<Self> {
+    fn new(
+        dag: VerificationDag,
+        verification_receipt_fingerprint: &str,
+        repository_state_fingerprint: &str,
+    ) -> MedusaResult<Self> {
         let mut persisted = Self {
             schema_version: 1,
             verification_receipt_fingerprint: verification_receipt_fingerprint.to_owned(),
+            repository_state_fingerprint: repository_state_fingerprint.to_owned(),
             dag,
             fingerprint: String::new(),
         };
@@ -69,6 +75,7 @@ impl PersistedVerificationDag {
     fn validate(&self) -> MedusaResult<()> {
         if self.schema_version != 1
             || self.verification_receipt_fingerprint.trim().is_empty()
+            || self.repository_state_fingerprint.trim().is_empty()
             || self.fingerprint != persisted_verification_dag_fingerprint(self)?
         {
             return Err(invalid("persisted verification DAG is stale or corrupted"));
@@ -176,7 +183,14 @@ pub fn authoritative_verification_for_components_at(
     let mut commands = Vec::<CommandReceipt>::new();
     let mut records = Vec::<EvidenceRecord>::new();
     let mut dag = dag_for_plan(repo, commit, &plan)?;
-    if let Some(receipt) = load_exact_verification_reuse(&store_root, &plan, &dag)? {
+    let repository_state_fingerprint = repository_state_fingerprint(repo, evidence_root)?;
+    if let Some(receipt) = load_exact_verification_reuse(
+        &store,
+        &store_root,
+        &plan,
+        &dag,
+        &repository_state_fingerprint,
+    )? {
         let mut summary = receipt.summary_lines();
         summary.push("verification_reuse=exact-persisted-receipt".to_owned());
         return Ok(AuthoritativeVerificationResult { receipt, summary });
@@ -324,7 +338,11 @@ pub fn authoritative_verification_for_components_at(
             )
         })?,
     )?;
-    let persisted_dag = PersistedVerificationDag::new(dag, &receipt.fingerprint)?;
+    let persisted_dag = PersistedVerificationDag::new(
+        dag,
+        &receipt.fingerprint,
+        &repository_state_fingerprint,
+    )?;
     fs::write(
         store_root.join("verification-dag.json"),
         serde_json::to_vec_pretty(&persisted_dag).map_err(|error| {
@@ -339,9 +357,11 @@ pub fn authoritative_verification_for_components_at(
 }
 
 fn load_exact_verification_reuse(
+    store: &ArtifactStore,
     store_root: &Path,
     plan: &VerificationPlan,
     current_dag: &VerificationDag,
+    repository_state_fingerprint: &str,
 ) -> MedusaResult<Option<VerificationReceipt>> {
     let receipt_path = store_root.join("verification-receipt.json");
     let dag_path = store_root.join("verification-dag.json");
@@ -359,10 +379,14 @@ fn load_exact_verification_reuse(
     };
     if persisted.validate().is_err()
         || persisted.verification_receipt_fingerprint != receipt.fingerprint
+        || persisted.repository_state_fingerprint != repository_state_fingerprint
+        || !persistent_reuse_allowed(plan)
+        || receipt.validate().is_err()
         || !receipt.passed
         || receipt.plan != *plan
         || !persisted.dag.authoritative_complete()
         || !current_dag.exact_receipts_reusable_from(&persisted.dag)
+        || !receipt_artifacts_available(store, &receipt)
     {
         return Ok(None);
     }
@@ -375,6 +399,7 @@ fn persisted_verification_dag_fingerprint(
     let mut hasher = Sha256::new();
     hasher.update(persisted.schema_version.to_le_bytes());
     hasher.update(persisted.verification_receipt_fingerprint.as_bytes());
+    hasher.update(persisted.repository_state_fingerprint.as_bytes());
     hasher.update(serde_json::to_vec(&persisted.dag).map_err(|error| {
         MedusaError::new(
             ErrorCode::InternalInvariant,
@@ -383,6 +408,95 @@ fn persisted_verification_dag_fingerprint(
         )
     })?);
     Ok(format!("{:x}", hasher.finalize()))
+}
+
+fn persistent_reuse_allowed(plan: &VerificationPlan) -> bool {
+    !plan.checks.is_empty()
+        && plan.checks.iter().all(|check| {
+            check.kind == VerificationCheckKind::ArtifactSemantic && check.program.is_none()
+        })
+}
+
+fn receipt_artifacts_available(store: &ArtifactStore, receipt: &VerificationReceipt) -> bool {
+    receipt.evidence.artifacts.iter().all(|expected| {
+        store
+            .metadata(&expected.id)
+            .is_ok_and(|actual| actual == *expected)
+    })
+}
+
+fn repository_state_fingerprint(repo: &Path, evidence_root: &Path) -> MedusaResult<String> {
+    let mut paths = repository_state_paths(repo)?;
+    paths.sort();
+    paths.dedup();
+    let evidence_root = evidence_root.canonicalize().unwrap_or_else(|_| evidence_root.to_path_buf());
+    let mut hasher = Sha256::new();
+    for relative in paths {
+        let path = repo.join(&relative);
+        let absolute = path.canonicalize().unwrap_or_else(|_| path.clone());
+        if absolute.starts_with(&evidence_root) || relative.starts_with(".git") {
+            continue;
+        }
+        hasher.update(relative.to_string_lossy().as_bytes());
+        match fs::symlink_metadata(&path) {
+            Ok(metadata) if metadata.file_type().is_symlink() => {
+                hasher.update(b"symlink");
+                match fs::read_link(&path) {
+                    Ok(target) => hasher.update(target.to_string_lossy().as_bytes()),
+                    Err(_) => hasher.update(b"unreadable"),
+                }
+            }
+            Ok(metadata) if metadata.is_file() => {
+                hasher.update(b"file");
+                match fs::read(&path) {
+                    Ok(bytes) => hasher.update(bytes),
+                    Err(_) => hasher.update(b"unreadable"),
+                }
+            }
+            Ok(_) => hasher.update(b"other"),
+            Err(_) => hasher.update(b"missing"),
+        }
+    }
+    Ok(format!("{:x}", hasher.finalize()))
+}
+
+fn repository_state_paths(repo: &Path) -> MedusaResult<Vec<PathBuf>> {
+    if git_repository(repo) {
+        let output = Command::new("git")
+            .args(["ls-files", "-z", "--cached", "--others", "--exclude-standard"])
+            .current_dir(repo)
+            .output()?;
+        if output.status.success() {
+            return Ok(output
+                .stdout
+                .split(|byte| *byte == 0)
+                .filter(|entry| !entry.is_empty())
+                .map(|entry| PathBuf::from(String::from_utf8_lossy(entry).into_owned()))
+                .collect());
+        }
+    }
+    let mut result = Vec::new();
+    collect_repository_paths(repo, repo, &mut result)?;
+    Ok(result)
+}
+
+fn collect_repository_paths(root: &Path, directory: &Path, result: &mut Vec<PathBuf>) -> MedusaResult<()> {
+    let mut entries = fs::read_dir(directory)?.collect::<std::io::Result<Vec<_>>>()?;
+    entries.sort_by_key(|entry| entry.file_name());
+    for entry in entries {
+        let path = entry.path();
+        let relative = path.strip_prefix(root).unwrap_or(&path).to_path_buf();
+        if relative.starts_with(".git") {
+            continue;
+        }
+        let metadata = fs::symlink_metadata(&path)?;
+        if metadata.is_dir() {
+            collect_repository_paths(root, &path, result)?;
+        } else {
+            result.push(relative);
+        }
+    }
+    Ok(())
 }
 
 pub(crate) fn authoritative_verification_for_paths(
@@ -1037,16 +1151,11 @@ mod tests {
     }
 
     #[test]
-    fn each_planned_command_has_typed_outputs_and_receipt() {
+    fn exact_hermetic_receipt_reuses_only_with_unchanged_repository_and_artifacts() {
         let directory = tempfile::tempdir().unwrap();
-        fs::create_dir_all(directory.path().join(".medusa")).unwrap();
-        fs::write(directory.path().join("file.txt"), "changed\n").unwrap();
-        fs::write(
-            directory.path().join(".medusa/verification.json"),
-            r#"{"checks":[{"kind":"repository_defined","program":"rustc","args":["--version"],"working_directory":".","reason":"prove command receipts"}]}"#,
-        )
-        .unwrap();
-        let component = ChangedComponent::new(ChangeKind::Modified, "file.txt").unwrap();
+        fs::write(directory.path().join("artifact.json"), "{\"ok\":true}\n").unwrap();
+        fs::write(directory.path().join("unrelated.txt"), "stable\n").unwrap();
+        let component = ChangedComponent::new(ChangeKind::Modified, "artifact.json").unwrap();
         let evidence_root = directory.path().join("durable-evidence");
         let result = authoritative_verification_for_components_at(
             directory.path(),
@@ -1057,10 +1166,8 @@ mod tests {
         )
         .unwrap();
         assert!(result.receipt.passed);
-        assert_eq!(result.receipt.evidence.commands.len(), 1);
-        assert!(result.receipt.checks[0].command.is_some());
-        assert!(result.receipt.evidence.artifacts.len() >= 2);
-        assert!(evidence_root.exists());
+        assert!(result.receipt.evidence.commands.is_empty());
+        assert!(!result.receipt.evidence.artifacts.is_empty());
 
         let reused = authoritative_verification_for_components_at(
             directory.path(),
@@ -1070,7 +1177,6 @@ mod tests {
             &[component.clone()],
         )
         .unwrap();
-        assert!(reused.receipt.passed);
         assert!(
             reused
                 .summary
@@ -1078,12 +1184,32 @@ mod tests {
                 .any(|line| line == "verification_reuse=exact-persisted-receipt")
         );
 
-        fs::write(
-            directory.path().join(".medusa/verification.json"),
-            r#"{"checks":[{"kind":"repository_defined","program":"rustc","args":["--version"],"working_directory":".","reason":"changed plan must rerun"}]}"#,
+        fs::write(directory.path().join("unrelated.txt"), "changed\n").unwrap();
+        let rerun_after_tree_drift = authoritative_verification_for_components_at(
+            directory.path(),
+            &evidence_root,
+            "repo",
+            "commit",
+            &[component.clone()],
         )
         .unwrap();
-        let rerun = authoritative_verification_for_components_at(
+        assert!(rerun_after_tree_drift.receipt.passed);
+        assert!(
+            !rerun_after_tree_drift
+                .summary
+                .iter()
+                .any(|line| line == "verification_reuse=exact-persisted-receipt")
+        );
+
+        let store_root = evidence_root.join(short_hash("repocommit"));
+        let object = fs::read_dir(store_root.join("objects"))
+            .unwrap()
+            .next()
+            .unwrap()
+            .unwrap()
+            .path();
+        fs::remove_file(object).unwrap();
+        let rerun_after_artifact_loss = authoritative_verification_for_components_at(
             directory.path(),
             &evidence_root,
             "repo",
@@ -1091,9 +1217,47 @@ mod tests {
             &[component],
         )
         .unwrap();
-        assert!(rerun.receipt.passed);
+        assert!(rerun_after_artifact_loss.receipt.passed);
         assert!(
-            !rerun
+            !rerun_after_artifact_loss
+                .summary
+                .iter()
+                .any(|line| line == "verification_reuse=exact-persisted-receipt")
+        );
+    }
+
+    #[test]
+    fn persistent_reuse_rejects_non_hermetic_repository_defined_checks() {
+        let directory = tempfile::tempdir().unwrap();
+        fs::create_dir_all(directory.path().join(".medusa")).unwrap();
+        fs::write(directory.path().join("file.txt"), "changed\n").unwrap();
+        fs::write(
+            directory.path().join(".medusa/verification.json"),
+            r#"{"checks":[{"kind":"repository_defined","program":"rustc","args":["--version"],"working_directory":".","reason":"external verifier"}]}"#,
+        )
+        .unwrap();
+        let component = ChangedComponent::new(ChangeKind::Modified, "file.txt").unwrap();
+        let evidence_root = directory.path().join("durable-evidence");
+        let first = authoritative_verification_for_components_at(
+            directory.path(),
+            &evidence_root,
+            "repo",
+            "commit",
+            &[component.clone()],
+        )
+        .unwrap();
+        assert!(first.receipt.passed);
+        let second = authoritative_verification_for_components_at(
+            directory.path(),
+            &evidence_root,
+            "repo",
+            "commit",
+            &[component],
+        )
+        .unwrap();
+        assert!(second.receipt.passed);
+        assert!(
+            !second
                 .summary
                 .iter()
                 .any(|line| line == "verification_reuse=exact-persisted-receipt")
