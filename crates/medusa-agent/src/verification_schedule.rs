@@ -34,32 +34,74 @@ pub(crate) fn dag_for_plan(
     ));
     let toolchain_fingerprint = toolchain_fingerprint(repo);
     let mut dag = VerificationDag::default();
+    let mut remaining = plan
+        .checks
+        .iter()
+        .map(|check| (check.id.clone(), check))
+        .collect::<BTreeMap<_, _>>();
 
-    for check in &plan.checks {
-        let command = check.program.as_deref().map_or_else(
-            || format!("internal:{:?}", check.kind),
-            |program| format!("{} {}", program, check.args.join(" ")),
-        );
-        dag.insert(VerificationNode {
-            id: check.id.clone(),
-            command,
-            dependencies: dependencies(plan, check),
-            authority: VerificationAuthority::IndependentAcceptance,
-            expected_duration_ms: 0,
-            resource_class: resource_class(check).to_owned(),
-            input: VerificationInputKey {
-                repository_revision: commit.to_owned(),
-                tree_fingerprint: check.input_fingerprint.clone(),
-                environment_fingerprint: environment_fingerprint.clone(),
-                toolchain_fingerprint: toolchain_fingerprint.clone(),
-                adapter_version: "verification-authority-v1".to_owned(),
-                changed_paths: changed_paths.clone(),
-            },
-            state: VerificationNodeState::Pending,
-        })
-        .map_err(invalid)?;
+    while !remaining.is_empty() {
+        let ready_ids = remaining
+            .iter()
+            .filter_map(|(id, check)| {
+                dependencies(plan, check)
+                    .iter()
+                    .all(|dependency| dag.node(dependency).is_some())
+                    .then_some(id.clone())
+            })
+            .collect::<Vec<_>>();
+        if ready_ids.is_empty() {
+            return Err(invalid(
+                "verification plan contains a dependency cycle or unknown prerequisite",
+            ));
+        }
+        for id in ready_ids {
+            let check = remaining
+                .remove(&id)
+                .ok_or_else(|| invalid(format!("verification check {id} disappeared")))?;
+            dag.insert(node_for_check(
+                check,
+                commit,
+                plan,
+                &changed_paths,
+                &environment_fingerprint,
+                &toolchain_fingerprint,
+            ))
+            .map_err(invalid)?;
+        }
     }
     Ok(dag)
+}
+
+fn node_for_check(
+    check: &VerificationCheck,
+    commit: &str,
+    plan: &VerificationPlan,
+    changed_paths: &BTreeSet<String>,
+    environment_fingerprint: &str,
+    toolchain_fingerprint: &str,
+) -> VerificationNode {
+    let command = check.program.as_deref().map_or_else(
+        || format!("internal:{:?}", check.kind),
+        |program| format!("{} {}", program, check.args.join(" ")),
+    );
+    VerificationNode {
+        id: check.id.clone(),
+        command,
+        dependencies: dependencies(plan, check),
+        authority: VerificationAuthority::IndependentAcceptance,
+        expected_duration_ms: 0,
+        resource_class: resource_class(check).to_owned(),
+        input: VerificationInputKey {
+            repository_revision: commit.to_owned(),
+            tree_fingerprint: check.input_fingerprint.clone(),
+            environment_fingerprint: environment_fingerprint.to_owned(),
+            toolchain_fingerprint: toolchain_fingerprint.to_owned(),
+            adapter_version: "verification-authority-v1".to_owned(),
+            changed_paths: changed_paths.clone(),
+        },
+        state: VerificationNodeState::Pending,
+    }
 }
 
 pub(crate) fn execute_command_wave(
