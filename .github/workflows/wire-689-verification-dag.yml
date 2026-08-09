@@ -1,0 +1,26 @@
+name: Wire 689 verification DAG
+on: push
+permissions:
+  contents: write
+jobs:
+  patch:
+    if: ${{ !contains(github.event.head_commit.message, '[689-dag-wired]') }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          ref: perf/689-verification-dag-foundation
+          fetch-depth: 0
+      - run: python3 scripts/wire_689_verification_dag.py
+      - run: |
+          rustup component add rustfmt
+          cargo fmt --all
+          git diff --check
+          cargo test -p medusa-agent verification_dag -- --nocapture
+          cargo clippy -p medusa-agent --all-targets --all-features -- -D warnings
+          git config user.name benclawbot
+          git config user.email 259942410+benclawbot@users.noreply.github.com
+          git add crates/medusa-agent/src/lib.rs crates/medusa-agent/src/verification_dag.rs
+          git diff --cached --quiet && exit 1
+          git commit -m 'feat: wire typed verification DAG foundation [689-dag-wired]'
+          git push origin HEAD:perf/689-verification-dag-foundation
