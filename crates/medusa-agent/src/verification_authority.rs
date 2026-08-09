@@ -116,7 +116,11 @@ fn valid_cache_artifact_id(id: &ArtifactId) -> bool {
 fn invalidate_persisted_reuse(store_root: &Path) -> MedusaResult<()> {
     VerificationCheckpointStore::new(store_root)
         .remove()
-        .map_err(|error| invalid(format!("failed to invalidate verification checkpoint: {error}")))?;
+        .map_err(|error| {
+            invalid(format!(
+                "failed to invalidate verification checkpoint: {error}"
+            ))
+        })?;
     for name in [
         "verification-receipt.json",
         "verification-dag.json",
