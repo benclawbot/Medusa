@@ -25,12 +25,6 @@ replace_once(
     '''    #[test]\n    fn web_tools_are_available_in_standard_and_planning_modes() {\n''',
     '''    #[test]\n    fn provider_phase_tracks_production_agent_mode() {\n        assert_eq!(\n            provider_execution_phase(Mode::ReadOnly),\n            ProviderExecutionPhase::Planning\n        );\n        assert_eq!(\n            provider_execution_phase(Mode::Review),\n            ProviderExecutionPhase::HighRiskReview\n        );\n        assert_eq!(\n            provider_execution_phase(Mode::Yolo),\n            ProviderExecutionPhase::Implementation\n        );\n    }\n\n    #[test]\n    fn web_tools_are_available_in_standard_and_planning_modes() {\n''',
 )
-
-replace_once(
-    "crates/medusa-agent/src/engine.rs",
-    '''    available_tools, compact_message_text, content_with_session_goal, json_error,\n    question_from_assistant_text, question_from_input, stream_dispatch_safe_tool,\n    system_prompt_with_context, tool_allowed, update_session_objective, validate_messages,\n''',
-    '''    available_tools, compact_message_text, content_with_session_goal, json_error,\n    provider_execution_phase, question_from_assistant_text, question_from_input,\n    stream_dispatch_safe_tool, system_prompt_with_context, tool_allowed, update_session_objective,\n    validate_messages,\n''',
-)
 replace_once(
     "crates/medusa-agent/src/engine.rs",
     '''        let phase = if self.config.agent.mode == Mode::ReadOnly {\n            ProviderExecutionPhase::Planning\n        } else {\n            ProviderExecutionPhase::Implementation\n        };\n''',
@@ -38,6 +32,6 @@ replace_once(
 )
 replace_once(
     "crates/medusa-agent/src/engine.rs",
-    '''    Message, MessageBlock, ModelProvider, ModelRequest, ProviderExecutionPhase, ProviderStreamEvent,\n    ProviderStreamTranscript, ResponseBlock, Role,\n''',
+    '''    Message, MessageBlock, ModelProvider, ModelRequest, ProviderExecutionPhase,\n    ProviderStreamEvent, ProviderStreamTranscript, ResponseBlock, Role,\n''',
     '''    Message, MessageBlock, ModelProvider, ModelRequest, ProviderStreamEvent,\n    ProviderStreamTranscript, ResponseBlock, Role,\n''',
 )
