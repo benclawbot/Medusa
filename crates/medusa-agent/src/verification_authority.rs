@@ -338,11 +338,8 @@ pub fn authoritative_verification_for_components_at(
             )
         })?,
     )?;
-    let persisted_dag = PersistedVerificationDag::new(
-        dag,
-        &receipt.fingerprint,
-        &repository_state_fingerprint,
-    )?;
+    let persisted_dag =
+        PersistedVerificationDag::new(dag, &receipt.fingerprint, &repository_state_fingerprint)?;
     fs::write(
         store_root.join("verification-dag.json"),
         serde_json::to_vec_pretty(&persisted_dag).map_err(|error| {
@@ -429,7 +426,9 @@ fn repository_state_fingerprint(repo: &Path, evidence_root: &Path) -> MedusaResu
     let mut paths = repository_state_paths(repo)?;
     paths.sort();
     paths.dedup();
-    let evidence_root = evidence_root.canonicalize().unwrap_or_else(|_| evidence_root.to_path_buf());
+    let evidence_root = evidence_root
+        .canonicalize()
+        .unwrap_or_else(|_| evidence_root.to_path_buf());
     let mut hasher = Sha256::new();
     for relative in paths {
         let path = repo.join(&relative);
@@ -463,7 +462,13 @@ fn repository_state_fingerprint(repo: &Path, evidence_root: &Path) -> MedusaResu
 fn repository_state_paths(repo: &Path) -> MedusaResult<Vec<PathBuf>> {
     if git_repository(repo) {
         let output = Command::new("git")
-            .args(["ls-files", "-z", "--cached", "--others", "--exclude-standard"])
+            .args([
+                "ls-files",
+                "-z",
+                "--cached",
+                "--others",
+                "--exclude-standard",
+            ])
             .current_dir(repo)
             .output()?;
         if output.status.success() {
@@ -480,7 +485,11 @@ fn repository_state_paths(repo: &Path) -> MedusaResult<Vec<PathBuf>> {
     Ok(result)
 }
 
-fn collect_repository_paths(root: &Path, directory: &Path, result: &mut Vec<PathBuf>) -> MedusaResult<()> {
+fn collect_repository_paths(
+    root: &Path,
+    directory: &Path,
+    result: &mut Vec<PathBuf>,
+) -> MedusaResult<()> {
     let mut entries = fs::read_dir(directory)?.collect::<std::io::Result<Vec<_>>>()?;
     entries.sort_by_key(|entry| entry.file_name());
     for entry in entries {
