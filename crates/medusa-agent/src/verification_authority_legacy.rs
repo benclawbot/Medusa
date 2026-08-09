@@ -29,9 +29,7 @@ use crate::{
         ExecutedVerificationCommand, VerificationResult, execute_verification_command,
         required_browser_verification,
     },
-    verification_dag::{
-        VerificationDag, VerificationNodeState, VerificationReceipt as DagReceipt,
-    },
+    verification_dag::{VerificationDag, VerificationNodeState, VerificationReceipt as DagReceipt},
 };
 use verification_schedule::{dag_for_plan, execute_command_wave};
 
@@ -475,15 +473,14 @@ fn persist_verification_checkpoint(
         materials,
         browser_material,
     );
-    let checkpoint = VerificationCheckpoint::new(
-        repository_state_fingerprint,
-        dag.clone(),
-        payload,
-    )
-    .map_err(|error| invalid(format!("failed to seal verification checkpoint: {error}")))?;
-    checkpoint_store
-        .save(&checkpoint)
-        .map_err(|error| invalid(format!("failed to persist verification checkpoint: {error}")))
+    let checkpoint =
+        VerificationCheckpoint::new(repository_state_fingerprint, dag.clone(), payload)
+            .map_err(|error| invalid(format!("failed to seal verification checkpoint: {error}")))?;
+    checkpoint_store.save(&checkpoint).map_err(|error| {
+        invalid(format!(
+            "failed to persist verification checkpoint: {error}"
+        ))
+    })
 }
 
 fn restore_verification_checkpoint(
@@ -500,12 +497,16 @@ fn restore_verification_checkpoint(
         return Ok(None);
     };
 
+    let pristine_dag = dag.clone();
     let recovery = match dag.recover_for_restart(&checkpoint.dag) {
         Ok(recovery) => recovery,
         Err(_) => {
             checkpoint_store.remove().map_err(|error| {
-                invalid(format!("failed to discard drifted verification checkpoint: {error}"))
+                invalid(format!(
+                    "failed to discard drifted verification checkpoint: {error}"
+                ))
             })?;
+            *dag = pristine_dag;
             return Ok(None);
         }
     };
@@ -535,9 +536,11 @@ fn restore_verification_checkpoint(
     });
     if !completed_materials_match || !checkpoint_artifacts_available(store, &payload) {
         checkpoint_store.remove().map_err(|error| {
-            invalid(format!("failed to discard unsafe verification checkpoint: {error}"))
+            invalid(format!(
+                "failed to discard unsafe verification checkpoint: {error}"
+            ))
         })?;
-        *dag = dag_for_plan(store.root(), "checkpoint-reset", plan).unwrap_or_default();
+        *dag = pristine_dag;
         return Ok(None);
     }
 
@@ -576,14 +579,17 @@ fn checkpoint_artifacts_available(
     {
         return false;
     }
-    payload.artifacts.iter().all(|expected| match store.metadata(&expected.id) {
-        Ok(actual) if actual == *expected => true,
-        Ok(_) => false,
-        Err(_) => {
-            remove_invalid_cached_artifact(store, &expected.id);
-            false
-        }
-    })
+    payload
+        .artifacts
+        .iter()
+        .all(|expected| match store.metadata(&expected.id) {
+            Ok(actual) if actual == *expected => true,
+            Ok(_) => false,
+            Err(_) => {
+                remove_invalid_cached_artifact(store, &expected.id);
+                false
+            }
+        })
 }
 
 fn load_exact_verification_reuse(
@@ -1549,15 +1555,10 @@ mod tests {
             .expect("save");
 
         let mut fresh = dag_for_plan(directory.path(), "commit", &plan).expect("fresh dag");
-        let (_, summary) = restore_verification_checkpoint(
-            &store,
-            &checkpoints,
-            "state",
-            &plan,
-            &mut fresh,
-        )
-        .expect("restore")
-        .expect("checkpoint");
+        let (_, summary) =
+            restore_verification_checkpoint(&store, &checkpoints, "state", &plan, &mut fresh)
+                .expect("restore")
+                .expect("checkpoint");
         assert_eq!(
             fresh.node(&check_id).expect("node").state,
             VerificationNodeState::Pending
