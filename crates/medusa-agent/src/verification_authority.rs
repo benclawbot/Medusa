@@ -1053,7 +1053,7 @@ mod tests {
             &evidence_root,
             "repo",
             "commit",
-            &[component],
+            &[component.clone()],
         )
         .unwrap();
         assert!(result.receipt.passed);
