@@ -118,6 +118,30 @@ impl ProviderRouteLatencyStore {
                 let generation_ms = duration_ms.saturating_sub(first_token_ms);
                 stats.generation_total_ms = stats.generation_total_ms.saturating_add(generation_ms);
             }
+        })?;
+        crate::verification_bridge::register_pending_route_completion(self.clone(), index);
+        Ok(())
+    }
+
+    /// Records an authoritative monetary cost observation for a route.
+    ///
+    /// The caller owns the pricing authority. This store intentionally never derives money from
+    /// token counts because provider/model price schedules are external, time-varying data.
+    pub fn record_cost_microusd(&self, index: usize, cost_microusd: u64) -> MedusaResult<()> {
+        self.update(index, |stats| {
+            stats.cost_samples = stats.cost_samples.saturating_add(1);
+            stats.cost_microusd_total = stats.cost_microusd_total.saturating_add(cost_microusd);
+        })
+    }
+
+    /// Records the result of authoritative downstream verification for work produced by a route.
+    pub fn record_verified_success(&self, index: usize, passed: bool) -> MedusaResult<()> {
+        self.update(index, |stats| {
+            if passed {
+                stats.verified_successes = stats.verified_successes.saturating_add(1);
+            } else {
+                stats.verified_failures = stats.verified_failures.saturating_add(1);
+            }
         })
     }
 
@@ -379,6 +403,13 @@ mod tests {
                 },
             )
             .expect("record success");
+        first.record_cost_microusd(0, 125).expect("record cost");
+        first
+            .record_verified_success(0, true)
+            .expect("record verified success");
+        first
+            .record_verified_success(0, false)
+            .expect("record verified failure");
 
         let second = ProviderRouteLatencyStore::at(directory.path(), &profiles).expect("second");
         let stats = second.stats().expect("stats")[0];
@@ -388,6 +419,8 @@ mod tests {
         assert_eq!(stats.cache_reuse_milli(), 900);
         assert_eq!(stats.output_tokens, 0);
         assert_eq!(stats.generation_total_ms, 0);
+        assert_eq!(stats.average_cost_microusd(), Some(125));
+        assert_eq!(stats.verified_success_milli(), 500);
 
         first
             .record_failure_with_category(0, 25, Some(ErrorCategory::Transient))

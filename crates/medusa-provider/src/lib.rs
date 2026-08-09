@@ -15,6 +15,7 @@ mod route_latency;
 mod route_metrics_store;
 mod streaming;
 mod streaming_tool_calls;
+mod verification_bridge;
 
 pub use anthropic::MiniMaxProvider;
 pub use configured::ConfiguredProvider;
@@ -33,6 +34,11 @@ pub use route_latency::{
 pub use route_metrics_store::ProviderRouteLatencyStore;
 pub use streaming::{ProviderStreamEvent, ProviderStreamTranscript, SequencedStreamEvent};
 pub use streaming_tool_calls::StreamingToolCallAssembler;
+#[doc(hidden)]
+pub use verification_bridge::{
+    clear_pending_route_verification, mark_pending_route_mutation,
+    record_pending_route_verification,
+};
 
 pub(crate) use http::{
     async_response_error, blocking_response_error, cancelled_provider_error, provider_error,
