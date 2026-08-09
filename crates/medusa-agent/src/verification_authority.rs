@@ -128,18 +128,15 @@ fn run_with_repository_state_guard<T>(
                 if watcher_stop.load(Ordering::Acquire) {
                     break;
                 }
-                let current_signature = match repository_watch_signature(
-                    repo,
-                    evidence_root,
-                    components,
-                    &watch_paths,
-                ) {
-                    Ok(signature) => signature,
-                    Err(_) => {
-                        watcher_cancellation.store(true, Ordering::Release);
-                        break;
-                    }
-                };
+                let current_signature =
+                    match repository_watch_signature(repo, evidence_root, components, &watch_paths)
+                    {
+                        Ok(signature) => signature,
+                        Err(_) => {
+                            watcher_cancellation.store(true, Ordering::Release);
+                            break;
+                        }
+                    };
                 if current_signature == watch_signature {
                     continue;
                 }
@@ -226,12 +223,9 @@ fn repository_watch_signature(
                     &metadata_timestamp(&metadata).to_le_bytes(),
                 );
             }
-            Err(_) => hash_repository_state_entry(
-                &mut hasher,
-                relative_bytes.as_bytes(),
-                b"missing",
-                b"",
-            ),
+            Err(_) => {
+                hash_repository_state_entry(&mut hasher, relative_bytes.as_bytes(), b"missing", b"")
+            }
         }
     }
     Ok(format!("{:x}", hasher.finalize()))
