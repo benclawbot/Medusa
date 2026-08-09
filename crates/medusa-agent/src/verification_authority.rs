@@ -2,6 +2,12 @@ use std::{
     fs,
     path::{Path, PathBuf},
     process::Command,
+    sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+    },
+    thread,
+    time::{Duration, UNIX_EPOCH},
 };
 
 use medusa_core::{ErrorCategory, ErrorCode, MedusaError, MedusaResult};
@@ -10,9 +16,12 @@ use sha2::{Digest, Sha256};
 
 use crate::verification::VerificationResult;
 
+#[path = "verification_cancellation.rs"]
+pub(crate) mod verification_cancellation;
 #[path = "verification_checkpoint.rs"]
 pub(crate) mod verification_checkpoint;
 
+use verification_cancellation::register_verification_cancellation;
 use verification_checkpoint::VerificationCheckpointStore;
 
 #[allow(dead_code)]
@@ -23,6 +32,7 @@ pub use legacy::{AuthoritativeVerificationResult, prepare_components_for_verific
 
 const MAX_STABLE_VERIFICATION_ATTEMPTS: usize = 3;
 const STATE_FINGERPRINT_FILE: &str = "verification-state-fingerprint";
+const STATE_WATCH_INTERVAL: Duration = Duration::from_millis(100);
 
 pub(crate) fn prepare_paths_for_verification(repo: &Path, paths: &[String]) -> MedusaResult<()> {
     legacy::prepare_paths_for_verification(repo, paths)
@@ -59,13 +69,21 @@ pub fn authoritative_verification_for_components_at(
             invalidate_persisted_reuse(&store_root)?;
         }
 
-        let result = legacy::authoritative_verification_for_components_at(
-            repo,
-            evidence_root,
-            repository_fingerprint,
-            commit,
-            components,
-        )?;
+        let guarded =
+            run_with_repository_state_guard(repo, evidence_root, components, &before, || {
+                legacy::authoritative_verification_for_components_at(
+                    repo,
+                    evidence_root,
+                    repository_fingerprint,
+                    commit,
+                    components,
+                )
+            })?;
+        if guarded.cancelled {
+            invalidate_persisted_reuse(&store_root)?;
+            continue;
+        }
+        let result = guarded.result?;
         let after = complete_repository_state_fingerprint(repo, evidence_root, components)?;
         if before == after {
             fs::create_dir_all(&store_root)?;
@@ -79,6 +97,146 @@ pub fn authoritative_verification_for_components_at(
     Err(invalid(
         "repository state changed repeatedly during authoritative verification",
     ))
+}
+
+struct GuardedVerification<T> {
+    result: T,
+    cancelled: bool,
+}
+
+fn run_with_repository_state_guard<T>(
+    repo: &Path,
+    evidence_root: &Path,
+    components: &[ChangedComponent],
+    expected: &str,
+    operation: impl FnOnce() -> T,
+) -> MedusaResult<GuardedVerification<T>> {
+    let registration = register_verification_cancellation(repo);
+    let cancellation = registration.token();
+    let stop = Arc::new(AtomicBool::new(false));
+    let watch_paths = filtered_repository_state_paths(repo, evidence_root, components)?;
+    let initial_watch_signature =
+        repository_watch_signature(repo, evidence_root, components, &watch_paths)?;
+
+    thread::scope(|scope| {
+        let watcher_cancellation = Arc::clone(&cancellation);
+        let watcher_stop = Arc::clone(&stop);
+        let watcher = scope.spawn(move || {
+            let mut watch_signature = initial_watch_signature;
+            while !watcher_stop.load(Ordering::Acquire) {
+                thread::park_timeout(STATE_WATCH_INTERVAL);
+                if watcher_stop.load(Ordering::Acquire) {
+                    break;
+                }
+                let current_signature =
+                    match repository_watch_signature(repo, evidence_root, components, &watch_paths)
+                    {
+                        Ok(signature) => signature,
+                        Err(_) => {
+                            watcher_cancellation.store(true, Ordering::Release);
+                            break;
+                        }
+                    };
+                if current_signature == watch_signature {
+                    continue;
+                }
+                match complete_repository_state_fingerprint(repo, evidence_root, components) {
+                    Ok(current) if current == expected => {
+                        watch_signature = current_signature;
+                    }
+                    Ok(_) | Err(_) => {
+                        watcher_cancellation.store(true, Ordering::Release);
+                        break;
+                    }
+                }
+            }
+        });
+
+        let result = operation();
+        stop.store(true, Ordering::Release);
+        watcher.thread().unpark();
+        let _ = watcher.join();
+        Ok(GuardedVerification {
+            result,
+            cancelled: cancellation.load(Ordering::Acquire),
+        })
+    })
+}
+
+fn repository_watch_signature(
+    repo: &Path,
+    evidence_root: &Path,
+    components: &[ChangedComponent],
+    watch_paths: &[PathBuf],
+) -> MedusaResult<String> {
+    let current_paths = filtered_repository_state_paths(repo, evidence_root, components)?;
+    let mut hasher = Sha256::new();
+    for relative in current_paths {
+        hash_repository_state_entry(
+            &mut hasher,
+            relative.to_string_lossy().as_bytes(),
+            b"path",
+            b"",
+        );
+    }
+
+    for relative in watch_paths {
+        let path = repo.join(relative);
+        let relative_bytes = relative.to_string_lossy();
+        match fs::symlink_metadata(&path) {
+            Ok(metadata) if metadata.file_type().is_symlink() => {
+                let modified = metadata_timestamp(&metadata);
+                match fs::read_link(&path) {
+                    Ok(target) => {
+                        let mut payload = modified.to_le_bytes().to_vec();
+                        payload.extend_from_slice(target.to_string_lossy().as_bytes());
+                        hash_repository_state_entry(
+                            &mut hasher,
+                            relative_bytes.as_bytes(),
+                            b"symlink",
+                            &payload,
+                        );
+                    }
+                    Err(_) => hash_repository_state_entry(
+                        &mut hasher,
+                        relative_bytes.as_bytes(),
+                        b"symlink",
+                        b"unreadable",
+                    ),
+                }
+            }
+            Ok(metadata) if metadata.is_file() => {
+                let mut payload = metadata.len().to_le_bytes().to_vec();
+                payload.extend_from_slice(&metadata_timestamp(&metadata).to_le_bytes());
+                hash_repository_state_entry(
+                    &mut hasher,
+                    relative_bytes.as_bytes(),
+                    b"file-metadata",
+                    &payload,
+                );
+            }
+            Ok(metadata) => {
+                hash_repository_state_entry(
+                    &mut hasher,
+                    relative_bytes.as_bytes(),
+                    b"other-metadata",
+                    &metadata_timestamp(&metadata).to_le_bytes(),
+                );
+            }
+            Err(_) => {
+                hash_repository_state_entry(&mut hasher, relative_bytes.as_bytes(), b"missing", b"")
+            }
+        }
+    }
+    Ok(format!("{:x}", hasher.finalize()))
+}
+
+fn metadata_timestamp(metadata: &fs::Metadata) -> u128 {
+    metadata
+        .modified()
+        .ok()
+        .and_then(|modified| modified.duration_since(UNIX_EPOCH).ok())
+        .map_or(0, |duration| duration.as_nanos())
 }
 
 fn state_marker_matches(store_root: &Path, expected: &str) -> bool {
@@ -140,19 +298,10 @@ fn complete_repository_state_fingerprint(
     evidence_root: &Path,
     components: &[ChangedComponent],
 ) -> MedusaResult<String> {
-    let mut paths = repository_state_paths(repo, components)?;
-    paths.sort();
-    paths.dedup();
-    let evidence_root = evidence_root
-        .canonicalize()
-        .unwrap_or_else(|_| evidence_root.to_path_buf());
+    let paths = filtered_repository_state_paths(repo, evidence_root, components)?;
     let mut hasher = Sha256::new();
     for relative in paths {
         let path = repo.join(&relative);
-        let absolute = path.canonicalize().unwrap_or_else(|_| path.clone());
-        if absolute.starts_with(&evidence_root) || relative.starts_with(".git") {
-            continue;
-        }
         let relative = relative.to_string_lossy();
         match fs::symlink_metadata(&path) {
             Ok(metadata) if metadata.file_type().is_symlink() => match fs::read_link(&path) {
@@ -187,6 +336,28 @@ fn complete_repository_state_fingerprint(
         }
     }
     Ok(format!("{:x}", hasher.finalize()))
+}
+
+fn filtered_repository_state_paths(
+    repo: &Path,
+    evidence_root: &Path,
+    components: &[ChangedComponent],
+) -> MedusaResult<Vec<PathBuf>> {
+    let mut paths = repository_state_paths(repo, components)?;
+    paths.sort();
+    paths.dedup();
+    let repo_root = repo.canonicalize().unwrap_or_else(|_| repo.to_path_buf());
+    let evidence_root = evidence_root
+        .canonicalize()
+        .unwrap_or_else(|_| evidence_root.to_path_buf());
+    paths.retain(|relative| {
+        if relative.starts_with(".git") {
+            return false;
+        }
+        let absolute = repo_root.join(relative);
+        !absolute.starts_with(&evidence_root)
+    });
+    Ok(paths)
 }
 
 fn repository_state_paths(
@@ -321,7 +492,10 @@ pub(crate) fn authoritative_verification_for_paths(
 
 #[cfg(test)]
 mod tests {
+    use std::time::Instant;
+
     use super::*;
+    use crate::verification_authority::verification_cancellation::active_verification_cancellation;
 
     #[test]
     fn explicit_ignored_component_changes_repository_state_fingerprint() {
@@ -354,6 +528,84 @@ mod tests {
                 .expect("after fingerprint");
 
         assert_ne!(before, after);
+    }
+
+    #[test]
+    fn active_state_guard_cancels_when_repository_changes() {
+        let directory = tempfile::tempdir().expect("repository");
+        fs::write(directory.path().join("input.txt"), "before\n").expect("input");
+        let component =
+            ChangedComponent::new(ChangeKind::Modified, "input.txt").expect("component");
+        let evidence_root = directory.path().join(".medusa/evidence");
+        fs::create_dir_all(&evidence_root).expect("evidence root");
+        let before = complete_repository_state_fingerprint(
+            directory.path(),
+            &evidence_root,
+            &[component.clone()],
+        )
+        .expect("before fingerprint");
+        let input = directory.path().join("input.txt");
+
+        let guarded = run_with_repository_state_guard(
+            directory.path(),
+            &evidence_root,
+            &[component],
+            &before,
+            || {
+                let cancellation = active_verification_cancellation(directory.path())
+                    .expect("active cancellation token");
+                let writer = thread::spawn(move || {
+                    thread::sleep(Duration::from_millis(150));
+                    fs::write(input, "after\n").expect("mutate repository");
+                });
+                let deadline = Instant::now() + Duration::from_secs(5);
+                while !cancellation.load(Ordering::Acquire) && Instant::now() < deadline {
+                    thread::sleep(Duration::from_millis(10));
+                }
+                writer.join().expect("writer");
+                cancellation.load(Ordering::Acquire)
+            },
+        )
+        .expect("guard");
+
+        assert!(guarded.cancelled);
+        assert!(guarded.result);
+    }
+
+    #[test]
+    fn metadata_only_change_is_confirmed_before_cancellation() {
+        let directory = tempfile::tempdir().expect("repository");
+        fs::write(directory.path().join("input.txt"), "stable\n").expect("input");
+        let component =
+            ChangedComponent::new(ChangeKind::Modified, "input.txt").expect("component");
+        let evidence_root = directory.path().join(".medusa/evidence");
+        fs::create_dir_all(&evidence_root).expect("evidence root");
+        let before = complete_repository_state_fingerprint(
+            directory.path(),
+            &evidence_root,
+            &[component.clone()],
+        )
+        .expect("before fingerprint");
+        let input = directory.path().join("input.txt");
+
+        let guarded = run_with_repository_state_guard(
+            directory.path(),
+            &evidence_root,
+            &[component],
+            &before,
+            || {
+                let cancellation = active_verification_cancellation(directory.path())
+                    .expect("active cancellation token");
+                thread::sleep(Duration::from_millis(150));
+                fs::write(input, "stable\n").expect("rewrite same content");
+                thread::sleep(Duration::from_millis(350));
+                cancellation.load(Ordering::Acquire)
+            },
+        )
+        .expect("guard");
+
+        assert!(!guarded.cancelled);
+        assert!(!guarded.result);
     }
 
     #[test]

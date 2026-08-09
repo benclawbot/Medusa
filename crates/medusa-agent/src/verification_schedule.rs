@@ -10,7 +10,11 @@ use medusa_evidence::{VerificationCheck, VerificationCheckKind, VerificationPlan
 use sha2::{Digest, Sha256};
 
 use crate::{
-    verification::{ExecutedVerificationCommand, execute_verification_command},
+    verification::{
+        ExecutedVerificationCommand, execute_verification_command,
+        execute_verification_command_cancellable,
+    },
+    verification_authority::verification_cancellation::active_verification_cancellation,
     verification_dag::{
         VerificationAuthority, VerificationDag, VerificationInputKey, VerificationNode,
         VerificationNodeState,
@@ -173,8 +177,19 @@ pub(crate) fn execute_command_wave(
             handles.push((
                 id,
                 scope.spawn(move || {
-                    execute_verification_command(&working_directory, program, &args)
+                    if let Some(cancellation) = active_verification_cancellation(&working_directory)
+                    {
+                        execute_verification_command_cancellable(
+                            &working_directory,
+                            program,
+                            &args,
+                            &cancellation,
+                        )
                         .map_err(|error| error.to_string())
+                    } else {
+                        execute_verification_command(&working_directory, program, &args)
+                            .map_err(|error| error.to_string())
+                    }
                 }),
             ));
         }
