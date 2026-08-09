@@ -69,12 +69,8 @@ pub fn authoritative_verification_for_components_at(
             invalidate_persisted_reuse(&store_root)?;
         }
 
-        let guarded = run_with_repository_state_guard(
-            repo,
-            evidence_root,
-            components,
-            &before,
-            || {
+        let guarded =
+            run_with_repository_state_guard(repo, evidence_root, components, &before, || {
                 legacy::authoritative_verification_for_components_at(
                     repo,
                     evidence_root,
@@ -82,8 +78,7 @@ pub fn authoritative_verification_for_components_at(
                     commit,
                     components,
                 )
-            },
-        );
+            });
         if guarded.cancelled {
             invalidate_persisted_reuse(&store_root)?;
             continue;
