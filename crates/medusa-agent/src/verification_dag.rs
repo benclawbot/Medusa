@@ -2,6 +2,9 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use serde::{Deserialize, Serialize};
 
+#[path = "verification_resource_pool.rs"]
+pub mod resource_pool;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum VerificationAuthority {
     Diagnostic,
