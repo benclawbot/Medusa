@@ -22,6 +22,7 @@ const CREATE_SUSPENDED: u32 = 0x0000_0004;
 #[derive(Debug)]
 pub struct OwnedProcessTree {
     child: Child,
+    terminated: bool,
     #[cfg(unix)]
     process_group: i32,
     #[cfg(windows)]
@@ -43,6 +44,7 @@ impl OwnedProcessTree {
             })?;
             Ok(Self {
                 child,
+                terminated: false,
                 process_group,
             })
         }
@@ -63,12 +65,17 @@ impl OwnedProcessTree {
                 let _ = child.wait();
                 return Err(error);
             }
-            Ok(Self { child, job })
+            Ok(Self {
+                child,
+                terminated: false,
+                job,
+            })
         }
         #[cfg(not(any(unix, windows)))]
         {
             Ok(Self {
                 child: command.spawn()?,
+                terminated: false,
             })
         }
     }
@@ -93,16 +100,21 @@ impl OwnedProcessTree {
 
     /// Force-terminates the owned process tree. Missing/already-exited groups are treated as success.
     pub fn terminate(&mut self) -> io::Result<()> {
+        if self.terminated {
+            return Ok(());
+        }
         #[cfg(unix)]
         {
             // SAFETY: the child was created in a dedicated process group whose ID is the child's PID.
             // Passing the negated group ID to kill targets that group only. ESRCH means it already exited.
             let result = unsafe { libc::kill(-self.process_group, libc::SIGKILL) };
             if result == 0 {
+                self.terminated = true;
                 return Ok(());
             }
             let error = io::Error::last_os_error();
             if error.raw_os_error() == Some(libc::ESRCH) {
+                self.terminated = true;
                 Ok(())
             } else {
                 Err(error)
@@ -110,11 +122,15 @@ impl OwnedProcessTree {
         }
         #[cfg(windows)]
         {
-            self.job.terminate()
+            self.job.terminate()?;
+            self.terminated = true;
+            Ok(())
         }
         #[cfg(not(any(unix, windows)))]
         {
-            self.child.kill()
+            self.child.kill()?;
+            self.terminated = true;
+            Ok(())
         }
     }
 }
