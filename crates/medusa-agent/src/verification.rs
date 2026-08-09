@@ -3,12 +3,14 @@ use std::{
     io::Read,
     path::Path,
     process::{Command, ExitStatus, Stdio},
+    sync::atomic::{AtomicBool, Ordering},
     thread,
     time::{Duration, Instant},
 };
 
 use medusa_browser_client::{BrowserClient, BrowserRequest, BrowserResponse};
 use medusa_core::{ErrorCategory, ErrorCode, MedusaError, MedusaResult};
+use medusa_process_containment::OwnedProcessTree;
 
 const VERIFICATION_TIMEOUT: Duration = Duration::from_secs(300);
 const VERIFICATION_POLL_INTERVAL: Duration = Duration::from_millis(25);
@@ -28,8 +30,18 @@ pub(crate) fn execute_verification_command(
     program: &str,
     args: &[String],
 ) -> MedusaResult<ExecutedVerificationCommand> {
+    let cancellation = AtomicBool::new(false);
+    execute_verification_command_cancellable(repo, program, args, &cancellation)
+}
+
+pub(crate) fn execute_verification_command_cancellable(
+    repo: &Path,
+    program: &str,
+    args: &[String],
+    cancellation: &AtomicBool,
+) -> MedusaResult<ExecutedVerificationCommand> {
     let program = platform_program(program);
-    let output = run_supervised_command(repo, program, args, VERIFICATION_TIMEOUT)?;
+    let output = run_supervised_command(repo, program, args, VERIFICATION_TIMEOUT, cancellation)?;
     Ok(ExecutedVerificationCommand {
         exit_code: output.status.code(),
         timed_out: output.timed_out,
@@ -215,6 +227,7 @@ fn run_supervised_command<S: AsRef<std::ffi::OsStr>>(
     program: &str,
     args: &[S],
     timeout: Duration,
+    cancellation: &AtomicBool,
 ) -> MedusaResult<SupervisedOutput> {
     let id = ulid::Ulid::new();
     let stdout_path = std::env::temp_dir().join(format!("medusa-verify-{id}.stdout"));
@@ -222,16 +235,24 @@ fn run_supervised_command<S: AsRef<std::ffi::OsStr>>(
     let stdout_file = File::create(&stdout_path)?;
     let stderr_file = File::create(&stderr_path)?;
     let started = Instant::now();
-    let mut child = Command::new(program)
+    let mut command = Command::new(program);
+    command
         .args(args)
         .current_dir(repo)
         .env("PYTHONDONTWRITEBYTECODE", "1")
         .stdin(Stdio::null())
         .stdout(Stdio::from(stdout_file))
-        .stderr(Stdio::from(stderr_file))
-        .spawn()
-        .map_err(|error| command_error(program, error))?;
+        .stderr(Stdio::from(stderr_file));
+    let mut child =
+        OwnedProcessTree::spawn(&mut command).map_err(|error| command_error(program, error))?;
     let (status, timed_out) = loop {
+        if cancellation.load(Ordering::Acquire) {
+            let _ = child.terminate();
+            let _ = child.wait();
+            let _ = fs::remove_file(&stdout_path);
+            let _ = fs::remove_file(&stderr_path);
+            return Err(cancelled_command(program));
+        }
         if let Some(status) = child
             .try_wait()
             .map_err(|error| command_error(program, error))?
@@ -239,7 +260,7 @@ fn run_supervised_command<S: AsRef<std::ffi::OsStr>>(
             break (status, false);
         }
         if started.elapsed() >= timeout {
-            let _ = child.kill();
+            let _ = child.terminate();
             let status = child
                 .wait()
                 .map_err(|error| command_error(program, error))?;
@@ -338,6 +359,18 @@ fn command_error(program: &str, error: std::io::Error) -> MedusaError {
     )
 }
 
+fn cancelled_command(program: &str) -> MedusaError {
+    let mut error = MedusaError::new(
+        ErrorCode::ToolExecutionFailed,
+        ErrorCategory::Execution,
+        format!("verification program `{program}` cancelled"),
+    );
+    error
+        .context
+        .insert("cancelled".to_owned(), serde_json::Value::Bool(true));
+    error
+}
+
 struct SupervisedOutput {
     status: ExitStatus,
     stdout: Vec<u8>,
@@ -365,6 +398,20 @@ mod tests {
         assert!(result.passed);
         assert!(!result.stdout.is_empty());
         assert!(result.stderr.is_empty());
+    }
+
+    #[test]
+    fn pre_cancelled_command_does_not_execute() {
+        let directory = tempfile::tempdir().expect("tempdir");
+        let cancellation = AtomicBool::new(true);
+        let error = execute_verification_command_cancellable(
+            directory.path(),
+            "rustc",
+            &["--version".to_owned()],
+            &cancellation,
+        )
+        .expect_err("cancelled");
+        assert_eq!(error.context.get("cancelled"), Some(&serde_json::Value::Bool(true)));
     }
 
     #[test]
