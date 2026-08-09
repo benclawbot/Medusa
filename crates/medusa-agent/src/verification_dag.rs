@@ -104,8 +104,11 @@ impl VerificationDag {
         if !ready {
             return Err(format!("verification node {id} is not ready"));
         }
-        self.nodes.get_mut(id).expect("ready node must exist").state =
-            VerificationNodeState::Running;
+        let node = self
+            .nodes
+            .get_mut(id)
+            .ok_or_else(|| format!("verification node {id} disappeared while becoming ready"))?;
+        node.state = VerificationNodeState::Running;
         Ok(())
     }
 
