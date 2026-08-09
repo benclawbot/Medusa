@@ -14,5 +14,12 @@ jobs:
           git config user.name benclawbot
           git config user.email 259942410+benclawbot@users.noreply.github.com
           git fetch origin main
-          git merge --no-edit origin/main
+          if ! git merge --no-edit origin/main; then
+            conflicts="$(git diff --name-only --diff-filter=U)"
+            test "$conflicts" = "crates/medusa-agent/src/evidence.rs"
+            git checkout --ours crates/medusa-agent/src/evidence.rs
+            git add crates/medusa-agent/src/evidence.rs
+            test -z "$(git diff --name-only --diff-filter=U)"
+            git commit --no-edit
+          fi
           git push origin HEAD:issue-752-durable-session-actions
