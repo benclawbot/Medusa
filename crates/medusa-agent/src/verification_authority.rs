@@ -13,6 +13,8 @@ use crate::verification::VerificationResult;
 #[path = "verification_checkpoint.rs"]
 pub(crate) mod verification_checkpoint;
 
+use verification_checkpoint::VerificationCheckpointStore;
+
 #[allow(dead_code)]
 #[path = "verification_authority_legacy.rs"]
 mod legacy;
@@ -112,6 +114,9 @@ fn valid_cache_artifact_id(id: &ArtifactId) -> bool {
 }
 
 fn invalidate_persisted_reuse(store_root: &Path) -> MedusaResult<()> {
+    VerificationCheckpointStore::new(store_root)
+        .remove()
+        .map_err(|error| invalid(format!("failed to invalidate verification checkpoint: {error}")))?;
     for name in [
         "verification-receipt.json",
         "verification-dag.json",
