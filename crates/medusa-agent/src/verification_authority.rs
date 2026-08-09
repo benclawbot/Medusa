@@ -2,6 +2,12 @@ use std::{
     fs,
     path::{Path, PathBuf},
     process::Command,
+    sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+    },
+    thread,
+    time::Duration,
 };
 
 use medusa_core::{ErrorCategory, ErrorCode, MedusaError, MedusaResult};
@@ -10,9 +16,12 @@ use sha2::{Digest, Sha256};
 
 use crate::verification::VerificationResult;
 
+#[path = "verification_cancellation.rs"]
+pub(crate) mod verification_cancellation;
 #[path = "verification_checkpoint.rs"]
 pub(crate) mod verification_checkpoint;
 
+use verification_cancellation::register_verification_cancellation;
 use verification_checkpoint::VerificationCheckpointStore;
 
 #[allow(dead_code)]
@@ -23,6 +32,7 @@ pub use legacy::{AuthoritativeVerificationResult, prepare_components_for_verific
 
 const MAX_STABLE_VERIFICATION_ATTEMPTS: usize = 3;
 const STATE_FINGERPRINT_FILE: &str = "verification-state-fingerprint";
+const STATE_WATCH_INTERVAL: Duration = Duration::from_millis(100);
 
 pub(crate) fn prepare_paths_for_verification(repo: &Path, paths: &[String]) -> MedusaResult<()> {
     legacy::prepare_paths_for_verification(repo, paths)
@@ -59,13 +69,26 @@ pub fn authoritative_verification_for_components_at(
             invalidate_persisted_reuse(&store_root)?;
         }
 
-        let result = legacy::authoritative_verification_for_components_at(
+        let guarded = run_with_repository_state_guard(
             repo,
             evidence_root,
-            repository_fingerprint,
-            commit,
             components,
-        )?;
+            &before,
+            || {
+                legacy::authoritative_verification_for_components_at(
+                    repo,
+                    evidence_root,
+                    repository_fingerprint,
+                    commit,
+                    components,
+                )
+            },
+        );
+        if guarded.cancelled {
+            invalidate_persisted_reuse(&store_root)?;
+            continue;
+        }
+        let result = guarded.result?;
         let after = complete_repository_state_fingerprint(repo, evidence_root, components)?;
         if before == after {
             fs::create_dir_all(&store_root)?;
@@ -79,6 +102,50 @@ pub fn authoritative_verification_for_components_at(
     Err(invalid(
         "repository state changed repeatedly during authoritative verification",
     ))
+}
+
+struct GuardedVerification<T> {
+    result: T,
+    cancelled: bool,
+}
+
+fn run_with_repository_state_guard<T>(
+    repo: &Path,
+    evidence_root: &Path,
+    components: &[ChangedComponent],
+    expected: &str,
+    operation: impl FnOnce() -> T,
+) -> GuardedVerification<T> {
+    let registration = register_verification_cancellation(repo);
+    let cancellation = registration.token();
+    let stop = Arc::new(AtomicBool::new(false));
+
+    thread::scope(|scope| {
+        let watcher_cancellation = Arc::clone(&cancellation);
+        let watcher_stop = Arc::clone(&stop);
+        scope.spawn(move || {
+            while !watcher_stop.load(Ordering::Acquire) {
+                thread::sleep(STATE_WATCH_INTERVAL);
+                if watcher_stop.load(Ordering::Acquire) {
+                    break;
+                }
+                match complete_repository_state_fingerprint(repo, evidence_root, components) {
+                    Ok(current) if current == expected => {}
+                    Ok(_) | Err(_) => {
+                        watcher_cancellation.store(true, Ordering::Release);
+                        break;
+                    }
+                }
+            }
+        });
+
+        let result = operation();
+        stop.store(true, Ordering::Release);
+        GuardedVerification {
+            result,
+            cancelled: cancellation.load(Ordering::Acquire),
+        }
+    })
 }
 
 fn state_marker_matches(store_root: &Path, expected: &str) -> bool {
@@ -321,7 +388,10 @@ pub(crate) fn authoritative_verification_for_paths(
 
 #[cfg(test)]
 mod tests {
+    use std::time::Instant;
+
     use super::*;
+    use crate::verification_authority::verification_cancellation::active_verification_cancellation;
 
     #[test]
     fn explicit_ignored_component_changes_repository_state_fingerprint() {
@@ -354,6 +424,47 @@ mod tests {
                 .expect("after fingerprint");
 
         assert_ne!(before, after);
+    }
+
+    #[test]
+    fn active_state_guard_cancels_when_repository_changes() {
+        let directory = tempfile::tempdir().expect("repository");
+        fs::write(directory.path().join("input.txt"), "before\n").expect("input");
+        let component =
+            ChangedComponent::new(ChangeKind::Modified, "input.txt").expect("component");
+        let evidence_root = directory.path().join(".medusa/evidence");
+        fs::create_dir_all(&evidence_root).expect("evidence root");
+        let before = complete_repository_state_fingerprint(
+            directory.path(),
+            &evidence_root,
+            &[component.clone()],
+        )
+        .expect("before fingerprint");
+        let input = directory.path().join("input.txt");
+
+        let guarded = run_with_repository_state_guard(
+            directory.path(),
+            &evidence_root,
+            &[component],
+            &before,
+            || {
+                let cancellation = active_verification_cancellation(directory.path())
+                    .expect("active cancellation token");
+                let writer = thread::spawn(move || {
+                    thread::sleep(Duration::from_millis(150));
+                    fs::write(input, "after\n").expect("mutate repository");
+                });
+                let deadline = Instant::now() + Duration::from_secs(5);
+                while !cancellation.load(Ordering::Acquire) && Instant::now() < deadline {
+                    thread::sleep(Duration::from_millis(10));
+                }
+                writer.join().expect("writer");
+                cancellation.load(Ordering::Acquire)
+            },
+        );
+
+        assert!(guarded.cancelled);
+        assert!(guarded.result);
     }
 
     #[test]
