@@ -233,9 +233,10 @@ impl VerificationDag {
         !authoritative.is_empty()
             && authoritative.iter().all(|node| {
                 node.state == VerificationNodeState::Passed
-                    && self.receipts.get(&node.id).is_some_and(|receipt| {
-                        receipt.passed && receipt.input == node.input
-                    })
+                    && self
+                        .receipts
+                        .get(&node.id)
+                        .is_some_and(|receipt| receipt.passed && receipt.input == node.input)
             })
     }
 }
@@ -369,9 +370,18 @@ mod tests {
         pass(&mut dag, "test-b");
 
         assert_eq!(dag.invalidate_paths(["a.rs"]), 2);
-        assert_eq!(dag.node("format-a").unwrap().state, VerificationNodeState::Stale);
-        assert_eq!(dag.node("test-a").unwrap().state, VerificationNodeState::Stale);
-        assert_eq!(dag.node("test-b").unwrap().state, VerificationNodeState::Passed);
+        assert_eq!(
+            dag.node("format-a").unwrap().state,
+            VerificationNodeState::Stale
+        );
+        assert_eq!(
+            dag.node("test-a").unwrap().state,
+            VerificationNodeState::Stale
+        );
+        assert_eq!(
+            dag.node("test-b").unwrap().state,
+            VerificationNodeState::Passed
+        );
         assert!(dag.reusable_receipt("test-b", &input(&["b.rs"])).is_some());
 
         let mut refreshed = input(&["a.rs"]);
@@ -408,7 +418,10 @@ mod tests {
             })
             .expect_err("mismatch rejected");
         assert!(error.contains("input mismatch"));
-        assert_eq!(dag.node("unit").unwrap().state, VerificationNodeState::Stale);
+        assert_eq!(
+            dag.node("unit").unwrap().state,
+            VerificationNodeState::Stale
+        );
         assert!(!dag.authoritative_complete());
     }
 
