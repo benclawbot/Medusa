@@ -459,27 +459,58 @@ fn repository_state_fingerprint(repo: &Path, evidence_root: &Path) -> MedusaResu
         if absolute.starts_with(&evidence_root) || relative.starts_with(".git") {
             continue;
         }
-        hasher.update(relative.to_string_lossy().as_bytes());
+        let relative = relative.to_string_lossy();
         match fs::symlink_metadata(&path) {
-            Ok(metadata) if metadata.file_type().is_symlink() => {
-                hasher.update(b"symlink");
-                match fs::read_link(&path) {
-                    Ok(target) => hasher.update(target.to_string_lossy().as_bytes()),
-                    Err(_) => hasher.update(b"unreadable"),
-                }
-            }
-            Ok(metadata) if metadata.is_file() => {
-                hasher.update(b"file");
-                match fs::read(&path) {
-                    Ok(bytes) => hasher.update(bytes),
-                    Err(_) => hasher.update(b"unreadable"),
-                }
-            }
-            Ok(_) => hasher.update(b"other"),
-            Err(_) => hasher.update(b"missing"),
+            Ok(metadata) if metadata.file_type().is_symlink() => match fs::read_link(&path) {
+                Ok(target) => hash_repository_state_entry(
+                    &mut hasher,
+                    relative.as_bytes(),
+                    b"symlink",
+                    target.to_string_lossy().as_bytes(),
+                ),
+                Err(_) => hash_repository_state_entry(
+                    &mut hasher,
+                    relative.as_bytes(),
+                    b"symlink",
+                    b"unreadable",
+                ),
+            },
+            Ok(metadata) if metadata.is_file() => match fs::read(&path) {
+                Ok(bytes) => hash_repository_state_entry(
+                    &mut hasher,
+                    relative.as_bytes(),
+                    b"file",
+                    &bytes,
+                ),
+                Err(_) => hash_repository_state_entry(
+                    &mut hasher,
+                    relative.as_bytes(),
+                    b"file",
+                    b"unreadable",
+                ),
+            },
+            Ok(_) => hash_repository_state_entry(
+                &mut hasher,
+                relative.as_bytes(),
+                b"other",
+                b"",
+            ),
+            Err(_) => hash_repository_state_entry(
+                &mut hasher,
+                relative.as_bytes(),
+                b"missing",
+                b"",
+            ),
         }
     }
     Ok(format!("{:x}", hasher.finalize()))
+}
+
+fn hash_repository_state_entry(hasher: &mut Sha256, path: &[u8], kind: &[u8], payload: &[u8]) {
+    for part in [path, kind, payload] {
+        hasher.update((part.len() as u64).to_le_bytes());
+        hasher.update(part);
+    }
 }
 
 fn repository_state_paths(repo: &Path) -> MedusaResult<Vec<PathBuf>> {
@@ -1279,6 +1310,18 @@ mod tests {
                 .iter()
                 .any(|line| line == "verification_reuse=exact-persisted-receipt")
         );
+    }
+
+    #[test]
+    fn repository_state_fingerprint_frames_entry_boundaries() {
+        let mut single_entry = Sha256::new();
+        hash_repository_state_entry(&mut single_entry, b"a.rs", b"file", b"Xb.rsfileY");
+
+        let mut split_entries = Sha256::new();
+        hash_repository_state_entry(&mut split_entries, b"a.rs", b"file", b"X");
+        hash_repository_state_entry(&mut split_entries, b"b.rs", b"file", b"Y");
+
+        assert_ne!(single_entry.finalize(), split_entries.finalize());
     }
 
     #[test]
