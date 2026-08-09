@@ -113,10 +113,12 @@ impl VerificationCheckpointStore {
             .map_err(|error| error.to_string())?
             .as_nanos();
         let generation = format!("{nonce:039}-{:010}", std::process::id());
-        let temporary = self.root.join(format!(".{CHECKPOINT_PREFIX}{generation}.tmp"));
-        let published = self
+        let temporary = self
             .root
-            .join(format!("{CHECKPOINT_PREFIX}{generation}{CHECKPOINT_SUFFIX}"));
+            .join(format!(".{CHECKPOINT_PREFIX}{generation}.tmp"));
+        let published = self.root.join(format!(
+            "{CHECKPOINT_PREFIX}{generation}{CHECKPOINT_SUFFIX}"
+        ));
         fs::write(&temporary, bytes).map_err(|error| error.to_string())?;
         match fs::rename(&temporary, &published) {
             Ok(()) => {
@@ -229,8 +231,8 @@ mod tests {
     fn roundtrip_is_bound_to_exact_repository_state() {
         let directory = tempfile::tempdir().expect("directory");
         let store = VerificationCheckpointStore::new(directory.path());
-        let checkpoint = VerificationCheckpoint::new("state-a", dag(), vec!["complete"])
-            .expect("checkpoint");
+        let checkpoint =
+            VerificationCheckpoint::new("state-a", dag(), vec!["complete"]).expect("checkpoint");
         store.save(&checkpoint).expect("save");
 
         let restored = store
@@ -238,7 +240,12 @@ mod tests {
             .expect("load")
             .expect("checkpoint");
         assert_eq!(restored.payload, vec!["complete"]);
-        assert!(store.load::<Vec<String>>("state-b").expect("load").is_none());
+        assert!(
+            store
+                .load::<Vec<String>>("state-b")
+                .expect("load")
+                .is_none()
+        );
     }
 
     #[test]
@@ -264,9 +271,9 @@ mod tests {
         let directory = tempfile::tempdir().expect("directory");
         let store = VerificationCheckpointStore::new(directory.path());
         fs::create_dir_all(directory.path()).expect("directory");
-        let corrupt = directory
-            .path()
-            .join("verification-checkpoint-000000000000000000000000000000000000001-0000000001.json");
+        let corrupt = directory.path().join(
+            "verification-checkpoint-000000000000000000000000000000000000001-0000000001.json",
+        );
         fs::write(&corrupt, b"{broken").expect("corrupt checkpoint");
         assert!(store.load::<Vec<String>>("state").expect("load").is_none());
         assert!(!corrupt.exists());
