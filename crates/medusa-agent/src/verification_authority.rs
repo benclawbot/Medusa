@@ -237,7 +237,7 @@ pub fn authoritative_verification_for_components_at(
                 artifact_refs: material
                     .artifact_ids
                     .iter()
-                    .map(ToString::to_string)
+                    .map(|artifact_id| artifact_id.0.clone())
                     .collect(),
             })
             .map_err(invalid)?;
