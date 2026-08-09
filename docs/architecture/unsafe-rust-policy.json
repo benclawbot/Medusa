@@ -29,6 +29,12 @@
         "reason": "Acquires immutable native process-creation identity using reviewed Windows process-time and macOS libproc APIs; Linux uses procfs without unsafe Rust, while all FFI remains isolated in this low-level module."
       },
       {
+        "path": "crates/medusa-process-containment/src/process_tree.rs",
+        "module": "process_tree",
+        "classification": "unsafe-ffi",
+        "reason": "Uses Unix kill(2) only to signal Medusa-owned dedicated process groups and delegates Windows descendant ownership to the reviewed Job Object boundary; all unsafe operations retain local safety rationale."
+      },
+      {
         "path": "crates/medusa-process-containment/src/windows.rs",
         "module": "windows",
         "classification": "unsafe-ffi",
