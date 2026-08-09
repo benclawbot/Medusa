@@ -2,6 +2,7 @@ use std::{
     collections::BTreeMap,
     fs,
     path::{Path, PathBuf},
+    sync::{Arc, Mutex},
     time::{SystemTime, UNIX_EPOCH},
 };
 
@@ -92,6 +93,7 @@ pub struct WarmResourceReceipt {
 pub struct WarmResourcePool {
     root: PathBuf,
     limits: WarmResourcePoolLimits,
+    operation_lock: Arc<Mutex<()>>,
 }
 
 impl WarmResourcePool {
@@ -104,7 +106,11 @@ impl WarmResourcePool {
                 root.display()
             )
         })?;
-        let pool = Self { root, limits };
+        let pool = Self {
+            root,
+            limits,
+            operation_lock: Arc::new(Mutex::new(())),
+        };
         pool.prune()?;
         Ok(pool)
     }
@@ -123,16 +129,16 @@ impl WarmResourcePool {
                 self.limits.max_bytes
             ));
         }
-
-        self.prune()?;
+        let _guard = self.lock_operations()?;
+        self.prune_unlocked()?;
         let entry_id = key_fingerprint(&key)?;
         let object_path = self.object_path(&entry_id);
         let metadata_path = self.metadata_path(&entry_id);
         if object_path.is_file() || metadata_path.is_file() {
-            if let Some(existing) = self.get(&key)? {
-                if existing.1 == bytes {
-                    return Ok(existing.0);
-                }
+            if let Some(existing) = self.get_unlocked(&key)?
+                && existing.1 == bytes
+            {
+                return Ok(existing.0);
             }
             remove_pair(&object_path, &metadata_path)?;
         }
@@ -151,9 +157,9 @@ impl WarmResourcePool {
             let _ = fs::remove_file(&object_path);
             return Err(error);
         }
-        self.prune()?;
+        self.prune_unlocked()?;
 
-        match self.get(&receipt.key)? {
+        match self.get_unlocked(&receipt.key)? {
             Some((persisted, _)) => Ok(persisted),
             None => {
                 Err("warm verification resource was immediately evicted by pool limits".to_owned())
@@ -166,6 +172,19 @@ impl WarmResourcePool {
         key: &WarmResourceKey,
     ) -> Result<Option<(WarmResourceReceipt, Vec<u8>)>, String> {
         key.validate()?;
+        let _guard = self.lock_operations()?;
+        self.get_unlocked(key)
+    }
+
+    pub fn prune(&self) -> Result<usize, String> {
+        let _guard = self.lock_operations()?;
+        self.prune_unlocked()
+    }
+
+    fn get_unlocked(
+        &self,
+        key: &WarmResourceKey,
+    ) -> Result<Option<(WarmResourceReceipt, Vec<u8>)>, String> {
         let entry_id = key_fingerprint(key)?;
         let object_path = self.object_path(&entry_id);
         let metadata_path = self.metadata_path(&entry_id);
@@ -206,7 +225,7 @@ impl WarmResourcePool {
         Ok(Some((receipt, bytes)))
     }
 
-    pub fn prune(&self) -> Result<usize, String> {
+    fn prune_unlocked(&self) -> Result<usize, String> {
         let now = now_unix_seconds()?;
         let mut entries = BTreeMap::<String, WarmResourceReceipt>::new();
         let directory = fs::read_dir(&self.root).map_err(|error| {
@@ -224,6 +243,21 @@ impl WarmResourcePool {
             let Some(name) = path.file_name().and_then(|name| name.to_str()) else {
                 continue;
             };
+
+            if name.starts_with('.') && name.contains(".tmp-") {
+                remove_file_if_present(&path)?;
+                removed += 1;
+                continue;
+            }
+
+            if let Some(entry_id) = name.strip_suffix(OBJECT_SUFFIX) {
+                if !self.metadata_path(entry_id).is_file() {
+                    remove_file_if_present(&path)?;
+                    removed += 1;
+                }
+                continue;
+            }
+
             let Some(entry_id) = name.strip_suffix(METADATA_SUFFIX) else {
                 continue;
             };
@@ -273,6 +307,12 @@ impl WarmResourcePool {
             removed += 1;
         }
         Ok(removed)
+    }
+
+    fn lock_operations(&self) -> Result<std::sync::MutexGuard<'_, ()>, String> {
+        self.operation_lock
+            .lock()
+            .map_err(|_| "warm verification resource pool lock is poisoned".to_owned())
     }
 
     fn object_path(&self, entry_id: &str) -> PathBuf {
@@ -334,20 +374,20 @@ fn write_new_atomic(path: &Path, bytes: &[u8]) -> Result<(), String> {
     })
 }
 
-fn remove_pair(object_path: &Path, metadata_path: &Path) -> Result<(), String> {
-    for path in [object_path, metadata_path] {
-        match fs::remove_file(path) {
-            Ok(()) => {}
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
-            Err(error) => {
-                return Err(format!(
-                    "failed to remove warm resource {}: {error}",
-                    path.display()
-                ));
-            }
-        }
+fn remove_file_if_present(path: &Path) -> Result<(), String> {
+    match fs::remove_file(path) {
+        Ok(()) => Ok(()),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(error) => Err(format!(
+            "failed to remove warm resource {}: {error}",
+            path.display()
+        )),
     }
-    Ok(())
+}
+
+fn remove_pair(object_path: &Path, metadata_path: &Path) -> Result<(), String> {
+    remove_file_if_present(object_path)?;
+    remove_file_if_present(metadata_path)
 }
 
 fn now_unix_seconds() -> Result<u64, String> {
@@ -365,6 +405,8 @@ fn sha256(bytes: &[u8]) -> String {
 
 #[cfg(test)]
 mod tests {
+    use std::thread;
+
     use super::*;
 
     fn key(kind: WarmResourceKind, input: &str) -> WarmResourceKey {
@@ -462,7 +504,51 @@ mod tests {
         let entry_id = key_fingerprint(&key).expect("entry id");
         fs::write(pool.object_path(&entry_id), b"orphan").expect("orphan object");
 
-        assert!(pool.get(&key).expect("lookup").is_none());
+        assert_eq!(pool.prune().expect("prune orphan"), 1);
         assert!(!pool.object_path(&entry_id).exists());
+    }
+
+    #[test]
+    fn prune_removes_stale_temporary_files() {
+        let directory = tempfile::tempdir().expect("directory");
+        let pool = pool(directory.path(), 4, 1024);
+        let temporary = directory.path().join(".orphan.bin.tmp-01H00000000000000000000000");
+        fs::write(&temporary, b"orphan").expect("temporary");
+
+        assert_eq!(pool.prune().expect("prune temporary"), 1);
+        assert!(!temporary.exists());
+    }
+
+    #[test]
+    fn cloned_pool_serializes_same_key_publication_and_reads() {
+        let directory = tempfile::tempdir().expect("directory");
+        let pool = pool(directory.path(), 4, 1024);
+        let key = key(WarmResourceKind::DependencyCache, "concurrent");
+        let writer = pool.clone();
+        let reader = pool.clone();
+        let writer_key = key.clone();
+        let reader_key = key.clone();
+
+        let write = thread::spawn(move || writer.put(writer_key, b"shared-resource"));
+        let read = thread::spawn(move || {
+            for _ in 0..64 {
+                if let Some(resource) = reader.get(&reader_key).expect("read") {
+                    return Some(resource);
+                }
+                thread::yield_now();
+            }
+            None
+        });
+
+        let written = write.join().expect("writer").expect("put");
+        let observed = read.join().expect("reader");
+        if let Some((receipt, bytes)) = observed {
+            assert_eq!(receipt, written);
+            assert_eq!(bytes, b"shared-resource");
+        }
+        assert_eq!(
+            pool.get(&key).expect("final read").expect("resource").1,
+            b"shared-resource"
+        );
     }
 }
