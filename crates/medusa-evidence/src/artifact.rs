@@ -106,17 +106,23 @@ impl ArtifactStore {
         metadata.fingerprint = metadata_fingerprint(&metadata);
         let object_path = self.object_path(&id);
         if object_path.is_file() {
-            if fs::read(&object_path)? != bytes {
-                return Err(EvidenceError::Validation(
-                    "content-addressed artifact collision".to_owned(),
-                ));
+            let existing = fs::read(&object_path)?;
+            if existing != bytes {
+                if hash_bytes(&existing) == sha256 {
+                    return Err(EvidenceError::Validation(
+                        "content-addressed artifact collision".to_owned(),
+                    ));
+                }
+                write_atomic(&object_path, bytes)?;
             }
         } else {
             write_atomic(&object_path, bytes)?;
         }
         let metadata_path = self.metadata_path(&id);
-        if metadata_path.is_file() {
-            return self.metadata(&id);
+        if metadata_path.is_file()
+            && let Ok(existing) = self.metadata(&id)
+        {
+            return Ok(existing);
         }
         write_json_atomic(&metadata_path, &metadata)?;
         Ok(metadata)
@@ -347,5 +353,30 @@ mod tests {
             .expect("range");
         assert_eq!(middle, bytes[40_000..40_128]);
         assert_eq!(store.load_read_receipt(&receipt.id).unwrap(), receipt);
+    }
+
+    #[test]
+    fn put_bytes_repairs_corrupted_cached_object_and_metadata() {
+        let directory = tempfile::tempdir().expect("tempdir");
+        let store = ArtifactStore::open(directory.path()).expect("store");
+        let bytes = b"authoritative evidence";
+        let artifact = store
+            .put_bytes("text/plain", "test", bytes)
+            .expect("artifact");
+        let object_path = store.object_path(&artifact.id);
+        let metadata_path = store.metadata_path(&artifact.id);
+
+        fs::write(&object_path, b"corrupted").expect("corrupt object");
+        let repaired_object = store
+            .put_bytes("text/plain", "test", bytes)
+            .expect("repair object");
+        assert_eq!(fs::read(&object_path).expect("object"), bytes);
+        assert_eq!(store.metadata(&artifact.id).unwrap(), repaired_object);
+
+        fs::write(&metadata_path, b"{broken-metadata").expect("corrupt metadata");
+        let repaired_metadata = store
+            .put_bytes("text/plain", "test", bytes)
+            .expect("repair metadata");
+        assert_eq!(store.metadata(&artifact.id).unwrap(), repaired_metadata);
     }
 }
