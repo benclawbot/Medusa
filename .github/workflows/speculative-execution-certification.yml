@@ -1,0 +1,36 @@
+name: Speculative Execution Certification
+
+on:
+  pull_request:
+    paths:
+      - 'crates/medusa-multi-agent-scheduler/**'
+      - 'crates/medusa-runtime/**'
+      - '.github/workflows/speculative-execution-certification.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'crates/medusa-multi-agent-scheduler/**'
+      - 'crates/medusa-runtime/**'
+      - '.github/workflows/speculative-execution-certification.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  certify:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      - uses: dtolnay/rust-toolchain@39b0b3842c7e8bbf6904c0bfc3d9006fdd4dc4e0
+        with:
+          toolchain: stable
+      - name: Verify typed speculation policy and fail-closed promotion
+        run: cargo test -p medusa-multi-agent-scheduler speculation -- --nocapture
+      - name: Verify speculative transaction authority boundary
+        run: cargo test -p medusa-runtime speculative_transaction_requires_explicit_promotion_before_review -- --nocapture
+      - name: Measure speculative overlap benefit
+        run: cargo test -p medusa-multi-agent-scheduler --test speculation_performance -- --nocapture
