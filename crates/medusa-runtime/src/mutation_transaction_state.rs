@@ -24,6 +24,7 @@ const MAX_REVISIONS: u32 = 2;
 pub enum MutationLifecycle {
     Planned,
     PreparedInIsolation,
+    SpeculativePrepared,
     ReviewPending,
     RevisionRequested,
     ReviewAccepted,
@@ -83,6 +84,7 @@ pub struct PreparedMutationInput {
     pub implementation_summary: String,
     pub worktree_verification_evidence: Vec<String>,
     pub worktree_verification_receipt: VerificationReceipt,
+    pub speculative: bool,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -153,6 +155,13 @@ impl MutationTransaction {
         if path.is_file() {
             let mut transaction = Self::open(&path)?;
             transaction.validate_identity(&input)?;
+            if transaction.state.lifecycle == MutationLifecycle::SpeculativePrepared {
+                transaction.validate_speculative_promotion_input(&input)?;
+                if !input.speculative {
+                    transaction.transition(MutationLifecycle::ReviewPending, None)?;
+                }
+                return Ok(transaction);
+            }
             if matches!(
                 transaction.state.lifecycle,
                 MutationLifecycle::Planned | MutationLifecycle::RevisionRequested
@@ -644,6 +653,7 @@ impl MutationTransaction {
                 self.state.lifecycle
             ));
         }
+        let speculative = input.speculative;
         let commit = input
             .worker
             .commit
@@ -697,7 +707,40 @@ impl MutationTransaction {
         self.state.authorization = None;
         self.state.integration = None;
         self.transition(MutationLifecycle::PreparedInIsolation, None)?;
-        self.transition(MutationLifecycle::ReviewPending, None)
+        if speculative {
+            self.transition(MutationLifecycle::SpeculativePrepared, None)
+        } else {
+            self.transition(MutationLifecycle::ReviewPending, None)
+        }
+    }
+
+    fn validate_speculative_promotion_input(
+        &self,
+        input: &PreparedMutationInput,
+    ) -> Result<(), String> {
+        let commit = input
+            .worker
+            .commit
+            .as_deref()
+            .ok_or_else(|| "speculative promotion input has no prepared commit".to_owned())?;
+        input
+            .worktree_verification_receipt
+            .validate()
+            .map_err(|error| error.to_string())?;
+        if self.state.prepared_commit != commit
+            || self.state.changed_paths != input.changed_paths
+            || changed_scope_fingerprint(&self.state.changed_components)
+                != changed_scope_fingerprint(&input.changed_components)
+            || self.state.worktree_verification_receipt.as_ref()
+                != Some(&input.worktree_verification_receipt)
+            || !input.worktree_verification_receipt.passed
+        {
+            return Err(
+                "speculative promotion input does not match the immutable prepared transaction"
+                    .to_owned(),
+            );
+        }
+        Ok(())
     }
 
     fn validate_identity(&self, input: &PreparedMutationInput) -> Result<(), String> {
@@ -943,6 +986,7 @@ mod tests {
             implementation_summary: "changed the value".to_owned(),
             worktree_verification_evidence: worktree_verification.summary,
             worktree_verification_receipt: worktree_verification.receipt,
+            speculative: false,
         };
         (directory, repo, manager, input)
     }
@@ -1102,4 +1146,25 @@ mod tests {
             MutationLifecycle::IntegrationAuthorized
         );
     }
+
+    #[test]
+    fn speculative_transaction_requires_explicit_promotion_before_review() {
+        let (_directory, repo, _manager, mut input) = fixture();
+        input.speculative = true;
+        let root = repo.join(".medusa/executions/test");
+        let transaction =
+            MutationTransaction::open_or_prepare(&root, &repo, input.clone()).expect("speculative");
+        assert_eq!(
+            transaction.snapshot().lifecycle,
+            MutationLifecycle::SpeculativePrepared
+        );
+        assert!(transaction.review_context().is_err());
+
+        input.speculative = false;
+        let promoted =
+            MutationTransaction::open_or_prepare(&root, &repo, input).expect("promoted");
+        assert_eq!(promoted.snapshot().lifecycle, MutationLifecycle::ReviewPending);
+        assert!(promoted.review_context().is_ok());
+    }
+
 }

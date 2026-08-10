@@ -210,7 +210,12 @@ pub(super) fn evidence_from_state(
         prepared_commit: snapshot.prepared_commit.clone(),
         prepared_tree: snapshot.prepared_tree.clone(),
         patch_fingerprint: snapshot.patch_fingerprint.clone(),
-        review_context: transaction.review_context()?,
+        review_context: if state.speculative {
+            "Speculative candidate is prepared in isolation. Parent review and integration are prohibited until the durable promotion gate confirms every dependency and assumption."
+                .to_owned()
+        } else {
+            transaction.review_context()?
+        },
         transaction_path,
         state_path: state_path.to_path_buf(),
     })
