@@ -21,8 +21,8 @@ jobs:
           set -euo pipefail
           python - <<'PY'
           from pathlib import Path
-          path = Path('crates/medusa-runtime/src/lib.rs')
-          text = path.read_text()
+          runtime = Path('crates/medusa-runtime/src/lib.rs')
+          text = runtime.read_text()
           anchor = 'pub mod openai_realtime;\n'
           if 'pub mod observer;' not in text:
               if anchor not in text:
@@ -34,7 +34,17 @@ jobs:
               if export_anchor not in text:
                   raise SystemExit('runtime export anchor not found')
               text = text.replace(export_anchor, export_anchor + export, 1)
-          path.write_text(text)
+          runtime.write_text(text)
+
+          observer = Path('crates/medusa-runtime/src/observer.rs')
+          observer_text = observer.read_text()
+          old = '''        AgentPlanStepStatus::InProgress => "in_progress",\n        AgentPlanStepStatus::Completed => "completed",\n'''
+          new = '''        AgentPlanStepStatus::InProgress => "in_progress",\n        AgentPlanStepStatus::Completed => "completed",\n        AgentPlanStepStatus::Failed => "failed",\n'''
+          if 'AgentPlanStepStatus::Failed => "failed"' not in observer_text:
+              if old not in observer_text:
+                  raise SystemExit('plan status anchor not found')
+              observer_text = observer_text.replace(old, new, 1)
+          observer.write_text(observer_text)
           PY
       - name: Format
         run: cargo fmt --all -- --check
