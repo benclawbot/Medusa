@@ -398,20 +398,19 @@ fn tool_call_mutates_repository(tool: &str, input: &serde_json::Value) -> bool {
     crate::tool_dag::invalidates_repository_revision(tool, input)
 }
 
-fn successful_mutating_tool_calls(
-    session: &AgentSession,
-) -> Vec<(&str, &serde_json::Value)> {
+fn successful_mutating_tool_calls(session: &AgentSession) -> Vec<(&str, &serde_json::Value)> {
     let mut pending = HashMap::<&str, VecDeque<&serde_json::Value>>::new();
     let mut successful = Vec::new();
     for event in &session.events {
         match &event.payload {
             EventPayload::ToolCallRequested { tool, arguments } => {
-                pending.entry(tool.as_str()).or_default().push_back(arguments);
+                pending
+                    .entry(tool.as_str())
+                    .or_default()
+                    .push_back(arguments);
             }
             EventPayload::ToolExecutionCompleted { tool, exit_code } => {
-                let input = pending
-                    .get_mut(tool.as_str())
-                    .and_then(VecDeque::pop_front);
+                let input = pending.get_mut(tool.as_str()).and_then(VecDeque::pop_front);
                 if *exit_code == Some(0)
                     && let Some(input) = input
                     && tool_call_mutates_repository(tool, input)
