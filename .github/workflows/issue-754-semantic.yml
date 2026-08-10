@@ -5,6 +5,7 @@ on:
     paths:
       - '.github/workflows/issue-754-semantic.yml'
       - '.github/scripts/issue754_semantic.py'
+      - 'crates/medusa-agent/tests/structured_compaction.rs'
 
 permissions:
   contents: write
