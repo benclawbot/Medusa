@@ -2,6 +2,7 @@ include!("lib.rs");
 
 #[rustfmt::skip]
 mod parent_reviewer;
+// Conflict-aware mutation scheduling and deterministic aggregate staging.
 mod parallel_mutation;
 mod parallel_mutation_batch;
 
