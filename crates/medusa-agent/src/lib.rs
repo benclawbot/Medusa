@@ -1,6 +1,7 @@
 //! Persistent single-agent execution, role-bound team contexts, and built-in tools.
 
 mod approval;
+pub mod compaction_v2;
 mod engine;
 mod engine_support;
 mod evidence;
@@ -386,12 +387,12 @@ mod tests {
         compact_session(&mut session, Some("keep the API decision")).expect("compact session");
 
         assert_eq!(session.objective, "new durable goal");
-        assert_eq!(session.messages.len(), 1);
-        assert!(matches!(
-            &session.messages[0].content[0],
-            medusa_provider::MessageBlock::Text { text }
-                if text.contains("keep the API decision") && text.contains("follow-up context")
-        ));
+        assert!(session.messages.len() >= 2);
+        let durable_messages =
+            serde_json::to_string(&session.messages).expect("serialize messages");
+        assert!(durable_messages.contains("[medusa-compaction-v2]"));
+        assert!(durable_messages.contains("keep the API decision"));
+        assert!(durable_messages.contains("follow-up context"));
         assert!(
             session.events.iter().any(|event| {
                 matches!(&event.payload, EventPayload::ConversationCompacted { .. })

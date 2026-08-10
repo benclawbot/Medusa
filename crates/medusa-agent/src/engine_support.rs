@@ -10,7 +10,7 @@ use medusa_core::{ErrorCategory, ErrorCode, MedusaError, MedusaResult};
 use medusa_extensions::{DesktopCommanderSettings, desktop_commander_tool_is_mutating};
 use medusa_protocol::{Actor, EventPayload};
 use medusa_provider::{
-    ImageSource, Message, MessageBlock, ProviderCapabilities, ProviderExecutionPhase, Role,
+    ImageSource, Message, MessageBlock, ProviderCapabilities, ProviderExecutionPhase,
 };
 use time::OffsetDateTime;
 
@@ -526,98 +526,37 @@ pub fn update_session_objective(session: &mut AgentSession, objective: String) -
     persist(session)
 }
 
-/// Compacts durable session history without requiring a live model provider.
+/// Compacts durable session history into a crash-safe V2 hybrid manifest.
 pub fn compact_session(session: &mut AgentSession, focus: Option<&str>) -> MedusaResult<()> {
-    const MARKER: &str = "[medusa-compaction-v1]";
-    const MAX_ENTRIES: usize = 24;
+    compact_session_with_semantic(session, focus, None)
+}
 
+pub(crate) fn compact_session_with_semantic(
+    session: &mut AgentSession,
+    focus: Option<&str>,
+    semantic: Option<crate::compaction_v2::ValidatedSemanticSummary>,
+) -> MedusaResult<()> {
     let original_messages = session.messages.len();
-    let generation = u32::try_from(
-        session
-            .events
-            .iter()
-            .filter(|event| matches!(event.payload, EventPayload::ConversationCompacted { .. }))
-            .count()
-            .saturating_add(1),
-    )
-    .unwrap_or(u32::MAX);
     let source_event_sequences = session
         .events
         .iter()
         .map(|event| event.sequence)
         .collect::<Vec<_>>();
-    let mut entries = session
-        .messages
-        .iter()
-        .flat_map(|message| {
-            message
-                .content
-                .iter()
-                .map(move |block| (message.role, block))
-        })
-        .filter(
-            |(_, block)| !matches!(block, MessageBlock::Text { text } if text.starts_with(MARKER)),
-        )
-        .map(|(role, block)| {
-            let speaker = match role {
-                Role::User => "User",
-                Role::Assistant => "Assistant",
-            };
-            format!("{speaker}: {}", compact_block_text(block))
-        })
-        .collect::<Vec<_>>();
-    if entries.len() > MAX_ENTRIES {
-        entries = entries.split_off(entries.len() - MAX_ENTRIES);
+    let migrated_v1 = session.messages.iter().flat_map(|message| &message.content).any(|block| matches!(block, MessageBlock::Text { text } if text.starts_with("[medusa-compaction-v1]")));
+    let prepared = crate::compaction_v2::prepare_with_semantic(session, focus, semantic)?;
+    let generation = prepared.manifest.generation;
+    let mut preserved_sections = prepared.preserved_sections;
+    preserved_sections.push(format!("migrated_v1={migrated_v1}"));
+    if !session.tool_artifacts.contains(&prepared.manifest_path) {
+        session.tool_artifacts.push(prepared.manifest_path.clone());
     }
-
-    let focus = focus
-        .filter(|value| !value.trim().is_empty())
-        .map(str::trim)
-        .unwrap_or("none");
-    let plan = serde_json::to_string(&session.plan).map_err(json_error)?;
-    let pending_question = serde_json::to_string(&session.pending_question).map_err(json_error)?;
-    let approval_grants = serde_json::to_string(&session.approval_grants).map_err(json_error)?;
-    let approval_receipts =
-        serde_json::to_string(&session.approval_receipts).map_err(json_error)?;
-    let evidence = serde_json::to_string(&session.evidence).map_err(json_error)?;
-    let artifacts = serde_json::to_string(
-        &session
-            .tool_artifacts
-            .iter()
-            .map(|path| path.display().to_string())
-            .collect::<Vec<_>>(),
-    )
-    .map_err(json_error)?;
-    let recent_context = if entries.is_empty() {
-        "none".to_owned()
-    } else {
-        entries.join("\n")
-    };
-    let preserved_sections = vec![
-        "objective".to_owned(),
-        "focus".to_owned(),
-        "plan".to_owned(),
-        "pending_question".to_owned(),
-        "approval_grants".to_owned(),
-        "approval_receipts".to_owned(),
-        "verification_evidence".to_owned(),
-        "tool_artifacts".to_owned(),
-        "recent_context".to_owned(),
-    ];
-    let summary = format!(
-        "{MARKER}\nGeneration: {generation}\nCurrent goal: {}\nFocus for the next turn: {focus}\n\nActive plan (JSON):\n{plan}\n\nPending question and approval state (JSON):\n{pending_question}\n\nApproval grants (JSON):\n{approval_grants}\n\nApproval receipts (JSON):\n{approval_receipts}\n\nVerification evidence (JSON):\n{evidence}\n\nTool artifacts and edited-file references (JSON):\n{artifacts}\n\nRecent uncompacted context:\n{recent_context}",
-        session.objective,
-    );
-    session.messages = vec![Message {
-        role: Role::User,
-        content: vec![MessageBlock::Text { text: summary }],
-    }];
+    session.messages = prepared.projection;
     append_event(
         session,
         Actor::Coordinator,
         EventPayload::ConversationCompacted {
             original_messages: u32::try_from(original_messages).unwrap_or(u32::MAX),
-            retained_messages: 1,
+            retained_messages: u32::try_from(session.messages.len()).unwrap_or(u32::MAX),
             generation,
             source_event_sequences,
             preserved_sections,
