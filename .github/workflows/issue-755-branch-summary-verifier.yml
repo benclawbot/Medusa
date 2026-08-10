@@ -24,6 +24,12 @@ jobs:
         run: |
           from pathlib import Path
 
+          branch = Path('crates/medusa-agent/src/branch_summary.rs')
+          text = branch.read_text()
+          text = text.replace('collections::{BTreeMap, BTreeSet}', 'collections::BTreeSet')
+          text = text.replace('Err(error) if path.is_file() => {', 'Err(_error) if path.is_file() => {')
+          branch.write_text(text)
+
           lib = Path('crates/medusa-agent/src/lib.rs')
           text = lib.read_text()
           if 'pub mod branch_summary;' not in text:
