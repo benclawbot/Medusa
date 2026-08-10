@@ -1,4 +1,7 @@
-use std::{thread, time::{Duration, Instant}};
+use std::{
+    thread,
+    time::{Duration, Instant},
+};
 
 use medusa_multi_agent_scheduler::{PlannerInput, plan_typed, speculation::policy_for};
 use serde_json::json;
@@ -20,7 +23,10 @@ fn eligible_speculation_overlaps_preflight_and_reduces_critical_path() {
     })
     .expect("planning");
     let policy = policy_for(&planning);
-    assert!(policy.eligible, "representative medium-risk mutation must be eligible");
+    assert!(
+        policy.eligible,
+        "representative medium-risk mutation must be eligible"
+    );
     assert_eq!(policy.budget.max_concurrent_tasks, 1);
 
     let mut serial_ms = Vec::with_capacity(SAMPLES);

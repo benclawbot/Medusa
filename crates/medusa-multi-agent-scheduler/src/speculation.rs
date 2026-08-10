@@ -84,7 +84,11 @@ pub fn policy_for(planning: &PlanningResult) -> SpeculationPolicy {
         && planning.confidence_milli >= 850
         && planning.scope.resolution == ScopeResolution::Resolved
         && !planning.scope.effective.is_empty()
-        && !planning.scope.effective.iter().any(|path| path == "repository")
+        && !planning
+            .scope
+            .effective
+            .iter()
+            .any(|path| path == "repository")
         && implementation.is_some_and(|planned| planned.task.speculative);
     if !eligible {
         return SpeculationPolicy {
@@ -160,10 +164,19 @@ pub enum InvalidationReason {
 pub enum SpeculationState {
     Proposed,
     Running,
-    Prepared { candidate_fingerprint: String },
-    Promoted { candidate_fingerprint: String },
-    Invalidated { reason: InvalidationReason, detail: String },
-    Discarded { detail: String },
+    Prepared {
+        candidate_fingerprint: String,
+    },
+    Promoted {
+        candidate_fingerprint: String,
+    },
+    Invalidated {
+        reason: InvalidationReason,
+        detail: String,
+    },
+    Discarded {
+        detail: String,
+    },
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -219,10 +232,9 @@ impl SpeculationLedger {
             .ok_or_else(|| "eligible speculation policy has no assumptions".to_owned())?;
         let path = path.into();
         if path.is_file() {
-            let record: SpeculationRecord = serde_json::from_slice(
-                &fs::read(&path).map_err(|error| error.to_string())?,
-            )
-            .map_err(|error| error.to_string())?;
+            let record: SpeculationRecord =
+                serde_json::from_slice(&fs::read(&path).map_err(|error| error.to_string())?)
+                    .map_err(|error| error.to_string())?;
             let ledger = Self { path, record };
             ledger.validate()?;
             if ledger.record.class != class
@@ -260,10 +272,9 @@ impl SpeculationLedger {
 
     pub fn load(path: impl Into<PathBuf>) -> Result<Self, String> {
         let path = path.into();
-        let record: SpeculationRecord = serde_json::from_slice(
-            &fs::read(&path).map_err(|error| error.to_string())?,
-        )
-        .map_err(|error| error.to_string())?;
+        let record: SpeculationRecord =
+            serde_json::from_slice(&fs::read(&path).map_err(|error| error.to_string())?)
+                .map_err(|error| error.to_string())?;
         let ledger = Self { path, record };
         ledger.validate()?;
         Ok(ledger)
@@ -505,10 +516,9 @@ impl SpeculationHistory {
                 ..Self::default()
             });
         }
-        let history: Self = serde_json::from_slice(
-            &fs::read(path).map_err(|error| error.to_string())?,
-        )
-        .map_err(|error| error.to_string())?;
+        let history: Self =
+            serde_json::from_slice(&fs::read(path).map_err(|error| error.to_string())?)
+                .map_err(|error| error.to_string())?;
         if history.schema_version != HISTORY_SCHEMA_VERSION {
             return Err("unsupported speculation history schema".to_owned());
         }
@@ -531,9 +541,7 @@ impl SpeculationHistory {
             SpeculationState::Invalidated { .. } => {
                 self.invalidated = self.invalidated.saturating_add(1)
             }
-            SpeculationState::Discarded { .. } => {
-                self.discarded = self.discarded.saturating_add(1)
-            }
+            SpeculationState::Discarded { .. } => self.discarded = self.discarded.saturating_add(1),
             _ => {}
         }
     }
@@ -648,8 +656,7 @@ mod tests {
         let policy = policy_for(&plan);
         let directory = tempfile::tempdir().expect("tempdir");
         let path = directory.path().join("speculation.json");
-        let mut ledger =
-            SpeculationLedger::open_or_create(&path, &policy, "repo").expect("ledger");
+        let mut ledger = SpeculationLedger::open_or_create(&path, &policy, "repo").expect("ledger");
         ledger.begin().expect("begin");
         ledger
             .account(policy.budget.max_model_turns + 1, 1, 1)
