@@ -213,7 +213,6 @@ impl RuntimeController {
         Ok(variable_info(name, &value))
     }
 
-    #[must_use]
     pub fn analysis_list_values(
         &self,
         session_id: &str,
