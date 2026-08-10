@@ -32,7 +32,7 @@ jobs:
           set +e
           : > speculation-certification.log
           echo '=== scheduler speculation tests ===' >> speculation-certification.log
-          cargo test -p medusa-multi-agent-scheduler speculation -- --nocapture >> speculation-certification.log 2>&1
+          cargo test -p medusa-multi-agent-scheduler --lib speculation -- --nocapture >> speculation-certification.log 2>&1
           scheduler_rc=$?
           echo "scheduler_rc=${scheduler_rc}" >> speculation-certification.log
 
