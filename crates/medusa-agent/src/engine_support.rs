@@ -410,7 +410,7 @@ fn successful_mutating_tool_calls(session: &AgentSession) -> Vec<(&str, &serde_j
                     .push_back(arguments);
             }
             EventPayload::ToolExecutionCompleted { tool, exit_code } => {
-                let input = pending.get_mut(tool.as_str()).and_then(VecDeque::pop_front);
+                let input = pending.get_mut(tool.as_str()).and_then(VecDeque::pop_back);
                 if *exit_code == Some(0)
                     && let Some(input) = input
                     && tool_call_mutates_repository(tool, input)
@@ -428,14 +428,22 @@ pub(crate) fn has_mutating_tool_result(session: &AgentSession) -> bool {
     !successful_mutating_tool_calls(session).is_empty()
 }
 
-pub(crate) fn successful_mutation_paths(session: &AgentSession) -> Vec<String> {
-    let mut paths = Vec::new();
-    for (_, input) in successful_mutating_tool_calls(session) {
-        collect_mutation_paths(input, &mut paths);
+fn finalize_mutation_paths(mut paths: Vec<String>, has_mutations: bool) -> Vec<String> {
+    if paths.is_empty() && has_mutations {
+        paths.push(".".to_owned());
     }
     paths.sort();
     paths.dedup();
     paths
+}
+
+pub(crate) fn successful_mutation_paths(session: &AgentSession) -> Vec<String> {
+    let mutations = successful_mutating_tool_calls(session);
+    let mut paths = Vec::new();
+    for (_, input) in &mutations {
+        collect_mutation_paths(input, &mut paths);
+    }
+    finalize_mutation_paths(paths, !mutations.is_empty())
 }
 
 fn collect_mutation_paths(value: &serde_json::Value, paths: &mut Vec<String>) {
@@ -945,5 +953,11 @@ mod tests {
                 "src/main.rs".to_owned()
             ]
         );
+    }
+
+    #[test]
+    fn pathless_mutation_uses_repository_wide_verification_scope() {
+        assert_eq!(finalize_mutation_paths(Vec::new(), true), vec!["."]);
+        assert!(finalize_mutation_paths(Vec::new(), false).is_empty());
     }
 }
