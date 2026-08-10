@@ -22,17 +22,32 @@ fn contained_reducer_processes_brokered_artifact_without_repository_write_author
     let artifact = controller
         .analysis_import_file("session-contained", "large.txt", None)
         .expect("import");
-    let result = controller
-        .analysis_reduce_contained(
-            "session-contained",
-            &artifact,
-            AnalysisOperation::MatchingLines {
-                needle: "alpha".to_owned(),
-                limit: 8,
-            },
-        )
-        .expect("contained reduction");
+    let result = controller.analysis_reduce_contained(
+        "session-contained",
+        &artifact,
+        AnalysisOperation::MatchingLines {
+            needle: "alpha".to_owned(),
+            limit: 8,
+        },
+    );
 
+    #[cfg(windows)]
+    if let Err(error) = &result {
+        let message = error.to_string();
+        assert!(
+            message.contains("sandbox unavailable")
+                && message.contains("Windows composable sandbox")
+                && message.contains("Windows 11 support is required"),
+            "unsupported Windows hosts must fail closed with the effective sandbox boundary: {message}"
+        );
+        assert_eq!(
+            fs::read_to_string(temp.path().join("large.txt")).expect("source remains readable"),
+            "alpha\nbeta\nalpha two\n"
+        );
+        return;
+    }
+
+    let result = result.expect("contained reduction");
     assert_eq!(
         result.result.value,
         AnalysisValue::StringList(vec!["alpha".to_owned(), "alpha two".to_owned()])
