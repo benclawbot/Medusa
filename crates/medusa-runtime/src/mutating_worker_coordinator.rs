@@ -15,13 +15,13 @@ use medusa_agent::{
     TeamRuntime, WorkerExecutionController, authoritative_verification_for_components_at,
     prepare_components_for_verification,
 };
-use medusa_evidence::{ChangedComponent, VerificationReceipt, changed_scope_fingerprint};
 use medusa_config::{Config, Mode};
-use medusa_multi_agent_scheduler::{Task, TaskState, Worker as ScheduledWorker};
+use medusa_evidence::{ChangedComponent, VerificationReceipt, changed_scope_fingerprint};
 use medusa_multi_agent_scheduler::speculation::{
     InvalidationReason, PromotionCheck, SpeculationAssumptions, SpeculationHistory,
     SpeculationLedger, SpeculationState, policy_for as speculation_policy_for,
 };
+use medusa_multi_agent_scheduler::{Task, TaskState, Worker as ScheduledWorker};
 use medusa_provider::ConfiguredProvider;
 use medusa_workers::{Worker, WorkerManager};
 use serde::{Deserialize, Serialize};
@@ -179,9 +179,17 @@ struct WorkerRun {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum SpeculationPreparation {
-    Skipped { reason: String },
-    Prepared { candidate: String, turns: u32, elapsed_ms: u64 },
-    Discarded { reason: String },
+    Skipped {
+        reason: String,
+    },
+    Prepared {
+        candidate: String,
+        turns: u32,
+        elapsed_ms: u64,
+    },
+    Discarded {
+        reason: String,
+    },
 }
 
 const SPECULATION_INVALIDATED_PREFIX: &str = "speculation invalidated before promotion:";
@@ -189,6 +197,117 @@ const SPECULATION_INVALIDATED_PREFIX: &str = "speculation invalidated before pro
 #[must_use]
 pub fn is_speculation_invalidation(error: &str) -> bool {
     error.starts_with(SPECULATION_INVALIDATED_PREFIX)
+}
+
+#[derive(Clone, Debug)]
+pub struct ParallelChildEvidence {
+    pub task_id: String,
+    pub evidence: ImplementationEvidence,
+}
+
+#[derive(Clone, Debug)]
+pub struct ParallelImplementationEvidence {
+    pub dag_fingerprint: String,
+    pub children: Vec<ParallelChildEvidence>,
+    pub task_elapsed_ms: std::collections::BTreeMap<String, u64>,
+    pub parallel_elapsed_ms: u64,
+    pub wave_count: usize,
+    pub peak_parallelism: usize,
+}
+
+#[allow(clippy::too_many_arguments)]
+pub fn run_parallel_implementations(
+    repo: &Path,
+    config: &Config,
+    session_api_key: Option<String>,
+    plan: &ProductionExecutionPlan,
+    preflight: &CoordinatorEvidence,
+    dag: &medusa_multi_agent_scheduler::mutation_dag::MutationDag,
+    cancel: &Arc<AtomicBool>,
+    events: &Sender<RuntimeEvent>,
+) -> Result<ParallelImplementationEvidence, String> {
+    dag.validate().map_err(str::to_owned)?;
+    validate_preflight(plan, preflight)?;
+    let started = std::time::Instant::now();
+    let mut completed = std::collections::BTreeSet::new();
+    let mut accepted = std::collections::BTreeMap::new();
+    let mut task_elapsed_ms = std::collections::BTreeMap::new();
+    let mut wave_count = 0usize;
+    let mut peak_parallelism = 0usize;
+    while completed.len() < dag.tasks.len() {
+        if cancel.load(Ordering::SeqCst) {
+            return Err("parallel mutation batch was cancelled before dispatch".to_owned());
+        }
+        let wave = dag.runnable_wave(&completed);
+        if wave.is_empty() {
+            return Err("parallel mutation DAG has no runnable conflict-free wave".to_owned());
+        }
+        wave_count = wave_count.saturating_add(1);
+        peak_parallelism = peak_parallelism.max(wave.len());
+        let results = std::thread::scope(|scope| {
+            let mut handles = Vec::with_capacity(wave.len());
+            for task_id in &wave {
+                let task = dag
+                    .tasks
+                    .iter()
+                    .find(|task| task.id == *task_id)
+                    .ok_or_else(|| format!("parallel mutation task {task_id} disappeared"))?;
+                let (child_plan, child_preflight) =
+                    crate::parallel_mutation::child_execution(plan, preflight, task)?;
+                let api_key = session_api_key.clone();
+                let task_id = task_id.clone();
+                let events = events.clone();
+                handles.push(scope.spawn(move || {
+                    let started = std::time::Instant::now();
+                    let control = TeamControlPlane::default();
+                    run_implementation(
+                        repo,
+                        config,
+                        api_key,
+                        &child_plan,
+                        &child_preflight,
+                        cancel,
+                        (&control, &events),
+                    )
+                    .map(|evidence| {
+                        let elapsed_ms = u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX);
+                        (task_id, evidence, elapsed_ms)
+                    })
+                }));
+            }
+            handles
+                .into_iter()
+                .map(|handle| {
+                    handle
+                        .join()
+                        .map_err(|_| "parallel implementer thread terminated unexpectedly".to_owned())?
+                })
+                .collect::<Result<Vec<_>, String>>()
+        })?;
+        for (task_id, evidence, elapsed_ms) in results {
+            completed.insert(task_id.clone());
+            task_elapsed_ms.insert(task_id.clone(), elapsed_ms);
+            accepted.insert(task_id, evidence);
+        }
+    }
+    let children = dag
+        .deterministic_integration_order()
+        .into_iter()
+        .map(|task_id| {
+            let evidence = accepted
+                .remove(&task_id)
+                .ok_or_else(|| format!("parallel mutation evidence missing for {task_id}"))?;
+            Ok(ParallelChildEvidence { task_id, evidence })
+        })
+        .collect::<Result<Vec<_>, String>>()?;
+    Ok(ParallelImplementationEvidence {
+        dag_fingerprint: dag.fingerprint.clone(),
+        children,
+        task_elapsed_ms,
+        parallel_elapsed_ms: u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX),
+        wave_count,
+        peak_parallelism,
+    })
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -201,6 +320,40 @@ pub fn run_implementation(
     cancel: &Arc<AtomicBool>,
     reporting: (&TeamControlPlane, &Sender<RuntimeEvent>),
 ) -> Result<ImplementationEvidence, String> {
+    let repository_revision = crate::parallel_mutation::repository_revision(repo)?;
+    match crate::parallel_mutation::decomposition_for(repo, plan, &repository_revision)? {
+        medusa_multi_agent_scheduler::mutation_dag::DecompositionDecision::Parallel(dag) => {
+            if let Some(root) = preflight.state_path.parent() {
+                let state_path = root.join("implementation-state.json");
+                if state_path.is_file()
+                    && let Ok(state) = load_state(&state_path)
+                    && state.speculative
+                {
+                    discard_speculative_artifacts(repo, root)?;
+                }
+            }
+            return crate::parallel_mutation_batch::prepare_combined(
+                repo,
+                config,
+                session_api_key,
+                plan,
+                preflight,
+                &dag,
+                cancel,
+                reporting.1,
+            );
+        }
+        medusa_multi_agent_scheduler::mutation_dag::DecompositionDecision::SingleImplementer {
+            reason,
+        } => {
+            let _ = reporting.1.send(RuntimeEvent::Activity(RuntimeActivity {
+                id: Some(plan.fingerprint.clone()),
+                kind: RuntimeActivityKind::Progress,
+                title: "Single implementer fallback".to_owned(),
+                details: vec![reason],
+            }));
+        }
+    }
     let (control, events) = reporting;
     coordinate_with_control(
         repo,
@@ -213,7 +366,6 @@ pub fn run_implementation(
         |request| execute_production_implementer(config, session_api_key.clone(), cancel, request),
     )
 }
-
 
 /// Prepares at most one disposable implementation while authoritative preflight continues.
 ///
@@ -257,14 +409,18 @@ pub fn run_speculative_implementation(
         repository_fingerprint.clone(),
     )?;
     match &ledger.record().state {
-        SpeculationState::Prepared { candidate_fingerprint } => {
+        SpeculationState::Prepared {
+            candidate_fingerprint,
+        } => {
             return Ok(SpeculationPreparation::Prepared {
                 candidate: candidate_fingerprint.clone(),
                 turns: ledger.record().model_turns,
                 elapsed_ms: ledger.record().elapsed_ms,
             });
         }
-        SpeculationState::Promoted { candidate_fingerprint } => {
+        SpeculationState::Promoted {
+            candidate_fingerprint,
+        } => {
             return Ok(SpeculationPreparation::Prepared {
                 candidate: candidate_fingerprint.clone(),
                 turns: ledger.record().model_turns,
@@ -391,7 +547,6 @@ struct SpeculativeExecutionContext {
     branch: String,
     max_model_turns: u32,
 }
-
 
 fn speculation_history_path(repo: &Path) -> PathBuf {
     repo.join(".medusa")
@@ -921,11 +1076,10 @@ where
             team_context,
             control: control.clone(),
             events: events.clone(),
-            max_model_turns: speculative
-                .map_or_else(
-                    || u32::from(plan.planning.model_turn_budget.successful_path_total),
-                    |context| context.max_model_turns,
-                ),
+            max_model_turns: speculative.map_or_else(
+                || u32::from(plan.planning.model_turn_budget.successful_path_total),
+                |context| context.max_model_turns,
+            ),
         };
         let run = match executor(request) {
             Ok(run) => run,
@@ -1394,8 +1548,7 @@ fn complete_prepared(
         .ok_or_else(|| "implementation state path has no execution root".to_owned())?;
     let transaction = MutationTransaction::open_or_prepare(
         root,
-        manager
-            .repository_path(),
+        manager.repository_path(),
         PreparedMutationInput {
             plan_fingerprint: state.plan_fingerprint.clone(),
             repository_fingerprint: state.repository_fingerprint.clone(),
@@ -1409,7 +1562,9 @@ fn complete_prepared(
             worktree_verification_receipt: state
                 .verification_receipt
                 .clone()
-                .ok_or_else(|| "prepared implementation has no typed verification receipt".to_owned())?,
+                .ok_or_else(|| {
+                    "prepared implementation has no typed verification receipt".to_owned()
+                })?,
             speculative: state.speculative,
         },
     )?;
@@ -1475,11 +1630,14 @@ fn execute_production_implementer(
     let mut session = engine
         .create_session(&request.worker.worktree, objective)
         .map_err(|error| error.to_string())?;
-    request.team_context.clone().execute(
-        "team_send_message",
-        &json!({"recipient":"lead","body":format!("{} implementation started", request.contract.task_id)}),
-    )
-    .map_err(|error| error.to_string())?;
+    request
+        .team_context
+        .clone()
+        .execute(
+            "team_send_message",
+            &json!({"recipient":"lead","body":format!("{} implementation started", request.contract.task_id)}),
+        )
+        .map_err(|error| error.to_string())?;
     let system_context = format!(
         "Authoritative delegation packet fingerprint: {}\n{}",
         request.packet.fingerprint,

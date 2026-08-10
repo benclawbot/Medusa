@@ -1,0 +1,10 @@
+{
+  "schema_version": 1,
+  "scenario": "large_decomposable_parallel_mutation",
+  "baseline_revision": "010c456e814eab4090e32052075d75a73bea1396",
+  "description": "Frozen pre-#691 execution model where independent mutating components are implemented serially through one implementer.",
+  "minimum_parallel_wall_time_reduction_ratio": 0.25,
+  "maximum_conflict_rate_ratio_for_decomposable_fixture": 0.0,
+  "required_platforms": ["Linux", "macOS", "Windows"],
+  "required_suites": ["mutation_dag", "parallel_runtime", "worker_transactions"]
+}

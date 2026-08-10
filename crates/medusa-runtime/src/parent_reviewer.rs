@@ -70,14 +70,20 @@ struct DedicatedReview {
     outcome: ParentReviewOutcome,
 }
 
-pub(crate) fn complete<P: ModelProvider>(
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) enum ParentReviewAuthorization {
+    RevisionRequested(String),
+    Authorized,
+}
+
+pub(crate) fn authorize<P: ModelProvider>(
     path: &Path,
     repo: &Path,
     provider: &P,
     config: &Config,
     cancel: &AtomicBool,
     events: &Sender<RuntimeEvent>,
-) -> Result<TransactionCompletion, String> {
+) -> Result<ParentReviewAuthorization, String> {
     let mut transaction = MutationTransaction::open(path)?;
     let packet = ReviewPacket {
         transaction_id: transaction.snapshot().transaction_id.clone(),
@@ -110,7 +116,7 @@ pub(crate) fn complete<P: ModelProvider>(
                 .map(|receipt| receipt.rationale.clone())
                 .unwrap_or_else(|| "parent requested revision".to_owned());
             transaction.emit(events);
-            Ok(TransactionCompletion::RevisionRequested(rationale))
+            Ok(ParentReviewAuthorization::RevisionRequested(rationale))
         }
         ParentReviewDecision::Accepted => {
             transaction.emit(events);
@@ -120,19 +126,39 @@ pub(crate) fn complete<P: ModelProvider>(
             transaction.emit(events);
             transaction.authorize(repo)?;
             transaction.emit(events);
+            let _ = events.send(RuntimeEvent::Activity(RuntimeActivity {
+                id: Some(format!("parent-review:{}", packet.transaction_id)),
+                kind: RuntimeActivityKind::Done,
+                title: "Dedicated parent review authorized".to_owned(),
+                details: vec![
+                    format!("reviewer session {}", review.reviewer_session_id),
+                    format!("response {}", review.outcome.response_fingerprint),
+                    "integration remains separate from review and verification authority".to_owned(),
+                ],
+            }));
+            Ok(ParentReviewAuthorization::Authorized)
+        }
+    }
+}
+
+pub(crate) fn complete<P: ModelProvider>(
+    path: &Path,
+    repo: &Path,
+    provider: &P,
+    config: &Config,
+    cancel: &AtomicBool,
+    events: &Sender<RuntimeEvent>,
+) -> Result<TransactionCompletion, String> {
+    match authorize(path, repo, provider, config, cancel, events)? {
+        ParentReviewAuthorization::RevisionRequested(rationale) => {
+            Ok(TransactionCompletion::RevisionRequested(rationale))
+        }
+        ParentReviewAuthorization::Authorized => {
+            let mut transaction = MutationTransaction::open(path)?;
             transaction.integrate(repo)?;
             transaction.emit(events);
             let receipt = transaction.reconcile(repo)?;
             transaction.emit(events);
-            let _ = events.send(RuntimeEvent::Activity(RuntimeActivity {
-                id: Some(format!("parent-review:{}", packet.transaction_id)),
-                kind: RuntimeActivityKind::Done,
-                title: "Dedicated parent review accepted".to_owned(),
-                details: vec![
-                    format!("reviewer session {}", review.reviewer_session_id),
-                    format!("response {}", review.outcome.response_fingerprint),
-                ],
-            }));
             Ok(TransactionCompletion::Reconciled(receipt))
         }
     }
