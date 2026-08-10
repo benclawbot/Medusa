@@ -28,6 +28,13 @@ jobs:
           text = branch.read_text()
           text = text.replace('collections::{BTreeMap, BTreeSet}', 'collections::BTreeSet')
           text = text.replace('Err(error) if path.is_file() => {', 'Err(_error) if path.is_file() => {')
+          text = text.replace('pub(crate) fn capture_restore_abandonment(', 'pub fn capture_restore_abandonment(')
+          text = text.replace('    source_cursor: u64,\n) -> MedusaResult<Option<PathBuf>> {', '    target_cursor: u64,\n) -> MedusaResult<Option<PathBuf>> {')
+          text = text.replace('    if source_cursor >= terminal_event.sequence {', '    if target_cursor >= terminal_event.sequence {')
+          text = text.replace('    let base_fingerprint = if source_cursor == 0 {', '    let base_fingerprint = if target_cursor == 0 {')
+          text = text.replace('.find(|event| event.sequence == source_cursor)', '.find(|event| event.sequence == target_cursor)')
+          text = text.replace('.filter(|event| event.sequence > source_cursor)', '.filter(|event| event.sequence > target_cursor)')
+          text = text.replace('            sequence: source_cursor,', '            sequence: target_cursor,')
           branch.write_text(text)
 
           lib = Path('crates/medusa-agent/src/lib.rs')
@@ -36,17 +43,29 @@ jobs:
               old = 'mod approval;\npub mod compaction_v2;'
               assert old in text
               text = text.replace(old, 'mod approval;\npub mod branch_summary;\npub mod compaction_v2;', 1)
-          export = 'pub use branch_summary::{\n    BranchAnchor, BranchSummaryRecord, DeterministicBranchMetadata, common_ancestor,\n};\n'
-          if export not in text:
+          old_export = 'pub use branch_summary::{\n    BranchAnchor, BranchSummaryRecord, DeterministicBranchMetadata, common_ancestor,\n};\n'
+          new_export = 'pub use branch_summary::{\n    BranchAnchor, BranchSummaryRecord, DeterministicBranchMetadata, capture_restore_abandonment,\n    common_ancestor,\n};\n'
+          if old_export in text:
+              text = text.replace(old_export, new_export, 1)
+          elif new_export not in text:
               marker = 'pub use approval::{\n    ApprovalDecision, ApprovalGrant, ApprovalReceipt, ApprovalScope, RollbackOutcome,\n    RollbackReceipt,\n};\n'
               assert marker in text
-              text = text.replace(marker, marker + export, 1)
-          old = '''pub fn record_session_event(\n    session: &mut AgentSession,\n    actor: medusa_protocol::Actor,\n    payload: medusa_protocol::EventPayload,\n) -> medusa_core::MedusaResult<()> {\n    evidence::append_event(session, actor, payload)?;'''
-          new = '''pub fn record_session_event(\n    session: &mut AgentSession,\n    actor: medusa_protocol::Actor,\n    payload: medusa_protocol::EventPayload,\n) -> medusa_core::MedusaResult<()> {\n    if let medusa_protocol::EventPayload::CheckpointRestoreRequested {\n        checkpoint_id,\n        source_cursor,\n    } = &payload\n    {\n        // Branch summaries are advisory. Their persistence must never block exact restore.\n        let _ = branch_summary::capture_restore_abandonment(\n            session,\n            checkpoint_id,\n            *source_cursor,\n        );\n    }\n    evidence::append_event(session, actor, payload)?;'''
+              text = text.replace(marker, marker + new_export, 1)
+          generic = '''pub fn record_session_event(\n    session: &mut AgentSession,\n    actor: medusa_protocol::Actor,\n    payload: medusa_protocol::EventPayload,\n) -> medusa_core::MedusaResult<()> {\n    evidence::append_event(session, actor, payload)?;'''
+          wrong = '''pub fn record_session_event(\n    session: &mut AgentSession,\n    actor: medusa_protocol::Actor,\n    payload: medusa_protocol::EventPayload,\n) -> medusa_core::MedusaResult<()> {\n    if let medusa_protocol::EventPayload::CheckpointRestoreRequested {\n        checkpoint_id,\n        source_cursor,\n    } = &payload\n    {\n        // Branch summaries are advisory. Their persistence must never block exact restore.\n        let _ = branch_summary::capture_restore_abandonment(\n            session,\n            checkpoint_id,\n            *source_cursor,\n        );\n    }\n    evidence::append_event(session, actor, payload)?;'''
+          if wrong in text:
+              text = text.replace(wrong, generic, 1)
+          assert generic in text
+          lib.write_text(text)
+
+          runtime = Path('crates/medusa-runtime/src/lib.rs')
+          text = runtime.read_text()
+          old = '''    let checkpoint_boundary = crate::checkpoint_store::is_checkpoint_boundary(&payload);\n    let mut session = medusa_agent::session_browser::load_session(repo, session_id)\n        .map_err(RuntimeError::agent)?;\n    medusa_agent::record_session_event(&mut session, actor, payload)\n        .map_err(RuntimeError::agent)?;'''
+          new = '''    let checkpoint_boundary = crate::checkpoint_store::is_checkpoint_boundary(&payload);\n    let mut session = medusa_agent::session_browser::load_session(repo, session_id)\n        .map_err(RuntimeError::agent)?;\n    if let EventPayload::CheckpointRestoreRequested { checkpoint_id, .. } = &payload\n        && let Ok(checkpoints) = crate::checkpoint_store::list(repo, session_id)\n        && let Some(target) = checkpoints\n            .iter()\n            .find(|record| record.checkpoint.fingerprint == *checkpoint_id)\n    {\n        // This artifact is advisory only. A summary failure must never block exact restore.\n        let _ = medusa_agent::capture_restore_abandonment(\n            &mut session,\n            checkpoint_id,\n            target.journal_cursor,\n        );\n    }\n    medusa_agent::record_session_event(&mut session, actor, payload)\n        .map_err(RuntimeError::agent)?;'''
           if new not in text:
               assert old in text
               text = text.replace(old, new, 1)
-          lib.write_text(text)
+          runtime.write_text(text)
 
           engine = Path('crates/medusa-agent/src/engine.rs')
           text = engine.read_text()
@@ -66,15 +85,15 @@ jobs:
               text = text.replace(old, new, 1)
           compaction.write_text(text)
       - name: Refresh dependency lock and compile
-        run: cargo check -p medusa-agent
+        run: cargo check -p medusa-agent -p medusa-runtime
       - name: Format
         run: cargo fmt --all
       - name: Test branch summaries
         run: cargo test -p medusa-agent branch_summary --locked -- --nocapture
-      - name: Check medusa-agent locked
-        run: cargo check -p medusa-agent --locked
-      - name: Clippy medusa-agent
-        run: cargo clippy -p medusa-agent --all-targets --all-features --locked -- -D warnings
+      - name: Check affected crates locked
+        run: cargo check -p medusa-agent -p medusa-runtime --locked
+      - name: Clippy affected crates
+        run: cargo clippy -p medusa-agent -p medusa-runtime --all-targets --all-features --locked -- -D warnings
       - name: Commit verified source
         shell: bash
         run: |
@@ -84,6 +103,6 @@ jobs:
           fi
           git config user.name github-actions[bot]
           git config user.email 41898282+github-actions[bot]@users.noreply.github.com
-          git add Cargo.lock crates/medusa-agent/src/lib.rs crates/medusa-agent/src/engine.rs crates/medusa-agent/src/compaction_v2.rs crates/medusa-agent/src/branch_summary.rs
+          git add Cargo.lock crates/medusa-agent/src/lib.rs crates/medusa-agent/src/engine.rs crates/medusa-agent/src/compaction_v2.rs crates/medusa-agent/src/branch_summary.rs crates/medusa-runtime/src/lib.rs
           git commit -m 'Wire abandoned branch summaries into restore flow'
           git push origin HEAD:agent/issue-755-branch-summaries
