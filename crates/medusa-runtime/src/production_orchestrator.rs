@@ -127,7 +127,7 @@ fn enrich_plan_from_repository_graph(
     planning: PlanningResult,
 ) -> Result<PlanningResult, &'static str> {
     let Ok(graph) = RepositoryGraph::open(repo) else {
-        return Ok(planning);
+        return apply_repository_graph_evidence(planning, Vec::new(), false, false);
     };
     if graph.freshness() != RepositoryGraphFreshness::Current {
         return apply_repository_graph_evidence(planning, Vec::new(), false, false);

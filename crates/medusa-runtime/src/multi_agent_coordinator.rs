@@ -808,7 +808,7 @@ fn validate_worker_evidence(
     .map_err(str::to_owned)
 }
 
-fn execution_root(repo: &Path, plan_fingerprint: &str, repository_fingerprint: &str) -> PathBuf {
+pub(crate) fn execution_root(repo: &Path, plan_fingerprint: &str, repository_fingerprint: &str) -> PathBuf {
     repo.join(".medusa")
         .join("executions")
         .join(execution_id(plan_fingerprint, repository_fingerprint))
@@ -845,7 +845,7 @@ fn validate_evidence(
     Ok(())
 }
 
-fn repository_fingerprint(repo: &Path) -> Result<String, String> {
+pub(crate) fn repository_fingerprint(repo: &Path) -> Result<String, String> {
     let paths = git_repository_paths(repo).or_else(|_| walk_repository_paths(repo))?;
     let mut digest = Sha256::new();
     for relative in paths {

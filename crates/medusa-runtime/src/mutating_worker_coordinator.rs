@@ -18,6 +18,10 @@ use medusa_agent::{
 use medusa_evidence::{ChangedComponent, VerificationReceipt, changed_scope_fingerprint};
 use medusa_config::{Config, Mode};
 use medusa_multi_agent_scheduler::{Task, TaskState, Worker as ScheduledWorker};
+use medusa_multi_agent_scheduler::speculation::{
+    InvalidationReason, PromotionCheck, SpeculationAssumptions, SpeculationHistory,
+    SpeculationLedger, SpeculationState, policy_for as speculation_policy_for,
+};
 use medusa_provider::ConfiguredProvider;
 use medusa_workers::{Worker, WorkerManager};
 use serde::{Deserialize, Serialize};
@@ -25,10 +29,10 @@ use serde_json::json;
 
 use crate::{
     RuntimeActivity, RuntimeActivityKind, RuntimeEvent,
-    multi_agent_coordinator::CoordinatorEvidence,
+    multi_agent_coordinator::{CoordinatorEvidence, WorkerEvidence},
     mutation_transaction::{MutationTransaction, PreparedMutationInput},
     production_orchestrator::{
-        AgentContract, ContextPacket, ProductionExecutionPlan, context_for_task,
+        AgentContract, AgentRole, ContextPacket, ProductionExecutionPlan, context_for_task,
     },
     team_control::{TeamControlPlane, TeamWorkerRegistration},
 };
@@ -123,6 +127,14 @@ struct DurableImplementationState {
     #[serde(default)]
     transaction_path: PathBuf,
     last_error: Option<String>,
+    #[serde(default)]
+    speculative: bool,
+    #[serde(default)]
+    speculation_ledger_path: PathBuf,
+    #[serde(default)]
+    speculation_assumptions_fingerprint: String,
+    #[serde(default)]
+    speculation_branch: String,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -165,6 +177,20 @@ struct WorkerRun {
     summary: String,
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum SpeculationPreparation {
+    Skipped { reason: String },
+    Prepared { candidate: String, turns: u32, elapsed_ms: u64 },
+    Discarded { reason: String },
+}
+
+const SPECULATION_INVALIDATED_PREFIX: &str = "speculation invalidated before promotion:";
+
+#[must_use]
+pub fn is_speculation_invalidation(error: &str) -> bool {
+    error.starts_with(SPECULATION_INVALIDATED_PREFIX)
+}
+
 #[allow(clippy::too_many_arguments)]
 pub fn run_implementation(
     repo: &Path,
@@ -176,9 +202,162 @@ pub fn run_implementation(
     reporting: (&TeamControlPlane, &Sender<RuntimeEvent>),
 ) -> Result<ImplementationEvidence, String> {
     let (control, events) = reporting;
-    coordinate_with_control(repo, plan, preflight, cancel, control, events, |request| {
-        execute_production_implementer(config, session_api_key.clone(), cancel, request)
-    })
+    coordinate_with_control(
+        repo,
+        plan,
+        preflight,
+        cancel,
+        control,
+        events,
+        None,
+        |request| execute_production_implementer(config, session_api_key.clone(), cancel, request),
+    )
+}
+
+
+/// Prepares at most one disposable implementation while authoritative preflight continues.
+///
+/// The resulting mutation transaction remains review-pending and has no integration authority.
+/// A later normal `run_implementation` call must promote it against the completed dependency
+/// evidence before the candidate can enter parent review.
+pub fn run_speculative_implementation(
+    repo: &Path,
+    config: &Config,
+    session_api_key: Option<String>,
+    plan: &ProductionExecutionPlan,
+    cancel: &Arc<AtomicBool>,
+    reporting: (&TeamControlPlane, &Sender<RuntimeEvent>),
+) -> Result<SpeculationPreparation, String> {
+    let (control, events) = reporting;
+    let policy = speculation_policy_for(&plan.planning);
+    if !policy.eligible {
+        return Ok(SpeculationPreparation::Skipped {
+            reason: policy.rationale,
+        });
+    }
+    let history_path = speculation_history_path(repo);
+    let history = SpeculationHistory::load(&history_path)?;
+    if !history.allows_speculation() {
+        return Ok(SpeculationPreparation::Skipped {
+            reason: "historical speculative waste exceeds retained useful work".to_owned(),
+        });
+    }
+    let repository_fingerprint =
+        crate::multi_agent_coordinator::repository_fingerprint(repo)?;
+    let root = crate::multi_agent_coordinator::execution_root(
+        repo,
+        &plan.fingerprint,
+        &repository_fingerprint,
+    );
+    fs::create_dir_all(&root).map_err(|error| error.to_string())?;
+    let ledger_path = root.join("speculation-ledger.json");
+    let mut ledger = SpeculationLedger::open_or_create(
+        &ledger_path,
+        &policy,
+        repository_fingerprint.clone(),
+    )?;
+    match &ledger.record().state {
+        SpeculationState::Prepared { candidate_fingerprint } => {
+            return Ok(SpeculationPreparation::Prepared {
+                candidate: candidate_fingerprint.clone(),
+                turns: ledger.record().model_turns,
+                elapsed_ms: ledger.record().elapsed_ms,
+            });
+        }
+        SpeculationState::Promoted { candidate_fingerprint } => {
+            return Ok(SpeculationPreparation::Prepared {
+                candidate: candidate_fingerprint.clone(),
+                turns: ledger.record().model_turns,
+                elapsed_ms: ledger.record().elapsed_ms,
+            });
+        }
+        SpeculationState::Invalidated { detail, .. } | SpeculationState::Discarded { detail } => {
+            return Ok(SpeculationPreparation::Skipped {
+                reason: detail.clone(),
+            });
+        }
+        SpeculationState::Running => {
+            if ledger.recover_interrupted()? {
+                update_speculation_history(repo, ledger.record())?;
+                discard_speculative_artifacts(repo, &root)?;
+                return Ok(SpeculationPreparation::Discarded {
+                    reason: "interrupted speculative work was recovered fail-closed".to_owned(),
+                });
+            }
+        }
+        SpeculationState::Proposed => ledger.begin()?,
+    }
+    let assumptions = policy
+        .assumptions
+        .as_ref()
+        .ok_or_else(|| "eligible speculation policy has no assumptions".to_owned())?;
+    let preflight = speculative_preflight(plan, &repository_fingerprint, &root, assumptions)?;
+    let context = SpeculativeExecutionContext {
+        ledger_path: ledger_path.clone(),
+        assumptions_fingerprint: assumptions.fingerprint.clone(),
+        branch: current_branch(repo)?,
+        max_model_turns: policy.budget.max_model_turns,
+    };
+    let started = std::time::Instant::now();
+    let result = coordinate_with_control(
+        repo,
+        plan,
+        &preflight,
+        cancel,
+        control,
+        events,
+        Some(&context),
+        |request| execute_production_implementer(config, session_api_key.clone(), cancel, request),
+    );
+    let elapsed_ms = u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX);
+    match result {
+        Ok(evidence) => {
+            ledger.account(evidence.turns, u64::from(evidence.turns), elapsed_ms)?;
+            if matches!(ledger.record().state, SpeculationState::Invalidated { .. }) {
+                update_speculation_history(repo, ledger.record())?;
+                discard_speculative_artifacts(repo, &root)?;
+                return Ok(SpeculationPreparation::Discarded {
+                    reason: "speculative resource budget was exceeded".to_owned(),
+                });
+            }
+            ledger.prepared(evidence.prepared_commit.clone())?;
+            let _ = events.send(RuntimeEvent::Activity(RuntimeActivity {
+                id: Some(plan.fingerprint.clone()),
+                kind: RuntimeActivityKind::Done,
+                title: "Speculative implementation prepared".to_owned(),
+                details: vec![
+                    format!("candidate={}", evidence.prepared_commit),
+                    format!("turns={}", evidence.turns),
+                    format!("elapsed_ms={elapsed_ms}"),
+                    "candidate has no integration authority until full preflight promotion"
+                        .to_owned(),
+                ],
+            }));
+            Ok(SpeculationPreparation::Prepared {
+                candidate: evidence.prepared_commit,
+                turns: evidence.turns,
+                elapsed_ms,
+            })
+        }
+        Err(error) => {
+            let reason = if cancel.load(Ordering::SeqCst) {
+                InvalidationReason::Cancellation
+            } else {
+                InvalidationReason::ConflictingEvidence
+            };
+            let _ = ledger.account(0, 0, elapsed_ms);
+            let _ = ledger.invalidate(reason, error.clone());
+            update_speculation_history(repo, ledger.record())?;
+            discard_speculative_artifacts(repo, &root)?;
+            let _ = events.send(RuntimeEvent::Activity(RuntimeActivity {
+                id: Some(plan.fingerprint.clone()),
+                kind: RuntimeActivityKind::Progress,
+                title: "Speculative implementation discarded".to_owned(),
+                details: vec![error.clone()],
+            }));
+            Ok(SpeculationPreparation::Discarded { reason: error })
+        }
+    }
 }
 
 #[cfg(test)]
@@ -200,10 +379,238 @@ where
         cancel,
         &TeamControlPlane::default(),
         events,
+        None,
         executor,
     )
 }
 
+#[derive(Clone, Debug)]
+struct SpeculativeExecutionContext {
+    ledger_path: PathBuf,
+    assumptions_fingerprint: String,
+    branch: String,
+    max_model_turns: u32,
+}
+
+
+fn speculation_history_path(repo: &Path) -> PathBuf {
+    repo.join(".medusa")
+        .join("speculation")
+        .join("medium-risk-resolved-mutation-history.json")
+}
+
+fn update_speculation_history(
+    repo: &Path,
+    record: &medusa_multi_agent_scheduler::speculation::SpeculationRecord,
+) -> Result<(), String> {
+    let path = speculation_history_path(repo);
+    let mut history = SpeculationHistory::load(&path)?;
+    history.observe(record);
+    history.persist(&path)
+}
+
+fn current_branch(repo: &Path) -> Result<String, String> {
+    let output = std::process::Command::new("git")
+        .args(["rev-parse", "--abbrev-ref", "HEAD"])
+        .current_dir(repo)
+        .output()
+        .map_err(|error| error.to_string())?;
+    if !output.status.success() {
+        return Err(format!(
+            "failed to resolve speculative repository branch: {}",
+            String::from_utf8_lossy(&output.stderr).trim()
+        ));
+    }
+    let branch = String::from_utf8_lossy(&output.stdout).trim().to_owned();
+    if branch.is_empty() {
+        return Err("speculative repository branch cannot be empty".to_owned());
+    }
+    Ok(branch)
+}
+
+fn speculative_preflight(
+    plan: &ProductionExecutionPlan,
+    repository_fingerprint: &str,
+    root: &Path,
+    assumptions: &SpeculationAssumptions,
+) -> Result<CoordinatorEvidence, String> {
+    let contract = implementation_contract(plan)?;
+    if contract.dependencies.len() < 2 {
+        return Err("speculative implementation requires at least two promotion dependencies".to_owned());
+    }
+    let mut workers = Vec::with_capacity(contract.dependencies.len());
+    for dependency in &contract.dependencies {
+        let role = plan
+            .contracts
+            .iter()
+            .find(|candidate| candidate.task_id == *dependency)
+            .map(|candidate| candidate.role)
+            .ok_or_else(|| format!("speculative dependency {dependency} has no contract"))?;
+        if !matches!(role, AgentRole::Planner | AgentRole::Researcher) {
+            return Err(format!(
+                "speculative dependency {dependency} is not a read-only preliminary task"
+            ));
+        }
+        workers.push(WorkerEvidence {
+            task_id: dependency.clone(),
+            worker_id: format!("speculative-assumption-{dependency}"),
+            role,
+            context_fingerprint: assumptions.fingerprint.clone(),
+            lease_epoch: 1,
+            session_id: format!("speculative-assumption-{dependency}"),
+            turns: 0,
+            summary: format!(
+                "Provisional assumption for `{dependency}` only. This is not authoritative dependency evidence and grants no integration authority. Full preflight must confirm this assumption before promotion."
+            ),
+        });
+    }
+    Ok(CoordinatorEvidence {
+        plan_fingerprint: plan.fingerprint.clone(),
+        repository_fingerprint: repository_fingerprint.to_owned(),
+        workers,
+        state_path: root.join("preflight-evidence.json"),
+    })
+}
+
+fn preflight_promotion_conflict(preflight: &CoordinatorEvidence) -> Option<String> {
+    const CONFLICT_MARKERS: &[&str] = &[
+        "scope must broaden",
+        "scope expansion required",
+        "public api change required",
+        "security-sensitive change required",
+        "dependency change required",
+        "conflicting evidence",
+        "stale repository graph",
+        "capability unavailable",
+        "cannot confirm resolved scope",
+    ];
+    preflight.workers.iter().find_map(|worker| {
+        let summary = worker.summary.to_ascii_lowercase();
+        CONFLICT_MARKERS
+            .iter()
+            .find(|marker| summary.contains(**marker))
+            .map(|marker| format!("{} reported promotion conflict marker `{marker}`", worker.task_id))
+    })
+}
+
+#[allow(clippy::too_many_arguments)]
+fn promote_speculative_state(
+    repo: &Path,
+    plan: &ProductionExecutionPlan,
+    preflight: &CoordinatorEvidence,
+    contract: &AgentContract,
+    packet: &ContextPacket,
+    state_path: &Path,
+    state: &mut DurableImplementationState,
+    events: &Sender<RuntimeEvent>,
+) -> Result<(), String> {
+    if state.speculation_ledger_path.as_os_str().is_empty()
+        || state.speculation_assumptions_fingerprint.trim().is_empty()
+        || state.speculation_branch.trim().is_empty()
+    {
+        return Err("prepared speculative state is missing promotion provenance".to_owned());
+    }
+    let mut ledger = SpeculationLedger::load(&state.speculation_ledger_path)?;
+    if ledger.record().assumptions.fingerprint != state.speculation_assumptions_fingerprint {
+        let _ = ledger.invalidate(
+            InvalidationReason::PromotionMismatch,
+            "implementation state assumptions do not match durable speculation ledger",
+        );
+        update_speculation_history(repo, ledger.record())?;
+        return Err("speculation assumptions fingerprint changed".to_owned());
+    }
+    if let Some(conflict) = preflight_promotion_conflict(preflight) {
+        let _ = ledger.invalidate(InvalidationReason::RiskEscalated, conflict.clone());
+        update_speculation_history(repo, ledger.record())?;
+        return Err(conflict);
+    }
+    let current_repository_fingerprint =
+        crate::multi_agent_coordinator::repository_fingerprint(repo)?;
+    if current_repository_fingerprint != preflight.repository_fingerprint {
+        let detail = "primary repository changed while speculative work was running".to_owned();
+        let _ = ledger.invalidate(InvalidationReason::RepositoryDrift, detail.clone());
+        update_speculation_history(repo, ledger.record())?;
+        return Err(detail);
+    }
+    if current_branch(repo)? != state.speculation_branch {
+        let detail = "primary repository branch changed while speculative work was running".to_owned();
+        let _ = ledger.invalidate(InvalidationReason::RepositoryDrift, detail.clone());
+        update_speculation_history(repo, ledger.record())?;
+        return Err(detail);
+    }
+    let planned = plan
+        .planning
+        .task(medusa_multi_agent_scheduler::TaskKind::Implementation)
+        .ok_or_else(|| "promotion plan has no implementation task".to_owned())?;
+    let candidate = state
+        .worker
+        .commit
+        .clone()
+        .ok_or_else(|| "prepared speculation has no immutable candidate commit".to_owned())?;
+    let check = PromotionCheck {
+        plan_fingerprint: plan.fingerprint.clone(),
+        repository_fingerprint: preflight.repository_fingerprint.clone(),
+        repository_scope: contract.allowed_write_paths.clone(),
+        dependency_ids: contract.dependencies.clone(),
+        task_context_fingerprint: planned.context_fingerprint.clone(),
+        candidate_fingerprint: candidate.clone(),
+    };
+    if let Err(reason) = ledger.promotion_decision(&check) {
+        let detail = format!("promotion evidence mismatch: {reason:?}");
+        let _ = ledger.invalidate(reason, detail.clone());
+        update_speculation_history(repo, ledger.record())?;
+        return Err(detail);
+    }
+    let retained_ms = ledger.record().elapsed_ms;
+    ledger.promote(&check, retained_ms)?;
+    update_speculation_history(repo, ledger.record())?;
+    state.speculative = false;
+    state.context_fingerprint = packet.fingerprint.clone();
+    write_atomic(state_path, state)?;
+    let _ = events.send(RuntimeEvent::Activity(RuntimeActivity {
+        id: Some(plan.fingerprint.clone()),
+        kind: RuntimeActivityKind::Done,
+        title: "Speculative candidate promoted".to_owned(),
+        details: vec![
+            format!("candidate={candidate}"),
+            format!("retained_useful_ms={retained_ms}"),
+            "full dependency evidence, scope, repository, branch, and task context matched"
+                .to_owned(),
+        ],
+    }));
+    Ok(())
+}
+
+fn discard_speculative_artifacts(repo: &Path, root: &Path) -> Result<(), String> {
+    let state_path = root.join("implementation-state.json");
+    if state_path.is_file() {
+        if let Ok(state) = load_state(&state_path) {
+            let manager = WorkerManager::new(repo, root.join("worktrees"))
+                .map_err(|error| error.to_string())?;
+            manager
+                .cleanup(std::slice::from_ref(&state.worker))
+                .map_err(|error| error.to_string())?;
+        }
+    }
+    for path in [
+        state_path,
+        root.join("implementation-worker-execution.json"),
+        root.join("implementation-team.json"),
+        root.join("mutation-transaction.json"),
+        root.join("prepared.patch"),
+    ] {
+        if path.is_file() {
+            fs::remove_file(path).map_err(|error| error.to_string())?;
+        }
+    }
+    let speculative_evidence = root.join("evidence/worktree");
+    if speculative_evidence.is_dir() {
+        fs::remove_dir_all(speculative_evidence).map_err(|error| error.to_string())?;
+    }
+    Ok(())
+}
+
+#[allow(clippy::too_many_arguments)]
 fn coordinate_with_control<F>(
     repo: &Path,
     plan: &ProductionExecutionPlan,
@@ -211,6 +618,7 @@ fn coordinate_with_control<F>(
     cancel: &Arc<AtomicBool>,
     control: &TeamControlPlane,
     events: &Sender<RuntimeEvent>,
+    speculative: Option<&SpeculativeExecutionContext>,
     executor: F,
 ) -> Result<ImplementationEvidence, String>
 where
@@ -271,7 +679,25 @@ where
     };
 
     if state_path.is_file() {
-        let state = load_state(&state_path)?;
+        let mut state = load_state(&state_path)?;
+        if speculative.is_none()
+            && state.speculative
+            && state.status == ImplementationStatus::Prepared
+        {
+            if let Err(error) = promote_speculative_state(
+                repo,
+                plan,
+                preflight,
+                &contract,
+                &packet,
+                &state_path,
+                &mut state,
+                events,
+            ) {
+                discard_speculative_artifacts(repo, root)?;
+                return Err(format!("{SPECULATION_INVALIDATED_PREFIX} {error}"));
+            }
+        }
         validate_state(plan, preflight, &packet, &state)?;
         match state.status {
             ImplementationStatus::Integrated => {
@@ -310,6 +736,7 @@ where
                     contract,
                     packet,
                     state.base_head,
+                    speculative,
                     None,
                 );
             }
@@ -370,6 +797,7 @@ where
         contract,
         packet,
         base_head,
+        speculative,
         Some(worker),
     )
 }
@@ -390,6 +818,7 @@ fn execute_attempts<F>(
     contract: AgentContract,
     packet: ContextPacket,
     base_head: String,
+    speculative: Option<&SpeculativeExecutionContext>,
     mut initial_worker: Option<Worker>,
 ) -> Result<ImplementationEvidence, String>
 where
@@ -462,6 +891,16 @@ where
                 .unwrap_or_else(|| Path::new("."))
                 .join("mutation-transaction.json"),
             last_error: last_error.clone(),
+            speculative: speculative.is_some(),
+            speculation_ledger_path: speculative
+                .map(|context| context.ledger_path.clone())
+                .unwrap_or_default(),
+            speculation_assumptions_fingerprint: speculative
+                .map(|context| context.assumptions_fingerprint.clone())
+                .unwrap_or_default(),
+            speculation_branch: speculative
+                .map(|context| context.branch.clone())
+                .unwrap_or_default(),
         };
         write_atomic(state_path, &running)?;
         let _ = events.send(RuntimeEvent::Activity(RuntimeActivity {
@@ -482,7 +921,11 @@ where
             team_context,
             control: control.clone(),
             events: events.clone(),
-            max_model_turns: u32::from(plan.planning.model_turn_budget.successful_path_total),
+            max_model_turns: speculative
+                .map_or_else(
+                    || u32::from(plan.planning.model_turn_budget.successful_path_total),
+                    |context| context.max_model_turns,
+                ),
         };
         let run = match executor(request) {
             Ok(run) => run,
@@ -890,6 +1333,16 @@ where
                 .unwrap_or_else(|| Path::new("."))
                 .join("mutation-transaction.json"),
             last_error: None,
+            speculative: speculative.is_some(),
+            speculation_ledger_path: speculative
+                .map(|context| context.ledger_path.clone())
+                .unwrap_or_default(),
+            speculation_assumptions_fingerprint: speculative
+                .map(|context| context.assumptions_fingerprint.clone())
+                .unwrap_or_default(),
+            speculation_branch: speculative
+                .map(|context| context.branch.clone())
+                .unwrap_or_default(),
         };
         write_atomic(state_path, &prepared)?;
         return complete_prepared(
@@ -957,6 +1410,7 @@ fn complete_prepared(
                 .verification_receipt
                 .clone()
                 .ok_or_else(|| "prepared implementation has no typed verification receipt".to_owned())?,
+            speculative: state.speculative,
         },
     )?;
     if transaction.snapshot().prepared_commit != commit {

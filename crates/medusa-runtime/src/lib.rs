@@ -1043,6 +1043,8 @@ fn run_prompt(
                 crate::production_orchestrator::projection(ledger),
             ));
         }
+        let speculation_policy =
+            medusa_multi_agent_scheduler::speculation::policy_for(&execution_plan.planning);
         let preflight = if crate::production_orchestrator::uses_deterministic_preflight(
             &execution_plan,
         ) {
@@ -1052,6 +1054,81 @@ fn run_prompt(
                 &state.team_control,
                 events,
             )
+        } else if speculation_policy.eligible {
+            let speculative_control = TeamControlPlane::default();
+            let (preflight, speculative) = std::thread::scope(|scope| {
+                let speculative = scope.spawn(|| {
+                    crate::mutating_worker_coordinator::run_speculative_implementation(
+                        &state.repo,
+                        &config,
+                        state.session_api_key.clone(),
+                        &execution_plan,
+                        cancel,
+                        (&speculative_control, events),
+                    )
+                });
+                let preflight = crate::multi_agent_coordinator::run_preflight(
+                    &state.repo,
+                    &config,
+                    state.session_api_key.clone(),
+                    &execution_plan,
+                    cancel,
+                    &state.team_control,
+                    events,
+                );
+                let speculative = speculative
+                    .join()
+                    .map_err(|_| "speculative implementer thread terminated unexpectedly".to_owned())
+                    .and_then(|result| result);
+                (preflight, speculative)
+            });
+            match speculative {
+                Ok(crate::mutating_worker_coordinator::SpeculationPreparation::Prepared {
+                    candidate,
+                    turns,
+                    elapsed_ms,
+                }) => {
+                    let _ = events.send(RuntimeEvent::Activity(RuntimeActivity {
+                        id: Some(execution_plan.fingerprint.clone()),
+                        kind: RuntimeActivityKind::Progress,
+                        title: "Speculative candidate awaiting promotion".to_owned(),
+                        details: vec![
+                            format!("candidate={candidate}"),
+                            format!("turns={turns}"),
+                            format!("overlapped_preflight_ms={elapsed_ms}"),
+                        ],
+                    }));
+                }
+                Ok(crate::mutating_worker_coordinator::SpeculationPreparation::Skipped {
+                    reason,
+                }) => {
+                    let _ = events.send(RuntimeEvent::Activity(RuntimeActivity {
+                        id: Some(execution_plan.fingerprint.clone()),
+                        kind: RuntimeActivityKind::Progress,
+                        title: "Speculation skipped".to_owned(),
+                        details: vec![reason],
+                    }));
+                }
+                Ok(crate::mutating_worker_coordinator::SpeculationPreparation::Discarded {
+                    reason,
+                }) => {
+                    let _ = events.send(RuntimeEvent::Activity(RuntimeActivity {
+                        id: Some(execution_plan.fingerprint.clone()),
+                        kind: RuntimeActivityKind::Progress,
+                        title: "Speculation discarded; cold path retained".to_owned(),
+                        details: vec![reason],
+                    }));
+                }
+                Err(error) => {
+                    let _ = events.send(RuntimeEvent::Activity(RuntimeActivity {
+                        id: Some(execution_plan.fingerprint.clone()),
+                        kind: RuntimeActivityKind::Progress,
+                        title: "Speculation unavailable; cold path retained".to_owned(),
+                        details: vec![error],
+                    }));
+                }
+            }
+            preflight
         } else {
             crate::multi_agent_coordinator::run_preflight(
                 &state.repo,
@@ -1139,7 +1216,7 @@ fn run_prompt(
                     crate::production_orchestrator::projection(ledger),
                 ));
             }
-            match crate::mutating_worker_coordinator::run_implementation(
+            let first_implementation = crate::mutating_worker_coordinator::run_implementation(
                 &state.repo,
                 &config,
                 state.session_api_key.clone(),
@@ -1147,7 +1224,31 @@ fn run_prompt(
                 preflight,
                 cancel,
                 (&state.team_control, events),
-            ) {
+            );
+            let implementation = match first_implementation {
+                Err(error)
+                    if crate::mutating_worker_coordinator::is_speculation_invalidation(&error) =>
+                {
+                    let _ = events.send(RuntimeEvent::Activity(RuntimeActivity {
+                        id: Some(execution_plan.fingerprint.clone()),
+                        kind: RuntimeActivityKind::Progress,
+                        title: "Speculation invalidated; restarting authoritative cold path"
+                            .to_owned(),
+                        details: vec![error],
+                    }));
+                    crate::mutating_worker_coordinator::run_implementation(
+                        &state.repo,
+                        &config,
+                        state.session_api_key.clone(),
+                        &execution_plan,
+                        preflight,
+                        cancel,
+                        (&state.team_control, events),
+                    )
+                }
+                result => result,
+            };
+            match implementation {
                 Ok(evidence) => {
                     if let Some(ledger) = execution_ledger.as_mut() {
                         crate::production_orchestrator::succeed_kinds(

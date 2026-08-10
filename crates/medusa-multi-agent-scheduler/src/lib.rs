@@ -305,6 +305,7 @@ pub fn plan_typed(mut input: PlannerInput) -> Result<PlanningResult, &'static st
         tasks,
         fingerprint: String::new(),
     };
+    apply_speculation_flags(&mut result);
     result.fingerprint = planning_fingerprint(&result);
     result.validate()?;
     Ok(result)
@@ -321,6 +322,17 @@ pub fn apply_repository_graph_evidence(
     evidence_current: bool,
 ) -> Result<PlanningResult, &'static str> {
     if !evidence_current {
+        for planned in &mut result.tasks {
+            planned.task.speculative = false;
+            planned.context_fingerprint = hash(&(
+                &planned.task,
+                planned.kind,
+                &planned.title,
+                CancellationAuthority::RuntimeController,
+            ));
+        }
+        result.fingerprint = planning_fingerprint(&result);
+        result.validate()?;
         return Ok(result);
     }
 
@@ -346,6 +358,7 @@ pub fn apply_repository_graph_evidence(
         result.model_turn_budget = model_turn_budget(ExecutionLane::FullOrchestration);
     }
 
+    apply_speculation_flags(&mut result);
     result.fingerprint = planning_fingerprint(&result);
     result.validate()?;
     Ok(result)
@@ -409,6 +422,20 @@ impl PlanningResult {
                 .any(|task| task.kind == TaskKind::Implementation)
         {
             return Err("read-only planning cannot contain an implementation task");
+        }
+        let speculative_implementation_allowed = self.lane == ExecutionLane::StandardMutation
+            && self.risk == RiskLevel::Medium
+            && self.confidence_milli >= 850
+            && self.scope.resolution == ScopeResolution::Resolved
+            && !self.scope.effective.is_empty()
+            && !self.scope.effective.iter().any(|path| path == "repository");
+        if self.tasks.iter().any(|planned| planned.task.speculative)
+            && (!speculative_implementation_allowed
+                || self.tasks.iter().any(|planned| {
+                    planned.task.speculative && planned.kind != TaskKind::Implementation
+                }))
+        {
+            return Err("speculative scheduler tasks violate the bounded eligibility policy");
         }
         let tasks = self
             .tasks
@@ -525,6 +552,28 @@ const fn model_turn_budget(lane: ExecutionLane) -> ModelTurnBudget {
             successful_path_total: 8,
             repair_attempts: 3,
         },
+    }
+}
+
+fn apply_speculation_flags(result: &mut PlanningResult) {
+    let eligible = result.lane == ExecutionLane::StandardMutation
+        && result.risk == RiskLevel::Medium
+        && result.confidence_milli >= 850
+        && result.scope.resolution == ScopeResolution::Resolved
+        && !result.scope.effective.is_empty()
+        && !result
+            .scope
+            .effective
+            .iter()
+            .any(|path| path == "repository");
+    for planned in &mut result.tasks {
+        planned.task.speculative = eligible && planned.kind == TaskKind::Implementation;
+        planned.context_fingerprint = hash(&(
+            &planned.task,
+            planned.kind,
+            &planned.title,
+            CancellationAuthority::RuntimeController,
+        ));
     }
 }
 

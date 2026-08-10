@@ -191,3 +191,17 @@ fn cancellation_prevents_implementation_dispatch() {
     assert!(error.contains("cancelled"));
     assert!(!repo.join(".medusa/executions/test/worktrees").exists());
 }
+
+#[test]
+fn promotion_conflict_is_fail_closed_on_explicit_risk_escalation() {
+    let (_directory, _repo, _plan, mut preflight) = repository("src/");
+    assert!(preflight_promotion_conflict(&preflight).is_none());
+    preflight
+        .workers
+        .iter_mut()
+        .find(|worker| worker.task_id == "risk-review")
+        .expect("risk worker")
+        .summary = "Scope expansion required before implementation can be accepted.".to_owned();
+    let conflict = preflight_promotion_conflict(&preflight).expect("promotion conflict");
+    assert!(conflict.contains("scope expansion required"));
+}
