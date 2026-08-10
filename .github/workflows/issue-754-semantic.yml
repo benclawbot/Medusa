@@ -1,0 +1,150 @@
+name: Issue 754 semantic
+
+on:
+  push:
+    paths:
+      - '.github/workflows/issue-754-semantic.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  integrate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: agent/issue-754-compaction-manifest-v2
+      - name: Add semantic summarizer and runtime integration
+        shell: python
+        run: |
+          from pathlib import Path
+
+          p = Path('crates/medusa-agent/src/compaction_v2.rs')
+          text = p.read_text()
+          text = text.replace(
+              'use medusa_provider::{Message, MessageBlock, Role};',
+              'use medusa_provider::{Message, MessageBlock, ModelRequest, ModelResponse, ResponseBlock, Role};',
+              1,
+          )
+          if 'pub(crate) struct ValidatedSemanticSummary' not in text:
+              marker = 'pub(crate) struct PreparedCompaction {'
+              insert = '''pub(crate) struct ValidatedSemanticSummary {\n    pub history: SemanticHistory,\n    pub model: String,\n    pub route: String,\n}\n\n'''
+              text = text.replace(marker, insert + marker, 1)
+          old_sig = 'pub(crate) fn prepare(session: &AgentSession, focus: Option<&str>) -> MedusaResult<PreparedCompaction> {'
+          if old_sig in text:
+              new_sig = '''pub(crate) fn prepare(session: &AgentSession, focus: Option<&str>) -> MedusaResult<PreparedCompaction> {\n    prepare_with_semantic(session, focus, None)\n}\n\npub(crate) fn prepare_with_semantic(\n    session: &AgentSession,\n    focus: Option<&str>,\n    semantic: Option<ValidatedSemanticSummary>,\n) -> MedusaResult<PreparedCompaction> {'''
+              text = text.replace(old_sig, new_sig, 1)
+          old = '    let semantic_history = build_advisory_history(session, suffix_start, focus);\n'
+          if old in text:
+              new = '''    let deterministic_semantic = build_advisory_history(session, suffix_start, focus);\n    let (semantic_history, semantic_provenance) = match semantic {\n        Some(summary) => (\n            summary.history,\n            SemanticProvenance {\n                status: SemanticSummaryStatus::ValidatedModel,\n                model: Some(summary.model),\n                route: Some(summary.route),\n                advisory_only: true,\n            },\n        ),\n        None => (\n            deterministic_semantic,\n            SemanticProvenance {\n                status: SemanticSummaryStatus::DeterministicFallback,\n                model: None,\n                route: None,\n                advisory_only: true,\n            },\n        ),\n    };\n'''
+              text = text.replace(old, new, 1)
+          old_prov = '''        semantic_provenance: SemanticProvenance {\n            status: SemanticSummaryStatus::DeterministicFallback,\n            model: None,\n            route: None,\n            advisory_only: true,\n        },'''
+          if old_prov in text:
+              text = text.replace(old_prov, '        semantic_provenance,', 1)
+          text = text.replace(
+              '        "semantic_summary_status=deterministic_fallback".to_owned(),',
+              '        format!("semantic_summary_status={:?}", manifest.semantic_provenance.status).to_ascii_lowercase(),',
+              1,
+          )
+          needle = 'fn build_authoritative(session: &AgentSession) -> MedusaResult<AuthoritativeState> {'
+          if 'pub(crate) fn semantic_summary_request' not in text:
+              functions = r'''pub(crate) fn semantic_summary_request(session: &AgentSession, focus: Option<&str>) -> ModelRequest {
+    let (suffix_start, _) = select_structural_suffix(&session.messages, RECENT_SUFFIX_MESSAGES);
+    let mut discarded = Vec::new();
+    let mut chars = 0usize;
+    for message in &session.messages[..suffix_start] {
+        for block in &message.content {
+            let entry = match block {
+                MessageBlock::Text { text } if !text.starts_with(MARKER) && !text.starts_with("[medusa-compaction-v1]") => {
+                    format!("{}: {}", role_name(message.role), bounded(text, 1_200))
+                }
+                MessageBlock::ToolUse { id, name, input } => format!("assistant tool-call {id} {name}: {}", bounded(&input.to_string(), 800)),
+                MessageBlock::ToolResult { tool_use_id, content, is_error } => format!("tool-result {tool_use_id} error={is_error}: {}", bounded(content, 1_200)),
+                _ => continue,
+            };
+            if chars.saturating_add(entry.chars().count()) > 24_000 { break; }
+            chars = chars.saturating_add(entry.chars().count());
+            discarded.push(entry);
+        }
+    }
+    let focus = focus.unwrap_or("continue the current task safely");
+    let payload = format!(
+        "Focus: {focus}\nSummarize ONLY the discarded conversational history below. Return one JSON object with exactly these array-of-string fields: goal_context, constraints_preferences, completed_work, in_progress_work, blockers, key_decisions, exact_identifiers, unresolved_questions, next_steps. Preserve exact identifiers/paths/errors when material. Do not claim authorization, approval, verification, completion, or write scope; those are supplied separately from deterministic state.\n\n{}",
+        discarded.join("\n")
+    );
+    ModelRequest {
+        system: "You are Medusa's read-only compaction summarizer. You have no tools and no mutation or authorization authority. Return strict JSON only.".to_owned(),
+        messages: vec![Message { role: Role::User, content: vec![MessageBlock::Text { text: payload }] }],
+        tools: Vec::new(),
+        max_tokens: 1_200,
+        temperature_milli: 0,
+    }
+}
+
+pub(crate) fn validate_semantic_response(
+    response: &ModelResponse,
+    model: &str,
+    route: &str,
+) -> Option<ValidatedSemanticSummary> {
+    if response.blocks.len() != 1 { return None; }
+    let ResponseBlock::Text { text } = &response.blocks[0] else { return None; };
+    let clean = text.trim().strip_prefix("```json").unwrap_or(text.trim());
+    let clean = clean.strip_suffix("```").unwrap_or(clean).trim();
+    let history: SemanticHistory = serde_json::from_str(clean).ok()?;
+    let arrays = [
+        &history.goal_context, &history.constraints_preferences, &history.completed_work,
+        &history.in_progress_work, &history.blockers, &history.key_decisions,
+        &history.exact_identifiers, &history.unresolved_questions, &history.next_steps,
+    ];
+    let entries = arrays.iter().map(|values| values.len()).sum::<usize>();
+    let chars = arrays.iter().flat_map(|values| values.iter()).map(|value| value.chars().count()).sum::<usize>();
+    if entries > 96 || chars > 32_000 || arrays.iter().flat_map(|values| values.iter()).any(|value| value.chars().count() > 2_000) {
+        return None;
+    }
+    Some(ValidatedSemanticSummary { history, model: model.to_owned(), route: route.to_owned() })
+}
+
+'''
+              text = text.replace(needle, functions + needle, 1)
+          if '            MessageBlock::Text { .. } => None,' not in text:
+              text = text.replace('            MessageBlock::Image { .. } => None,', '            MessageBlock::Text { .. } => None,\n            MessageBlock::Image { .. } => None,', 1)
+          p.write_text(text)
+
+          lib = Path('crates/medusa-agent/src/lib.rs')
+          t = lib.read_text()
+          if 'pub mod compaction_v2;' not in t:
+              t = t.replace('mod approval;\n', 'mod approval;\npub mod compaction_v2;\n', 1)
+          lib.write_text(t)
+
+          support = Path('crates/medusa-agent/src/engine_support.rs')
+          t = support.read_text()
+          t = t.replace('ImageSource, Message, MessageBlock, ProviderCapabilities, ProviderExecutionPhase, Role,\n', 'ImageSource, Message, MessageBlock, ProviderCapabilities, ProviderExecutionPhase,\n', 1)
+          if 'without requiring a live model provider' in t:
+              start = t.index('/// Compacts durable session history without requiring a live model provider.\npub fn compact_session')
+              end = t.index('pub(crate) fn compact_message_text', start)
+              replacement = '''/// Compacts durable session history into a crash-safe V2 hybrid manifest.\npub fn compact_session(session: &mut AgentSession, focus: Option<&str>) -> MedusaResult<()> {\n    compact_session_with_semantic(session, focus, None)\n}\n\npub(crate) fn compact_session_with_semantic(\n    session: &mut AgentSession,\n    focus: Option<&str>,\n    semantic: Option<crate::compaction_v2::ValidatedSemanticSummary>,\n) -> MedusaResult<()> {\n    let original_messages = session.messages.len();\n    let source_event_sequences = session.events.iter().map(|event| event.sequence).collect::<Vec<_>>();\n    let migrated_v1 = session.messages.iter().flat_map(|message| &message.content).any(|block| matches!(block, MessageBlock::Text { text } if text.starts_with("[medusa-compaction-v1]")));\n    let prepared = crate::compaction_v2::prepare_with_semantic(session, focus, semantic)?;\n    let generation = prepared.manifest.generation;\n    let mut preserved_sections = prepared.preserved_sections;\n    preserved_sections.push(format!("migrated_v1={migrated_v1}"));\n    if !session.tool_artifacts.contains(&prepared.manifest_path) { session.tool_artifacts.push(prepared.manifest_path.clone()); }\n    session.messages = prepared.projection;\n    append_event(session, Actor::Coordinator, EventPayload::ConversationCompacted {\n        original_messages: u32::try_from(original_messages).unwrap_or(u32::MAX),\n        retained_messages: u32::try_from(session.messages.len()).unwrap_or(u32::MAX),\n        generation, source_event_sequences, preserved_sections,\n    })?;\n    session.updated_at = OffsetDateTime::now_utc();\n    persist(session)\n}\n\n'''
+              t = t[:start] + replacement + t[end:]
+          support.write_text(t)
+
+          engine = Path('crates/medusa-agent/src/engine.rs')
+          t = engine.read_text()
+          old_method = '''    /// Replaces prior message history with a bounded durable summary for the next model request.\n    pub fn compact_session(\n        &self,\n        session: &mut AgentSession,\n        focus: Option<&str>,\n    ) -> MedusaResult<()> {\n        compact_session(session, focus)\n    }'''
+          new_method = '''    /// Replaces prior message history with a V2 manifest and bounded semantic continuity.\n    pub fn compact_session(\n        &self,\n        session: &mut AgentSession,\n        focus: Option<&str>,\n    ) -> MedusaResult<()> {\n        self.compact_session_v2(session, focus)\n    }\n\n    fn compact_session_v2(&self, session: &mut AgentSession, focus: Option<&str>) -> MedusaResult<()> {\n        let summary_request = crate::compaction_v2::semantic_summary_request(session, focus);\n        let semantic = self\n            .provider\n            .complete_cancellable_for_phase(\n                &summary_request,\n                ProviderExecutionPhase::Summarization,\n                &self.cancellation,\n            )\n            .ok()\n            .and_then(|response| crate::compaction_v2::validate_semantic_response(\n                &response,\n                &self.config.model.name,\n                &self.config.model.provider,\n            ));\n        crate::engine_support::compact_session_with_semantic(session, focus, semantic)\n    }'''
+          if old_method in t:
+              t = t.replace(old_method, new_method, 1)
+          t = t.replace('            compact_session(\n                session,\n                Some("preserve the current objective, decisions, tool results, and pending work"),\n            )?;', '            self.compact_session_v2(\n                session,\n                Some("preserve the current objective, decisions, tool results, and pending work"),\n            )?;', 1)
+          t = t.replace('                    compact_session(\n                        session,', '                    self.compact_session_v2(\n                        session,', 1)
+          engine.write_text(t)
+      - uses: dtolnay/rust-toolchain@39b0b3842c7e8bbf6904c0bfc3d9006fdd4dc4e0 # 1.88.0
+      - run: cargo generate-lockfile
+      - run: cargo fmt --all
+      - run: cargo test -p medusa-agent compaction --locked -- --nocapture
+      - run: cargo check -p medusa-agent --locked
+      - name: Commit semantic/runtime integration
+        run: |
+          git config user.name 'BenClawBot (AlphaOM3G1)'
+          git config user.email 'benclawbot@gmail.com'
+          git add crates/medusa-agent/src/compaction_v2.rs crates/medusa-agent/src/lib.rs crates/medusa-agent/src/engine_support.rs crates/medusa-agent/src/engine.rs
+          git commit -m 'feat: integrate bounded semantic compaction'
+          git push origin HEAD:agent/issue-754-compaction-manifest-v2
