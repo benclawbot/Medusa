@@ -73,7 +73,7 @@ pub(crate) fn decomposition_for(
                 repository_revision: repository_revision.to_owned(),
                 resources: resources_for_path(&normalized)?,
                 dependencies: Vec::new(),
-                capabilities: implementation.capabilities.clone(),
+                capabilities: implementation.task.capabilities.clone(),
                 required_evidence: contract.required_evidence.clone(),
                 verification_responsibility: vec![
                     "targeted worktree verification".to_owned(),
