@@ -45,6 +45,7 @@ pub mod openai_realtime;
 pub mod observer;
 pub mod prompt;
 pub mod review;
+pub mod scheduled_actions;
 pub mod skill_dependencies;
 pub mod skill_dependency_locks;
 mod support;

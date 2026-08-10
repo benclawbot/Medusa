@@ -15,7 +15,7 @@ use medusa_protocol::{
     SessionActionDeliveryPolicy, SessionActionKind, SessionActionLifecycle, SessionActionWakePolicy,
 };
 use serde::{Deserialize, Serialize};
-use serde_json::{Value, json};
+use serde_json::json;
 use sha2::{Digest, Sha256};
 use time::OffsetDateTime;
 
@@ -110,6 +110,12 @@ pub struct TriggerDispatchRecord {
     pub delivery_mode: TriggerDeliveryMode,
     pub delivery_policy: SessionActionDeliveryPolicy,
     pub wake_policy: SessionActionWakePolicy,
+    pub prompt: String,
+    pub authorized: bool,
+    pub enabled: bool,
+    pub persistent_goal: bool,
+    pub recurrence_seconds: Option<u64>,
+    pub missed_run_policy: MissedRunPolicy,
     pub status: TriggerDispatchStatus,
     pub recovered: bool,
     pub skip_reason: Option<String>,
@@ -314,6 +320,12 @@ fn claimed_record(request: &TriggerDispatchRequest) -> Result<TriggerDispatchRec
         delivery_mode: request.delivery_mode,
         delivery_policy,
         wake_policy: request.wake_policy,
+        prompt: request.prompt.clone(),
+        authorized: request.authorized,
+        enabled: request.enabled,
+        persistent_goal: request.persistent_goal,
+        recurrence_seconds: request.recurrence_seconds,
+        missed_run_policy: request.missed_run_policy,
         status: TriggerDispatchStatus::Claimed,
         recovered: false,
         skip_reason: None,
@@ -326,12 +338,23 @@ fn claimed_record(request: &TriggerDispatchRequest) -> Result<TriggerDispatchRec
 }
 
 fn request_from_record(record: &TriggerDispatchRecord) -> Result<TriggerDispatchRequest, RuntimeError> {
-    let session = medusa_agent::session_browser::load_session(Path::new("."), "");
-    drop(session);
-    Err(RuntimeError::InvalidCommand(format!(
-        "trigger recovery requires the original trigger payload for {}",
-        record.occurrence_id
-    )))
+    Ok(TriggerDispatchRequest {
+        schedule_id: record.schedule_id.clone(),
+        source_kind: record.source_kind,
+        occurrence_id: record.occurrence_id.clone(),
+        occurrence_sequence: record.occurrence_sequence,
+        scheduled_for: record.scheduled_for,
+        observed_at: record.observed_at,
+        target_session_id: record.target_session_id.clone(),
+        delivery_mode: record.delivery_mode,
+        wake_policy: record.wake_policy,
+        prompt: record.prompt.clone(),
+        authorized: record.authorized,
+        enabled: record.enabled,
+        persistent_goal: record.persistent_goal,
+        recurrence_seconds: record.recurrence_seconds,
+        missed_run_policy: record.missed_run_policy,
+    })
 }
 
 fn ensure_same_occurrence(
