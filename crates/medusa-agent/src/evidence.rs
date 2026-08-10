@@ -19,7 +19,7 @@ fn successful_mutation_event(payload: &EventPayload) -> bool {
         EventPayload::ToolExecutionCompleted {
             tool,
             exit_code: Some(0)
-        } if matches!(tool.as_str(), "fs_create_dir" | "fs_write" | "patch_apply" | "symbol_rename" | "git_checkpoint")
+        } if crate::tool_dag::invalidates_repository_revision(tool, &serde_json::Value::Null)
             || tool
                 .strip_prefix("desktop_commander:")
                 .is_some_and(desktop_commander_tool_is_mutating)
@@ -405,7 +405,9 @@ mod tests {
             "fs_write",
             "patch_apply",
             "symbol_rename",
+            "apply_structured_patch",
             "git_checkpoint",
+            "shell_run",
         ] {
             assert!(successful_mutation_event(
                 &EventPayload::ToolExecutionCompleted {
@@ -414,6 +416,12 @@ mod tests {
                 }
             ));
         }
+        assert!(successful_mutation_event(
+            &EventPayload::ToolExecutionCompleted {
+                tool: "desktop_commander:write_file".to_owned(),
+                exit_code: Some(0),
+            }
+        ));
         assert!(!successful_mutation_event(
             &EventPayload::ToolExecutionCompleted {
                 tool: "fs_read".to_owned(),
