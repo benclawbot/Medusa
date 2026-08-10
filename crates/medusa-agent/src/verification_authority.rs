@@ -21,7 +21,9 @@ pub(crate) mod verification_cancellation;
 #[path = "verification_checkpoint.rs"]
 pub(crate) mod verification_checkpoint;
 
-use verification_cancellation::register_verification_cancellation;
+use verification_cancellation::{
+    VerificationRuntimeMetrics, register_verification_cancellation, take_runtime_metrics,
+};
 use verification_checkpoint::VerificationCheckpointStore;
 
 #[allow(dead_code)]
@@ -62,6 +64,9 @@ pub fn authoritative_verification_for_components_at(
 ) -> MedusaResult<AuthoritativeVerificationResult> {
     fs::create_dir_all(evidence_root)?;
     let store_root = evidence_root.join(short_hash(&(repository_fingerprint.to_owned() + commit)));
+    let _ = take_runtime_metrics(repo);
+    let mut runtime_metrics = VerificationRuntimeMetrics::default();
+    let mut invalidation_reruns = 0u64;
 
     for _ in 0..MAX_STABLE_VERIFICATION_ATTEMPTS {
         let before = complete_repository_state_fingerprint(repo, evidence_root, components)?;
@@ -79,24 +84,91 @@ pub fn authoritative_verification_for_components_at(
                     components,
                 )
             })?;
+        accumulate_runtime_metrics(&mut runtime_metrics, take_runtime_metrics(repo));
         if guarded.cancelled {
+            invalidation_reruns = invalidation_reruns.saturating_add(1);
             invalidate_persisted_reuse(&store_root)?;
             continue;
         }
-        let result = guarded.result?;
+        let mut result = guarded.result?;
         let after = complete_repository_state_fingerprint(repo, evidence_root, components)?;
         if before == after {
             fs::create_dir_all(&store_root)?;
             fs::write(store_root.join(STATE_FINGERPRINT_FILE), after)?;
+            append_runtime_summary(&mut result, &runtime_metrics, invalidation_reruns);
             return Ok(result);
         }
 
+        invalidation_reruns = invalidation_reruns.saturating_add(1);
         invalidate_persisted_reuse(&store_root)?;
     }
 
     Err(invalid(
         "repository state changed repeatedly during authoritative verification",
     ))
+}
+
+fn accumulate_runtime_metrics(
+    total: &mut VerificationRuntimeMetrics,
+    attempt: VerificationRuntimeMetrics,
+) {
+    total.command_waves = total.command_waves.saturating_add(attempt.command_waves);
+    total.command_checks_executed = total
+        .command_checks_executed
+        .saturating_add(attempt.command_checks_executed);
+    total.command_queue_duration_ms = total
+        .command_queue_duration_ms
+        .saturating_add(attempt.command_queue_duration_ms);
+    total.command_serial_execution_ms = total
+        .command_serial_execution_ms
+        .saturating_add(attempt.command_serial_execution_ms);
+    total.command_wall_duration_ms = total
+        .command_wall_duration_ms
+        .saturating_add(attempt.command_wall_duration_ms);
+    total.command_overlap_ms = total
+        .command_overlap_ms
+        .saturating_add(attempt.command_overlap_ms);
+}
+
+fn append_runtime_summary(
+    result: &mut AuthoritativeVerificationResult,
+    metrics: &VerificationRuntimeMetrics,
+    invalidation_reruns: u64,
+) {
+    let exact_reuse = result
+        .summary
+        .iter()
+        .any(|line| line == "verification_reuse=exact-persisted-receipt");
+    result
+        .summary
+        .push(format!("verification_command_waves={}", metrics.command_waves));
+    result.summary.push(format!(
+        "verification_command_checks={}",
+        metrics.command_checks_executed
+    ));
+    result.summary.push(format!(
+        "verification_command_queue_ms={}",
+        metrics.command_queue_duration_ms
+    ));
+    result.summary.push(format!(
+        "verification_command_serial_ms={}",
+        metrics.command_serial_execution_ms
+    ));
+    result.summary.push(format!(
+        "verification_command_wall_ms={}",
+        metrics.command_wall_duration_ms
+    ));
+    result.summary.push(format!(
+        "verification_command_overlap_ms={}",
+        metrics.command_overlap_ms
+    ));
+    result
+        .summary
+        .push(format!("verification_invalidation_reruns={invalidation_reruns}"));
+    result.summary.push(format!(
+        "verification_exact_reuse_hits={}",
+        u8::from(exact_reuse)
+    ));
 }
 
 struct GuardedVerification<T> {
@@ -620,6 +692,39 @@ mod tests {
     }
 
     #[test]
+    fn runtime_metrics_accumulate_attempts() {
+        let mut total = VerificationRuntimeMetrics::default();
+        accumulate_runtime_metrics(
+            &mut total,
+            VerificationRuntimeMetrics {
+                command_waves: 1,
+                command_checks_executed: 2,
+                command_queue_duration_ms: 3,
+                command_serial_execution_ms: 40,
+                command_wall_duration_ms: 25,
+                command_overlap_ms: 15,
+            },
+        );
+        accumulate_runtime_metrics(
+            &mut total,
+            VerificationRuntimeMetrics {
+                command_waves: 2,
+                command_checks_executed: 3,
+                command_queue_duration_ms: 4,
+                command_serial_execution_ms: 60,
+                command_wall_duration_ms: 45,
+                command_overlap_ms: 15,
+            },
+        );
+        assert_eq!(total.command_waves, 3);
+        assert_eq!(total.command_checks_executed, 5);
+        assert_eq!(total.command_queue_duration_ms, 7);
+        assert_eq!(total.command_serial_execution_ms, 100);
+        assert_eq!(total.command_wall_duration_ms, 70);
+        assert_eq!(total.command_overlap_ms, 30);
+    }
+
+    #[test]
     fn outer_state_guard_reuses_only_stable_semantic_inputs() {
         let directory = tempfile::tempdir().expect("repository");
         fs::write(directory.path().join("artifact.json"), "{\"ok\":true}\n").expect("artifact");
@@ -636,6 +741,12 @@ mod tests {
         )
         .expect("first verification");
         assert!(first.receipt.passed);
+        assert!(
+            first
+                .summary
+                .iter()
+                .any(|line| line == "verification_exact_reuse_hits=0")
+        );
 
         let reused = authoritative_verification_for_components_at(
             directory.path(),
@@ -650,6 +761,12 @@ mod tests {
                 .summary
                 .iter()
                 .any(|line| line == "verification_reuse=exact-persisted-receipt")
+        );
+        assert!(
+            reused
+                .summary
+                .iter()
+                .any(|line| line == "verification_exact_reuse_hits=1")
         );
 
         fs::write(directory.path().join("artifact.json"), "{broken}\n").expect("mutate");
@@ -667,6 +784,12 @@ mod tests {
                 .summary
                 .iter()
                 .any(|line| line == "verification_reuse=exact-persisted-receipt")
+        );
+        assert!(
+            changed
+                .summary
+                .iter()
+                .any(|line| line == "verification_exact_reuse_hits=0")
         );
     }
 }
