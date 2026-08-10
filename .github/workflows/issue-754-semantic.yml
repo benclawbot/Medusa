@@ -5,6 +5,7 @@ on:
     paths:
       - '.github/workflows/issue-754-semantic.yml'
       - '.github/scripts/issue754_semantic.py'
+      - '.github/scripts/issue754_finalize.py'
       - 'crates/medusa-agent/tests/structured_compaction.rs'
 
 permissions:
@@ -18,16 +19,18 @@ jobs:
         with:
           ref: agent/issue-754-compaction-manifest-v2
       - name: Apply semantic/runtime integration
-        run: python .github/scripts/issue754_semantic.py
+        run: |
+          python .github/scripts/issue754_semantic.py
+          python .github/scripts/issue754_finalize.py
       - uses: dtolnay/rust-toolchain@39b0b3842c7e8bbf6904c0bfc3d9006fdd4dc4e0 # 1.88.0
       - run: cargo generate-lockfile
-      - run: cargo fmt --all
+      - run: cargo fmt --all -- --check
       - run: cargo test -p medusa-agent compaction --locked -- --nocapture
       - run: cargo check -p medusa-agent --locked
-      - name: Commit semantic/runtime integration
+      - name: Commit final source integration
         run: |
           git config user.name 'BenClawBot (AlphaOM3G1)'
           git config user.email 'benclawbot@gmail.com'
-          git add crates/medusa-agent/src/compaction_v2.rs crates/medusa-agent/src/lib.rs crates/medusa-agent/src/engine_support.rs crates/medusa-agent/src/engine.rs
-          git commit -m 'feat: integrate bounded semantic compaction'
+          git add crates/medusa-agent/src/compaction_v2.rs crates/medusa-agent/src/lib.rs crates/medusa-agent/src/engine_support.rs crates/medusa-agent/src/engine.rs crates/medusa-agent/tests/structured_compaction.rs
+          git diff --cached --quiet || git commit -m 'test: finalize compaction v2 safety contracts'
           git push origin HEAD:agent/issue-754-compaction-manifest-v2
