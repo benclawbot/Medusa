@@ -1,7 +1,7 @@
 use std::path::Path;
 
 use medusa_multi_agent_scheduler::{
-    RiskLevel,
+    RiskLevel, TaskKind,
     mutation_dag::{
         DecompositionDecision, MutationDag, MutationResource, MutationResourceKind,
         MutationTaskContract,
@@ -19,6 +19,10 @@ pub(crate) fn decomposition_for(
     repository_revision: &str,
 ) -> Result<DecompositionDecision, String> {
     let contract = implementation_contract(plan)?;
+    let implementation = plan
+        .planning
+        .task(TaskKind::Implementation)
+        .ok_or_else(|| "parallel mutation planning requires an implementation task".to_owned())?;
     let scope = &contract.allowed_write_paths;
     if plan.planning.risk == RiskLevel::High {
         return Ok(single("high-risk mutations remain single-implementer"));
@@ -58,18 +62,13 @@ pub(crate) fn decomposition_for(
                 repository_revision: repository_revision.to_owned(),
                 resources: resources_for_path(&normalized)?,
                 dependencies: Vec::new(),
-                capabilities: contract
-                    .delegation
-                    .allowed_capabilities
-                    .iter()
-                    .cloned()
-                    .collect(),
+                capabilities: implementation.capabilities.clone(),
                 required_evidence: contract.required_evidence.clone(),
                 verification_responsibility: vec![
                     "targeted worktree verification".to_owned(),
                     "independent runtime verification before integration".to_owned(),
                 ],
-                confidence_milli: plan.planning.confidence.milli,
+                confidence_milli: plan.planning.confidence_milli,
             })
         })
         .collect::<Result<Vec<_>, String>>()?;
