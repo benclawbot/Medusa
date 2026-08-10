@@ -1,0 +1,60 @@
+name: Journal Durability Certification
+
+on:
+  pull_request:
+    paths:
+      - 'crates/medusa-agent/src/journal.rs'
+      - 'docs/durable-journal-policy.md'
+      - 'benchmarks/performance/692-journal-persistence.json'
+      - '.github/workflows/journal-durability-certification.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'crates/medusa-agent/src/journal.rs'
+      - 'docs/durable-journal-policy.md'
+      - 'benchmarks/performance/692-journal-persistence.json'
+      - '.github/workflows/journal-durability-certification.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  journal-recovery:
+    name: Journal recovery (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: dtolnay/rust-toolchain@39b0b3842c7e8bbf6904c0bfc3d9006fdd4dc4e0 # 1.88.0
+      - name: Refresh merged dependency lock
+        run: cargo generate-lockfile
+      - name: Run canonical journal durability and recovery tests
+        run: cargo test -p medusa-agent journal::tests --locked -- --nocapture
+
+  persistence-contract:
+    name: Persistence performance contract
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - name: Validate issue 692 performance evidence
+        shell: python
+        run: |
+          import json
+          from pathlib import Path
+
+          path = Path('benchmarks/performance/692-journal-persistence.json')
+          data = json.loads(path.read_text(encoding='utf-8'))
+          persistence = data['persistence']
+          assert data['schema_version'] == 1
+          assert data['outcome']['verified_success'] is True
+          assert persistence['baseline_append_opens_per_transition'] == 2
+          assert persistence['candidate_append_opens_per_transition'] == 1
+          assert persistence['baseline_file_syncs_per_transition'] == 2
+          assert persistence['candidate_file_syncs_per_transition'] == 1
+          assert persistence['synchronous_persistence_operation_reduction_ratio'] >= 0.5
+          assert persistence['ordering'] == 'event_then_snapshot'
+          assert persistence['publish_after_sync'] is True
+          assert persistence['global_persistence_lock'] is False
