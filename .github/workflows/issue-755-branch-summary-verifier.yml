@@ -1,0 +1,82 @@
+name: Issue 755 branch summary verifier
+
+on:
+  pull_request:
+    types: [opened, reopened, synchronize]
+
+permissions:
+  contents: write
+
+jobs:
+  apply-and-verify:
+    if: github.event.pull_request.head.repo.full_name == github.repository && github.event.pull_request.head.ref == 'agent/issue-755-branch-summaries'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          ref: agent/issue-755-branch-summaries
+          fetch-depth: 0
+      - uses: dtolnay/rust-toolchain@39b0b3842c7e8bbf6904c0bfc3d9006fdd4dc4e0
+        with:
+          toolchain: stable
+          components: rustfmt, clippy
+      - name: Wire branch summaries into production paths
+        shell: python
+        run: |
+          from pathlib import Path
+
+          lib = Path('crates/medusa-agent/src/lib.rs')
+          text = lib.read_text()
+          if 'pub mod branch_summary;' not in text:
+              old = 'mod approval;\npub mod compaction_v2;'
+              assert old in text
+              text = text.replace(old, 'mod approval;\npub mod branch_summary;\npub mod compaction_v2;', 1)
+          export = 'pub use branch_summary::{\n    BranchAnchor, BranchSummaryRecord, DeterministicBranchMetadata, common_ancestor,\n};\n'
+          if export not in text:
+              marker = 'pub use approval::{\n    ApprovalDecision, ApprovalGrant, ApprovalReceipt, ApprovalScope, RollbackOutcome,\n    RollbackReceipt,\n};\n'
+              assert marker in text
+              text = text.replace(marker, marker + export, 1)
+          old = '''pub fn record_session_event(\n    session: &mut AgentSession,\n    actor: medusa_protocol::Actor,\n    payload: medusa_protocol::EventPayload,\n) -> medusa_core::MedusaResult<()> {\n    evidence::append_event(session, actor, payload)?;'''
+          new = '''pub fn record_session_event(\n    session: &mut AgentSession,\n    actor: medusa_protocol::Actor,\n    payload: medusa_protocol::EventPayload,\n) -> medusa_core::MedusaResult<()> {\n    if let medusa_protocol::EventPayload::CheckpointRestoreRequested {\n        checkpoint_id,\n        source_cursor,\n    } = &payload\n    {\n        // Branch summaries are advisory. Their persistence must never block exact restore.\n        let _ = branch_summary::capture_restore_abandonment(\n            session,\n            checkpoint_id,\n            *source_cursor,\n        );\n    }\n    evidence::append_event(session, actor, payload)?;'''
+          if new not in text:
+              assert old in text
+              text = text.replace(old, new, 1)
+          lib.write_text(text)
+
+          engine = Path('crates/medusa-agent/src/engine.rs')
+          text = engine.read_text()
+          old = '''        if let Some(team) = &self.team_context {\n            system.push_str("\\n\\n");\n            system.push_str(&team.prompt_context()?);\n        }\n        let mut tools = available_tools('''
+          new = '''        if let Some(team) = &self.team_context {\n            system.push_str("\\n\\n");\n            system.push_str(&team.prompt_context()?);\n        }\n        if let Some(branch_context) = crate::branch_summary::advisory_context(session) {\n            system.push_str("\\n\\n");\n            system.push_str(&branch_context);\n        }\n        let mut tools = available_tools('''
+          if new not in text:
+              assert old in text
+              text = text.replace(old, new, 1)
+          engine.write_text(text)
+
+          compaction = Path('crates/medusa-agent/src/compaction_v2.rs')
+          text = compaction.read_text()
+          old = '''fn previous_semantic_history(session: &AgentSession) -> SemanticHistory {\n    session\n        .tool_artifacts\n        .iter()\n        .filter_map(|path| fs::read(path).ok())\n        .filter_map(|bytes| serde_json::from_slice::<CompactionManifestV2>(&bytes).ok())\n        .max_by_key(|manifest| manifest.generation)\n        .map(|manifest| manifest.semantic_history)\n        .unwrap_or_default()\n}'''
+          new = '''fn previous_semantic_history(session: &AgentSession) -> SemanticHistory {\n    let mut history = session\n        .tool_artifacts\n        .iter()\n        .filter_map(|path| fs::read(path).ok())\n        .filter_map(|bytes| serde_json::from_slice::<CompactionManifestV2>(&bytes).ok())\n        .max_by_key(|manifest| manifest.generation)\n        .map(|manifest| manifest.semantic_history)\n        .unwrap_or_default();\n    let branch_history = crate::branch_summary::valid_semantic_history(session);\n    merge_semantic_history(&mut history, &branch_history);\n    history\n}'''
+          if new not in text:
+              assert old in text
+              text = text.replace(old, new, 1)
+          compaction.write_text(text)
+      - name: Format
+        run: cargo fmt --all
+      - name: Test branch summaries
+        run: cargo test -p medusa-agent branch_summary --locked -- --nocapture
+      - name: Check medusa-agent
+        run: cargo check -p medusa-agent --locked
+      - name: Clippy medusa-agent
+        run: cargo clippy -p medusa-agent --all-targets --all-features --locked -- -D warnings
+      - name: Commit verified source
+        shell: bash
+        run: |
+          set -euo pipefail
+          if git diff --quiet; then
+            exit 0
+          fi
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add crates/medusa-agent/src/lib.rs crates/medusa-agent/src/engine.rs crates/medusa-agent/src/compaction_v2.rs crates/medusa-agent/src/branch_summary.rs
+          git commit -m 'Wire abandoned branch summaries into restore flow'
+          git push origin HEAD:agent/issue-755-branch-summaries
