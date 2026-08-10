@@ -26,11 +26,34 @@ jobs:
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
       - uses: dtolnay/rust-toolchain@39b0b3842c7e8bbf6904c0bfc3d9006fdd4dc4e0
+      - name: Run complete speculative certification set
+        shell: bash
+        run: |
+          set +e
+          : > speculation-certification.log
+          echo '=== scheduler speculation tests ===' >> speculation-certification.log
+          cargo test -p medusa-multi-agent-scheduler speculation -- --nocapture >> speculation-certification.log 2>&1
+          scheduler_rc=$?
+          echo "scheduler_rc=${scheduler_rc}" >> speculation-certification.log
+
+          echo '=== runtime promotion-authority test ===' >> speculation-certification.log
+          cargo test -p medusa-runtime speculative_transaction_requires_explicit_promotion_before_review -- --nocapture >> speculation-certification.log 2>&1
+          runtime_rc=$?
+          echo "runtime_rc=${runtime_rc}" >> speculation-certification.log
+
+          echo '=== overlap performance test ===' >> speculation-certification.log
+          cargo test -p medusa-multi-agent-scheduler --test speculation_performance -- --nocapture >> speculation-certification.log 2>&1
+          performance_rc=$?
+          echo "performance_rc=${performance_rc}" >> speculation-certification.log
+
+          cat speculation-certification.log
+          if [ "$scheduler_rc" -ne 0 ] || [ "$runtime_rc" -ne 0 ] || [ "$performance_rc" -ne 0 ]; then
+            exit 1
+          fi
+      - name: Upload certification diagnostics
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
-          toolchain: stable
-      - name: Verify typed speculation policy and fail-closed promotion
-        run: cargo test -p medusa-multi-agent-scheduler speculation -- --nocapture
-      - name: Verify speculative transaction authority boundary
-        run: cargo test -p medusa-runtime speculative_transaction_requires_explicit_promotion_before_review -- --nocapture
-      - name: Measure speculative overlap benefit
-        run: cargo test -p medusa-multi-agent-scheduler --test speculation_performance -- --nocapture
+          name: speculative-certification-${{ matrix.os }}
+          path: speculation-certification.log
+          if-no-files-found: error
