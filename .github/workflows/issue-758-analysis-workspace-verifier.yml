@@ -22,16 +22,61 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt,clippy
-      - name: Wire production module
+      - name: Apply gathered cross-platform fixes and wiring
         shell: python
         run: |
           from pathlib import Path
-          p = Path('crates/medusa-runtime/src/lib.rs')
-          s = p.read_text()
+
+          lib = Path('crates/medusa-runtime/src/lib.rs')
+          s = lib.read_text()
           marker = 'pub mod attachment;\n'
           if 'pub mod analysis_workspace;' not in s:
               s = s.replace(marker, marker + 'pub mod analysis_workspace;\n', 1)
-          p.write_text(s)
+          lib.write_text(s)
+
+          policy = Path('crates/medusa-agent/src/policy.rs')
+          s = policy.read_text()
+          s = s.replace(
+              '    sync::atomic::{AtomicBool, Ordering},\n',
+              '    sync::atomic::AtomicBool,\n',
+              1,
+          )
+          marker = '#[cfg(any(target_os = "linux", target_os = "macos"))]\nuse std::{\n'
+          if '#[cfg(any(target_os = "linux", target_os = "macos"))]\nuse std::sync::atomic::Ordering;' not in s:
+              s = s.replace(
+                  marker,
+                  '#[cfg(any(target_os = "linux", target_os = "macos"))]\nuse std::sync::atomic::Ordering;\n\n' + marker,
+                  1,
+              )
+          s = s.replace(
+              '\nfn cancelled_command(description: &str) -> MedusaError {',
+              '\n#[cfg(any(target_os = "linux", target_os = "macos"))]\nfn cancelled_command(description: &str) -> MedusaError {',
+              1,
+          )
+          policy.write_text(s)
+
+          windows = Path('crates/medusa-agent/src/windows_sandbox.rs')
+          s = windows.read_text()
+          s = s.replace(
+              'use medusa_process_containment::{\n    WindowsSandboxRestrictions, run_appcontainer, run_appcontainer_cancellable,\n};',
+              'use medusa_process_containment::{WindowsSandboxRestrictions, run_appcontainer_cancellable};',
+              1,
+          )
+          start = s.find('pub(crate) fn run(repo: &Path, program: &str, args: &[String]) -> MedusaResult<Output> {')
+          if start != -1:
+              end = s.find('\n\npub(crate) fn run_cancellable(', start)
+              if end == -1:
+                  raise SystemExit('could not locate end of obsolete Windows run adapter')
+              s = s[:start] + s[end + 2:]
+          windows.write_text(s)
+
+          scheduled = Path('crates/medusa-runtime/src/scheduled_actions.rs')
+          s = scheduled.read_text()
+          old = '''fn sync_directory(path: &Path) -> Result<(), RuntimeError> {\n    #[cfg(unix)]\n    {\n        File::open(path)\n            .and_then(|directory| directory.sync_all())\n            .map_err(RuntimeError::agent)?;\n    }\n    Ok(())\n}'''
+          new = '''fn sync_directory(path: &Path) -> Result<(), RuntimeError> {\n    #[cfg(unix)]\n    {\n        File::open(path)\n            .and_then(|directory| directory.sync_all())\n            .map_err(RuntimeError::agent)?;\n    }\n    #[cfg(not(unix))]\n    let _ = path;\n    Ok(())\n}'''
+          if old not in s:
+              raise SystemExit('could not locate scheduled_actions sync_directory')
+          scheduled.write_text(s.replace(old, new, 1))
       - name: Format
         run: cargo fmt --all
       - name: Check runtime
@@ -40,14 +85,14 @@ jobs:
         run: cargo test -p medusa-runtime analysis_workspace --locked -- --nocapture
       - name: Clippy
         run: cargo clippy -p medusa-runtime --locked --all-targets -- -D warnings
-      - name: Commit verified wiring
+      - name: Commit verified source
         if: matrix.os == 'ubuntu-latest'
         shell: bash
         run: |
           if ! git diff --quiet; then
             git config user.name github-actions[bot]
             git config user.email 41898282+github-actions[bot]@users.noreply.github.com
-            git add crates/medusa-runtime/src/lib.rs crates/medusa-runtime/src/analysis_workspace.rs
-            git commit -m "feat(runtime): wire persistent analysis workspace"
+            git add crates/medusa-runtime/src/lib.rs crates/medusa-runtime/src/analysis_workspace.rs crates/medusa-runtime/src/scheduled_actions.rs crates/medusa-agent/src/policy.rs crates/medusa-agent/src/windows_sandbox.rs
+            git commit -m "fix(runtime): clear gathered cross-platform warnings"
             git push
           fi
