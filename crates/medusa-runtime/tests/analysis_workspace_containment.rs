@@ -1,7 +1,8 @@
 use std::fs;
 
+use medusa_config::Config;
 use medusa_runtime::{
-    Config, RuntimeController,
+    RuntimeController,
     analysis_workspace::{AnalysisOperation, AnalysisValue},
 };
 use tempfile::TempDir;
