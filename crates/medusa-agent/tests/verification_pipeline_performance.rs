@@ -39,28 +39,6 @@ fn exact_authoritative_reuse_reduces_runtime_and_stale_input_reruns() {
     write_fixtures(repository.path());
     let components = components();
 
-    let mut cold_ns = Vec::with_capacity(SAMPLE_COUNT);
-    for sample in 0..SAMPLE_COUNT {
-        let evidence_root = evidence.path().join(format!("cold-{sample}"));
-        let started = Instant::now();
-        let result = authoritative_verification_for_components_at(
-            repository.path(),
-            &evidence_root,
-            "perf-repository",
-            "perf-commit",
-            &components,
-        )
-        .expect("cold verification");
-        cold_ns.push(started.elapsed().as_nanos() as u64);
-        assert!(result.receipt.passed);
-        assert!(
-            !result
-                .summary
-                .iter()
-                .any(|line| line == "verification_reuse=exact-persisted-receipt")
-        );
-    }
-
     let warm_root = evidence.path().join("warm");
     let initial = authoritative_verification_for_components_at(
         repository.path(),
@@ -72,10 +50,34 @@ fn exact_authoritative_reuse_reduces_runtime_and_stale_input_reruns() {
     .expect("warm population");
     assert!(initial.receipt.passed);
 
+    // Pair cold and warm samples so platform-wide thermal scheduling or runner
+    // drift cannot be mistaken for a reuse regression. Each cold sample still
+    // uses a unique evidence root, while every warm sample exercises the same
+    // exact persisted receipt populated above.
+    let mut cold_ns = Vec::with_capacity(SAMPLE_COUNT);
     let mut warm_ns = Vec::with_capacity(SAMPLE_COUNT);
-    for _ in 0..SAMPLE_COUNT {
-        let started = Instant::now();
-        let result = authoritative_verification_for_components_at(
+    for sample in 0..SAMPLE_COUNT {
+        let evidence_root = evidence.path().join(format!("cold-{sample}"));
+        let cold_started = Instant::now();
+        let cold_result = authoritative_verification_for_components_at(
+            repository.path(),
+            &evidence_root,
+            "perf-repository",
+            "perf-commit",
+            &components,
+        )
+        .expect("cold verification");
+        cold_ns.push(cold_started.elapsed().as_nanos() as u64);
+        assert!(cold_result.receipt.passed);
+        assert!(
+            !cold_result
+                .summary
+                .iter()
+                .any(|line| line == "verification_reuse=exact-persisted-receipt")
+        );
+
+        let warm_started = Instant::now();
+        let warm_result = authoritative_verification_for_components_at(
             repository.path(),
             &warm_root,
             "perf-repository",
@@ -83,10 +85,10 @@ fn exact_authoritative_reuse_reduces_runtime_and_stale_input_reruns() {
             &components,
         )
         .expect("warm verification");
-        warm_ns.push(started.elapsed().as_nanos() as u64);
-        assert!(result.receipt.passed);
+        warm_ns.push(warm_started.elapsed().as_nanos() as u64);
+        assert!(warm_result.receipt.passed);
         assert!(
-            result
+            warm_result
                 .summary
                 .iter()
                 .any(|line| line == "verification_reuse=exact-persisted-receipt")
