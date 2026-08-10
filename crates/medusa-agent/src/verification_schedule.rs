@@ -43,13 +43,9 @@ impl VerificationRuntimeMetrics {
         wall_duration_ms: u64,
     ) {
         self.waves = self.waves.saturating_add(1);
-        self.checks_executed = self
-            .checks_executed
-            .saturating_add(checks_executed as u64);
+        self.checks_executed = self.checks_executed.saturating_add(checks_executed as u64);
         self.queue_duration_ms = self.queue_duration_ms.saturating_add(queue_duration_ms);
-        self.serial_execution_ms = self
-            .serial_execution_ms
-            .saturating_add(serial_execution_ms);
+        self.serial_execution_ms = self.serial_execution_ms.saturating_add(serial_execution_ms);
         self.wall_duration_ms = self.wall_duration_ms.saturating_add(wall_duration_ms);
         self.overlap_ms = self
             .overlap_ms
