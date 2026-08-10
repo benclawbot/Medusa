@@ -153,13 +153,17 @@ impl MutationDag {
             .iter()
             .any(|task| task.repository_revision != repository_revision)
         {
-            return Ok(single("mutation tasks do not share one immutable repository revision"));
+            return Ok(single(
+                "mutation tasks do not share one immutable repository revision",
+            ));
         }
         if tasks
             .iter()
             .any(|task| task.confidence_milli < minimum_confidence_milli)
         {
-            return Ok(single("mutation decomposition confidence is below policy threshold"));
+            return Ok(single(
+                "mutation decomposition confidence is below policy threshold",
+            ));
         }
         let ids = tasks
             .iter()
@@ -810,11 +814,7 @@ mod tests {
         let dag = parallel(vec![
             task("b", vec![resource(MutationResourceKind::Path, "b")], &[]),
             task("a", vec![resource(MutationResourceKind::Path, "a")], &[]),
-            task(
-                "c",
-                vec![resource(MutationResourceKind::Path, "c")],
-                &["a"],
-            ),
+            task("c", vec![resource(MutationResourceKind::Path, "c")], &["a"]),
         ]);
         assert_eq!(dag.deterministic_integration_order(), vec!["a", "b", "c"]);
     }
@@ -823,11 +823,7 @@ mod tests {
     fn stale_downstream_evidence_blocks_barrier() {
         let dag = parallel(vec![
             task("a", vec![resource(MutationResourceKind::Path, "a")], &[]),
-            task(
-                "b",
-                vec![resource(MutationResourceKind::Path, "b")],
-                &["a"],
-            ),
+            task("b", vec![resource(MutationResourceKind::Path, "b")], &["a"]),
             task("c", vec![resource(MutationResourceKind::Path, "c")], &[]),
         ]);
         let evidence = vec![
@@ -846,11 +842,7 @@ mod tests {
     fn batch_receipt_is_idempotently_reconcilable() {
         let dag = parallel(vec![
             task("a", vec![resource(MutationResourceKind::Path, "a")], &[]),
-            task(
-                "b",
-                vec![resource(MutationResourceKind::Path, "b")],
-                &["a"],
-            ),
+            task("b", vec![resource(MutationResourceKind::Path, "b")], &["a"]),
             task("c", vec![resource(MutationResourceKind::Path, "c")], &[]),
         ]);
         let barrier = IntegrationBarrier::establish(
