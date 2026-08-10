@@ -403,14 +403,17 @@ fn is_projection_header(message: &Message) -> bool {
 }
 
 fn previous_semantic_history(session: &AgentSession) -> SemanticHistory {
-    session
+    let mut history = session
         .tool_artifacts
         .iter()
         .filter_map(|path| fs::read(path).ok())
         .filter_map(|bytes| serde_json::from_slice::<CompactionManifestV2>(&bytes).ok())
         .max_by_key(|manifest| manifest.generation)
         .map(|manifest| manifest.semantic_history)
-        .unwrap_or_default()
+        .unwrap_or_default();
+    let branch_history = crate::branch_summary::valid_semantic_history(session);
+    merge_semantic_history(&mut history, &branch_history);
+    history
 }
 
 fn merge_semantic_history(target: &mut SemanticHistory, source: &SemanticHistory) {

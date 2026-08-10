@@ -1567,6 +1567,7 @@ dependencies = [
 name = "medusa-process-containment"
 version = "1.0.0"
 dependencies = [
+ "libc",
  "tempfile",
  "windows",
  "windows-sys 0.61.2",

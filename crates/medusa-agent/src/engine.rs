@@ -816,6 +816,10 @@ impl<P: ModelProvider> AgentEngine<P> {
             system.push_str("\n\n");
             system.push_str(&team.prompt_context()?);
         }
+        if let Some(branch_context) = crate::branch_summary::advisory_context(session) {
+            system.push_str("\n\n");
+            system.push_str(&branch_context);
+        }
         let mut tools = available_tools(
             self.config.agent.mode,
             &session.repo,
