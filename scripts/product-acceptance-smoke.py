@@ -66,17 +66,17 @@ SCENARIOS: tuple[dict[str, Any], ...] = (
     },
     {
         "id": "interruption-resume",
-        "guarantee": "Interrupted repository repair resumes from the latest validated checkpoint.",
+        "guarantee": "Interrupted repository repair resumes with exact durable evidence.",
         "args": [
             "test",
             "-p",
-            "medusa-continuation",
-            "resumes_incomplete_plan_from_checkpoint",
+            "medusa-agent",
+            "fixture_bug_fix_survives_restart_with_exact_evidence",
             "--locked",
             "--",
             "--nocapture",
         ],
-        "marker": "resumes_incomplete_plan_from_checkpoint",
+        "marker": "fixture_bug_fix_survives_restart_with_exact_evidence",
     },
 )
 
