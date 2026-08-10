@@ -12,6 +12,7 @@
     {"id":"provider_failure_recovery","language":"mixed","risk":"medium","modes":["injected_provider_latency"]},
     {"id":"verification_failure_repair","language":"mixed","risk":"high","modes":["cold","warm"]},
     {"id":"crash_resume","language":"mixed","risk":"high","modes":["cold"]},
-    {"id":"multi_implementer_conflict","language":"mixed","risk":"high","modes":["cold","warm"]}
+    {"id":"multi_implementer_conflict","language":"mixed","risk":"high","modes":["cold","warm"]},
+    {"id":"large_decomposable_parallel_mutation","language":"mixed","risk":"medium","modes":["cold","warm","injected_tool_latency"]}
   ]
 }
