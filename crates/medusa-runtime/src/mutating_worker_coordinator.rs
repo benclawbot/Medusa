@@ -493,6 +493,7 @@ fn preflight_promotion_conflict(preflight: &CoordinatorEvidence) -> Option<Strin
     })
 }
 
+#[allow(clippy::too_many_arguments)]
 fn promote_speculative_state(
     repo: &Path,
     plan: &ProductionExecutionPlan,
@@ -609,6 +610,7 @@ fn discard_speculative_artifacts(repo: &Path, root: &Path) -> Result<(), String>
     Ok(())
 }
 
+#[allow(clippy::too_many_arguments)]
 fn coordinate_with_control<F>(
     repo: &Path,
     plan: &ProductionExecutionPlan,
