@@ -78,7 +78,16 @@ pub struct SpeculationPolicy {
 #[must_use]
 pub fn policy_for(planning: &PlanningResult) -> SpeculationPolicy {
     let budget = SpeculationBudget::default();
-    let implementation = planning.task(TaskKind::Implementation);
+    let Some(implementation) = planning.task(TaskKind::Implementation) else {
+        return SpeculationPolicy {
+            eligible: false,
+            class: None,
+            rationale: "speculation requires a high-confidence medium-risk mutation with exact resolved scope"
+                .to_owned(),
+            budget,
+            assumptions: None,
+        };
+    };
     let eligible = planning.lane == ExecutionLane::StandardMutation
         && planning.risk == RiskLevel::Medium
         && planning.confidence_milli >= 850
@@ -89,7 +98,7 @@ pub fn policy_for(planning: &PlanningResult) -> SpeculationPolicy {
             .effective
             .iter()
             .any(|path| path == "repository")
-        && implementation.is_some_and(|planned| planned.task.speculative);
+        && implementation.task.speculative;
     if !eligible {
         return SpeculationPolicy {
             eligible: false,
@@ -100,7 +109,6 @@ pub fn policy_for(planning: &PlanningResult) -> SpeculationPolicy {
             assumptions: None,
         };
     }
-    let implementation = implementation.expect("eligibility requires implementation task");
     let mut scope = planning.scope.effective.clone();
     scope.sort();
     scope.dedup();
