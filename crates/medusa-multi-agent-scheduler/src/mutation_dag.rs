@@ -243,7 +243,7 @@ impl MutationDag {
             .map(|task| task.id.clone())
             .collect::<Vec<_>>();
         ready.sort();
-        let mut selected = Vec::new();
+        let mut selected: Vec<String> = Vec::new();
         for candidate in ready {
             if selected.len() >= usize::from(self.max_parallelism) {
                 break;
@@ -544,10 +544,7 @@ fn path_overlaps(left: &str, right: &str) -> bool {
             .is_some_and(|suffix| suffix.starts_with('/'))
 }
 
-const fn conflict_reason(
-    left: MutationResourceKind,
-    right: MutationResourceKind,
-) -> ConflictReason {
+fn conflict_reason(left: MutationResourceKind, right: MutationResourceKind) -> ConflictReason {
     let specialized = if left == MutationResourceKind::Path {
         right
     } else {
