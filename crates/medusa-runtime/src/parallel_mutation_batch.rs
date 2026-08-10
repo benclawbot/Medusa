@@ -3,122 +3,297 @@ use std::{
     fs,
     path::{Path, PathBuf},
     process::Command,
-    sync::{atomic::AtomicBool, mpsc::Sender},
+    sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+        mpsc::Sender,
+    },
 };
 
-use medusa_agent::authoritative_verification_for_components_at;
+use medusa_agent::{
+    authoritative_verification_for_components_at, prepare_components_for_verification,
+};
 use medusa_config::Config;
-use medusa_evidence::ChangedComponent;
+use medusa_evidence::{ChangedComponent, changed_scope_fingerprint};
 use medusa_multi_agent_scheduler::mutation_dag::{
-    AcceptedTaskEvidence, BatchIntegrationReceipt, IntegrationBarrier, MutationDag,
+    AcceptedTaskEvidence, IntegrationBarrier, MutationDag,
 };
-use medusa_provider::{Message, MessageBlock, ModelProvider, ModelRequest, ResponseBlock, Role};
-use medusa_review_model::{
-    ParentReviewDecision, ParentReviewResponse, ParentReviewResponseError, final_parent_review_line,
-    validate_parent_review_response,
-};
-use medusa_workers::{IntegrationReceipt, Worker, WorkerManager};
-use serde::{Deserialize, Serialize};
+use medusa_provider::ConfiguredProvider;
+use medusa_workers::{Worker, WorkerManager, WorkerState};
+use serde::Serialize;
 use sha2::{Digest, Sha256};
 
 use crate::{
     RuntimeActivity, RuntimeActivityKind, RuntimeEvent,
-    mutating_worker_coordinator::ParallelImplementationEvidence,
+    multi_agent_coordinator::CoordinatorEvidence,
+    mutating_worker_coordinator::{ImplementationEvidence, ParallelImplementationEvidence},
     mutation_transaction::{
-        MutationLifecycle, MutationTransaction, ParentReviewAuthorization,
-        authorize_after_parent_review,
+        MutationLifecycle, MutationTransaction, ParentReviewAuthorization, PreparedMutationInput,
+        authorize_after_parent_review, cancel_transaction,
     },
+    production_orchestrator::{AgentRole, ProductionExecutionPlan},
 };
 
-const BATCH_SCHEMA_VERSION: u16 = 1;
-const MAX_BATCH_REVIEW_OUTPUT_TOKENS: u32 = 4_096;
-const BATCH_REVIEW_SYSTEM_PROMPT: &str = "You are Medusa's read-only combined mutation batch reviewer. You have no tools. Review the complete set of individually reviewed and independently verified immutable child patches as one candidate. Reject only for a concrete cross-task defect, incompatible combined behavior, stale dependency evidence, or scope/integration mismatch. Do not execute tools or claim integration already occurred. End with the exact typed parent-review JSON envelope and write nothing after it.";
-
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-pub struct ParallelBatchCompletion {
-    pub receipt: BatchIntegrationReceipt,
-    pub integrations: Vec<IntegrationReceipt>,
-    pub changed_paths: Vec<String>,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub enum ParallelBatchOutcome {
-    RevisionRequested(String),
-    Reconciled(ParallelBatchCompletion),
-}
-
-#[derive(Clone, Debug, Deserialize, Serialize)]
-struct CombinedReviewJournal {
-    schema_version: u16,
-    request_fingerprint: String,
-    response_text: String,
-    fingerprint: String,
-}
+const BATCH_WORKER_LABEL: &str = "parallel-batch";
 
 #[allow(clippy::too_many_arguments)]
-pub fn complete<P: ModelProvider>(
+pub fn prepare_combined(
     repo: &Path,
     config: &Config,
-    provider: &P,
+    session_api_key: Option<String>,
+    plan: &ProductionExecutionPlan,
+    preflight: &CoordinatorEvidence,
     dag: &MutationDag,
-    evidence: &ParallelImplementationEvidence,
-    repository_fingerprint: &str,
-    cancel: &AtomicBool,
+    cancel: &Arc<AtomicBool>,
     events: &Sender<RuntimeEvent>,
-) -> Result<ParallelBatchOutcome, String> {
+) -> Result<ImplementationEvidence, String> {
     dag.validate().map_err(str::to_owned)?;
-    if evidence.dag_fingerprint != dag.fingerprint {
-        return Err("parallel implementation evidence belongs to another mutation DAG".to_owned());
-    }
-    let ordered = dag.deterministic_integration_order();
-    let child_ids = evidence
-        .children
-        .iter()
-        .map(|child| child.task_id.clone())
-        .collect::<Vec<_>>();
-    if child_ids != ordered {
-        return Err("parallel child evidence is not in deterministic DAG integration order".to_owned());
+    let batch_root = batch_root(
+        preflight
+            .state_path
+            .parent()
+            .ok_or_else(|| "parallel preflight has no execution root".to_owned())?,
+        &dag.fingerprint,
+    );
+    fs::create_dir_all(&batch_root).map_err(|error| error.to_string())?;
+    let prepared_evidence_path = batch_root.join("prepared-implementation-evidence.json");
+    if prepared_evidence_path.is_file() {
+        let evidence: ImplementationEvidence = serde_json::from_slice(
+            &fs::read(&prepared_evidence_path).map_err(|error| error.to_string())?,
+        )
+        .map_err(|error| error.to_string())?;
+        validate_resumed_aggregate(&evidence, plan, preflight, dag)?;
+        return Ok(evidence);
     }
 
-    let batch_root = batch_root(repo, &dag.fingerprint);
-    fs::create_dir_all(&batch_root).map_err(|error| error.to_string())?;
+    let parallel = crate::mutating_worker_coordinator::run_parallel_implementations(
+        repo,
+        config,
+        session_api_key.clone(),
+        plan,
+        preflight,
+        dag,
+        cancel,
+        events,
+    )?;
+    validate_parallel_evidence(dag, &parallel)?;
+    let provider = ConfiguredProvider::manager_from_config(config, session_api_key)
+        .map_err(|error| error.to_string())?;
+    let barrier = authorize_children(
+        repo,
+        config,
+        &provider,
+        dag,
+        &parallel,
+        cancel,
+        events,
+    )?;
+    persist_json(&batch_root.join("integration-barrier.json"), &barrier)?;
+
     let manager = WorkerManager::new(repo, batch_root.join("worktrees"))
         .map_err(|error| error.to_string())?;
     manager.require_clean().map_err(|error| error.to_string())?;
     let base_head = manager.repository_head().map_err(|error| error.to_string())?;
     if base_head != dag.repository_revision {
         return Err(format!(
-            "parallel mutation base drifted from {} to {base_head}",
+            "parallel staging base drifted from {} to {base_head}",
             dag.repository_revision
         ));
     }
-
-    let mut accepted = Vec::with_capacity(evidence.children.len());
-    let mut prepared_trees = BTreeMap::new();
-    let mut workers = Vec::with_capacity(evidence.children.len());
-    let mut original_workers = Vec::with_capacity(evidence.children.len());
-    let mut combined_packet = Vec::new();
-
-    for (index, child) in evidence.children.iter().enumerate() {
-        if cancel.load(std::sync::atomic::Ordering::SeqCst) {
-            return Err("parallel mutation batch was cancelled during parent review".to_owned());
+    let worker_id = format!("batch-{}", &dag.fingerprint[..dag.fingerprint.len().min(16)]);
+    let mut staging = match manager.open_or_create_worker(BATCH_WORKER_LABEL, &worker_id) {
+        Ok(worker) => worker,
+        Err(first_error) => {
+            let stale = Worker {
+                id: worker_id.clone(),
+                branch: format!("medusa/{BATCH_WORKER_LABEL}-{worker_id}"),
+                worktree: batch_root.join("worktrees").join(&worker_id),
+                state: WorkerState::Ready,
+                commit: None,
+                stdout: String::new(),
+                stderr: String::new(),
+            };
+            let _ = manager.cleanup(&[stale]);
+            manager
+                .open_or_create_worker(BATCH_WORKER_LABEL, &worker_id)
+                .map_err(|second_error| {
+                    format!(
+                        "could not recover parallel staging worker after {first_error}: {second_error}"
+                    )
+                })?
         }
+    };
+
+    for task_id in &barrier.ordered_tasks {
+        if cancel.load(Ordering::SeqCst) {
+            cleanup_staging(&manager, &staging, &base_head);
+            return Err("parallel staging was cancelled before deterministic composition".to_owned());
+        }
+        let child = parallel
+            .children
+            .iter()
+            .find(|child| child.task_id == *task_id)
+            .ok_or_else(|| format!("parallel staging lost child {task_id}"))?;
+        if let Err(error) = cherry_pick_without_commit(&staging.worktree, &child.evidence.prepared_commit)
+        {
+            cleanup_staging(&manager, &staging, &base_head);
+            return Err(format!(
+                "deterministic staging failed for {task_id}: {error}"
+            ));
+        }
+    }
+
+    let initial_components = manager
+        .changed_components_since(&staging, &base_head)
+        .map_err(|error| error.to_string())?;
+    validate_aggregate_scope(plan, &initial_components)?;
+    prepare_components_for_verification(&staging.worktree, &initial_components)
+        .map_err(|error| format!("parallel aggregate preparation failed: {error}"))?;
+    let changed_components = manager
+        .changed_components_since(&staging, &base_head)
+        .map_err(|error| error.to_string())?;
+    if changed_scope_fingerprint(&initial_components)
+        != changed_scope_fingerprint(&changed_components)
+    {
+        cleanup_staging(&manager, &staging, &base_head);
+        return Err("parallel aggregate preparation changed the accepted mutation scope".to_owned());
+    }
+    let changed_paths = component_paths(&changed_components);
+    let worktree_identity = format!(
+        "parallel-staging:{}:{}",
+        base_head,
+        changed_scope_fingerprint(&changed_components)
+    );
+    let verification = authoritative_verification_for_components_at(
+        &staging.worktree,
+        &batch_root.join("evidence/staging"),
+        &preflight.repository_fingerprint,
+        &worktree_identity,
+        &changed_components,
+    )
+    .map_err(|error| format!("parallel aggregate verification could not run: {error}"))?;
+    if !verification.receipt.passed {
+        cleanup_staging(&manager, &staging, &base_head);
+        return Err(format!(
+            "parallel aggregate verification failed: {}",
+            verification.summary.join(" | ")
+        ));
+    }
+
+    staging = manager
+        .finalize_worker(
+            staging,
+            &base_head,
+            &format!("Medusa parallel aggregate {}", dag.fingerprint),
+        )
+        .map_err(|error| error.to_string())?;
+    let aggregate_root = batch_root.join("aggregate-transaction");
+    let implementation_summary = parallel
+        .children
+        .iter()
+        .map(|child| format!("{}: {}", child.task_id, child.evidence.summary))
+        .collect::<Vec<_>>()
+        .join("\n\n");
+    let task_id = plan
+        .contracts
+        .iter()
+        .find(|contract| contract.role == AgentRole::Implementer)
+        .map(|contract| contract.task_id.clone())
+        .ok_or_else(|| "parallel aggregate lost parent implementer contract".to_owned())?;
+    let transaction = MutationTransaction::open_or_prepare(
+        &aggregate_root,
+        repo,
+        PreparedMutationInput {
+            plan_fingerprint: plan.fingerprint.clone(),
+            repository_fingerprint: preflight.repository_fingerprint.clone(),
+            task_id: task_id.clone(),
+            base_head: base_head.clone(),
+            worker: staging.clone(),
+            changed_paths: changed_paths.clone(),
+            changed_components: changed_components.clone(),
+            implementation_summary: implementation_summary.clone(),
+            worktree_verification_evidence: verification.summary.clone(),
+            worktree_verification_receipt: verification.receipt.clone(),
+            speculative: false,
+        },
+    )?;
+    if transaction.snapshot().lifecycle != MutationLifecycle::ReviewPending {
+        return Err("parallel aggregate did not reach parent-review pending state".to_owned());
+    }
+    let evidence = ImplementationEvidence {
+        plan_fingerprint: plan.fingerprint.clone(),
+        repository_fingerprint: preflight.repository_fingerprint.clone(),
+        task_id,
+        worker_id: staging.id.clone(),
+        session_id: format!("parallel-{}", hash(&parallel.dag_fingerprint)),
+        turns: parallel
+            .children
+            .iter()
+            .map(|child| child.evidence.turns)
+            .sum(),
+        summary: implementation_summary,
+        changed_paths,
+        changed_components,
+        verification_evidence: verification.summary,
+        verification_receipt: verification.receipt,
+        base_head,
+        prepared_commit: transaction.snapshot().prepared_commit.clone(),
+        prepared_tree: transaction.snapshot().prepared_tree.clone(),
+        patch_fingerprint: transaction.snapshot().patch_fingerprint.clone(),
+        review_context: transaction.review_context()?,
+        transaction_path: transaction.path().to_path_buf(),
+        state_path: prepared_evidence_path.clone(),
+    };
+    persist_json(&prepared_evidence_path, &evidence)?;
+
+    for child in &parallel.children {
+        let _ = cancel_transaction(
+            &child.evidence.transaction_path,
+            "authorized child superseded by deterministic aggregate transaction",
+            events,
+        );
+    }
+    let child_workers = parallel
+        .children
+        .iter()
+        .filter_map(|child| {
+            MutationTransaction::open(&child.evidence.transaction_path)
+                .ok()
+                .map(|transaction| transaction.snapshot().worker.clone())
+        })
+        .collect::<Vec<_>>();
+    let _ = manager.cleanup(&child_workers);
+    let _ = events.send(RuntimeEvent::Activity(RuntimeActivity {
+        id: Some(dag.fingerprint.clone()),
+        kind: RuntimeActivityKind::Done,
+        title: "Parallel aggregate prepared".to_owned(),
+        details: vec![
+            format!("tasks={:?}", barrier.ordered_tasks),
+            format!("aggregate_commit={}", evidence.prepared_commit),
+            format!("changed_paths={:?}", evidence.changed_paths),
+            "primary repository remains unchanged pending combined parent review".to_owned(),
+        ],
+    }));
+    Ok(evidence)
+}
+
+fn authorize_children<P: medusa_provider::ModelProvider>(
+    repo: &Path,
+    config: &Config,
+    provider: &P,
+    dag: &MutationDag,
+    parallel: &ParallelImplementationEvidence,
+    cancel: &AtomicBool,
+    events: &Sender<RuntimeEvent>,
+) -> Result<IntegrationBarrier, String> {
+    let mut accepted = Vec::with_capacity(parallel.children.len());
+    let mut prepared_trees = BTreeMap::new();
+    for child in &parallel.children {
         let task = dag
             .tasks
             .iter()
             .find(|task| task.id == child.task_id)
             .ok_or_else(|| format!("mutation DAG lost task {}", child.task_id))?;
-        let before = MutationTransaction::open(&child.evidence.transaction_path)?;
-        if before.snapshot().base_head != base_head
-            || before.snapshot().prepared_commit != child.evidence.prepared_commit
-            || before.snapshot().prepared_tree != child.evidence.prepared_tree
-        {
-            return Err(format!(
-                "prepared transaction identity changed for {}",
-                child.task_id
-            ));
-        }
-        combined_packet.push(render_child_packet(&child.task_id, &before)?);
         match authorize_after_parent_review(
             &child.evidence.transaction_path,
             repo,
@@ -128,25 +303,24 @@ pub fn complete<P: ModelProvider>(
             events,
         )? {
             ParentReviewAuthorization::RevisionRequested(reason) => {
-                return Ok(ParallelBatchOutcome::RevisionRequested(format!(
-                    "{}: {reason}",
-                    child.task_id
-                )));
+                return Err(format!("{} requested revision: {reason}", child.task_id));
             }
             ParentReviewAuthorization::Authorized => {}
         }
-        let authorized = MutationTransaction::open(&child.evidence.transaction_path)?;
-        if authorized.snapshot().lifecycle != MutationLifecycle::IntegrationAuthorized {
+        let transaction = MutationTransaction::open(&child.evidence.transaction_path)?;
+        if transaction.snapshot().lifecycle != MutationLifecycle::IntegrationAuthorized
+            || transaction.snapshot().base_head != dag.repository_revision
+        {
             return Err(format!(
-                "parallel child {} did not reach integration authorization",
+                "parallel child {} lacks valid integration authorization",
                 child.task_id
             ));
         }
-        let verification = authorized
+        let verification = transaction
             .snapshot()
             .verification
             .as_ref()
-            .ok_or_else(|| format!("parallel child {} lost verification evidence", child.task_id))?;
+            .ok_or_else(|| format!("parallel child {} lost verification receipt", child.task_id))?;
         let dependency_fingerprints = task
             .dependencies
             .iter()
@@ -165,254 +339,135 @@ pub fn complete<P: ModelProvider>(
             .collect::<Result<BTreeMap<_, _>, String>>()?;
         accepted.push(AcceptedTaskEvidence {
             task_id: child.task_id.clone(),
-            prepared_commit: authorized.snapshot().prepared_commit.clone(),
-            prepared_tree: authorized.snapshot().prepared_tree.clone(),
+            prepared_commit: transaction.snapshot().prepared_commit.clone(),
+            prepared_tree: transaction.snapshot().prepared_tree.clone(),
             contract_fingerprint: hash(task),
             dependency_fingerprints,
             verification_fingerprint: verification.fingerprint.clone(),
         });
         prepared_trees.insert(
             child.task_id.clone(),
-            authorized.snapshot().prepared_tree.clone(),
+            transaction.snapshot().prepared_tree.clone(),
         );
-        let original = authorized.snapshot().worker.clone();
-        let mut ordered_worker = original.clone();
-        ordered_worker.id = format!("parallel-{index:04}-{}", child.task_id);
-        workers.push(ordered_worker);
-        original_workers.push(original);
     }
-
-    let barrier = IntegrationBarrier::establish(dag, accepted).map_err(str::to_owned)?;
-    let combined_context = format!(
-        "Combined immutable mutation candidate. DAG fingerprint: {}. Deterministic order: {:?}. Every child below already passed its own dedicated parent review and independent verification. Review cross-task compatibility and the combined scope before the runtime integrates anything.\n\n{}\n\n{}",
-        dag.fingerprint,
-        barrier.ordered_tasks,
-        combined_packet.join("\n\n"),
-        medusa_review_model::PARENT_REVIEW_RESPONSE_REQUIREMENT,
-    );
-    let combined = combined_review(
-        provider,
-        config,
-        cancel,
-        &batch_root.join("combined-parent-review.json"),
-        &combined_context,
-    )?;
-    if combined.decision == ParentReviewDecision::RevisionRequested {
-        return Ok(ParallelBatchOutcome::RevisionRequested(format!(
-            "combined candidate: {}",
-            combined.rationale
-        )));
-    }
-
-    let _ = events.send(RuntimeEvent::Activity(RuntimeActivity {
-        id: Some(dag.fingerprint.clone()),
-        kind: RuntimeActivityKind::Progress,
-        title: "Parallel integration barrier satisfied".to_owned(),
-        details: vec![
-            format!("tasks={:?}", barrier.ordered_tasks),
-            format!("barrier={}", barrier.fingerprint),
-            "all child reviews, independent verification, and combined review accepted".to_owned(),
-        ],
-    }));
-
-    let integrations = manager
-        .integrate_successful(&workers)
-        .map_err(|error| error.to_string())?;
-    if integrations.len() != workers.len() {
-        rollback(repo, &base_head)?;
-        return Err("parallel integration omitted an authorized child".to_owned());
-    }
-    let final_head = manager.repository_head().map_err(|error| error.to_string())?;
-    let final_tree = manager
-        .commit_tree(&final_head)
-        .map_err(|error| error.to_string())?;
-    let components = integrations
-        .iter()
-        .flat_map(|receipt| receipt.changed_components.clone())
-        .collect::<Vec<ChangedComponent>>();
-    let verification = authoritative_verification_for_components_at(
-        repo,
-        &batch_root.join("evidence/final"),
-        repository_fingerprint,
-        &final_head,
-        &components,
-    );
-    let verification = match verification {
-        Ok(verification) if verification.receipt.passed => verification,
-        Ok(verification) => {
-            rollback(repo, &base_head)?;
-            return Err(format!(
-                "final parallel verification failed: {}",
-                verification.summary.join(" | ")
-            ));
-        }
-        Err(error) => {
-            rollback(repo, &base_head)?;
-            return Err(format!("final parallel verification could not run: {error}"));
-        }
-    };
-
-    let receipt = BatchIntegrationReceipt::complete(
-        &barrier,
-        base_head,
-        barrier.ordered_tasks.clone(),
-        final_head,
-        final_tree,
-        verification.receipt.fingerprint.clone(),
-    )
-    .map_err(str::to_owned)?;
-    persist_json(&batch_root.join("batch-integration-receipt.json"), &receipt)?;
-    manager
-        .cleanup(&original_workers)
-        .map_err(|error| error.to_string())?;
-
-    let mut changed_paths = integrations
-        .iter()
-        .flat_map(|receipt| receipt.changed_paths.clone())
-        .collect::<Vec<_>>();
-    changed_paths.sort();
-    changed_paths.dedup();
-    let _ = events.send(RuntimeEvent::Activity(RuntimeActivity {
-        id: Some(dag.fingerprint.clone()),
-        kind: RuntimeActivityKind::Done,
-        title: "Parallel mutation batch reconciled".to_owned(),
-        details: vec![
-            format!("receipt={}", receipt.fingerprint),
-            format!("final_head={}", receipt.final_head),
-            format!("changed_paths={changed_paths:?}"),
-        ],
-    }));
-    Ok(ParallelBatchOutcome::Reconciled(ParallelBatchCompletion {
-        receipt,
-        integrations,
-        changed_paths,
-    }))
+    IntegrationBarrier::establish(dag, accepted).map_err(str::to_owned)
 }
 
-fn render_child_packet(task_id: &str, transaction: &MutationTransaction) -> Result<String, String> {
-    let snapshot = transaction.snapshot();
-    let root = transaction
-        .path()
-        .parent()
-        .ok_or_else(|| "parallel child transaction has no durable root".to_owned())?;
-    let patch = fs::read_to_string(root.join("prepared.patch")).map_err(|error| error.to_string())?;
-    Ok(format!(
-        "## Child {task_id}\ncommit={}\ntree={}\nchanged_paths={:?}\npatch_fingerprint={}\n\n{}",
-        snapshot.prepared_commit,
-        snapshot.prepared_tree,
-        snapshot.changed_paths,
-        snapshot.patch_fingerprint,
-        patch,
-    ))
-}
-
-fn combined_review<P: ModelProvider>(
-    provider: &P,
-    config: &Config,
-    cancel: &AtomicBool,
-    journal_path: &Path,
-    context: &str,
-) -> Result<medusa_review_model::ParentReviewOutcome, String> {
-    let request = ModelRequest {
-        system: BATCH_REVIEW_SYSTEM_PROMPT.to_owned(),
-        messages: vec![Message {
-            role: Role::User,
-            content: vec![MessageBlock::Text {
-                text: context.to_owned(),
-            }],
-        }],
-        tools: Vec::new(),
-        max_tokens: config
-            .model
-            .max_output_tokens
-            .min(MAX_BATCH_REVIEW_OUTPUT_TOKENS),
-        temperature_milli: 0,
-    };
-    let request_fingerprint = hash(&request);
-    if journal_path.is_file() {
-        let journal: CombinedReviewJournal = serde_json::from_slice(
-            &fs::read(journal_path).map_err(|error| error.to_string())?,
-        )
-        .map_err(|error| error.to_string())?;
-        validate_combined_journal(&journal, &request_fingerprint)?;
-        return decode_review(&journal.response_text);
-    }
-    let response = provider
-        .complete_cancellable(&request, cancel)
-        .map_err(|error| error.to_string())?;
-    let mut text = Vec::new();
-    for block in &response.blocks {
-        match block {
-            ResponseBlock::Text { text: value } => text.push(value.as_str()),
-            ResponseBlock::ToolUse { name, .. } => {
-                return Err(format!(
-                    "combined parent reviewer attempted forbidden tool `{name}`"
-                ));
-            }
-        }
-    }
-    let response_text = text.join("\n");
-    let outcome = decode_review(&response_text)?;
-    let mut journal = CombinedReviewJournal {
-        schema_version: BATCH_SCHEMA_VERSION,
-        request_fingerprint,
-        response_text,
-        fingerprint: String::new(),
-    };
-    journal.fingerprint = combined_journal_fingerprint(&journal);
-    persist_json(journal_path, &journal)?;
-    Ok(outcome)
-}
-
-fn decode_review(text: &str) -> Result<medusa_review_model::ParentReviewOutcome, String> {
-    let final_line = final_parent_review_line(text).map_err(|error| error.to_string())?;
-    let response: ParentReviewResponse = serde_json::from_str(final_line).map_err(|error| {
-        ParentReviewResponseError::InvalidEnvelope(error.to_string()).to_string()
-    })?;
-    validate_parent_review_response(response, final_line).map_err(|error| error.to_string())
-}
-
-fn validate_combined_journal(
-    journal: &CombinedReviewJournal,
-    request_fingerprint: &str,
+fn validate_parallel_evidence(
+    dag: &MutationDag,
+    parallel: &ParallelImplementationEvidence,
 ) -> Result<(), String> {
-    if journal.schema_version != BATCH_SCHEMA_VERSION
-        || journal.request_fingerprint != request_fingerprint
-        || journal.response_text.trim().is_empty()
-        || journal.fingerprint != combined_journal_fingerprint(journal)
+    if parallel.dag_fingerprint != dag.fingerprint
+        || parallel
+            .children
+            .iter()
+            .map(|child| child.task_id.clone())
+            .collect::<Vec<_>>()
+            != dag.deterministic_integration_order()
     {
-        return Err("combined parent-review journal is incomplete or stale".to_owned());
+        return Err("parallel child evidence does not match accepted DAG order".to_owned());
     }
     Ok(())
 }
 
-fn combined_journal_fingerprint(journal: &CombinedReviewJournal) -> String {
-    hash(&(
-        journal.schema_version,
-        &journal.request_fingerprint,
-        &journal.response_text,
-    ))
-}
-
-fn batch_root(repo: &Path, dag_fingerprint: &str) -> PathBuf {
-    repo.join(".medusa")
-        .join("parallel-mutation-batches")
-        .join(dag_fingerprint)
-}
-
-fn rollback(repo: &Path, base_head: &str) -> Result<(), String> {
-    let output = Command::new("git")
-        .args(["reset", "--hard", base_head])
-        .current_dir(repo)
-        .output()
-        .map_err(|error| error.to_string())?;
-    if !output.status.success() {
+fn validate_aggregate_scope(
+    plan: &ProductionExecutionPlan,
+    components: &[ChangedComponent],
+) -> Result<(), String> {
+    let contract = plan
+        .contracts
+        .iter()
+        .find(|contract| contract.role == AgentRole::Implementer)
+        .ok_or_else(|| "parallel aggregate has no parent implementer contract".to_owned())?;
+    let paths = component_paths(components);
+    if paths.is_empty()
+        || paths.iter().any(|path| {
+            !contract.allowed_write_paths.iter().any(|allowed| {
+                path == allowed
+                    || path
+                        .strip_prefix(allowed)
+                        .is_some_and(|suffix| suffix.starts_with('/'))
+            })
+        })
+    {
         return Err(format!(
-            "parallel batch rollback failed: {}",
-            String::from_utf8_lossy(&output.stderr).trim()
+            "parallel aggregate escaped parent write scope: {paths:?} not within {:?}",
+            contract.allowed_write_paths
         ));
     }
     Ok(())
+}
+
+fn validate_resumed_aggregate(
+    evidence: &ImplementationEvidence,
+    plan: &ProductionExecutionPlan,
+    preflight: &CoordinatorEvidence,
+    dag: &MutationDag,
+) -> Result<(), String> {
+    if evidence.plan_fingerprint != plan.fingerprint
+        || evidence.repository_fingerprint != preflight.repository_fingerprint
+        || evidence.base_head != dag.repository_revision
+        || evidence.transaction_path.as_os_str().is_empty()
+    {
+        return Err("durable parallel aggregate evidence is stale".to_owned());
+    }
+    let transaction = MutationTransaction::open(&evidence.transaction_path)?;
+    if transaction.snapshot().prepared_commit != evidence.prepared_commit
+        || transaction.snapshot().prepared_tree != evidence.prepared_tree
+        || !matches!(
+            transaction.snapshot().lifecycle,
+            MutationLifecycle::ReviewPending
+                | MutationLifecycle::ReviewAccepted
+                | MutationLifecycle::VerificationPending
+                | MutationLifecycle::Verified
+                | MutationLifecycle::IntegrationAuthorized
+                | MutationLifecycle::Integrated
+                | MutationLifecycle::Reconciled
+        )
+    {
+        return Err("durable parallel aggregate transaction no longer matches evidence".to_owned());
+    }
+    Ok(())
+}
+
+fn cherry_pick_without_commit(worktree: &Path, commit: &str) -> Result<(), String> {
+    let output = Command::new("git")
+        .args(["cherry-pick", "--no-commit", commit])
+        .current_dir(worktree)
+        .output()
+        .map_err(|error| error.to_string())?;
+    if output.status.success() {
+        Ok(())
+    } else {
+        Err(String::from_utf8_lossy(&output.stderr).trim().to_owned())
+    }
+}
+
+fn cleanup_staging(manager: &WorkerManager, worker: &Worker, base_head: &str) {
+    let _ = Command::new("git")
+        .args(["cherry-pick", "--abort"])
+        .current_dir(&worker.worktree)
+        .output();
+    let _ = Command::new("git")
+        .args(["reset", "--hard", base_head])
+        .current_dir(&worker.worktree)
+        .output();
+    let _ = manager.cleanup(std::slice::from_ref(worker));
+}
+
+fn component_paths(components: &[ChangedComponent]) -> Vec<String> {
+    let mut paths = components
+        .iter()
+        .flat_map(ChangedComponent::all_paths)
+        .map(str::to_owned)
+        .collect::<Vec<_>>();
+    paths.sort();
+    paths.dedup();
+    paths
+}
+
+fn batch_root(execution_root: &Path, dag_fingerprint: &str) -> PathBuf {
+    execution_root.join("parallel-batch").join(dag_fingerprint)
 }
 
 fn persist_json(path: &Path, value: &impl Serialize) -> Result<(), String> {
