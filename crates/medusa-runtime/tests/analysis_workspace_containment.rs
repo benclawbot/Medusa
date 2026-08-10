@@ -26,9 +26,9 @@ fn contained_reducer_processes_brokered_artifact_without_repository_write_author
     );
 
     if let Err(error) = &result {
-        let message = error.to_string();
         #[cfg(windows)]
         {
+            let message = error.to_string();
             assert!(
                 message.contains("sandbox unavailable")
                     && message.contains("Windows composable sandbox")
@@ -43,6 +43,7 @@ fn contained_reducer_processes_brokered_artifact_without_repository_write_author
         }
         #[cfg(target_os = "linux")]
         {
+            let message = error.to_string();
             assert!(
                 message.contains("contained analysis backend failed")
                     && message.contains("bwrap: loopback")
