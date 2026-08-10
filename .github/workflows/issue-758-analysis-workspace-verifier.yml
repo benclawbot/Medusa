@@ -44,6 +44,11 @@ jobs:
 
           agent = Path('crates/medusa-agent/src/lib.rs')
           s = agent.read_text()
+          if 'pub mod analysis_host;' not in s:
+              marker = 'mod approval;\n'
+              if marker not in s:
+                  raise SystemExit('agent module marker not found')
+              s = s.replace(marker, marker + 'pub mod analysis_host;\n', 1)
           marker = 'pub use policy::validate_shell_command;\n'
           function = '''\n/// Runs a host-owned analysis helper inside the same fail-closed command containment used by\n/// Medusa tools. The caller supplies the containment root; analysis callers use only their\n/// session-scoped scratch directory, never the authoritative repository.\npub fn run_contained_analysis_command(\n    root: &std::path::Path,\n    program: &str,\n    args: &[String],\n    cancellation: &std::sync::atomic::AtomicBool,\n) -> medusa_core::MedusaResult<std::process::Output> {\n    policy::validate_shell_command_hard_denials(program, args)?;\n    policy::sandboxed_command_cancellable(root, program, args, cancellation)\n}\n'''
           if 'pub fn run_contained_analysis_command(' not in s:
@@ -51,6 +56,50 @@ jobs:
                   raise SystemExit('policy export marker not found')
               s = s.replace(marker, marker + function, 1)
           agent.write_text(s)
+
+          engine = Path('crates/medusa-agent/src/engine.rs')
+          s = engine.read_text()
+          old = '''use crate::{\n    approval::{ApprovalDecision, ApprovalGrant, ApprovalReceipt},'''
+          new = '''use crate::{\n    analysis_host::{ANALYSIS_WORKSPACE_TOOL, AnalysisWorkspaceHost},\n    approval::{ApprovalDecision, ApprovalGrant, ApprovalReceipt},'''
+          if 'analysis_host::{ANALYSIS_WORKSPACE_TOOL, AnalysisWorkspaceHost}' not in s:
+              if old not in s:
+                  raise SystemExit('engine import marker not found')
+              s = s.replace(old, new, 1)
+          old = '''    execution_policy: AgentExecutionPolicy,\n    team_context: Option<TeamMemberContext>,\n}'''
+          new = '''    execution_policy: AgentExecutionPolicy,\n    team_context: Option<TeamMemberContext>,\n    analysis_host: Option<Arc<dyn AnalysisWorkspaceHost>>,\n}'''
+          if 'analysis_host: Option<Arc<dyn AnalysisWorkspaceHost>>' not in s:
+              if old not in s:
+                  raise SystemExit('engine field marker not found')
+              s = s.replace(old, new, 1)
+          s = s.replace(
+              '            team_context: None,\n        }',
+              '            team_context: None,\n            analysis_host: None,\n        }',
+          )
+          marker = '''    pub fn with_team_context(mut self, context: TeamMemberContext) -> Self {\n        self.team_context = Some(context);\n        self\n    }\n'''
+          addition = marker + '''\n    #[must_use]\n    pub fn with_analysis_workspace_host(mut self, host: Arc<dyn AnalysisWorkspaceHost>) -> Self {\n        self.analysis_host = Some(host);\n        self\n    }\n'''
+          if 'pub fn with_analysis_workspace_host(' not in s:
+              if marker not in s:
+                  raise SystemExit('engine builder marker not found')
+              s = s.replace(marker, addition, 1)
+          marker = '''        if let Some(team) = &self.team_context {\n            tools.extend(team.definitions());\n        }\n        tools.retain(|tool| self.execution_policy.allows(&tool.name));'''
+          replacement = '''        if let Some(team) = &self.team_context {\n            tools.extend(team.definitions());\n        }\n        if self.analysis_host.is_some() {\n            tools.push(crate::analysis_host::tool_definition());\n        }\n        tools.retain(|tool| self.execution_policy.allows(&tool.name));'''
+          if 'tools.push(crate::analysis_host::tool_definition())' not in s:
+              if marker not in s:
+                  raise SystemExit('engine tool projection marker not found')
+              s = s.replace(marker, replacement, 1)
+          marker = '''            let positions = calls\n                .iter()\n                .position(|(id, _, _)| early_tool_executions.contains_key(id))\n                .map_or_else(\n                    || {\n                        crate::tool_dag::select_ready_positions(\n                            &schedulable,\n                            parallel_tool_limit(self.config.agent.parallel_workers),\n                        )\n                    },\n                    |position| vec![position],\n                );'''
+          replacement = '''            let positions = calls\n                .iter()\n                .position(|(_, name, _)| name == ANALYSIS_WORKSPACE_TOOL)\n                .or_else(|| {\n                    calls\n                        .iter()\n                        .position(|(id, _, _)| early_tool_executions.contains_key(id))\n                })\n                .map_or_else(\n                    || {\n                        crate::tool_dag::select_ready_positions(\n                            &schedulable,\n                            parallel_tool_limit(self.config.agent.parallel_workers),\n                        )\n                    },\n                    |position| vec![position],\n                );'''
+          if '.position(|(_, name, _)| name == ANALYSIS_WORKSPACE_TOOL)' not in s:
+              if marker not in s:
+                  raise SystemExit('engine batch marker not found')
+              s = s.replace(marker, replacement, 1)
+          marker = '''                } else if name == "update_plan" {\n                    measured = true;'''
+          replacement = '''                } else if name == ANALYSIS_WORKSPACE_TOOL {\n                    measured = true;\n                    append_observed(\n                        session,\n                        EventPayload::ToolExecutionStarted {\n                            tool: audited_tool_name(&name, &input),\n                        },\n                        &mut observer,\n                    )?;\n                    let host = self.analysis_host.as_ref().ok_or_else(|| {\n                        MedusaError::new(\n                            ErrorCode::PolicyDenied,\n                            ErrorCategory::Policy,\n                            "analysis workspace authority is unavailable",\n                        )\n                    })?;\n                    let session_id = session.id.to_string();\n                    host.execute(&session_id, &input, self.cancellation.as_ref())\n                } else if name == "update_plan" {\n                    measured = true;'''
+          if '"analysis workspace authority is unavailable"' not in s:
+              if marker not in s:
+                  raise SystemExit('engine execution marker not found')
+              s = s.replace(marker, replacement, 1)
+          engine.write_text(s)
       - name: Format
         run: cargo fmt --all
       - name: Check runtime and agent
@@ -59,6 +108,8 @@ jobs:
         run: cargo test -p medusa-runtime analysis_workspace --locked -- --nocapture
       - name: Test contained analysis backend
         run: cargo test -p medusa-runtime --test analysis_workspace_containment --locked -- --nocapture
+      - name: Test analysis host contract
+        run: cargo test -p medusa-agent analysis_host --locked -- --nocapture
       - name: Clippy
         run: cargo clippy -p medusa-agent -p medusa-runtime --locked --all-targets -- -D warnings
       - name: Commit verified source
@@ -68,7 +119,7 @@ jobs:
           if ! git diff --quiet; then
             git config user.name github-actions[bot]
             git config user.email 41898282+github-actions[bot]@users.noreply.github.com
-            git add crates/medusa-agent/src/lib.rs crates/medusa-runtime/src/lib.rs crates/medusa-runtime/src/analysis_contained.rs crates/medusa-runtime/tests/analysis_workspace_containment.rs
-            git commit -m "feat(runtime): wire contained analysis execution"
+            git add crates/medusa-agent/src/lib.rs crates/medusa-agent/src/engine.rs crates/medusa-agent/src/analysis_host.rs crates/medusa-runtime/src/lib.rs crates/medusa-runtime/src/analysis_contained.rs crates/medusa-runtime/tests/analysis_workspace_containment.rs
+            git commit -m "feat(runtime): wire production analysis workspace tool"
             git push
           fi
