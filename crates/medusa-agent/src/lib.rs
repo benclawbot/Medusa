@@ -1,5 +1,6 @@
 //! Persistent single-agent execution, role-bound team contexts, and built-in tools.
 
+pub mod analysis_host;
 mod approval;
 pub mod branch_summary;
 pub mod compaction_v2;
@@ -33,6 +34,19 @@ pub use engine::{AgentEngine, AgentUpdate, StepOutcome};
 pub use engine_support::{compact_session, update_session_objective};
 pub use identity_guard::{compatibility_context, validate_provider_text};
 pub use policy::validate_shell_command;
+
+/// Runs a host-owned analysis helper inside the same fail-closed command containment used by
+/// Medusa tools. The caller supplies the containment root; analysis callers use only their
+/// session-scoped scratch directory, never the authoritative repository.
+pub fn run_contained_analysis_command(
+    root: &std::path::Path,
+    program: &str,
+    args: &[String],
+    cancellation: &std::sync::atomic::AtomicBool,
+) -> medusa_core::MedusaResult<std::process::Output> {
+    policy::validate_shell_command_hard_denials(program, args)?;
+    policy::sandboxed_command_cancellable(root, program, args, cancellation)
+}
 pub use session::{
     AgentPlanStep, AgentPlanStepStatus, AgentQuestion, AgentQuestionItem, AgentQuestionOption,
     AgentSession, BrowserAssistedLaunch, EscalationJournal, EscalationStatus, SessionEscalation,

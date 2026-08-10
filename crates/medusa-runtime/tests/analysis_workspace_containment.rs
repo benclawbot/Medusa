@@ -10,15 +10,9 @@ use tempfile::TempDir;
 #[test]
 fn contained_reducer_processes_brokered_artifact_without_repository_write_authority() {
     let temp = TempDir::new().expect("tempdir");
-    fs::write(
-        temp.path().join("large.txt"),
-        "alpha\nbeta\nalpha two\n",
-    )
-    .expect("fixture");
-    let controller = RuntimeController::start_with_config(
-        temp.path().to_path_buf(),
-        Config::default(),
-    );
+    fs::write(temp.path().join("large.txt"), "alpha\nbeta\nalpha two\n").expect("fixture");
+    let controller =
+        RuntimeController::start_with_config(temp.path().to_path_buf(), Config::default());
     let artifact = controller
         .analysis_import_file("session-contained", "large.txt", None)
         .expect("import");
@@ -80,10 +74,8 @@ fn contained_reducer_processes_brokered_artifact_without_repository_write_author
 #[test]
 fn capability_contract_exposes_fail_closed_authority() {
     let temp = TempDir::new().expect("tempdir");
-    let controller = RuntimeController::start_with_config(
-        temp.path().to_path_buf(),
-        Config::default(),
-    );
+    let controller =
+        RuntimeController::start_with_config(temp.path().to_path_buf(), Config::default());
     let capabilities = controller.analysis_workspace_capabilities();
     assert!(!capabilities.arbitrary_user_code);
     assert!(!capabilities.ambient_network);

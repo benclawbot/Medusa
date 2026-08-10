@@ -40,6 +40,7 @@ use medusa_world_model::{WorkspaceModel, create_for_session, load as load_world_
 use time::OffsetDateTime;
 
 use crate::{
+    analysis_host::{ANALYSIS_WORKSPACE_TOOL, AnalysisWorkspaceHost},
     approval::{ApprovalDecision, ApprovalGrant, ApprovalReceipt},
     engine_support::*,
     evidence::append_event,
@@ -152,6 +153,7 @@ pub struct AgentEngine<P> {
     cancellation: Arc<AtomicBool>,
     execution_policy: AgentExecutionPolicy,
     team_context: Option<TeamMemberContext>,
+    analysis_host: Option<Arc<dyn AnalysisWorkspaceHost>>,
 }
 
 fn refreshed_repository_revision(repo: &Path) -> Option<String> {
@@ -249,6 +251,7 @@ impl<P: ModelProvider> AgentEngine<P> {
             cancellation: Arc::new(AtomicBool::new(false)),
             execution_policy: AgentExecutionPolicy::unrestricted(),
             team_context: None,
+            analysis_host: None,
         }
     }
 
@@ -266,6 +269,7 @@ impl<P: ModelProvider> AgentEngine<P> {
             cancellation,
             execution_policy: AgentExecutionPolicy::unrestricted(),
             team_context: None,
+            analysis_host: None,
         }
     }
 
@@ -278,6 +282,12 @@ impl<P: ModelProvider> AgentEngine<P> {
     #[must_use]
     pub fn with_team_context(mut self, context: TeamMemberContext) -> Self {
         self.team_context = Some(context);
+        self
+    }
+
+    #[must_use]
+    pub fn with_analysis_workspace_host(mut self, host: Arc<dyn AnalysisWorkspaceHost>) -> Self {
+        self.analysis_host = Some(host);
         self
     }
 
@@ -828,6 +838,9 @@ impl<P: ModelProvider> AgentEngine<P> {
         if let Some(team) = &self.team_context {
             tools.extend(team.definitions());
         }
+        if self.analysis_host.is_some() {
+            tools.push(crate::analysis_host::tool_definition());
+        }
         tools.retain(|tool| self.execution_policy.allows(&tool.name));
         let mut request_messages = messages_with_turn_instruction(session, turn_instruction);
         validate_messages(&request_messages, &self.provider.capabilities())?;
@@ -1069,7 +1082,12 @@ impl<P: ModelProvider> AgentEngine<P> {
                 .collect::<Vec<_>>();
             let positions = calls
                 .iter()
-                .position(|(id, _, _)| early_tool_executions.contains_key(id))
+                .position(|(_, name, _)| name == ANALYSIS_WORKSPACE_TOOL)
+                .or_else(|| {
+                    calls
+                        .iter()
+                        .position(|(id, _, _)| early_tool_executions.contains_key(id))
+                })
                 .map_or_else(
                     || {
                         crate::tool_dag::select_ready_positions(
@@ -1176,6 +1194,24 @@ impl<P: ModelProvider> AgentEngine<P> {
                         &mut observer,
                     )?;
                     Ok(early.output)
+                } else if name == ANALYSIS_WORKSPACE_TOOL {
+                    measured = true;
+                    append_observed(
+                        session,
+                        EventPayload::ToolExecutionStarted {
+                            tool: audited_tool_name(&name, &input),
+                        },
+                        &mut observer,
+                    )?;
+                    let host = self.analysis_host.as_ref().ok_or_else(|| {
+                        MedusaError::new(
+                            ErrorCode::PolicyDenied,
+                            ErrorCategory::Policy,
+                            "analysis workspace authority is unavailable",
+                        )
+                    })?;
+                    let session_id = session.id.to_string();
+                    host.execute(&session_id, &input, self.cancellation.as_ref())
                 } else if name == "update_plan" {
                     measured = true;
                     append_observed(
