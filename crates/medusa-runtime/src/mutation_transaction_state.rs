@@ -606,6 +606,9 @@ impl MutationTransaction {
             MutationLifecycle::PreparedInIsolation => {
                 (RuntimeActivityKind::Progress, "Prepared in isolation")
             }
+            MutationLifecycle::SpeculativePrepared => {
+                (RuntimeActivityKind::Progress, "Speculative mutation prepared")
+            }
             MutationLifecycle::ReviewPending => (RuntimeActivityKind::Progress, "Parent review pending"),
             MutationLifecycle::RevisionRequested => {
                 (RuntimeActivityKind::Progress, "Revision requested")

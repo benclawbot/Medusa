@@ -734,6 +734,7 @@ where
                     contract,
                     packet,
                     state.base_head,
+                    speculative,
                     None,
                 );
             }
@@ -794,6 +795,7 @@ where
         contract,
         packet,
         base_head,
+        speculative,
         Some(worker),
     )
 }
@@ -814,6 +816,7 @@ fn execute_attempts<F>(
     contract: AgentContract,
     packet: ContextPacket,
     base_head: String,
+    speculative: Option<&SpeculativeExecutionContext>,
     mut initial_worker: Option<Worker>,
 ) -> Result<ImplementationEvidence, String>
 where
