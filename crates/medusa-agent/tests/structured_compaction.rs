@@ -8,7 +8,7 @@ use medusa_provider::{MessageBlock, ModelProvider, ModelRequest, ModelResponse};
 struct IdleProvider;
 impl ModelProvider for IdleProvider {
     fn complete(&self, _: &ModelRequest) -> MedusaResult<ModelResponse> {
-        unreachable!("compaction does not call the provider")
+        unreachable!("manual compaction does not call the provider")
     }
 }
 
@@ -47,16 +47,20 @@ fn structured_compaction_preserves_state_and_provenance() {
         .compact_session(&mut session, Some("finish migration safely"))
         .expect("compact");
     let MessageBlock::Text { text } = &session.messages[0].content[0] else {
-        panic!("summary")
+        panic!("manifest projection")
     };
+    assert!(text.contains("[medusa-compaction-v2]"));
     assert!(text.contains("Run cargo test -p medusa-agent"));
     assert!(text.contains("migration failed at src/store.rs:42"));
-    assert!(text.contains("Do not rename SessionId; keep the exact symbol."));
+    assert!(session.messages.iter().flat_map(|message| &message.content).any(|block| {
+        matches!(block, MessageBlock::Text { text } if text.contains("Do not rename SessionId; keep the exact symbol."))
+    }));
     assert!(session.events.iter().any(|event| matches!(
         &event.payload,
         EventPayload::ConversationCompacted { generation: 1, source_event_sequences, preserved_sections, .. }
             if source_event_sequences == &source_sequences
-                && preserved_sections.contains(&"verification_evidence".to_owned())
+                && preserved_sections.iter().any(|section| section.starts_with("manifest_v2_hash="))
+                && preserved_sections.iter().any(|section| section.starts_with("authoritative_fingerprint="))
     )));
 }
 
@@ -70,8 +74,8 @@ fn repeated_compaction_does_not_nest_prior_summary() {
     engine.compact_session(&mut session, None).expect("first");
     engine.compact_session(&mut session, None).expect("second");
     let MessageBlock::Text { text } = &session.messages[0].content[0] else {
-        panic!("summary")
+        panic!("manifest projection")
     };
-    assert_eq!(text.matches("[medusa-compaction-v1]").count(), 1);
+    assert_eq!(text.matches("[medusa-compaction-v2]").count(), 1);
     assert!(text.contains("Generation: 2"));
 }
