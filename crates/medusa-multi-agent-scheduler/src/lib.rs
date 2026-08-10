@@ -561,7 +561,11 @@ fn apply_speculation_flags(result: &mut PlanningResult) {
         && result.confidence_milli >= 850
         && result.scope.resolution == ScopeResolution::Resolved
         && !result.scope.effective.is_empty()
-        && !result.scope.effective.iter().any(|path| path == "repository");
+        && !result
+            .scope
+            .effective
+            .iter()
+            .any(|path| path == "repository");
     for planned in &mut result.tasks {
         planned.task.speculative = eligible && planned.kind == TaskKind::Implementation;
         planned.context_fingerprint = hash(&(
