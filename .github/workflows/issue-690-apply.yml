@@ -19,15 +19,42 @@ jobs:
         with:
           ref: ${{ github.event.pull_request.head.ref }}
       - name: Apply complete production patch atomically
+        id: apply
         shell: bash
         run: |
-          set -euo pipefail
+          set +e
+          exec > >(tee /tmp/issue690-transfer.log) 2>&1
+          echo '=== head ==='
+          git rev-parse HEAD
+          echo '=== patch artifact ==='
+          ls -l .github/issue-690-patch/issue690.patch.gz
+          sha256sum .github/issue-690-patch/issue690.patch.gz
+          echo '=== gunzip ==='
           gunzip -c .github/issue-690-patch/issue690.patch.gz > /tmp/issue690.patch
-          git apply --check /tmp/issue690.patch
-          git apply /tmp/issue690.patch
+          rc=$?; echo "gunzip_rc=$rc"; test $rc -eq 0 || exit $rc
+          wc -c /tmp/issue690.patch
+          echo '=== apply check ==='
+          git apply --check --verbose /tmp/issue690.patch
+          rc=$?; echo "apply_check_rc=$rc"; test $rc -eq 0 || exit $rc
+          echo '=== apply ==='
+          git apply --verbose /tmp/issue690.patch
+          rc=$?; echo "apply_rc=$rc"; test $rc -eq 0 || exit $rc
           rm -rf .github/issue-690-patch
+          echo '=== status ==='
+          git status --short
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
           git add -A
+          echo '=== commit ==='
           git commit -m 'feat: add bounded speculative implementation'
+          rc=$?; echo "commit_rc=$rc"; test $rc -eq 0 || exit $rc
+          echo '=== push ==='
           git push origin HEAD:${{ github.event.pull_request.head.ref }}
+          rc=$?; echo "push_rc=$rc"; exit $rc
+      - name: Upload transfer diagnostics
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: issue-690-transfer-diagnostics
+          path: /tmp/issue690-transfer.log
+          if-no-files-found: error
