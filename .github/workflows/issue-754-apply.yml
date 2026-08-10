@@ -20,6 +20,21 @@ jobs:
         run: |
           from pathlib import Path
 
+          compaction = Path('crates/medusa-agent/src/compaction_v2.rs')
+          compaction_text = compaction.read_text()
+          guarded = '''            MessageBlock::Text { text } if !text.starts_with(MARKER) && !text.starts_with("[medusa-compaction-v1]") => {
+                Some(format!("{}: {}", role_name(message.role), bounded(text, SEMANTIC_ENTRY_CHARS)))
+            }
+            MessageBlock::ToolUse'''
+          repaired = '''            MessageBlock::Text { text } if !text.starts_with(MARKER) && !text.starts_with("[medusa-compaction-v1]") => {
+                Some(format!("{}: {}", role_name(message.role), bounded(text, SEMANTIC_ENTRY_CHARS)))
+            }
+            MessageBlock::Text { .. } => None,
+            MessageBlock::ToolUse'''
+          if guarded in compaction_text:
+              compaction_text = compaction_text.replace(guarded, repaired, 1)
+          compaction.write_text(compaction_text)
+
           lib = Path('crates/medusa-agent/src/lib.rs')
           text = lib.read_text()
           if 'pub mod compaction_v2;' not in text:
@@ -28,6 +43,11 @@ jobs:
 
           support = Path('crates/medusa-agent/src/engine_support.rs')
           text = support.read_text()
+          text = text.replace(
+              'ImageSource, Message, MessageBlock, ProviderCapabilities, ProviderExecutionPhase, Role,\n',
+              'ImageSource, Message, MessageBlock, ProviderCapabilities, ProviderExecutionPhase,\n',
+              1,
+          )
           start = text.index('/// Compacts durable session history without requiring a live model provider.\npub fn compact_session')
           end = text.index('pub(crate) fn compact_message_text', start)
           replacement = '''/// Compacts durable session history into a crash-safe V2 hybrid manifest.\npub fn compact_session(session: &mut AgentSession, focus: Option<&str>) -> MedusaResult<()> {\n    let original_messages = session.messages.len();\n    let source_event_sequences = session\n        .events\n        .iter()\n        .map(|event| event.sequence)\n        .collect::<Vec<_>>();\n    let migrated_v1 = session.messages.iter().flat_map(|message| &message.content).any(|block| {\n        matches!(block, MessageBlock::Text { text } if text.starts_with("[medusa-compaction-v1]"))\n    });\n\n    // The manifest is fsync'd and renamed before the active projection changes. A crash\n    // before this point leaves the old projection authoritative; a crash afterwards can\n    // replay the journal and either reuse or safely regenerate the content-addressed manifest.\n    let prepared = crate::compaction_v2::prepare(session, focus)?;\n    let generation = prepared.manifest.generation;\n    let mut preserved_sections = prepared.preserved_sections;\n    preserved_sections.push(format!("migrated_v1={migrated_v1}"));\n    if !session.tool_artifacts.contains(&prepared.manifest_path) {\n        session.tool_artifacts.push(prepared.manifest_path.clone());\n    }\n    session.messages = prepared.projection;\n    append_event(\n        session,\n        Actor::Coordinator,\n        EventPayload::ConversationCompacted {\n            original_messages: u32::try_from(original_messages).unwrap_or(u32::MAX),\n            retained_messages: u32::try_from(session.messages.len()).unwrap_or(u32::MAX),\n            generation,\n            source_event_sequences,\n            preserved_sections,\n        },\n    )?;\n    session.updated_at = OffsetDateTime::now_utc();\n    persist(session)\n}\n\n'''
