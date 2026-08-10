@@ -450,6 +450,7 @@ fn plan_status(status: AgentPlanStepStatus) -> String {
         AgentPlanStepStatus::Pending => "pending",
         AgentPlanStepStatus::InProgress => "in_progress",
         AgentPlanStepStatus::Completed => "completed",
+        AgentPlanStepStatus::Failed => "failed",
     }
     .to_owned()
 }
