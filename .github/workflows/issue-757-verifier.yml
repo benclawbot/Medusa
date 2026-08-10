@@ -24,6 +24,7 @@ jobs:
           from pathlib import Path
           p = Path('crates/medusa-runtime/src/scheduled_actions.rs')
           s = p.read_text()
+          s = s.replace('use serde_json::{Value, json};', 'use serde_json::json;')
           old = '''    pub wake_policy: SessionActionWakePolicy,\n    pub status: TriggerDispatchStatus,\n    pub recovered: bool,'''
           new = '''    pub wake_policy: SessionActionWakePolicy,\n    pub prompt: String,\n    pub authorized: bool,\n    pub enabled: bool,\n    pub persistent_goal: bool,\n    pub recurrence_seconds: Option<u64>,\n    pub missed_run_policy: MissedRunPolicy,\n    pub status: TriggerDispatchStatus,\n    pub recovered: bool,'''
           if old in s:
