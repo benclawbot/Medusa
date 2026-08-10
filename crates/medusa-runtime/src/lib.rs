@@ -42,6 +42,7 @@ mod multi_agent_coordinator;
 mod mutating_worker_coordinator;
 mod mutation_transaction;
 pub mod openai_realtime;
+pub mod observer;
 pub mod prompt;
 pub mod review;
 pub mod skill_dependencies;
@@ -58,6 +59,11 @@ pub use checkpoint_store::RuntimeCheckpointRecord;
 pub use error::RuntimeError;
 pub use execution_history::{
     RuntimeContinuityHealth, RuntimeExecutionHealth, RuntimeHistoricalState,
+};
+pub use observer::{
+    ObservationMessage, ObservationStage, ObservationVerification, ObservedPlanStep,
+    SessionObservationSnapshot, SideQuestionCancelToken, SideQuestionRequest, SideQuestionResponse,
+    answer_side_question, observe_session,
 };
 pub use medusa_agent::{
     AgentPlanStep as RuntimePlanStep, AgentPlanStepStatus, AgentQuestionItem, AgentQuestionOption,
