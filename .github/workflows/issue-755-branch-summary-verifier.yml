@@ -18,7 +18,6 @@ jobs:
           fetch-depth: 0
       - uses: dtolnay/rust-toolchain@39b0b3842c7e8bbf6904c0bfc3d9006fdd4dc4e0
         with:
-          toolchain: stable
           components: rustfmt, clippy
       - name: Wire branch summaries into production paths
         shell: python
@@ -60,11 +59,13 @@ jobs:
               assert old in text
               text = text.replace(old, new, 1)
           compaction.write_text(text)
+      - name: Refresh dependency lock and compile
+        run: cargo check -p medusa-agent
       - name: Format
         run: cargo fmt --all
       - name: Test branch summaries
         run: cargo test -p medusa-agent branch_summary --locked -- --nocapture
-      - name: Check medusa-agent
+      - name: Check medusa-agent locked
         run: cargo check -p medusa-agent --locked
       - name: Clippy medusa-agent
         run: cargo clippy -p medusa-agent --all-targets --all-features --locked -- -D warnings
@@ -77,6 +78,6 @@ jobs:
           fi
           git config user.name github-actions[bot]
           git config user.email 41898282+github-actions[bot]@users.noreply.github.com
-          git add crates/medusa-agent/src/lib.rs crates/medusa-agent/src/engine.rs crates/medusa-agent/src/compaction_v2.rs crates/medusa-agent/src/branch_summary.rs
+          git add Cargo.lock crates/medusa-agent/src/lib.rs crates/medusa-agent/src/engine.rs crates/medusa-agent/src/compaction_v2.rs crates/medusa-agent/src/branch_summary.rs
           git commit -m 'Wire abandoned branch summaries into restore flow'
           git push origin HEAD:agent/issue-755-branch-summaries
