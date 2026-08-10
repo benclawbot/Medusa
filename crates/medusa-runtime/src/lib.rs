@@ -650,6 +650,19 @@ fn record_controller_event(
     let checkpoint_boundary = crate::checkpoint_store::is_checkpoint_boundary(&payload);
     let mut session = medusa_agent::session_browser::load_session(repo, session_id)
         .map_err(RuntimeError::agent)?;
+    if let EventPayload::CheckpointRestoreRequested { checkpoint_id, .. } = &payload
+        && let Ok(checkpoints) = crate::checkpoint_store::list(repo, session_id)
+        && let Some(target) = checkpoints
+            .iter()
+            .find(|record| record.checkpoint.fingerprint == *checkpoint_id)
+    {
+        // This artifact is advisory only. A summary failure must never block exact restore.
+        let _ = medusa_agent::capture_restore_abandonment(
+            &mut session,
+            checkpoint_id,
+            target.journal_cursor,
+        );
+    }
     medusa_agent::record_session_event(&mut session, actor, payload)
         .map_err(RuntimeError::agent)?;
     if checkpoint_boundary {

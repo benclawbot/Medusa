@@ -123,25 +123,25 @@ pub fn common_ancestor(left: &[EventEnvelope], right: &[EventEnvelope]) -> Optio
 /// Captures the branch that is about to be abandoned by a checkpoint restore.
 /// This function is deliberately side-effect-limited to a content-addressed advisory artifact and
 /// the session's artifact reference list. Callers must not make restore success depend on it.
-pub(crate) fn capture_restore_abandonment(
+pub fn capture_restore_abandonment(
     session: &mut AgentSession,
     checkpoint_id: &str,
-    source_cursor: u64,
+    target_cursor: u64,
 ) -> MedusaResult<Option<PathBuf>> {
     let Some(terminal_event) = session.events.last() else {
         return Ok(None);
     };
-    if source_cursor >= terminal_event.sequence {
+    if target_cursor >= terminal_event.sequence {
         return Ok(None);
     }
 
-    let base_fingerprint = if source_cursor == 0 {
+    let base_fingerprint = if target_cursor == 0 {
         None
     } else {
         let base = session
             .events
             .iter()
-            .find(|event| event.sequence == source_cursor)
+            .find(|event| event.sequence == target_cursor)
             .ok_or_else(|| {
                 validation_error("restore cursor does not reference this event chain")
             })?;
@@ -150,7 +150,7 @@ pub(crate) fn capture_restore_abandonment(
     let abandoned = session
         .events
         .iter()
-        .filter(|event| event.sequence > source_cursor)
+        .filter(|event| event.sequence > target_cursor)
         .collect::<Vec<_>>();
     if abandoned.is_empty() {
         return Ok(None);
@@ -167,7 +167,7 @@ pub(crate) fn capture_restore_abandonment(
         session_id: session.id.as_str().to_owned(),
         abandoned_for_checkpoint_id: checkpoint_id.to_owned(),
         base: BranchAnchor {
-            sequence: source_cursor,
+            sequence: target_cursor,
             event_fingerprint: base_fingerprint,
         },
         terminal: BranchAnchor {
