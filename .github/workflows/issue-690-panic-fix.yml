@@ -19,8 +19,8 @@ jobs:
           ref: ${{ github.event.pull_request.head.ref }}
       - uses: dtolnay/rust-toolchain@39b0b3842c7e8bbf6904c0bfc3d9006fdd4dc4e0
         with:
-          components: clippy
-      - name: Remove production panic and verify
+          components: rustfmt,clippy
+      - name: Remove production panic and verify exact audit scope
         shell: bash
         run: |
           set -euo pipefail
@@ -42,7 +42,10 @@ jobs:
           p.write_text(s)
           PY
           cargo fmt --all
-          cargo clippy -p medusa-multi-agent-scheduler --all-targets -- -D warnings -D clippy::unwrap_used -D clippy::expect_used
+          cargo clippy --workspace --all-features --locked --lib --bins --examples -- \
+            -D clippy::unwrap_used \
+            -D clippy::expect_used \
+            -D clippy::panic
           cargo test -p medusa-multi-agent-scheduler --lib speculation -- --nocapture
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
