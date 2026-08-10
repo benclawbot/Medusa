@@ -21,6 +21,9 @@ jobs:
           cp crates/medusa-runtime/src/multi_agent_coordinator.rs source-export/crates/medusa-runtime/src/
           cp crates/medusa-runtime/src/mutating_worker_coordinator.rs source-export/crates/medusa-runtime/src/
           cp crates/medusa-runtime/src/mutating_worker_coordinator_support.rs source-export/crates/medusa-runtime/src/
+          cp crates/medusa-runtime/src/mutating_worker_coordinator_tests.rs source-export/crates/medusa-runtime/src/
+          cp crates/medusa-runtime/src/mutation_transaction.rs source-export/crates/medusa-runtime/src/
+          cp crates/medusa-runtime/src/mutation_transaction_state.rs source-export/crates/medusa-runtime/src/
           cp crates/medusa-runtime/src/lib_wrapper.rs source-export/crates/medusa-runtime/src/
           cp crates/medusa-runtime/Cargo.toml source-export/crates/medusa-runtime/
           cp crates/medusa-multi-agent-scheduler/src/lib.rs source-export/crates/medusa-multi-agent-scheduler/src/
