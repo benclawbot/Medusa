@@ -79,28 +79,25 @@ pub fn prepare_combined(
     validate_parallel_evidence(dag, &parallel)?;
     let provider = ConfiguredProvider::manager_from_config(config, session_api_key)
         .map_err(|error| error.to_string())?;
-    let barrier = authorize_children(
-        repo,
-        config,
-        &provider,
-        dag,
-        &parallel,
-        cancel,
-        events,
-    )?;
+    let barrier = authorize_children(repo, config, &provider, dag, &parallel, cancel, events)?;
     persist_json(&batch_root.join("integration-barrier.json"), &barrier)?;
 
     let manager = WorkerManager::new(repo, batch_root.join("worktrees"))
         .map_err(|error| error.to_string())?;
     manager.require_clean().map_err(|error| error.to_string())?;
-    let base_head = manager.repository_head().map_err(|error| error.to_string())?;
+    let base_head = manager
+        .repository_head()
+        .map_err(|error| error.to_string())?;
     if base_head != dag.repository_revision {
         return Err(format!(
             "parallel staging base drifted from {} to {base_head}",
             dag.repository_revision
         ));
     }
-    let worker_id = format!("batch-{}", &dag.fingerprint[..dag.fingerprint.len().min(16)]);
+    let worker_id = format!(
+        "batch-{}",
+        &dag.fingerprint[..dag.fingerprint.len().min(16)]
+    );
     let mut staging = match manager.open_or_create_worker(BATCH_WORKER_LABEL, &worker_id) {
         Ok(worker) => worker,
         Err(first_error) => {
@@ -127,14 +124,17 @@ pub fn prepare_combined(
     for task_id in &barrier.ordered_tasks {
         if cancel.load(Ordering::SeqCst) {
             cleanup_staging(&manager, &staging, &base_head);
-            return Err("parallel staging was cancelled before deterministic composition".to_owned());
+            return Err(
+                "parallel staging was cancelled before deterministic composition".to_owned(),
+            );
         }
         let child = parallel
             .children
             .iter()
             .find(|child| child.task_id == *task_id)
             .ok_or_else(|| format!("parallel staging lost child {task_id}"))?;
-        if let Err(error) = cherry_pick_without_commit(&staging.worktree, &child.evidence.prepared_commit)
+        if let Err(error) =
+            cherry_pick_without_commit(&staging.worktree, &child.evidence.prepared_commit)
         {
             cleanup_staging(&manager, &staging, &base_head);
             return Err(format!(
@@ -156,7 +156,9 @@ pub fn prepare_combined(
         != changed_scope_fingerprint(&changed_components)
     {
         cleanup_staging(&manager, &staging, &base_head);
-        return Err("parallel aggregate preparation changed the accepted mutation scope".to_owned());
+        return Err(
+            "parallel aggregate preparation changed the accepted mutation scope".to_owned(),
+        );
     }
     let changed_paths = component_paths(&changed_components);
     let worktree_identity = format!(
