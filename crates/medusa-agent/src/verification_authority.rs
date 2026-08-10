@@ -318,7 +318,8 @@ fn warm_bytes(
             match pool.put(key, bytes) {
                 Ok(receipt) => {
                     metrics.prepared = metrics.prepared.saturating_add(1);
-                    metrics.prepared_bytes = metrics.prepared_bytes.saturating_add(receipt.byte_len);
+                    metrics.prepared_bytes =
+                        metrics.prepared_bytes.saturating_add(receipt.byte_len);
                 }
                 Err(_) => metrics.errors = metrics.errors.saturating_add(1),
             }
@@ -386,8 +387,11 @@ fn append_runtime_metrics(
     warm_setup_duration_ms: u64,
     warm_metrics: &WarmResourceMetrics,
 ) {
-    let non_command_wall_duration_ms = authority_wall_duration_ms
-        .saturating_sub(metrics.command_wall_duration_ms.min(authority_wall_duration_ms));
+    let non_command_wall_duration_ms = authority_wall_duration_ms.saturating_sub(
+        metrics
+            .command_wall_duration_ms
+            .min(authority_wall_duration_ms),
+    );
     let serial_recorded_work_ms = metrics
         .command_serial_execution_ms
         .saturating_add(non_command_wall_duration_ms);
@@ -429,16 +433,20 @@ fn append_runtime_metrics(
         format!("verification_non_command_wall_duration_ms={non_command_wall_duration_ms}"),
         format!("verification_total_overlap_ms={total_overlap_ms}"),
         format!("verification_critical_path_duration_ms={authority_wall_duration_ms}"),
-        format!(
-            "verification_critical_path_contribution_milli={critical_path_contribution_milli}"
-        ),
+        format!("verification_critical_path_contribution_milli={critical_path_contribution_milli}"),
         format!("verification_warm_setup_duration_ms={warm_setup_duration_ms}"),
-        format!("verification_warm_resource_hits={}", warm_metrics.cache_hits),
+        format!(
+            "verification_warm_resource_hits={}",
+            warm_metrics.cache_hits
+        ),
         format!(
             "verification_warm_resource_misses={}",
             warm_metrics.cache_misses
         ),
-        format!("verification_warm_resource_prepared={}", warm_metrics.prepared),
+        format!(
+            "verification_warm_resource_prepared={}",
+            warm_metrics.prepared
+        ),
         format!(
             "verification_warm_resource_reused_bytes={}",
             warm_metrics.reused_bytes
@@ -1059,12 +1067,9 @@ mod tests {
         assert_eq!(second.errors, 0);
 
         fs::write(directory.path().join("artifact.json"), "{\"ok\":false}\n").expect("mutate");
-        let after = complete_repository_state_fingerprint(
-            directory.path(),
-            evidence.path(),
-            &[component],
-        )
-        .expect("changed state");
+        let after =
+            complete_repository_state_fingerprint(directory.path(), evidence.path(), &[component])
+                .expect("changed state");
         assert_ne!(before, after);
         let changed = warm_authoritative_resources(
             directory.path(),
