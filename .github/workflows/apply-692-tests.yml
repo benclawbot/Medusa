@@ -33,3 +33,5 @@ jobs:
           git diff --cached --check
           git commit -m 'test: certify batched journal durability and lock isolation'
           git push origin HEAD:agent/issue-692-journal-runtime-performance
+
+# rerun after benchmark evidence commit
