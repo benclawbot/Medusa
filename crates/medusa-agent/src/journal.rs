@@ -1,9 +1,9 @@
 use std::{
-    collections::BTreeSet,
+    collections::{BTreeMap, BTreeSet},
     fs::{self, File, OpenOptions},
     io::{Read, Write},
     path::{Path, PathBuf},
-    sync::{Mutex, MutexGuard, OnceLock},
+    sync::{Arc, Mutex, MutexGuard, OnceLock, Weak},
 };
 
 use medusa_core::{CorrelationId, ErrorCategory, ErrorCode, MedusaError, MedusaResult, SessionId};
@@ -21,7 +21,7 @@ const JOURNAL_MAGIC: &[u8; 8] = b"MDJNL002";
 const FRAME_HEADER_BYTES: usize = std::mem::size_of::<u32>() + 32;
 const MAX_FRAME_BYTES: usize = 32 * 1024 * 1024;
 
-static JOURNAL_WRITE_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+static JOURNAL_LOCKS: OnceLock<Mutex<BTreeMap<String, Weak<Mutex<()>>>>> = OnceLock::new();
 
 #[allow(dead_code)]
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -58,7 +58,8 @@ pub(crate) fn append_payload_committed(
     actor: Actor,
     payload: EventPayload,
 ) -> MedusaResult<EventEnvelope> {
-    let _guard = lock_journal();
+    let lock = session_lock(&session.repo, &session.id);
+    let _guard = lock_mutex(&lock);
     verify_chain(&session.events)?;
     ensure_initialized(session)?;
     let path = journal_path(&session.repo, &session.id)?;
@@ -82,14 +83,16 @@ pub(crate) fn append_payload_committed(
         session.events.last().map(|event| event.checksum.clone()),
         OffsetDateTime::now_utc(),
     )?;
-    append_record(
-        &path,
-        &JournalRecord::Event {
+    let mut committed = session.clone();
+    committed.events.push(event.clone());
+    let records = [
+        JournalRecord::Event {
             event: Box::new(event.clone()),
         },
-    )?;
+        snapshot_record_owned(committed),
+    ];
+    append_records(&path, &records)?;
     session.events.push(event.clone());
-    append_record(&path, &snapshot_record(session))?;
     Ok(event)
 }
 
@@ -249,7 +252,8 @@ pub(crate) fn append_event(
     session: &AgentSession,
     event: &EventEnvelope,
 ) -> MedusaResult<AppendDisposition> {
-    let _guard = lock_journal();
+    let lock = session_lock(&session.repo, &session.id);
+    let _guard = lock_mutex(&lock);
     verify_chain(&session.events)?;
     event.validate()?;
     if event.session_id != session.id {
@@ -321,7 +325,8 @@ pub(crate) fn append_event(
 
 #[allow(dead_code)]
 pub(crate) fn commit_snapshot(session: &AgentSession) -> MedusaResult<AgentSession> {
-    let _guard = lock_journal();
+    let lock = session_lock(&session.repo, &session.id);
+    let _guard = lock_mutex(&lock);
     commit_snapshot_locked(session)
 }
 
@@ -332,7 +337,8 @@ pub(crate) fn commit_snapshot_with<F>(
 where
     F: FnOnce(&AgentSession) -> MedusaResult<()>,
 {
-    let _guard = lock_journal();
+    let lock = session_lock(&session.repo, &session.id);
+    let _guard = lock_mutex(&lock);
     let committed = commit_snapshot_locked(session)?;
     after_commit(&committed)?;
     Ok(committed)
@@ -371,7 +377,8 @@ pub(crate) fn load_or_migrate(
     session_id: &SessionId,
     snapshot: Option<AgentSession>,
 ) -> MedusaResult<LoadOutcome> {
-    let _guard = lock_journal();
+    let lock = session_lock(repo, session_id);
+    let _guard = lock_mutex(&lock);
     if let Some(snapshot) = &snapshot {
         validate_snapshot_identity(repo, session_id, snapshot)?;
         verify_chain(&snapshot.events)?;
@@ -429,7 +436,8 @@ pub(crate) fn replay_from_cursor(
     session_id: &SessionId,
     cursor: u64,
 ) -> MedusaResult<Vec<EventEnvelope>> {
-    let _guard = lock_journal();
+    let lock = session_lock(repo, session_id);
+    let _guard = lock_mutex(&lock);
     let path = journal_path(repo, session_id)?;
     let state = read_journal(&path, session_id, true, true)?;
     let committed = state.committed_snapshot.ok_or_else(|| {
@@ -499,17 +507,29 @@ fn write_journal(path: &Path, session: &AgentSession) -> MedusaResult<()> {
 }
 
 fn snapshot_record(session: &AgentSession) -> JournalRecord {
+    snapshot_record_owned(session.clone())
+}
+
+fn snapshot_record_owned(session: AgentSession) -> JournalRecord {
+    let cursor = u64::try_from(session.events.len()).unwrap_or(u64::MAX);
+    let final_event_checksum = session.events.last().map(|event| event.checksum.clone());
     JournalRecord::Snapshot {
-        cursor: u64::try_from(session.events.len()).unwrap_or(u64::MAX),
-        final_event_checksum: session.events.last().map(|event| event.checksum.clone()),
-        session: Box::new(session.clone()),
+        cursor,
+        final_event_checksum,
+        session: Box::new(session),
     }
 }
 
 fn append_record(path: &Path, record: &JournalRecord) -> MedusaResult<()> {
+    append_records(path, std::slice::from_ref(record))
+}
+
+fn append_records(path: &Path, records: &[JournalRecord]) -> MedusaResult<()> {
     create_parent(path)?;
     let mut file = OpenOptions::new().append(true).open(path)?;
-    write_record(&mut file, record)?;
+    for record in records {
+        write_record(&mut file, record)?;
+    }
     file.sync_data()?;
     Ok(())
 }
@@ -784,8 +804,24 @@ fn create_parent(path: &Path) -> MedusaResult<()> {
     Ok(())
 }
 
-fn lock_journal() -> MutexGuard<'static, ()> {
-    match JOURNAL_WRITE_LOCK.get_or_init(|| Mutex::new(())).lock() {
+fn session_lock(repo: &Path, session_id: &SessionId) -> Arc<Mutex<()>> {
+    let key = format!("{}\0{session_id}", repo.display());
+    let registry = JOURNAL_LOCKS.get_or_init(|| Mutex::new(BTreeMap::new()));
+    let mut locks = match registry.lock() {
+        Ok(guard) => guard,
+        Err(poisoned) => poisoned.into_inner(),
+    };
+    locks.retain(|_, lock| lock.strong_count() > 0);
+    if let Some(lock) = locks.get(&key).and_then(Weak::upgrade) {
+        return lock;
+    }
+    let lock = Arc::new(Mutex::new(()));
+    locks.insert(key, Arc::downgrade(&lock));
+    lock
+}
+
+fn lock_mutex(lock: &Mutex<()>) -> MutexGuard<'_, ()> {
+    match lock.lock() {
         Ok(guard) => guard,
         Err(poisoned) => poisoned.into_inner(),
     }
