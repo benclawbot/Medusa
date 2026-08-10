@@ -74,10 +74,30 @@ pub fn authoritative_verification_for_components_at(
         components,
     );
     let metrics = take_runtime_metrics(repo);
-    result.map(|mut result| {
-        append_runtime_metrics(&mut result.summary, &metrics);
-        result
+    result.map(|mut execution| {
+        let exact_reuse_hits = if execution
+            .result
+            .summary
+            .iter()
+            .any(|line| line == "verification_reuse=exact-persisted-receipt")
+        {
+            1
+        } else {
+            0
+        };
+        append_runtime_metrics(
+            &mut execution.result.summary,
+            &metrics,
+            exact_reuse_hits,
+            execution.reruns,
+        );
+        execution.result
     })
+}
+
+struct AuthorityExecution {
+    result: AuthoritativeVerificationResult,
+    reruns: u64,
 }
 
 fn authoritative_verification_for_components_at_inner(
@@ -86,9 +106,10 @@ fn authoritative_verification_for_components_at_inner(
     repository_fingerprint: &str,
     commit: &str,
     components: &[ChangedComponent],
-) -> MedusaResult<AuthoritativeVerificationResult> {
+) -> MedusaResult<AuthorityExecution> {
     fs::create_dir_all(evidence_root)?;
     let store_root = evidence_root.join(short_hash(&(repository_fingerprint.to_owned() + commit)));
+    let mut reruns = 0u64;
 
     for _ in 0..MAX_STABLE_VERIFICATION_ATTEMPTS {
         let before = complete_repository_state_fingerprint(repo, evidence_root, components)?;
@@ -107,6 +128,7 @@ fn authoritative_verification_for_components_at_inner(
                 )
             })?;
         if guarded.cancelled {
+            reruns = reruns.saturating_add(1);
             invalidate_persisted_reuse(&store_root)?;
             continue;
         }
@@ -115,9 +137,10 @@ fn authoritative_verification_for_components_at_inner(
         if before == after {
             fs::create_dir_all(&store_root)?;
             fs::write(store_root.join(STATE_FINGERPRINT_FILE), after)?;
-            return Ok(result);
+            return Ok(AuthorityExecution { result, reruns });
         }
 
+        reruns = reruns.saturating_add(1);
         invalidate_persisted_reuse(&store_root)?;
     }
 
@@ -126,7 +149,12 @@ fn authoritative_verification_for_components_at_inner(
     ))
 }
 
-fn append_runtime_metrics(summary: &mut Vec<String>, metrics: &VerificationRuntimeMetrics) {
+fn append_runtime_metrics(
+    summary: &mut Vec<String>,
+    metrics: &VerificationRuntimeMetrics,
+    exact_reuse_hits: u64,
+    authority_reruns: u64,
+) {
     summary.extend([
         format!("verification_command_waves={}", metrics.command_waves),
         format!(
@@ -149,6 +177,8 @@ fn append_runtime_metrics(summary: &mut Vec<String>, metrics: &VerificationRunti
             "verification_command_overlap_ms={}",
             metrics.command_overlap_ms
         ),
+        format!("verification_exact_reuse_hits={exact_reuse_hits}"),
+        format!("verification_authority_reruns={authority_reruns}"),
     ]);
 }
 
@@ -685,7 +715,7 @@ mod tests {
             command_overlap_ms: 50,
         };
         let mut summary = Vec::new();
-        append_runtime_metrics(&mut summary, &metrics);
+        append_runtime_metrics(&mut summary, &metrics, 1, 3);
         assert_eq!(
             summary,
             vec![
@@ -695,6 +725,8 @@ mod tests {
                 "verification_command_serial_execution_ms=120",
                 "verification_command_wall_duration_ms=70",
                 "verification_command_overlap_ms=50",
+                "verification_exact_reuse_hits=1",
+                "verification_authority_reruns=3",
             ]
         );
     }
@@ -723,6 +755,18 @@ mod tests {
                 .iter()
                 .any(|line| line == "verification_command_waves=0")
         );
+        assert!(
+            result
+                .summary
+                .iter()
+                .any(|line| line == "verification_exact_reuse_hits=0")
+        );
+        assert!(
+            result
+                .summary
+                .iter()
+                .any(|line| line == "verification_authority_reruns=0")
+        );
         assert_eq!(
             take_runtime_metrics(directory.path()),
             VerificationRuntimeMetrics::default()
@@ -746,6 +790,12 @@ mod tests {
         )
         .expect("first verification");
         assert!(first.receipt.passed);
+        assert!(
+            first
+                .summary
+                .iter()
+                .any(|line| line == "verification_exact_reuse_hits=0")
+        );
 
         let reused = authoritative_verification_for_components_at(
             directory.path(),
@@ -760,6 +810,18 @@ mod tests {
                 .summary
                 .iter()
                 .any(|line| line == "verification_reuse=exact-persisted-receipt")
+        );
+        assert!(
+            reused
+                .summary
+                .iter()
+                .any(|line| line == "verification_exact_reuse_hits=1")
+        );
+        assert!(
+            reused
+                .summary
+                .iter()
+                .any(|line| line == "verification_authority_reruns=0")
         );
 
         fs::write(directory.path().join("artifact.json"), "{broken}\n").expect("mutate");
@@ -777,6 +839,12 @@ mod tests {
                 .summary
                 .iter()
                 .any(|line| line == "verification_reuse=exact-persisted-receipt")
+        );
+        assert!(
+            changed
+                .summary
+                .iter()
+                .any(|line| line == "verification_exact_reuse_hits=0")
         );
     }
 }
