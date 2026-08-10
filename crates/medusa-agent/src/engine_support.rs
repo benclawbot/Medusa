@@ -1,4 +1,8 @@
-use std::{collections::HashMap, fs, path::Path};
+use std::{
+    collections::{HashMap, VecDeque},
+    fs,
+    path::Path,
+};
 
 use medusa_capabilities::CapabilityRegistry;
 use medusa_config::Mode;
@@ -387,76 +391,48 @@ pub(crate) fn compact_envelope_for_model(envelope: &OutputEnvelope) -> String {
     )
 }
 
+fn tool_call_mutates_repository(tool: &str, input: &serde_json::Value) -> bool {
+    if let Some(desktop_tool) = tool.strip_prefix("desktop_commander:") {
+        return desktop_commander_tool_is_mutating(desktop_tool);
+    }
+    crate::tool_dag::invalidates_repository_revision(tool, input)
+}
+
+fn successful_mutating_tool_calls(
+    session: &AgentSession,
+) -> Vec<(&str, &serde_json::Value)> {
+    let mut pending = HashMap::<&str, VecDeque<&serde_json::Value>>::new();
+    let mut successful = Vec::new();
+    for event in &session.events {
+        match &event.payload {
+            EventPayload::ToolCallRequested { tool, arguments } => {
+                pending.entry(tool.as_str()).or_default().push_back(arguments);
+            }
+            EventPayload::ToolExecutionCompleted { tool, exit_code } => {
+                let input = pending
+                    .get_mut(tool.as_str())
+                    .and_then(VecDeque::pop_front);
+                if *exit_code == Some(0)
+                    && let Some(input) = input
+                    && tool_call_mutates_repository(tool, input)
+                {
+                    successful.push((tool.as_str(), input));
+                }
+            }
+            _ => {}
+        }
+    }
+    successful
+}
+
 pub(crate) fn has_mutating_tool_result(session: &AgentSession) -> bool {
-    session.events.iter().any(|event| {
-        matches!(
-            &event.payload,
-            EventPayload::ToolExecutionCompleted {
-                tool,
-                exit_code: Some(0)
-            } if matches!(tool.as_str(), "fs_create_dir" | "fs_write" | "patch_apply" | "symbol_rename" | "git_checkpoint")
-                || tool
-                    .strip_prefix("desktop_commander:")
-                    .is_some_and(desktop_commander_tool_is_mutating)
-        )
-    })
+    !successful_mutating_tool_calls(session).is_empty()
 }
 
 pub(crate) fn successful_mutation_paths(session: &AgentSession) -> Vec<String> {
-    let mut calls = HashMap::new();
     let mut paths = Vec::new();
-    for message in &session.messages {
-        for block in &message.content {
-            match block {
-                MessageBlock::ToolUse { id, name, input } => {
-                    calls.insert(id.as_str(), (name.as_str(), input));
-                }
-                MessageBlock::ToolResult {
-                    tool_use_id,
-                    is_error: false,
-                    ..
-                } => {
-                    let Some((name, input)) = calls.get(tool_use_id.as_str()) else {
-                        continue;
-                    };
-                    match *name {
-                        "fs_write" | "fs_create_dir" => {
-                            if let Some(path) =
-                                input.get("path").and_then(serde_json::Value::as_str)
-                            {
-                                paths.push(path.to_owned());
-                            }
-                        }
-                        "patch_apply" => {
-                            paths.extend(
-                                input
-                                    .get("edits")
-                                    .and_then(serde_json::Value::as_array)
-                                    .into_iter()
-                                    .flatten()
-                                    .filter_map(|edit| edit.get("path"))
-                                    .filter_map(serde_json::Value::as_str)
-                                    .map(str::to_owned),
-                            );
-                        }
-                        "symbol_rename" => collect_mutation_paths(input, &mut paths),
-                        "desktop_commander" => {
-                            if input
-                                .get("tool")
-                                .and_then(serde_json::Value::as_str)
-                                .is_some_and(desktop_commander_tool_is_mutating)
-                            {
-                                if let Some(arguments) = input.get("arguments") {
-                                    collect_mutation_paths(arguments, &mut paths);
-                                }
-                            }
-                        }
-                        _ => {}
-                    }
-                }
-                _ => {}
-            }
-        }
+    for (_, input) in successful_mutating_tool_calls(session) {
+        collect_mutation_paths(input, &mut paths);
     }
     paths.sort();
     paths.dedup();
@@ -790,6 +766,7 @@ mod tests {
     use std::fs;
 
     use super::*;
+    use serde_json::json;
     use tempfile::tempdir;
 
     fn image_block(media_type: &str, data: &str) -> MessageBlock {
@@ -927,6 +904,47 @@ mod tests {
         assert_eq!(
             question.questions[0].question,
             "What kind of website is it?"
+        );
+    }
+
+    #[test]
+    fn production_mutation_classifier_covers_all_repository_write_lanes() {
+        assert!(tool_call_mutates_repository(
+            "apply_structured_patch",
+            &json!({"repository_revision":"r","edits":[{"path":"src/lib.rs"}]})
+        ));
+        assert!(tool_call_mutates_repository(
+            "shell_run",
+            &json!({"program":"cargo","args":["fmt"]})
+        ));
+        assert!(tool_call_mutates_repository(
+            "desktop_commander:write_file",
+            &json!({"tool":"write_file","arguments":{"path":"src/lib.rs"}})
+        ));
+        assert!(!tool_call_mutates_repository(
+            "inspect_target",
+            &json!({"path":"src/lib.rs"})
+        ));
+    }
+
+    #[test]
+    fn mutation_path_collection_handles_structured_and_nested_adapters() {
+        let mut paths = Vec::new();
+        collect_mutation_paths(
+            &json!({
+                "edits": [{"path":"src/lib.rs"}, {"file_path":"src/main.rs"}],
+                "arguments": {"destination":"generated/out.rs"}
+            }),
+            &mut paths,
+        );
+        paths.sort();
+        assert_eq!(
+            paths,
+            vec![
+                "generated/out.rs".to_owned(),
+                "src/lib.rs".to_owned(),
+                "src/main.rs".to_owned()
+            ]
         );
     }
 }
