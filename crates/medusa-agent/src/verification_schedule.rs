@@ -3,6 +3,7 @@ use std::{
     fs,
     path::Path,
     thread,
+    time::Instant,
 };
 
 use medusa_core::{ErrorCategory, ErrorCode, MedusaError, MedusaResult};
@@ -20,6 +21,13 @@ use crate::{
         VerificationNodeState,
     },
 };
+
+#[derive(Debug)]
+pub(crate) struct VerificationWaveExecution {
+    pub results: BTreeMap<String, Result<ExecutedVerificationCommand, String>>,
+    pub queue_duration_ms: BTreeMap<String, u64>,
+    pub wall_duration_ms: u64,
+}
 
 pub(crate) fn dag_for_plan(
     repo: &Path,
@@ -135,7 +143,7 @@ fn node_for_check(
         command,
         dependencies: dependencies(plan, check),
         authority: VerificationAuthority::IndependentAcceptance,
-        expected_duration_ms: 0,
+        expected_duration_ms: expected_duration_ms(check.kind),
         resource_class: resource_class(check).to_owned(),
         input: VerificationInputKey {
             repository_revision: commit.to_owned(),
@@ -152,8 +160,9 @@ fn node_for_check(
 pub(crate) fn execute_command_wave(
     repo: &Path,
     checks: &[&VerificationCheck],
-) -> BTreeMap<String, Result<ExecutedVerificationCommand, String>> {
-    thread::scope(|scope| {
+) -> VerificationWaveExecution {
+    let wave_started = Instant::now();
+    let (results, queue_duration_ms) = thread::scope(|scope| {
         let mut handles = Vec::new();
         for check in checks {
             let Some(program) = check.program.as_deref() else {
@@ -177,7 +186,9 @@ pub(crate) fn execute_command_wave(
             handles.push((
                 id,
                 scope.spawn(move || {
-                    if let Some(cancellation) = active_verification_cancellation(&working_directory)
+                    let queue_duration_ms = wave_started.elapsed().as_millis() as u64;
+                    let result = if let Some(cancellation) =
+                        active_verification_cancellation(&working_directory)
                     {
                         execute_verification_command_cancellable(
                             &working_directory,
@@ -189,21 +200,88 @@ pub(crate) fn execute_command_wave(
                     } else {
                         execute_verification_command(&working_directory, program, &args)
                             .map_err(|error| error.to_string())
-                    }
+                    };
+                    (queue_duration_ms, result)
                 }),
             ));
         }
-        handles
-            .into_iter()
-            .map(|(id, handle)| {
-                let result = match handle.join() {
-                    Ok(result) => result,
-                    Err(_) => Err("verification worker terminated unexpectedly".to_owned()),
-                };
-                (id, result)
+        let mut results = BTreeMap::new();
+        let mut queue_duration_ms = BTreeMap::new();
+        for (id, handle) in handles {
+            let (queue_ms, result) = match handle.join() {
+                Ok(result) => result,
+                Err(_) => (
+                    wave_started.elapsed().as_millis() as u64,
+                    Err("verification worker terminated unexpectedly".to_owned()),
+                ),
+            };
+            queue_duration_ms.insert(id.clone(), queue_ms);
+            results.insert(id, result);
+        }
+        (results, queue_duration_ms)
+    });
+    VerificationWaveExecution {
+        results,
+        queue_duration_ms,
+        wall_duration_ms: wave_started.elapsed().as_millis() as u64,
+    }
+}
+
+pub(crate) fn critical_path_duration_ms(
+    plan: &VerificationPlan,
+    durations: &BTreeMap<String, u64>,
+) -> u64 {
+    let mut remaining = plan
+        .checks
+        .iter()
+        .map(|check| (check.id.clone(), check))
+        .collect::<BTreeMap<_, _>>();
+    let mut totals = BTreeMap::<String, u64>::new();
+    while !remaining.is_empty() {
+        let ready_ids = remaining
+            .iter()
+            .filter_map(|(id, check)| {
+                dependencies(plan, check)
+                    .iter()
+                    .all(|dependency| totals.contains_key(dependency))
+                    .then_some(id.clone())
             })
-            .collect()
-    })
+            .collect::<Vec<_>>();
+        if ready_ids.is_empty() {
+            return 0;
+        }
+        for id in ready_ids {
+            let Some(check) = remaining.remove(&id) else {
+                continue;
+            };
+            let prerequisite_ms = dependencies(plan, check)
+                .iter()
+                .filter_map(|dependency| totals.get(dependency))
+                .copied()
+                .max()
+                .unwrap_or(0);
+            totals.insert(
+                id.clone(),
+                prerequisite_ms.saturating_add(durations.get(&id).copied().unwrap_or(0)),
+            );
+        }
+    }
+    totals.values().copied().max().unwrap_or(0)
+}
+
+fn expected_duration_ms(kind: VerificationCheckKind) -> u64 {
+    match kind {
+        VerificationCheckKind::Format => 500,
+        VerificationCheckKind::Lint | VerificationCheckKind::Typecheck => 5_000,
+        VerificationCheckKind::Unit => 10_000,
+        VerificationCheckKind::Integration => 30_000,
+        VerificationCheckKind::Build => 30_000,
+        VerificationCheckKind::ArtifactSemantic => 500,
+        VerificationCheckKind::BrowserBehavior | VerificationCheckKind::Accessibility => 15_000,
+        VerificationCheckKind::Packaging => 30_000,
+        VerificationCheckKind::Security => 15_000,
+        VerificationCheckKind::RepositoryDefined => 10_000,
+    }
 }
 
 fn dependencies(plan: &VerificationPlan, check: &VerificationCheck) -> BTreeSet<String> {
@@ -275,4 +353,70 @@ fn invalid(message: impl Into<String>) -> MedusaError {
         ErrorCategory::Internal,
         message.into(),
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use medusa_evidence::{ChangeKind, ChangedComponent};
+
+    use super::*;
+
+    fn check(id: &str, kind: VerificationCheckKind, working_directory: &str) -> VerificationCheck {
+        VerificationCheck {
+            id: id.to_owned(),
+            kind,
+            required: true,
+            reason: "test".to_owned(),
+            program: Some("rustc".to_owned()),
+            args: vec!["--version".to_owned()],
+            working_directory: working_directory.to_owned(),
+            input_fingerprint: format!("input-{id}"),
+        }
+    }
+
+    #[test]
+    fn production_nodes_have_nonzero_expected_durations() {
+        for kind in [
+            VerificationCheckKind::Format,
+            VerificationCheckKind::Lint,
+            VerificationCheckKind::Typecheck,
+            VerificationCheckKind::Unit,
+            VerificationCheckKind::Integration,
+            VerificationCheckKind::Build,
+            VerificationCheckKind::ArtifactSemantic,
+            VerificationCheckKind::BrowserBehavior,
+            VerificationCheckKind::Accessibility,
+            VerificationCheckKind::Packaging,
+            VerificationCheckKind::Security,
+            VerificationCheckKind::RepositoryDefined,
+        ] {
+            assert!(expected_duration_ms(kind) > 0);
+        }
+    }
+
+    #[test]
+    fn critical_path_uses_dependency_chain_not_serial_sum() {
+        let component = ChangedComponent::new(ChangeKind::Modified, "src/lib.rs").expect("component");
+        let plan = VerificationPlan {
+            repository_fingerprint: "repo".to_owned(),
+            commit: "commit".to_owned(),
+            components: vec![component],
+            checks: vec![
+                check("format", VerificationCheckKind::Format, "."),
+                check("build", VerificationCheckKind::Build, "."),
+                check("unit", VerificationCheckKind::Unit, "."),
+                check("integration", VerificationCheckKind::Integration, "."),
+            ],
+            exemptions: Vec::new(),
+            fingerprint: "plan".to_owned(),
+        };
+        let durations = BTreeMap::from([
+            ("format".to_owned(), 5),
+            ("build".to_owned(), 20),
+            ("unit".to_owned(), 10),
+            ("integration".to_owned(), 30),
+        ]);
+
+        assert_eq!(critical_path_duration_ms(&plan, &durations), 55);
+    }
 }
