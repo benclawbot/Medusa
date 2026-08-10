@@ -1,9 +1,7 @@
 name: Issue 691 Rustfmt
 
 on:
-  push:
-    branches:
-      - agent/issue-691-mutation-dag
+  pull_request:
     paths:
       - 'crates/medusa-multi-agent-scheduler/src/mutation_dag.rs'
       - '.github/workflows/issue-691-format.yml'
