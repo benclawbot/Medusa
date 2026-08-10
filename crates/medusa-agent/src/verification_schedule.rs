@@ -15,12 +15,13 @@ use crate::{
         ExecutedVerificationCommand, execute_verification_command,
         execute_verification_command_cancellable,
     },
-    verification_authority::verification_cancellation::active_verification_cancellation,
+    verification_authority::verification_cancellation::{
+        active_verification_cancellation, record_command_wave,
+    },
     verification_dag::{
         VerificationAuthority, VerificationDag, VerificationInputKey, VerificationNode,
         VerificationNodeState,
     },
-    verification_metrics::record_command_wave,
 };
 
 pub(crate) fn dag_for_plan(
