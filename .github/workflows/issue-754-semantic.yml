@@ -4,6 +4,7 @@ on:
   push:
     paths:
       - '.github/workflows/issue-754-semantic.yml'
+      - '.github/scripts/issue754_semantic.py'
 
 permissions:
   contents: write
