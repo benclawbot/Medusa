@@ -14,7 +14,7 @@ on:
       - 'docs/**'
       - '.github/workflows/**'
   push:
-    branches: [main, agent/issue-691-mutation-dag]
+    branches: [main]
     paths:
       - 'Cargo.toml'
       - 'crates/**'
@@ -28,143 +28,13 @@ on:
       - '.github/workflows/**'
 
 permissions:
-  contents: write
+  contents: read
 
 concurrency:
   group: refactor-guardrails-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
-  apply-issue-691-runtime-wave:
-    if: github.event_name == 'push' && github.ref == 'refs/heads/agent/issue-691-mutation-dag' && github.actor != 'github-actions[bot]'
-    name: Apply issue 691 runtime wave
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
-        with:
-          ref: agent/issue-691-mutation-dag
-          fetch-depth: 0
-      - name: Apply bounded parallel runtime wave executor
-        shell: python
-        run: |
-          from pathlib import Path
-          path = Path('crates/medusa-runtime/src/mutating_worker_coordinator.rs')
-          text = path.read_text()
-          marker = "#[allow(clippy::too_many_arguments)]\npub fn run_implementation(\n"
-          if 'pub fn run_parallel_implementations(' not in text:
-              insert = '''#[derive(Clone, Debug)]
-pub struct ParallelChildEvidence {
-    pub task_id: String,
-    pub evidence: ImplementationEvidence,
-}
-
-#[derive(Clone, Debug)]
-pub struct ParallelImplementationEvidence {
-    pub dag_fingerprint: String,
-    pub children: Vec<ParallelChildEvidence>,
-}
-
-#[allow(clippy::too_many_arguments)]
-pub fn run_parallel_implementations(
-    repo: &Path,
-    config: &Config,
-    session_api_key: Option<String>,
-    plan: &ProductionExecutionPlan,
-    preflight: &CoordinatorEvidence,
-    dag: &medusa_multi_agent_scheduler::mutation_dag::MutationDag,
-    cancel: &Arc<AtomicBool>,
-    events: &Sender<RuntimeEvent>,
-) -> Result<ParallelImplementationEvidence, String> {
-    dag.validate().map_err(str::to_owned)?;
-    validate_preflight(plan, preflight)?;
-    let mut completed = std::collections::BTreeSet::new();
-    let mut accepted = std::collections::BTreeMap::new();
-    while completed.len() < dag.tasks.len() {
-        if cancel.load(Ordering::SeqCst) {
-            return Err("parallel mutation batch was cancelled before dispatch".to_owned());
-        }
-        let wave = dag.runnable_wave(&completed);
-        if wave.is_empty() {
-            return Err("parallel mutation DAG has no runnable conflict-free wave".to_owned());
-        }
-        let results = std::thread::scope(|scope| {
-            let mut handles = Vec::with_capacity(wave.len());
-            for task_id in &wave {
-                let task = dag
-                    .tasks
-                    .iter()
-                    .find(|task| task.id == *task_id)
-                    .ok_or_else(|| format!("parallel mutation task {task_id} disappeared"))?;
-                let (child_plan, child_preflight) =
-                    crate::parallel_mutation::child_execution(plan, preflight, task)?;
-                let api_key = session_api_key.clone();
-                let task_id = task_id.clone();
-                let events = events.clone();
-                handles.push(scope.spawn(move || {
-                    let control = TeamControlPlane::default();
-                    run_implementation(
-                        repo,
-                        config,
-                        api_key,
-                        &child_plan,
-                        &child_preflight,
-                        cancel,
-                        (&control, &events),
-                    )
-                    .map(|evidence| (task_id, evidence))
-                }));
-            }
-            handles
-                .into_iter()
-                .map(|handle| {
-                    handle
-                        .join()
-                        .map_err(|_| "parallel implementer thread terminated unexpectedly".to_owned())?
-                })
-                .collect::<Result<Vec<_>, String>>()
-        })?;
-        for (task_id, evidence) in results {
-            completed.insert(task_id.clone());
-            accepted.insert(task_id, evidence);
-        }
-    }
-    let children = dag
-        .deterministic_integration_order()
-        .into_iter()
-        .map(|task_id| {
-            let evidence = accepted
-                .remove(&task_id)
-                .ok_or_else(|| format!("parallel mutation evidence missing for {task_id}"))?;
-            Ok(ParallelChildEvidence { task_id, evidence })
-        })
-        .collect::<Result<Vec<_>, String>>()?;
-    Ok(ParallelImplementationEvidence {
-        dag_fingerprint: dag.fingerprint.clone(),
-        children,
-    })
-}
-
-#[allow(clippy::too_many_arguments)]
-pub fn run_implementation(
-'''
-              if marker not in text:
-                  raise SystemExit('run_implementation insertion point not found')
-              path.write_text(text.replace(marker, insert, 1))
-      - uses: dtolnay/rust-toolchain@39b0b3842c7e8bbf6904c0bfc3d9006fdd4dc4e0
-        with:
-          components: rustfmt
-      - run: cargo fmt --all
-      - name: Restore workflow and commit production code
-        shell: bash
-        run: |
-          set -euo pipefail
-          git checkout origin/main -- .github/workflows/refactor-guardrails.yml
-          git config user.name 'github-actions[bot]'
-          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git add crates/medusa-runtime/src/mutating_worker_coordinator.rs .github/workflows/refactor-guardrails.yml
-          git commit -m 'feat: execute conflict-free mutation waves'
-          git push origin HEAD:agent/issue-691-mutation-dag
-
   workflow-hygiene:
     name: Workflows are read-only or explicitly justified
     runs-on: ubuntu-latest
