@@ -1689,6 +1689,7 @@ dependencies = [
  "medusa-tool-control",
  "medusa-tool-policy",
  "medusa-turn-assembly",
+ "medusa-wakeup",
  "medusa-workers",
  "png",
  "reqwest",

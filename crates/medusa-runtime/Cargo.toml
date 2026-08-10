@@ -39,6 +39,7 @@ medusa-time-travel = { path = "../medusa-time-travel" }
 medusa-tool-control = { path = "../medusa-tool-control" }
 medusa-tool-policy = { path = "../medusa-tool-policy" }
 medusa-turn-assembly = { path = "../medusa-turn-assembly" }
+medusa-wakeup = { path = "../medusa-wakeup" }
 medusa-workers = { path = "../medusa-workers" }
 png = "0.17"
 # Trusted runtime-only HTTP client for bounded Realtime client-secret minting.
