@@ -1,0 +1,41 @@
+name: Issue 691 Clippy Fix
+
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/issue-691-clippy-fix.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  fix:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          ref: agent/issue-691-mutation-dag
+      - name: Apply compiler fixes
+        shell: python
+        run: |
+          from pathlib import Path
+          path = Path('crates/medusa-multi-agent-scheduler/src/mutation_dag.rs')
+          text = path.read_text()
+          old = text
+          text = text.replace('let mut selected = Vec::new();', 'let mut selected: Vec<String> = Vec::new();', 1)
+          text = text.replace('const fn conflict_reason(', 'fn conflict_reason(', 1)
+          if text == old:
+              raise SystemExit('expected issue 691 compiler patterns were not found')
+          path.write_text(text)
+      - uses: dtolnay/rust-toolchain@39b0b3842c7e8bbf6904c0bfc3d9006fdd4dc4e0
+        with:
+          components: rustfmt
+      - run: cargo fmt --all
+      - name: Commit fixes
+        shell: bash
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add crates/medusa-multi-agent-scheduler/src/mutation_dag.rs
+          git commit -m 'fix: satisfy mutation DAG compiler checks'
+          git push origin HEAD:agent/issue-691-mutation-dag
