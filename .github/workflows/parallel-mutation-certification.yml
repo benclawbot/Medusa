@@ -55,7 +55,8 @@ jobs:
           assert report['decomposable_fixture_conflict_rate_ratio'] == 0.0
           assert report['deterministic_integration_verified'] is True
           assert report['fallback_and_scope_invalidation_verified'] is True
-          assert report['staging_recovery_and_metrics_verified'] is True
+          assert report['staging_recovery_verified'] is True
+          assert report['runtime_metrics_verified'] is True
           assert report['rollback_and_worker_cleanup_verified'] is True
           PY
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
