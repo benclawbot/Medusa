@@ -617,21 +617,43 @@ impl<P: ModelProvider> AgentEngine<P> {
         focus: Option<&str>,
     ) -> MedusaResult<()> {
         let summary_request = crate::compaction_v2::semantic_summary_request(session, focus);
-        let semantic = self
-            .provider
-            .complete_cancellable_for_phase(
-                &summary_request,
-                ProviderExecutionPhase::Summarization,
-                &self.cancellation,
-            )
-            .ok()
-            .and_then(|response| {
+        append_event(
+            session,
+            Actor::Coordinator,
+            EventPayload::ModelRequestStarted {
+                provider: self.config.model.provider.clone(),
+                model: self.config.model.name.clone(),
+            },
+        )?;
+        let request_started = std::time::Instant::now();
+        let semantic = match self.provider.complete_cancellable_for_phase(
+            &summary_request,
+            ProviderExecutionPhase::Summarization,
+            &self.cancellation,
+        ) {
+            Ok(response) => {
+                let turn_usage = crate::session::record_turn_usage(
+                    session.turn,
+                    &summary_request,
+                    &response,
+                    request_started.elapsed(),
+                );
+                append_event(
+                    session,
+                    Actor::Coordinator,
+                    EventPayload::ModelResponseReceived {
+                        response_id: response.response_id.clone(),
+                        usage: serde_json::to_value(turn_usage).map_err(json_error)?,
+                    },
+                )?;
                 crate::compaction_v2::validate_semantic_response(
                     &response,
                     &self.config.model.name,
                     &self.config.model.provider,
                 )
-            });
+            }
+            Err(_) => None,
+        };
         crate::engine_support::compact_session_with_semantic(session, focus, semantic)
     }
 
