@@ -21,24 +21,17 @@ jobs:
           from pathlib import Path
           p = Path("crates/medusa-agent/src/lib.rs")
           text = p.read_text()
-          old = '''        assert_eq!(session.objective, "new durable goal");
-          assert_eq!(session.messages.len(), 1);
-          assert!(matches!(
-              &session.messages[0].content[0],
-              medusa_provider::MessageBlock::Text { text }
-                  if text.contains("keep the API decision") && text.contains("follow-up context")
-          ));
-          '''
-          new = '''        assert_eq!(session.objective, "new durable goal");
-          assert!(session.messages.len() >= 2);
-          let durable_messages = serde_json::to_string(&session.messages).expect("serialize messages");
-          assert!(durable_messages.contains("[medusa-compaction-v2]"));
-          assert!(durable_messages.contains("keep the API decision"));
-          assert!(durable_messages.contains("follow-up context"));
-          '''
-          if old not in text:
-              raise SystemExit("stale V1 assertion block not found")
-          p.write_text(text.replace(old, new, 1))
+          scope = text.index('fn compacting_and_updating_a_goal_changes_durable_session_context()')
+          start = text.index('        assert_eq!(session.messages.len(), 1);', scope)
+          end = text.index('        assert!(\n            session.events.iter().any', start)
+          replacement = (
+              '        assert!(session.messages.len() >= 2);\n'
+              '        let durable_messages = serde_json::to_string(&session.messages).expect("serialize messages");\n'
+              '        assert!(durable_messages.contains("[medusa-compaction-v2]"));\n'
+              '        assert!(durable_messages.contains("keep the API decision"));\n'
+              '        assert!(durable_messages.contains("follow-up context"));\n'
+          )
+          p.write_text(text[:start] + replacement + text[end:])
           PY
       - uses: dtolnay/rust-toolchain@39b0b3842c7e8bbf6904c0bfc3d9006fdd4dc4e0
       - run: cargo generate-lockfile
