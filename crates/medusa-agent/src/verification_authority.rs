@@ -21,7 +21,9 @@ pub(crate) mod verification_cancellation;
 #[path = "verification_checkpoint.rs"]
 pub(crate) mod verification_checkpoint;
 
-use verification_cancellation::register_verification_cancellation;
+use verification_cancellation::{
+    VerificationRuntimeMetrics, register_verification_cancellation, take_runtime_metrics,
+};
 use verification_checkpoint::VerificationCheckpointStore;
 
 #[allow(dead_code)]
@@ -54,6 +56,31 @@ pub fn authoritative_verification_for_components(
 }
 
 pub fn authoritative_verification_for_components_at(
+    repo: &Path,
+    evidence_root: &Path,
+    repository_fingerprint: &str,
+    commit: &str,
+    components: &[ChangedComponent],
+) -> MedusaResult<AuthoritativeVerificationResult> {
+    // A repository-scoped verification authority owns one metrics lifecycle. Clear any
+    // abandoned prior sample before execution, then always drain after the inner
+    // authority returns so failed attempts cannot contaminate a later verification.
+    let _ = take_runtime_metrics(repo);
+    let result = authoritative_verification_for_components_at_inner(
+        repo,
+        evidence_root,
+        repository_fingerprint,
+        commit,
+        components,
+    );
+    let metrics = take_runtime_metrics(repo);
+    result.map(|mut result| {
+        append_runtime_metrics(&mut result.summary, &metrics);
+        result
+    })
+}
+
+fn authoritative_verification_for_components_at_inner(
     repo: &Path,
     evidence_root: &Path,
     repository_fingerprint: &str,
@@ -97,6 +124,32 @@ pub fn authoritative_verification_for_components_at(
     Err(invalid(
         "repository state changed repeatedly during authoritative verification",
     ))
+}
+
+fn append_runtime_metrics(summary: &mut Vec<String>, metrics: &VerificationRuntimeMetrics) {
+    summary.extend([
+        format!("verification_command_waves={}", metrics.command_waves),
+        format!(
+            "verification_command_checks_executed={}",
+            metrics.command_checks_executed
+        ),
+        format!(
+            "verification_command_queue_duration_ms={}",
+            metrics.command_queue_duration_ms
+        ),
+        format!(
+            "verification_command_serial_execution_ms={}",
+            metrics.command_serial_execution_ms
+        ),
+        format!(
+            "verification_command_wall_duration_ms={}",
+            metrics.command_wall_duration_ms
+        ),
+        format!(
+            "verification_command_overlap_ms={}",
+            metrics.command_overlap_ms
+        ),
+    ]);
 }
 
 struct GuardedVerification<T> {
@@ -495,7 +548,9 @@ mod tests {
     use std::time::Instant;
 
     use super::*;
-    use crate::verification_authority::verification_cancellation::active_verification_cancellation;
+    use crate::verification_authority::verification_cancellation::{
+        active_verification_cancellation, record_command_wave,
+    };
 
     #[test]
     fn explicit_ignored_component_changes_repository_state_fingerprint() {
@@ -617,6 +672,61 @@ mod tests {
             "artifact-{}",
             "a".repeat(64)
         ))));
+    }
+
+    #[test]
+    fn runtime_metrics_render_in_authoritative_summary_format() {
+        let metrics = VerificationRuntimeMetrics {
+            command_waves: 2,
+            command_checks_executed: 5,
+            command_queue_duration_ms: 7,
+            command_serial_execution_ms: 120,
+            command_wall_duration_ms: 70,
+            command_overlap_ms: 50,
+        };
+        let mut summary = Vec::new();
+        append_runtime_metrics(&mut summary, &metrics);
+        assert_eq!(
+            summary,
+            vec![
+                "verification_command_waves=2",
+                "verification_command_checks_executed=5",
+                "verification_command_queue_duration_ms=7",
+                "verification_command_serial_execution_ms=120",
+                "verification_command_wall_duration_ms=70",
+                "verification_command_overlap_ms=50",
+            ]
+        );
+    }
+
+    #[test]
+    fn outer_authority_resets_stale_runtime_metrics() {
+        let directory = tempfile::tempdir().expect("repository");
+        fs::write(directory.path().join("artifact.json"), "{\"ok\":true}\n").expect("artifact");
+        let component =
+            ChangedComponent::new(ChangeKind::Modified, "artifact.json").expect("component");
+        let evidence_root = directory.path().join("durable-evidence");
+        record_command_wave(directory.path(), 1, 4, 10, 8);
+
+        let result = authoritative_verification_for_components_at(
+            directory.path(),
+            &evidence_root,
+            "repo",
+            "commit",
+            &[component],
+        )
+        .expect("verification");
+
+        assert!(
+            result
+                .summary
+                .iter()
+                .any(|line| line == "verification_command_waves=0")
+        );
+        assert_eq!(
+            take_runtime_metrics(directory.path()),
+            VerificationRuntimeMetrics::default()
+        );
     }
 
     #[test]
