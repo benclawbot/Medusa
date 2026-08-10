@@ -18,39 +18,36 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt,clippy
-      - name: Complete recovery wiring
+      - name: Complete source wiring
         shell: python
         run: |
           from pathlib import Path
           p = Path('crates/medusa-runtime/src/scheduled_actions.rs')
           s = p.read_text()
           s = s.replace('use serde_json::{Value, json};', 'use serde_json::json;')
-          old = '''    pub wake_policy: SessionActionWakePolicy,\n    pub status: TriggerDispatchStatus,\n    pub recovered: bool,'''
-          new = '''    pub wake_policy: SessionActionWakePolicy,\n    pub prompt: String,\n    pub authorized: bool,\n    pub enabled: bool,\n    pub persistent_goal: bool,\n    pub recurrence_seconds: Option<u64>,\n    pub missed_run_policy: MissedRunPolicy,\n    pub status: TriggerDispatchStatus,\n    pub recovered: bool,'''
-          if old in s:
-              s = s.replace(old, new, 1)
-          old = '''        wake_policy: request.wake_policy,\n        status: TriggerDispatchStatus::Claimed,'''
-          new = '''        wake_policy: request.wake_policy,\n        prompt: request.prompt.clone(),\n        authorized: request.authorized,\n        enabled: request.enabled,\n        persistent_goal: request.persistent_goal,\n        recurrence_seconds: request.recurrence_seconds,\n        missed_run_policy: request.missed_run_policy,\n        status: TriggerDispatchStatus::Claimed,'''
-          if old in s:
-              s = s.replace(old, new, 1)
-          start = s.index('fn request_from_record(')
-          end = s.index('\nfn ensure_same_occurrence(', start)
-          replacement = '''fn request_from_record(record: &TriggerDispatchRecord) -> Result<TriggerDispatchRequest, RuntimeError> {\n    Ok(TriggerDispatchRequest {\n        schedule_id: record.schedule_id.clone(),\n        source_kind: record.source_kind,\n        occurrence_id: record.occurrence_id.clone(),\n        occurrence_sequence: record.occurrence_sequence,\n        scheduled_for: record.scheduled_for,\n        observed_at: record.observed_at,\n        target_session_id: record.target_session_id.clone(),\n        delivery_mode: record.delivery_mode,\n        wake_policy: record.wake_policy,\n        prompt: record.prompt.clone(),\n        authorized: record.authorized,\n        enabled: record.enabled,\n        persistent_goal: record.persistent_goal,\n        recurrence_seconds: record.recurrence_seconds,\n        missed_run_policy: record.missed_run_policy,\n    })\n}\n'''
-          s = s[:start] + replacement + s[end:]
           p.write_text(s)
 
           lib = Path('crates/medusa-runtime/src/lib.rs')
           text = lib.read_text()
           marker = 'pub mod review;\n'
+          modules = ''
           if 'pub mod scheduled_actions;' not in text:
-              text = text.replace(marker, marker + 'pub mod scheduled_actions;\n', 1)
+              modules += 'pub mod scheduled_actions;\n'
+          if 'pub mod wakeup_action_bridge;' not in text:
+              modules += 'pub mod wakeup_action_bridge;\n'
+          if modules:
+              text = text.replace(marker, marker + modules, 1)
           lib.write_text(text)
-      - name: Format
-        run: cargo fmt --all -- --check || cargo fmt --all
-      - name: Check affected crates
+      - name: Format and refresh lock
+        run: |
+          cargo fmt --all
+          cargo check -p medusa-runtime
+      - name: Locked affected crate check
         run: cargo check -p medusa-runtime --locked
-      - name: Test trigger dispatch module
+      - name: Test durable trigger dispatch
         run: cargo test -p medusa-runtime scheduled_actions --locked -- --nocapture
+      - name: Test production wakeup bridge
+        run: cargo test -p medusa-runtime wakeup_action_bridge --locked -- --nocapture
       - name: Clippy
         run: cargo clippy -p medusa-runtime --locked --all-targets -- -D warnings
       - name: Commit verified source
@@ -58,7 +55,7 @@ jobs:
           if ! git diff --quiet; then
             git config user.name github-actions[bot]
             git config user.email 41898282+github-actions[bot]@users.noreply.github.com
-            git add crates/medusa-runtime/src/scheduled_actions.rs crates/medusa-runtime/src/lib.rs
-            git commit -m "fix(runtime): make trigger recovery self-contained"
+            git add Cargo.lock crates/medusa-runtime/src/scheduled_actions.rs crates/medusa-runtime/src/lib.rs crates/medusa-runtime/src/wakeup_action_bridge.rs
+            git commit -m "feat(runtime): verify wakeup session action bridge"
             git push
           fi
