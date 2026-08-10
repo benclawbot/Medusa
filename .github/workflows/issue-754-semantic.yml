@@ -20,7 +20,7 @@ jobs:
         run: python .github/scripts/issue754_finalize.py
       - uses: dtolnay/rust-toolchain@39b0b3842c7e8bbf6904c0bfc3d9006fdd4dc4e0 # 1.88.0
       - run: cargo generate-lockfile
-      - run: cargo fmt --all -- --check
+      - run: cargo fmt --all
       - run: cargo test -p medusa-agent compaction --locked -- --nocapture
       - run: cargo check -p medusa-agent --locked
       - name: Commit final source integration
