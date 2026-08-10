@@ -209,6 +209,10 @@ pub struct ParallelChildEvidence {
 pub struct ParallelImplementationEvidence {
     pub dag_fingerprint: String,
     pub children: Vec<ParallelChildEvidence>,
+    pub task_elapsed_ms: std::collections::BTreeMap<String, u64>,
+    pub parallel_elapsed_ms: u64,
+    pub wave_count: usize,
+    pub peak_parallelism: usize,
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -224,8 +228,12 @@ pub fn run_parallel_implementations(
 ) -> Result<ParallelImplementationEvidence, String> {
     dag.validate().map_err(str::to_owned)?;
     validate_preflight(plan, preflight)?;
+    let started = std::time::Instant::now();
     let mut completed = std::collections::BTreeSet::new();
     let mut accepted = std::collections::BTreeMap::new();
+    let mut task_elapsed_ms = std::collections::BTreeMap::new();
+    let mut wave_count = 0usize;
+    let mut peak_parallelism = 0usize;
     while completed.len() < dag.tasks.len() {
         if cancel.load(Ordering::SeqCst) {
             return Err("parallel mutation batch was cancelled before dispatch".to_owned());
@@ -234,6 +242,8 @@ pub fn run_parallel_implementations(
         if wave.is_empty() {
             return Err("parallel mutation DAG has no runnable conflict-free wave".to_owned());
         }
+        wave_count = wave_count.saturating_add(1);
+        peak_parallelism = peak_parallelism.max(wave.len());
         let results = std::thread::scope(|scope| {
             let mut handles = Vec::with_capacity(wave.len());
             for task_id in &wave {
@@ -248,6 +258,7 @@ pub fn run_parallel_implementations(
                 let task_id = task_id.clone();
                 let events = events.clone();
                 handles.push(scope.spawn(move || {
+                    let started = std::time::Instant::now();
                     let control = TeamControlPlane::default();
                     run_implementation(
                         repo,
@@ -258,7 +269,10 @@ pub fn run_parallel_implementations(
                         cancel,
                         (&control, &events),
                     )
-                    .map(|evidence| (task_id, evidence))
+                    .map(|evidence| {
+                        let elapsed_ms = u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX);
+                        (task_id, evidence, elapsed_ms)
+                    })
                 }));
             }
             handles
@@ -270,8 +284,9 @@ pub fn run_parallel_implementations(
                 })
                 .collect::<Result<Vec<_>, String>>()
         })?;
-        for (task_id, evidence) in results {
+        for (task_id, evidence, elapsed_ms) in results {
             completed.insert(task_id.clone());
+            task_elapsed_ms.insert(task_id.clone(), elapsed_ms);
             accepted.insert(task_id, evidence);
         }
     }
@@ -288,6 +303,10 @@ pub fn run_parallel_implementations(
     Ok(ParallelImplementationEvidence {
         dag_fingerprint: dag.fingerprint.clone(),
         children,
+        task_elapsed_ms,
+        parallel_elapsed_ms: u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX),
+        wave_count,
+        peak_parallelism,
     })
 }
 

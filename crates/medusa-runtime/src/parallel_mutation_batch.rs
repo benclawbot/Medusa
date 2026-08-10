@@ -20,7 +20,7 @@ use medusa_multi_agent_scheduler::mutation_dag::{
 };
 use medusa_provider::ConfiguredProvider;
 use medusa_workers::{Worker, WorkerManager, WorkerState};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
 use crate::{
@@ -35,6 +35,24 @@ use crate::{
 };
 
 const BATCH_WORKER_LABEL: &str = "parallel-batch";
+const PARALLEL_METRICS_SCHEMA_VERSION: u16 = 1;
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+struct ParallelMutationMetrics {
+    schema_version: u16,
+    dag_fingerprint: String,
+    task_count: usize,
+    wave_count: usize,
+    peak_parallelism: usize,
+    conflict_edges: usize,
+    serial_worker_ms: u64,
+    parallel_worker_ms: u64,
+    staging_ms: u64,
+    idle_capacity_ms: u64,
+    parallel_efficiency_milli: u16,
+    wall_time_improvement_milli: u16,
+    conflict_rate_milli: u16,
+}
 
 #[allow(clippy::too_many_arguments)]
 pub fn prepare_combined(
@@ -82,6 +100,7 @@ pub fn prepare_combined(
     let barrier = authorize_children(repo, config, &provider, dag, &parallel, cancel, events)?;
     persist_json(&batch_root.join("integration-barrier.json"), &barrier)?;
 
+    let staging_started = std::time::Instant::now();
     let manager = WorkerManager::new(repo, batch_root.join("worktrees"))
         .map_err(|error| error.to_string())?;
     manager.require_clean().map_err(|error| error.to_string())?;
@@ -120,6 +139,7 @@ pub fn prepare_combined(
                 })?
         }
     };
+    reset_staging_for_replay(&staging.worktree, &base_head)?;
 
     for task_id in &barrier.ordered_tasks {
         if cancel.load(Ordering::SeqCst) {
@@ -247,6 +267,12 @@ pub fn prepare_combined(
         state_path: prepared_evidence_path.clone(),
     };
     persist_json(&prepared_evidence_path, &evidence)?;
+    let metrics = parallel_metrics(
+        dag,
+        &parallel,
+        u64::try_from(staging_started.elapsed().as_millis()).unwrap_or(u64::MAX),
+    );
+    persist_json(&batch_root.join("parallel-mutation-metrics.json"), &metrics)?;
 
     for child in &parallel.children {
         let _ = cancel_transaction(
@@ -273,6 +299,17 @@ pub fn prepare_combined(
             format!("tasks={:?}", barrier.ordered_tasks),
             format!("aggregate_commit={}", evidence.prepared_commit),
             format!("changed_paths={:?}", evidence.changed_paths),
+            format!(
+                "parallel_efficiency_milli={}",
+                metrics.parallel_efficiency_milli
+            ),
+            format!(
+                "wall_time_improvement_milli={}",
+                metrics.wall_time_improvement_milli
+            ),
+            format!("conflict_rate_milli={}", metrics.conflict_rate_milli),
+            format!("idle_capacity_ms={}", metrics.idle_capacity_ms),
+            format!("staging_ms={}", metrics.staging_ms),
             "primary repository remains unchanged pending combined parent review".to_owned(),
         ],
     }));
@@ -432,6 +469,85 @@ fn validate_resumed_aggregate(
     Ok(())
 }
 
+fn parallel_metrics(
+    dag: &MutationDag,
+    parallel: &ParallelImplementationEvidence,
+    staging_ms: u64,
+) -> ParallelMutationMetrics {
+    let serial_worker_ms = parallel.task_elapsed_ms.values().copied().sum::<u64>();
+    let parallel_worker_ms = parallel.parallel_elapsed_ms.max(1);
+    let peak_parallelism = u64::try_from(parallel.peak_parallelism.max(1)).unwrap_or(u64::MAX);
+    let capacity_ms = parallel_worker_ms.saturating_mul(peak_parallelism);
+    let idle_capacity_ms = capacity_ms.saturating_sub(serial_worker_ms);
+    let efficiency = if capacity_ms == 0 {
+        0
+    } else {
+        serial_worker_ms
+            .saturating_mul(1_000)
+            .saturating_div(capacity_ms)
+            .min(1_000)
+    };
+    let improvement = if serial_worker_ms == 0 {
+        0
+    } else {
+        serial_worker_ms
+            .saturating_sub(parallel_worker_ms)
+            .saturating_mul(1_000)
+            .saturating_div(serial_worker_ms)
+            .min(1_000)
+    };
+    let pairs = dag
+        .tasks
+        .len()
+        .saturating_mul(dag.tasks.len().saturating_sub(1))
+        / 2;
+    let conflict_rate = if pairs == 0 {
+        0
+    } else {
+        dag.conflict_edges
+            .len()
+            .saturating_mul(1_000)
+            .saturating_div(pairs)
+            .min(1_000)
+    };
+    ParallelMutationMetrics {
+        schema_version: PARALLEL_METRICS_SCHEMA_VERSION,
+        dag_fingerprint: dag.fingerprint.clone(),
+        task_count: dag.tasks.len(),
+        wave_count: parallel.wave_count,
+        peak_parallelism: parallel.peak_parallelism,
+        conflict_edges: dag.conflict_edges.len(),
+        serial_worker_ms,
+        parallel_worker_ms,
+        staging_ms,
+        idle_capacity_ms,
+        parallel_efficiency_milli: u16::try_from(efficiency).unwrap_or(1_000),
+        wall_time_improvement_milli: u16::try_from(improvement).unwrap_or(1_000),
+        conflict_rate_milli: u16::try_from(conflict_rate).unwrap_or(1_000),
+    }
+}
+
+fn reset_staging_for_replay(worktree: &Path, base_head: &str) -> Result<(), String> {
+    let _ = Command::new("git")
+        .args(["cherry-pick", "--abort"])
+        .current_dir(worktree)
+        .output();
+    for args in [vec!["reset", "--hard", base_head], vec!["clean", "-fd"]] {
+        let output = Command::new("git")
+            .args(&args)
+            .current_dir(worktree)
+            .output()
+            .map_err(|error| error.to_string())?;
+        if !output.status.success() {
+            return Err(format!(
+                "could not reset parallel staging for deterministic replay: {}",
+                String::from_utf8_lossy(&output.stderr).trim()
+            ));
+        }
+    }
+    Ok(())
+}
+
 fn cherry_pick_without_commit(worktree: &Path, commit: &str) -> Result<(), String> {
     let output = Command::new("git")
         .args(["cherry-pick", "--no-commit", commit])
@@ -491,4 +607,38 @@ fn persist_json(path: &Path, value: &impl Serialize) -> Result<(), String> {
 fn hash(value: &impl Serialize) -> String {
     let encoded = serde_json::to_vec(value).unwrap_or_default();
     format!("{:x}", Sha256::digest(encoded))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn metrics_report_parallel_gain_efficiency_idle_and_conflicts() {
+        let parallel = ParallelImplementationEvidence {
+            dag_fingerprint: "dag".to_owned(),
+            children: Vec::new(),
+            task_elapsed_ms: [("a".to_owned(), 100), ("b".to_owned(), 100)]
+                .into_iter()
+                .collect(),
+            parallel_elapsed_ms: 110,
+            wave_count: 1,
+            peak_parallelism: 2,
+        };
+        let dag = MutationDag {
+            schema_version: 1,
+            repository_revision: "base".to_owned(),
+            tasks: Vec::new(),
+            conflict_edges: Vec::new(),
+            max_parallelism: 2,
+            fingerprint: "dag".to_owned(),
+        };
+        let metrics = parallel_metrics(&dag, &parallel, 7);
+        assert_eq!(metrics.serial_worker_ms, 200);
+        assert_eq!(metrics.parallel_worker_ms, 110);
+        assert_eq!(metrics.wall_time_improvement_milli, 450);
+        assert_eq!(metrics.parallel_efficiency_milli, 909);
+        assert_eq!(metrics.idle_capacity_ms, 20);
+        assert_eq!(metrics.staging_ms, 7);
+    }
 }
