@@ -611,6 +611,30 @@ impl<P: ModelProvider> AgentEngine<P> {
         compact_session(session, focus)
     }
 
+    fn compact_session_v2(
+        &self,
+        session: &mut AgentSession,
+        focus: Option<&str>,
+    ) -> MedusaResult<()> {
+        let summary_request = crate::compaction_v2::semantic_summary_request(session, focus);
+        let semantic = self
+            .provider
+            .complete_cancellable_for_phase(
+                &summary_request,
+                ProviderExecutionPhase::Summarization,
+                &self.cancellation,
+            )
+            .ok()
+            .and_then(|response| {
+                crate::compaction_v2::validate_semantic_response(
+                    &response,
+                    &self.config.model.name,
+                    &self.config.model.provider,
+                )
+            });
+        crate::engine_support::compact_session_with_semantic(session, focus, semantic)
+    }
+
     pub fn run_to_completion(&self, session: &mut AgentSession) -> MedusaResult<()> {
         let default_phase = provider_execution_phase(self.config.agent.mode);
         let mut phase = default_phase;
@@ -820,7 +844,7 @@ impl<P: ModelProvider> AgentEngine<P> {
             budget.decision(),
             context_budget::PromptBudgetDecision::Compact
         ) {
-            compact_session(
+            self.compact_session_v2(
                 session,
                 Some("preserve the current objective, decisions, tool results, and pending work"),
             )?;
@@ -911,7 +935,7 @@ impl<P: ModelProvider> AgentEngine<P> {
             Ok(response) => response,
             Err(error) if context_budget::is_context_limit_rejection(&error.to_string()) => {
                 if !compacted {
-                    compact_session(
+                    self.compact_session_v2(
                         session,
                         Some(
                             "recover from the provider context limit while preserving the current objective, decisions, tool results, and pending work",

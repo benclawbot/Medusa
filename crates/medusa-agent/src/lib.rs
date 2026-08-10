@@ -1,6 +1,7 @@
 //! Persistent single-agent execution, role-bound team contexts, and built-in tools.
 
 mod approval;
+pub mod compaction_v2;
 mod engine;
 mod engine_support;
 mod evidence;
