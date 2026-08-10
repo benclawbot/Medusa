@@ -1,6 +1,7 @@
 //! Persistent single-agent execution, role-bound team contexts, and built-in tools.
 
 mod approval;
+pub mod branch_summary;
 pub mod compaction_v2;
 mod engine;
 mod engine_support;
@@ -23,6 +24,9 @@ pub mod world_model_session;
 pub use approval::{
     ApprovalDecision, ApprovalGrant, ApprovalReceipt, ApprovalScope, RollbackOutcome,
     RollbackReceipt,
+};
+pub use branch_summary::{
+    BranchAnchor, BranchSummaryRecord, DeterministicBranchMetadata, common_ancestor,
 };
 pub use engine::{AgentEngine, AgentUpdate, StepOutcome};
 pub use engine_support::{compact_session, update_session_objective};
@@ -61,6 +65,14 @@ pub fn record_session_event(
     actor: medusa_protocol::Actor,
     payload: medusa_protocol::EventPayload,
 ) -> medusa_core::MedusaResult<()> {
+    if let medusa_protocol::EventPayload::CheckpointRestoreRequested {
+        checkpoint_id,
+        source_cursor,
+    } = &payload
+    {
+        // Branch summaries are advisory. Their persistence must never block exact restore.
+        let _ = branch_summary::capture_restore_abandonment(session, checkpoint_id, *source_cursor);
+    }
     evidence::append_event(session, actor, payload)?;
     session.updated_at = time::OffsetDateTime::now_utc();
     session::persist(session)

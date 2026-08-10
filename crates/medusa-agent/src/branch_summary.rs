@@ -1,5 +1,5 @@
 use std::{
-    collections::{BTreeMap, BTreeSet},
+    collections::BTreeSet,
     fs,
     io::Write,
     path::{Path, PathBuf},
@@ -70,22 +70,32 @@ pub struct BranchSummaryRecord {
 impl BranchSummaryRecord {
     pub fn verify(&self) -> MedusaResult<()> {
         if self.format_version != BRANCH_SUMMARY_FORMAT_VERSION {
-            return Err(validation_error("unsupported branch summary format version"));
+            return Err(validation_error(
+                "unsupported branch summary format version",
+            ));
         }
         if self.session_id.trim().is_empty() || self.abandoned_for_checkpoint_id.trim().is_empty() {
-            return Err(validation_error("branch summary identity must not be empty"));
+            return Err(validation_error(
+                "branch summary identity must not be empty",
+            ));
         }
         if self.base.sequence >= self.terminal.sequence {
-            return Err(validation_error("branch summary terminal must follow its base"));
+            return Err(validation_error(
+                "branch summary terminal must follow its base",
+            ));
         }
         if self.source_event_sequences.first().copied() != Some(self.base.sequence + 1)
             || self.source_event_sequences.last().copied() != Some(self.terminal.sequence)
             || self.source_event_sequences.len() != self.source_event_fingerprints.len()
         {
-            return Err(validation_error("branch summary event range is inconsistent"));
+            return Err(validation_error(
+                "branch summary event range is inconsistent",
+            ));
         }
         if !self.semantic_provenance.advisory_only {
-            return Err(validation_error("branch semantic history must remain advisory-only"));
+            return Err(validation_error(
+                "branch semantic history must remain advisory-only",
+            ));
         }
         let expected = hash_record(self)?;
         if self.record_hash != expected {
@@ -132,7 +142,9 @@ pub(crate) fn capture_restore_abandonment(
             .events
             .iter()
             .find(|event| event.sequence == source_cursor)
-            .ok_or_else(|| validation_error("restore cursor does not reference this event chain"))?;
+            .ok_or_else(|| {
+                validation_error("restore cursor does not reference this event chain")
+            })?;
         Some(base.checksum.clone())
     };
     let abandoned = session
@@ -181,7 +193,11 @@ pub(crate) fn capture_restore_abandonment(
     record.record_hash = hash_record(&record)?;
     record.verify()?;
     let path = persist_record(session, &record)?;
-    if !session.tool_artifacts.iter().any(|artifact| artifact == &path) {
+    if !session
+        .tool_artifacts
+        .iter()
+        .any(|artifact| artifact == &path)
+    {
         session.tool_artifacts.push(path.clone());
     }
     prune_bounded(session);
@@ -207,8 +223,8 @@ pub(crate) fn advisory_context(session: &AgentSession) -> Option<String> {
     );
     for record in records.into_iter().rev() {
         let deterministic = &record.deterministic;
-        let semantic = serde_json::to_string(&record.semantic_history)
-            .unwrap_or_else(|_| "{}".to_owned());
+        let semantic =
+            serde_json::to_string(&record.semantic_history).unwrap_or_else(|_| "{}".to_owned());
         let section = format!(
             "\nbranch_summary hash={} base_seq={} terminal_seq={} integrated={} files_read={:?} files_touched={:?} tools={:?} verification={:?}\nsemantic_advisory={}\n",
             record.record_hash,
@@ -295,7 +311,10 @@ fn deterministic_metadata(
             EventPayload::ToolOutputChunk { artifact_ref, .. } => {
                 tool_artifacts.insert(artifact_ref.clone());
             }
-            EventPayload::FileTransactionCommitted { paths, rollback_ref } => {
+            EventPayload::FileTransactionCommitted {
+                paths,
+                rollback_ref,
+            } => {
                 files_touched.extend(paths.iter().cloned());
                 tool_artifacts.insert(rollback_ref.clone());
             }
@@ -311,7 +330,9 @@ fn deterministic_metadata(
                 approval_records.push(decision.clone());
             }
             EventPayload::TeamStateChanged { snapshot } => team_records.push(snapshot.clone()),
-            EventPayload::WorkerEvidenceRecorded { evidence } => team_records.push(evidence.clone()),
+            EventPayload::WorkerEvidenceRecorded { evidence } => {
+                team_records.push(evidence.clone())
+            }
             EventPayload::IntegrationReceiptRecorded { receipt } => {
                 integrated = true;
                 team_records.push(receipt.clone());
@@ -339,13 +360,18 @@ fn deterministic_semantic_history(events: &[&EventEnvelope]) -> SemanticHistory 
     let mut history = SemanticHistory::default();
     for event in events {
         match &event.payload {
-            EventPayload::SessionCreated { objective } | EventPayload::GoalUpdated { objective } => {
+            EventPayload::SessionCreated { objective }
+            | EventPayload::GoalUpdated { objective } => {
                 push_semantic(&mut history.goal_context, objective);
             }
-            EventPayload::UserPromptReceived { text } | EventPayload::UserFollowupDequeued { text, .. } => {
+            EventPayload::UserPromptReceived { text }
+            | EventPayload::UserFollowupDequeued { text, .. } => {
                 push_semantic(&mut history.goal_context, text);
             }
-            EventPayload::AssumptionRecorded { assumption, rationale } => {
+            EventPayload::AssumptionRecorded {
+                assumption,
+                rationale,
+            } => {
                 push_semantic(
                     &mut history.key_decisions,
                     &format!("assumption: {assumption}; rationale: {rationale}"),
@@ -392,7 +418,10 @@ fn deterministic_semantic_history(events: &[&EventEnvelope]) -> SemanticHistory 
                 push_semantic(&mut history.blockers, message);
             }
             EventPayload::SessionCompleted { report_ref } => {
-                push_semantic(&mut history.completed_work, &format!("session report {report_ref}"));
+                push_semantic(
+                    &mut history.completed_work,
+                    &format!("session report {report_ref}"),
+                );
             }
             _ => {}
         }
@@ -450,9 +479,10 @@ fn repository_identity(repo: &Path) -> BranchRepositoryIdentity {
             .args(args)
             .output()
             .ok()?;
-        output.status.success().then(|| {
-            String::from_utf8_lossy(&output.stdout).trim().to_owned()
-        })
+        output
+            .status
+            .success()
+            .then(|| String::from_utf8_lossy(&output.stdout).trim().to_owned())
     }
     BranchRepositoryIdentity {
         revision: git(repo, &["rev-parse", "HEAD"]),
@@ -461,16 +491,18 @@ fn repository_identity(repo: &Path) -> BranchRepositoryIdentity {
 }
 
 fn persist_record(session: &AgentSession, record: &BranchSummaryRecord) -> MedusaResult<PathBuf> {
-    let root = session
-        .repo
-        .join(".medusa/artifacts/branch-summary-v1");
+    let root = session.repo.join(".medusa/artifacts/branch-summary-v1");
     fs::create_dir_all(&root)?;
     let path = root.join(format!("{}.json", record.record_hash));
     if path.is_file() {
         return Ok(path);
     }
     let bytes = serde_json::to_vec_pretty(record).map_err(json_error)?;
-    let temp = root.join(format!(".{}.{}.tmp", record.record_hash, std::process::id()));
+    let temp = root.join(format!(
+        ".{}.{}.tmp",
+        record.record_hash,
+        std::process::id()
+    ));
     {
         let mut file = fs::OpenOptions::new()
             .create_new(true)
@@ -481,7 +513,7 @@ fn persist_record(session: &AgentSession, record: &BranchSummaryRecord) -> Medus
     }
     match fs::rename(&temp, &path) {
         Ok(()) => {}
-        Err(error) if path.is_file() => {
+        Err(_error) if path.is_file() => {
             let _ = fs::remove_file(&temp);
             let existing = fs::read(&path)?;
             if existing != bytes {
@@ -524,7 +556,9 @@ fn prune_bounded(session: &mut AgentSession) {
         .take(remove)
         .map(|(_, path)| path)
         .collect::<BTreeSet<_>>();
-    session.tool_artifacts.retain(|path| !obsolete.contains(path));
+    session
+        .tool_artifacts
+        .retain(|path| !obsolete.contains(path));
     for path in obsolete {
         let _ = fs::remove_file(path);
     }
@@ -570,7 +604,10 @@ fn push_semantic(target: &mut Vec<String>, value: &str) {
     if value.is_empty() {
         return;
     }
-    let bounded = value.chars().take(MAX_SEMANTIC_ENTRY_CHARS).collect::<String>();
+    let bounded = value
+        .chars()
+        .take(MAX_SEMANTIC_ENTRY_CHARS)
+        .collect::<String>();
     if !target.iter().any(|existing| existing == &bounded) {
         target.push(bounded);
     }
@@ -580,11 +617,19 @@ fn push_semantic(target: &mut Vec<String>, value: &str) {
 }
 
 fn validation_error(message: impl Into<String>) -> MedusaError {
-    MedusaError::new(ErrorCode::InvalidConfiguration, ErrorCategory::Validation, message)
+    MedusaError::new(
+        ErrorCode::InvalidConfiguration,
+        ErrorCategory::Validation,
+        message,
+    )
 }
 
 fn json_error(error: serde_json::Error) -> MedusaError {
-    MedusaError::new(ErrorCode::InternalInvariant, ErrorCategory::Internal, error.to_string())
+    MedusaError::new(
+        ErrorCode::InternalInvariant,
+        ErrorCategory::Internal,
+        error.to_string(),
+    )
 }
 
 #[cfg(test)]
@@ -631,7 +676,10 @@ mod tests {
         record.record_hash = hash_record(&record).expect("hash");
         record.verify().expect("valid record");
         assert!(!record.deterministic.integrated_to_authoritative_repository);
-        record.semantic_history.completed_work.push("tampered".to_owned());
+        record
+            .semantic_history
+            .completed_work
+            .push("tampered".to_owned());
         assert!(record.verify().is_err());
     }
 
@@ -639,7 +687,10 @@ mod tests {
     fn semantic_merge_is_bounded_and_deduplicated() {
         let mut target = SemanticHistory::default();
         let source = SemanticHistory {
-            next_steps: vec!["retry exact command".to_owned(), "retry exact command".to_owned()],
+            next_steps: vec![
+                "retry exact command".to_owned(),
+                "retry exact command".to_owned(),
+            ],
             ..Default::default()
         };
         merge_history(&mut target, &source);
