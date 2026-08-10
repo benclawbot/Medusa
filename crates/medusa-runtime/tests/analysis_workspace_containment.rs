@@ -31,20 +31,36 @@ fn contained_reducer_processes_brokered_artifact_without_repository_write_author
         },
     );
 
-    #[cfg(windows)]
     if let Err(error) = &result {
         let message = error.to_string();
-        assert!(
-            message.contains("sandbox unavailable")
-                && message.contains("Windows composable sandbox")
-                && message.contains("Windows 11 support is required"),
-            "unsupported Windows hosts must fail closed with the effective sandbox boundary: {message}"
-        );
-        assert_eq!(
-            fs::read_to_string(temp.path().join("large.txt")).expect("source remains readable"),
-            "alpha\nbeta\nalpha two\n"
-        );
-        return;
+        #[cfg(windows)]
+        {
+            assert!(
+                message.contains("sandbox unavailable")
+                    && message.contains("Windows composable sandbox")
+                    && message.contains("Windows 11 support is required"),
+                "unsupported Windows hosts must fail closed with the effective sandbox boundary: {message}"
+            );
+            assert_eq!(
+                fs::read_to_string(temp.path().join("large.txt")).expect("source remains readable"),
+                "alpha\nbeta\nalpha two\n"
+            );
+            return;
+        }
+        #[cfg(target_os = "linux")]
+        {
+            assert!(
+                message.contains("contained analysis backend failed")
+                    && message.contains("bwrap: loopback")
+                    && message.contains("Operation not permitted"),
+                "restricted Linux hosts must fail closed when the kernel denies the isolated network namespace: {message}"
+            );
+            assert_eq!(
+                fs::read_to_string(temp.path().join("large.txt")).expect("source remains readable"),
+                "alpha\nbeta\nalpha two\n"
+            );
+            return;
+        }
     }
 
     let result = result.expect("contained reduction");
