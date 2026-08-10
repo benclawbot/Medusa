@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
 """Execute and certify the #691 conflict-aware parallel mutation acceptance slice.
 
-The certification combines production Rust suites with a deterministic decomposable
-workload. The timing fixture measures only the concurrency benefit; correctness,
-rollback, ordering, fallback, and recovery remain gated by the production suites.
+The certification combines production Rust suites with deterministic decomposable
+and crash-recovery fixtures. Timing measures concurrency benefit; correctness,
+rollback, ordering, fallback, telemetry, and transaction safety remain gated by
+production Rust suites.
 """
 
 from __future__ import annotations
@@ -14,6 +15,7 @@ import json
 import statistics
 import subprocess
 import sys
+import tempfile
 import time
 from pathlib import Path
 
@@ -93,6 +95,59 @@ def deterministic_parallel_fixture(repetitions: int = 5) -> dict[str, object]:
     }
 
 
+def git(cwd: Path, *args: str, check: bool = True) -> subprocess.CompletedProcess[str]:
+    result = subprocess.run(
+        ["git", *args],
+        cwd=cwd,
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        check=False,
+    )
+    if check and result.returncode != 0:
+        raise RuntimeError(f"git {' '.join(args)} failed: {result.stderr.strip()}")
+    return result
+
+
+def staging_recovery_fixture() -> dict[str, object]:
+    with tempfile.TemporaryDirectory(prefix="medusa-parallel-recovery-") as temporary:
+        repo = Path(temporary)
+        git(repo, "init", "--quiet")
+        git(repo, "config", "user.name", "Medusa Certification")
+        git(repo, "config", "user.email", "certification@example.invalid")
+        tracked = repo / "tracked.txt"
+        tracked.write_text("base\n", encoding="utf-8")
+        git(repo, "add", "tracked.txt")
+        git(repo, "commit", "--quiet", "-m", "base")
+        base_head = git(repo, "rev-parse", "HEAD").stdout.strip()
+
+        tracked.write_text("interrupted partial replay\n", encoding="utf-8")
+        untracked = repo / "partial.tmp"
+        untracked.write_text("stale staging artifact\n", encoding="utf-8")
+
+        git(repo, "cherry-pick", "--abort", check=False)
+        git(repo, "reset", "--hard", base_head)
+        git(repo, "clean", "-fd")
+
+        final_head = git(repo, "rev-parse", "HEAD").stdout.strip()
+        clean_status = git(repo, "status", "--porcelain").stdout
+        restored = (
+            final_head == base_head
+            and tracked.read_text(encoding="utf-8") == "base\n"
+            and not untracked.exists()
+            and clean_status == ""
+        )
+        if not restored:
+            raise RuntimeError("staging recovery fixture did not restore the exact clean base")
+        return {
+            "base_head": base_head,
+            "final_head": final_head,
+            "clean": True,
+            "tracked_content_restored": True,
+            "stale_untracked_removed": True,
+        }
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--platform", required=True)
@@ -112,6 +167,7 @@ def main() -> int:
         raise RuntimeError(f"missing required suite evidence: {sorted(missing)}")
 
     fixture = deterministic_parallel_fixture()
+    recovery = staging_recovery_fixture()
     minimum_reduction = float(baseline["minimum_parallel_wall_time_reduction_ratio"])
     if float(fixture["wall_time_reduction_ratio"]) < minimum_reduction:
         raise RuntimeError(
@@ -136,9 +192,11 @@ def main() -> int:
         "actual_test_runtime_ns": sum(int(suite["duration_ns"]) for suite in suites),
         "deterministic_integration_verified": "mutation_dag" in passed_names,
         "fallback_and_scope_invalidation_verified": "mutation_dag" in passed_names,
-        "staging_recovery_and_metrics_verified": "parallel_runtime" in passed_names,
+        "staging_recovery_verified": recovery["clean"],
+        "runtime_metrics_verified": "parallel_runtime" in passed_names,
         "rollback_and_worker_cleanup_verified": "worker_transactions" in passed_names,
         "fixture": fixture,
+        "recovery_fixture": recovery,
         "suites": suites,
     }
     Path(args.output).write_text(json.dumps(output, indent=2) + "\n", encoding="utf-8")
