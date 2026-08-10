@@ -1,9 +1,8 @@
 //! Conflict-aware decomposition and deterministic integration planning for mutating implementers.
 //!
-//! This module is deliberately policy-only: it never grants integration authority. It converts
-//! exact mutation contracts into a durable DAG, computes exclusive ownership conflicts, exposes
-//! deterministic runnable waves, and records the barrier/invalidation information required by the
-//! runtime transaction layer.
+//! This module is policy-only: it never grants integration authority. It turns exact mutation
+//! contracts into a durable DAG, reserves overlapping resources, exposes deterministic runnable
+//! waves, and records the barrier/invalidation data consumed by the runtime transaction layer.
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -81,7 +80,11 @@ impl MutationTaskContract {
         if self.required_evidence.is_empty() || self.verification_responsibility.is_empty() {
             return Err("mutation task requires evidence and verification responsibility");
         }
-        if self.dependencies.iter().any(|dependency| dependency == &self.id) {
+        if self
+            .dependencies
+            .iter()
+            .any(|dependency| dependency == &self.id)
+        {
             return Err("mutation task cannot depend on itself");
         }
         Ok(self)
@@ -137,70 +140,58 @@ impl MutationDag {
         if max_parallelism == 0 || minimum_confidence_milli > 1_000 {
             return Err("mutation decomposition limits are invalid");
         }
-        let mut canonical = tasks
+        let mut tasks = tasks
             .into_iter()
             .map(MutationTaskContract::canonicalize)
             .collect::<Result<Vec<_>, _>>()?;
-        canonical.sort_by(|left, right| left.id.cmp(&right.id));
-        if canonical
-            .windows(2)
-            .any(|window| window[0].id == window[1].id)
-        {
+        tasks.sort_by(|left, right| left.id.cmp(&right.id));
+        if tasks.windows(2).any(|window| window[0].id == window[1].id) {
             return Err("mutation task ids must be unique");
         }
-        let repository_revision = canonical[0].repository_revision.clone();
-        if canonical
+        let repository_revision = tasks[0].repository_revision.clone();
+        if tasks
             .iter()
             .any(|task| task.repository_revision != repository_revision)
         {
-            return Ok(DecompositionDecision::SingleImplementer {
-                reason: "mutation tasks do not share one immutable repository revision".to_owned(),
-            });
+            return Ok(single("mutation tasks do not share one immutable repository revision"));
         }
-        if canonical
+        if tasks
             .iter()
             .any(|task| task.confidence_milli < minimum_confidence_milli)
         {
-            return Ok(DecompositionDecision::SingleImplementer {
-                reason: "mutation decomposition confidence is below policy threshold".to_owned(),
-            });
+            return Ok(single("mutation decomposition confidence is below policy threshold"));
         }
-        let ids = canonical
+        let ids = tasks
             .iter()
             .map(|task| task.id.as_str())
             .collect::<BTreeSet<_>>();
-        if canonical.iter().any(|task| {
+        if tasks.iter().any(|task| {
             task.dependencies
                 .iter()
                 .any(|dependency| !ids.contains(dependency.as_str()))
         }) {
-            return Ok(DecompositionDecision::SingleImplementer {
-                reason: "mutation dependency references an unaccepted task".to_owned(),
-            });
+            return Ok(single("mutation dependency references an unaccepted task"));
         }
-        validate_acyclic(&canonical)?;
-        if canonical.len() < 2 || max_parallelism < 2 {
-            return Ok(DecompositionDecision::SingleImplementer {
-                reason: "parallel mutation requires at least two accepted tasks and workers"
-                    .to_owned(),
-            });
+        validate_acyclic(&tasks)?;
+        if tasks.len() < 2 || max_parallelism < 2 {
+            return Ok(single(
+                "parallel mutation requires at least two accepted tasks and workers",
+            ));
         }
-        let conflict_edges = conflict_edges(&canonical);
         let mut dag = Self {
             schema_version: MUTATION_DAG_SCHEMA_VERSION,
             repository_revision,
-            tasks: canonical,
-            conflict_edges,
+            conflict_edges: conflict_edges(&tasks),
+            tasks,
             max_parallelism,
             fingerprint: String::new(),
         };
         dag.fingerprint = dag_fingerprint(&dag);
         dag.validate()?;
         if dag.maximum_runnable_width() < 2 {
-            return Ok(DecompositionDecision::SingleImplementer {
-                reason: "accepted mutation contracts have no conflict-free parallel wave"
-                    .to_owned(),
-            });
+            return Ok(single(
+                "accepted mutation contracts have no conflict-free parallel wave",
+            ));
         }
         Ok(DecompositionDecision::Parallel(dag))
     }
@@ -248,7 +239,6 @@ impl MutationDag {
             .map(|task| task.id.clone())
             .collect::<Vec<_>>();
         ready.sort();
-
         let mut selected = Vec::new();
         for candidate in ready {
             if selected.len() >= usize::from(self.max_parallelism) {
@@ -299,27 +289,28 @@ impl MutationDag {
             .ok_or("scope change references an unknown mutation task")?;
         task.resources = resources;
         *task = task.clone().canonicalize()?;
+        let resources_fingerprint = hash(&task.resources);
         let new_edges = conflict_edges(&tasks);
         let old_edges = self.conflict_edges.iter().cloned().collect::<BTreeSet<_>>();
-        let introduced = new_edges
+        let introduced_conflicts = new_edges
             .iter()
             .filter(|edge| !old_edges.contains(*edge))
             .cloned()
             .collect::<Vec<_>>();
-        if introduced.is_empty() {
+        if introduced_conflicts.is_empty() {
             return Ok(ScopeChangeDecision::Continue {
-                resources_fingerprint: resources_fingerprint(&task.resources),
+                resources_fingerprint,
             });
         }
-        let mut affected = introduced
+        let mut affected_tasks = introduced_conflicts
             .iter()
             .flat_map(|edge| [edge.first.clone(), edge.second.clone()])
             .collect::<Vec<_>>();
-        affected.sort();
-        affected.dedup();
+        affected_tasks.sort();
+        affected_tasks.dedup();
         Ok(ScopeChangeDecision::ReplanAndSerialize {
-            affected_tasks: affected,
-            introduced_conflicts: introduced,
+            affected_tasks,
+            introduced_conflicts,
         })
     }
 }
@@ -364,7 +355,10 @@ impl IntegrationBarrier {
             .map(|item| (item.task_id.clone(), item))
             .collect::<BTreeMap<_, _>>();
         if accepted.len() != dag.tasks.len()
-            || dag.tasks.iter().any(|task| !accepted.contains_key(&task.id))
+            || dag
+                .tasks
+                .iter()
+                .any(|task| !accepted.contains_key(&task.id))
         {
             return Err("integration barrier requires accepted evidence for every DAG task");
         }
@@ -382,16 +376,19 @@ impl IntegrationBarrier {
             if task.dependencies.iter().any(|dependency| {
                 accepted
                     .get(dependency)
-                    .and_then(|upstream| item.dependency_fingerprints.get(dependency).map(|seen| (seen, upstream)))
+                    .and_then(|upstream| {
+                        item.dependency_fingerprints
+                            .get(dependency)
+                            .map(|seen| (seen, upstream))
+                    })
                     .is_none_or(|(seen, upstream)| seen != &upstream.prepared_tree)
             }) {
                 return Err("downstream evidence is stale against accepted upstream inputs");
             }
         }
-        let ordered_tasks = dag.deterministic_integration_order();
         let mut barrier = Self {
             dag_fingerprint: dag.fingerprint.clone(),
-            ordered_tasks,
+            ordered_tasks: dag.deterministic_integration_order(),
             accepted,
             fingerprint: String::new(),
         };
@@ -475,6 +472,12 @@ impl BatchIntegrationReceipt {
     }
 }
 
+fn single(reason: &str) -> DecompositionDecision {
+    DecompositionDecision::SingleImplementer {
+        reason: reason.to_owned(),
+    }
+}
+
 fn conflict_edges(tasks: &[MutationTaskContract]) -> Vec<ConflictEdge> {
     let mut edges = Vec::new();
     for (index, left) in tasks.iter().enumerate() {
@@ -483,7 +486,7 @@ fn conflict_edges(tasks: &[MutationTaskContract]) -> Vec<ConflictEdge> {
             for left_resource in &left.resources {
                 for right_resource in &right.resources {
                     if resources_overlap(left_resource, right_resource) {
-                        reasons.insert(conflict_reason(left_resource.kind));
+                        reasons.insert(conflict_reason(left_resource.kind, right_resource.kind));
                     }
                 }
             }
@@ -502,13 +505,29 @@ fn conflict_edges(tasks: &[MutationTaskContract]) -> Vec<ConflictEdge> {
 }
 
 fn resources_overlap(left: &MutationResource, right: &MutationResource) -> bool {
-    if left.kind != right.kind {
-        return false;
+    if left.kind == right.kind {
+        return if left.kind == MutationResourceKind::Path {
+            path_overlaps(&left.key, &right.key)
+        } else {
+            left.key == right.key
+        };
     }
-    if left.kind != MutationResourceKind::Path {
-        return left.key == right.key;
+    if is_path_like(left.kind) && is_path_like(right.kind) {
+        return path_overlaps(&left.key, &right.key);
     }
-    path_overlaps(&left.key, &right.key)
+    false
+}
+
+const fn is_path_like(kind: MutationResourceKind) -> bool {
+    matches!(
+        kind,
+        MutationResourceKind::Path
+            | MutationResourceKind::GeneratedOutput
+            | MutationResourceKind::Manifest
+            | MutationResourceKind::Lockfile
+            | MutationResourceKind::Migration
+            | MutationResourceKind::Snapshot
+    )
 }
 
 fn path_overlaps(left: &str, right: &str) -> bool {
@@ -521,8 +540,16 @@ fn path_overlaps(left: &str, right: &str) -> bool {
             .is_some_and(|suffix| suffix.starts_with('/'))
 }
 
-const fn conflict_reason(kind: MutationResourceKind) -> ConflictReason {
-    match kind {
+const fn conflict_reason(
+    left: MutationResourceKind,
+    right: MutationResourceKind,
+) -> ConflictReason {
+    let specialized = if left == MutationResourceKind::Path {
+        right
+    } else {
+        left
+    };
+    match specialized {
         MutationResourceKind::Path => ConflictReason::OverlappingPath,
         MutationResourceKind::Symbol => ConflictReason::SharedSymbol,
         MutationResourceKind::PublicApi => ConflictReason::SharedPublicApi,
@@ -571,7 +598,7 @@ fn deterministic_topological_order(tasks: &[MutationTaskContract]) -> Vec<String
 
 fn normalize_resource_key(kind: MutationResourceKind, value: &str) -> String {
     let trimmed = value.trim().replace('\\', "/");
-    if kind == MutationResourceKind::Path {
+    if is_path_like(kind) {
         trimmed
             .split('/')
             .filter(|part| !part.is_empty() && *part != ".")
@@ -597,10 +624,6 @@ fn ordered_pair<'a>(left: &'a str, right: &'a str) -> (&'a str, &'a str) {
     } else {
         (right, left)
     }
-}
-
-fn resources_fingerprint(resources: &[MutationResource]) -> String {
-    hash(resources)
 }
 
 fn dag_fingerprint(dag: &MutationDag) -> String {
@@ -647,12 +670,19 @@ mod tests {
         MutationResource::new(kind, key).expect("test resource must be valid")
     }
 
-    fn task(id: &str, resources: Vec<MutationResource>, dependencies: &[&str]) -> MutationTaskContract {
+    fn task(
+        id: &str,
+        resources: Vec<MutationResource>,
+        dependencies: &[&str],
+    ) -> MutationTaskContract {
         MutationTaskContract {
             id: id.to_owned(),
             repository_revision: "base-revision".to_owned(),
             resources,
-            dependencies: dependencies.iter().map(|value| (*value).to_owned()).collect(),
+            dependencies: dependencies
+                .iter()
+                .map(|value| (*value).to_owned())
+                .collect(),
             capabilities: vec!["repository-write".to_owned()],
             required_evidence: vec!["changed-paths".to_owned()],
             verification_responsibility: vec!["targeted-tests".to_owned()],
@@ -672,29 +702,48 @@ mod tests {
     #[test]
     fn disjoint_packages_run_in_same_wave() {
         let dag = parallel(vec![
-            task("api", vec![resource(MutationResourceKind::Path, "crates/api")], &[]),
-            task("ui", vec![resource(MutationResourceKind::Path, "crates/ui")], &[]),
+            task(
+                "api",
+                vec![resource(MutationResourceKind::Path, "crates/api")],
+                &[],
+            ),
+            task(
+                "ui",
+                vec![resource(MutationResourceKind::Path, "crates/ui")],
+                &[],
+            ),
         ]);
         assert_eq!(dag.runnable_wave(&BTreeSet::new()), vec!["api", "ui"]);
         assert!(dag.conflict_edges.is_empty());
     }
 
     #[test]
-    fn shared_manifest_serializes_ownership_and_falls_back_without_parallel_wave() {
+    fn shared_manifest_serializes_ownership() {
         let decision = MutationDag::build(
             vec![
-                task("api", vec![resource(MutationResourceKind::Manifest, "Cargo.toml")], &[]),
-                task("ui", vec![resource(MutationResourceKind::Manifest, "Cargo.toml")], &[]),
+                task(
+                    "api",
+                    vec![resource(MutationResourceKind::Manifest, "Cargo.toml")],
+                    &[],
+                ),
+                task(
+                    "ui",
+                    vec![resource(MutationResourceKind::Path, "Cargo.toml")],
+                    &[],
+                ),
             ],
             4,
             850,
         )
         .expect("conflicting DAG must be analyzable");
-        assert!(matches!(decision, DecompositionDecision::SingleImplementer { .. }));
+        assert!(matches!(
+            decision,
+            DecompositionDecision::SingleImplementer { .. }
+        ));
     }
 
     #[test]
-    fn generated_output_conflicts_even_when_source_paths_are_disjoint() {
+    fn hidden_generated_output_conflict_is_detected() {
         let decision = MutationDag::build(
             vec![
                 task(
@@ -709,11 +758,15 @@ mod tests {
                     "two",
                     vec![
                         resource(MutationResourceKind::Path, "packages/two"),
-                        resource(MutationResourceKind::GeneratedOutput, "schema/client.rs"),
+                        resource(MutationResourceKind::Path, "schema/client.rs"),
                     ],
                     &[],
                 ),
-                task("three", vec![resource(MutationResourceKind::Path, "packages/three")], &[]),
+                task(
+                    "three",
+                    vec![resource(MutationResourceKind::Path, "packages/three")],
+                    &[],
+                ),
             ],
             4,
             850,
@@ -727,10 +780,18 @@ mod tests {
     }
 
     #[test]
-    fn scope_expansion_introduces_conflict_and_requests_replan() {
+    fn scope_expansion_requests_replan() {
         let dag = parallel(vec![
-            task("api", vec![resource(MutationResourceKind::Path, "crates/api")], &[]),
-            task("ui", vec![resource(MutationResourceKind::Path, "crates/ui")], &[]),
+            task(
+                "api",
+                vec![resource(MutationResourceKind::Path, "crates/api")],
+                &[],
+            ),
+            task(
+                "ui",
+                vec![resource(MutationResourceKind::Path, "crates/ui")],
+                &[],
+            ),
         ]);
         let decision = dag
             .recompute_after_scope_change(
@@ -745,11 +806,15 @@ mod tests {
     }
 
     #[test]
-    fn integration_order_is_independent_of_worker_completion_order() {
+    fn integration_order_is_stable_across_worker_completion_order() {
         let dag = parallel(vec![
             task("b", vec![resource(MutationResourceKind::Path, "b")], &[]),
             task("a", vec![resource(MutationResourceKind::Path, "a")], &[]),
-            task("c", vec![resource(MutationResourceKind::Path, "c")], &["a"]),
+            task(
+                "c",
+                vec![resource(MutationResourceKind::Path, "c")],
+                &["a"],
+            ),
         ]);
         assert_eq!(dag.deterministic_integration_order(), vec!["a", "b", "c"]);
     }
@@ -758,29 +823,45 @@ mod tests {
     fn stale_downstream_evidence_blocks_barrier() {
         let dag = parallel(vec![
             task("a", vec![resource(MutationResourceKind::Path, "a")], &[]),
-            task("b", vec![resource(MutationResourceKind::Path, "b")], &["a"]),
+            task(
+                "b",
+                vec![resource(MutationResourceKind::Path, "b")],
+                &["a"],
+            ),
             task("c", vec![resource(MutationResourceKind::Path, "c")], &[]),
         ]);
         let evidence = vec![
             accepted("a", "tree-a", BTreeMap::new()),
-            accepted("b", "tree-b", BTreeMap::from([("a".to_owned(), "old-tree".to_owned())])),
+            accepted(
+                "b",
+                "tree-b",
+                BTreeMap::from([("a".to_owned(), "old-tree".to_owned())]),
+            ),
             accepted("c", "tree-c", BTreeMap::new()),
         ];
         assert!(IntegrationBarrier::establish(&dag, evidence).is_err());
     }
 
     #[test]
-    fn barrier_and_batch_receipt_are_deterministic_and_reconcilable() {
+    fn batch_receipt_is_idempotently_reconcilable() {
         let dag = parallel(vec![
             task("a", vec![resource(MutationResourceKind::Path, "a")], &[]),
-            task("b", vec![resource(MutationResourceKind::Path, "b")], &["a"]),
+            task(
+                "b",
+                vec![resource(MutationResourceKind::Path, "b")],
+                &["a"],
+            ),
             task("c", vec![resource(MutationResourceKind::Path, "c")], &[]),
         ]);
         let barrier = IntegrationBarrier::establish(
             &dag,
             vec![
                 accepted("c", "tree-c", BTreeMap::new()),
-                accepted("b", "tree-b", BTreeMap::from([("a".to_owned(), "tree-a".to_owned())])),
+                accepted(
+                    "b",
+                    "tree-b",
+                    BTreeMap::from([("a".to_owned(), "tree-a".to_owned())]),
+                ),
                 accepted("a", "tree-a", BTreeMap::new()),
             ],
         )
@@ -800,16 +881,22 @@ mod tests {
     }
 
     #[test]
-    fn ambiguous_or_low_confidence_decomposition_stays_single_implementer() {
+    fn ambiguous_or_low_confidence_tasks_stay_single_implementer() {
         let mut low = task("a", vec![resource(MutationResourceKind::Path, "a")], &[]);
         low.confidence_milli = 700;
         let decision = MutationDag::build(
-            vec![low, task("b", vec![resource(MutationResourceKind::Path, "b")], &[])],
+            vec![
+                low,
+                task("b", vec![resource(MutationResourceKind::Path, "b")], &[]),
+            ],
             4,
             850,
         )
         .expect("fallback must be a valid decision");
-        assert!(matches!(decision, DecompositionDecision::SingleImplementer { .. }));
+        assert!(matches!(
+            decision,
+            DecompositionDecision::SingleImplementer { .. }
+        ));
     }
 
     fn accepted(
