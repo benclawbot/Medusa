@@ -191,6 +191,98 @@ pub fn is_speculation_invalidation(error: &str) -> bool {
     error.starts_with(SPECULATION_INVALIDATED_PREFIX)
 }
 
+#[derive(Clone, Debug)]
+pub struct ParallelChildEvidence {
+    pub task_id: String,
+    pub evidence: ImplementationEvidence,
+}
+
+#[derive(Clone, Debug)]
+pub struct ParallelImplementationEvidence {
+    pub dag_fingerprint: String,
+    pub children: Vec<ParallelChildEvidence>,
+}
+
+#[allow(clippy::too_many_arguments)]
+pub fn run_parallel_implementations(
+    repo: &Path,
+    config: &Config,
+    session_api_key: Option<String>,
+    plan: &ProductionExecutionPlan,
+    preflight: &CoordinatorEvidence,
+    dag: &medusa_multi_agent_scheduler::mutation_dag::MutationDag,
+    cancel: &Arc<AtomicBool>,
+    events: &Sender<RuntimeEvent>,
+) -> Result<ParallelImplementationEvidence, String> {
+    dag.validate().map_err(str::to_owned)?;
+    validate_preflight(plan, preflight)?;
+    let mut completed = std::collections::BTreeSet::new();
+    let mut accepted = std::collections::BTreeMap::new();
+    while completed.len() < dag.tasks.len() {
+        if cancel.load(Ordering::SeqCst) {
+            return Err("parallel mutation batch was cancelled before dispatch".to_owned());
+        }
+        let wave = dag.runnable_wave(&completed);
+        if wave.is_empty() {
+            return Err("parallel mutation DAG has no runnable conflict-free wave".to_owned());
+        }
+        let results = std::thread::scope(|scope| {
+            let mut handles = Vec::with_capacity(wave.len());
+            for task_id in &wave {
+                let task = dag
+                    .tasks
+                    .iter()
+                    .find(|task| task.id == *task_id)
+                    .ok_or_else(|| format!("parallel mutation task {task_id} disappeared"))?;
+                let (child_plan, child_preflight) =
+                    crate::parallel_mutation::child_execution(plan, preflight, task)?;
+                let api_key = session_api_key.clone();
+                let task_id = task_id.clone();
+                let events = events.clone();
+                handles.push(scope.spawn(move || {
+                    let control = TeamControlPlane::default();
+                    run_implementation(
+                        repo,
+                        config,
+                        api_key,
+                        &child_plan,
+                        &child_preflight,
+                        cancel,
+                        (&control, &events),
+                    )
+                    .map(|evidence| (task_id, evidence))
+                }));
+            }
+            handles
+                .into_iter()
+                .map(|handle| {
+                    handle
+                        .join()
+                        .map_err(|_| "parallel implementer thread terminated unexpectedly".to_owned())?
+                })
+                .collect::<Result<Vec<_>, String>>()
+        })?;
+        for (task_id, evidence) in results {
+            completed.insert(task_id.clone());
+            accepted.insert(task_id, evidence);
+        }
+    }
+    let children = dag
+        .deterministic_integration_order()
+        .into_iter()
+        .map(|task_id| {
+            let evidence = accepted
+                .remove(&task_id)
+                .ok_or_else(|| format!("parallel mutation evidence missing for {task_id}"))?;
+            Ok(ParallelChildEvidence { task_id, evidence })
+        })
+        .collect::<Result<Vec<_>, String>>()?;
+    Ok(ParallelImplementationEvidence {
+        dag_fingerprint: dag.fingerprint.clone(),
+        children,
+    })
+}
+
 #[allow(clippy::too_many_arguments)]
 pub fn run_implementation(
     repo: &Path,
@@ -213,7 +305,6 @@ pub fn run_implementation(
         |request| execute_production_implementer(config, session_api_key.clone(), cancel, request),
     )
 }
-
 
 /// Prepares at most one disposable implementation while authoritative preflight continues.
 ///
@@ -391,7 +482,6 @@ struct SpeculativeExecutionContext {
     branch: String,
     max_model_turns: u32,
 }
-
 
 fn speculation_history_path(repo: &Path) -> PathBuf {
     repo.join(".medusa")
@@ -1394,8 +1484,7 @@ fn complete_prepared(
         .ok_or_else(|| "implementation state path has no execution root".to_owned())?;
     let transaction = MutationTransaction::open_or_prepare(
         root,
-        manager
-            .repository_path(),
+        manager.repository_path(),
         PreparedMutationInput {
             plan_fingerprint: state.plan_fingerprint.clone(),
             repository_fingerprint: state.repository_fingerprint.clone(),
