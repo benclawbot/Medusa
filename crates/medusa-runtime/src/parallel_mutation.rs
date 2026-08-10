@@ -7,11 +7,22 @@ use medusa_multi_agent_scheduler::{
         MutationTaskContract,
     },
 };
+use medusa_workers::WorkerManager;
 
-use crate::production_orchestrator::{AgentContract, AgentRole, ProductionExecutionPlan};
+use crate::{
+    multi_agent_coordinator::CoordinatorEvidence,
+    production_orchestrator::{AgentContract, AgentRole, ProductionExecutionPlan},
+};
 
 const MAX_PARALLEL_MUTATORS: u16 = 3;
 const MIN_DECOMPOSITION_CONFIDENCE_MILLI: u16 = 850;
+
+pub(crate) fn repository_revision(repo: &Path) -> Result<String, String> {
+    WorkerManager::new(repo, repo.join(".medusa/parallel-planning-worktrees"))
+        .map_err(|error| error.to_string())?
+        .repository_head()
+        .map_err(|error| error.to_string())
+}
 
 pub(crate) fn decomposition_for(
     repo: &Path,
@@ -79,6 +90,67 @@ pub(crate) fn decomposition_for(
         MIN_DECOMPOSITION_CONFIDENCE_MILLI,
     )
     .map_err(str::to_owned)
+}
+
+pub(crate) fn child_execution(
+    plan: &ProductionExecutionPlan,
+    preflight: &CoordinatorEvidence,
+    task: &MutationTaskContract,
+) -> Result<(ProductionExecutionPlan, CoordinatorEvidence), String> {
+    let owned_paths = task
+        .resources
+        .iter()
+        .filter(|resource| resource.kind == MutationResourceKind::Path)
+        .map(|resource| resource.key.clone())
+        .collect::<Vec<_>>();
+    if owned_paths.len() != 1 {
+        return Err("parallel child execution requires exactly one owned path".to_owned());
+    }
+
+    let mut child = plan.clone();
+    child.fingerprint = format!("{}:parallel:{}", plan.fingerprint, task.id);
+    child.planning.scope.effective = owned_paths.clone();
+    if let Some(planned) = child
+        .planning
+        .tasks
+        .iter_mut()
+        .find(|planned| planned.kind == TaskKind::Implementation)
+    {
+        planned.task.write_paths = owned_paths.clone();
+        planned.task.speculative = false;
+    }
+    if let Some(scheduled) = child
+        .tasks
+        .iter_mut()
+        .find(|scheduled| scheduled.id == "implement")
+    {
+        scheduled.write_paths = owned_paths.clone();
+        scheduled.speculative = false;
+    }
+    let contract = child
+        .contracts
+        .iter_mut()
+        .find(|contract| contract.role == AgentRole::Implementer)
+        .ok_or_else(|| "parallel child plan lost implementer contract".to_owned())?;
+    contract.allowed_write_paths = owned_paths.clone();
+    contract.objective = format!(
+        "{}\n\nParallel child ownership: mutate only {:?}. Do not edit any sibling task scope.",
+        contract.objective, owned_paths
+    );
+
+    let root = preflight
+        .state_path
+        .parent()
+        .ok_or_else(|| "parallel preflight evidence path has no execution root".to_owned())?
+        .join("parallel")
+        .join(&task.id);
+    let child_preflight = CoordinatorEvidence {
+        plan_fingerprint: child.fingerprint.clone(),
+        repository_fingerprint: preflight.repository_fingerprint.clone(),
+        workers: preflight.workers.clone(),
+        state_path: root.join("preflight-evidence.json"),
+    };
+    Ok((child, child_preflight))
 }
 
 fn implementation_contract(plan: &ProductionExecutionPlan) -> Result<&AgentContract, String> {
