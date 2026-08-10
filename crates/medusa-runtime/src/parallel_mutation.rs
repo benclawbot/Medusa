@@ -29,10 +29,14 @@ pub(crate) fn decomposition_for(
         ));
     }
     if scope.len() > usize::from(MAX_PARALLEL_MUTATORS) {
-        return Ok(single("mutation scope exceeds the bounded parallel worker budget"));
+        return Ok(single(
+            "mutation scope exceeds the bounded parallel worker budget",
+        ));
     }
     if repository_revision.trim().is_empty() {
-        return Err("parallel mutation planning requires an immutable repository revision".to_owned());
+        return Err(
+            "parallel mutation planning requires an immutable repository revision".to_owned(),
+        );
     }
 
     let tasks = scope
@@ -92,13 +96,16 @@ fn implementation_contract(plan: &ProductionExecutionPlan) -> Result<&AgentContr
 }
 
 fn resources_for_path(path: &str) -> Result<Vec<MutationResource>, String> {
-    let mut resources = vec![MutationResource::new(MutationResourceKind::Path, path)
-        .map_err(str::to_owned)?];
+    let mut resources =
+        vec![MutationResource::new(MutationResourceKind::Path, path).map_err(str::to_owned)?];
     let file_name = path.rsplit('/').next().unwrap_or(path);
     let lower = path.to_ascii_lowercase();
     let specialized = if matches!(file_name, "Cargo.toml" | "package.json" | "pyproject.toml") {
         Some(MutationResourceKind::Manifest)
-    } else if matches!(file_name, "Cargo.lock" | "package-lock.json" | "pnpm-lock.yaml" | "yarn.lock") {
+    } else if matches!(
+        file_name,
+        "Cargo.lock" | "package-lock.json" | "pnpm-lock.yaml" | "yarn.lock"
+    ) {
         Some(MutationResourceKind::Lockfile)
     } else if lower.contains("/migrations/") || lower.starts_with("migrations/") {
         Some(MutationResourceKind::Migration)
@@ -128,18 +135,32 @@ mod tests {
     #[test]
     fn classifies_hidden_shared_artifacts() {
         let manifest = resources_for_path("crates/api/Cargo.toml").expect("manifest resources");
-        assert!(manifest.iter().any(|resource| resource.kind == MutationResourceKind::Manifest));
+        assert!(
+            manifest
+                .iter()
+                .any(|resource| resource.kind == MutationResourceKind::Manifest)
+        );
         let generated = resources_for_path("src/generated/client.rs").expect("generated resources");
-        assert!(generated
-            .iter()
-            .any(|resource| resource.kind == MutationResourceKind::GeneratedOutput));
+        assert!(
+            generated
+                .iter()
+                .any(|resource| resource.kind == MutationResourceKind::GeneratedOutput)
+        );
     }
 
     #[test]
     fn lockfiles_and_migrations_are_specialized() {
         let lockfile = resources_for_path("Cargo.lock").expect("lockfile resources");
-        assert!(lockfile.iter().any(|resource| resource.kind == MutationResourceKind::Lockfile));
+        assert!(
+            lockfile
+                .iter()
+                .any(|resource| resource.kind == MutationResourceKind::Lockfile)
+        );
         let migration = resources_for_path("db/migrations/001.sql").expect("migration resources");
-        assert!(migration.iter().any(|resource| resource.kind == MutationResourceKind::Migration));
+        assert!(
+            migration
+                .iter()
+                .any(|resource| resource.kind == MutationResourceKind::Migration)
+        );
     }
 }
