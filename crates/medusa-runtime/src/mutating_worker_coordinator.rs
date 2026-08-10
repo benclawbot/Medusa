@@ -15,13 +15,13 @@ use medusa_agent::{
     TeamRuntime, WorkerExecutionController, authoritative_verification_for_components_at,
     prepare_components_for_verification,
 };
-use medusa_evidence::{ChangedComponent, VerificationReceipt, changed_scope_fingerprint};
 use medusa_config::{Config, Mode};
-use medusa_multi_agent_scheduler::{Task, TaskState, Worker as ScheduledWorker};
+use medusa_evidence::{ChangedComponent, VerificationReceipt, changed_scope_fingerprint};
 use medusa_multi_agent_scheduler::speculation::{
     InvalidationReason, PromotionCheck, SpeculationAssumptions, SpeculationHistory,
     SpeculationLedger, SpeculationState, policy_for as speculation_policy_for,
 };
+use medusa_multi_agent_scheduler::{Task, TaskState, Worker as ScheduledWorker};
 use medusa_provider::ConfiguredProvider;
 use medusa_workers::{Worker, WorkerManager};
 use serde::{Deserialize, Serialize};
@@ -179,9 +179,17 @@ struct WorkerRun {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum SpeculationPreparation {
-    Skipped { reason: String },
-    Prepared { candidate: String, turns: u32, elapsed_ms: u64 },
-    Discarded { reason: String },
+    Skipped {
+        reason: String,
+    },
+    Prepared {
+        candidate: String,
+        turns: u32,
+        elapsed_ms: u64,
+    },
+    Discarded {
+        reason: String,
+    },
 }
 
 const SPECULATION_INVALIDATED_PREFIX: &str = "speculation invalidated before promotion:";
@@ -293,6 +301,40 @@ pub fn run_implementation(
     cancel: &Arc<AtomicBool>,
     reporting: (&TeamControlPlane, &Sender<RuntimeEvent>),
 ) -> Result<ImplementationEvidence, String> {
+    let repository_revision = crate::parallel_mutation::repository_revision(repo)?;
+    match crate::parallel_mutation::decomposition_for(repo, plan, &repository_revision)? {
+        medusa_multi_agent_scheduler::mutation_dag::DecompositionDecision::Parallel(dag) => {
+            if let Some(root) = preflight.state_path.parent() {
+                let state_path = root.join("implementation-state.json");
+                if state_path.is_file()
+                    && let Ok(state) = load_state(&state_path)
+                    && state.speculative
+                {
+                    discard_speculative_artifacts(repo, root)?;
+                }
+            }
+            return crate::parallel_mutation_batch::prepare_combined(
+                repo,
+                config,
+                session_api_key,
+                plan,
+                preflight,
+                &dag,
+                cancel,
+                reporting.1,
+            );
+        }
+        medusa_multi_agent_scheduler::mutation_dag::DecompositionDecision::SingleImplementer {
+            reason,
+        } => {
+            let _ = reporting.1.send(RuntimeEvent::Activity(RuntimeActivity {
+                id: Some(plan.fingerprint.clone()),
+                kind: RuntimeActivityKind::Progress,
+                title: "Single implementer fallback".to_owned(),
+                details: vec![reason],
+            }));
+        }
+    }
     let (control, events) = reporting;
     coordinate_with_control(
         repo,
@@ -348,14 +390,18 @@ pub fn run_speculative_implementation(
         repository_fingerprint.clone(),
     )?;
     match &ledger.record().state {
-        SpeculationState::Prepared { candidate_fingerprint } => {
+        SpeculationState::Prepared {
+            candidate_fingerprint,
+        } => {
             return Ok(SpeculationPreparation::Prepared {
                 candidate: candidate_fingerprint.clone(),
                 turns: ledger.record().model_turns,
                 elapsed_ms: ledger.record().elapsed_ms,
             });
         }
-        SpeculationState::Promoted { candidate_fingerprint } => {
+        SpeculationState::Promoted {
+            candidate_fingerprint,
+        } => {
             return Ok(SpeculationPreparation::Prepared {
                 candidate: candidate_fingerprint.clone(),
                 turns: ledger.record().model_turns,
@@ -1011,11 +1057,10 @@ where
             team_context,
             control: control.clone(),
             events: events.clone(),
-            max_model_turns: speculative
-                .map_or_else(
-                    || u32::from(plan.planning.model_turn_budget.successful_path_total),
-                    |context| context.max_model_turns,
-                ),
+            max_model_turns: speculative.map_or_else(
+                || u32::from(plan.planning.model_turn_budget.successful_path_total),
+                |context| context.max_model_turns,
+            ),
         };
         let run = match executor(request) {
             Ok(run) => run,
@@ -1498,7 +1543,9 @@ fn complete_prepared(
             worktree_verification_receipt: state
                 .verification_receipt
                 .clone()
-                .ok_or_else(|| "prepared implementation has no typed verification receipt".to_owned())?,
+                .ok_or_else(|| {
+                    "prepared implementation has no typed verification receipt".to_owned()
+                })?,
             speculative: state.speculative,
         },
     )?;
@@ -1564,11 +1611,14 @@ fn execute_production_implementer(
     let mut session = engine
         .create_session(&request.worker.worktree, objective)
         .map_err(|error| error.to_string())?;
-    request.team_context.clone().execute(
-        "team_send_message",
-        &json!({"recipient":"lead","body":format!("{} implementation started", request.contract.task_id)}),
-    )
-    .map_err(|error| error.to_string())?;
+    request
+        .team_context
+        .clone()
+        .execute(
+            "team_send_message",
+            &json!({"recipient":"lead","body":format!("{} implementation started", request.contract.task_id)}),
+        )
+        .map_err(|error| error.to_string())?;
     let system_context = format!(
         "Authoritative delegation packet fingerprint: {}\n{}",
         request.packet.fingerprint,
