@@ -2,8 +2,11 @@ use std::{
     fs,
     path::{Component, Path, PathBuf},
     process::Output,
-    sync::atomic::{AtomicBool, Ordering},
+    sync::atomic::AtomicBool,
 };
+
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+use std::sync::atomic::Ordering;
 
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 use std::{
@@ -352,6 +355,7 @@ fn sandbox_unavailable(message: impl Into<String>) -> MedusaError {
     error
 }
 
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 fn cancelled_command(description: &str) -> MedusaError {
     let mut error = MedusaError::new(
         ErrorCode::ToolExecutionFailed,

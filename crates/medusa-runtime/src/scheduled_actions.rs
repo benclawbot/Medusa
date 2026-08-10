@@ -434,6 +434,8 @@ fn sync_directory(path: &Path) -> Result<(), RuntimeError> {
             .and_then(|directory| directory.sync_all())
             .map_err(RuntimeError::agent)?;
     }
+    #[cfg(not(unix))]
+    let _ = path;
     Ok(())
 }
 

@@ -6,13 +6,7 @@
 use std::{path::Path, process::Output, sync::atomic::AtomicBool};
 
 use medusa_core::{ErrorCategory, ErrorCode, MedusaError, MedusaResult};
-use medusa_process_containment::{
-    WindowsSandboxRestrictions, run_appcontainer, run_appcontainer_cancellable,
-};
-
-pub(crate) fn run(repo: &Path, program: &str, args: &[String]) -> MedusaResult<Output> {
-    run_appcontainer(repo, program, args).map_err(unavailable)
-}
+use medusa_process_containment::{WindowsSandboxRestrictions, run_appcontainer_cancellable};
 
 pub(crate) fn run_cancellable(
     repo: &Path,

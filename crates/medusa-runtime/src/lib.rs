@@ -29,6 +29,7 @@ use crate::{
 };
 
 pub mod attachment;
+pub mod analysis_workspace;
 pub mod checkpoint_payload;
 pub mod checkpoint_store;
 pub mod commands;
