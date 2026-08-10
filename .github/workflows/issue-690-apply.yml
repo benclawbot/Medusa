@@ -26,8 +26,6 @@ jobs:
           git apply --check /tmp/issue690.patch
           git apply /tmp/issue690.patch
           rm -rf .github/issue-690-patch
-          rm -f .github/workflows/agent-source-export.yml
-          rm -f .github/workflows/issue-690-apply.yml
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
           git add -A
