@@ -135,7 +135,7 @@ fn node_for_check(
         command,
         dependencies: dependencies(plan, check),
         authority: VerificationAuthority::IndependentAcceptance,
-        expected_duration_ms: 0,
+        expected_duration_ms: expected_duration_ms(check.kind),
         resource_class: resource_class(check).to_owned(),
         input: VerificationInputKey {
             repository_revision: commit.to_owned(),
@@ -204,6 +204,21 @@ pub(crate) fn execute_command_wave(
             })
             .collect()
     })
+}
+
+fn expected_duration_ms(kind: VerificationCheckKind) -> u64 {
+    match kind {
+        VerificationCheckKind::Format => 500,
+        VerificationCheckKind::Lint | VerificationCheckKind::Typecheck => 5_000,
+        VerificationCheckKind::Unit => 10_000,
+        VerificationCheckKind::Integration => 30_000,
+        VerificationCheckKind::Build => 30_000,
+        VerificationCheckKind::ArtifactSemantic => 500,
+        VerificationCheckKind::BrowserBehavior | VerificationCheckKind::Accessibility => 15_000,
+        VerificationCheckKind::Packaging => 30_000,
+        VerificationCheckKind::Security => 15_000,
+        VerificationCheckKind::RepositoryDefined => 10_000,
+    }
 }
 
 fn dependencies(plan: &VerificationPlan, check: &VerificationCheck) -> BTreeSet<String> {
@@ -275,4 +290,29 @@ fn invalid(message: impl Into<String>) -> MedusaError {
         ErrorCategory::Internal,
         message.into(),
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn every_production_check_kind_has_an_expected_duration() {
+        for kind in [
+            VerificationCheckKind::Format,
+            VerificationCheckKind::Lint,
+            VerificationCheckKind::Typecheck,
+            VerificationCheckKind::Unit,
+            VerificationCheckKind::Integration,
+            VerificationCheckKind::Build,
+            VerificationCheckKind::ArtifactSemantic,
+            VerificationCheckKind::BrowserBehavior,
+            VerificationCheckKind::Accessibility,
+            VerificationCheckKind::Packaging,
+            VerificationCheckKind::Security,
+            VerificationCheckKind::RepositoryDefined,
+        ] {
+            assert!(expected_duration_ms(kind) > 0);
+        }
+    }
 }
