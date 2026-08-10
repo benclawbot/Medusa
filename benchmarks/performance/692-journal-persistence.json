@@ -1,0 +1,66 @@
+{
+  "schema_version": 1,
+  "run_id": "issue-692-durable-journal-operation-model-v1",
+  "scenario": "durable_journal_committed_transition",
+  "mode": "warm_repository",
+  "repository_revision": "agent/issue-692-journal-runtime-performance",
+  "platform": "cross-platform-contract",
+  "machine": {
+    "cpu": "not_applicable_deterministic_operation_model",
+    "memory_bytes": 0,
+    "os": "linux-macos-windows"
+  },
+  "provider": {
+    "mode": "none",
+    "route": "journal-only"
+  },
+  "outcome": {
+    "status": "success",
+    "verified_success": true,
+    "first_pass_verified_success": true
+  },
+  "phases": {
+    "objective_accepted_ns": 0,
+    "verified_completion_ns": 1
+  },
+  "model": {
+    "requests": 0,
+    "tokens": 0,
+    "retries": 0,
+    "cache_eligible": 0,
+    "cache_hits": 0
+  },
+  "tools": {
+    "calls": 0,
+    "redundant_calls": 0,
+    "failures": 0,
+    "cancelled": 0
+  },
+  "verification": {
+    "coverage": 1.0,
+    "started_ns": 0,
+    "completed_ns": 1,
+    "failures": 0,
+    "reruns": 0
+  },
+  "artifacts": [
+    "crates/medusa-agent/src/journal.rs",
+    "docs/durable-journal-policy.md"
+  ],
+  "persistence": {
+    "authoritative_records_per_transition": 2,
+    "baseline_append_opens_per_transition": 2,
+    "candidate_append_opens_per_transition": 1,
+    "baseline_file_syncs_per_transition": 2,
+    "candidate_file_syncs_per_transition": 1,
+    "synchronous_persistence_operation_reduction_ratio": 0.5,
+    "ordering": "event_then_snapshot",
+    "publish_after_sync": true,
+    "global_persistence_lock": false,
+    "lock_scope": "repository_and_session",
+    "serialized_bytes": "recorded_by_frame_payload_length_at_write boundary; unchanged encoding",
+    "copied_bytes": "one full session clone for commit snapshot; prior path also cloned snapshot after event materialization",
+    "snapshot_timing": "same durable append batch before publish",
+    "critical_path_contribution": "one append open plus one file sync per committed transition instead of two each"
+  }
+}
