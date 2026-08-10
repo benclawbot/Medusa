@@ -42,6 +42,7 @@ jobs:
           p.write_text(s)
           PY
           cargo fmt --all
+          cargo generate-lockfile
           cargo clippy --workspace --all-features --locked --lib --bins --examples -- \
             -D clippy::unwrap_used \
             -D clippy::expect_used \
