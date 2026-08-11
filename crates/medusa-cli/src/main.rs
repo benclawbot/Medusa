@@ -74,18 +74,18 @@ enum CommandKind {
         #[command(subcommand)]
         action: Option<ConfigAction>,
     },
-    /// Check for or install a verified prebuilt Medusa release.
+    /// Check for or install the latest Medusa main-branch build.
     Update {
-        /// Report whether an eligible update exists without modifying this installation.
+        /// Report whether this build matches the current main branch without modifying it.
         #[arg(long)]
         check: bool,
         /// Apply an available update without an additional prompt (for managed automation).
         #[arg(long)]
         automatic: bool,
-        /// Select the verified release channel or the explicit slow developer source channel.
-        #[arg(long, default_value = "release", value_parser = ["release", "source"])]
+        /// Select the main-branch source channel or the explicit verified release channel.
+        #[arg(long, default_value = "source", value_parser = ["source", "release"])]
         channel: String,
-        /// Permit an intentional version or rollout-sequence rollback.
+        /// Permit an intentional version or rollout-sequence rollback on the release channel.
         #[arg(long)]
         allow_downgrade: bool,
     },
@@ -1065,8 +1065,9 @@ mod tests {
             Some(CommandKind::Update {
                 check: true,
                 automatic: false,
-                ..
-            })
+                channel,
+                allow_downgrade: false,
+            }) if channel == "source"
         ));
     }
 
