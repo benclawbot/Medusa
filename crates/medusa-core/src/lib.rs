@@ -6,6 +6,8 @@ use serde::{Deserialize, Serialize};
 use thiserror::Error;
 use ulid::Ulid;
 
+pub mod learning_policy;
+
 macro_rules! typed_id {
     ($name:ident, $prefix:literal) => {
         #[doc = concat!("Stable ", stringify!($name), " identifier.")]
