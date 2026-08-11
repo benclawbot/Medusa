@@ -6,6 +6,12 @@ on:
       - 'crates/medusa-protocol/**'
       - 'crates/medusa-testkit/**'
       - 'crates/medusa-agent/src/journal.rs'
+      - 'crates/medusa-transaction-coordinator/**'
+      - 'crates/medusa-execution-checkpoint/**'
+      - 'crates/medusa-worker-leases/**'
+      - 'crates/medusa-process-registry/**'
+      - 'crates/medusa-time-travel/**'
+      - 'crates/medusa-session-continuity/**'
       - '.github/workflows/resilience-certification.yml'
       - 'docs/resilience-certification.md'
   push:
@@ -14,6 +20,12 @@ on:
       - 'crates/medusa-protocol/**'
       - 'crates/medusa-testkit/**'
       - 'crates/medusa-agent/src/journal.rs'
+      - 'crates/medusa-transaction-coordinator/**'
+      - 'crates/medusa-execution-checkpoint/**'
+      - 'crates/medusa-worker-leases/**'
+      - 'crates/medusa-process-registry/**'
+      - 'crates/medusa-time-travel/**'
+      - 'crates/medusa-session-continuity/**'
       - '.github/workflows/resilience-certification.yml'
       - 'docs/resilience-certification.md'
   schedule:
@@ -43,6 +55,16 @@ jobs:
         run: cargo test -p medusa-testkit --locked -- --nocapture
       - name: Run protocol property and malformed-input certification
         run: cargo test -p medusa-protocol --test resilience --locked -- --nocapture
+      - name: Run authority state-machine and recovery suites
+        run: >-
+          cargo test
+          -p medusa-transaction-coordinator
+          -p medusa-execution-checkpoint
+          -p medusa-worker-leases
+          -p medusa-process-registry
+          -p medusa-time-travel
+          -p medusa-session-continuity
+          --locked -- --nocapture
       - name: Re-run canonical journal crash/recovery coverage
         run: cargo test -p medusa-agent journal::tests --locked -- --nocapture
       - name: Preserve minimized proptest reproducers
@@ -74,6 +96,16 @@ jobs:
         run: cargo generate-lockfile
       - name: Run deep protocol and deterministic fault campaign
         run: cargo test -p medusa-testkit -p medusa-protocol --locked -- --nocapture
+      - name: Run deep authority state-machine and recovery suites
+        run: >-
+          cargo test
+          -p medusa-transaction-coordinator
+          -p medusa-execution-checkpoint
+          -p medusa-worker-leases
+          -p medusa-process-registry
+          -p medusa-time-travel
+          -p medusa-session-continuity
+          --locked -- --nocapture
       - name: Run journal recovery campaign
         run: cargo test -p medusa-agent journal::tests --locked -- --nocapture
       - name: Preserve minimized proptest reproducers
