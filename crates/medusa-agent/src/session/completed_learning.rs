@@ -3,7 +3,9 @@ use std::{
     path::{Path, PathBuf},
 };
 
-use medusa_core::MedusaResult;
+use medusa_core::{ErrorCategory, ErrorCode, MedusaError, MedusaResult};
+use medusa_improvement::learning_admission::LearningAdmissionPolicy;
+use medusa_protocol::{Actor, EventPayload};
 use serde_json::{Value, json};
 
 use super::{AgentSession, lessons, skill_drafts, skill_outcomes, skill_probation};
@@ -11,7 +13,12 @@ use super::{AgentSession, lessons, skill_drafts, skill_outcomes, skill_probation
 const MIN_PROBATION_CONFIDENCE_MILLI: u64 = 750;
 
 pub(super) fn process(session: &AgentSession) -> MedusaResult<()> {
-    if !session.completed {
+    let policy = policy_for(&session.repo)?;
+    if !policy.capture_enabled() || !session.completed {
+        return Ok(());
+    }
+
+    if !authoritative_success(session) {
         return Ok(());
     }
 
@@ -20,26 +27,102 @@ pub(super) fn process(session: &AgentSession) -> MedusaResult<()> {
         return Ok(());
     }
 
-    if let Some(proposal_path) = lessons::extract_completed_session(session)? {
+    if policy.automatic_proposals_enabled()
+        && let Some(proposal_path) = lessons::extract_completed_session(session)?
+    {
         let canonical_path = admit_to_canonical_memory(session, &proposal_path)?;
         let value: Value = serde_json::from_slice(&fs::read(&canonical_path)?)?;
         if value["lifecycle"]["status"] == "probation" {
             skill_drafts::create_from_lesson(&canonical_path)?;
         }
+        skill_probation::refresh(&session.repo)?;
     }
 
-    skill_outcomes::record_completed_session(session)?;
-    skill_probation::refresh(&session.repo)?;
+    if policy.telemetry_enabled() {
+        skill_outcomes::record_completed_session(session)?;
+    }
+
     write_json_atomic(
         &marker,
         &json!({
+            "schema_version": 2,
             "session_id": session.id.to_string(),
-            "repository": session.repo.to_string_lossy(),
             "completed": true,
-            "evidence_count": session.evidence.len(),
-            "verification_result": verification_result(session),
+            "authoritative_success": true,
+            "automatic_proposals_enabled": policy.automatic_proposals_enabled(),
+            "telemetry_enabled": policy.telemetry_enabled(),
+            "authority_receipts": authority_receipts(session),
         }),
     )
+}
+
+pub(super) fn policy_for(repo: &Path) -> MedusaResult<LearningAdmissionPolicy> {
+    LearningAdmissionPolicy::for_repository(repo).map_err(|error| {
+        MedusaError::new(
+            ErrorCode::PersistenceFailed,
+            ErrorCategory::Persistence,
+            format!("learning privacy state is unavailable; learning failed closed: {error}"),
+        )
+    })
+}
+
+pub(super) fn telemetry_allowed(repo: &Path) -> MedusaResult<bool> {
+    Ok(policy_for(repo)?.telemetry_enabled())
+}
+
+/// Positive learning is admitted only from a root task with a passing verification receipt that
+/// remains valid through the authoritative terminal completion. Production-created teammate
+/// objectives are explicitly non-root until #820 replaces this compatibility discriminator with
+/// the typed root-trajectory identity carried by the provenance graph.
+pub(super) fn authoritative_success(session: &AgentSession) -> bool {
+    if !session.completed || delegated_worker_session(session) {
+        return false;
+    }
+
+    let Some(completion_sequence) = session.events.iter().rev().find_map(|event| {
+        matches!(&event.payload, EventPayload::SessionCompleted { .. }).then_some(event.sequence)
+    }) else {
+        return false;
+    };
+
+    let Some((verification_sequence, passed)) = session.events.iter().rev().find_map(|event| {
+        if event.sequence > completion_sequence {
+            return None;
+        }
+        match &event.payload {
+            EventPayload::VerificationCompleted { passed, .. } => Some((event.sequence, *passed)),
+            _ => None,
+        }
+    }) else {
+        return false;
+    };
+    if !passed {
+        return false;
+    }
+
+    !session.events.iter().any(|event| {
+        event.sequence >= verification_sequence
+            && matches!(
+                &event.payload,
+                EventPayload::SessionFailed { .. }
+                    | EventPayload::RuntimeFailed { .. }
+                    | EventPayload::CancellationCompleted
+            )
+    })
+}
+
+fn delegated_worker_session(session: &AgentSession) -> bool {
+    if session
+        .events
+        .iter()
+        .any(|event| matches!(&event.actor, Actor::Worker(_)))
+    {
+        return true;
+    }
+    let objective = session.objective.trim_start();
+    objective.starts_with("Implement delegated task `")
+        || objective.starts_with("Collect read-only repository evidence for the parent goal.")
+        || objective.starts_with("Perform a read-only risk and failure-mode review for the parent goal.")
 }
 
 fn admit_to_canonical_memory(
@@ -48,13 +131,13 @@ fn admit_to_canonical_memory(
 ) -> MedusaResult<PathBuf> {
     let mut proposal: Value = serde_json::from_slice(&fs::read(proposal_path)?)?;
     let confidence = proposal["confidence_milli"].as_u64().unwrap_or_default();
-    let safe_evidence = session
-        .evidence
+    let all_evidence = authoritative_evidence(session);
+    let safe_evidence = all_evidence
         .iter()
         .filter(|item| !secret_like(item))
         .cloned()
         .collect::<Vec<_>>();
-    let safe = !safe_evidence.is_empty() && safe_evidence.len() == session.evidence.len();
+    let safe = !safe_evidence.is_empty() && safe_evidence.len() == all_evidence.len();
     let status = if safe && confidence >= MIN_PROBATION_CONFIDENCE_MILLI {
         "probation"
     } else {
@@ -82,10 +165,10 @@ fn admit_to_canonical_memory(
     });
     proposal["provenance"] = json!({
         "session_id": session.id.to_string(),
-        "repository": session.repo.to_string_lossy(),
         "evidence": safe_evidence,
-        "evidence_count": session.evidence.len(),
-        "verification_result": verification_result(session),
+        "evidence_count": all_evidence.len(),
+        "verification_result": "verified",
+        "authority_receipts": authority_receipts(session),
         "completed_at": session.updated_at,
     });
 
@@ -97,19 +180,48 @@ fn admit_to_canonical_memory(
     Ok(path)
 }
 
+pub(super) fn authoritative_evidence(session: &AgentSession) -> Vec<String> {
+    let mut evidence = session.evidence.clone();
+    for event in &session.events {
+        if let EventPayload::VerificationCompleted {
+            passed: true,
+            evidence: verification_evidence,
+        } = &event.payload
+        {
+            evidence.extend(verification_evidence.iter().cloned());
+        }
+    }
+    evidence.sort();
+    evidence.dedup();
+    evidence
+}
+
+fn authority_receipts(session: &AgentSession) -> Vec<Value> {
+    session
+        .events
+        .iter()
+        .filter_map(|event| {
+            let kind = match &event.payload {
+                EventPayload::WorkerEvidenceRecorded { .. } => "worker_evidence",
+                EventPayload::IntegrationReceiptRecorded { .. } => "integration",
+                EventPayload::VerificationCompleted { passed: true, .. } => "verification",
+                EventPayload::SessionCompleted { .. } => "completion",
+                _ => return None,
+            };
+            Some(json!({
+                "kind": kind,
+                "event_id": event.event_id.to_string(),
+                "sequence": event.sequence,
+            }))
+        })
+        .collect()
+}
+
 fn processed_marker(session: &AgentSession) -> PathBuf {
     session
         .repo
         .join(".medusa/learning/processed-sessions")
         .join(format!("{}.json", session.id))
-}
-
-fn verification_result(session: &AgentSession) -> &'static str {
-    if session.completed && skill_outcomes::verification_passed(session) {
-        "verified"
-    } else {
-        "unverified"
-    }
 }
 
 fn secret_like(value: &str) -> bool {
@@ -178,11 +290,25 @@ mod tests {
             },
         )
         .expect("verification event");
+        append_event(
+            &mut session,
+            Actor::Coordinator,
+            EventPayload::SessionCompleted {
+                report_ref: "test-report".to_owned(),
+            },
+        )
+        .expect("completion event");
         session
     }
 
+    fn update_privacy(repo: &Path, privacy: medusa_improvement::learning_review::LearningPrivacy) {
+        medusa_improvement::learning_review::LearningReviewStore::for_repository(repo)
+            .update_privacy(privacy, 0, "test")
+            .expect("privacy");
+    }
+
     #[test]
-    fn processing_is_idempotent_and_writes_canonical_provenance() {
+    fn processing_is_idempotent_and_writes_authority_receipts() {
         let repo = tempfile::tempdir().expect("repo");
         let session = session(repo.path());
         process(&session).expect("first processing");
@@ -197,15 +323,100 @@ mod tests {
         assert_eq!(value["provenance"]["session_id"], session.id.to_string());
         assert_eq!(value["provenance"]["verification_result"], "verified");
         assert_eq!(value["lifecycle"]["status"], "probation");
-        assert_eq!(value["lifecycle"]["auto_promotion"], "disabled");
-        assert_eq!(
-            value["lifecycle"]["promotion"]["mode"],
-            "explicit_graduation"
+        assert!(
+            value["provenance"]["authority_receipts"]
+                .as_array()
+                .is_some_and(|items| items.iter().any(|item| item["kind"] == "completion"))
         );
-        assert_eq!(
-            value["lifecycle"]["rollback"]["mode"],
-            "graduation_receipt_transaction"
+        assert!(processed_marker(&session).is_file());
+    }
+
+    #[test]
+    fn completed_session_without_authoritative_verification_is_ineligible() {
+        let repo = tempfile::tempdir().expect("repo");
+        let mut session = session(repo.path());
+        session.events.retain(|event| {
+            !matches!(&event.payload, EventPayload::VerificationCompleted { .. })
+        });
+        assert!(!authoritative_success(&session));
+        process(&session).expect("blocked process");
+        assert!(!processed_marker(&session).exists());
+        assert!(!repo.path().join(".medusa/memory/lessons").exists());
+    }
+
+    #[test]
+    fn failed_verification_cannot_be_overridden_by_completion() {
+        let repo = tempfile::tempdir().expect("repo");
+        let mut session = session(repo.path());
+        session.events.clear();
+        append_event(
+            &mut session,
+            Actor::System("test".to_owned()),
+            EventPayload::VerificationCompleted {
+                passed: false,
+                evidence: vec!["tests failed".to_owned()],
+            },
+        )
+        .expect("failed verification");
+        append_event(
+            &mut session,
+            Actor::Coordinator,
+            EventPayload::SessionCompleted {
+                report_ref: "fabricated-completion".to_owned(),
+            },
+        )
+        .expect("completion");
+        assert!(!authoritative_success(&session));
+    }
+
+    #[test]
+    fn production_worker_objective_cannot_become_positive_learning() {
+        let repo = tempfile::tempdir().expect("repo");
+        let mut session = session(repo.path());
+        session.objective = "Implement delegated task `implementation` inside this isolated Git worktree. Objective: fix it.".to_owned();
+        assert!(!authoritative_success(&session));
+        process(&session).expect("blocked worker learning");
+        assert!(!processed_marker(&session).exists());
+    }
+
+    #[test]
+    fn capture_disabled_persists_no_learning_artifact() {
+        let repo = tempfile::tempdir().expect("repo");
+        update_privacy(
+            repo.path(),
+            medusa_improvement::learning_review::LearningPrivacy {
+                capture_enabled: false,
+                user_persistence_enabled: true,
+                cross_repository_reuse_enabled: true,
+                telemetry_enabled: true,
+                automatic_proposals_enabled: true,
+            },
         );
+        let mut session = session(repo.path());
+        session.objective = "SEEDED_PRIVATE_CONTENT".to_owned();
+        process(&session).expect("privacy block");
+        assert!(!repo.path().join(".medusa/learning/proposals").exists());
+        assert!(!repo.path().join(".medusa/memory/lessons").exists());
+        assert!(!processed_marker(&session).exists());
+    }
+
+    #[test]
+    fn automatic_proposals_disabled_creates_no_candidate() {
+        let repo = tempfile::tempdir().expect("repo");
+        update_privacy(
+            repo.path(),
+            medusa_improvement::learning_review::LearningPrivacy {
+                capture_enabled: true,
+                user_persistence_enabled: false,
+                cross_repository_reuse_enabled: false,
+                telemetry_enabled: false,
+                automatic_proposals_enabled: false,
+            },
+        );
+        let session = session(repo.path());
+        process(&session).expect("process");
+        assert!(!repo.path().join(".medusa/learning/proposals").exists());
+        assert!(!repo.path().join(".medusa/memory/lessons").exists());
         assert!(processed_marker(&session).is_file());
     }
 
