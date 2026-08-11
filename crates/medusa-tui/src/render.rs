@@ -274,6 +274,139 @@ pub(super) fn draw_common(
     stdout.flush()
 }
 
+fn modal_lines(model_modal: &app::ModelModal) -> Vec<StyledLine> {
+    if model_modal.is_settings() {
+        settings_modal_lines(model_modal)
+    } else {
+        support::model_modal_lines(model_modal)
+    }
+}
+
+fn settings_modal_lines(modal: &app::ModelModal) -> Vec<StyledLine> {
+    let page = modal.settings_page().unwrap_or(app::SettingsPage::Root);
+    let revision = modal.settings_revision().unwrap_or_default();
+    let profile = modal.settings_active_profile().unwrap_or("default");
+    if page == app::SettingsPage::Root {
+        let mut lines = vec![StyledLine::new(
+            format!("Settings · profile {profile} · revision {revision}"),
+            Color::Cyan,
+        )];
+        for (index, (label, value)) in modal.settings_root_rows().into_iter().enumerate() {
+            let selected = index == modal.settings_root_selected();
+            lines.push(StyledLine::with_marker(
+                if selected { "› " } else { "  " },
+                if selected {
+                    Color::Magenta
+                } else {
+                    Color::DarkGrey
+                },
+                format!("{label:<15} {value}"),
+                if selected { Color::White } else { Color::Grey },
+            ));
+        }
+        lines.push(StyledLine::new(
+            format!(
+                "Last apply timing: {} · credentials remain external/redacted",
+                modal
+                    .settings_last_apply_timing()
+                    .map_or("none", |timing| timing.label())
+            ),
+            Color::DarkGrey,
+        ));
+        return lines;
+    }
+
+    let page_name = match page {
+        app::SettingsPage::Root => "Settings",
+        app::SettingsPage::Profile => "Profile",
+        app::SettingsPage::Provider => "Provider",
+        app::SettingsPage::Model => "Model",
+        app::SettingsPage::Speed => "Speed",
+        app::SettingsPage::Reasoning => "Reasoning",
+        app::SettingsPage::Authentication => "Authentication",
+        app::SettingsPage::BaseUrl => "Base URL",
+        app::SettingsPage::Status => "Status",
+    };
+    let mut lines = vec![StyledLine::new(
+        format!("Settings / {page_name} · revision {revision}"),
+        Color::Cyan,
+    )];
+    if page == app::SettingsPage::Status {
+        lines.push(StyledLine::new(
+            format!("Active profile: {profile}"),
+            Color::White,
+        ));
+        lines.push(StyledLine::new(
+            format!(
+                "Last apply timing: {}",
+                modal
+                    .settings_last_apply_timing()
+                    .map_or("none", |timing| timing.label())
+            ),
+            Color::Grey,
+        ));
+        lines.push(StyledLine::new(
+            "Configuration values come from ProviderProfileCatalog; credential material is never displayed.",
+            Color::DarkGrey,
+        ));
+        return lines;
+    }
+    if page == app::SettingsPage::BaseUrl {
+        lines.push(StyledLine::with_marker(
+            "> ",
+            Color::Magenta,
+            if modal.settings_base_url_edit().is_empty() {
+                "provider default".to_owned()
+            } else {
+                modal.settings_base_url_edit().to_owned()
+            },
+            Color::White,
+        ));
+        lines.push(StyledLine::new(
+            "Empty uses the provider default. Managed provider routes reject custom endpoints.",
+            Color::DarkGrey,
+        ));
+        return lines;
+    }
+    if modal.settings_searching() || !modal.settings_search().is_empty() {
+        lines.push(StyledLine::with_marker(
+            "/ ",
+            Color::Magenta,
+            modal.settings_search(),
+            Color::White,
+        ));
+    }
+    let query = modal.settings_search().trim().to_lowercase();
+    for (index, choice) in modal.settings_choices().into_iter().enumerate() {
+        if !query.is_empty() && !choice.label.to_lowercase().contains(&query) {
+            continue;
+        }
+        let selected = index == modal.settings_selected_choice();
+        let description = if choice.description.is_empty() {
+            choice.label.clone()
+        } else {
+            format!("{}  {}", choice.label, choice.description)
+        };
+        lines.push(StyledLine::with_marker(
+            if selected { "› " } else { "  " },
+            if selected {
+                Color::Magenta
+            } else {
+                Color::DarkGrey
+            },
+            description,
+            if !choice.enabled {
+                Color::DarkGrey
+            } else if selected {
+                Color::White
+            } else {
+                Color::Grey
+            },
+        ));
+    }
+    lines
+}
+
 pub(super) fn render_frame(
     identity: &UiIdentity,
     app: &AppState,
@@ -314,7 +447,7 @@ pub(super) fn render_frame(
     let model_modal = app.model_modal();
     let modal_lines = question_modal
         .map(question_modal_lines)
-        .or_else(|| model_modal.map(model_modal_lines))
+        .or_else(|| model_modal.map(modal_lines))
         .unwrap_or_default();
     let is_modal = question_modal.is_some() || model_modal.is_some();
     let plan_panel = if !is_modal && app.task_list_visible {
@@ -399,6 +532,18 @@ pub(super) fn render_frame(
                 "enter confirm and send - shift+tab edit answers"
             } else {
                 "up/down choose - space multi-select - enter next - tab switch"
+            }
+        } else if let Some(model_modal) = model_modal
+            && model_modal.is_settings()
+        {
+            match model_modal.settings_page().unwrap_or(app::SettingsPage::Root) {
+                app::SettingsPage::Root => "up/down choose - enter open - esc close",
+                app::SettingsPage::BaseUrl => "type endpoint - enter apply - esc back",
+                app::SettingsPage::Status => "enter/esc back",
+                _ if model_modal.settings_searching() => {
+                    "type search - up/down choose - enter apply - esc clear search"
+                }
+                _ => "up/down choose - / search - enter apply - esc back",
             }
         } else {
             "tab field - arrows choose - type or paste key - enter apply - esc cancel"
