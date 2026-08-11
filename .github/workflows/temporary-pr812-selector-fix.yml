@@ -10,7 +10,7 @@ permissions:
 
 jobs:
   apply-fix:
-    if: github.actor != 'github-actions[bot]'
+    if: ${{ github.actor != 'github-actions[bot]' }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
@@ -18,8 +18,9 @@ jobs:
           ref: agent/issue-802-settings
           fetch-depth: 0
       - name: Apply selector fix
-        shell: python
+        shell: bash
         run: |
+          python - <<'PY'
           from pathlib import Path
 
           path = Path("crates/medusa-tui/src/input.rs")
@@ -99,6 +100,7 @@ jobs:
               raise SystemExit("selector test insertion point did not match expected source")
           text = text.replace(marker, regression + marker, 1)
           path.write_text(text)
+          PY
       - name: Commit fix and remove temporary workflow
         shell: bash
         run: |
