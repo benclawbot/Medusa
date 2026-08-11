@@ -26,6 +26,7 @@ jobs:
 
           p = Path('crates/medusa-cli/src/config_command.rs')
           s = p.read_text()
+
           old = '''use std::{
               collections::BTreeMap,
               env,
@@ -36,7 +37,7 @@ jobs:
           '''
           new = '''use std::{
               collections::BTreeMap,
-              env, fs,
+              env,
               io::{self, IsTerminal, Write},
               net::{IpAddr, Ipv4Addr, SocketAddr, TcpStream},
               path::Path,
@@ -48,8 +49,7 @@ jobs:
               raise SystemExit('std import block not found')
           s = s.replace(old, new, 1)
 
-          marker = '''fn print_auth_guidance(profile: &ProviderProfile) {
-          '''
+          marker = 'fn print_auth_guidance(profile: &ProviderProfile) {\n'
           helper = '''fn loopback_socket(base_url: &str) -> Option<SocketAddr> {
               let url = reqwest::Url::parse(base_url).ok()?;
               let host = url.host_str()?;
@@ -70,30 +70,26 @@ jobs:
                   raise SystemExit('auth guidance marker not found')
               s = s.replace(marker, helper + marker, 1)
 
-          old_test = '''    fn doctor_report_redacts_malformed_profile_contents() {
-                  let directory = tempfile::tempdir().expect("tempdir");
-                  let store = ProviderProfileStore::at(directory.path().join("provider.toml"));
-                  fs::write(store.path(), "token = 'super-secret-value'\n").expect("malformed profile");
-                  let report = diagnose_store(&store, 0, "default".to_owned());
-                  let encoded = serde_json::to_string(&report).expect("doctor json");
-                  assert!(!report.healthy);
-                  assert!(!encoded.contains("super-secret-value"));
-              }
-          '''
-          new_test = '''    fn doctor_report_redacts_malformed_profile_contents() {
-                  let directory = tempfile::tempdir().expect("tempdir");
-                  let catalog = ProviderProfileCatalog::at(directory.path());
-                  let store = catalog.active_store().expect("store");
-                  fs::write(store.path(), "token = 'super-secret-value'\n").expect("malformed profile");
-                  let report = diagnose_config_catalog(&catalog).expect("doctor report");
-                  let encoded = serde_json::to_string(&report).expect("doctor json");
-                  assert!(!report.healthy);
-                  assert!(!encoded.contains("super-secret-value"));
-              }
-          '''
-          if old_test not in s:
-              raise SystemExit('stale doctor test block not found')
-          s = s.replace(old_test, new_test, 1)
+          tests_marker = 'mod tests {\n    use super::*;\n'
+          if tests_marker not in s:
+              raise SystemExit('tests module marker not found')
+          s = s.replace(tests_marker, tests_marker + '    use std::fs;\n', 1)
+
+          store_line = '        let store = ProviderProfileStore::at(directory.path().join("provider.toml"));\n'
+          report_line = '        let report = diagnose_store(&store, 0, "default".to_owned());\n'
+          if report_line not in s:
+              raise SystemExit('stale diagnose_store call not found')
+          s = s.replace(
+              store_line,
+              '        let catalog = ProviderProfileCatalog::at(directory.path());\n'
+              '        let store = catalog.active_store().expect("store");\n',
+              1,
+          )
+          s = s.replace(
+              report_line,
+              '        let report = diagnose_config_catalog(&catalog).expect("doctor report");\n',
+              1,
+          )
           p.write_text(s)
           PY
 
