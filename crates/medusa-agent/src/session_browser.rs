@@ -12,10 +12,11 @@ use medusa_protocol::EventEnvelope;
 use serde::{Deserialize, Serialize};
 use time::OffsetDateTime;
 
-use crate::{
-    session::{AgentSession, journal, load},
-    session_disposition::is_session_disposed,
-};
+use crate::session::{AgentSession, journal, load};
+
+#[path = "session_disposition.rs"]
+mod session_disposition;
+pub use session_disposition::{dispose_completed_session, is_session_disposed};
 
 /// Lightweight durable-session metadata suitable for frontend discovery lists.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -267,7 +268,7 @@ fn resolve_path(configured: Option<&Path>) -> MedusaResult<PathBuf> {
         return Ok(adjacent.clone());
     }
     if let Ok(found) = which(exe_name) {
-        return Ok(found.clone());
+        return Ok(found);
     }
     Err(unavailable(format!(
         "{exe_name} not found on PATH and not adjacent to the agent binary"
