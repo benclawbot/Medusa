@@ -97,7 +97,10 @@ fn main() {
     }
     if legacy::config_init_requested() {
         match first_run::configure_interactive() {
-            Ok(first_run::FirstRunDisposition::Continue | first_run::FirstRunDisposition::Cancelled) => {
+            Ok(
+                first_run::FirstRunDisposition::Continue
+                | first_run::FirstRunDisposition::Cancelled,
+            ) => {
                 return;
             }
             Err(error) => {
