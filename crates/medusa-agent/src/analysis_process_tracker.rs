@@ -100,8 +100,8 @@ fn load_or_default(path: &Path) -> MedusaResult<ProcessRegistry> {
 
 fn registry_error(error: impl std::fmt::Display) -> MedusaError {
     MedusaError::new(
-        ErrorCode::PersistenceFailed,
-        ErrorCategory::Persistence,
+        ErrorCode::InternalInvariant,
+        ErrorCategory::Internal,
         format!("analysis process registry failure: {error}"),
     )
 }
