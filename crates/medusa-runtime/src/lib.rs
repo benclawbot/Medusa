@@ -31,6 +31,7 @@ use crate::{
 pub mod attachment;
 pub mod analysis_workspace;
 pub mod analysis_contained;
+mod analysis_tool;
 pub mod checkpoint_payload;
 pub mod checkpoint_store;
 pub mod commands;
@@ -979,7 +980,16 @@ fn run_prompt(
             .map_err(RuntimeError::agent)?;
     let coordinated =
         execution_plan.mode == crate::production_orchestrator::ExecutionMode::Orchestrated;
-    let engine = AgentEngine::new_with_cancellation(provider, config.clone(), Arc::clone(cancel));
+    let analysis_host = Arc::new(crate::analysis_tool::RuntimeAnalysisHost::new(
+        state.repo.clone(),
+        config.clone(),
+        state.session_api_key.clone(),
+        state.team_control.clone(),
+        events.clone(),
+        Arc::clone(cancel),
+    ));
+    let engine = AgentEngine::new_with_cancellation(provider, config.clone(), Arc::clone(cancel))
+        .with_analysis_workspace_host(analysis_host);
     let engine = if coordinated {
         engine.with_execution_policy(medusa_agent::AgentExecutionPolicy::for_team_role(
             medusa_agent::TeamRole::Reviewer,

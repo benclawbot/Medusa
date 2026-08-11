@@ -111,6 +111,7 @@ impl AgentExecutionPolicy {
             "web_search".to_owned(),
             "web_fetch".to_owned(),
             "skill_read".to_owned(),
+            "analysis_workspace".to_owned(),
             "update_plan".to_owned(),
             "team_list_members".to_owned(),
             "team_read_messages".to_owned(),

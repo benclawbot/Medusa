@@ -1,6 +1,6 @@
 use std::{
     io,
-    process::{Child, Command, ExitStatus},
+    process::{Child, ChildStderr, ChildStdout, Command, ExitStatus},
 };
 
 #[cfg(unix)]
@@ -82,6 +82,16 @@ impl OwnedProcessTree {
 
     pub fn id(&self) -> u32 {
         self.child.id()
+    }
+
+    /// Transfers the captured stdout pipe to the supervising runtime.
+    pub fn take_stdout(&mut self) -> Option<ChildStdout> {
+        self.child.stdout.take()
+    }
+
+    /// Transfers the captured stderr pipe to the supervising runtime.
+    pub fn take_stderr(&mut self) -> Option<ChildStderr> {
+        self.child.stderr.take()
     }
 
     pub fn try_wait(&mut self) -> io::Result<Option<ExitStatus>> {

@@ -117,9 +117,6 @@ impl RuntimeAnalysisHost {
         };
         let plan = production_orchestrator::plan_for_repository(&self.repo, &draft)
             .map_err(|error| invalid(error.to_string()))?;
-        if !plan.delegation.allowed {
-            return Err(policy("analysis delegation is disabled by the admitted production plan"));
-        }
         if production_orchestrator::requires_mutation(&plan)
             || plan.tasks.iter().any(|task| !task.write_paths.is_empty())
         {
@@ -307,7 +304,7 @@ fn json_error(error: serde_json::Error) -> MedusaError {
 }
 
 fn invalid(message: impl Into<String>) -> MedusaError {
-    MedusaError::new(ErrorCode::InvalidToolInput, ErrorCategory::Validation, message)
+    MedusaError::new(ErrorCode::InvalidInput, ErrorCategory::Validation, message)
 }
 
 fn policy(message: impl Into<String>) -> MedusaError {

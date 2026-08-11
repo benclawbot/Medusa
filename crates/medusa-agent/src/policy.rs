@@ -10,10 +10,14 @@ use std::sync::atomic::Ordering;
 
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 use std::{
+    io::Read,
     process::{Command, Stdio},
     thread,
     time::{Duration, Instant},
 };
+
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+use medusa_process_containment::OwnedProcessTree;
 
 use medusa_core::{ErrorCategory, ErrorCode, MedusaError, MedusaResult};
 
@@ -304,36 +308,69 @@ fn output_with_timeout(
     description: &str,
     cancellation: &AtomicBool,
 ) -> MedusaResult<Output> {
-    let mut child = command
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .map_err(|error| {
-            MedusaError::new(
-                ErrorCode::DependencyUnavailable,
-                ErrorCategory::Environment,
-                format!("{description} unavailable: {error}"),
-            )
-        })?;
+    command.stdout(Stdio::piped()).stderr(Stdio::piped());
+    let mut tree = OwnedProcessTree::spawn(command).map_err(|error| {
+        MedusaError::new(
+            ErrorCode::DependencyUnavailable,
+            ErrorCategory::Environment,
+            format!("{description} unavailable: {error}"),
+        )
+    })?;
+    let stdout = tree.take_stdout().ok_or_else(|| {
+        MedusaError::new(
+            ErrorCode::InternalInvariant,
+            ErrorCategory::Internal,
+            format!("{description} stdout pipe was unavailable"),
+        )
+    })?;
+    let stderr = tree.take_stderr().ok_or_else(|| {
+        MedusaError::new(
+            ErrorCode::InternalInvariant,
+            ErrorCategory::Internal,
+            format!("{description} stderr pipe was unavailable"),
+        )
+    })?;
+    let stdout_reader = thread::spawn(move || {
+        let mut pipe = stdout;
+        let mut bytes = Vec::new();
+        pipe.read_to_end(&mut bytes).map(|_| bytes)
+    });
+    let stderr_reader = thread::spawn(move || {
+        let mut pipe = stderr;
+        let mut bytes = Vec::new();
+        pipe.read_to_end(&mut bytes).map(|_| bytes)
+    });
     let started = Instant::now();
     loop {
         if cancellation.load(Ordering::Acquire) {
-            let _ = child.kill();
-            let _ = child.wait();
+            let _ = tree.terminate();
+            let _ = tree.wait();
             return Err(cancelled_command(description));
         }
-        if child.try_wait()?.is_some() {
-            return child.wait_with_output().map_err(|error| {
+        if let Some(status) = tree.try_wait()? {
+            let stdout = stdout_reader.join().map_err(|_| {
                 MedusaError::new(
                     ErrorCode::ToolExecutionFailed,
                     ErrorCategory::Execution,
-                    format!("{description} failed while collecting output: {error}"),
+                    format!("{description} stdout reader terminated unexpectedly"),
                 )
+            })??;
+            let stderr = stderr_reader.join().map_err(|_| {
+                MedusaError::new(
+                    ErrorCode::ToolExecutionFailed,
+                    ErrorCategory::Execution,
+                    format!("{description} stderr reader terminated unexpectedly"),
+                )
+            })??;
+            return Ok(Output {
+                status,
+                stdout,
+                stderr,
             });
         }
         if started.elapsed() >= SHELL_COMMAND_TIMEOUT {
-            let _ = child.kill();
-            let _ = child.wait();
+            let _ = tree.terminate();
+            let _ = tree.wait();
             return Err(MedusaError::new(
                 ErrorCode::ToolExecutionFailed,
                 ErrorCategory::Execution,
