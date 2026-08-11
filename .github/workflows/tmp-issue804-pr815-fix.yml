@@ -1,0 +1,109 @@
+name: tmp-issue804-pr815-fix
+
+on:
+  push:
+    branches: [tmp/issue-804-pr815-fix]
+    paths: [.github/workflows/tmp-issue804-pr815-fix.yml]
+
+permissions:
+  contents: write
+
+jobs:
+  fix:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          fetch-depth: 0
+      - uses: dtolnay/rust-toolchain@39b0b3842c7e8bbf6904c0bfc3d9006fdd4dc4e0
+        with:
+          components: rustfmt,clippy
+      - name: Apply and validate consolidated fix
+        shell: bash
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          p = Path('crates/medusa-cli/src/config_command.rs')
+          s = p.read_text()
+          old = '''use std::{
+              collections::BTreeMap,
+              env,
+              io::{self, IsTerminal, Write},
+              path::Path,
+              process::Command,
+          };
+          '''
+          new = '''use std::{
+              collections::BTreeMap,
+              env, fs,
+              io::{self, IsTerminal, Write},
+              net::{IpAddr, Ipv4Addr, SocketAddr, TcpStream},
+              path::Path,
+              process::Command,
+              time::Duration,
+          };
+          '''
+          if old not in s:
+              raise SystemExit('std import block not found')
+          s = s.replace(old, new, 1)
+
+          marker = '''fn print_auth_guidance(profile: &ProviderProfile) {
+          '''
+          helper = '''fn loopback_socket(base_url: &str) -> Option<SocketAddr> {
+              let url = reqwest::Url::parse(base_url).ok()?;
+              let host = url.host_str()?;
+              let address = if host.eq_ignore_ascii_case("localhost") {
+                  IpAddr::V4(Ipv4Addr::LOCALHOST)
+              } else {
+                  host.parse::<IpAddr>().ok()?
+              };
+              if !address.is_loopback() {
+                  return None;
+              }
+              Some(SocketAddr::new(address, url.port_or_known_default()?))
+          }
+
+          '''
+          if 'fn loopback_socket(base_url: &str)' not in s:
+              if marker not in s:
+                  raise SystemExit('auth guidance marker not found')
+              s = s.replace(marker, helper + marker, 1)
+
+          old_test = '''    fn doctor_report_redacts_malformed_profile_contents() {
+                  let directory = tempfile::tempdir().expect("tempdir");
+                  let store = ProviderProfileStore::at(directory.path().join("provider.toml"));
+                  fs::write(store.path(), "token = 'super-secret-value'\n").expect("malformed profile");
+                  let report = diagnose_store(&store, 0, "default".to_owned());
+                  let encoded = serde_json::to_string(&report).expect("doctor json");
+                  assert!(!report.healthy);
+                  assert!(!encoded.contains("super-secret-value"));
+              }
+          '''
+          new_test = '''    fn doctor_report_redacts_malformed_profile_contents() {
+                  let directory = tempfile::tempdir().expect("tempdir");
+                  let catalog = ProviderProfileCatalog::at(directory.path());
+                  let store = catalog.active_store().expect("store");
+                  fs::write(store.path(), "token = 'super-secret-value'\n").expect("malformed profile");
+                  let report = diagnose_config_catalog(&catalog).expect("doctor report");
+                  let encoded = serde_json::to_string(&report).expect("doctor json");
+                  assert!(!report.healthy);
+                  assert!(!encoded.contains("super-secret-value"));
+              }
+          '''
+          if old_test not in s:
+              raise SystemExit('stale doctor test block not found')
+          s = s.replace(old_test, new_test, 1)
+          p.write_text(s)
+          PY
+
+          cargo fmt --all
+          cargo fmt --all -- --check
+          cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
+          cargo test -p medusa-cli --locked
+
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add crates/medusa-cli/src/config_command.rs
+          git commit -m 'Restore CLI runtime helpers after doctor extraction'
+          git push origin HEAD:tmp/issue-804-pr815-fix
