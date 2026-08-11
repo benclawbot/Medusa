@@ -1,0 +1,88 @@
+name: Issue 758 Linux temp-root fix
+
+on:
+  push:
+    branches:
+      - agent/issue-758-analysis-workspace
+
+permissions:
+  contents: write
+
+jobs:
+  integrate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt,clippy
+      - name: Install Linux sandbox backend
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y bubblewrap
+          if [[ -e /proc/sys/kernel/apparmor_restrict_unprivileged_userns ]]; then
+            echo 0 | sudo tee /proc/sys/kernel/apparmor_restrict_unprivileged_userns
+          fi
+      - name: Patch temp-root mount plan
+        shell: python
+        run: |
+          from pathlib import Path
+          path = Path('crates/medusa-agent/src/policy.rs')
+          text = path.read_text()
+          old = '''                "--ro-bind",
+                          "/",
+                          "/",
+                          "--bind",
+                      ])
+                      .arg(&root)
+                      .arg(&root)
+                      .arg("--chdir")
+                      .arg(&root)
+                      .args(["--tmpfs", "/tmp", "--clearenv", "--setenv", "PATH"])
+          '''
+          new = '''                "--ro-bind",
+                          "/",
+                          "/",
+                      ]);
+                  // A tmpfs mounted over /tmp would hide a repository or analysis workspace whose
+                  // canonical root itself lives below /tmp (as TempDir-backed production tests do).
+                  // In that case the readonly root mount already makes ambient /tmp non-writable;
+                  // only the explicitly rebound workspace remains writable. For roots elsewhere,
+                  // retain the isolated writable tmpfs used by ordinary contained tools.
+                  if !root.starts_with("/tmp") {
+                      command.args(["--tmpfs", "/tmp"]);
+                  }
+                  command
+                      .arg("--bind")
+                      .arg(&root)
+                      .arg(&root)
+                      .arg("--chdir")
+                      .arg(&root)
+                      .args(["--clearenv", "--setenv", "PATH"])
+          '''
+          if old not in text:
+              raise SystemExit('Linux bubblewrap mount block not found')
+          path.write_text(text.replace(old, new, 1))
+      - name: Format
+        run: cargo fmt --all
+      - name: Format check
+        run: cargo fmt --all -- --check
+      - name: Check
+        run: cargo check -p medusa-agent -p medusa-runtime -p medusa-process-containment --locked
+      - name: Test production orchestration
+        run: cargo test -p medusa-runtime --locked -- --nocapture
+      - name: Test Linux containment regression
+        run: cargo test -p medusa-runtime --test analysis_workspace_containment --locked -- --nocapture
+      - name: Clippy
+        run: cargo clippy -p medusa-agent -p medusa-runtime -p medusa-process-containment --locked --all-targets -- -D warnings
+      - name: Commit production fix and remove integrator
+        shell: bash
+        run: |
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git rm .github/workflows/issue-758-linux-tmp-root-fix.yml
+          git add crates/medusa-agent/src/policy.rs
+          git commit -m "fix(containment): preserve Linux temp-root workspaces"
+          git push
