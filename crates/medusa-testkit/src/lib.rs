@@ -1,5 +1,6 @@
 //! Deterministic fixtures for Medusa tests.
 
+#[allow(clippy::too_many_arguments)]
 pub mod data_lifecycle;
 pub mod resilience;
 
