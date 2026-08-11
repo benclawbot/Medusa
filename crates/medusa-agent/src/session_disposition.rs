@@ -188,12 +188,13 @@ fn write_journal_tombstone(repo: &Path, id: &SessionId) -> MedusaResult<()> {
 
 fn journal_is_tombstoned(repo: &Path, id: &SessionId) -> MedusaResult<bool> {
     let path = primary_journal_path(repo, id);
-    let raw = match fs::read_to_string(path) {
+    let raw = match fs::read(path) {
         Ok(raw) => raw,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(false),
         Err(error) => return Err(error.into()),
     };
-    Ok(raw == format!("{JOURNAL_TOMBSTONE_PREFIX}{id}\n"))
+    let prefix = format!("{JOURNAL_TOMBSTONE_PREFIX}{id}\n");
+    Ok(raw.starts_with(prefix.as_bytes()))
 }
 
 fn marker_path(repo: &Path, id: &SessionId) -> PathBuf {
