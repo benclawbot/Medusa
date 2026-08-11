@@ -251,6 +251,7 @@ impl SetupState {
                         self.mode = Some(SetupMode::Quick);
                         self.selected_existing = None;
                         self.go_to(SetupStep::Connection);
+                        self.selection = SelectionState::new(0);
                     }
                     1 => {
                         self.mode = Some(SetupMode::Advanced);
@@ -695,6 +696,7 @@ mod tests {
 
         enter(&mut state);
         assert_eq!(state.step, SetupStep::Connection);
+        assert_eq!(state.selection.selected(), 0);
         enter(&mut state);
         assert_eq!(state.step, SetupStep::Model);
         enter(&mut state);
@@ -720,7 +722,7 @@ mod tests {
         state.move_selection(1);
         enter(&mut state);
         assert_eq!(state.mode, Some(SetupMode::Advanced));
-        state.move_selection(2);
+        state.selection.set_selected(2, state.choices().len());
         enter(&mut state);
         assert_eq!(state.profile.connection, "openai-api");
         assert_eq!(state.step, SetupStep::Model);
@@ -741,7 +743,7 @@ mod tests {
                 model: "gpt-5".to_owned(),
             }],
         });
-        state.move_selection(2);
+        state.selection.set_selected(2, state.choices().len());
         enter(&mut state);
         assert_eq!(state.step, SetupStep::ExistingProfile);
         enter(&mut state);
