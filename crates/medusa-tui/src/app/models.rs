@@ -1277,9 +1277,11 @@ mod settings_tests {
     }
 
     #[test]
-    fn provider_route_change_records_tui_origin_and_next_session_timing() {
+    fn provider_route_change_stages_then_records_tui_origin_and_next_session_timing_on_apply() {
         let directory = tempfile::tempdir().expect("tempdir");
         let catalog = catalog_at(directory.path());
+        let revision = catalog.revision().expect("revision");
+        let original = catalog.snapshot().expect("snapshot").profile;
         let mut modal = ModelModal::new_settings_with_catalog(None, None, false, catalog.clone())
             .expect("settings");
         modal.settings_move_root(1);
@@ -1292,7 +1294,25 @@ mod settings_tests {
         assert_eq!(
             modal
                 .settings_commit_current(directory.path())
-                .expect("provider change"),
+                .expect("stage provider change"),
+            AppAction::Redraw
+        );
+
+        assert_eq!(catalog.revision().expect("revision"), revision);
+        assert_eq!(catalog.snapshot().expect("snapshot").profile, original);
+        assert!(
+            modal
+                .settings_review_lines()
+                .iter()
+                .any(|line| line.starts_with("provider:"))
+        );
+
+        modal.settings_move_root(7);
+        modal.settings_open_selected();
+        assert_eq!(
+            modal
+                .settings_commit_current(directory.path())
+                .expect("apply staged provider change"),
             AppAction::Redraw
         );
 
