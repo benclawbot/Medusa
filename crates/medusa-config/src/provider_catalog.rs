@@ -15,7 +15,7 @@ pub struct ProviderCatalogEntry {
     pub connection: &'static str,
     /// `ProviderProfile.provider` value used by this route.
     pub profile_provider: &'static str,
-    /// Authentication modes the route can truthfully represent.
+    /// Authentication modes the route can truthfully represent through the current runtime.
     pub auth_methods: &'static [&'static str],
     /// Default authentication mode for a newly selected route.
     pub default_auth: &'static str,
@@ -87,10 +87,10 @@ const CATALOG: [ProviderCatalogEntry; 8] = [
     ProviderCatalogEntry {
         id: "anthropic-compatible",
         display_name: "Anthropic-compatible",
-        description: "Custom Anthropic-compatible route using brokered MEDUSA_API_KEY",
+        description: "Custom Anthropic-compatible route using MEDUSA_API_KEY when selected",
         connection: "direct",
         profile_provider: "anthropic-compatible",
-        auth_methods: &["api-key", "existing", "none"],
+        auth_methods: &["api-key", "none"],
         default_auth: "api-key",
         default_model: "custom-model",
         known_models: &["custom-model"],
@@ -138,8 +138,8 @@ const CATALOG: [ProviderCatalogEntry; 8] = [
         description: "Custom OpenAI-compatible endpoint",
         connection: "openai-compatible",
         profile_provider: "openai-compatible",
-        auth_methods: &["api-key", "existing", "none"],
-        default_auth: "existing",
+        auth_methods: &["api-key", "none"],
+        default_auth: "none",
         default_model: "custom-model",
         known_models: &["custom-model"],
         base_url: Some("http://127.0.0.1:8000/v1"),
@@ -154,8 +154,8 @@ const CATALOG: [ProviderCatalogEntry; 8] = [
         description: "Managed or existing OmniRoute gateway (recommended)",
         connection: "omniroute",
         profile_provider: "auto/coding",
-        auth_methods: &["existing", "oauth", "none"],
-        default_auth: "existing",
+        auth_methods: &["none"],
+        default_auth: "none",
         default_model: "auto/coding",
         known_models: &["auto/coding"],
         base_url: Some("http://127.0.0.1:20128/v1"),
@@ -170,7 +170,7 @@ const CATALOG: [ProviderCatalogEntry; 8] = [
         description: "OpenAI-compatible local runtime on 127.0.0.1:11434",
         connection: "local",
         profile_provider: "local",
-        auth_methods: &["none", "existing"],
+        auth_methods: &["none"],
         default_auth: "none",
         default_model: "MiniMax-M3",
         known_models: &["MiniMax-M3", "local-model"],
@@ -264,6 +264,7 @@ pub fn apply_provider_defaults(entry: &ProviderCatalogEntry, profile: &mut Provi
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::Config;
 
     #[test]
     fn catalog_ids_are_unique_and_resolve() {
@@ -275,12 +276,20 @@ mod tests {
     }
 
     #[test]
-    fn every_catalog_default_is_a_valid_configured_profile() {
+    fn every_catalog_default_is_a_valid_effective_configuration() {
         for entry in provider_catalog() {
             let mut profile = ProviderProfile::default();
             apply_provider_defaults(entry, &mut profile);
             profile.configured = true;
             profile.validate().expect(entry.id);
+            Config::load_layers_with_provider_profile(
+                &profile,
+                None,
+                None,
+                &Default::default(),
+                &Default::default(),
+            )
+            .expect(entry.id);
         }
     }
 
