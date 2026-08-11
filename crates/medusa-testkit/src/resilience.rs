@@ -107,7 +107,10 @@ impl FaultPlan {
 /// input is never mutated and each returned case is capped at `max_len`.
 #[must_use]
 pub fn corruption_cases(input: &[u8], seed: u64, max_len: usize) -> Vec<Vec<u8>> {
-    let cap = max_len.max(1);
+    if max_len == 0 {
+        return vec![Vec::new()];
+    }
+    let cap = max_len;
     let bounded = &input[..input.len().min(cap)];
     let mut cases = Vec::with_capacity(4);
 
@@ -198,5 +201,11 @@ mod tests {
             assert!(first.iter().all(|case| case.len() <= 12));
             assert!(first.iter().all(|case| case.as_slice() != input));
         }
+    }
+
+    #[test]
+    fn zero_corruption_budget_is_honored() {
+        let cases = corruption_cases(b"non-empty", SMOKE_SEEDS[0], 0);
+        assert_eq!(cases, vec![Vec::<u8>::new()]);
     }
 }
