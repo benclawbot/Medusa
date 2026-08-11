@@ -253,7 +253,10 @@ mod tests {
         let directory = tempfile::tempdir().expect("tempdir");
         let engine = MemoryEngine::new(directory.path()).expect("engine");
         let first = engine
-            .commit_proposal(&proposal("Sensitive source", "Unique lifecycle deletion marker."))
+            .commit_proposal(&proposal(
+                "Sensitive source",
+                "Unique lifecycle deletion marker.",
+            ))
             .expect("first");
         let second = engine
             .commit_proposal(&proposal("Other source", "Independent retained memory."))
