@@ -231,30 +231,38 @@ pub(crate) fn sandboxed_command_cancellable(
     {
         let root = repo.canonicalize()?;
         let mut command = Command::new("bwrap");
+        command.args([
+            "--die-with-parent",
+            "--new-session",
+            // Enter a subordinate user namespace before creating the network namespace. This
+            // gives bubblewrap only the namespace-local capabilities required to configure
+            // loopback while retaining the fail-closed no-network boundary on restricted CI
+            // hosts and unprivileged installations.
+            "--unshare-user",
+            "--uid",
+            "0",
+            "--gid",
+            "0",
+            "--unshare-net",
+            "--ro-bind",
+            "/",
+            "/",
+        ]);
+        // A tmpfs mounted over /tmp would hide a repository or analysis workspace whose
+        // canonical root itself lives below /tmp (as TempDir-backed production tests do).
+        // In that case the readonly root mount already makes ambient /tmp non-writable;
+        // only the explicitly rebound workspace remains writable. For roots elsewhere,
+        // retain the isolated writable tmpfs used by ordinary contained tools.
+        if !root.starts_with("/tmp") {
+            command.args(["--tmpfs", "/tmp"]);
+        }
         command
-            .args([
-                "--die-with-parent",
-                "--new-session",
-                // Enter a subordinate user namespace before creating the network namespace. This
-                // gives bubblewrap only the namespace-local capabilities required to configure
-                // loopback while retaining the fail-closed no-network boundary on restricted CI
-                // hosts and unprivileged installations.
-                "--unshare-user",
-                "--uid",
-                "0",
-                "--gid",
-                "0",
-                "--unshare-net",
-                "--ro-bind",
-                "/",
-                "/",
-                "--bind",
-            ])
+            .arg("--bind")
             .arg(&root)
             .arg(&root)
             .arg("--chdir")
             .arg(&root)
-            .args(["--tmpfs", "/tmp", "--clearenv", "--setenv", "PATH"])
+            .args(["--clearenv", "--setenv", "PATH"])
             .arg(std::env::var("PATH").unwrap_or_else(|_| "/usr/local/bin:/usr/bin:/bin".into()))
             .args(["--setenv", "PYTHONDONTWRITEBYTECODE", "1"])
             .arg("--")
