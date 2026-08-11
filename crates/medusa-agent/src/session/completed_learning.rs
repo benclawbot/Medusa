@@ -189,12 +189,23 @@ fn admit_to_canonical_memory(
 pub(super) fn authoritative_evidence(session: &AgentSession) -> Vec<String> {
     let mut evidence = session.evidence.clone();
     for event in &session.events {
-        if let EventPayload::VerificationCompleted {
-            passed: true,
-            evidence: verification_evidence,
-        } = &event.payload
-        {
-            evidence.extend(verification_evidence.iter().cloned());
+        match &event.payload {
+            EventPayload::VerificationCompleted {
+                passed: true,
+                evidence: verification_evidence,
+            } => evidence.extend(verification_evidence.iter().cloned()),
+            EventPayload::IntegrationReceiptRecorded { receipt } => {
+                let summary = receipt.get("commit").and_then(Value::as_str).map_or_else(
+                    || "independent verification, integration, and reconciliation completed".to_owned(),
+                    |commit| {
+                        format!(
+                            "independent verification, integration, and reconciliation completed for commit {commit}"
+                        )
+                    },
+                );
+                evidence.push(summary);
+            }
+            _ => {}
         }
     }
     evidence.sort();
@@ -324,6 +335,38 @@ mod tests {
         .expect("privacy state");
     }
 
+    fn make_coordinated_reconciled(session: &mut AgentSession) {
+        session.events.clear();
+        append_event(
+            session,
+            Actor::Coordinator,
+            EventPayload::WorkerEvidenceRecorded {
+                evidence: json!({"commit": "abc123", "reviewed": true}),
+            },
+        )
+        .expect("worker evidence");
+        append_event(
+            session,
+            Actor::Coordinator,
+            EventPayload::IntegrationReceiptRecorded {
+                receipt: json!({
+                    "commit": "abc123",
+                    "independent_verification": "passed",
+                    "reconciled": true
+                }),
+            },
+        )
+        .expect("integration receipt");
+        append_event(
+            session,
+            Actor::Coordinator,
+            EventPayload::SessionCompleted {
+                report_ref: "commit:abc123".to_owned(),
+            },
+        )
+        .expect("completion");
+    }
+
     #[test]
     fn processing_is_idempotent_and_writes_authority_receipts() {
         let repo = tempfile::tempdir().expect("repo");
@@ -362,39 +405,19 @@ mod tests {
     }
 
     #[test]
-    fn coordinated_reconciled_parent_is_authoritative_without_legacy_verification_event() {
+    fn coordinated_reconciled_parent_is_authoritative_and_can_propose() {
         let repo = tempfile::tempdir().expect("repo");
         let mut session = session(repo.path());
-        session.events.clear();
-        append_event(
-            &mut session,
-            Actor::Coordinator,
-            EventPayload::WorkerEvidenceRecorded {
-                evidence: json!({"commit": "abc123", "reviewed": true}),
-            },
-        )
-        .expect("worker evidence");
-        append_event(
-            &mut session,
-            Actor::Coordinator,
-            EventPayload::IntegrationReceiptRecorded {
-                receipt: json!({
-                    "commit": "abc123",
-                    "independent_verification": "passed",
-                    "reconciled": true
-                }),
-            },
-        )
-        .expect("integration receipt");
-        append_event(
-            &mut session,
-            Actor::Coordinator,
-            EventPayload::SessionCompleted {
-                report_ref: "commit:abc123".to_owned(),
-            },
-        )
-        .expect("completion");
+        session.evidence.clear();
+        make_coordinated_reconciled(&mut session);
         assert!(authoritative_success(&session));
+        let evidence = authoritative_evidence(&session);
+        assert!(evidence.iter().any(|item| item.contains("commit abc123")));
+        assert!(
+            lessons::extract_completed_session(&session)
+                .expect("extract")
+                .is_some()
+        );
     }
 
     #[test]
