@@ -1,0 +1,45 @@
+name: Issue 758 tracker integration runner
+
+on:
+  push:
+    branches:
+      - agent/issue-758-analysis-workspace
+
+permissions:
+  contents: write
+
+jobs:
+  integrate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
+      - name: Apply integration patch
+        shell: python
+        run: |
+          from pathlib import Path
+          text = Path('.github/workflows/issue-758-integrate-tracker.yml').read_text()
+          marker = '      - name: Integrate tracker\n        shell: python\n        run: |\n'
+          block = text.split(marker, 1)[1].split('      - name: Format\n', 1)[0]
+          source = '\n'.join(line[10:] if line.startswith('          ') else line for line in block.splitlines())
+          exec(compile(source, 'issue758_tracker_integration', 'exec'))
+      - name: Format
+        run: cargo fmt --all
+      - name: Check
+        run: cargo check -p medusa-agent -p medusa-runtime -p medusa-process-containment --locked
+      - name: Test tracker
+        run: cargo test -p medusa-agent analysis_process_tracker --locked -- --nocapture
+      - name: Commit production source
+        shell: bash
+        run: |
+          if ! git diff --quiet; then
+            git config user.name github-actions[bot]
+            git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+            git add Cargo.lock crates/medusa-agent/src/lib.rs crates/medusa-agent/src/policy.rs crates/medusa-agent/src/analysis_process_tracker.rs crates/medusa-agent/Cargo.toml
+            git commit -m "feat(agent): track contained analysis processes durably"
+            git push
+          fi
