@@ -19,6 +19,12 @@ use std::{
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 use medusa_process_containment::OwnedProcessTree;
 
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+#[path = "analysis_process_tracker.rs"]
+mod analysis_process_tracker;
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+use analysis_process_tracker::AnalysisProcessTracker;
+
 use medusa_core::{ErrorCategory, ErrorCode, MedusaError, MedusaResult};
 
 #[cfg(windows)]
@@ -252,7 +258,14 @@ pub(crate) fn sandboxed_command_cancellable(
             .arg("--")
             .arg(program)
             .args(args);
-        output_with_timeout(&mut command, "Linux bubblewrap sandbox", cancellation)
+        output_with_timeout(
+            &mut command,
+            "Linux bubblewrap sandbox",
+            cancellation,
+            &root,
+            program,
+            args,
+        )
     }
     #[cfg(target_os = "macos")]
     {
@@ -278,7 +291,14 @@ pub(crate) fn sandboxed_command_cancellable(
             .args(args)
             .current_dir(&root)
             .env("PYTHONDONTWRITEBYTECODE", "1");
-        let result = output_with_timeout(&mut command, "macOS sandbox-exec sandbox", cancellation);
+        let result = output_with_timeout(
+            &mut command,
+            "macOS sandbox-exec sandbox",
+            cancellation,
+            &root,
+            program,
+            args,
+        );
         let _ = fs::remove_file(&profile_path);
         result
     }
@@ -307,6 +327,9 @@ fn output_with_timeout(
     command: &mut Command,
     description: &str,
     cancellation: &AtomicBool,
+    root: &Path,
+    program: &str,
+    args: &[String],
 ) -> MedusaResult<Output> {
     command.stdout(Stdio::piped()).stderr(Stdio::piped());
     let mut tree = OwnedProcessTree::spawn(command).map_err(|error| {
@@ -316,6 +339,16 @@ fn output_with_timeout(
             format!("{description} unavailable: {error}"),
         )
     })?;
+    let mut process_tracker = if root.to_string_lossy().contains("/analysis-workspace-v1/") {
+        Some(AnalysisProcessTracker::started(
+            root,
+            program,
+            args,
+            tree.ownership_receipt(),
+        )?)
+    } else {
+        None
+    };
     let stdout = tree.take_stdout().ok_or_else(|| {
         MedusaError::new(
             ErrorCode::InternalInvariant,
@@ -345,9 +378,15 @@ fn output_with_timeout(
         if cancellation.load(Ordering::Acquire) {
             let _ = tree.terminate();
             let _ = tree.wait();
+            if let Some(tracker) = process_tracker.take() {
+                let _ = tracker.failed("analysis execution cancelled");
+            }
             return Err(cancelled_command(description));
         }
         if let Some(status) = tree.try_wait()? {
+            if let Some(tracker) = process_tracker.take() {
+                tracker.exited(status.code())?;
+            }
             let stdout = stdout_reader.join().map_err(|_| {
                 MedusaError::new(
                     ErrorCode::ToolExecutionFailed,
@@ -371,6 +410,9 @@ fn output_with_timeout(
         if started.elapsed() >= SHELL_COMMAND_TIMEOUT {
             let _ = tree.terminate();
             let _ = tree.wait();
+            if let Some(tracker) = process_tracker.take() {
+                let _ = tracker.failed("analysis execution timed out");
+            }
             return Err(MedusaError::new(
                 ErrorCode::ToolExecutionFailed,
                 ErrorCategory::Execution,

@@ -135,15 +135,16 @@ mod tests {
         let status = tree.wait().expect("wait");
         tracker.exited(status.code()).expect("track exit");
 
-        let registry = ProcessRegistry::load(&directory.path().join(REGISTRY_FILE))
-            .expect("load registry");
+        let registry =
+            ProcessRegistry::load(&directory.path().join(REGISTRY_FILE)).expect("load registry");
         let record = registry.records().next().expect("record");
         assert_eq!(record.state, ProcessState::Exited);
         assert_eq!(record.pid, Some(tree.id()));
         assert!(record.identity.as_ref().is_some_and(|identity| {
-            identity.start_marker.as_ref().is_some_and(|marker| {
-                !marker.platform.is_empty() && !marker.value.is_empty()
-            })
+            identity
+                .start_marker
+                .as_ref()
+                .is_some_and(|marker| !marker.platform.is_empty() && !marker.value.is_empty())
         }));
     }
 }

@@ -1131,6 +1131,7 @@ dependencies = [
  "medusa-memory",
  "medusa-multi-agent-scheduler",
  "medusa-process-containment",
+ "medusa-process-registry",
  "medusa-progress",
  "medusa-protocol",
  "medusa-provider",
