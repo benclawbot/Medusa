@@ -829,11 +829,9 @@ impl ModelModal {
         }
 
         if settings.page == SettingsPage::Profile {
-            let choices = settings_choices(settings);
-            let name = choices
-                .get(settings.choice_selection.selected())
-                .map(|choice| choice.label.clone())
-                .ok_or_else(|| "no provider profile is selected".to_owned())?;
+            let name = selected_settings_choice(settings)
+                .map(|choice| choice.label)
+                .ok_or_else(|| "no matching provider profile is selected".to_owned())?;
             if name == settings.active_profile {
                 settings.page = SettingsPage::Root;
                 return Ok(AppAction::Redraw);
@@ -844,16 +842,21 @@ impl ModelModal {
         }
 
         if settings.page == SettingsPage::Provider {
-            let choices = settings_choices(settings);
-            let provider = choices
-                .get(settings.choice_selection.selected())
-                .filter(|choice| choice.enabled)
-                .map(|choice| choice.label.clone())
-                .ok_or_else(|| "no available provider route is selected".to_owned())?;
+            let provider = selected_settings_choice(settings)
+                .map(|choice| choice.label)
+                .ok_or_else(|| "no matching available provider route is selected".to_owned())?;
             let entry = provider_catalog_entry(&provider)
                 .ok_or_else(|| format!("provider route `{provider}` is not in the catalog"))?;
+            if entry.connection == settings.profile.connection
+                && (entry.profile_provider == settings.profile.provider
+                    || entry.id == settings.profile.provider)
+            {
+                settings.page = SettingsPage::Root;
+                return Ok(AppAction::Redraw);
+            }
             let mut candidate = settings.profile.clone();
             apply_provider_defaults(entry, &mut candidate);
+            candidate.configured = true;
             validate_settings_candidate(repository, &candidate)?;
             let change = settings
                 .catalog
@@ -896,12 +899,9 @@ impl ModelModal {
             })));
         }
 
-        let choices = settings_choices(settings);
-        let value = choices
-            .get(settings.choice_selection.selected())
-            .filter(|choice| choice.enabled)
-            .map(|choice| choice.label.clone())
-            .ok_or_else(|| "no settings value is selected".to_owned())?;
+        let value = selected_settings_choice(settings)
+            .map(|choice| choice.label)
+            .ok_or_else(|| "no matching settings value is selected".to_owned())?;
         let key = match settings.page {
             SettingsPage::Model => "model",
             SettingsPage::Speed => "speed",
@@ -1007,6 +1007,23 @@ fn settings_choices(settings: &SettingsState) -> Vec<SettingsChoice> {
             })
             .collect(),
     }
+}
+
+fn selected_settings_choice(settings: &SettingsState) -> Option<SettingsChoice> {
+    let choices = settings_choices(settings);
+    let labels = choices
+        .iter()
+        .map(|choice| choice.label.as_str())
+        .collect::<Vec<_>>();
+    let selected = settings.choice_selection.selected();
+    settings
+        .choice_selection
+        .filtered_indices(&labels)
+        .contains(&selected)
+        .then(|| choices.get(selected))
+        .flatten()
+        .filter(|choice| choice.enabled)
+        .cloned()
 }
 
 fn normalize_settings_choice(settings: &mut SettingsState) {
@@ -1153,6 +1170,56 @@ mod settings_tests {
     }
 
     #[test]
+    fn current_provider_route_is_a_noop_and_preserves_profile() {
+        let directory = tempfile::tempdir().expect("tempdir");
+        let catalog = catalog_at(directory.path());
+        let mut current = catalog.snapshot().expect("snapshot").profile;
+        current
+            .set_value("model", "MiniMax-M2.7")
+            .expect("custom current model");
+        catalog
+            .active_store()
+            .expect("store")
+            .save(&current)
+            .expect("save current profile");
+        let revision = catalog.revision().expect("revision");
+        let mut modal = ModelModal::new_settings_with_catalog(None, None, false, catalog.clone())
+            .expect("settings");
+        modal.settings_move_root(1);
+        modal.settings_open_selected();
+
+        assert_eq!(
+            modal
+                .settings_commit_current(directory.path())
+                .expect("current route"),
+            AppAction::Redraw
+        );
+        assert_eq!(catalog.revision().expect("revision"), revision);
+        assert_eq!(catalog.snapshot().expect("snapshot").profile, current);
+    }
+
+    #[test]
+    fn zero_match_filter_cannot_apply_hidden_settings_choice() {
+        let directory = tempfile::tempdir().expect("tempdir");
+        let catalog = catalog_at(directory.path());
+        let revision = catalog.revision().expect("revision");
+        let mut modal = ModelModal::new_settings_with_catalog(None, None, false, catalog.clone())
+            .expect("settings");
+        modal.settings_move_root(2);
+        modal.settings_open_selected();
+        modal.settings_begin_search();
+        for character in "definitely-no-match".chars() {
+            modal.settings_push_search(character);
+        }
+
+        let error = modal
+            .settings_commit_current(directory.path())
+            .expect_err("hidden selection must not apply");
+        assert!(error.contains("no matching settings value"));
+        assert_eq!(catalog.revision().expect("revision"), revision);
+    }
+
+    #[test]
     fn provider_route_change_records_tui_origin_and_next_session_timing() {
         let directory = tempfile::tempdir().expect("tempdir");
         let catalog = catalog_at(directory.path());
@@ -1178,9 +1245,18 @@ mod settings_tests {
             .expect("change");
         assert_eq!(change.origin, ConfigurationChangeOrigin::Tui);
         assert_eq!(change.apply_timing, ConfigurationApplyTiming::NextSession);
-        assert_eq!(
-            catalog.snapshot().expect("snapshot").profile.provider,
-            "anthropic"
-        );
+        let profile = catalog.snapshot().expect("snapshot").profile;
+        assert_eq!(profile.provider, "anthropic");
+        assert!(profile.configured);
+        let effective = Config::load_layers_with_provider_profile(
+            &profile,
+            None,
+            None,
+            &BTreeMap::new(),
+            &BTreeMap::new(),
+        )
+        .expect("effective config");
+        assert_eq!(effective.model.provider, "anthropic");
+        assert_eq!(effective.model.name, "claude-sonnet-4-6");
     }
 }
