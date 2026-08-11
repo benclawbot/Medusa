@@ -20,6 +20,9 @@ use sha2::{Digest, Sha256};
 
 use crate::{RuntimeController, RuntimeError, execution_history};
 
+#[path = "restore_transaction_lifecycle.rs"]
+mod restore_transaction_lifecycle;
+
 const CHECKPOINT_SCHEMA_VERSION: u32 = 1;
 const CHECKPOINT_DIRECTORY: &str = ".medusa/checkpoints";
 const RECOVERY_CHECKPOINT_DIRECTORY: &str = ".medusa/recovery-checkpoints";
@@ -129,12 +132,17 @@ impl RuntimeController {
 
 /// Disposes a completed session and removes runtime-owned checkpoint/recovery/continuity copies.
 ///
-/// The agent authority writes the fail-closed journal tombstone first. These runtime removals are
-/// idempotent, so an interrupted operation can be retried without resurrecting canonical state.
+/// Runtime restore transactions are classified from verified checkpoint payloads before the agent
+/// writes its fail-closed journal tombstone. Corrupt ownership metadata therefore blocks the
+/// deletion claim instead of leaving unclassified repository backups behind. All removals are
+/// idempotent so an interrupted operation can be retried without resurrecting canonical state.
 pub fn dispose_completed_session(repo: &Path, session_id: &str) -> Result<(), RuntimeError> {
     validate_session_id(session_id)?;
+    let restore_transactions =
+        restore_transaction_lifecycle::owned_transactions(repo, session_id)?;
     medusa_agent::session_browser::dispose_completed_session(repo, session_id)
         .map_err(RuntimeError::agent)?;
+    restore_transaction_lifecycle::remove_transactions(&restore_transactions)?;
     remove_dir_if_present(&checkpoint_directory(repo, session_id))?;
     remove_dir_if_present(&repo.join(RECOVERY_CHECKPOINT_DIRECTORY).join(session_id))?;
     remove_file_if_present(
@@ -469,7 +477,24 @@ mod tests {
     fn completed_session_disposition_removes_runtime_projections() {
         let repository = tempfile::tempdir().expect("repository");
         let mut session = session(repository.path());
-        materialize(repository.path(), session.id.as_str()).expect("checkpoint");
+        let record = materialize(repository.path(), session.id.as_str()).expect("checkpoint");
+        let payload_path = repository
+            .path()
+            .join(RECOVERY_CHECKPOINT_DIRECTORY)
+            .join(session.id.as_str())
+            .join(format!("{}.json", record.checkpoint.fingerprint));
+        let payload: crate::checkpoint_payload::RuntimeCheckpointPayload =
+            serde_json::from_slice(&fs::read(&payload_path).expect("payload")).expect("payload json");
+        let restore_transaction = repository
+            .path()
+            .join(".medusa/restore-transactions")
+            .join(&payload.payload_fingerprint);
+        fs::create_dir_all(restore_transaction.join("backups")).expect("restore transaction");
+        fs::write(
+            restore_transaction.join("backups/0"),
+            b"PRIVATE_RESTORE_BACKUP_MARKER",
+        )
+        .expect("restore backup");
         let continuity_path = repository
             .path()
             .join(CONTINUITY_DIRECTORY)
@@ -490,6 +515,7 @@ mod tests {
                 .join(session.id.as_str())
                 .exists()
         );
+        assert!(!restore_transaction.exists());
         assert!(!continuity_path.exists());
         assert!(load_session(repository.path(), session.id.as_str()).is_err());
         assert!(list(repository.path(), session.id.as_str()).unwrap().is_empty());
