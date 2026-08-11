@@ -2,8 +2,10 @@ use std::{
     collections::BTreeMap,
     env,
     io::{self, IsTerminal, Write},
+    net::{IpAddr, Ipv4Addr, SocketAddr, TcpStream},
     path::Path,
     process::Command,
+    time::Duration,
 };
 
 use medusa_config::{
@@ -577,6 +579,20 @@ fn ensure_chatgpt_oauth_gateway() -> MedusaResult<()> {
     Ok(())
 }
 
+fn loopback_socket(base_url: &str) -> Option<SocketAddr> {
+    let url = reqwest::Url::parse(base_url).ok()?;
+    let host = url.host_str()?;
+    let address = if host.eq_ignore_ascii_case("localhost") {
+        IpAddr::V4(Ipv4Addr::LOCALHOST)
+    } else {
+        host.parse::<IpAddr>().ok()?
+    };
+    if !address.is_loopback() {
+        return None;
+    }
+    Some(SocketAddr::new(address, url.port_or_known_default()?))
+}
+
 fn print_auth_guidance(profile: &ProviderProfile) {
     if profile.uses_openai_oauth() {
         println!(
@@ -612,6 +628,7 @@ fn config_error(message: impl Into<String>) -> MedusaError {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::fs;
 
     #[test]
     fn defaults_are_safe_and_backward_compatible() {
@@ -674,15 +691,17 @@ mod tests {
     }
 
     #[test]
-    fn doctor_report_redacts_malformed_profile_contents() {
-        let directory = tempfile::tempdir().expect("tempdir");
-        let store = ProviderProfileStore::at(directory.path().join("provider.toml"));
-        fs::write(store.path(), "token = 'super-secret-value'\n").expect("malformed profile");
-        let report = diagnose_store(&store, 0, "default".to_owned());
-        let encoded = serde_json::to_string(&report).expect("doctor json");
-        assert!(!report.healthy);
-        assert!(!encoded.contains("super-secret-value"));
-    }
+fn doctor_report_redacts_malformed_profile_contents() {
+    let directory = tempfile::tempdir().expect("tempdir");
+    let catalog = ProviderProfileCatalog::at(directory.path());
+    let store = catalog.active_store().expect("store");
+    fs::write(store.path(), "token = 'super-secret-value'
+").expect("malformed profile");
+    let report = diagnose_config_catalog(&catalog).expect("doctor report");
+    let encoded = serde_json::to_string(&report).expect("doctor json");
+    assert!(!report.healthy);
+    assert!(!encoded.contains("super-secret-value"));
+}
 
     #[test]
     fn current_choice_is_highlighted_and_unknown_values_use_first_option() {
