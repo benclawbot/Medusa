@@ -334,20 +334,43 @@ fn settings_modal_lines(modal: &app::ModelModal) -> Vec<StyledLine> {
     )];
     if page == app::SettingsPage::Status {
         lines.push(StyledLine::new(
-            format!("Active profile: {profile}"),
+            format!(
+                "Health: {} · active profile: {profile}",
+                modal.settings_doctor_summary()
+            ),
             Color::White,
         ));
+        let selected = modal.settings_selected_choice();
+        for (index, check) in modal.settings_doctor_checks().into_iter().enumerate() {
+            let is_selected = index == selected;
+            lines.push(StyledLine::with_marker(
+                if is_selected { "› " } else { "  " },
+                if is_selected { Color::Magenta } else { Color::DarkGrey },
+                format!("[{}] {} · {}", check.status.label(), check.name, check.detail),
+                if is_selected { Color::White } else { Color::Grey },
+            ));
+            if is_selected {
+                if let Some(remediation) = check.remediation {
+                    lines.push(StyledLine::new(
+                        format!("    {remediation}"),
+                        Color::DarkGrey,
+                    ));
+                }
+                if check.repair.is_some() {
+                    lines.push(StyledLine::new(
+                        "    Enter applies this deterministic repair through ProviderProfileCatalog.",
+                        Color::DarkGrey,
+                    ));
+                } else {
+                    lines.push(StyledLine::new(
+                        "    Enter refreshes diagnostics; no automatic mutation is available for this check.",
+                        Color::DarkGrey,
+                    ));
+                }
+            }
+        }
         lines.push(StyledLine::new(
-            format!(
-                "Last apply timing: {}",
-                modal
-                    .settings_last_apply_timing()
-                    .map_or("none", |timing| timing.label())
-            ),
-            Color::Grey,
-        ));
-        lines.push(StyledLine::new(
-            "Configuration values come from ProviderProfileCatalog; credential material is never displayed.",
+            "Credentials remain external/redacted · Esc returns without applying a repair.",
             Color::DarkGrey,
         ));
         return lines;

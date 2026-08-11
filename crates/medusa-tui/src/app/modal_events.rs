@@ -185,9 +185,7 @@ impl AppState {
                         if let Some(modal) = self.model_modal.as_mut() {
                             if page == SettingsPage::Root {
                                 modal.settings_move_root(-1);
-                            } else if page != SettingsPage::BaseUrl
-                                && page != SettingsPage::Status
-                            {
+                            } else if page != SettingsPage::BaseUrl {
                                 modal.settings_move_choice(-1);
                             }
                         }
@@ -197,9 +195,7 @@ impl AppState {
                         if let Some(modal) = self.model_modal.as_mut() {
                             if page == SettingsPage::Root {
                                 modal.settings_move_root(1);
-                            } else if page != SettingsPage::BaseUrl
-                                && page != SettingsPage::Status
-                            {
+                            } else if page != SettingsPage::BaseUrl {
                                 modal.settings_move_choice(1);
                             }
                         }
@@ -259,6 +255,10 @@ impl AppState {
             .unwrap_or(Ok(AppAction::None));
         match result {
             Ok(action) => {
+                if page == SettingsPage::Status {
+                    self.status = "configuration diagnostics refreshed; Enter repairs only deterministic checks".to_owned();
+                    return Ok(action);
+                }
                 if !matches!(page, SettingsPage::Review | SettingsPage::Profile) {
                     self.status = "settings · changes staged; open Review changes to apply".to_owned();
                     return Ok(action);

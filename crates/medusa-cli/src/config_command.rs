@@ -1,18 +1,17 @@
 use std::{
     collections::BTreeMap,
-    env, fs,
-    fs::OpenOptions,
+    env,
     io::{self, IsTerminal, Write},
     net::{IpAddr, Ipv4Addr, SocketAddr, TcpStream},
     path::Path,
     process::Command,
-    time::{Duration, SystemTime, UNIX_EPOCH},
+    time::Duration,
 };
 
 use medusa_config::{
     Config, PROVIDER_PROFILE_KEYS, ConfigurationApplyTiming, ConfigurationChangeOrigin,
     ConfigurationChanged, ProviderProfile, ProviderProfileCatalog, ProviderProfileStore,
-    credential_environment,
+    credential_environment, diagnose_config_catalog,
 };
 use medusa_core::{ErrorCategory, ErrorCode, MedusaError, MedusaResult};
 use serde::Serialize;
@@ -374,31 +373,9 @@ fn commit_edited_profile(
     Ok((candidate, change))
 }
 
-#[derive(Debug, Serialize)]
-struct ConfigDoctorOutput {
-    healthy: bool,
-    revision: u64,
-    active_profile: String,
-    configured: bool,
-    path: String,
-    checks: Vec<ConfigDoctorCheck>,
-}
-
-#[derive(Debug, Serialize)]
-struct ConfigDoctorCheck {
-    name: &'static str,
-    ok: bool,
-    detail: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    remediation: Option<String>,
-}
-
 pub(crate) fn doctor(json: bool) -> MedusaResult<()> {
     let catalog = ProviderProfileCatalog::user()?;
-    let revision = catalog.revision()?;
-    let active_profile = catalog.active_name()?;
-    let store = catalog.active_store()?;
-    let report = diagnose_store(&store, revision, active_profile);
+    let report = diagnose_config_catalog(&catalog)?;
     if json {
         println!(
             "{}",
@@ -413,268 +390,13 @@ pub(crate) fn doctor(json: bool) -> MedusaResult<()> {
     println!("Active profile: {}", report.active_profile);
     println!("Path: {}", report.path);
     for check in &report.checks {
-        let marker = if check.ok { "ok" } else { "fix" };
-        println!("[{marker}] {}: {}", check.name, check.detail);
+        println!("[{}] {}: {}", check.status.label(), check.name, check.detail);
         if let Some(remediation) = &check.remediation {
             println!("      remediation: {remediation}");
         }
     }
-    println!(
-        "Status: {}",
-        if report.healthy { "healthy" } else { "attention required" }
-    );
+    println!("Status: {}", report.summary_label());
     Ok(())
-}
-
-fn diagnose_store(
-    store: &ProviderProfileStore,
-    revision: u64,
-    active_profile: String,
-) -> ConfigDoctorOutput {
-    let path = store.path().display().to_string();
-    let mut checks = Vec::new();
-    let exists = store.path().is_file();
-    add_check(
-        &mut checks,
-        "profile_file",
-        exists,
-        if exists {
-            "active profile exists"
-        } else {
-            "active profile has not been initialized"
-        },
-        (!exists).then_some("run `medusa config init`"),
-    );
-    let profile_store_writable = profile_store_writable(store.path());
-    add_check(
-        &mut checks,
-        "profile_store",
-        profile_store_writable,
-        if profile_store_writable {
-            "configuration directory is writable"
-        } else {
-            "configuration directory is not writable or does not exist"
-        },
-        Some("fix the configuration-directory ownership or permissions"),
-    );
-
-    let profile = match store.load() {
-        Ok(profile) => {
-            add_check(
-                &mut checks,
-                "schema",
-                true,
-                "profile schema and typed invariants are valid",
-                None::<String>,
-            );
-            profile
-        }
-        Err(_) => {
-            add_check(
-                &mut checks,
-                "schema",
-                false,
-                "profile cannot be parsed or validated",
-                Some("run `medusa config edit` or `medusa config reset`"),
-            );
-            return finish_doctor(path, revision, active_profile, false, checks);
-        }
-    };
-
-    add_check(
-        &mut checks,
-        "configured",
-        profile.configured,
-        if profile.configured {
-            "provider profile is configured"
-        } else {
-            "provider profile is not configured"
-        },
-        (!profile.configured).then_some("run `medusa config init`"),
-    );
-    let effective = Config::load_layers_with_provider_profile(
-        &profile,
-        None,
-        None,
-        &BTreeMap::new(),
-        &BTreeMap::new(),
-    )
-    .is_ok();
-    add_check(
-        &mut checks,
-        "effective_configuration",
-        effective,
-        if effective {
-            "resolved runtime configuration is valid"
-        } else {
-            "resolved runtime configuration is invalid"
-        },
-        (!effective).then_some("run `medusa config validate` and correct the reported field"),
-    );
-
-    diagnose_endpoint(&profile, &mut checks);
-    diagnose_credential(&profile, &mut checks);
-    finish_doctor(path, revision, active_profile, profile.configured, checks)
-}
-
-fn diagnose_endpoint(profile: &ProviderProfile, checks: &mut Vec<ConfigDoctorCheck>) {
-    let Some(base_url) = profile.base_url.as_deref() else {
-        add_check(
-            checks,
-            "endpoint",
-            true,
-            "selected route uses its provider default endpoint",
-            None::<String>,
-        );
-        return;
-    };
-    let parsed = reqwest::Url::parse(base_url);
-    add_check(
-        checks,
-        "endpoint",
-        parsed.is_ok(),
-        if parsed.is_ok() {
-            "endpoint URL is syntactically valid"
-        } else {
-            "endpoint URL is invalid"
-        },
-        parsed
-            .is_err()
-            .then_some("set a valid http:// or https:// provider endpoint"),
-    );
-    let Some(address) = loopback_socket(base_url) else {
-        return;
-    };
-    let reachable = TcpStream::connect_timeout(&address, Duration::from_millis(300)).is_ok();
-    add_check(
-        checks,
-        "local_gateway",
-        reachable,
-        if reachable {
-            "selected loopback gateway is reachable"
-        } else {
-            "selected loopback gateway is not reachable"
-        },
-        (!reachable).then_some(match profile.connection.as_str() {
-            "chatgpt-oauth" => "run `npx openai-oauth@latest login` and retry",
-            "omniroute" => "start OmniRoute on the configured loopback endpoint",
-            "local" => "start the configured local model runtime",
-            _ => "start the configured loopback gateway",
-        }),
-    );
-}
-
-fn diagnose_credential(profile: &ProviderProfile, checks: &mut Vec<ConfigDoctorCheck>) {
-    if profile.auth != "api-key" {
-        add_check(
-            checks,
-            "credential",
-            true,
-            match profile.auth.as_str() {
-                "none" => "selected route does not require a Medusa-managed credential",
-                "existing" => "credential ownership is delegated to the selected gateway",
-                "oauth" => "credential ownership is delegated to the provider OAuth route",
-                _ => "credential mode is valid",
-            },
-            None::<String>,
-        );
-        return;
-    }
-    let Some(variable) = credential_environment(&profile.provider) else {
-        add_check(
-            checks,
-            "credential",
-            false,
-            "selected provider has no registered API-key environment source",
-            Some("select a supported provider route or use an existing gateway credential"),
-        );
-        return;
-    };
-    let configured = env::var_os(variable).is_some();
-    add_check(
-        checks,
-        "credential",
-        configured,
-        if configured {
-            format!("{variable} is present; its value was not read or displayed")
-        } else {
-            format!("{variable} is not present")
-        },
-        (!configured).then(|| format!("set {variable} in the Medusa process environment")),
-    );
-}
-
-fn loopback_socket(base_url: &str) -> Option<SocketAddr> {
-    let url = reqwest::Url::parse(base_url).ok()?;
-    let host = url.host_str()?;
-    let address = if host.eq_ignore_ascii_case("localhost") {
-        IpAddr::V4(Ipv4Addr::LOCALHOST)
-    } else {
-        host.parse::<IpAddr>().ok()?
-    };
-    if !address.is_loopback() {
-        return None;
-    }
-    Some(SocketAddr::new(address, url.port_or_known_default()?))
-}
-
-fn profile_store_writable(path: &Path) -> bool {
-    let Some(parent) = path.parent() else {
-        return false;
-    };
-    if !parent.is_dir() {
-        return false;
-    }
-    let stamp = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map_or(0, |duration| duration.as_nanos());
-    let probe = parent.join(format!(
-        ".medusa-config-doctor-{}-{stamp}.tmp",
-        std::process::id()
-    ));
-    let result = OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .open(&probe)
-        .and_then(|mut file| {
-            file.write_all(b"medusa-config-doctor")?;
-            file.sync_all()
-        })
-        .is_ok();
-    let _ = fs::remove_file(probe);
-    result
-}
-
-fn add_check(
-    checks: &mut Vec<ConfigDoctorCheck>,
-    name: &'static str,
-    ok: bool,
-    detail: impl Into<String>,
-    remediation: Option<impl Into<String>>,
-) {
-    checks.push(ConfigDoctorCheck {
-        name,
-        ok,
-        detail: detail.into(),
-        remediation: remediation.map(Into::into),
-    });
-}
-
-fn finish_doctor(
-    path: String,
-    revision: u64,
-    active_profile: String,
-    configured: bool,
-    checks: Vec<ConfigDoctorCheck>,
-) -> ConfigDoctorOutput {
-    ConfigDoctorOutput {
-        healthy: checks.iter().all(|check| check.ok),
-        revision,
-        active_profile,
-        configured,
-        path,
-        checks,
-    }
 }
 
 pub(crate) fn reset() -> MedusaResult<()> {
@@ -857,6 +579,20 @@ fn ensure_chatgpt_oauth_gateway() -> MedusaResult<()> {
     Ok(())
 }
 
+fn loopback_socket(base_url: &str) -> Option<SocketAddr> {
+    let url = reqwest::Url::parse(base_url).ok()?;
+    let host = url.host_str()?;
+    let address = if host.eq_ignore_ascii_case("localhost") {
+        IpAddr::V4(Ipv4Addr::LOCALHOST)
+    } else {
+        host.parse::<IpAddr>().ok()?
+    };
+    if !address.is_loopback() {
+        return None;
+    }
+    Some(SocketAddr::new(address, url.port_or_known_default()?))
+}
+
 fn print_auth_guidance(profile: &ProviderProfile) {
     if profile.uses_openai_oauth() {
         println!(
@@ -892,6 +628,7 @@ fn config_error(message: impl Into<String>) -> MedusaError {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::fs;
 
     #[test]
     fn defaults_are_safe_and_backward_compatible() {
@@ -954,15 +691,17 @@ mod tests {
     }
 
     #[test]
-    fn doctor_report_redacts_malformed_profile_contents() {
-        let directory = tempfile::tempdir().expect("tempdir");
-        let store = ProviderProfileStore::at(directory.path().join("provider.toml"));
-        fs::write(store.path(), "token = 'super-secret-value'\n").expect("malformed profile");
-        let report = diagnose_store(&store, 0, "default".to_owned());
-        let encoded = serde_json::to_string(&report).expect("doctor json");
-        assert!(!report.healthy);
-        assert!(!encoded.contains("super-secret-value"));
-    }
+fn doctor_report_redacts_malformed_profile_contents() {
+    let directory = tempfile::tempdir().expect("tempdir");
+    let catalog = ProviderProfileCatalog::at(directory.path());
+    let store = catalog.active_store().expect("store");
+    fs::write(store.path(), "token = 'super-secret-value'
+").expect("malformed profile");
+    let report = diagnose_config_catalog(&catalog).expect("doctor report");
+    let encoded = serde_json::to_string(&report).expect("doctor json");
+    assert!(!report.healthy);
+    assert!(!encoded.contains("super-secret-value"));
+}
 
     #[test]
     fn current_choice_is_highlighted_and_unknown_values_use_first_option() {

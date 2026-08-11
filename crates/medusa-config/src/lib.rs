@@ -5,11 +5,16 @@ use std::{collections::BTreeMap, fs, path::Path};
 use medusa_core::{ErrorCategory, ErrorCode, MedusaError, MedusaResult};
 use serde::{Deserialize, Serialize};
 
+mod config_doctor;
 mod configuration_state;
 mod provider_profile;
 mod provider_profiles;
 mod staged_profile;
 
+pub use config_doctor::{
+    ConfigDoctorCheck, ConfigDoctorRepair, ConfigDoctorReport, ConfigDoctorStatus,
+    diagnose_config_catalog, repair_config_check,
+};
 pub use configuration_state::{
     ConfigurationApplyTiming, ConfigurationChangeOrigin, ConfigurationChanged,
 };

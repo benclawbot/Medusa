@@ -1,9 +1,10 @@
 use std::{collections::BTreeMap, path::Path};
 
 use medusa_config::{
-    Config, ConfigurationApplyTiming, ConfigurationChangeOrigin, ProviderProfile,
-    ProviderProfileCatalog, StagedProviderProfile, apply_provider_defaults, provider_catalog_entry,
-    provider_ids_with_current, provider_model_options,
+    Config, ConfigDoctorCheck, ConfigDoctorReport, ConfigurationApplyTiming,
+    ConfigurationChangeOrigin, ProviderProfile, ProviderProfileCatalog, StagedProviderProfile,
+    apply_provider_defaults, diagnose_config_catalog, provider_catalog_entry,
+    provider_ids_with_current, provider_model_options, repair_config_check,
 };
 
 use crate::{
@@ -349,6 +350,7 @@ struct SettingsState {
     choice_selection: SelectionState,
     searching: bool,
     base_url_edit: String,
+    doctor: ConfigDoctorReport,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -428,6 +430,7 @@ impl ModelModal {
             .into_iter()
             .map(|summary| summary.name)
             .collect::<Vec<_>>();
+        let doctor = diagnose_config_catalog(&catalog).map_err(|error| error.to_string())?;
         let last_apply_timing = catalog
             .last_change()
             .map_err(|error| error.to_string())?
@@ -452,6 +455,7 @@ impl ModelModal {
             root_selection: SelectionState::new(0),
             choice_selection: SelectionState::new(profile_index),
             searching: false,
+            doctor,
         });
         Ok(modal)
     }
@@ -634,11 +638,7 @@ impl ModelModal {
             ),
             (
                 "Status".to_owned(),
-                if settings.profile.configured {
-                    "configured".to_owned()
-                } else {
-                    "not configured".to_owned()
-                },
+                settings.doctor.summary_label().to_owned(),
             ),
             (
                 "Review changes".to_owned(),
@@ -808,6 +808,21 @@ impl ModelModal {
     }
 
     #[must_use]
+    pub fn settings_doctor_checks(&self) -> Vec<ConfigDoctorCheck> {
+        self.settings
+            .as_ref()
+            .map(|settings| settings.doctor.checks.clone())
+            .unwrap_or_default()
+    }
+
+    #[must_use]
+    pub fn settings_doctor_summary(&self) -> &str {
+        self.settings
+            .as_ref()
+            .map_or("unavailable", |settings| settings.doctor.summary_label())
+    }
+
+    #[must_use]
     pub fn settings_review_lines(&self) -> Vec<String> {
         self.settings
             .as_ref()
@@ -855,7 +870,23 @@ impl ModelModal {
         }
 
         if settings.page == SettingsPage::Status {
-            settings.page = SettingsPage::Root;
+            let selected = settings.choice_selection.selected();
+            if let Some(check) = settings.doctor.checks.get(selected).cloned()
+                && check.repair.is_some()
+            {
+                if let Some(change) = repair_config_check(&settings.catalog, &check)
+                    .map_err(|error| error.to_string())?
+                {
+                    settings.revision = change.revision;
+                    settings.last_apply_timing = Some(change.apply_timing);
+                }
+            }
+            settings.doctor = diagnose_config_catalog(&settings.catalog)
+                .map_err(|error| error.to_string())?;
+            settings.choice_selection.set_selected(
+                selected.min(settings.doctor.checks.len().saturating_sub(1)),
+                settings.doctor.checks.len(),
+            );
             return Ok(AppAction::Redraw);
         }
 
@@ -996,10 +1027,17 @@ fn settings_auth_options(profile: &ProviderProfile) -> Vec<String> {
 
 fn settings_choices(settings: &SettingsState) -> Vec<SettingsChoice> {
     match settings.page {
-        SettingsPage::Root
-        | SettingsPage::BaseUrl
-        | SettingsPage::Status
-        | SettingsPage::Review => Vec::new(),
+        SettingsPage::Root | SettingsPage::BaseUrl | SettingsPage::Review => Vec::new(),
+        SettingsPage::Status => settings
+            .doctor
+            .checks
+            .iter()
+            .map(|check| SettingsChoice {
+                label: check.name.clone(),
+                description: check.detail.clone(),
+                enabled: true,
+            })
+            .collect(),
         SettingsPage::Profile => settings
             .profiles
             .iter()
