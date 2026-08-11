@@ -24,9 +24,21 @@ use crate::{
 const MAX_CONTAINED_INPUT_BYTES: u64 = 64 * 1024 * 1024;
 const MAX_CONTAINED_OUTPUT_BYTES: usize = 16 * 1024;
 const MAX_CONTAINED_LINES: usize = 128;
+const UNIX_ANALYSIS_CPU_SECONDS: u64 = 10;
+const UNIX_ANALYSIS_MEMORY_BYTES: u64 = 512 * 1024 * 1024;
+const UNIX_ANALYSIS_FILE_BYTES: u64 = 16 * 1024 * 1024;
+const CONTAINMENT_WALL_SECONDS: u64 = 120;
 
 const PYTHON_REDUCER: &str = r#"
-import json, sys
+import json, sys, time
+if sys.platform != "win32":
+    import resource
+    resource.setrlimit(resource.RLIMIT_CPU, (10, 10))
+    resource.setrlimit(resource.RLIMIT_AS, (536870912, 536870912))
+    resource.setrlimit(resource.RLIMIT_FSIZE, (16777216, 16777216))
+    if hasattr(resource, "RLIMIT_NPROC"):
+        resource.setrlimit(resource.RLIMIT_NPROC, (1, 1))
+reducer_started = time.perf_counter_ns()
 path = sys.argv[1]
 op = json.loads(sys.argv[2])
 with open(path, "rb") as handle:
@@ -70,7 +82,11 @@ else:
         value = {"kind": "string_list", "value": selected}
     else:
         raise ValueError("unsupported analysis operation")
-print(json.dumps({"value": value, "truncated": truncated}, separators=(",", ":")))
+print(json.dumps({
+    "value": value,
+    "truncated": truncated,
+    "reducer_elapsed_nanos": time.perf_counter_ns() - reducer_started,
+}, separators=(",", ":")))
 "#;
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -85,6 +101,10 @@ pub struct AnalysisWorkspaceCapabilities {
     pub max_output_bytes: usize,
     pub max_result_lines: usize,
     pub process_limit: usize,
+    pub cpu_seconds: u64,
+    pub memory_bytes: u64,
+    pub file_bytes: u64,
+    pub wall_time_seconds: u64,
     pub cancellation: String,
     pub containment_authority: String,
     pub delegation_authority: String,
@@ -95,6 +115,9 @@ pub struct AnalysisExecutionMetrics {
     pub input_bytes: u64,
     pub output_bytes: usize,
     pub elapsed_millis: u128,
+    pub reducer_millis: u128,
+    pub sandbox_startup_millis: u128,
+    pub output_to_input_ppm: u64,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -117,7 +140,11 @@ impl RuntimeController {
             max_input_bytes: MAX_CONTAINED_INPUT_BYTES,
             max_output_bytes: MAX_CONTAINED_OUTPUT_BYTES,
             max_result_lines: MAX_CONTAINED_LINES,
-            process_limit: 1,
+            process_limit: platform_process_limit(),
+            cpu_seconds: platform_cpu_seconds(),
+            memory_bytes: platform_memory_bytes(),
+            file_bytes: platform_file_bytes(),
+            wall_time_seconds: CONTAINMENT_WALL_SECONDS,
             cancellation: "runtime_atomic_cancel_to_process_tree".to_owned(),
             containment_authority: "medusa-agent/policy -> medusa-process-containment".to_owned(),
             delegation_authority: "medusa-runtime/team-control".to_owned(),
@@ -170,6 +197,7 @@ impl RuntimeController {
             &self.cancel,
         )
         .map_err(RuntimeError::agent)?;
+        let elapsed_millis = started.elapsed().as_millis();
         if !output.status.success() {
             return Err(RuntimeError::InvalidCommand(format!(
                 "contained analysis backend failed: {}",
@@ -182,6 +210,7 @@ impl RuntimeController {
             ));
         }
         let wire: WireResult = serde_json::from_slice(&output.stdout).map_err(RuntimeError::agent)?;
+        let reducer_millis = u128::from(wire.reducer_elapsed_nanos) / 1_000_000;
         let result = AnalysisResult {
             operation,
             value: wire.value.into_value()?,
@@ -197,7 +226,10 @@ impl RuntimeController {
             metrics: AnalysisExecutionMetrics {
                 input_bytes: artifact.size_bytes,
                 output_bytes: output.stdout.len(),
-                elapsed_millis: started.elapsed().as_millis(),
+                elapsed_millis,
+                reducer_millis,
+                sandbox_startup_millis: elapsed_millis.saturating_sub(reducer_millis),
+                output_to_input_ppm: output_to_input_ppm(output.stdout.len(), artifact.size_bytes),
             },
             result,
             backend: "contained_fixed_python_reducer".to_owned(),
@@ -209,6 +241,7 @@ impl RuntimeController {
 struct WireResult {
     value: WireValue,
     truncated: bool,
+    reducer_elapsed_nanos: u64,
 }
 
 #[derive(Deserialize)]
@@ -274,6 +307,58 @@ fn python_program() -> &'static str {
     }
 }
 
+fn platform_process_limit() -> usize {
+    #[cfg(windows)]
+    {
+        64
+    }
+    #[cfg(not(windows))]
+    {
+        1
+    }
+}
+
+fn platform_cpu_seconds() -> u64 {
+    #[cfg(windows)]
+    {
+        CONTAINMENT_WALL_SECONDS
+    }
+    #[cfg(not(windows))]
+    {
+        UNIX_ANALYSIS_CPU_SECONDS
+    }
+}
+
+fn platform_memory_bytes() -> u64 {
+    #[cfg(windows)]
+    {
+        2 * 1024 * 1024 * 1024
+    }
+    #[cfg(not(windows))]
+    {
+        UNIX_ANALYSIS_MEMORY_BYTES
+    }
+}
+
+fn platform_file_bytes() -> u64 {
+    #[cfg(windows)]
+    {
+        MAX_CONTAINED_OUTPUT_BYTES as u64
+    }
+    #[cfg(not(windows))]
+    {
+        UNIX_ANALYSIS_FILE_BYTES
+    }
+}
+
+fn output_to_input_ppm(output_bytes: usize, input_bytes: u64) -> u64 {
+    let output = u64::try_from(output_bytes).unwrap_or(u64::MAX);
+    output
+        .saturating_mul(1_000_000)
+        .checked_div(input_bytes.max(1))
+        .unwrap_or(u64::MAX)
+}
+
 fn bounded_text(bytes: &[u8]) -> String {
     String::from_utf8_lossy(&bytes[..bytes.len().min(2048)]).into_owned()
 }
@@ -301,7 +386,10 @@ mod tests {
         assert!(!capabilities.ambient_credentials);
         assert!(!capabilities.primary_repository_write);
         assert!(!capabilities.direct_provider_client);
-        assert_eq!(capabilities.process_limit, 1);
+        assert!(capabilities.process_limit >= 1);
+        assert!(capabilities.cpu_seconds > 0);
+        assert!(capabilities.memory_bytes >= MAX_CONTAINED_INPUT_BYTES);
+        assert!(capabilities.file_bytes > 0);
     }
 
     #[test]
@@ -314,5 +402,11 @@ mod tests {
         assert_eq!(wire["kind"], "matching_lines");
         assert_eq!(wire["limit"], MAX_CONTAINED_LINES);
         assert!(wire.get("code").is_none());
+    }
+
+    #[test]
+    fn context_reduction_metric_is_bounded() {
+        assert_eq!(output_to_input_ppm(100, 10_000), 10_000);
+        assert_eq!(output_to_input_ppm(0, 0), 0);
     }
 }
