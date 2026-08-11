@@ -209,7 +209,8 @@ impl SelectionState {
             .iter()
             .enumerate()
             .filter_map(|(index, label)| {
-                (query.is_empty() || label.as_ref().to_lowercase().contains(&query)).then_some(index)
+                (query.is_empty() || label.as_ref().to_lowercase().contains(&query))
+                    .then_some(index)
             })
             .collect()
     }
@@ -228,9 +229,11 @@ impl SelectionState {
         } else if position >= self.scroll.saturating_add(visible_rows) {
             self.scroll = position.saturating_add(1).saturating_sub(visible_rows);
         }
-        self.scroll = self
-            .scroll
-            .min(ordered_indices.len().saturating_sub(visible_rows.min(ordered_indices.len())));
+        self.scroll = self.scroll.min(
+            ordered_indices
+                .len()
+                .saturating_sub(visible_rows.min(ordered_indices.len())),
+        );
     }
 
     #[must_use]
