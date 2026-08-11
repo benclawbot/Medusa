@@ -44,11 +44,14 @@ fn contained_reducer_processes_brokered_artifact_without_repository_write_author
         #[cfg(target_os = "linux")]
         {
             let message = _error.to_string();
+            let namespace_denied = message.contains("contained analysis backend failed")
+                && message.contains("bwrap: loopback")
+                && message.contains("Operation not permitted");
+            let backend_unavailable = message.contains("sandbox unavailable")
+                && message.contains("Linux bubblewrap sandbox unavailable");
             assert!(
-                message.contains("contained analysis backend failed")
-                    && message.contains("bwrap: loopback")
-                    && message.contains("Operation not permitted"),
-                "restricted Linux hosts must fail closed when the kernel denies the isolated network namespace: {message}"
+                namespace_denied || backend_unavailable,
+                "restricted Linux hosts must fail closed when bubblewrap is unavailable or the kernel denies the isolated network namespace: {message}"
             );
             assert_eq!(
                 fs::read_to_string(temp.path().join("large.txt")).expect("source remains readable"),
