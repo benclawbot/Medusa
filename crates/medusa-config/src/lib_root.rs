@@ -1,4 +1,7 @@
-include!("lib.rs");
+#[path = "lib.rs"]
+mod implementation;
+
+pub use implementation::*;
 
 pub mod provider_catalog;
 
