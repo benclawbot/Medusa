@@ -42,10 +42,28 @@ pub use escalation_state::{
     persist_escalation_journal,
 };
 pub use manual_escalation::{export_manual_escalation, import_manual_advice};
-pub(crate) use skill_outcomes::{record_loaded_skills, record_terminal_skill_outcome};
 pub(crate) use usage::record_turn_usage;
 #[allow(unused_imports)]
 pub use usage::{SessionUsage, TurnUsage, UsageProvenance, session_usage};
+
+pub(crate) fn record_loaded_skills(session: &AgentSession) -> MedusaResult<()> {
+    if !completed_learning::telemetry_allowed(&session.repo)? {
+        return Ok(());
+    }
+    skill_outcomes::record_loaded_skills(session)
+}
+
+pub(crate) fn record_terminal_skill_outcome(
+    session: &AgentSession,
+    error: &MedusaError,
+    decision: &medusa_failure::FailureDecision,
+    reason: &str,
+) -> MedusaResult<Option<PathBuf>> {
+    if !completed_learning::telemetry_allowed(&session.repo)? {
+        return Ok(None);
+    }
+    skill_outcomes::record_terminal_skill_outcome(session, error, decision, reason)
+}
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct NonFatalDiagnostic {

@@ -1,11 +1,15 @@
-use std::{collections::BTreeSet, fs, path::PathBuf};
+use std::{collections::BTreeSet, fs, path::PathBuf, process::Command};
 
 use medusa_core::MedusaResult;
 use serde::Serialize;
 use serde_json::Value;
+use sha2::{Digest, Sha256};
 use time::format_description::well_known::Rfc3339;
 
-use super::AgentSession;
+use super::{
+    AgentSession,
+    completed_learning::{authoritative_evidence, authoritative_success},
+};
 
 const MAX_EVIDENCE_ITEMS: usize = 12;
 const MAX_PROCEDURE_ITEMS: usize = 10;
@@ -27,6 +31,7 @@ struct LessonProposal {
     source_session_id: String,
     created_at: String,
     repository_fingerprint: String,
+    repository_revision: Option<String>,
     kind: LessonKind,
     title: String,
     summary: String,
@@ -52,7 +57,11 @@ pub(super) fn extract_completed_session(session: &AgentSession) -> MedusaResult<
 }
 
 fn build_proposal(session: &AgentSession) -> MedusaResult<Option<LessonProposal>> {
-    if !session.completed || session.evidence.is_empty() {
+    if !authoritative_success(session) {
+        return Ok(None);
+    }
+    let authoritative_evidence = authoritative_evidence(session);
+    if authoritative_evidence.is_empty() {
         return Ok(None);
     }
 
@@ -75,7 +84,7 @@ fn build_proposal(session: &AgentSession) -> MedusaResult<Option<LessonProposal>
     let meaningful = session.turn >= 2
         || !successful_steps.is_empty()
         || !failed_steps.is_empty()
-        || session.evidence.len() >= 2;
+        || authoritative_evidence.len() >= 2;
     if !meaningful {
         return Ok(None);
     }
@@ -83,8 +92,7 @@ fn build_proposal(session: &AgentSession) -> MedusaResult<Option<LessonProposal>
     let kind = classify(&all_text, &failed_steps, &tools);
     let mut procedure = successful_steps;
     procedure.extend(
-        session
-            .evidence
+        authoritative_evidence
             .iter()
             .filter(|value| safe_text(value))
             .map(|value| compact(value, 240)),
@@ -92,8 +100,7 @@ fn build_proposal(session: &AgentSession) -> MedusaResult<Option<LessonProposal>
     deduplicate(&mut procedure);
     procedure.truncate(MAX_PROCEDURE_ITEMS);
 
-    let mut evidence = session
-        .evidence
+    let mut evidence = authoritative_evidence
         .iter()
         .filter(|value| safe_text(value))
         .map(|value| compact(value, 300))
@@ -124,11 +131,12 @@ fn build_proposal(session: &AgentSession) -> MedusaResult<Option<LessonProposal>
         id: format!("lesson-{}", session.id),
         source_session_id: session.id.to_string(),
         created_at: timestamp,
-        repository_fingerprint: format!("path:{}", session.repo.to_string_lossy()),
+        repository_fingerprint: repository_fingerprint(&session.repo),
+        repository_revision: git_output(&session.repo, &["rev-parse", "HEAD"]),
         kind,
         title: format!("Reusable workflow: {objective}"),
         summary: format!(
-            "Medusa completed this task with {} verified evidence item(s) using {} tool(s).",
+            "Medusa completed this task with {} authoritative evidence item(s) using {} tool(s).",
             evidence.len(),
             tools.len()
         ),
@@ -138,6 +146,41 @@ fn build_proposal(session: &AgentSession) -> MedusaResult<Option<LessonProposal>
         confidence_milli: confidence,
         status: "proposed",
     }))
+}
+
+fn repository_fingerprint(repo: &std::path::Path) -> String {
+    let identity = git_output(repo, &["remote", "get-url", "origin"])
+        .map(|origin| normalize_origin(&origin))
+        .or_else(|| {
+            git_output(repo, &["rev-list", "--max-parents=0", "HEAD"]).map(|roots| {
+                let mut roots = roots.lines().map(str::trim).collect::<Vec<_>>();
+                roots.sort_unstable();
+                format!("git-roots:{}", roots.join(","))
+            })
+        })
+        .unwrap_or_else(|| "unresolved-repository".to_owned());
+    hex::encode(Sha256::digest(identity.as_bytes()))
+}
+
+fn git_output(repo: &std::path::Path, arguments: &[&str]) -> Option<String> {
+    let output = Command::new("git")
+        .args(arguments)
+        .current_dir(repo)
+        .output()
+        .ok()?;
+    output
+        .status
+        .success()
+        .then(|| String::from_utf8_lossy(&output.stdout).trim().to_owned())
+        .filter(|value| !value.is_empty())
+}
+
+fn normalize_origin(origin: &str) -> String {
+    origin
+        .trim()
+        .trim_end_matches('/')
+        .trim_end_matches(".git")
+        .to_ascii_lowercase()
 }
 
 fn classify(text: &[String], failures: &[String], tools: &BTreeSet<String>) -> LessonKind {
@@ -264,12 +307,15 @@ mod tests {
     use std::path::PathBuf;
 
     use medusa_core::SessionId;
+    use medusa_protocol::{Actor, EventPayload};
     use time::OffsetDateTime;
+
+    use crate::evidence::append_event;
 
     use super::*;
 
     fn session(directory: &std::path::Path) -> AgentSession {
-        AgentSession {
+        let mut session = AgentSession {
             id: SessionId::new(),
             objective: "Fix Windows executable replacement and verify the package".to_owned(),
             repo: PathBuf::from(directory),
@@ -290,7 +336,25 @@ mod tests {
             approval_receipts: Vec::new(),
             rollback_receipts: Vec::new(),
             world_model: None,
-        }
+        };
+        append_event(
+            &mut session,
+            Actor::System("test".to_owned()),
+            EventPayload::VerificationCompleted {
+                passed: true,
+                evidence: vec!["cargo test --workspace passed".to_owned()],
+            },
+        )
+        .expect("verification");
+        append_event(
+            &mut session,
+            Actor::Coordinator,
+            EventPayload::SessionCompleted {
+                report_ref: "report".to_owned(),
+            },
+        )
+        .expect("completion");
+        session
     }
 
     #[test]
@@ -313,16 +377,29 @@ mod tests {
     }
 
     #[test]
-    fn incomplete_or_unverified_session_is_ignored() {
+    fn parent_can_use_verification_evidence_when_legacy_evidence_is_empty() {
         let directory = tempfile::tempdir().expect("tempdir");
         let mut session = session(directory.path());
         session.evidence.clear();
         assert!(
             extract_completed_session(&session)
                 .expect("extract")
+                .is_some()
+        );
+    }
+
+    #[test]
+    fn incomplete_or_unverified_session_is_ignored() {
+        let directory = tempfile::tempdir().expect("tempdir");
+        let mut session = session(directory.path());
+        session
+            .events
+            .retain(|event| !matches!(&event.payload, EventPayload::VerificationCompleted { .. }));
+        assert!(
+            extract_completed_session(&session)
+                .expect("extract")
                 .is_none()
         );
-        session.evidence.push("verified".to_owned());
         session.completed = false;
         assert!(
             extract_completed_session(&session)

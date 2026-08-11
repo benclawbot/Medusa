@@ -1,11 +1,12 @@
-use std::fs;
+use std::{fs, process::Command};
 
 use medusa_core::MedusaResult;
 use serde::Serialize;
 use serde_json::Value;
+use sha2::{Digest, Sha256};
 use time::format_description::well_known::Rfc3339;
 
-use super::AgentSession;
+use super::{AgentSession, completed_learning};
 
 #[derive(Serialize)]
 struct RecallEvent {
@@ -22,12 +23,14 @@ struct RecallRecord {
     parent_session_id: Option<String>,
     created_at: String,
     repository_fingerprint: String,
+    repository_revision: Option<String>,
     outcome: String,
     events: Vec<RecallEvent>,
 }
 
 pub(super) fn persist_completed_session(session: &AgentSession) -> MedusaResult<()> {
-    if !session.completed {
+    let policy = completed_learning::policy_for(&session.repo)?;
+    if !policy.capture_enabled() || !completed_learning::authoritative_success(session) {
         return Ok(());
     }
 
@@ -75,8 +78,9 @@ pub(super) fn persist_completed_session(session: &AgentSession) -> MedusaResult<
                 format!("cannot format session recall timestamp: {error}"),
             )
         })?,
-        repository_fingerprint: format!("path:{}", session.repo.to_string_lossy()),
-        outcome: "success".to_owned(),
+        repository_fingerprint: repository_fingerprint(&session.repo),
+        repository_revision: git_output(&session.repo, &["rev-parse", "HEAD"]),
+        outcome: "authoritatively_verified".to_owned(),
         events,
     };
 
@@ -89,14 +93,47 @@ pub(super) fn persist_completed_session(session: &AgentSession) -> MedusaResult<
     Ok(())
 }
 
+fn repository_fingerprint(repo: &std::path::Path) -> String {
+    let identity = git_output(repo, &["remote", "get-url", "origin"])
+        .map(|origin| {
+            origin
+                .trim()
+                .trim_end_matches('/')
+                .trim_end_matches(".git")
+                .to_ascii_lowercase()
+        })
+        .or_else(|| {
+            git_output(repo, &["rev-list", "--max-parents=0", "HEAD"]).map(|roots| {
+                let mut roots = roots.lines().map(str::trim).collect::<Vec<_>>();
+                roots.sort_unstable();
+                format!("git-roots:{}", roots.join(","))
+            })
+        })
+        .unwrap_or_else(|| "unresolved-repository".to_owned());
+    hex::encode(Sha256::digest(identity.as_bytes()))
+}
+
+fn git_output(repo: &std::path::Path, arguments: &[&str]) -> Option<String> {
+    let output = Command::new("git")
+        .args(arguments)
+        .current_dir(repo)
+        .output()
+        .ok()?;
+    output
+        .status
+        .success()
+        .then(|| String::from_utf8_lossy(&output.stdout).trim().to_owned())
+        .filter(|value| !value.is_empty())
+}
+
 fn find_string(value: &Value, keys: &[&str]) -> Option<String> {
     match value {
         Value::Object(map) => {
             for key in keys {
-                if let Some(Value::String(value)) = map.get(*key) {
-                    if !value.trim().is_empty() {
-                        return Some(value.clone());
-                    }
+                if let Some(Value::String(value)) = map.get(*key)
+                    && !value.trim().is_empty()
+                {
+                    return Some(value.clone());
                 }
             }
             map.values().find_map(|value| find_string(value, keys))
@@ -126,17 +163,19 @@ mod tests {
     use std::path::PathBuf;
 
     use medusa_core::SessionId;
+    use medusa_protocol::{Actor, EventPayload};
+    use serde_json::json;
     use time::OffsetDateTime;
+
+    use crate::evidence::append_event;
 
     use super::*;
 
-    #[test]
-    fn completed_session_is_written_to_recall_inbox() {
-        let directory = tempfile::tempdir().expect("tempdir");
-        let session = AgentSession {
+    fn verified_session(directory: &std::path::Path) -> AgentSession {
+        let mut session = AgentSession {
             id: SessionId::new(),
             objective: "repair the update command".to_owned(),
-            repo: PathBuf::from(directory.path()),
+            repo: PathBuf::from(directory),
             created_at: OffsetDateTime::now_utc(),
             updated_at: OffsetDateTime::now_utc(),
             completed: true,
@@ -152,6 +191,30 @@ mod tests {
             rollback_receipts: Vec::new(),
             world_model: None,
         };
+        append_event(
+            &mut session,
+            Actor::System("test".to_owned()),
+            EventPayload::VerificationCompleted {
+                passed: true,
+                evidence: vec!["verified".to_owned()],
+            },
+        )
+        .expect("verification");
+        append_event(
+            &mut session,
+            Actor::Coordinator,
+            EventPayload::SessionCompleted {
+                report_ref: "report".to_owned(),
+            },
+        )
+        .expect("completion");
+        session
+    }
+
+    #[test]
+    fn completed_authoritative_session_is_written_to_recall_inbox() {
+        let directory = tempfile::tempdir().expect("tempdir");
+        let session = verified_session(directory.path());
 
         persist_completed_session(&session).expect("persist recall");
         let path = directory
@@ -161,6 +224,40 @@ mod tests {
         let value: Value = serde_json::from_slice(&fs::read(path).expect("inbox record"))
             .expect("valid recall record");
         assert_eq!(value["session_id"], session.id.to_string());
-        assert_eq!(value["events"][0]["text"], "repair the update command");
+        assert_eq!(value["outcome"], "authoritatively_verified");
+    }
+
+    #[test]
+    fn capture_disabled_leaves_no_recall_content() {
+        let directory = tempfile::tempdir().expect("tempdir");
+        let root = directory.path().join(".medusa/learning-review");
+        fs::create_dir_all(&root).expect("privacy root");
+        fs::write(
+            root.join("state.json"),
+            serde_json::to_vec_pretty(&json!({
+                "schema_version": 1,
+                "revision": 1,
+                "privacy": {
+                    "capture_enabled": false,
+                    "user_persistence_enabled": false,
+                    "cross_repository_reuse_enabled": false,
+                    "telemetry_enabled": false,
+                    "automatic_proposals_enabled": false
+                },
+                "items": [],
+                "audit_head": "0000000000000000000000000000000000000000000000000000000000000000"
+            }))
+            .expect("privacy json"),
+        )
+        .expect("privacy");
+        let mut session = verified_session(directory.path());
+        session.objective = "SEEDED_PRIVATE_CONTENT".to_owned();
+        persist_completed_session(&session).expect("privacy block");
+        assert!(
+            !directory
+                .path()
+                .join(".medusa/session-recall-inbox")
+                .exists()
+        );
     }
 }

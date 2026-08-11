@@ -5,6 +5,7 @@ use std::{
 };
 
 use medusa_agent::{AgentPlanStep, AgentPlanStepStatus};
+use medusa_core::learning_policy::LearningAdmissionPolicy;
 use medusa_intelligence::{RepositoryGraph, RepositoryGraphFreshness, ReviewImpact};
 use medusa_multi_agent_scheduler::{
     CancellationAuthority, ExecutionLane, ExecutionLedger, ExecutionStrategy, LedgerTaskState,
@@ -418,9 +419,17 @@ pub fn persist_outcome(
     verified: bool,
     failed: bool,
 ) -> std::io::Result<PathBuf> {
-    let directory = repo.join(".medusa").join("learning");
-    fs::create_dir_all(&directory)?;
-    let path = directory.join("runtime-outcomes.jsonl");
+    let path = repo
+        .join(".medusa")
+        .join("learning")
+        .join("runtime-outcomes.jsonl");
+    let policy = LearningAdmissionPolicy::for_repository(repo).map_err(std::io::Error::other)?;
+    if !policy.telemetry_enabled() {
+        return Ok(path);
+    }
+    if let Some(directory) = path.parent() {
+        fs::create_dir_all(directory)?;
+    }
     let outcome = PersistedOutcome {
         objective_fingerprint: digest(&draft.text),
         plan_fingerprint: plan.fingerprint.clone(),
@@ -716,5 +725,17 @@ mod tests {
             .iter()
             .take(2)
             .all(|step| step.status == AgentPlanStepStatus::InProgress));
+    }
+
+    #[test]
+    fn privacy_disabled_runtime_telemetry_is_not_persisted() {
+        let directory = tempfile::tempdir().unwrap();
+        let draft = PromptDraft {
+            text: "Analyze repository architecture without changing files".to_owned(),
+            ..PromptDraft::default()
+        };
+        let planned = plan_for_repository(directory.path(), &draft).unwrap();
+        let outcome_path = persist_outcome(directory.path(), &draft, &planned, true, false).unwrap();
+        assert!(!outcome_path.exists());
     }
 }

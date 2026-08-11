@@ -10,6 +10,7 @@ use std::{
 };
 
 use medusa_improvement::{
+    learning_admission::LearningAdmissionPolicy,
     retrieval::{RetrievalConfig, RetrievalResult, SelectionDisposition, TaskContext, retrieve},
     scoped_memory::{RepositoryIdentity, ScopeContext, ScopedMemoryStore},
 };
@@ -40,7 +41,29 @@ pub(crate) fn select(
     session_id: Option<&str>,
     events: &Sender<RuntimeEvent>,
 ) -> RuntimeLearningContext {
-    let user_store = user_store_path();
+    let policy = match LearningAdmissionPolicy::for_repository(repo) {
+        Ok(policy) => policy,
+        Err(error) => {
+            let _ = events.send(RuntimeEvent::Notice {
+                title: "Learned behavior unavailable".to_owned(),
+                details: vec![format!(
+                    "Learning privacy state could not be resolved; retrieval failed closed: {error}"
+                )],
+            });
+            return RuntimeLearningContext::default();
+        }
+    };
+    if !policy.capture_enabled() {
+        return RuntimeLearningContext::default();
+    }
+
+    // User-level data is not even opened unless both user persistence and cross-repository reuse
+    // are authorized. Repository-scoped learnings remain available independently.
+    let user_store = if policy.cross_repository_reuse_enabled() {
+        user_store_path()
+    } else {
+        repo.join(".medusa/learning-disabled-user-store.json")
+    };
     let repository_store = repo.join(".medusa/learnings.json");
     if !user_store.exists() && !repository_store.exists() {
         return RuntimeLearningContext::default();
@@ -87,14 +110,16 @@ pub(crate) fn select(
     };
 
     emit_notices(&result, events);
-    if let Err(error) = append_audit(
-        repo,
-        objective,
-        task_kind,
-        artifact_kind,
-        now_unix_ms,
-        &result,
-    ) {
+    if policy.telemetry_enabled()
+        && let Err(error) = append_audit(
+            repo,
+            objective,
+            task_kind,
+            artifact_kind,
+            now_unix_ms,
+            &result,
+        )
+    {
         let _ = events.send(RuntimeEvent::Notice {
             title: "Learning selection audit unavailable".to_owned(),
             details: vec![error.to_string()],
@@ -208,9 +233,32 @@ fn owner_id() -> String {
 }
 
 fn repository_identity(repo: &Path) -> Option<RepositoryIdentity> {
-    let origin = read_origin(repo).unwrap_or_else(|| repo.to_string_lossy().into_owned());
+    let origin = read_origin(repo).or_else(|| repository_root_commit(repo))?;
+    // RepositoryIdentity uses the origin fingerprint for logical identity. The second component is
+    // clone/worktree-local and is deliberately based on the git common directory so worktrees of
+    // one clone remain correlated without substituting an absolute worktree path for repository
+    // identity.
     let common = git_common_directory(repo).unwrap_or_else(|| repo.join(".git"));
     RepositoryIdentity::new(&origin, &common.to_string_lossy()).ok()
+}
+
+fn repository_root_commit(repo: &Path) -> Option<String> {
+    let output = std::process::Command::new("git")
+        .args(["rev-list", "--max-parents=0", "HEAD"])
+        .current_dir(repo)
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    let mut roots = String::from_utf8_lossy(&output.stdout)
+        .lines()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_owned)
+        .collect::<Vec<_>>();
+    roots.sort();
+    (!roots.is_empty()).then(|| format!("git-roots:{}", roots.join(",")))
 }
 
 fn read_origin(repo: &Path) -> Option<String> {
@@ -221,12 +269,12 @@ fn read_origin(repo: &Path) -> Option<String> {
         let trimmed = line.trim();
         if trimmed.starts_with('[') {
             in_origin = trimmed.eq_ignore_ascii_case("[remote \"origin\"]");
-        } else if in_origin {
-            if let Some(value) = trimmed.strip_prefix("url") {
-                return value
-                    .split_once('=')
-                    .map(|(_, origin)| origin.trim().to_owned());
-            }
+        } else if in_origin
+            && let Some(value) = trimmed.strip_prefix("url")
+        {
+            return value
+                .split_once('=')
+                .map(|(_, origin)| origin.trim().to_owned());
         }
     }
     None
@@ -382,5 +430,30 @@ mod tests {
         let exclusions = explicit_exclusions("write release notes without publishing artifacts");
         assert!(exclusions.contains("publishing"));
         assert!(exclusions.contains("artifacts"));
+    }
+
+    #[test]
+    fn capture_disabled_short_circuits_before_selection_audit() {
+        let repo = tempfile::tempdir().expect("repo");
+        let store = medusa_improvement::learning_review::LearningReviewStore::for_repository(
+            repo.path(),
+        );
+        store
+            .update_privacy(
+                medusa_improvement::learning_review::LearningPrivacy {
+                    capture_enabled: false,
+                    user_persistence_enabled: true,
+                    cross_repository_reuse_enabled: true,
+                    telemetry_enabled: true,
+                    automatic_proposals_enabled: true,
+                },
+                0,
+                "test",
+            )
+            .expect("privacy");
+        let (tx, _rx) = std::sync::mpsc::channel();
+        let context = select(repo.path(), &PromptDraft::default(), None, &tx);
+        assert!(context.prompt_context.is_none());
+        assert!(!repo.path().join(".medusa/learning-selection-audit.jsonl").exists());
     }
 }
