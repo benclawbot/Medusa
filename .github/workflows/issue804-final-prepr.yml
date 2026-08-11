@@ -1,0 +1,44 @@
+name: issue804-final-prepr
+
+on:
+  push:
+    branches: [agent/issue-804-tui-config-doctor]
+    paths: [.github/workflows/issue804-final-prepr.yml]
+
+permissions:
+  contents: write
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          fetch-depth: 0
+      - uses: dtolnay/rust-toolchain@39b0b3842c7e8bbf6904c0bfc3d9006fdd4dc4e0
+      - name: Generate implementation and run focused validation
+        shell: bash
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          import textwrap
+
+          cargo = Path('crates/medusa-config/Cargo.toml')
+          text = cargo.read_text()
+          if 'serde_json.workspace = true' not in text:
+              if '[dev-dependencies]' in text:
+                  text = text.replace('[dev-dependencies]\n', '[dev-dependencies]\nserde_json.workspace = true\n', 1)
+              else:
+                  text += '\n[dev-dependencies]\nserde_json.workspace = true\n'
+              cargo.write_text(text)
+
+          workflow = Path('.github/workflows/issue804-implement-v2.yml').read_text().splitlines()
+          start = workflow.index('        run: |') + 1
+          script = textwrap.dedent('\n'.join(workflow[start:]))
+          script = script.replace(
+              'rm -f .github/workflows/issue804-implement.yml .github/workflows/issue804-implement-v2.yml',
+              'true # workflow cleanup is connector-managed after validation',
+          )
+          Path('/tmp/issue804.sh').write_text(script + '\n')
+          PY
+          bash /tmp/issue804.sh
