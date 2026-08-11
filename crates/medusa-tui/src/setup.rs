@@ -158,7 +158,8 @@ impl SetupState {
                 let mut choices = vec![
                     SetupChoice {
                         label: "Quick setup".to_owned(),
-                        description: "Recommended route with the minimum required choices".to_owned(),
+                        description: "Recommended route with the minimum required choices"
+                            .to_owned(),
                     },
                     SetupChoice {
                         label: "Advanced setup".to_owned(),
@@ -186,11 +187,10 @@ impl SetupState {
                 .iter()
                 .map(|entry| SetupChoice {
                     label: entry.display_name.to_owned(),
-                    description: entry
-                        .disabled_reason
-                        .map_or_else(|| entry.description.to_owned(), |reason| {
-                            format!("Unavailable: {reason}")
-                        }),
+                    description: entry.disabled_reason.map_or_else(
+                        || entry.description.to_owned(),
+                        |reason| format!("Unavailable: {reason}"),
+                    ),
                 })
                 .collect(),
             SetupStep::Authentication => self.authentication_choices(),
@@ -200,9 +200,9 @@ impl SetupState {
                 .filter_map(|index| {
                     self.model_options().get(index).map(|model| SetupChoice {
                         label: model.clone(),
-                        description: self
-                            .provider_entry()
-                            .map_or_else(|| "Current custom model".to_owned(), |entry| {
+                        description: self.provider_entry().map_or_else(
+                            || "Current custom model".to_owned(),
+                            |entry| {
                                 if entry.discover_models
                                     && self
                                         .discovered_models
@@ -215,7 +215,8 @@ impl SetupState {
                                 } else {
                                     "Available catalog/current model".to_owned()
                                 }
-                            }),
+                            },
+                        ),
                     })
                 })
                 .collect(),
@@ -418,7 +419,8 @@ impl SetupState {
                     return SetupTransition::None;
                 };
                 if entry.browser_oauth {
-                    self.status = Some("Waiting for browser sign-in… Press Esc to cancel.".to_owned());
+                    self.status =
+                        Some("Waiting for browser sign-in… Press Esc to cancel.".to_owned());
                     return SetupTransition::StartBrowserOAuth(entry.id.to_owned());
                 }
                 if let Some(method) = entry.auth_methods.get(selected) {
@@ -479,7 +481,11 @@ impl SetupState {
     }
 
     fn oauth_succeeded(&mut self, provider_id: &str, models: Vec<String>) {
-        self.discovered_models.insert(provider_id.to_owned(), models);
+        if !models.is_empty() && !models.iter().any(|model| model == &self.profile.model) {
+            self.profile.model.clone_from(&models[0]);
+        }
+        self.discovered_models
+            .insert(provider_id.to_owned(), models);
         self.status = Some("Browser sign-in succeeded; provider models were refreshed.".to_owned());
         self.go_to(SetupStep::Model);
     }
@@ -529,7 +535,8 @@ impl SetupState {
         if !indices.contains(&self.selection.selected())
             && let Some(first) = indices.first().copied()
         {
-            self.selection.set_selected(first, self.model_options().len());
+            self.selection
+                .set_selected(first, self.model_options().len());
         }
     }
 
@@ -668,12 +675,12 @@ pub fn run_first_run_setup_with_host(
                 continue;
             }
             if key.code == KeyCode::Esc
-                || (key.code == KeyCode::Char('c')
-                    && key.modifiers.contains(KeyModifiers::CONTROL))
+                || (key.code == KeyCode::Char('c') && key.modifiers.contains(KeyModifiers::CONTROL))
             {
                 session.cancel();
                 oauth_session = None;
-                state.status = Some("Browser sign-in cancelled; configuration unchanged.".to_owned());
+                state.status =
+                    Some("Browser sign-in cancelled; configuration unchanged.".to_owned());
             }
             continue;
         }
@@ -936,7 +943,9 @@ mod tests {
             .iter()
             .position(|entry| entry.id == "openai-oauth")
             .expect("oauth entry");
-        state.selection.set_selected(oauth, provider_catalog().len());
+        state
+            .selection
+            .set_selected(oauth, provider_catalog().len());
         enter(&mut state);
         assert_eq!(state.step, SetupStep::Authentication);
         assert_eq!(
@@ -960,6 +969,23 @@ mod tests {
         let models = state.model_options();
         assert!(models.contains(&"gpt-live".to_owned()));
         assert!(models.contains(&"gpt-5".to_owned()));
+        assert_eq!(state.profile.model, "gpt-5");
+    }
+
+    #[test]
+    fn discovered_oauth_models_replace_unavailable_fallback() {
+        let mut state = SetupState::new(FirstRunSetupRequest {
+            initial_profile: ProviderProfile::default(),
+            existing_profiles: Vec::new(),
+        });
+        let entry = provider_catalog_entry("openai-oauth").expect("oauth");
+        apply_provider_defaults(entry, &mut state.profile);
+        state.oauth_succeeded(
+            "openai-oauth",
+            vec!["gpt-account-a".to_owned(), "gpt-account-b".to_owned()],
+        );
+        assert_eq!(state.profile.model, "gpt-account-a");
+        assert_eq!(state.selection.selected(), 0);
     }
 
     #[test]
