@@ -166,7 +166,7 @@ impl SelectionState {
         &mut self,
         count: usize,
         delta: isize,
-        mut enabled: impl FnMut(usize) -> bool,
+        enabled: impl FnMut(usize) -> bool,
     ) {
         let indices = (0..count).collect::<Vec<_>>();
         self.move_in_with(&indices, delta, enabled);
