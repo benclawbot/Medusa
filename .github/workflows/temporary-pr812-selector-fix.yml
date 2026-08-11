@@ -20,60 +20,9 @@ jobs:
       - name: Apply selector fix
         shell: bash
         run: |
-          python - <<'PY'
-          from pathlib import Path
-
-          path = Path("crates/medusa-tui/src/input.rs")
-          text = path.read_text()
-          start = text.index("    pub fn move_in_with(")
-          end = text.index("    #[must_use]\n    pub fn search(&self)", start)
-          replacement = '''    pub fn move_in_with(
-              &mut self,
-              indices: &[usize],
-              delta: isize,
-              mut enabled: impl FnMut(usize) -> bool,
-          ) {
-              if indices.is_empty() || delta == 0 || !indices.iter().copied().any(&mut enabled) {
-                  return;
-              }
-              let direction = delta.signum();
-              let mut selected = self.selected;
-              for _ in 0..delta.unsigned_abs() {
-                  let start = indices
-                      .iter()
-                      .position(|index| *index == selected)
-                      .unwrap_or_else(|| if direction > 0 { indices.len() - 1 } else { 0 });
-                  let Some(next) = (1..=indices.len()).find_map(|offset| {
-                      let position = (start as isize + direction * offset as isize)
-                          .rem_euclid(indices.len() as isize) as usize;
-                      let candidate = indices[position];
-                      enabled(candidate).then_some(candidate)
-                  }) else {
-                      return;
-                  };
-                  selected = next;
-              }
-              self.selected = selected;
-          }
-
-'''
-          text = text[:start] + replacement + text[end:]
-
-          marker = "    #[test]\n    fn selection_state_filters_and_scrolls_long_lists() {\n"
-          regression = '''    #[test]
-          fn selection_state_honors_multi_step_delta() {
-              let mut state = SelectionState::new(0);
-              state.move_by(5, 2);
-              assert_eq!(state.selected(), 2);
-              state.move_by(5, -3);
-              assert_eq!(state.selected(), 4);
-          }
-
-'''
-          if "fn selection_state_honors_multi_step_delta()" not in text:
-              text = text.replace(marker, regression + marker, 1)
-          path.write_text(text)
-          PY
+          echo 'CmZyb20gcGF0aGxpYiBpbXBvcnQgUGF0aAppbXBvcnQgcmUKCnBhdGggPSBQYXRoKCJjcmF0ZXMvbWVkdXNhLXR1aS9zcmMvaW5wdXQucnMiKQp0ZXh0ID0gcGF0aC5yZWFkX3RleHQoKQoKcGF0dGVybiA9IHJlLmNvbXBpbGUoCiAgICByIiAgICBwdWIgZm4gbW92ZV9pbl93aXRoXChcbi4qPyg/PSAgICAjXFttdXN0X3VzZVxdXG4gICAgcHViIGZuIHNlYXJjaFwoJnNlbGZcKSkiLAogICAgcmUuUywKKQpyZXBsYWNlbWVudCA9ICIiIiAgICBwdWIgZm4gbW92ZV9pbl93aXRoKAogICAgICAgICZtdXQgc2VsZiwKICAgICAgICBpbmRpY2VzOiAmW3VzaXplXSwKICAgICAgICBkZWx0YTogaXNpemUsCiAgICAgICAgbXV0IGVuYWJsZWQ6IGltcGwgRm5NdXQodXNpemUpIC0+IGJvb2wsCiAgICApIHsKICAgICAgICBpZiBpbmRpY2VzLmlzX2VtcHR5KCkgfHwgZGVsdGEgPT0gMCB8fCAhaW5kaWNlcy5pdGVyKCkuY29waWVkKCkuYW55KCZtdXQgZW5hYmxlZCkgewogICAgICAgICAgICByZXR1cm47CiAgICAgICAgfQogICAgICAgIGxldCBkaXJlY3Rpb24gPSBkZWx0YS5zaWdudW0oKTsKICAgICAgICBsZXQgbXV0IHNlbGVjdGVkID0gc2VsZi5zZWxlY3RlZDsKICAgICAgICBmb3IgXyBpbiAwLi5kZWx0YS51bnNpZ25lZF9hYnMoKSB7CiAgICAgICAgICAgIGxldCBzdGFydCA9IGluZGljZXMKICAgICAgICAgICAgICAgIC5pdGVyKCkKICAgICAgICAgICAgICAgIC5wb3NpdGlvbih8aW5kZXh8ICppbmRleCA9PSBzZWxlY3RlZCkKICAgICAgICAgICAgICAgIC51bndyYXBfb3JfZWxzZSh8fCBpZiBkaXJlY3Rpb24gPiAwIHsgaW5kaWNlcy5sZW4oKSAtIDEgfSBlbHNlIHsgMCB9KTsKICAgICAgICAgICAgbGV0IFNvbWUobmV4dCkgPSAoMS4uPWluZGljZXMubGVuKCkpLmZpbmRfbWFwKHxvZmZzZXR8IHsKICAgICAgICAgICAgICAgIGxldCBwb3NpdGlvbiA9IChzdGFydCBhcyBpc2l6ZSArIGRpcmVjdGlvbiAqIG9mZnNldCBhcyBpc2l6ZSkKICAgICAgICAgICAgICAgICAgICAucmVtX2V1Y2xpZChpbmRpY2VzLmxlbigpIGFzIGlzaXplKSBhcyB1c2l6ZTsKICAgICAgICAgICAgICAgIGxldCBjYW5kaWRhdGUgPSBpbmRpY2VzW3Bvc2l0aW9uXTsKICAgICAgICAgICAgICAgIGVuYWJsZWQoY2FuZGlkYXRlKS50aGVuX3NvbWUoY2FuZGlkYXRlKQogICAgICAgICAgICB9KSBlbHNlIHsKICAgICAgICAgICAgICAgIHJldHVybjsKICAgICAgICAgICAgfTsKICAgICAgICAgICAgc2VsZWN0ZWQgPSBuZXh0OwogICAgICAgIH0KICAgICAgICBzZWxmLnNlbGVjdGVkID0gc2VsZWN0ZWQ7CiAgICB9CgoiIiIKdGV4dCwgY291bnQgPSBwYXR0ZXJuLnN1Ym4ocmVwbGFjZW1lbnQsIHRleHQsIGNvdW50PTEpCmlmIGNvdW50ICE9IDE6CiAgICByYWlzZSBTeXN0ZW1FeGl0KGYic2VsZWN0b3IgcmVwbGFjZW1lbnQgY291bnQ9e2NvdW50fSIpCgppZiAiZm4gc2VsZWN0aW9uX3N0YXRlX2hvbm9yc19tdWx0aV9zdGVwX2RlbHRhKCkiIG5vdCBpbiB0ZXh0OgogICAgbWFya2VyID0gIiAgICAjW3Rlc3RdXG4gICAgZm4gc2VsZWN0aW9uX3N0YXRlX2ZpbHRlcnNfYW5kX3Njcm9sbHNfbG9uZ19saXN0cygpIHtcbiIKICAgIHJlZ3Jlc3Npb24gPSAiIiIgICAgI1t0ZXN0XQogICAgZm4gc2VsZWN0aW9uX3N0YXRlX2hvbm9yc19tdWx0aV9zdGVwX2RlbHRhKCkgewogICAgICAgIGxldCBtdXQgc3RhdGUgPSBTZWxlY3Rpb25TdGF0ZTo6bmV3KDApOwogICAgICAgIHN0YXRlLm1vdmVfYnkoNSwgMik7CiAgICAgICAgYXNzZXJ0X2VxIShzdGF0ZS5zZWxlY3RlZCgpLCAyKTsKICAgICAgICBzdGF0ZS5tb3ZlX2J5KDUsIC0zKTsKICAgICAgICBhc3NlcnRfZXEhKHN0YXRlLnNlbGVjdGVkKCksIDQpOwogICAgfQoKIiIiCiAgICBpZiBtYXJrZXIgbm90IGluIHRleHQ6CiAgICAgICAgcmFpc2UgU3lzdGVtRXhpdCgidGVzdCBtYXJrZXIgbm90IGZvdW5kIikKICAgIHRleHQgPSB0ZXh0LnJlcGxhY2UobWFya2VyLCByZWdyZXNzaW9uICsgbWFya2VyLCAxKQoKcGF0aC53cml0ZV90ZXh0KHRleHQpCg==' | base64 --decode > /tmp/pr812-selector-fix.py
+          python /tmp/pr812-selector-fix.py
+          cargo fmt -- crates/medusa-tui/src/input.rs
       - name: Commit fix and remove temporary workflow
         shell: bash
         run: |
