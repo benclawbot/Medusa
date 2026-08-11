@@ -87,7 +87,8 @@ impl SetupState {
                 let mut choices = vec![
                     SetupChoice {
                         label: "Quick setup".to_owned(),
-                        description: "Recommended secure defaults with only essential choices".to_owned(),
+                        description: "Recommended secure defaults with only essential choices"
+                            .to_owned(),
                     },
                     SetupChoice {
                         label: "Advanced setup".to_owned(),
@@ -187,7 +188,8 @@ impl SetupState {
                     } else {
                         "Save and continue".to_owned()
                     },
-                    description: "Validate through Medusa's existing configuration authority".to_owned(),
+                    description: "Validate through Medusa's existing configuration authority"
+                        .to_owned(),
                 },
                 SetupChoice {
                     label: "Back".to_owned(),
@@ -212,14 +214,26 @@ impl SetupState {
 
     fn subtitle(&self) -> &'static str {
         match self.step {
-            SetupStep::Mode => "First-run setup stays inside the terminal UI and never stores credentials in provider.toml.",
-            SetupStep::ExistingProfile => "Selecting a profile changes only the active catalog selection after validation.",
-            SetupStep::Connection => "Provider discovery and browser OAuth will expand these choices in issue #801.",
-            SetupStep::Model => "Choose the model value that will be validated before the profile is committed.",
+            SetupStep::Mode => {
+                "First-run setup stays inside the terminal UI and never stores credentials in provider.toml."
+            }
+            SetupStep::ExistingProfile => {
+                "Selecting a profile changes only the active catalog selection after validation."
+            }
+            SetupStep::Connection => {
+                "Provider discovery and browser OAuth will expand these choices in issue #801."
+            }
+            SetupStep::Model => {
+                "Choose the model value that will be validated before the profile is committed."
+            }
             SetupStep::Speed => "This controls the existing ProviderProfile speed setting.",
             SetupStep::Reasoning => "This controls the existing ProviderProfile reasoning setting.",
-            SetupStep::Authentication => "Credentials remain owned by the environment, provider, or gateway.",
-            SetupStep::Review => "Repository mutation, containment, approvals, and verification remain governed by Medusa.",
+            SetupStep::Authentication => {
+                "Credentials remain owned by the environment, provider, or gateway."
+            }
+            SetupStep::Review => {
+                "Repository mutation, containment, approvals, and verification remain governed by Medusa."
+            }
         }
     }
 
@@ -418,7 +432,10 @@ impl SetupState {
                 if self.profile.base_url.is_none() {
                     self.profile.base_url = Some("http://127.0.0.1:8000/v1".to_owned());
                 }
-                if !matches!(self.profile.auth.as_str(), "oauth" | "api-key" | "existing" | "none") {
+                if !matches!(
+                    self.profile.auth.as_str(),
+                    "oauth" | "api-key" | "existing" | "none"
+                ) {
                     self.profile.auth = "existing".to_owned();
                 }
             }
@@ -442,7 +459,10 @@ impl SetupState {
     }
 
     fn auth_is_fixed(&self) -> bool {
-        matches!(self.profile.connection.as_str(), "chatgpt-oauth" | "openai-api")
+        matches!(
+            self.profile.connection.as_str(),
+            "chatgpt-oauth" | "openai-api"
+        )
     }
 
     fn review_lines(&self) -> Vec<String> {
@@ -514,7 +534,11 @@ pub fn run_first_run_setup(request: FirstRunSetupRequest) -> io::Result<FirstRun
             }
             KeyCode::Enter => state.enter(),
             KeyCode::Esc => state.escape(),
-            KeyCode::Char('c') if key.modifiers.contains(crossterm::event::KeyModifiers::CONTROL) => {
+            KeyCode::Char('c')
+                if key
+                    .modifiers
+                    .contains(crossterm::event::KeyModifiers::CONTROL) =>
+            {
                 Some(FirstRunSetupOutcome::Cancelled)
             }
             _ => None,
@@ -723,7 +747,10 @@ mod tests {
         enter(&mut state);
         assert_eq!(state.step, SetupStep::Review);
         let outcome = enter(&mut state).expect("outcome");
-        assert_eq!(outcome, FirstRunSetupOutcome::UseExisting("work".to_owned()));
+        assert_eq!(
+            outcome,
+            FirstRunSetupOutcome::UseExisting("work".to_owned())
+        );
         assert_eq!(state.profile, initial);
     }
 
