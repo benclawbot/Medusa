@@ -253,6 +253,11 @@ mod tests {
         let mut session = verified_session(directory.path());
         session.objective = "SEEDED_PRIVATE_CONTENT".to_owned();
         persist_completed_session(&session).expect("privacy block");
-        assert!(!directory.path().join(".medusa/session-recall-inbox").exists());
+        assert!(
+            !directory
+                .path()
+                .join(".medusa/session-recall-inbox")
+                .exists()
+        );
     }
 }
