@@ -19,7 +19,7 @@ jobs:
         with:
           components: rustfmt,clippy
       - name: Apply production patch
-        shell: python
+        shell: bash
         run: python .github/issue758_windows_patch.py
       - name: Format
         run: cargo fmt --all
