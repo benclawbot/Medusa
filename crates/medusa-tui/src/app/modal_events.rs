@@ -14,8 +14,17 @@ impl AppState {
             }
             Event::Key(key) if key.kind != KeyEventKind::Release => match key.code {
                 KeyCode::Esc => {
-                    self.model_modal = None;
-                    self.status = "model configuration cancelled".to_owned();
+                    let at_root = self
+                        .model_modal
+                        .as_ref()
+                        .is_some_and(|modal| modal.focus() == ModelModalFocus::Provider);
+                    if at_root {
+                        self.model_modal = None;
+                        self.status = "model configuration cancelled".to_owned();
+                    } else if let Some(modal) = self.model_modal.as_mut() {
+                        modal.cycle_focus_back();
+                        self.status = "model configuration".to_owned();
+                    }
                     Ok(AppAction::Redraw)
                 }
                 KeyCode::Enter => {
@@ -113,10 +122,8 @@ impl AppState {
             }
             Event::Key(key) if key.kind != KeyEventKind::Release => match key.code {
                 KeyCode::Esc => {
-                    if let Some(modal) = self.question_modal.as_mut()
-                        && modal.is_reviewing()
-                    {
-                        modal.move_question(-1);
+                    if let Some(modal) = self.question_modal.as_mut() {
+                        modal.back_one_question();
                     }
                     self.status = "waiting for your answers".to_owned();
                     Ok(AppAction::Redraw)
@@ -325,5 +332,55 @@ mod limitations_regression_tests {
             .expect("submit answer");
         assert!(matches!(action, AppAction::AnswerQuestion(_)));
         assert!(app.question_modal.is_none());
+    }
+
+    #[test]
+    fn escape_moves_back_one_question_without_wrapping() {
+        let directory = tempfile::tempdir().expect("tempdir");
+        let mut app = AppState::new(
+            directory.path().to_path_buf(),
+            "nested-question",
+            "",
+            Arc::new(UnsupportedClipboard),
+        )
+        .expect("app");
+        app.open_question(vec![
+            QuestionPrompt {
+                header: "First".to_owned(),
+                question: "First?".to_owned(),
+                options: vec![QuestionOption {
+                    label: "A".to_owned(),
+                    description: String::new(),
+                }],
+                multi_select: false,
+            },
+            QuestionPrompt {
+                header: "Second".to_owned(),
+                question: "Second?".to_owned(),
+                options: vec![QuestionOption {
+                    label: "B".to_owned(),
+                    description: String::new(),
+                }],
+                multi_select: false,
+            },
+        ]);
+        app.handle_question_modal_event(Event::Key(KeyEvent::new(
+            KeyCode::Enter,
+            KeyModifiers::NONE,
+        )))
+        .expect("advance");
+        assert_eq!(app.question_modal().expect("question").active_question(), 1);
+        app.handle_question_modal_event(Event::Key(KeyEvent::new(
+            KeyCode::Esc,
+            KeyModifiers::NONE,
+        )))
+        .expect("back");
+        assert_eq!(app.question_modal().expect("question").active_question(), 0);
+        app.handle_question_modal_event(Event::Key(KeyEvent::new(
+            KeyCode::Esc,
+            KeyModifiers::NONE,
+        )))
+        .expect("stay at root");
+        assert_eq!(app.question_modal().expect("question").active_question(), 0);
     }
 }
