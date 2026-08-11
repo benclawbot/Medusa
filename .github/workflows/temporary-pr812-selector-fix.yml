@@ -49,7 +49,7 @@ jobs:
                   }
               }
           }
-'''
+          '''
           new = '''    pub fn move_in_with(
               &mut self,
               indices: &[usize],
@@ -78,14 +78,14 @@ jobs:
               }
               self.selected = selected;
           }
-'''
+          '''
           if old not in text:
               raise SystemExit("selector implementation did not match expected source")
           text = text.replace(old, new, 1)
 
           marker = '''    #[test]
           fn selection_state_filters_and_scrolls_long_lists() {
-'''
+          '''
           regression = '''    #[test]
           fn selection_state_honors_multi_step_delta() {
               let mut state = SelectionState::new(0);
@@ -95,7 +95,7 @@ jobs:
               assert_eq!(state.selected(), 4);
           }
 
-'''
+          '''
           if marker not in text:
               raise SystemExit("selector test insertion point did not match expected source")
           text = text.replace(marker, regression + marker, 1)
