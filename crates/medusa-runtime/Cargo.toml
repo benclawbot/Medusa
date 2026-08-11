@@ -19,6 +19,7 @@ medusa-capabilities = { path = "../medusa-capabilities" }
 medusa-config = { path = "../medusa-config" }
 medusa-context = { path = "../medusa-context" }
 medusa-continuation = { path = "../medusa-continuation" }
+medusa-core = { path = "../medusa-core" }
 medusa-execution-checkpoint = { path = "../medusa-execution-checkpoint" }
 medusa-execution-replay = { path = "../medusa-execution-replay" }
 medusa-improvement = { path = "../medusa-improvement" }
@@ -52,7 +53,6 @@ time.workspace = true
 tungstenite.workspace = true
 
 [dev-dependencies]
-medusa-core = { path = "../medusa-core" }
 medusa-testkit.workspace = true
 tempfile.workspace = true
 

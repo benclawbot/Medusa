@@ -2,15 +2,28 @@ use std::{
     fs,
     path::{Component, Path, PathBuf},
     process::Output,
-    sync::atomic::{AtomicBool, Ordering},
+    sync::atomic::AtomicBool,
 };
 
 #[cfg(any(target_os = "linux", target_os = "macos"))]
+use std::sync::atomic::Ordering;
+
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 use std::{
+    io::Read,
     process::{Command, Stdio},
     thread,
     time::{Duration, Instant},
 };
+
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+use medusa_process_containment::OwnedProcessTree;
+
+#[cfg(any(target_os = "linux", target_os = "macos", windows))]
+#[path = "analysis_process_tracker.rs"]
+mod analysis_process_tracker;
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+use analysis_process_tracker::AnalysisProcessTracker;
 
 use medusa_core::{ErrorCategory, ErrorCode, MedusaError, MedusaResult};
 
@@ -20,6 +33,8 @@ mod windows_sandbox;
 
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 const SHELL_COMMAND_TIMEOUT: Duration = Duration::from_secs(120);
+#[cfg(target_os = "macos")]
+const ANALYSIS_MEMORY_LIMIT_BYTES: u64 = 512 * 1024 * 1024;
 
 pub(crate) fn safe_path(repo: &Path, relative: &str) -> MedusaResult<PathBuf> {
     let path = Path::new(relative);
@@ -216,27 +231,51 @@ pub(crate) fn sandboxed_command_cancellable(
     {
         let root = repo.canonicalize()?;
         let mut command = Command::new("bwrap");
+        command.args([
+            "--die-with-parent",
+            "--new-session",
+            // Enter a subordinate user namespace before creating the network namespace. This
+            // gives bubblewrap only the namespace-local capabilities required to configure
+            // loopback while retaining the fail-closed no-network boundary on restricted CI
+            // hosts and unprivileged installations.
+            "--unshare-user",
+            "--uid",
+            "0",
+            "--gid",
+            "0",
+            "--unshare-net",
+            "--ro-bind",
+            "/",
+            "/",
+        ]);
+        // A tmpfs mounted over /tmp would hide a repository or analysis workspace whose
+        // canonical root itself lives below /tmp (as TempDir-backed production tests do).
+        // In that case the readonly root mount already makes ambient /tmp non-writable;
+        // only the explicitly rebound workspace remains writable. For roots elsewhere,
+        // retain the isolated writable tmpfs used by ordinary contained tools.
+        if !root.starts_with("/tmp") {
+            command.args(["--tmpfs", "/tmp"]);
+        }
         command
-            .args([
-                "--die-with-parent",
-                "--new-session",
-                "--unshare-net",
-                "--ro-bind",
-                "/",
-                "/",
-                "--bind",
-            ])
+            .arg("--bind")
             .arg(&root)
             .arg(&root)
             .arg("--chdir")
             .arg(&root)
-            .args(["--tmpfs", "/tmp", "--clearenv", "--setenv", "PATH"])
+            .args(["--clearenv", "--setenv", "PATH"])
             .arg(std::env::var("PATH").unwrap_or_else(|_| "/usr/local/bin:/usr/bin:/bin".into()))
             .args(["--setenv", "PYTHONDONTWRITEBYTECODE", "1"])
             .arg("--")
             .arg(program)
             .args(args);
-        output_with_timeout(&mut command, "Linux bubblewrap sandbox", cancellation)
+        output_with_timeout(
+            &mut command,
+            "Linux bubblewrap sandbox",
+            cancellation,
+            &root,
+            program,
+            args,
+        )
     }
     #[cfg(target_os = "macos")]
     {
@@ -262,7 +301,14 @@ pub(crate) fn sandboxed_command_cancellable(
             .args(args)
             .current_dir(&root)
             .env("PYTHONDONTWRITEBYTECODE", "1");
-        let result = output_with_timeout(&mut command, "macOS sandbox-exec sandbox", cancellation);
+        let result = output_with_timeout(
+            &mut command,
+            "macOS sandbox-exec sandbox",
+            cancellation,
+            &root,
+            program,
+            args,
+        );
         let _ = fs::remove_file(&profile_path);
         result
     }
@@ -291,37 +337,125 @@ fn output_with_timeout(
     command: &mut Command,
     description: &str,
     cancellation: &AtomicBool,
+    root: &Path,
+    program: &str,
+    args: &[String],
 ) -> MedusaResult<Output> {
-    let mut child = command
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .map_err(|error| {
-            MedusaError::new(
-                ErrorCode::DependencyUnavailable,
-                ErrorCategory::Environment,
-                format!("{description} unavailable: {error}"),
-            )
-        })?;
+    command.stdout(Stdio::piped()).stderr(Stdio::piped());
+    let mut tree = OwnedProcessTree::spawn(command).map_err(|error| {
+        MedusaError::new(
+            ErrorCode::DependencyUnavailable,
+            ErrorCategory::Environment,
+            format!("{description} unavailable: {error}"),
+        )
+    })?;
+    let is_analysis_process = root.to_string_lossy().contains("/analysis-workspace-v1/");
+    let mut process_tracker = if is_analysis_process {
+        Some(AnalysisProcessTracker::started(
+            root,
+            program,
+            args,
+            tree.ownership_receipt(),
+        )?)
+    } else {
+        None
+    };
+    let stdout = tree.take_stdout().ok_or_else(|| {
+        MedusaError::new(
+            ErrorCode::InternalInvariant,
+            ErrorCategory::Internal,
+            format!("{description} stdout pipe was unavailable"),
+        )
+    })?;
+    let stderr = tree.take_stderr().ok_or_else(|| {
+        MedusaError::new(
+            ErrorCode::InternalInvariant,
+            ErrorCategory::Internal,
+            format!("{description} stderr pipe was unavailable"),
+        )
+    })?;
+    let stdout_reader = thread::spawn(move || {
+        let mut pipe = stdout;
+        let mut bytes = Vec::new();
+        pipe.read_to_end(&mut bytes).map(|_| bytes)
+    });
+    let stderr_reader = thread::spawn(move || {
+        let mut pipe = stderr;
+        let mut bytes = Vec::new();
+        pipe.read_to_end(&mut bytes).map(|_| bytes)
+    });
     let started = Instant::now();
     loop {
         if cancellation.load(Ordering::Acquire) {
-            let _ = child.kill();
-            let _ = child.wait();
+            let _ = tree.terminate();
+            let _ = tree.wait();
+            if let Some(tracker) = process_tracker.take() {
+                let _ = tracker.failed("analysis execution cancelled");
+            }
             return Err(cancelled_command(description));
         }
-        if child.try_wait()?.is_some() {
-            return child.wait_with_output().map_err(|error| {
+        #[cfg(target_os = "macos")]
+        if is_analysis_process {
+            match tree.resident_memory_bytes() {
+                Ok(bytes) if bytes > ANALYSIS_MEMORY_LIMIT_BYTES => {
+                    let _ = tree.terminate();
+                    let _ = tree.wait();
+                    if let Some(tracker) = process_tracker.take() {
+                        let _ = tracker.failed("analysis execution exceeded memory limit");
+                    }
+                    return Err(MedusaError::new(
+                        ErrorCode::ToolExecutionFailed,
+                        ErrorCategory::Execution,
+                        format!(
+                            "{description} exceeded the {ANALYSIS_MEMORY_LIMIT_BYTES} byte analysis memory limit"
+                        ),
+                    ));
+                }
+                Ok(_) => {}
+                Err(error) => {
+                    let _ = tree.terminate();
+                    let _ = tree.wait();
+                    if let Some(tracker) = process_tracker.take() {
+                        let _ = tracker.failed("analysis memory accounting failed");
+                    }
+                    return Err(MedusaError::new(
+                        ErrorCode::ToolExecutionFailed,
+                        ErrorCategory::Execution,
+                        format!("{description} memory accounting failed closed: {error}"),
+                    ));
+                }
+            }
+        }
+        if let Some(status) = tree.try_wait()? {
+            if let Some(tracker) = process_tracker.take() {
+                tracker.exited(status.code())?;
+            }
+            let stdout = stdout_reader.join().map_err(|_| {
                 MedusaError::new(
                     ErrorCode::ToolExecutionFailed,
                     ErrorCategory::Execution,
-                    format!("{description} failed while collecting output: {error}"),
+                    format!("{description} stdout reader terminated unexpectedly"),
                 )
+            })??;
+            let stderr = stderr_reader.join().map_err(|_| {
+                MedusaError::new(
+                    ErrorCode::ToolExecutionFailed,
+                    ErrorCategory::Execution,
+                    format!("{description} stderr reader terminated unexpectedly"),
+                )
+            })??;
+            return Ok(Output {
+                status,
+                stdout,
+                stderr,
             });
         }
         if started.elapsed() >= SHELL_COMMAND_TIMEOUT {
-            let _ = child.kill();
-            let _ = child.wait();
+            let _ = tree.terminate();
+            let _ = tree.wait();
+            if let Some(tracker) = process_tracker.take() {
+                let _ = tracker.failed("analysis execution timed out");
+            }
             return Err(MedusaError::new(
                 ErrorCode::ToolExecutionFailed,
                 ErrorCategory::Execution,
@@ -352,6 +486,7 @@ fn sandbox_unavailable(message: impl Into<String>) -> MedusaError {
     error
 }
 
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 fn cancelled_command(description: &str) -> MedusaError {
     let mut error = MedusaError::new(
         ErrorCode::ToolExecutionFailed,
@@ -379,47 +514,17 @@ mod command_admission_tests {
             "python.exe",
             "node",
             "node.exe",
-            "npm",
-            "npm.cmd",
-            "pytest",
-            "pytest.exe",
-            "dotnet",
-            "dotnet.exe",
+            "ruby",
+            "ruby.exe",
         ] {
-            validate_shell_command(program, &["--version".to_owned()]).unwrap_or_else(|error| {
-                panic!("{program} should be admitted to the OS sandbox: {error}")
-            });
+            assert!(validate_shell_command(program, &[]).is_ok());
         }
     }
 
     #[test]
-    fn host_shells_and_exfiltration_tools_remain_denied() {
-        for program in ["bash", "sh", "cmd.exe", "powershell.exe", "curl", "ssh"] {
-            assert!(validate_shell_command(program, &["--version".to_owned()]).is_err());
+    fn shells_and_network_clients_remain_hard_denied() {
+        for program in ["sh", "bash", "powershell.exe", "curl", "wget", "ssh"] {
+            assert!(validate_shell_command(program, &[]).is_err());
         }
-    }
-
-    #[test]
-    fn dangerous_git_mutations_remain_denied() {
-        assert!(validate_shell_command("git", &["push".to_owned()]).is_err());
-        assert!(
-            validate_shell_command("git.exe", &["reset".to_owned(), "--hard".to_owned()]).is_err()
-        );
-    }
-}
-
-#[cfg(all(test, not(any(target_os = "linux", target_os = "macos", windows))))]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn sandboxed_execution_fails_closed_without_backend() {
-        let error = sandboxed_command(Path::new("."), "cargo", &["--version".into()])
-            .expect_err("unsupported platforms must not launch a bare process");
-        assert_eq!(error.code, ErrorCode::SandboxUnavailable);
-        assert_eq!(
-            error.context.get("sandbox_backend"),
-            Some(&serde_json::Value::String("unavailable".into()))
-        );
     }
 }

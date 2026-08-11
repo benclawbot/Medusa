@@ -1,6 +1,6 @@
 use std::{
     io,
-    process::{Child, Command, ExitStatus},
+    process::{Child, ChildStderr, ChildStdout, Command, ExitStatus},
 };
 
 #[cfg(unix)]
@@ -8,6 +8,10 @@ use std::os::unix::process::CommandExt;
 #[cfg(windows)]
 use std::os::windows::process::CommandExt;
 
+#[cfg(any(unix, windows))]
+use crate::ProcessOwnershipReceipt;
+#[cfg(unix)]
+use crate::ProcessOwnershipVerification;
 #[cfg(windows)]
 use crate::WindowsJob;
 
@@ -17,12 +21,15 @@ const CREATE_SUSPENDED: u32 = 0x0000_0004;
 /// Owns a spawned process and every descendant that remains in its platform containment group.
 ///
 /// Unix children are placed in a dedicated process group before exec. Windows children are created
-/// suspended, assigned to a kill-on-close Job Object, and only then resumed. This removes the race
-/// where user code could spawn descendants before Medusa established ownership.
+/// suspended, assigned to a kill-on-close Job Object, and only then resumed. On supported targets,
+/// the leader's native creation identity is captured at launch so later destructive cleanup cannot
+/// mistake a recycled PID for the process Medusa created.
 #[derive(Debug)]
 pub struct OwnedProcessTree {
     child: Child,
     terminated: bool,
+    #[cfg(any(unix, windows))]
+    ownership: ProcessOwnershipReceipt,
     #[cfg(unix)]
     process_group: i32,
     #[cfg(windows)]
@@ -35,16 +42,30 @@ impl OwnedProcessTree {
         #[cfg(unix)]
         {
             command.process_group(0);
-            let child = command.spawn()?;
+            let mut child = command.spawn()?;
             let process_group = i32::try_from(child.id()).map_err(|_| {
+                let _ = child.kill();
+                let _ = child.wait();
                 io::Error::new(
                     io::ErrorKind::InvalidData,
                     "child PID does not fit process-group ID",
                 )
             })?;
+            let ownership = match ProcessOwnershipReceipt::capture(child.id()) {
+                Ok(ownership) => ownership,
+                Err(error) => {
+                    let _ = child.kill();
+                    let _ = child.wait();
+                    return Err(io::Error::new(
+                        error.kind(),
+                        format!("failed to capture child process identity: {error}"),
+                    ));
+                }
+            };
             Ok(Self {
                 child,
                 terminated: false,
+                ownership,
                 process_group,
             })
         }
@@ -52,6 +73,17 @@ impl OwnedProcessTree {
         {
             command.creation_flags(CREATE_SUSPENDED);
             let mut child = command.spawn()?;
+            let ownership = match ProcessOwnershipReceipt::capture(child.id()) {
+                Ok(ownership) => ownership,
+                Err(error) => {
+                    let _ = child.kill();
+                    let _ = child.wait();
+                    return Err(io::Error::new(
+                        error.kind(),
+                        format!("failed to capture child process identity: {error}"),
+                    ));
+                }
+            };
             let job = match WindowsJob::assign(&child) {
                 Ok(job) => job,
                 Err(error) => {
@@ -68,6 +100,7 @@ impl OwnedProcessTree {
             Ok(Self {
                 child,
                 terminated: false,
+                ownership,
                 job,
             })
         }
@@ -82,6 +115,52 @@ impl OwnedProcessTree {
 
     pub fn id(&self) -> u32 {
         self.child.id()
+    }
+
+    /// Returns aggregate resident memory for the owned process group on macOS.
+    /// `ps` reports RSS in KiB; descendants inherit the dedicated PGID established at spawn.
+    #[cfg(target_os = "macos")]
+    pub fn resident_memory_bytes(&self) -> io::Result<u64> {
+        let output = Command::new("/bin/ps")
+            .args(["-axo", "pgid=,rss="])
+            .output()?;
+        if !output.status.success() {
+            return Err(io::Error::other(
+                "failed to inspect process-group resident memory",
+            ));
+        }
+        let listing = std::str::from_utf8(&output.stdout)
+            .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?;
+        let mut total_kib = 0_u64;
+        for line in listing.lines() {
+            let mut fields = line.split_whitespace();
+            let Some(group) = fields.next() else { continue };
+            let Some(rss) = fields.next() else { continue };
+            if group.parse::<i32>().ok() != Some(self.process_group) {
+                continue;
+            }
+            let rss_kib = rss
+                .parse::<u64>()
+                .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?;
+            total_kib = total_kib.saturating_add(rss_kib);
+        }
+        Ok(total_kib.saturating_mul(1024))
+    }
+
+    /// Returns the native launch identity used to guard destructive process actions.
+    #[cfg(any(unix, windows))]
+    pub fn ownership_receipt(&self) -> &ProcessOwnershipReceipt {
+        &self.ownership
+    }
+
+    /// Transfers the captured stdout pipe to the supervising runtime.
+    pub fn take_stdout(&mut self) -> Option<ChildStdout> {
+        self.child.stdout.take()
+    }
+
+    /// Transfers the captured stderr pipe to the supervising runtime.
+    pub fn take_stderr(&mut self) -> Option<ChildStderr> {
+        self.child.stderr.take()
     }
 
     pub fn try_wait(&mut self) -> io::Result<Option<ExitStatus>> {
@@ -105,8 +184,26 @@ impl OwnedProcessTree {
         }
         #[cfg(unix)]
         {
+            match self.ownership.verify() {
+                ProcessOwnershipVerification::VerifiedCurrent
+                | ProcessOwnershipVerification::ProcessMissing => {}
+                ProcessOwnershipVerification::VerifiedStale => {
+                    return Err(io::Error::new(
+                        io::ErrorKind::PermissionDenied,
+                        "refusing to terminate process group after leader PID identity changed",
+                    ));
+                }
+                ProcessOwnershipVerification::IdentityUnavailable => {
+                    return Err(io::Error::new(
+                        io::ErrorKind::PermissionDenied,
+                        "refusing to terminate process group without verifiable leader identity",
+                    ));
+                }
+            }
             // SAFETY: the child was created in a dedicated process group whose ID is the child's PID.
-            // Passing the negated group ID to kill targets that group only. ESRCH means it already exited.
+            // A missing leader can legitimately leave owned descendants in the same group; the group ID
+            // remains reserved while those descendants live. A stale/recycled leader identity is rejected
+            // above before this destructive action.
             let result = unsafe { libc::kill(-self.process_group, libc::SIGKILL) };
             if result == 0 {
                 self.terminated = true;
@@ -122,6 +219,8 @@ impl OwnedProcessTree {
         }
         #[cfg(windows)]
         {
+            // The Job Object is the stable ownership anchor for the complete descendant tree; the
+            // launch receipt remains available for durable registry/audit identity.
             self.job.terminate()?;
             self.terminated = true;
             Ok(())
@@ -153,6 +252,8 @@ mod tests {
     };
 
     use super::*;
+    #[cfg(windows)]
+    use crate::ProcessOwnershipVerification;
 
     const ROLE_ENV: &str = "MEDUSA_PROCESS_TREE_TEST_ROLE";
     const PID_FILE_ENV: &str = "MEDUSA_PROCESS_TREE_TEST_PID_FILE";
@@ -183,6 +284,21 @@ mod tests {
         } else if role == "grandchild" {
             thread::sleep(Duration::from_secs(30));
         }
+    }
+
+    #[test]
+    fn launch_captures_current_native_identity() {
+        let directory = tempfile::tempdir().expect("directory");
+        let pid_file = directory.path().join("grandchild.pid");
+        let mut command = helper_command(&pid_file, "child");
+        let mut tree = OwnedProcessTree::spawn(&mut command).expect("owned process tree");
+        assert_eq!(tree.ownership_receipt().pid, tree.id());
+        assert_eq!(
+            tree.ownership_receipt().verify(),
+            ProcessOwnershipVerification::VerifiedCurrent
+        );
+        tree.terminate().expect("terminate tree");
+        let _ = tree.wait().expect("wait tree");
     }
 
     #[test]
