@@ -34,12 +34,6 @@ fn lifecycle(index: u8) -> SessionActionLifecycle {
 }
 
 proptest! {
-    #![proptest_config(ProptestConfig {
-        cases: 256,
-        max_shrink_iters: 4096,
-        .. ProptestConfig::default()
-    })]
-
     #[test]
     fn arbitrary_wire_bytes_never_panic(bytes in prop::collection::vec(any::<u8>(), 0..4096)) {
         if let Ok(event) = serde_json::from_slice::<EventEnvelope>(&bytes) {
