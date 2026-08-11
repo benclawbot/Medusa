@@ -1242,7 +1242,9 @@ name = "medusa-config"
 version = "1.0.0"
 dependencies = [
  "medusa-core",
+ "reqwest",
  "serde",
+ "serde_json",
  "serial_test",
  "tempfile",
  "toml",
