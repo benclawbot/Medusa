@@ -29,7 +29,9 @@ jobs:
           exec(compile(source, 'issue758_tracker_integration', 'exec'))
       - name: Format
         run: cargo fmt --all
-      - name: Check
+      - name: Refresh lockfile
+        run: cargo check -p medusa-agent -p medusa-runtime -p medusa-process-containment
+      - name: Check locked
         run: cargo check -p medusa-agent -p medusa-runtime -p medusa-process-containment --locked
       - name: Test tracker
         run: cargo test -p medusa-agent analysis_process_tracker --locked -- --nocapture
