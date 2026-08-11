@@ -1,10 +1,8 @@
 use std::collections::BTreeMap;
 
 use medusa_execution_checkpoint::{ExecutionCheckpoint, ExecutionLog};
-use medusa_testkit::resilience::{corruption_cases, FaultPlan, FaultPoint, SMOKE_SEEDS};
-use medusa_transaction_coordinator::{
-    Participant, TransactionCoordinator, TransactionPhase, Vote,
-};
+use medusa_testkit::resilience::{FaultPlan, FaultPoint, SMOKE_SEEDS, corruption_cases};
+use medusa_transaction_coordinator::{Participant, TransactionCoordinator, TransactionPhase, Vote};
 
 fn fingerprint(byte: u8) -> String {
     format!("{byte:02x}").repeat(32)
@@ -73,7 +71,9 @@ fn fault_plans_drive_transaction_promotion_authority() {
             }
         }
 
-        coordinator.verify(&transaction_id).expect("fingerprint valid");
+        coordinator
+            .verify(&transaction_id)
+            .expect("fingerprint valid");
         let phase = &coordinator.record(&transaction_id).expect("record").phase;
         assert!(matches!(
             phase,
