@@ -27,13 +27,24 @@ jobs:
           block = text.split(marker, 1)[1].split('      - name: Format\n', 1)[0]
           source = '\n'.join(line[10:] if line.startswith('          ') else line for line in block.splitlines())
           exec(compile(source, 'issue758_tracker_integration', 'exec'))
+
+          lib = Path('crates/medusa-agent/src/lib.rs')
+          s = lib.read_text().replace('mod analysis_process_tracker;\n', '')
+          lib.write_text(s)
+
+          policy = Path('crates/medusa-agent/src/policy.rs')
+          s = policy.read_text().replace(
+              '#[cfg(any(target_os = "linux", target_os = "macos"))]\nuse crate::analysis_process_tracker::AnalysisProcessTracker;\n',
+              '#[cfg(any(target_os = "linux", target_os = "macos"))]\n#[path = "analysis_process_tracker.rs"]\nmod analysis_process_tracker;\n#[cfg(any(target_os = "linux", target_os = "macos"))]\nuse analysis_process_tracker::AnalysisProcessTracker;\n',
+          )
+          policy.write_text(s)
       - name: Format
         run: cargo fmt --all
       - name: Refresh lockfile
         run: cargo check -p medusa-agent -p medusa-runtime -p medusa-process-containment
       - name: Check locked
         run: cargo check -p medusa-agent -p medusa-runtime -p medusa-process-containment --locked
-      - name: Test tracker
+      - name: Test tracker and standalone policy consumers
         run: cargo test -p medusa-agent analysis_process_tracker --locked -- --nocapture
       - name: Commit production source
         shell: bash
