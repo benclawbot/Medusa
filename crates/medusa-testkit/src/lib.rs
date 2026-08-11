@@ -1,5 +1,6 @@
 //! Deterministic fixtures for Medusa tests.
 
+pub mod data_lifecycle;
 pub mod resilience;
 
 use medusa_core::{
