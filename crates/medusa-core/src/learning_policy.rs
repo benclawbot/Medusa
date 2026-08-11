@@ -51,12 +51,13 @@ impl LearningAdmissionPolicy {
                 LearningPrivacyPolicy::private_by_default(),
             ));
         }
-        let document: PolicyDocument = serde_json::from_slice(&fs::read(&path)?).map_err(|error| {
-            policy_error(format!(
-                "learning privacy state {} is invalid; learning failed closed: {error}",
-                path.display()
-            ))
-        })?;
+        let document: PolicyDocument =
+            serde_json::from_slice(&fs::read(&path)?).map_err(|error| {
+                policy_error(format!(
+                    "learning privacy state {} is invalid; learning failed closed: {error}",
+                    path.display()
+                ))
+            })?;
         if document.schema_version != LEARNING_REVIEW_SCHEMA_VERSION {
             return Err(policy_error(format!(
                 "unsupported learning privacy schema {}; learning failed closed",
@@ -103,11 +104,7 @@ impl LearningAdmissionPolicy {
 }
 
 fn policy_error(message: String) -> MedusaError {
-    MedusaError::new(
-        ErrorCode::PersistenceFailed,
-        ErrorCategory::Policy,
-        message,
-    )
+    MedusaError::new(ErrorCode::PersistenceFailed, ErrorCategory::Policy, message)
 }
 
 #[cfg(test)]
