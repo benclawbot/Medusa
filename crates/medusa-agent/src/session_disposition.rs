@@ -96,9 +96,11 @@ fn purge_agent_owned_state(repo: &Path, id: &SessionId) -> MedusaResult<()> {
 fn purge_world_model(repo: &Path, id: &SessionId) -> MedusaResult<()> {
     let relative = medusa_world_model::model_relative_path(id.as_str());
     validate_relative_path(&relative)?;
-    let directory = repo.join(relative).parent().map(Path::to_path_buf).ok_or_else(|| {
-        persistence_error("world-model path does not have a session directory")
-    })?;
+    let directory = repo
+        .join(relative)
+        .parent()
+        .map(Path::to_path_buf)
+        .ok_or_else(|| persistence_error("world-model path does not have a session directory"))?;
     remove_dir_if_present(&directory)
 }
 
@@ -324,7 +326,10 @@ mod tests {
         let repository = tempfile::tempdir().expect("repository");
         let engine = AgentEngine::new(UnusedProvider, Config::default());
         let mut session = engine
-            .create_session(repository.path(), "PRIVATE_SESSION_DELETE_MARKER".to_owned())
+            .create_session(
+                repository.path(),
+                "PRIVATE_SESSION_DELETE_MARKER".to_owned(),
+            )
             .expect("session");
         session.completed = true;
         persist_session(&session).expect("persist completed session");
