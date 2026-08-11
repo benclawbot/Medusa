@@ -21,21 +21,18 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
-      - name: Diagnose Darwin resource limits
+      - name: Diagnose Darwin resident-set limit
         shell: bash
         run: |
           python3 - <<'PY'
           import resource, subprocess, sys
-          names = ['RLIMIT_CPU','RLIMIT_AS','RLIMIT_DATA','RLIMIT_FSIZE','RLIMIT_NPROC']
-          requested = {'RLIMIT_CPU':10,'RLIMIT_AS':536870912,'RLIMIT_DATA':536870912,'RLIMIT_FSIZE':16777216,'RLIMIT_NPROC':1}
-          print('RLIM_INFINITY', resource.RLIM_INFINITY)
-          for name in names:
+          for name in ['RLIMIT_RSS','RLIMIT_MEMLOCK']:
               if not hasattr(resource, name):
                   print(name, 'missing')
                   continue
               kind = getattr(resource, name)
               print(name, 'current', resource.getrlimit(kind))
-              code = f'''import resource\nkind=getattr(resource,{name!r})\nsoft,hard=resource.getrlimit(kind)\nreq={requested[name]}\ntarget=req if hard == resource.RLIM_INFINITY else min(req, hard)\nprint({name!r}, soft, hard, target)\ntry:\n resource.setrlimit(kind,(target,target)); print('both-ok',resource.getrlimit(kind))\nexcept Exception as e:\n print('both-fail',type(e).__name__,repr(e))\n try:\n  resource.setrlimit(kind,(target,hard)); print('soft-ok',resource.getrlimit(kind))\n except Exception as e2:\n  print('soft-fail',type(e2).__name__,repr(e2))\n'''
+              code = f'''import resource\nkind=getattr(resource,{name!r})\nsoft,hard=resource.getrlimit(kind)\nreq=536870912\ntarget=req if hard == resource.RLIM_INFINITY else min(req, hard)\nprint({name!r},soft,hard,target)\ntry:\n resource.setrlimit(kind,(target,hard)); print('soft-ok',resource.getrlimit(kind))\nexcept Exception as e:\n print('soft-fail',type(e).__name__,repr(e))\n'''
               subprocess.run([sys.executable, '-c', code], check=True)
           PY
       - name: Apply portable Unix resource limits
@@ -59,8 +56,8 @@ jobs:
                   target = requested if hard == resource.RLIM_INFINITY else min(requested, hard)
                   resource.setrlimit(kind, (target, hard))
               tighten_limit(resource.RLIMIT_CPU, 10)
-              if sys.platform == "darwin" and hasattr(resource, "RLIMIT_DATA"):
-                  tighten_limit(resource.RLIMIT_DATA, 536870912)
+              if sys.platform == "darwin":
+                  tighten_limit(resource.RLIMIT_RSS, 536870912)
               else:
                   tighten_limit(resource.RLIMIT_AS, 536870912)
               tighten_limit(resource.RLIMIT_FSIZE, 16777216)
@@ -85,6 +82,6 @@ jobs:
             git config user.name github-actions[bot]
             git config user.email 41898282+github-actions[bot]@users.noreply.github.com
             git add crates/medusa-runtime/src/analysis_contained.rs
-            git commit -m "fix(containment): use portable Darwin analysis limits"
+            git commit -m "fix(containment): use Darwin resident-set analysis limit"
             git push
           fi
