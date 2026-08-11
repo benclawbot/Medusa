@@ -1,5 +1,7 @@
 //! Deterministic fixtures for Medusa tests.
 
+pub mod resilience;
+
 use medusa_core::{
     CorrelationId, ErrorCategory, ErrorCode, EventId, MedusaError, MedusaResult, SessionId,
 };
