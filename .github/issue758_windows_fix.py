@@ -16,6 +16,62 @@ s = s.replace(
     'limits.BasicLimitInformation.LimitFlags |= JOB_OBJECT_LIMIT_PROCESS_TIME;',
     'limits.BasicLimitInformation.LimitFlags |= JOB_OBJECT_LIMIT_PROCESS_TIME_FLAG;',
 )
+
+if 'struct LaunchControls' not in s:
+    anchor = '\nunsafe fn launch(\n'
+    controls = '''
+struct LaunchControls<'a> {
+    limits: WindowsSandboxLimits,
+    on_start: &'a mut dyn FnMut(&ProcessOwnershipReceipt) -> io::Result<()>,
+}
+'''
+    if anchor not in s:
+        raise SystemExit('launch anchor missing')
+    s = s.replace(anchor, '\n' + controls + anchor, 1)
+
+old_call = '''        launch(
+            &api,
+            &root,
+            &executable,
+            args,
+            &specification,
+            cancellation,
+            limits,
+            &mut on_start,
+        )
+'''
+new_call = '''        let mut controls = LaunchControls {
+            limits,
+            on_start: &mut on_start,
+        };
+        launch(
+            &api,
+            &root,
+            &executable,
+            args,
+            &specification,
+            cancellation,
+            &mut controls,
+        )
+'''
+if old_call in s:
+    s = s.replace(old_call, new_call, 1)
+
+old_sig = '''    specification: &[u8],
+    cancellation: &AtomicBool,
+    sandbox_limits: WindowsSandboxLimits,
+    on_start: &mut impl FnMut(&ProcessOwnershipReceipt) -> io::Result<()>,
+) -> io::Result<Output> {
+'''
+new_sig = '''    specification: &[u8],
+    cancellation: &AtomicBool,
+    controls: &mut LaunchControls<'_>,
+) -> io::Result<Output> {
+    let sandbox_limits = controls.limits;
+'''
+if old_sig in s:
+    s = s.replace(old_sig, new_sig, 1)
+s = s.replace('    on_start(&ownership)?;', '    (controls.on_start)(&ownership)?;', 1)
 base.write_text(s)
 
 tree = Path('crates/medusa-process-containment/src/process_tree.rs')
@@ -25,3 +81,11 @@ s = s.replace(
     '#[cfg(any(unix, windows))]\nuse crate::ProcessOwnershipReceipt;\n#[cfg(unix)]\nuse crate::ProcessOwnershipVerification;',
 )
 tree.write_text(s)
+
+contained = Path('crates/medusa-runtime/src/analysis_contained.rs')
+s = contained.read_text()
+s = s.replace(
+    'const UNIX_ANALYSIS_FILE_BYTES: u64 = 16 * 1024 * 1024;',
+    '#[cfg(unix)]\nconst UNIX_ANALYSIS_FILE_BYTES: u64 = 16 * 1024 * 1024;',
+)
+contained.write_text(s)
