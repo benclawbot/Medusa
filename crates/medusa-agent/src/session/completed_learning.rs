@@ -115,7 +115,8 @@ fn delegated_worker_session(session: &AgentSession) -> bool {
     let objective = session.objective.trim_start();
     objective.starts_with("Implement delegated task `")
         || objective.starts_with("Collect read-only repository evidence for the parent goal.")
-        || objective.starts_with("Perform a read-only risk and failure-mode review for the parent goal.")
+        || objective
+            .starts_with("Perform a read-only risk and failure-mode review for the parent goal.")
 }
 
 fn admit_to_canonical_memory(
@@ -339,9 +340,9 @@ mod tests {
     fn completed_session_without_authoritative_verification_is_ineligible() {
         let repo = tempfile::tempdir().expect("repo");
         let mut session = session(repo.path());
-        session.events.retain(|event| {
-            !matches!(&event.payload, EventPayload::VerificationCompleted { .. })
-        });
+        session
+            .events
+            .retain(|event| !matches!(&event.payload, EventPayload::VerificationCompleted { .. }));
         assert!(!authoritative_success(&session));
         process(&session).expect("blocked process");
         assert!(!processed_marker(&session).exists());
