@@ -1,7 +1,7 @@
 use std::{collections::BTreeMap, io::IsTerminal};
 
 use medusa_config::{
-    Config, PROVIDER_PROFILE_KEYS, ConfigurationApplyTiming, ConfigurationChangeOrigin,
+    Config, ConfigurationApplyTiming, ConfigurationChangeOrigin, PROVIDER_PROFILE_KEYS,
     ProviderProfile, ProviderProfileCatalog,
 };
 use medusa_core::{ErrorCategory, ErrorCode, MedusaError, MedusaResult};
