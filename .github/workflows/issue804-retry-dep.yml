@@ -1,0 +1,43 @@
+name: issue804-retry-dep
+
+on:
+  push:
+    branches: [agent/issue-804-tui-config-doctor]
+    paths: [.github/workflows/issue804-retry-dep.yml]
+
+permissions:
+  contents: write
+
+jobs:
+  fix:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          fetch-depth: 0
+      - name: Add test dependency and retrigger implementation validation
+        shell: bash
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          cargo = Path('crates/medusa-config/Cargo.toml')
+          text = cargo.read_text()
+          if 'serde_json.workspace = true' not in text:
+              if '[dev-dependencies]' in text:
+                  text = text.replace('[dev-dependencies]\n', '[dev-dependencies]\nserde_json.workspace = true\n', 1)
+              else:
+                  text += '\n[dev-dependencies]\nserde_json.workspace = true\n'
+              cargo.write_text(text)
+
+          workflow = Path('.github/workflows/issue804-implement-v2.yml')
+          text = workflow.read_text()
+          if '# dependency retry' not in text:
+              workflow.write_text(text + '\n# dependency retry\n')
+          PY
+          rm .github/workflows/issue804-retry-dep.yml
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add -A
+          git commit -m 'Add config doctor test dependency'
+          git push origin HEAD:agent/issue-804-tui-config-doctor
