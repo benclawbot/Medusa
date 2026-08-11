@@ -23,6 +23,7 @@ jobs:
         run: |
           python - <<'PY'
           from pathlib import Path
+          import re
 
           p = Path('crates/medusa-cli/src/config_command.rs')
           s = p.read_text()
@@ -73,23 +74,28 @@ jobs:
           tests_marker = 'mod tests {\n    use super::*;\n'
           if tests_marker not in s:
               raise SystemExit('tests module marker not found')
-          s = s.replace(tests_marker, tests_marker + '    use std::fs;\n', 1)
+          if 'mod tests {\n    use super::*;\n    use std::fs;\n' not in s:
+              s = s.replace(tests_marker, tests_marker + '    use std::fs;\n', 1)
 
-          store_line = '        let store = ProviderProfileStore::at(directory.path().join("provider.toml"));\n'
-          report_line = '        let report = diagnose_store(&store, 0, "default".to_owned());\n'
-          if report_line not in s:
-              raise SystemExit('stale diagnose_store call not found')
-          s = s.replace(
-              store_line,
-              '        let catalog = ProviderProfileCatalog::at(directory.path());\n'
-              '        let store = catalog.active_store().expect("store");\n',
-              1,
+          pattern = re.compile(
+              r'    #\[test\]\n    fn doctor_report_redacts_malformed_profile_contents\(\) \{.*?\n    \}\n',
+              re.S,
           )
-          s = s.replace(
-              report_line,
-              '        let report = diagnose_config_catalog(&catalog).expect("doctor report");\n',
-              1,
-          )
+          replacement = '''    #[test]
+          fn doctor_report_redacts_malformed_profile_contents() {
+              let directory = tempfile::tempdir().expect("tempdir");
+              let catalog = ProviderProfileCatalog::at(directory.path());
+              let store = catalog.active_store().expect("store");
+              fs::write(store.path(), "token = 'super-secret-value'\\n").expect("malformed profile");
+              let report = diagnose_config_catalog(&catalog).expect("doctor report");
+              let encoded = serde_json::to_string(&report).expect("doctor json");
+              assert!(!report.healthy);
+              assert!(!encoded.contains("super-secret-value"));
+          }
+          '''
+          s, count = pattern.subn(replacement, s, count=1)
+          if count != 1:
+              raise SystemExit(f'redaction test replacement count: {count}')
           p.write_text(s)
           PY
 
