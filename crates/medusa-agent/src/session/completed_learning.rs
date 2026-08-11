@@ -3,8 +3,7 @@ use std::{
     path::{Path, PathBuf},
 };
 
-use medusa_core::{ErrorCategory, ErrorCode, MedusaError, MedusaResult};
-use medusa_improvement::learning_admission::LearningAdmissionPolicy;
+use medusa_core::{MedusaResult, learning_policy::LearningAdmissionPolicy};
 use medusa_protocol::{Actor, EventPayload};
 use serde_json::{Value, json};
 
@@ -57,13 +56,7 @@ pub(super) fn process(session: &AgentSession) -> MedusaResult<()> {
 }
 
 pub(super) fn policy_for(repo: &Path) -> MedusaResult<LearningAdmissionPolicy> {
-    LearningAdmissionPolicy::for_repository(repo).map_err(|error| {
-        MedusaError::new(
-            ErrorCode::PersistenceFailed,
-            ErrorCategory::Persistence,
-            format!("learning privacy state is unavailable; learning failed closed: {error}"),
-        )
-    })
+    LearningAdmissionPolicy::for_repository(repo)
 }
 
 pub(super) fn telemetry_allowed(repo: &Path) -> MedusaResult<bool> {
@@ -301,10 +294,21 @@ mod tests {
         session
     }
 
-    fn update_privacy(repo: &Path, privacy: medusa_improvement::learning_review::LearningPrivacy) {
-        medusa_improvement::learning_review::LearningReviewStore::for_repository(repo)
-            .update_privacy(privacy, 0, "test")
-            .expect("privacy");
+    fn update_privacy(repo: &Path, privacy: medusa_core::learning_policy::LearningPrivacyPolicy) {
+        let root = repo.join(".medusa/learning-review");
+        fs::create_dir_all(&root).expect("privacy root");
+        fs::write(
+            root.join("state.json"),
+            serde_json::to_vec_pretty(&json!({
+                "schema_version": 1,
+                "revision": 1,
+                "privacy": privacy,
+                "items": [],
+                "audit_head": "0000000000000000000000000000000000000000000000000000000000000000"
+            }))
+            .expect("privacy json"),
+        )
+        .expect("privacy state");
     }
 
     #[test]
@@ -384,7 +388,7 @@ mod tests {
         let repo = tempfile::tempdir().expect("repo");
         update_privacy(
             repo.path(),
-            medusa_improvement::learning_review::LearningPrivacy {
+            medusa_core::learning_policy::LearningPrivacyPolicy {
                 capture_enabled: false,
                 user_persistence_enabled: true,
                 cross_repository_reuse_enabled: true,
@@ -405,7 +409,7 @@ mod tests {
         let repo = tempfile::tempdir().expect("repo");
         update_privacy(
             repo.path(),
-            medusa_improvement::learning_review::LearningPrivacy {
+            medusa_core::learning_policy::LearningPrivacyPolicy {
                 capture_enabled: true,
                 user_persistence_enabled: false,
                 cross_repository_reuse_enabled: false,
