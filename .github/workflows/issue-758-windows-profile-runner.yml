@@ -20,13 +20,7 @@ jobs:
           components: rustfmt,clippy
       - name: Apply production patch
         shell: python
-        run: |
-          from pathlib import Path
-          text = Path('.github/workflows/issue-758-windows-profile-integrator.yml').read_text()
-          marker = '      - name: Patch Windows production path\n        shell: python\n        run: |\n'
-          block = text.split(marker, 1)[1].split('      - name: Format\n', 1)[0]
-          source = '\n'.join(line[10:] if line.startswith('          ') else line for line in block.splitlines())
-          exec(compile(source, 'issue758_windows_integration', 'exec'))
+        run: python .github/issue758_windows_patch.py
       - name: Format
         run: cargo fmt --all
       - name: Check Windows source
