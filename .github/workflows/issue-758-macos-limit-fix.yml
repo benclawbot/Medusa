@@ -21,67 +21,167 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
-      - name: Diagnose Darwin resident-set limit
-        shell: bash
-        run: |
-          python3 - <<'PY'
-          import resource, subprocess, sys
-          for name in ['RLIMIT_RSS','RLIMIT_MEMLOCK']:
-              if not hasattr(resource, name):
-                  print(name, 'missing')
-                  continue
-              kind = getattr(resource, name)
-              print(name, 'current', resource.getrlimit(kind))
-              code = f'''import resource\nkind=getattr(resource,{name!r})\nsoft,hard=resource.getrlimit(kind)\nreq=536870912\ntarget=req if hard == resource.RLIM_INFINITY else min(req, hard)\nprint({name!r},soft,hard,target)\ntry:\n resource.setrlimit(kind,(target,hard)); print('soft-ok',resource.getrlimit(kind))\nexcept Exception as e:\n print('soft-fail',type(e).__name__,repr(e))\n'''
-              subprocess.run([sys.executable, '-c', code], check=True)
-          PY
-      - name: Apply portable Unix resource limits
+      - name: Apply macOS parent-side memory watchdog
         shell: python
         run: |
           from pathlib import Path
-          path = Path('crates/medusa-runtime/src/analysis_contained.rs')
-          text = path.read_text()
-          old = '''if sys.platform != "win32":
-              import resource
-              resource.setrlimit(resource.RLIMIT_CPU, (10, 10))
+
+          tree = Path('crates/medusa-process-containment/src/process_tree.rs')
+          text = tree.read_text()
+          anchor = '''    pub fn id(&self) -> u32 {
+              self.child.id()
+          }
+          '''
+          addition = '''    pub fn id(&self) -> u32 {
+              self.child.id()
+          }
+
+              /// Returns the aggregate resident memory of the owned process group on macOS.
+              /// `ps` reports RSS in KiB; descendants inherit the dedicated PGID established at spawn.
+              #[cfg(target_os = "macos")]
+              pub fn resident_memory_bytes(&self) -> io::Result<u64> {
+                  let output = Command::new("/bin/ps")
+                      .args(["-axo", "pgid=,rss="])
+                      .output()?;
+                  if !output.status.success() {
+                      return Err(io::Error::other("failed to inspect process-group resident memory"));
+                  }
+                  let listing = std::str::from_utf8(&output.stdout).map_err(|error| {
+                      io::Error::new(io::ErrorKind::InvalidData, error)
+                  })?;
+                  let mut total_kib = 0_u64;
+                  for line in listing.lines() {
+                      let mut fields = line.split_whitespace();
+                      let Some(group) = fields.next() else { continue };
+                      let Some(rss) = fields.next() else { continue };
+                      if group.parse::<i32>().ok() != Some(self.process_group) {
+                          continue;
+                      }
+                      let rss_kib = rss.parse::<u64>().map_err(|error| {
+                          io::Error::new(io::ErrorKind::InvalidData, error)
+                      })?;
+                      total_kib = total_kib.saturating_add(rss_kib);
+                  }
+                  Ok(total_kib.saturating_mul(1024))
+              }
+          '''
+          if anchor not in text:
+              raise SystemExit('process tree id anchor missing')
+          tree.write_text(text.replace(anchor, addition, 1))
+
+          policy = Path('crates/medusa-agent/src/policy.rs')
+          text = policy.read_text()
+          timeout = '''#[cfg(any(target_os = "linux", target_os = "macos"))]
+          const SHELL_COMMAND_TIMEOUT: Duration = Duration::from_secs(120);
+          '''
+          timeout_new = '''#[cfg(any(target_os = "linux", target_os = "macos"))]
+          const SHELL_COMMAND_TIMEOUT: Duration = Duration::from_secs(120);
+          #[cfg(target_os = "macos")]
+          const ANALYSIS_MEMORY_LIMIT_BYTES: u64 = 512 * 1024 * 1024;
+          '''
+          if timeout not in text:
+              raise SystemExit('timeout anchor missing')
+          text = text.replace(timeout, timeout_new, 1)
+          tracker = '''    let mut process_tracker = if root.to_string_lossy().contains("/analysis-workspace-v1/") {
+              Some(AnalysisProcessTracker::started(
+                  root,
+                  program,
+                  args,
+                  tree.ownership_receipt(),
+              )?)
+          } else {
+              None
+          };
+          '''
+          tracker_new = '''    let is_analysis_process = root.to_string_lossy().contains("/analysis-workspace-v1/");
+              let mut process_tracker = if is_analysis_process {
+                  Some(AnalysisProcessTracker::started(
+                      root,
+                      program,
+                      args,
+                      tree.ownership_receipt(),
+                  )?)
+              } else {
+                  None
+              };
+          '''
+          if tracker not in text:
+              raise SystemExit('tracker anchor missing')
+          text = text.replace(tracker, tracker_new, 1)
+          poll = '''        if let Some(status) = tree.try_wait()? {
+          '''
+          watchdog = '''        #[cfg(target_os = "macos")]
+              if is_analysis_process {
+                  match tree.resident_memory_bytes() {
+                      Ok(bytes) if bytes > ANALYSIS_MEMORY_LIMIT_BYTES => {
+                          let _ = tree.terminate();
+                          let _ = tree.wait();
+                          if let Some(tracker) = process_tracker.take() {
+                              let _ = tracker.failed("analysis execution exceeded memory limit");
+                          }
+                          return Err(MedusaError::new(
+                              ErrorCode::ToolExecutionFailed,
+                              ErrorCategory::Execution,
+                              format!(
+                                  "{description} exceeded the {} byte analysis memory limit",
+                                  ANALYSIS_MEMORY_LIMIT_BYTES
+                              ),
+                          ));
+                      }
+                      Ok(_) => {}
+                      Err(error) => {
+                          let _ = tree.terminate();
+                          let _ = tree.wait();
+                          if let Some(tracker) = process_tracker.take() {
+                              let _ = tracker.failed("analysis memory accounting failed");
+                          }
+                          return Err(MedusaError::new(
+                              ErrorCode::ToolExecutionFailed,
+                              ErrorCategory::Execution,
+                              format!("{description} memory accounting failed closed: {error}"),
+                          ));
+                      }
+                  }
+              }
+              if let Some(status) = tree.try_wait()? {
+          '''
+          if poll not in text:
+              raise SystemExit('poll anchor missing')
+          policy.write_text(text.replace(poll, watchdog, 1))
+
+          contained = Path('crates/medusa-runtime/src/analysis_contained.rs')
+          text = contained.read_text()
+          old = '''    resource.setrlimit(resource.RLIMIT_CPU, (10, 10))
               resource.setrlimit(resource.RLIMIT_AS, (536870912, 536870912))
               resource.setrlimit(resource.RLIMIT_FSIZE, (16777216, 16777216))
-              if hasattr(resource, "RLIMIT_NPROC"):
-                  resource.setrlimit(resource.RLIMIT_NPROC, (1, 1))
           '''
-          new = '''if sys.platform != "win32":
-              import resource
-              def tighten_limit(kind, requested):
-                  _soft, hard = resource.getrlimit(kind)
-                  target = requested if hard == resource.RLIM_INFINITY else min(requested, hard)
-                  resource.setrlimit(kind, (target, hard))
-              tighten_limit(resource.RLIMIT_CPU, 10)
-              if sys.platform == "darwin":
-                  tighten_limit(resource.RLIMIT_RSS, 536870912)
-              else:
-                  tighten_limit(resource.RLIMIT_AS, 536870912)
-              tighten_limit(resource.RLIMIT_FSIZE, 16777216)
-              if hasattr(resource, "RLIMIT_NPROC"):
-                  tighten_limit(resource.RLIMIT_NPROC, 1)
+          new = '''    resource.setrlimit(resource.RLIMIT_CPU, (10, 10))
+              if sys.platform != "darwin":
+                  resource.setrlimit(resource.RLIMIT_AS, (536870912, 536870912))
+              resource.setrlimit(resource.RLIMIT_FSIZE, (16777216, 16777216))
           '''
           if old not in text:
-              raise SystemExit('resource-limit block not found')
-          path.write_text(text.replace(old, new, 1))
+              raise SystemExit('Python resource block missing')
+          contained.write_text(text.replace(old, new, 1))
       - name: Format
+        run: cargo fmt --all
+      - name: Format check
         run: cargo fmt --all -- --check
       - name: Check
         run: cargo check -p medusa-runtime -p medusa-agent -p medusa-process-containment --locked
       - name: Test contained backend
         run: cargo test -p medusa-runtime --test analysis_workspace_containment --locked -- --nocapture
+      - name: Test process ownership
+        run: cargo test -p medusa-process-containment process_tree --locked -- --nocapture
       - name: Clippy
         run: cargo clippy -p medusa-runtime -p medusa-agent -p medusa-process-containment --locked --all-targets -- -D warnings
       - name: Commit production fix
         shell: bash
         run: |
-          if ! git diff --quiet; then
-            git config user.name github-actions[bot]
-            git config user.email 41898282+github-actions[bot]@users.noreply.github.com
-            git add crates/medusa-runtime/src/analysis_contained.rs
-            git commit -m "fix(containment): use Darwin resident-set analysis limit"
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add crates/medusa-runtime/src/analysis_contained.rs crates/medusa-agent/src/policy.rs crates/medusa-process-containment/src/process_tree.rs
+          if ! git diff --cached --quiet; then
+            git commit -m "fix(containment): enforce macOS analysis memory watchdog"
             git push
           fi
