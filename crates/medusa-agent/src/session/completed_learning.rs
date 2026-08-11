@@ -60,7 +60,7 @@ pub(super) fn policy_for(repo: &Path) -> MedusaResult<LearningAdmissionPolicy> {
 }
 
 pub(super) fn telemetry_allowed(repo: &Path) -> MedusaResult<bool> {
-    Ok(policy_for(repo).map_or(false, |policy| policy.telemetry_enabled()))
+    Ok(policy_for(repo).is_ok_and(|policy| policy.telemetry_enabled()))
 }
 
 /// Positive learning is admitted only from a root task with authoritative verification that
