@@ -131,10 +131,15 @@ mod tests {
 
     #[test]
     fn corrupt_state_fails_closed() {
-        let repo = tempfile::tempdir().expect("repo");
-        let root = repo.path().join(".medusa/learning-review");
+        let repo = std::env::temp_dir().join(format!(
+            "medusa-learning-policy-{}-{}",
+            std::process::id(),
+            crate::SessionId::new()
+        ));
+        let root = repo.join(".medusa/learning-review");
         fs::create_dir_all(&root).expect("root");
         fs::write(root.join("state.json"), b"not-json").expect("state");
-        assert!(LearningAdmissionPolicy::for_repository(repo.path()).is_err());
+        assert!(LearningAdmissionPolicy::for_repository(&repo).is_err());
+        let _ = fs::remove_dir_all(repo);
     }
 }
