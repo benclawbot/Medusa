@@ -109,6 +109,11 @@ s = s.replace(
     '#[cfg(any(unix, windows))]\nuse crate::{ProcessOwnershipReceipt, ProcessOwnershipVerification};',
     '#[cfg(any(unix, windows))]\nuse crate::ProcessOwnershipReceipt;\n#[cfg(unix)]\nuse crate::ProcessOwnershipVerification;',
 )
+s = s.replace(
+    '    use super::*;\n\n    const ROLE_ENV:',
+    '    use super::*;\n    #[cfg(windows)]\n    use crate::ProcessOwnershipVerification;\n\n    const ROLE_ENV:',
+    1,
+)
 tree.write_text(s)
 
 contained = Path('crates/medusa-runtime/src/analysis_contained.rs')
