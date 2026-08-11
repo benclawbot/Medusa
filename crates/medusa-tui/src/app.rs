@@ -364,6 +364,27 @@ impl AppState {
                 self.composer = ComposerState::new("");
                 self.draft_store.delete(&self.draft_key)?;
                 self.command_selection = 0;
+                if submitted.attachments.is_empty()
+                    && submitted.text.trim().eq_ignore_ascii_case("/settings")
+                {
+                    match ModelModal::new_settings(
+                        self.model_label.as_deref(),
+                        self.effort_label.as_deref(),
+                        self.credential_configured,
+                    ) {
+                        Ok(modal) => {
+                            self.model_modal = Some(modal);
+                            self.status = "settings".to_owned();
+                        }
+                        Err(error) => {
+                            self.transcript.push(TranscriptEntry::System(format!(
+                                "error: could not open settings: {error}"
+                            )));
+                            self.status = "settings unavailable".to_owned();
+                        }
+                    }
+                    return Ok(AppAction::Redraw);
+                }
                 if submitted.attachments.is_empty() {
                     match parse_slash_command(&submitted.text) {
                         Ok(Some(command)) => {

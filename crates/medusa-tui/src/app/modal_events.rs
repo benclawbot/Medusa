@@ -4,6 +4,13 @@ use super::*;
 
 impl AppState {
     pub(super) fn handle_model_modal_event(&mut self, event: Event) -> Result<AppAction, AppError> {
+        if self
+            .model_modal
+            .as_ref()
+            .is_some_and(ModelModal::is_settings)
+        {
+            return self.handle_settings_modal_event(event);
+        }
         match event {
             Event::Paste(text) => {
                 if let Some(modal) = self.model_modal.as_mut() {
@@ -106,6 +113,172 @@ impl AppState {
                 _ => Ok(AppAction::None),
             },
             _ => Ok(AppAction::None),
+        }
+    }
+
+    fn handle_settings_modal_event(&mut self, event: Event) -> Result<AppAction, AppError> {
+        let page = self
+            .model_modal
+            .as_ref()
+            .and_then(ModelModal::settings_page)
+            .unwrap_or(SettingsPage::Root);
+        match event {
+            Event::Paste(text) if page == SettingsPage::BaseUrl => {
+                if let Some(modal) = self.model_modal.as_mut() {
+                    modal.settings_insert_base_url(&text);
+                }
+                Ok(AppAction::Redraw)
+            }
+            Event::Key(key) if key.kind != KeyEventKind::Release => {
+                if self
+                    .model_modal
+                    .as_ref()
+                    .is_some_and(ModelModal::settings_searching)
+                {
+                    match key.code {
+                        KeyCode::Esc => {
+                            if let Some(modal) = self.model_modal.as_mut() {
+                                modal.settings_clear_search();
+                            }
+                        }
+                        KeyCode::Backspace => {
+                            if let Some(modal) = self.model_modal.as_mut() {
+                                modal.settings_pop_search();
+                            }
+                        }
+                        KeyCode::Up => {
+                            if let Some(modal) = self.model_modal.as_mut() {
+                                modal.settings_move_choice(-1);
+                            }
+                        }
+                        KeyCode::Down => {
+                            if let Some(modal) = self.model_modal.as_mut() {
+                                modal.settings_move_choice(1);
+                            }
+                        }
+                        KeyCode::Enter => return self.commit_settings_selection(),
+                        KeyCode::Char(character)
+                            if key.modifiers.is_empty()
+                                || key.modifiers == KeyModifiers::SHIFT =>
+                        {
+                            if let Some(modal) = self.model_modal.as_mut() {
+                                modal.settings_push_search(character);
+                            }
+                        }
+                        _ => {}
+                    }
+                    return Ok(AppAction::Redraw);
+                }
+
+                match key.code {
+                    KeyCode::Esc => {
+                        if page == SettingsPage::Root {
+                            self.model_modal = None;
+                            self.status = "settings cancelled; no changes applied".to_owned();
+                        } else if let Some(modal) = self.model_modal.as_mut() {
+                            modal.settings_back();
+                            self.status = "settings".to_owned();
+                        }
+                        Ok(AppAction::Redraw)
+                    }
+                    KeyCode::Up | KeyCode::Left => {
+                        if let Some(modal) = self.model_modal.as_mut() {
+                            if page == SettingsPage::Root {
+                                modal.settings_move_root(-1);
+                            } else if page != SettingsPage::BaseUrl
+                                && page != SettingsPage::Status
+                            {
+                                modal.settings_move_choice(-1);
+                            }
+                        }
+                        Ok(AppAction::Redraw)
+                    }
+                    KeyCode::Down | KeyCode::Right => {
+                        if let Some(modal) = self.model_modal.as_mut() {
+                            if page == SettingsPage::Root {
+                                modal.settings_move_root(1);
+                            } else if page != SettingsPage::BaseUrl
+                                && page != SettingsPage::Status
+                            {
+                                modal.settings_move_choice(1);
+                            }
+                        }
+                        Ok(AppAction::Redraw)
+                    }
+                    KeyCode::Enter => {
+                        if page == SettingsPage::Root {
+                            if let Some(modal) = self.model_modal.as_mut() {
+                                modal.settings_open_selected();
+                            }
+                            self.status = "settings".to_owned();
+                            Ok(AppAction::Redraw)
+                        } else {
+                            self.commit_settings_selection()
+                        }
+                    }
+                    KeyCode::Char('/') if page != SettingsPage::BaseUrl => {
+                        if let Some(modal) = self.model_modal.as_mut() {
+                            modal.settings_begin_search();
+                        }
+                        Ok(AppAction::Redraw)
+                    }
+                    KeyCode::Backspace if page == SettingsPage::BaseUrl => {
+                        if let Some(modal) = self.model_modal.as_mut() {
+                            modal.settings_delete_base_url_character();
+                        }
+                        Ok(AppAction::Redraw)
+                    }
+                    KeyCode::Char(character)
+                        if page == SettingsPage::BaseUrl
+                            && (key.modifiers.is_empty()
+                                || key.modifiers == KeyModifiers::SHIFT) =>
+                    {
+                        if let Some(modal) = self.model_modal.as_mut() {
+                            modal.settings_insert_base_url(&character.to_string());
+                        }
+                        Ok(AppAction::Redraw)
+                    }
+                    _ => Ok(AppAction::None),
+                }
+            }
+            _ => Ok(AppAction::None),
+        }
+    }
+
+    fn commit_settings_selection(&mut self) -> Result<AppAction, AppError> {
+        let repository = self.repository.clone();
+        let page = self
+            .model_modal
+            .as_ref()
+            .and_then(ModelModal::settings_page)
+            .unwrap_or(SettingsPage::Root);
+        let result = self
+            .model_modal
+            .as_mut()
+            .map(|modal| modal.settings_commit_current(&repository))
+            .unwrap_or(Ok(AppAction::None));
+        match result {
+            Ok(action) => {
+                if page == SettingsPage::Status {
+                    self.status = "settings".to_owned();
+                    return Ok(action);
+                }
+                let timing = self
+                    .model_modal
+                    .as_ref()
+                    .and_then(ModelModal::settings_last_apply_timing)
+                    .map(|timing| timing.label().to_owned());
+                self.model_modal = None;
+                self.status = timing.map_or_else(
+                    || "settings update submitted".to_owned(),
+                    |timing| format!("settings updated · apply timing: {timing}"),
+                );
+                Ok(action)
+            }
+            Err(error) => {
+                self.status = format!("settings update rejected: {error}");
+                Ok(AppAction::Redraw)
+            }
         }
     }
 
