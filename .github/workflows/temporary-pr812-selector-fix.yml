@@ -1,0 +1,110 @@
+name: Temporary PR 812 selector fix
+
+on:
+  push:
+    branches:
+      - agent/issue-802-settings
+
+permissions:
+  contents: write
+
+jobs:
+  apply-fix:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          ref: agent/issue-802-settings
+          fetch-depth: 0
+      - name: Apply selector fix
+        shell: python
+        run: |
+          from pathlib import Path
+
+          path = Path("crates/medusa-tui/src/input.rs")
+          text = path.read_text()
+          old = '''    pub fn move_in_with(
+              &mut self,
+              indices: &[usize],
+              delta: isize,
+              mut enabled: impl FnMut(usize) -> bool,
+          ) {
+              if indices.is_empty() || delta == 0 || !indices.iter().copied().any(&mut enabled) {
+                  return;
+              }
+              let direction = delta.signum();
+              let start = indices
+                  .iter()
+                  .position(|index| *index == self.selected)
+                  .unwrap_or_else(|| if direction > 0 { indices.len() - 1 } else { 0 });
+              for offset in 1..=indices.len() {
+                  let position = (start as isize + direction * offset as isize)
+                      .rem_euclid(indices.len() as isize) as usize;
+                  let candidate = indices[position];
+                  if enabled(candidate) {
+                      self.selected = candidate;
+                      return;
+                  }
+              }
+          }
+'''
+          new = '''    pub fn move_in_with(
+              &mut self,
+              indices: &[usize],
+              delta: isize,
+              mut enabled: impl FnMut(usize) -> bool,
+          ) {
+              if indices.is_empty() || delta == 0 || !indices.iter().copied().any(&mut enabled) {
+                  return;
+              }
+              let direction = delta.signum();
+              let mut selected = self.selected;
+              for _ in 0..delta.unsigned_abs() {
+                  let start = indices
+                      .iter()
+                      .position(|index| *index == selected)
+                      .unwrap_or_else(|| if direction > 0 { indices.len() - 1 } else { 0 });
+                  let Some(next) = (1..=indices.len()).find_map(|offset| {
+                      let position = (start as isize + direction * offset as isize)
+                          .rem_euclid(indices.len() as isize) as usize;
+                      let candidate = indices[position];
+                      enabled(candidate).then_some(candidate)
+                  }) else {
+                      return;
+                  };
+                  selected = next;
+              }
+              self.selected = selected;
+          }
+'''
+          if old not in text:
+              raise SystemExit("selector implementation did not match expected source")
+          text = text.replace(old, new, 1)
+
+          marker = '''    #[test]
+          fn selection_state_filters_and_scrolls_long_lists() {
+'''
+          regression = '''    #[test]
+          fn selection_state_honors_multi_step_delta() {
+              let mut state = SelectionState::new(0);
+              state.move_by(5, 2);
+              assert_eq!(state.selected(), 2);
+              state.move_by(5, -3);
+              assert_eq!(state.selected(), 4);
+          }
+
+'''
+          if marker not in text:
+              raise SystemExit("selector test insertion point did not match expected source")
+          text = text.replace(marker, regression + marker, 1)
+          path.write_text(text)
+      - name: Commit fix and remove temporary workflow
+        shell: bash
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git rm .github/workflows/temporary-pr812-selector-fix.yml
+          git add crates/medusa-tui/src/input.rs
+          git commit -m "Fix multi-step selection navigation"
+          git push origin HEAD:agent/issue-802-settings
