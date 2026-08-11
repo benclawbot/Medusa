@@ -1,0 +1,299 @@
+name: Issue 758 Windows profile integrator
+
+on:
+  push:
+    branches:
+      - agent/issue-758-analysis-workspace
+
+permissions:
+  contents: write
+
+jobs:
+  integrate:
+    if: ${{ github.actor != 'github-actions[bot]' }}
+    runs-on: windows-2022
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
+      - name: Patch Windows production path
+        shell: python
+        run: |
+          from pathlib import Path
+
+          base = Path('crates/medusa-process-containment/src/base_container.rs')
+          s = base.read_text()
+          if 'use crate::ProcessOwnershipReceipt;' not in s:
+              insert = 'use flatbuffers::FlatBufferBuilder;\n'
+              s = s.replace(insert, insert + 'use crate::ProcessOwnershipReceipt;\n', 1)
+          marker = '''impl Default for WindowsSandboxRestrictions {
+    fn default() -> Self {
+        Self {
+            backend: "windows_base_container",
+            restrictions: &[
+                "app_container",
+                "network_denied",
+                "bound_filesystem_repository_rw",
+                "bound_filesystem_toolchain_ro",
+                "job_kill_on_close",
+                "active_process_limit",
+                "job_memory_limit",
+                "environment_allowlist",
+                "no_host_acl_mutation",
+            ],
+        }
+    }
+}
+'''
+          addition = marker + '''
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct WindowsSandboxLimits {
+    pub active_process_limit: u32,
+    pub job_memory_bytes: usize,
+    pub timeout: Duration,
+}
+
+impl Default for WindowsSandboxLimits {
+    fn default() -> Self {
+        Self {
+            active_process_limit: 64,
+            job_memory_bytes: 2 * 1024 * 1024 * 1024,
+            timeout: COMMAND_TIMEOUT,
+        }
+    }
+}
+
+impl WindowsSandboxLimits {
+    #[must_use]
+    pub const fn analysis() -> Self {
+        Self {
+            active_process_limit: 1,
+            job_memory_bytes: 512 * 1024 * 1024,
+            timeout: COMMAND_TIMEOUT,
+        }
+    }
+}
+'''
+          if 'pub struct WindowsSandboxLimits' not in s:
+              if marker not in s:
+                  raise SystemExit('Windows restrictions marker missing')
+              s = s.replace(marker, addition, 1)
+
+          old = '''pub fn run_appcontainer_cancellable(
+    repo: &Path,
+    program: &str,
+    args: &[String],
+    cancellation: &AtomicBool,
+) -> io::Result<Output> {
+    let root = strip_verbatim(&repo.canonicalize()?);
+    let executable = strip_verbatim(&resolve_program(program)?);
+    let read_only = read_only_paths(&executable);
+    let specification = sandbox_specification(&root, &read_only);
+    let api = SandboxApi::load()?;
+    unsafe { launch(&api, &root, &executable, args, &specification, cancellation) }
+}
+'''
+          new = '''pub fn run_appcontainer_cancellable(
+    repo: &Path,
+    program: &str,
+    args: &[String],
+    cancellation: &AtomicBool,
+) -> io::Result<Output> {
+    run_appcontainer_cancellable_observed(
+        repo,
+        program,
+        args,
+        cancellation,
+        WindowsSandboxLimits::default(),
+        |_| Ok(()),
+    )
+}
+
+pub fn run_appcontainer_cancellable_observed<F>(
+    repo: &Path,
+    program: &str,
+    args: &[String],
+    cancellation: &AtomicBool,
+    limits: WindowsSandboxLimits,
+    mut on_start: F,
+) -> io::Result<Output>
+where
+    F: FnMut(&ProcessOwnershipReceipt) -> io::Result<()>,
+{
+    let root = strip_verbatim(&repo.canonicalize()?);
+    let executable = strip_verbatim(&resolve_program(program)?);
+    let read_only = read_only_paths(&executable);
+    let specification = sandbox_specification(&root, &read_only);
+    let api = SandboxApi::load()?;
+    unsafe {
+        launch(
+            &api,
+            &root,
+            &executable,
+            args,
+            &specification,
+            cancellation,
+            limits,
+            &mut on_start,
+        )
+    }
+}
+'''
+          if 'run_appcontainer_cancellable_observed' not in s:
+              if old not in s:
+                  raise SystemExit('cancellable function marker missing')
+              s = s.replace(old, new, 1)
+
+          s = s.replace(
+              '''    cancellation: &AtomicBool,
+) -> io::Result<Output> {
+    let job = OwnedHandle::new(unsafe { CreateJobObjectW(null(), null()) })?;''',
+              '''    cancellation: &AtomicBool,
+    sandbox_limits: WindowsSandboxLimits,
+    on_start: &mut impl FnMut(&ProcessOwnershipReceipt) -> io::Result<()>,
+) -> io::Result<Output> {
+    let job = OwnedHandle::new(unsafe { CreateJobObjectW(null(), null()) })?;''',
+              1,
+          )
+          s = s.replace('limits.BasicLimitInformation.ActiveProcessLimit = 64;', 'limits.BasicLimitInformation.ActiveProcessLimit = sandbox_limits.active_process_limit;', 1)
+          s = s.replace('limits.JobMemoryLimit = 2 * 1024 * 1024 * 1024;', 'limits.JobMemoryLimit = sandbox_limits.job_memory_bytes;', 1)
+          assign_marker = '''    let process_handle = OwnedHandle::new(process.hProcess)?;
+    let thread_handle = OwnedHandle::new(process.hThread)?;
+    if unsafe { AssignProcessToJobObject(job.0, process_handle.0) } == 0 {
+'''
+          assign_replacement = '''    let process_handle = OwnedHandle::new(process.hProcess)?;
+    let thread_handle = OwnedHandle::new(process.hThread)?;
+    let ownership = ProcessOwnershipReceipt::capture(process.dwProcessId).map_err(|error| {
+        io::Error::new(
+            error.kind(),
+            format!("failed to capture Windows sandbox process identity: {error}"),
+        )
+    })?;
+    on_start(&ownership)?;
+    if unsafe { AssignProcessToJobObject(job.0, process_handle.0) } == 0 {
+'''
+          if 'failed to capture Windows sandbox process identity' not in s:
+              if assign_marker not in s:
+                  raise SystemExit('process handle marker missing')
+              s = s.replace(assign_marker, assign_replacement, 1)
+          s = s.replace('if started.elapsed() >= COMMAND_TIMEOUT {', 'if started.elapsed() >= sandbox_limits.timeout {', 1)
+          s = s.replace('COMMAND_TIMEOUT.as_secs()', 'sandbox_limits.timeout.as_secs()', 1)
+          base.write_text(s)
+
+          lib = Path('crates/medusa-process-containment/src/lib.rs')
+          s = lib.read_text()
+          s = s.replace(
+              '    WindowsSandboxRestrictions, run_appcontainer, run_appcontainer_cancellable,\n',
+              '    WindowsSandboxLimits, WindowsSandboxRestrictions, run_appcontainer,\n    run_appcontainer_cancellable, run_appcontainer_cancellable_observed,\n',
+          )
+          lib.write_text(s)
+
+          policy = Path('crates/medusa-agent/src/policy.rs')
+          s = policy.read_text()
+          old_cfg = '#[cfg(any(target_os = "linux", target_os = "macos"))]\n#[path = "analysis_process_tracker.rs"]\nmod analysis_process_tracker;\n#[cfg(any(target_os = "linux", target_os = "macos"))]\nuse analysis_process_tracker::AnalysisProcessTracker;\n'
+          new_cfg = '#[cfg(any(target_os = "linux", target_os = "macos", windows))]\n#[path = "analysis_process_tracker.rs"]\nmod analysis_process_tracker;\n#[cfg(any(target_os = "linux", target_os = "macos"))]\nuse analysis_process_tracker::AnalysisProcessTracker;\n'
+          s = s.replace(old_cfg, new_cfg)
+          policy.write_text(s)
+
+          win = Path('crates/medusa-agent/src/windows_sandbox.rs')
+          s = win.read_text()
+          s = s.replace(
+              'use medusa_process_containment::{WindowsSandboxRestrictions, run_appcontainer_cancellable};',
+              'use medusa_process_containment::{\n    WindowsSandboxLimits, WindowsSandboxRestrictions, run_appcontainer_cancellable_observed,\n};\n\nuse super::analysis_process_tracker::AnalysisProcessTracker;',
+          )
+          old_body = '''    run_appcontainer_cancellable(repo, program, args, cancellation).map_err(|error| {
+        if error.kind() == std::io::ErrorKind::Interrupted {
+            cancelled(error)
+        } else {
+            unavailable(error)
+        }
+    })
+'''
+          new_body = '''    let analysis = repo
+        .components()
+        .any(|component| component.as_os_str() == "analysis-workspace-v1");
+    let limits = if analysis {
+        WindowsSandboxLimits::analysis()
+    } else {
+        WindowsSandboxLimits::default()
+    };
+    let mut tracker = None;
+    let result = run_appcontainer_cancellable_observed(
+        repo,
+        program,
+        args,
+        cancellation,
+        limits,
+        |receipt| {
+            if analysis {
+                tracker = Some(
+                    AnalysisProcessTracker::started(repo, program, args, receipt)
+                        .map_err(|error| std::io::Error::other(error.to_string()))?,
+                );
+            }
+            Ok(())
+        },
+    );
+    match result {
+        Ok(output) => {
+            if let Some(tracker) = tracker.take() {
+                tracker.exited(output.status.code())?;
+            }
+            Ok(output)
+        }
+        Err(error) => {
+            if let Some(tracker) = tracker.take() {
+                let _ = tracker.failed(&error.to_string());
+            }
+            Err(if error.kind() == std::io::ErrorKind::Interrupted {
+                cancelled(error)
+            } else {
+                unavailable(error)
+            })
+        }
+    }
+'''
+          if 'WindowsSandboxLimits::analysis()' not in s:
+              if old_body not in s:
+                  raise SystemExit('Windows adapter body marker missing')
+              s = s.replace(old_body, new_body, 1)
+          win.write_text(s)
+
+          contained = Path('crates/medusa-runtime/src/analysis_contained.rs')
+          s = contained.read_text()
+          s = s.replace('''    #[cfg(windows)]
+    {
+        64
+    }''', '''    #[cfg(windows)]
+    {
+        1
+    }''', 1)
+          s = s.replace('''    #[cfg(windows)]
+    {
+        2 * 1024 * 1024 * 1024
+    }''', '''    #[cfg(windows)]
+    {
+        UNIX_ANALYSIS_MEMORY_BYTES
+    }''', 1)
+          contained.write_text(s)
+      - name: Format
+        run: cargo fmt --all
+      - name: Check Windows source
+        run: cargo check -p medusa-process-containment -p medusa-agent -p medusa-runtime --locked
+      - name: Test Windows tracker and containment
+        run: cargo test -p medusa-agent analysis_process_tracker --locked -- --nocapture
+      - name: Clippy
+        run: cargo clippy -p medusa-process-containment -p medusa-agent -p medusa-runtime --locked --all-targets -- -D warnings
+      - name: Commit production source
+        shell: bash
+        run: |
+          if ! git diff --quiet; then
+            git config user.name github-actions[bot]
+            git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+            git add crates/medusa-process-containment/src/base_container.rs crates/medusa-process-containment/src/lib.rs crates/medusa-agent/src/policy.rs crates/medusa-agent/src/windows_sandbox.rs crates/medusa-runtime/src/analysis_contained.rs
+            git commit -m "feat(containment): track and bound Windows analysis processes"
+            git push
+          fi
