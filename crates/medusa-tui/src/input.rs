@@ -423,8 +423,8 @@ fn normalize_menu_selection(choices: &[MenuItem], selection: &mut SelectionState
     if filtered.is_empty() {
         return;
     }
-    let selected_is_usable = filtered.contains(&selection.selected())
-        && choices[selection.selected()].is_enabled();
+    let selected_is_usable =
+        filtered.contains(&selection.selected()) && choices[selection.selected()].is_enabled();
     if selected_is_usable {
         return;
     }
@@ -535,7 +535,11 @@ impl MenuTerminal {
                 "  /".to_owned()
             },
         ] {
-            queue!(stdout, Print(truncate_terminal_line(&line, width)), Print("\r\n"))?;
+            queue!(
+                stdout,
+                Print(truncate_terminal_line(&line, width)),
+                Print("\r\n")
+            )?;
             rendered_rows = rendered_rows.saturating_add(1);
         }
 
