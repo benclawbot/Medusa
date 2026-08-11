@@ -177,19 +177,23 @@ impl SelectionState {
             return;
         }
         let direction = delta.signum();
-        let start = indices
-            .iter()
-            .position(|index| *index == self.selected)
-            .unwrap_or_else(|| if direction > 0 { indices.len() - 1 } else { 0 });
-        for offset in 1..=indices.len() {
-            let position = (start as isize + direction * offset as isize)
-                .rem_euclid(indices.len() as isize) as usize;
-            let candidate = indices[position];
-            if enabled(candidate) {
-                self.selected = candidate;
+        let mut selected = self.selected;
+        for _ in 0..delta.unsigned_abs() {
+            let start = indices
+                .iter()
+                .position(|index| *index == selected)
+                .unwrap_or_else(|| if direction > 0 { indices.len() - 1 } else { 0 });
+            let Some(next) = (1..=indices.len()).find_map(|offset| {
+                let position = (start as isize + direction * offset as isize)
+                    .rem_euclid(indices.len() as isize) as usize;
+                let candidate = indices[position];
+                enabled(candidate).then_some(candidate)
+            }) else {
                 return;
-            }
+            };
+            selected = next;
         }
+        self.selected = selected;
     }
 
     #[must_use]
@@ -910,6 +914,15 @@ mod tests {
         assert_eq!(state.selected(), 3);
         state.move_by_with(4, -1, |index| index != 2);
         assert_eq!(state.selected(), 1);
+    }
+
+    #[test]
+    fn selection_state_honors_multi_step_delta() {
+        let mut state = SelectionState::new(0);
+        state.move_by(5, 2);
+        assert_eq!(state.selected(), 2);
+        state.move_by(5, -3);
+        assert_eq!(state.selected(), 4);
     }
 
     #[test]
