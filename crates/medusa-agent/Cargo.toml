@@ -20,6 +20,7 @@ medusa-evidence.workspace = true
 medusa-escalation = { path = "../medusa-escalation" }
 medusa-failure = { path = "../medusa-failure" }
 medusa-extensions = { path = "../medusa-extensions" }
+medusa-improvement = { path = "../medusa-improvement" }
 medusa-intelligence = { path = "../medusa-intelligence" }
 medusa-memory = { path = "../medusa-memory" }
 medusa-multi-agent-scheduler = { path = "../medusa-multi-agent-scheduler" }
