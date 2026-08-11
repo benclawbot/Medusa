@@ -164,6 +164,7 @@ mod tests {
 
     use medusa_core::SessionId;
     use medusa_protocol::{Actor, EventPayload};
+    use serde_json::json;
     use time::OffsetDateTime;
 
     use crate::evidence::append_event;
@@ -229,22 +230,26 @@ mod tests {
     #[test]
     fn capture_disabled_leaves_no_recall_content() {
         let directory = tempfile::tempdir().expect("tempdir");
-        let store = medusa_improvement::learning_review::LearningReviewStore::for_repository(
-            directory.path(),
-        );
-        store
-            .update_privacy(
-                medusa_improvement::learning_review::LearningPrivacy {
-                    capture_enabled: false,
-                    user_persistence_enabled: false,
-                    cross_repository_reuse_enabled: false,
-                    telemetry_enabled: false,
-                    automatic_proposals_enabled: false,
+        let root = directory.path().join(".medusa/learning-review");
+        fs::create_dir_all(&root).expect("privacy root");
+        fs::write(
+            root.join("state.json"),
+            serde_json::to_vec_pretty(&json!({
+                "schema_version": 1,
+                "revision": 1,
+                "privacy": {
+                    "capture_enabled": false,
+                    "user_persistence_enabled": false,
+                    "cross_repository_reuse_enabled": false,
+                    "telemetry_enabled": false,
+                    "automatic_proposals_enabled": false
                 },
-                0,
-                "test",
-            )
-            .expect("privacy");
+                "items": [],
+                "audit_head": "0000000000000000000000000000000000000000000000000000000000000000"
+            }))
+            .expect("privacy json"),
+        )
+        .expect("privacy");
         let mut session = verified_session(directory.path());
         session.objective = "SEEDED_PRIVATE_CONTENT".to_owned();
         persist_completed_session(&session).expect("privacy block");
