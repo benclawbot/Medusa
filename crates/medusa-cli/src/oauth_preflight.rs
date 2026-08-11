@@ -35,17 +35,33 @@ pub(crate) fn run_if_needed(config: &Config) -> MedusaResult<()> {
 
     ensure_gateway_running()?;
     let base_url = config.model.base_url.as_deref().unwrap_or(DEFAULT_GATEWAY);
-    let client = Client::builder()
-        .connect_timeout(Duration::from_secs(2))
-        .timeout(Duration::from_secs(15))
-        .build()
-        .map_err(gateway_transport_error)?;
+    let client = gateway_client()?;
     let report = probe_gateway(&client, base_url, &config.model.name)?;
     eprintln!(
         "ChatGPT OAuth gateway verified: model={}, tool_calling={}, streaming={}, cancellation={}.",
         report.model, report.tool_calling, report.streaming, report.cancellation
     );
     Ok(())
+}
+
+/// Returns the account-aware OAuth model catalog without issuing a completion request.
+pub(crate) fn discover_models() -> MedusaResult<Vec<String>> {
+    ensure_gateway_running()?;
+    let client = gateway_client()?;
+    let response = client
+        .get(format!("{DEFAULT_GATEWAY}/models"))
+        .send()
+        .map_err(gateway_transport_error)?;
+    let body = require_success(response, "gateway model discovery")?;
+    parse_model_ids(&body)
+}
+
+fn gateway_client() -> MedusaResult<Client> {
+    Client::builder()
+        .connect_timeout(Duration::from_secs(2))
+        .timeout(Duration::from_secs(15))
+        .build()
+        .map_err(gateway_transport_error)
 }
 
 fn requires_preflight(config: &Config) -> bool {
@@ -86,7 +102,7 @@ fn ensure_gateway_running() -> MedusaResult<()> {
         return Err(preflight_error(
             ErrorCategory::Environment,
             format!(
-                "OAuth gateway startup failed with {status}; run `npx openai-oauth@latest login` and retry"
+                "OAuth gateway startup failed with {status}; authenticate from Medusa's browser sign-in and retry"
             ),
         ));
     }
@@ -172,7 +188,7 @@ fn require_success(response: reqwest::blocking::Response, operation: &str) -> Me
     ))
 }
 
-fn verify_model(body: &str, model: &str) -> MedusaResult<()> {
+fn parse_model_ids(body: &str) -> MedusaResult<Vec<String>> {
     let value: Value = serde_json::from_str(body).map_err(|error| {
         protocol_error(format!("model discovery returned malformed JSON: {error}"))
     })?;
@@ -180,11 +196,23 @@ fn verify_model(body: &str, model: &str) -> MedusaResult<()> {
         .get("data")
         .and_then(Value::as_array)
         .ok_or_else(|| protocol_error("model discovery response has no data array"))?;
-    if available
+    let mut models = available
         .iter()
         .filter_map(|item| item.get("id").and_then(Value::as_str))
-        .any(|id| id == model)
-    {
+        .filter(|id| !id.trim().is_empty())
+        .map(str::to_owned)
+        .collect::<Vec<_>>();
+    models.sort();
+    models.dedup();
+    if models.is_empty() {
+        return Err(protocol_error("model discovery returned no model ids"));
+    }
+    Ok(models)
+}
+
+fn verify_model(body: &str, model: &str) -> MedusaResult<()> {
+    let available = parse_model_ids(body)?;
+    if available.iter().any(|id| id == model) {
         Ok(())
     } else {
         Err(preflight_error(
@@ -289,6 +317,16 @@ mod tests {
     fn model_discovery_requires_requested_model() {
         verify_model(r#"{"data":[{"id":"gpt-test"}]}"#, "gpt-test").expect("model");
         assert!(verify_model(r#"{"data":[{"id":"other"}]}"#, "gpt-test").is_err());
+    }
+
+    #[test]
+    fn discovered_models_are_sorted_deduplicated_and_typed() {
+        assert_eq!(
+            parse_model_ids(r#"{"data":[{"id":"gpt-b"},{"id":"gpt-a"},{"id":"gpt-a"}]}"#)
+                .expect("models"),
+            vec!["gpt-a".to_owned(), "gpt-b".to_owned()]
+        );
+        assert!(parse_model_ids(r#"{"data":[]}"#).is_err());
     }
 
     #[test]
