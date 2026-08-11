@@ -259,8 +259,8 @@ impl AppState {
             .unwrap_or(Ok(AppAction::None));
         match result {
             Ok(action) => {
-                if page == SettingsPage::Status {
-                    self.status = "settings".to_owned();
+                if !matches!(page, SettingsPage::Review | SettingsPage::Profile) {
+                    self.status = "settings · changes staged; open Review changes to apply".to_owned();
                     return Ok(action);
                 }
                 let timing = self

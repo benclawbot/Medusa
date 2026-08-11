@@ -326,6 +326,7 @@ fn settings_modal_lines(modal: &app::ModelModal) -> Vec<StyledLine> {
         app::SettingsPage::Authentication => "Authentication",
         app::SettingsPage::BaseUrl => "Base URL",
         app::SettingsPage::Status => "Status",
+        app::SettingsPage::Review => "Review changes",
     };
     let mut lines = vec![StyledLine::new(
         format!("Settings / {page_name} · revision {revision}"),
@@ -349,6 +350,22 @@ fn settings_modal_lines(modal: &app::ModelModal) -> Vec<StyledLine> {
             "Configuration values come from ProviderProfileCatalog; credential material is never displayed.",
             Color::DarkGrey,
         ));
+        return lines;
+    }
+    if page == app::SettingsPage::Review {
+        let review = modal.settings_review_lines();
+        if review.is_empty() {
+            lines.push(StyledLine::new("No staged changes.", Color::Grey));
+        } else {
+            lines.push(StyledLine::new("Pending non-secret changes:", Color::White));
+            for change in review {
+                lines.push(StyledLine::new(format!("  {change}"), Color::Grey));
+            }
+            lines.push(StyledLine::new(
+                "Enter applies all staged changes atomically · Esc returns without applying.",
+                Color::DarkGrey,
+            ));
+        }
         return lines;
     }
     if page == app::SettingsPage::BaseUrl {

@@ -18,9 +18,9 @@ use config_command::{
     validate as validate_config,
 };
 use config_profiles::{
-    create as create_config_profile, delete as delete_config_profile,
-    list as list_config_profiles, set as set_config, unset as unset_config,
-    use_profile as use_config_profile,
+    create as create_config_profile, delete as delete_config_profile, history as config_history,
+    list as list_config_profiles, reset_section as reset_config_section, rollback as rollback_config,
+    set as set_config, unset as unset_config, use_profile as use_config_profile,
 };
 use medusa_agent::{bootstrap, session_browser::list_sessions};
 use medusa_config::Config;
@@ -143,6 +143,15 @@ enum ConfigAction {
     Set { key: String, value: String },
     /// Reset one known provider-profile key to its default.
     Unset { key: String },
+    /// Reset a typed provider-profile section to defaults.
+    ResetSection { section: String },
+    /// Show bounded, non-secret known-good provider-profile history.
+    History {
+        #[arg(long)]
+        json: bool,
+    },
+    /// Restore the previous known-good provider profile.
+    Rollback,
     /// Manage named provider profiles.
     Profiles {
         #[command(subcommand)]
@@ -264,6 +273,9 @@ fn run() -> MedusaResult<()> {
             Some(ConfigAction::Get { key, json }) => get_config(&key, json),
             Some(ConfigAction::Set { key, value }) => set_config(&key, &value),
             Some(ConfigAction::Unset { key }) => unset_config(&key),
+            Some(ConfigAction::ResetSection { section }) => reset_config_section(&section),
+            Some(ConfigAction::History { json }) => config_history(json),
+            Some(ConfigAction::Rollback) => rollback_config(),
             Some(ConfigAction::Profiles { action }) => match action {
                 ConfigProfileAction::List { json } => list_config_profiles(json),
                 ConfigProfileAction::Create { name } => create_config_profile(&name),

@@ -13,6 +13,10 @@ use super::{
         ConfigurationApplyTiming, ConfigurationChangeOrigin, ConfigurationChanged,
         ConfigurationStateGuard, ConfigurationStateStore,
     },
+    staged_profile::{
+        begin_pending_transaction, finish_pending_transaction, reconcile_pending_transaction,
+        record_known_good,
+    },
 };
 
 const ACTIVE_PROFILE_SCHEMA_VERSION: u32 = 1;
@@ -33,6 +37,7 @@ pub struct ProviderProfileSnapshot {
 }
 
 pub struct ProviderProfileUpdate {
+    root: PathBuf,
     guard: ConfigurationStateGuard,
     store: ProviderProfileStore,
     active_profile: String,
@@ -59,6 +64,20 @@ impl ProviderProfileUpdate {
         apply_timing: ConfigurationApplyTiming,
     ) -> MedusaResult<ConfigurationChanged> {
         profile.validate()?;
+        record_known_good(
+            &self.root,
+            self.guard.revision(),
+            &self.active_profile,
+            &self.previous,
+        )?;
+        begin_pending_transaction(
+            &self.root,
+            self.guard.revision(),
+            &self.active_profile,
+            self.existed,
+            &self.previous,
+            profile,
+        )?;
         self.store.save(profile)?;
         match self.guard.commit(
             self.active_profile.clone(),
@@ -66,13 +85,17 @@ impl ProviderProfileUpdate {
             origin,
             apply_timing,
         ) {
-            Ok(change) => Ok(change),
+            Ok(change) => {
+                finish_pending_transaction(&self.root)?;
+                Ok(change)
+            }
             Err(error) => {
                 restore_profile(&self.store, self.existed, &self.previous).map_err(|rollback| {
                     store_error(format!(
                         "commit configuration metadata: {error}; rollback failed: {rollback}"
                     ))
                 })?;
+                finish_pending_transaction(&self.root)?;
                 Err(error)
             }
         }
@@ -114,14 +137,17 @@ impl ProviderProfileCatalog {
     }
 
     pub fn revision(&self) -> MedusaResult<u64> {
+        reconcile_pending_transaction(&self.root)?;
         self.state_store().revision()
     }
 
     pub fn last_change(&self) -> MedusaResult<Option<ConfigurationChanged>> {
+        reconcile_pending_transaction(&self.root)?;
         self.state_store().last_change()
     }
 
     pub fn snapshot(&self) -> MedusaResult<ProviderProfileSnapshot> {
+        reconcile_pending_transaction(&self.root)?;
         let guard = self.state_store().acquire()?;
         let active_profile = self.active_name()?;
         let profile = self.store_for_name(&active_profile).load()?;
@@ -237,6 +263,7 @@ impl ProviderProfileCatalog {
         &self,
         expected_revision: u64,
     ) -> MedusaResult<ProviderProfileUpdate> {
+        reconcile_pending_transaction(&self.root)?;
         let guard = self.state_store().acquire()?;
         guard.check_expected(expected_revision)?;
         let active_profile = self.active_name()?;
@@ -244,6 +271,7 @@ impl ProviderProfileCatalog {
         let existed = store.path().is_file();
         let previous = store.load()?;
         Ok(ProviderProfileUpdate {
+            root: self.root.clone(),
             guard,
             store,
             active_profile,

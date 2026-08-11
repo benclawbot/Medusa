@@ -2,7 +2,7 @@ use std::{collections::BTreeMap, path::Path};
 
 use medusa_config::{
     Config, ConfigurationApplyTiming, ConfigurationChangeOrigin, ProviderProfile,
-    ProviderProfileCatalog, apply_provider_defaults, provider_catalog_entry,
+    ProviderProfileCatalog, StagedProviderProfile, apply_provider_defaults, provider_catalog_entry,
     provider_ids_with_current, provider_model_options,
 };
 
@@ -325,6 +325,7 @@ pub enum SettingsPage {
     Authentication,
     BaseUrl,
     Status,
+    Review,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -340,6 +341,7 @@ struct SettingsState {
     revision: u64,
     active_profile: String,
     profile: ProviderProfile,
+    staged: StagedProviderProfile,
     profiles: Vec<String>,
     last_apply_timing: Option<ConfigurationApplyTiming>,
     page: SettingsPage,
@@ -419,6 +421,7 @@ impl ModelModal {
         catalog: ProviderProfileCatalog,
     ) -> Result<Self, String> {
         let snapshot = catalog.snapshot().map_err(|error| error.to_string())?;
+        let staged = StagedProviderProfile::from_snapshot(snapshot.clone());
         let profiles = catalog
             .list()
             .map_err(|error| error.to_string())?
@@ -442,6 +445,7 @@ impl ModelModal {
             active_profile,
             base_url_edit: profile.base_url.clone().unwrap_or_default(),
             profile,
+            staged,
             profiles,
             last_apply_timing,
             page: SettingsPage::Root,
@@ -636,12 +640,20 @@ impl ModelModal {
                     "not configured".to_owned()
                 },
             ),
+            (
+                "Review changes".to_owned(),
+                if settings.staged.is_dirty() {
+                    format!("{} pending", settings.staged.diff().len())
+                } else {
+                    "no changes".to_owned()
+                },
+            ),
         ]
     }
 
     pub(super) fn settings_move_root(&mut self, delta: isize) {
         if let Some(settings) = self.settings.as_mut() {
-            settings.root_selection.move_by(8, delta);
+            settings.root_selection.move_by(9, delta);
         }
     }
 
@@ -659,7 +671,8 @@ impl ModelModal {
             4 => SettingsPage::Reasoning,
             5 => SettingsPage::Authentication,
             6 => SettingsPage::BaseUrl,
-            _ => SettingsPage::Status,
+            7 => SettingsPage::Status,
+            _ => SettingsPage::Review,
         };
         let selected = match settings.page {
             SettingsPage::Profile => settings
@@ -691,7 +704,10 @@ impl ModelModal {
                 .iter()
                 .position(|value| value == &settings.profile.auth)
                 .unwrap_or(0),
-            SettingsPage::BaseUrl | SettingsPage::Status | SettingsPage::Root => 0,
+            SettingsPage::BaseUrl
+            | SettingsPage::Status
+            | SettingsPage::Review
+            | SettingsPage::Root => 0,
         };
         settings.choice_selection.set_selected(selected, usize::MAX);
         if settings.page == SettingsPage::BaseUrl {
@@ -792,6 +808,21 @@ impl ModelModal {
     }
 
     #[must_use]
+    pub fn settings_review_lines(&self) -> Vec<String> {
+        self.settings
+            .as_ref()
+            .map(|settings| {
+                settings
+                    .staged
+                    .diff()
+                    .into_iter()
+                    .map(|entry| format!("{}: {} -> {}", entry.key, entry.before, entry.after))
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+
+    #[must_use]
     pub fn settings_base_url_edit(&self) -> &str {
         self.settings
             .as_ref()
@@ -828,6 +859,26 @@ impl ModelModal {
             return Ok(AppAction::Redraw);
         }
 
+        if settings.page == SettingsPage::Review {
+            if !settings.staged.is_dirty() {
+                settings.page = SettingsPage::Root;
+                return Ok(AppAction::Redraw);
+            }
+            validate_settings_candidate(repository, settings.staged.candidate())?;
+            let change = settings
+                .staged
+                .clone()
+                .commit(
+                    &settings.catalog,
+                    ConfigurationChangeOrigin::Tui,
+                    ConfigurationApplyTiming::NextSession,
+                )
+                .map_err(|error| error.to_string())?;
+            settings.revision = change.revision;
+            settings.last_apply_timing = Some(change.apply_timing);
+            return Ok(AppAction::Redraw);
+        }
+
         if settings.page == SettingsPage::Profile {
             let name = selected_settings_choice(settings)
                 .map(|choice| choice.label)
@@ -858,26 +909,12 @@ impl ModelModal {
             apply_provider_defaults(entry, &mut candidate);
             candidate.configured = true;
             validate_settings_candidate(repository, &candidate)?;
-            let change = settings
-                .catalog
-                .save_active_profile(
-                    &candidate,
-                    settings.revision,
-                    ConfigurationChangeOrigin::Tui,
-                    [
-                        "connection".to_owned(),
-                        "provider".to_owned(),
-                        "model".to_owned(),
-                        "auth".to_owned(),
-                        "base_url".to_owned(),
-                        "configured".to_owned(),
-                    ],
-                    ConfigurationApplyTiming::NextSession,
-                )
+            settings
+                .staged
+                .replace(candidate.clone())
                 .map_err(|error| error.to_string())?;
-            settings.revision = change.revision;
             settings.profile = candidate;
-            settings.last_apply_timing = Some(change.apply_timing);
+            settings.page = SettingsPage::Root;
             return Ok(AppAction::Redraw);
         }
 
@@ -887,16 +924,24 @@ impl ModelModal {
                 return Err("base URL is managed by the selected provider route".to_owned());
             }
             let value = settings.base_url_edit.trim();
-            return Ok(AppAction::Command(SlashCommand::Config(if value.is_empty() {
-                ConfigCommand::Unset {
-                    key: "base_url".to_owned(),
-                }
+            let mut candidate = settings.profile.clone();
+            if value.is_empty() {
+                candidate
+                    .unset_value("base_url")
+                    .map_err(|error| error.to_string())?;
             } else {
-                ConfigCommand::Set {
-                    key: "base_url".to_owned(),
-                    value: value.to_owned(),
-                }
-            })));
+                candidate
+                    .set_value("base_url", value)
+                    .map_err(|error| error.to_string())?;
+            }
+            validate_settings_candidate(repository, &candidate)?;
+            settings
+                .staged
+                .replace(candidate.clone())
+                .map_err(|error| error.to_string())?;
+            settings.profile = candidate;
+            settings.page = SettingsPage::Root;
+            return Ok(AppAction::Redraw);
         }
 
         let value = selected_settings_choice(settings)
@@ -911,12 +956,21 @@ impl ModelModal {
             | SettingsPage::Profile
             | SettingsPage::Provider
             | SettingsPage::BaseUrl
-            | SettingsPage::Status => return Ok(AppAction::Redraw),
+            | SettingsPage::Status
+            | SettingsPage::Review => return Ok(AppAction::Redraw),
         };
-        Ok(AppAction::Command(SlashCommand::Config(ConfigCommand::Set {
-            key: key.to_owned(),
-            value,
-        })))
+        let mut candidate = settings.profile.clone();
+        candidate
+            .set_value(key, &value)
+            .map_err(|error| error.to_string())?;
+        validate_settings_candidate(repository, &candidate)?;
+        settings
+            .staged
+            .replace(candidate.clone())
+            .map_err(|error| error.to_string())?;
+        settings.profile = candidate;
+        settings.page = SettingsPage::Root;
+        Ok(AppAction::Redraw)
     }
 }
 
@@ -942,7 +996,10 @@ fn settings_auth_options(profile: &ProviderProfile) -> Vec<String> {
 
 fn settings_choices(settings: &SettingsState) -> Vec<SettingsChoice> {
     match settings.page {
-        SettingsPage::Root | SettingsPage::BaseUrl | SettingsPage::Status => Vec::new(),
+        SettingsPage::Root
+        | SettingsPage::BaseUrl
+        | SettingsPage::Status
+        | SettingsPage::Review => Vec::new(),
         SettingsPage::Profile => settings
             .profiles
             .iter()
@@ -1220,9 +1277,11 @@ mod settings_tests {
     }
 
     #[test]
-    fn provider_route_change_records_tui_origin_and_next_session_timing() {
+    fn provider_route_change_stages_then_records_tui_origin_and_next_session_timing_on_apply() {
         let directory = tempfile::tempdir().expect("tempdir");
         let catalog = catalog_at(directory.path());
+        let revision = catalog.revision().expect("revision");
+        let original = catalog.snapshot().expect("snapshot").profile;
         let mut modal = ModelModal::new_settings_with_catalog(None, None, false, catalog.clone())
             .expect("settings");
         modal.settings_move_root(1);
@@ -1235,7 +1294,25 @@ mod settings_tests {
         assert_eq!(
             modal
                 .settings_commit_current(directory.path())
-                .expect("provider change"),
+                .expect("stage provider change"),
+            AppAction::Redraw
+        );
+
+        assert_eq!(catalog.revision().expect("revision"), revision);
+        assert_eq!(catalog.snapshot().expect("snapshot").profile, original);
+        assert!(
+            modal
+                .settings_review_lines()
+                .iter()
+                .any(|line| line.starts_with("provider:"))
+        );
+
+        modal.settings_move_root(7);
+        modal.settings_open_selected();
+        assert_eq!(
+            modal
+                .settings_commit_current(directory.path())
+                .expect("apply staged provider change"),
             AppAction::Redraw
         );
 

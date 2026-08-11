@@ -1,19 +1,16 @@
 use medusa_config::{
     ConfigurationApplyTiming, ConfigurationChangeOrigin, ProviderProfileCatalog,
-    ProviderProfileSummary,
+    ProviderProfileSection, ProviderProfileSummary,
 };
 use medusa_core::{ErrorCategory, ErrorCode, MedusaError, MedusaResult};
 
 pub(crate) fn set(key: &str, value: &str) -> MedusaResult<()> {
     let catalog = ProviderProfileCatalog::user()?;
-    let snapshot = catalog.snapshot()?;
-    let mut profile = snapshot.profile;
-    profile.set_value(key, value)?;
-    let change = catalog.save_active_profile(
-        &profile,
-        snapshot.revision,
+    let mut staged = catalog.stage_active_profile()?;
+    staged.set(key, value)?;
+    let change = staged.commit(
+        &catalog,
         ConfigurationChangeOrigin::Cli,
-        [key.to_owned()],
         ConfigurationApplyTiming::NextSession,
     )?;
     println!(
@@ -25,19 +22,74 @@ pub(crate) fn set(key: &str, value: &str) -> MedusaResult<()> {
 
 pub(crate) fn unset(key: &str) -> MedusaResult<()> {
     let catalog = ProviderProfileCatalog::user()?;
-    let snapshot = catalog.snapshot()?;
-    let mut profile = snapshot.profile;
-    profile.unset_value(key)?;
-    let change = catalog.save_active_profile(
-        &profile,
-        snapshot.revision,
+    let mut staged = catalog.stage_active_profile()?;
+    staged.unset(key)?;
+    let change = staged.commit(
+        &catalog,
         ConfigurationChangeOrigin::Cli,
-        [key.to_owned()],
         ConfigurationApplyTiming::NextSession,
     )?;
     println!(
         "Reset `{key}` to its default in provider profile `{}` at revision {}.",
         change.active_profile, change.revision
+    );
+    Ok(())
+}
+
+pub(crate) fn reset_section(section: &str) -> MedusaResult<()> {
+    let catalog = ProviderProfileCatalog::user()?;
+    let mut staged = catalog.stage_active_profile()?;
+    let section = match section {
+        "connection" => ProviderProfileSection::Connection,
+        "preferences" => ProviderProfileSection::Preferences,
+        _ => return Err(cli_error("section must be `connection` or `preferences`")),
+    };
+    staged.reset_section(section)?;
+    let review = staged.render_diff();
+    if review.is_empty() {
+        println!("Configuration section is already at defaults.");
+        return Ok(());
+    }
+    println!("Configuration changes:\n{review}");
+    let change = staged.commit(
+        &catalog,
+        ConfigurationChangeOrigin::Cli,
+        ConfigurationApplyTiming::NextSession,
+    )?;
+    println!("Reset section `{section:?}` at revision {}.", change.revision);
+    Ok(())
+}
+
+pub(crate) fn history(json: bool) -> MedusaResult<()> {
+    let history = ProviderProfileCatalog::user()?.active_profile_history()?;
+    if json {
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&history).map_err(|error| cli_error(error.to_string()))?
+        );
+    } else if history.is_empty() {
+        println!("No previous known-good provider profiles are retained.");
+    } else {
+        for entry in history {
+            println!(
+                "revision {} · {} · {} / {}",
+                entry.revision, entry.active_profile, entry.profile.provider, entry.profile.model
+            );
+        }
+    }
+    Ok(())
+}
+
+pub(crate) fn rollback() -> MedusaResult<()> {
+    let catalog = ProviderProfileCatalog::user()?;
+    let revision = catalog.revision()?;
+    let change = catalog.restore_previous_active_profile(
+        revision,
+        ConfigurationChangeOrigin::Cli,
+    )?;
+    println!(
+        "Restored previous known-good provider profile at revision {}.",
+        change.revision
     );
     Ok(())
 }
