@@ -180,7 +180,8 @@ impl StagedProviderProfile {
         let current = catalog.snapshot()?;
         let expected_revision = if current.revision == self.base_revision {
             self.base_revision
-        } else if current.active_profile == self.active_profile && current.profile == self.original {
+        } else if current.active_profile == self.active_profile && current.profile == self.original
+        {
             current.revision
         } else {
             return Err(config_error(format!(
@@ -577,7 +578,10 @@ mod tests {
             )
             .expect("rebased commit");
         assert_eq!(change.revision, 2);
-        assert_eq!(catalog.snapshot().expect("snapshot").profile.model, "second");
+        assert_eq!(
+            catalog.snapshot().expect("snapshot").profile.model,
+            "second"
+        );
     }
 
     #[test]
