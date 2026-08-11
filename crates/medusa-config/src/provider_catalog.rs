@@ -212,7 +212,9 @@ pub fn provider_ids_with_current(current_provider: &str) -> Vec<String> {
         .map(|provider| (*provider).to_owned())
         .collect::<Vec<_>>();
     if !current_provider.trim().is_empty()
-        && !providers.iter().any(|provider| provider == current_provider)
+        && !providers
+            .iter()
+            .any(|provider| provider == current_provider)
     {
         providers.insert(0, current_provider.to_owned());
     }
@@ -245,8 +247,9 @@ pub fn provider_model_options(
         }
         push(entry.default_model);
     }
+    drop(push);
     if models.is_empty() {
-        push("custom-model");
+        models.push("custom-model".to_owned());
     }
     models
 }
@@ -302,7 +305,13 @@ mod tests {
         );
         assert_eq!(options[0], "custom-current");
         assert!(options.contains(&"gpt-live".to_owned()));
-        assert_eq!(options.iter().filter(|model| *model == "custom-current").count(), 1);
+        assert_eq!(
+            options
+                .iter()
+                .filter(|model| *model == "custom-current")
+                .count(),
+            1
+        );
     }
 
     #[test]
