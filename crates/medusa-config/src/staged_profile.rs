@@ -176,9 +176,22 @@ impl StagedProviderProfile {
         if changed_keys.is_empty() {
             return Err(config_error("staged configuration has no changes to apply"));
         }
+
+        let current = catalog.snapshot()?;
+        let expected_revision = if current.revision == self.base_revision {
+            self.base_revision
+        } else if current.active_profile == self.active_profile && current.profile == self.original {
+            current.revision
+        } else {
+            return Err(config_error(format!(
+                "stale configuration revision {}; current revision is {}; reload configuration and retry",
+                self.base_revision, current.revision
+            )));
+        };
+
         catalog.save_active_profile(
             &self.candidate,
-            self.base_revision,
+            expected_revision,
             origin,
             changed_keys,
             apply_timing,
@@ -531,6 +544,40 @@ mod tests {
         let encoded = toml::to_string(&history[0]).expect("history encode");
         assert!(!encoded.to_ascii_lowercase().contains("token"));
         assert!(!encoded.to_ascii_lowercase().contains("api_key"));
+    }
+
+    #[test]
+    fn staged_commit_rebases_revision_only_changes_without_losing_candidate_edits() {
+        let directory = tempfile::tempdir().expect("tempdir");
+        let catalog = ProviderProfileCatalog::at(directory.path());
+        catalog
+            .active_store()
+            .expect("store")
+            .save(&configured_profile("first"))
+            .expect("seed");
+
+        let mut staged = catalog.stage_active_profile().expect("stage");
+        staged.set("model", "second").expect("set");
+        let snapshot = catalog.snapshot().expect("snapshot");
+        catalog
+            .save_active_profile(
+                &snapshot.profile,
+                snapshot.revision,
+                ConfigurationChangeOrigin::Tui,
+                ["configured".to_owned()],
+                ConfigurationApplyTiming::NextSession,
+            )
+            .expect("revision-only change");
+
+        let change = staged
+            .commit(
+                &catalog,
+                ConfigurationChangeOrigin::Tui,
+                ConfigurationApplyTiming::NextSession,
+            )
+            .expect("rebased commit");
+        assert_eq!(change.revision, 2);
+        assert_eq!(catalog.snapshot().expect("snapshot").profile.model, "second");
     }
 
     #[test]
