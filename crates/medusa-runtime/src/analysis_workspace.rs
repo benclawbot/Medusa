@@ -11,6 +11,9 @@ use std::{
     fs::{self, File},
     io::{Read, Write},
     path::{Path, PathBuf},
+    sync::atomic::Ordering,
+    thread,
+    time::{Duration, Instant},
 };
 
 use serde::{Deserialize, Serialize};
@@ -25,6 +28,8 @@ const MAX_TEXT_VALUE_BYTES: usize = 32 * 1024;
 const MAX_RESULT_TEXT_BYTES: usize = 16 * 1024;
 const MAX_SAMPLE_LINES: usize = 128;
 const MAX_DELEGATION_MESSAGE_BYTES: usize = 4 * 1024;
+const DELEGATION_AWAIT_POLL_INTERVAL: Duration = Duration::from_millis(25);
+const DELEGATION_AWAIT_TIMEOUT: Duration = Duration::from_secs(120);
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
@@ -423,13 +428,34 @@ impl RuntimeController {
                     .map_err(RuntimeError::agent)?
             }
             AnalysisDelegationKind::AwaitTerminal { worker_id } => {
-                let snapshot = self.team_control.snapshot();
-                if !snapshot.workers.iter().any(|worker| worker.worker_id == *worker_id) {
-                    return Err(RuntimeError::InvalidCommand(format!(
-                        "unknown team worker `{worker_id}`"
-                    )));
+                let started = Instant::now();
+                loop {
+                    if self.cancel.load(Ordering::SeqCst) {
+                        return Err(RuntimeError::InvalidCommand(format!(
+                            "awaiting team worker `{worker_id}` was cancelled"
+                        )));
+                    }
+                    let snapshot = self.team_control.snapshot();
+                    let lifecycle = snapshot
+                        .workers
+                        .iter()
+                        .find(|worker| worker.worker_id == *worker_id)
+                        .map(|worker| worker.lifecycle)
+                        .ok_or_else(|| {
+                            RuntimeError::InvalidCommand(format!(
+                                "unknown team worker `{worker_id}`"
+                            ))
+                        })?;
+                    if lifecycle.is_terminal() {
+                        break snapshot;
+                    }
+                    if started.elapsed() >= DELEGATION_AWAIT_TIMEOUT {
+                        return Err(RuntimeError::InvalidCommand(format!(
+                            "timed out waiting for team worker `{worker_id}` to reach a terminal state"
+                        )));
+                    }
+                    thread::sleep(DELEGATION_AWAIT_POLL_INTERVAL);
                 }
-                snapshot
             }
         };
         Ok(AnalysisDelegationReceipt {
@@ -601,7 +627,7 @@ fn sha256_hex(bytes: &[u8]) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::Config;
+    use crate::{Config, TeamWorkerRegistration};
     use tempfile::TempDir;
 
     fn controller() -> (TempDir, RuntimeController) {
@@ -719,5 +745,61 @@ mod tests {
                 message: "do work".to_owned(),
             })
             .is_err());
+    }
+
+    #[test]
+    fn await_terminal_waits_for_terminal_worker_state() {
+        let (_temp, controller) = controller();
+        controller.team_control.begin(
+            "execution-a",
+            [TeamWorkerRegistration {
+                worker_id: "worker-a".to_owned(),
+                role: "analyzer".to_owned(),
+                task_id: "analyze".to_owned(),
+            }],
+        );
+        controller
+            .team_control
+            .start("worker-a", Some("session-a"), "running")
+            .expect("start");
+        let control = controller.team_control.clone();
+        let completion = thread::spawn(move || {
+            thread::sleep(Duration::from_millis(50));
+            control.complete("worker-a", "done").expect("complete");
+        });
+
+        let receipt = controller
+            .analysis_delegate(AnalysisDelegationKind::AwaitTerminal {
+                worker_id: "worker-a".to_owned(),
+            })
+            .expect("await terminal");
+        completion.join().expect("completion thread");
+        let worker = receipt
+            .team
+            .workers
+            .iter()
+            .find(|worker| worker.worker_id == "worker-a")
+            .expect("worker snapshot");
+        assert!(worker.lifecycle.is_terminal());
+    }
+
+    #[test]
+    fn await_terminal_honors_runtime_cancellation() {
+        let (_temp, controller) = controller();
+        controller.team_control.begin(
+            "execution-a",
+            [TeamWorkerRegistration {
+                worker_id: "worker-a".to_owned(),
+                role: "analyzer".to_owned(),
+                task_id: "analyze".to_owned(),
+            }],
+        );
+        controller.cancel.store(true, Ordering::SeqCst);
+        let error = controller
+            .analysis_delegate(AnalysisDelegationKind::AwaitTerminal {
+                worker_id: "worker-a".to_owned(),
+            })
+            .expect_err("cancelled await must fail");
+        assert!(error.to_string().contains("cancelled"));
     }
 }
