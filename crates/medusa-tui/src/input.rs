@@ -118,6 +118,132 @@ impl ComposerState {
     }
 }
 
+/// Reusable keyboard-first selection state shared by terminal menus and modal pickers.
+///
+/// The state keeps selection, search text, and scroll position independent from rendering so
+/// callers can preserve a highlighted parent row while navigating nested screens.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct SelectionState {
+    selected: usize,
+    search: String,
+    scroll: usize,
+}
+
+impl Default for SelectionState {
+    fn default() -> Self {
+        Self::new(0)
+    }
+}
+
+impl SelectionState {
+    #[must_use]
+    pub const fn new(selected: usize) -> Self {
+        Self {
+            selected,
+            search: String::new(),
+            scroll: 0,
+        }
+    }
+
+    #[must_use]
+    pub const fn selected(&self) -> usize {
+        self.selected
+    }
+
+    pub fn set_selected(&mut self, selected: usize, count: usize) {
+        self.selected = if count == 0 {
+            0
+        } else {
+            selected.min(count.saturating_sub(1))
+        };
+    }
+
+    pub fn move_by(&mut self, count: usize, delta: isize) {
+        self.move_by_with(count, delta, |_| true);
+    }
+
+    pub fn move_by_with(
+        &mut self,
+        count: usize,
+        delta: isize,
+        mut enabled: impl FnMut(usize) -> bool,
+    ) {
+        if count == 0 || delta == 0 || !(0..count).any(&mut enabled) {
+            return;
+        }
+        let direction = delta.signum();
+        let mut candidate = self.selected.min(count.saturating_sub(1));
+        for _ in 0..count {
+            candidate = (candidate as isize + direction).rem_euclid(count as isize) as usize;
+            if enabled(candidate) {
+                self.selected = candidate;
+                return;
+            }
+        }
+    }
+
+    #[must_use]
+    pub fn search(&self) -> &str {
+        &self.search
+    }
+
+    pub fn push_search(&mut self, character: char) {
+        self.search.push(character);
+        self.scroll = 0;
+    }
+
+    pub fn pop_search(&mut self) {
+        self.search.pop();
+        self.scroll = 0;
+    }
+
+    pub fn clear_search(&mut self) {
+        self.search.clear();
+        self.scroll = 0;
+    }
+
+    #[must_use]
+    pub fn filtered_indices<T: AsRef<str>>(&self, labels: &[T]) -> Vec<usize> {
+        let query = self.search.trim().to_lowercase();
+        labels
+            .iter()
+            .enumerate()
+            .filter_map(|(index, label)| {
+                (query.is_empty() || label.as_ref().to_lowercase().contains(&query)).then_some(index)
+            })
+            .collect()
+    }
+
+    pub fn ensure_visible(&mut self, ordered_indices: &[usize], visible_rows: usize) {
+        if ordered_indices.is_empty() || visible_rows == 0 {
+            self.scroll = 0;
+            return;
+        }
+        let position = ordered_indices
+            .iter()
+            .position(|index| *index == self.selected)
+            .unwrap_or(0);
+        if position < self.scroll {
+            self.scroll = position;
+        } else if position >= self.scroll.saturating_add(visible_rows) {
+            self.scroll = position.saturating_add(1).saturating_sub(visible_rows);
+        }
+        self.scroll = self
+            .scroll
+            .min(ordered_indices.len().saturating_sub(visible_rows.min(ordered_indices.len())));
+    }
+
+    #[must_use]
+    pub fn visible_indices(&self, ordered_indices: &[usize], visible_rows: usize) -> Vec<usize> {
+        ordered_indices
+            .iter()
+            .skip(self.scroll)
+            .take(visible_rows)
+            .copied()
+            .collect()
+    }
+}
+
 /// Runs a compact keyboard-first terminal picker.
 ///
 /// The caller must provide an interactive terminal. `None` means the user cancelled with Escape
@@ -137,20 +263,20 @@ pub fn select_menu(title: &str, choices: &[&str], initial: usize) -> io::Result<
     }
 
     let mut terminal = MenuTerminal::enter()?;
-    let mut selected = initial.min(choices.len() - 1);
+    let mut selection = SelectionState::new(initial.min(choices.len() - 1));
     loop {
-        terminal.render(title, choices, selected)?;
+        terminal.render(title, choices, selection.selected())?;
         let Event::Key(key) = event::read()? else {
             continue;
         };
         if key.kind == KeyEventKind::Release {
             continue;
         }
-        match menu_action(key, selected, choices.len()) {
-            MenuAction::Move(next) => selected = next,
+        match menu_action(key, selection.selected(), choices.len()) {
+            MenuAction::Move(next) => selection.set_selected(next, choices.len()),
             MenuAction::Select => {
-                terminal.complete(title, choices[selected])?;
-                return Ok(Some(selected));
+                terminal.complete(title, choices[selection.selected()])?;
+                return Ok(Some(selection.selected()));
             }
             MenuAction::Cancel => {
                 terminal.cancel(title)?;
@@ -535,5 +661,29 @@ mod tests {
             ),
             MenuAction::Cancel
         );
+    }
+
+    #[test]
+    fn selection_state_skips_disabled_rows_and_preserves_parent_selection() {
+        let mut state = SelectionState::new(1);
+        state.move_by_with(4, 1, |index| index != 2);
+        assert_eq!(state.selected(), 3);
+        state.move_by_with(4, -1, |index| index != 2);
+        assert_eq!(state.selected(), 1);
+    }
+
+    #[test]
+    fn selection_state_filters_and_scrolls_long_lists() {
+        let labels = ["alpha", "beta", "alphabet", "gamma"];
+        let mut state = SelectionState::new(2);
+        for character in "alp".chars() {
+            state.push_search(character);
+        }
+        let filtered = state.filtered_indices(&labels);
+        assert_eq!(filtered, vec![0, 2]);
+        state.ensure_visible(&filtered, 1);
+        assert_eq!(state.visible_indices(&filtered, 1), vec![2]);
+        state.clear_search();
+        assert!(state.search().is_empty());
     }
 }
