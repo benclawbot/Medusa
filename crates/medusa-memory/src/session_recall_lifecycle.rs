@@ -1,4 +1,4 @@
-use std::{fs, path::Path, time::Duration};
+use std::{path::Path, time::Duration};
 
 use medusa_core::{MedusaResult, SessionId};
 use rusqlite::{Connection, params};
@@ -23,7 +23,9 @@ pub fn delete_session_recall(root: impl AsRef<Path>, session_id: &str) -> Medusa
         return Ok(());
     }
     let connection = Connection::open(database).map_err(sql_error)?;
-    connection.busy_timeout(Duration::from_secs(30)).map_err(sql_error)?;
+    connection
+        .busy_timeout(Duration::from_secs(30))
+        .map_err(sql_error)?;
     connection
         .execute(
             "DELETE FROM session_recall WHERE session_id = ?1",
@@ -35,6 +37,8 @@ pub fn delete_session_recall(root: impl AsRef<Path>, session_id: &str) -> Medusa
 
 #[cfg(test)]
 mod tests {
+    use std::fs;
+
     use super::*;
     use crate::{SessionEvent, SessionRecallStore, SessionRecord, SessionSearchQuery};
 
