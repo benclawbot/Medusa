@@ -96,7 +96,10 @@ pub(super) fn authoritative_success(session: &AgentSession) -> bool {
         None => {
             let Some(sequence) = session.events.iter().rev().find_map(|event| {
                 (event.sequence <= completion_sequence
-                    && matches!(&event.payload, EventPayload::IntegrationReceiptRecorded { .. }))
+                    && matches!(
+                        &event.payload,
+                        EventPayload::IntegrationReceiptRecorded { .. }
+                    ))
                 .then_some(event.sequence)
             }) else {
                 return false;
