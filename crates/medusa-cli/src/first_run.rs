@@ -23,13 +23,27 @@ pub(crate) enum FirstRunDisposition {
 }
 
 pub(crate) fn ensure_first_run() -> MedusaResult<FirstRunDisposition> {
+    run_setup(true)
+}
+
+pub(crate) fn configure_interactive() -> MedusaResult<FirstRunDisposition> {
+    run_setup(false)
+}
+
+fn run_setup(skip_configured: bool) -> MedusaResult<FirstRunDisposition> {
     let catalog = ProviderProfileCatalog::user()?;
     let snapshot = catalog.snapshot()?;
-    if snapshot.profile.configured
-        || !std::io::stdin().is_terminal()
-        || !std::io::stdout().is_terminal()
-    {
+    if skip_configured && snapshot.profile.configured {
         return Ok(FirstRunDisposition::Continue);
+    }
+    if !io::stdin().is_terminal() || !io::stdout().is_terminal() {
+        return if skip_configured {
+            Ok(FirstRunDisposition::Continue)
+        } else {
+            Err(config_error(
+                "`medusa config init` requires an interactive terminal for native provider setup",
+            ))
+        };
     }
 
     let existing_profiles = catalog
@@ -50,7 +64,7 @@ pub(crate) fn ensure_first_run() -> MedusaResult<FirstRunDisposition> {
         },
         &mut host,
     )
-    .map_err(|error| config_error(format!("first-run terminal setup failed: {error}")))?;
+    .map_err(|error| config_error(format!("provider setup failed: {error}")))?;
 
     match outcome {
         FirstRunSetupOutcome::Cancelled => Ok(FirstRunDisposition::Cancelled),
