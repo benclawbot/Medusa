@@ -98,8 +98,10 @@ jobs:
         run: cargo test -p medusa-runtime --test analysis_workspace_containment --locked -- --nocapture
       - name: Test process-tree ownership
         run: cargo test -p medusa-process-containment process_tree --locked -- --nocapture
-      - name: Test analysis host and scheduler admission
-        run: cargo test -p medusa-agent analysis_host -p medusa-runtime analysis_tool --locked -- --nocapture
+      - name: Test analysis host contract
+        run: cargo test -p medusa-agent analysis_host --locked -- --nocapture
+      - name: Test runtime scheduler admission
+        run: cargo test -p medusa-runtime analysis_tool --locked -- --nocapture
       - name: Clippy
         run: cargo clippy -p medusa-process-containment -p medusa-agent -p medusa-runtime --locked --all-targets -- -D warnings
       - name: Commit verified source
