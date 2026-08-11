@@ -60,13 +60,15 @@ pub(super) fn policy_for(repo: &Path) -> MedusaResult<LearningAdmissionPolicy> {
 }
 
 pub(super) fn telemetry_allowed(repo: &Path) -> MedusaResult<bool> {
-    Ok(policy_for(repo)?.telemetry_enabled())
+    Ok(policy_for(repo).map_or(false, |policy| policy.telemetry_enabled()))
 }
 
-/// Positive learning is admitted only from a root task with a passing verification receipt that
-/// remains valid through the authoritative terminal completion. Production-created teammate
-/// objectives are explicitly non-root until #820 replaces this compatibility discriminator with
-/// the typed root-trajectory identity carried by the provenance graph.
+/// Positive learning is admitted only from a root task with authoritative verification that
+/// remains valid through terminal completion. Direct sessions carry a `VerificationCompleted`
+/// receipt. The coordinated mutation path currently records its successful independent
+/// verification, authorization, integration, and reconciliation as `IntegrationReceiptRecorded`;
+/// that canonical receipt is accepted until #820 gives every root trajectory a single typed
+/// verification identity. Production-created teammate objectives remain non-root.
 pub(super) fn authoritative_success(session: &AgentSession) -> bool {
     if !session.completed || delegated_worker_session(session) {
         return false;
@@ -78,7 +80,7 @@ pub(super) fn authoritative_success(session: &AgentSession) -> bool {
         return false;
     };
 
-    let Some((verification_sequence, passed)) = session.events.iter().rev().find_map(|event| {
+    let explicit_verification = session.events.iter().rev().find_map(|event| {
         if event.sequence > completion_sequence {
             return None;
         }
@@ -86,12 +88,22 @@ pub(super) fn authoritative_success(session: &AgentSession) -> bool {
             EventPayload::VerificationCompleted { passed, .. } => Some((event.sequence, *passed)),
             _ => None,
         }
-    }) else {
-        return false;
+    });
+
+    let verification_sequence = match explicit_verification {
+        Some((sequence, true)) => sequence,
+        Some((_, false)) => return false,
+        None => {
+            let Some(sequence) = session.events.iter().rev().find_map(|event| {
+                (event.sequence <= completion_sequence
+                    && matches!(&event.payload, EventPayload::IntegrationReceiptRecorded { .. }))
+                .then_some(event.sequence)
+            }) else {
+                return false;
+            };
+            sequence
+        }
     };
-    if !passed {
-        return false;
-    }
 
     !session.events.iter().any(|event| {
         event.sequence >= verification_sequence
@@ -350,7 +362,43 @@ mod tests {
     }
 
     #[test]
-    fn failed_verification_cannot_be_overridden_by_completion() {
+    fn coordinated_reconciled_parent_is_authoritative_without_legacy_verification_event() {
+        let repo = tempfile::tempdir().expect("repo");
+        let mut session = session(repo.path());
+        session.events.clear();
+        append_event(
+            &mut session,
+            Actor::Coordinator,
+            EventPayload::WorkerEvidenceRecorded {
+                evidence: json!({"commit": "abc123", "reviewed": true}),
+            },
+        )
+        .expect("worker evidence");
+        append_event(
+            &mut session,
+            Actor::Coordinator,
+            EventPayload::IntegrationReceiptRecorded {
+                receipt: json!({
+                    "commit": "abc123",
+                    "independent_verification": "passed",
+                    "reconciled": true
+                }),
+            },
+        )
+        .expect("integration receipt");
+        append_event(
+            &mut session,
+            Actor::Coordinator,
+            EventPayload::SessionCompleted {
+                report_ref: "commit:abc123".to_owned(),
+            },
+        )
+        .expect("completion");
+        assert!(authoritative_success(&session));
+    }
+
+    #[test]
+    fn failed_verification_cannot_be_overridden_by_completion_or_integration() {
         let repo = tempfile::tempdir().expect("repo");
         let mut session = session(repo.path());
         session.events.clear();
@@ -366,12 +414,29 @@ mod tests {
         append_event(
             &mut session,
             Actor::Coordinator,
+            EventPayload::IntegrationReceiptRecorded {
+                receipt: json!({"commit": "fabricated"}),
+            },
+        )
+        .expect("integration");
+        append_event(
+            &mut session,
+            Actor::Coordinator,
             EventPayload::SessionCompleted {
                 report_ref: "fabricated-completion".to_owned(),
             },
         )
         .expect("completion");
         assert!(!authoritative_success(&session));
+    }
+
+    #[test]
+    fn corrupt_privacy_disables_optional_telemetry_without_error() {
+        let repo = tempfile::tempdir().expect("repo");
+        let root = repo.path().join(".medusa/learning-review");
+        fs::create_dir_all(&root).expect("privacy root");
+        fs::write(root.join("state.json"), b"not-json").expect("privacy state");
+        assert!(!telemetry_allowed(repo.path()).expect("optional telemetry decision"));
     }
 
     #[test]
