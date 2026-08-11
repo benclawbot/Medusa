@@ -1,0 +1,120 @@
+name: Resilience Certification
+
+on:
+  pull_request:
+    paths:
+      - 'crates/medusa-protocol/**'
+      - 'crates/medusa-testkit/**'
+      - 'crates/medusa-agent/src/journal.rs'
+      - 'crates/medusa-transaction-coordinator/**'
+      - 'crates/medusa-execution-checkpoint/**'
+      - 'crates/medusa-worker-leases/**'
+      - 'crates/medusa-process-registry/**'
+      - 'crates/medusa-time-travel/**'
+      - 'crates/medusa-session-continuity/**'
+      - '.github/workflows/resilience-certification.yml'
+      - 'docs/resilience-certification.md'
+  push:
+    branches: [main]
+    paths:
+      - 'crates/medusa-protocol/**'
+      - 'crates/medusa-testkit/**'
+      - 'crates/medusa-agent/src/journal.rs'
+      - 'crates/medusa-transaction-coordinator/**'
+      - 'crates/medusa-execution-checkpoint/**'
+      - 'crates/medusa-worker-leases/**'
+      - 'crates/medusa-process-registry/**'
+      - 'crates/medusa-time-travel/**'
+      - 'crates/medusa-session-continuity/**'
+      - '.github/workflows/resilience-certification.yml'
+      - 'docs/resilience-certification.md'
+  schedule:
+    - cron: '23 3 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  bounded-smoke:
+    name: Resilience smoke (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    env:
+      PROPTEST_CASES: '256'
+      PROPTEST_MAX_SHRINK_ITERS: '4096'
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: dtolnay/rust-toolchain@39b0b3842c7e8bbf6904c0bfc3d9006fdd4dc4e0 # 1.88.0
+      - name: Refresh merged dependency lock
+        run: cargo generate-lockfile
+      - name: Run deterministic resilience primitives
+        run: cargo test -p medusa-testkit --locked -- --nocapture
+      - name: Run protocol property and malformed-input certification
+        run: cargo test -p medusa-protocol --test resilience --locked -- --nocapture
+      - name: Run authority state-machine and recovery suites
+        run: >-
+          cargo test
+          -p medusa-transaction-coordinator
+          -p medusa-execution-checkpoint
+          -p medusa-worker-leases
+          -p medusa-process-registry
+          -p medusa-time-travel
+          -p medusa-session-continuity
+          --locked -- --nocapture
+      - name: Re-run canonical journal crash/recovery coverage
+        run: cargo test -p medusa-agent journal::tests --locked -- --nocapture
+      - name: Preserve minimized proptest reproducers
+        if: failure()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: resilience-repro-${{ matrix.os }}-${{ github.run_id }}
+          path: |
+            crates/**/proptest-regressions
+            crates/**/*.proptest-regressions
+          if-no-files-found: ignore
+          retention-days: 14
+
+  deep-campaign:
+    name: Deep resilience campaign (${{ matrix.os }})
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    env:
+      PROPTEST_CASES: '4096'
+      PROPTEST_MAX_SHRINK_ITERS: '32768'
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: dtolnay/rust-toolchain@39b0b3842c7e8bbf6904c0bfc3d9006fdd4dc4e0 # 1.88.0
+      - name: Refresh merged dependency lock
+        run: cargo generate-lockfile
+      - name: Run deep protocol and deterministic fault campaign
+        run: cargo test -p medusa-testkit -p medusa-protocol --locked -- --nocapture
+      - name: Run deep authority state-machine and recovery suites
+        run: >-
+          cargo test
+          -p medusa-transaction-coordinator
+          -p medusa-execution-checkpoint
+          -p medusa-worker-leases
+          -p medusa-process-registry
+          -p medusa-time-travel
+          -p medusa-session-continuity
+          --locked -- --nocapture
+      - name: Run journal recovery campaign
+        run: cargo test -p medusa-agent journal::tests --locked -- --nocapture
+      - name: Preserve minimized proptest reproducers
+        if: failure()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: resilience-deep-repro-${{ matrix.os }}-${{ github.run_id }}
+          path: |
+            crates/**/proptest-regressions
+            crates/**/*.proptest-regressions
+          if-no-files-found: ignore
+          retention-days: 30
