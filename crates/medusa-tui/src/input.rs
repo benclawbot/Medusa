@@ -162,12 +162,7 @@ impl SelectionState {
         self.move_by_with(count, delta, |_| true);
     }
 
-    pub fn move_by_with(
-        &mut self,
-        count: usize,
-        delta: isize,
-        enabled: impl FnMut(usize) -> bool,
-    ) {
+    pub fn move_by_with(&mut self, count: usize, delta: isize, enabled: impl FnMut(usize) -> bool) {
         let indices = (0..count).collect::<Vec<_>>();
         self.move_in_with(&indices, delta, enabled);
     }
