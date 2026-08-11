@@ -1,0 +1,62 @@
+name: issue803-ux-fix
+
+on:
+  push:
+    branches:
+      - agent/issue-803-staged-config
+    paths:
+      - .github/workflows/issue803-ux-fix.yml
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          fetch-depth: 0
+      - uses: dtolnay/rust-toolchain@39b0b3842c7e8bbf6904c0bfc3d9006fdd4dc4e0
+      - name: Reuse staged UX patch with renderer fix
+        shell: bash
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          source = Path('.github/workflows/issue803-ux.yml').read_text().splitlines()
+          start = next(i for i, line in enumerate(source) if line.strip() == 'run: |') + 1
+          block = []
+          for line in source[start:]:
+              if line.startswith('          '):
+                  block.append(line[10:])
+              elif not line.strip():
+                  block.append('')
+              else:
+                  break
+          script = '\n'.join(block) + '\n'
+          needle = "PY\ncargo fmt --all"
+          renderer_patch = r'''          replace(
+              'crates/medusa-tui/src/render.rs',
+              ''' + "'''" + r'''        app::SettingsPage::BaseUrl => "Base URL",\n        app::SettingsPage::Status => "Status",\n    };\n''' + "'''" + r''',
+              ''' + "'''" + r'''        app::SettingsPage::BaseUrl => "Base URL",\n        app::SettingsPage::Status => "Status",\n        app::SettingsPage::Review => "Review changes",\n    };\n''' + "'''" + r''',
+          )
+          marker = ''' + "'''" + r'''    if page == app::SettingsPage::BaseUrl {\n''' + "'''" + r'''
+          addition = ''' + "'''" + r'''    if page == app::SettingsPage::Review {\n        let review = modal.settings_review_lines();\n        if review.is_empty() {\n            lines.push(StyledLine::new("No staged changes.", Color::Grey));\n        } else {\n            lines.push(StyledLine::new("Pending non-secret changes:", Color::White));\n            for change in review {\n                lines.push(StyledLine::new(format!("  {change}"), Color::Grey));\n            }\n            lines.push(StyledLine::new(\n                "Enter applies all staged changes atomically · Esc returns without applying.",\n                Color::DarkGrey,\n            ));\n        }\n        return lines;\n    }\n''' + "'''" + r'''
+          p = Path('crates/medusa-tui/src/render.rs')
+          text = p.read_text()
+          if marker not in text:
+              raise SystemExit('missing review render insertion marker')
+          p.write_text(text.replace(marker, addition + marker, 1))
+'''
+          if needle not in script:
+              raise SystemExit('could not locate UX script heredoc boundary')
+          script = script.replace(needle, renderer_patch + '\nPY\ncargo fmt --all', 1)
+          script = script.replace(
+              'rm .github/workflows/issue803-ux.yml',
+              'rm .github/workflows/issue803-ux.yml .github/workflows/issue803-ux-fix.yml',
+              1,
+          )
+          Path('/tmp/issue803-ux.sh').write_text(script)
+          PY
+          bash /tmp/issue803-ux.sh
