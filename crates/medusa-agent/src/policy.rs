@@ -33,6 +33,8 @@ mod windows_sandbox;
 
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 const SHELL_COMMAND_TIMEOUT: Duration = Duration::from_secs(120);
+#[cfg(target_os = "macos")]
+const ANALYSIS_MEMORY_LIMIT_BYTES: u64 = 512 * 1024 * 1024;
 
 pub(crate) fn safe_path(repo: &Path, relative: &str) -> MedusaResult<PathBuf> {
     let path = Path::new(relative);
@@ -339,7 +341,8 @@ fn output_with_timeout(
             format!("{description} unavailable: {error}"),
         )
     })?;
-    let mut process_tracker = if root.to_string_lossy().contains("/analysis-workspace-v1/") {
+    let is_analysis_process = root.to_string_lossy().contains("/analysis-workspace-v1/");
+    let mut process_tracker = if is_analysis_process {
         Some(AnalysisProcessTracker::started(
             root,
             program,
@@ -382,6 +385,38 @@ fn output_with_timeout(
                 let _ = tracker.failed("analysis execution cancelled");
             }
             return Err(cancelled_command(description));
+        }
+        #[cfg(target_os = "macos")]
+        if is_analysis_process {
+            match tree.resident_memory_bytes() {
+                Ok(bytes) if bytes > ANALYSIS_MEMORY_LIMIT_BYTES => {
+                    let _ = tree.terminate();
+                    let _ = tree.wait();
+                    if let Some(tracker) = process_tracker.take() {
+                        let _ = tracker.failed("analysis execution exceeded memory limit");
+                    }
+                    return Err(MedusaError::new(
+                        ErrorCode::ToolExecutionFailed,
+                        ErrorCategory::Execution,
+                        format!(
+                            "{description} exceeded the {ANALYSIS_MEMORY_LIMIT_BYTES} byte analysis memory limit"
+                        ),
+                    ));
+                }
+                Ok(_) => {}
+                Err(error) => {
+                    let _ = tree.terminate();
+                    let _ = tree.wait();
+                    if let Some(tracker) = process_tracker.take() {
+                        let _ = tracker.failed("analysis memory accounting failed");
+                    }
+                    return Err(MedusaError::new(
+                        ErrorCode::ToolExecutionFailed,
+                        ErrorCategory::Execution,
+                        format!("{description} memory accounting failed closed: {error}"),
+                    ));
+                }
+            }
         }
         if let Some(status) = tree.try_wait()? {
             if let Some(tracker) = process_tracker.take() {

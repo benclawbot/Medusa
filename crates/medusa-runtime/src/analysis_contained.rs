@@ -35,7 +35,8 @@ import json, sys, time
 if sys.platform != "win32":
     import resource
     resource.setrlimit(resource.RLIMIT_CPU, (10, 10))
-    resource.setrlimit(resource.RLIMIT_AS, (536870912, 536870912))
+    if sys.platform != "darwin":
+        resource.setrlimit(resource.RLIMIT_AS, (536870912, 536870912))
     resource.setrlimit(resource.RLIMIT_FSIZE, (16777216, 16777216))
     if hasattr(resource, "RLIMIT_NPROC"):
         resource.setrlimit(resource.RLIMIT_NPROC, (1, 1))

@@ -117,6 +117,36 @@ impl OwnedProcessTree {
         self.child.id()
     }
 
+    /// Returns aggregate resident memory for the owned process group on macOS.
+    /// `ps` reports RSS in KiB; descendants inherit the dedicated PGID established at spawn.
+    #[cfg(target_os = "macos")]
+    pub fn resident_memory_bytes(&self) -> io::Result<u64> {
+        let output = Command::new("/bin/ps")
+            .args(["-axo", "pgid=,rss="])
+            .output()?;
+        if !output.status.success() {
+            return Err(io::Error::other(
+                "failed to inspect process-group resident memory",
+            ));
+        }
+        let listing = std::str::from_utf8(&output.stdout)
+            .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?;
+        let mut total_kib = 0_u64;
+        for line in listing.lines() {
+            let mut fields = line.split_whitespace();
+            let Some(group) = fields.next() else { continue };
+            let Some(rss) = fields.next() else { continue };
+            if group.parse::<i32>().ok() != Some(self.process_group) {
+                continue;
+            }
+            let rss_kib = rss
+                .parse::<u64>()
+                .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?;
+            total_kib = total_kib.saturating_add(rss_kib);
+        }
+        Ok(total_kib.saturating_mul(1024))
+    }
+
     /// Returns the native launch identity used to guard destructive process actions.
     #[cfg(any(unix, windows))]
     pub fn ownership_receipt(&self) -> &ProcessOwnershipReceipt {
