@@ -412,7 +412,7 @@ impl ModelModal {
         )
     }
 
-    fn new_settings_with_catalog(
+    pub(super) fn new_settings_with_catalog(
         model_label: Option<&str>,
         effort_label: Option<&str>,
         has_existing_key: bool,
@@ -689,7 +689,7 @@ impl ModelModal {
                 .unwrap_or(0),
             SettingsPage::Authentication => settings_auth_options(&settings.profile)
                 .iter()
-                .position(|value| *value == settings.profile.auth)
+                .position(|value| value == &settings.profile.auth)
                 .unwrap_or(0),
             SettingsPage::BaseUrl | SettingsPage::Status | SettingsPage::Root => 0,
         };
@@ -1059,4 +1059,128 @@ fn cycle_index(current: usize, length: usize, delta: isize) -> usize {
         return 0;
     }
     (current as isize + delta).rem_euclid(length as isize) as usize
+}
+
+#[cfg(test)]
+mod settings_tests {
+    use super::*;
+
+    fn catalog_at(root: &Path) -> ProviderProfileCatalog {
+        let catalog = ProviderProfileCatalog::at(root.join("config"));
+        catalog
+            .active_store()
+            .expect("active store")
+            .save(&ProviderProfile {
+                configured: true,
+                ..ProviderProfile::default()
+            })
+            .expect("save profile");
+        catalog
+    }
+
+    #[test]
+    fn settings_render_current_catalog_values_and_preserve_nested_selection() {
+        let directory = tempfile::tempdir().expect("tempdir");
+        let catalog = catalog_at(directory.path());
+        let mut modal = ModelModal::new_settings_with_catalog(
+            Some("minimax / MiniMax-M3"),
+            Some("effort:high"),
+            false,
+            catalog,
+        )
+        .expect("settings");
+
+        let rows = modal.settings_root_rows();
+        assert!(rows.contains(&("Profile".to_owned(), "default".to_owned())));
+        assert!(rows.contains(&("Provider".to_owned(), "minimax".to_owned())));
+        assert!(rows.contains(&("Model".to_owned(), "MiniMax-M3".to_owned())));
+        assert!(rows.contains(&("Speed".to_owned(), "balanced".to_owned())));
+        assert!(rows.contains(&("Reasoning".to_owned(), "medium".to_owned())));
+        assert!(rows.contains(&("Authentication".to_owned(), "api-key".to_owned())));
+
+        modal.settings_move_root(1);
+        assert_eq!(modal.settings_root_selected(), 1);
+        modal.settings_open_selected();
+        assert_eq!(modal.settings_page(), Some(SettingsPage::Provider));
+        modal.settings_back();
+        assert_eq!(modal.settings_page(), Some(SettingsPage::Root));
+        assert_eq!(modal.settings_root_selected(), 1);
+    }
+
+    #[test]
+    fn navigating_and_cancelling_settings_does_not_write_configuration() {
+        let directory = tempfile::tempdir().expect("tempdir");
+        let catalog = catalog_at(directory.path());
+        let revision = catalog.revision().expect("revision");
+        let mut modal = ModelModal::new_settings_with_catalog(None, None, false, catalog.clone())
+            .expect("settings");
+        modal.settings_move_root(2);
+        modal.settings_open_selected();
+        modal.settings_move_choice(1);
+        modal.settings_back();
+        assert_eq!(catalog.revision().expect("revision"), revision);
+    }
+
+    #[test]
+    fn stale_settings_revision_is_rejected_before_mutation() {
+        let directory = tempfile::tempdir().expect("tempdir");
+        let catalog = catalog_at(directory.path());
+        let snapshot = catalog.snapshot().expect("snapshot");
+        let mut modal = ModelModal::new_settings_with_catalog(None, None, false, catalog.clone())
+            .expect("settings");
+
+        let mut external = snapshot.profile;
+        external
+            .set_value("model", "MiniMax-M2.7")
+            .expect("external model");
+        catalog
+            .save_active_profile(
+                &external,
+                snapshot.revision,
+                ConfigurationChangeOrigin::Cli,
+                ["model".to_owned()],
+                ConfigurationApplyTiming::Immediate,
+            )
+            .expect("external save");
+
+        modal.settings_move_root(1);
+        modal.settings_open_selected();
+        let error = modal
+            .settings_commit_current(directory.path())
+            .expect_err("stale settings must fail");
+        assert!(error.contains("configuration changed since settings opened"));
+        assert_eq!(catalog.snapshot().expect("snapshot").profile, external);
+    }
+
+    #[test]
+    fn provider_route_change_records_tui_origin_and_next_session_timing() {
+        let directory = tempfile::tempdir().expect("tempdir");
+        let catalog = catalog_at(directory.path());
+        let mut modal = ModelModal::new_settings_with_catalog(None, None, false, catalog.clone())
+            .expect("settings");
+        modal.settings_move_root(1);
+        modal.settings_open_selected();
+        modal.settings_move_choice(1);
+        assert_eq!(
+            modal.settings_choices()[modal.settings_selected_choice()].label,
+            "anthropic"
+        );
+        assert_eq!(
+            modal
+                .settings_commit_current(directory.path())
+                .expect("provider change"),
+            AppAction::Redraw
+        );
+
+        let change = catalog
+            .last_change()
+            .expect("last change")
+            .expect("change");
+        assert_eq!(change.origin, ConfigurationChangeOrigin::Tui);
+        assert_eq!(change.apply_timing, ConfigurationApplyTiming::NextSession);
+        assert_eq!(
+            catalog.snapshot().expect("snapshot").profile.provider,
+            "anthropic"
+        );
+    }
 }
