@@ -1,4 +1,8 @@
-use std::{collections::BTreeSet, fs, path::PathBuf};
+use std::{
+    collections::BTreeSet,
+    fs,
+    path::{Component, PathBuf},
+};
 
 use medusa_core::MedusaResult;
 use serde::{Deserialize, Serialize};
@@ -223,7 +227,14 @@ impl MemoryEngine {
 }
 
 fn ensure_memory_path(root: &std::path::Path, path: &std::path::Path) -> MedusaResult<()> {
-    if !path.starts_with(root) || path == root {
+    let relative = path
+        .strip_prefix(root)
+        .map_err(|_| invalid("lifecycle journal path escapes the memory root"))?;
+    if relative.as_os_str().is_empty()
+        || relative
+            .components()
+            .any(|component| !matches!(component, Component::Normal(_)))
+    {
         return Err(invalid("lifecycle journal path escapes the memory root"));
     }
     Ok(())
@@ -304,5 +315,29 @@ mod tests {
                 .is_empty()
         );
         assert!(!engine.lifecycle_journal_path().exists());
+    }
+
+    #[test]
+    fn recovery_rejects_parent_directory_escape_without_deleting_outside_file() {
+        let directory = tempfile::tempdir().expect("tempdir");
+        let engine = MemoryEngine::new(directory.path()).expect("engine");
+        let outside = directory.path().join("outside.md");
+        std::fs::write(&outside, "must survive").expect("outside file");
+        let escaped = engine.root.join("..").join("..").join("outside.md");
+        let journal = LifecycleJournal::Delete(DeleteJournal {
+            paths: vec![escaped],
+        });
+        atomic_write(
+            &engine.lifecycle_journal_path(),
+            &serde_json::to_vec(&journal).expect("journal json"),
+        )
+        .expect("journal");
+
+        assert!(engine.recover_lifecycle_journal().is_err());
+        assert_eq!(
+            std::fs::read_to_string(&outside).expect("outside survives"),
+            "must survive"
+        );
+        assert!(engine.lifecycle_journal_path().exists());
     }
 }
