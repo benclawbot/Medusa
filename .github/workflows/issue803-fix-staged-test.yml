@@ -1,0 +1,39 @@
+name: issue803-fix-staged-test
+
+on:
+  push:
+    branches: [agent/issue-803-staged-config]
+    paths: [.github/workflows/issue803-fix-staged-test.yml]
+
+permissions:
+  contents: write
+
+jobs:
+  fix:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          fetch-depth: 0
+      - uses: dtolnay/rust-toolchain@39b0b3842c7e8bbf6904c0bfc3d9006fdd4dc4e0
+      - name: Update staged settings test
+        shell: bash
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          p = Path('crates/medusa-tui/src/app/models.rs')
+          text = p.read_text()
+          old = '''    #[test]\n    fn provider_route_change_records_tui_origin_and_next_session_timing() {\n        let directory = tempfile::tempdir().expect("tempdir");\n        let catalog = catalog_at(directory.path());\n        let mut modal = ModelModal::new_settings_with_catalog(None, None, false, catalog.clone())\n            .expect("settings");\n        modal.settings_move_root(1);\n        modal.settings_open_selected();\n        modal.settings_move_choice(1);\n        assert_eq!(\n            modal.settings_choices()[modal.settings_selected_choice()].label,\n            "anthropic"\n        );\n        assert_eq!(\n            modal\n                .settings_commit_current(directory.path())\n                .expect("provider change"),\n            AppAction::Redraw\n        );\n\n        let change = catalog\n            .last_change()\n            .expect("last change")\n            .expect("change");\n        assert_eq!(change.origin, ConfigurationChangeOrigin::Tui);\n        assert_eq!(change.apply_timing, ConfigurationApplyTiming::NextSession);\n        let profile = catalog.snapshot().expect("snapshot").profile;\n        assert_eq!(profile.provider, "anthropic");\n        assert!(profile.configured);\n        let effective = Config::load_layers_with_provider_profile(\n            &profile,\n            None,\n            None,\n            &BTreeMap::new(),\n            &BTreeMap::new(),\n        )\n        .expect("effective config");\n        assert_eq!(effective.model.provider, "anthropic");\n        assert_eq!(effective.model.name, "claude-sonnet-4-6");\n    }\n'''
+          new = '''    #[test]\n    fn provider_route_change_stages_then_records_tui_origin_and_next_session_timing_on_apply() {\n        let directory = tempfile::tempdir().expect("tempdir");\n        let catalog = catalog_at(directory.path());\n        let revision = catalog.revision().expect("revision");\n        let original = catalog.snapshot().expect("snapshot").profile;\n        let mut modal = ModelModal::new_settings_with_catalog(None, None, false, catalog.clone())\n            .expect("settings");\n        modal.settings_move_root(1);\n        modal.settings_open_selected();\n        modal.settings_move_choice(1);\n        assert_eq!(\n            modal.settings_choices()[modal.settings_selected_choice()].label,\n            "anthropic"\n        );\n        assert_eq!(\n            modal\n                .settings_commit_current(directory.path())\n                .expect("stage provider change"),\n            AppAction::Redraw\n        );\n\n        assert_eq!(catalog.revision().expect("revision"), revision);\n        assert_eq!(catalog.snapshot().expect("snapshot").profile, original);\n        assert!(\n            modal\n                .settings_review_lines()\n                .iter()\n                .any(|line| line.starts_with("provider:"))\n        );\n\n        modal.settings_move_root(7);\n        modal.settings_open_selected();\n        assert_eq!(\n            modal\n                .settings_commit_current(directory.path())\n                .expect("apply staged provider change"),\n            AppAction::Redraw\n        );\n\n        let change = catalog\n            .last_change()\n            .expect("last change")\n            .expect("change");\n        assert_eq!(change.origin, ConfigurationChangeOrigin::Tui);\n        assert_eq!(change.apply_timing, ConfigurationApplyTiming::NextSession);\n        let profile = catalog.snapshot().expect("snapshot").profile;\n        assert_eq!(profile.provider, "anthropic");\n        assert!(profile.configured);\n        let effective = Config::load_layers_with_provider_profile(\n            &profile,\n            None,\n            None,\n            &BTreeMap::new(),\n            &BTreeMap::new(),\n        )\n        .expect("effective config");\n        assert_eq!(effective.model.provider, "anthropic");\n        assert_eq!(effective.model.name, "claude-sonnet-4-6");\n    }\n'''
+          if old not in text:
+              raise SystemExit('stale settings test block not found')
+          p.write_text(text.replace(old, new, 1))
+          PY
+          cargo fmt --all -- --check
+          cargo test -p medusa-tui provider_route_change_stages_then_records_tui_origin_and_next_session_timing
+          rm .github/workflows/issue803-fix-staged-test.yml
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add -A
+          git commit -m 'Update staged settings test contract'
+          git push origin HEAD:agent/issue-803-staged-config
