@@ -5,7 +5,7 @@ use serde::Serialize;
 use serde_json::Value;
 use time::format_description::well_known::Rfc3339;
 
-use super::AgentSession;
+use super::{AgentSession, completed_learning};
 
 #[derive(Serialize)]
 struct RecallEvent {
@@ -27,7 +27,8 @@ struct RecallRecord {
 }
 
 pub(super) fn persist_completed_session(session: &AgentSession) -> MedusaResult<()> {
-    if !session.completed {
+    let policy = completed_learning::policy_for(&session.repo)?;
+    if !policy.capture_enabled() || !completed_learning::authoritative_success(session) {
         return Ok(());
     }
 
@@ -75,8 +76,8 @@ pub(super) fn persist_completed_session(session: &AgentSession) -> MedusaResult<
                 format!("cannot format session recall timestamp: {error}"),
             )
         })?,
-        repository_fingerprint: format!("path:{}", session.repo.to_string_lossy()),
-        outcome: "success".to_owned(),
+        repository_fingerprint: super::lessons::repository_fingerprint_for_recall(&session.repo),
+        outcome: "authoritatively_verified".to_owned(),
         events,
     };
 
@@ -93,10 +94,10 @@ fn find_string(value: &Value, keys: &[&str]) -> Option<String> {
     match value {
         Value::Object(map) => {
             for key in keys {
-                if let Some(Value::String(value)) = map.get(*key) {
-                    if !value.trim().is_empty() {
-                        return Some(value.clone());
-                    }
+                if let Some(Value::String(value)) = map.get(*key)
+                    && !value.trim().is_empty()
+                {
+                    return Some(value.clone());
                 }
             }
             map.values().find_map(|value| find_string(value, keys))
@@ -126,17 +127,18 @@ mod tests {
     use std::path::PathBuf;
 
     use medusa_core::SessionId;
+    use medusa_protocol::{Actor, EventPayload};
     use time::OffsetDateTime;
+
+    use crate::evidence::append_event;
 
     use super::*;
 
-    #[test]
-    fn completed_session_is_written_to_recall_inbox() {
-        let directory = tempfile::tempdir().expect("tempdir");
-        let session = AgentSession {
+    fn verified_session(directory: &std::path::Path) -> AgentSession {
+        let mut session = AgentSession {
             id: SessionId::new(),
             objective: "repair the update command".to_owned(),
-            repo: PathBuf::from(directory.path()),
+            repo: PathBuf::from(directory),
             created_at: OffsetDateTime::now_utc(),
             updated_at: OffsetDateTime::now_utc(),
             completed: true,
@@ -152,6 +154,30 @@ mod tests {
             rollback_receipts: Vec::new(),
             world_model: None,
         };
+        append_event(
+            &mut session,
+            Actor::System("test".to_owned()),
+            EventPayload::VerificationCompleted {
+                passed: true,
+                evidence: vec!["verified".to_owned()],
+            },
+        )
+        .expect("verification");
+        append_event(
+            &mut session,
+            Actor::Coordinator,
+            EventPayload::SessionCompleted {
+                report_ref: "report".to_owned(),
+            },
+        )
+        .expect("completion");
+        session
+    }
+
+    #[test]
+    fn completed_authoritative_session_is_written_to_recall_inbox() {
+        let directory = tempfile::tempdir().expect("tempdir");
+        let session = verified_session(directory.path());
 
         persist_completed_session(&session).expect("persist recall");
         let path = directory
@@ -161,6 +187,31 @@ mod tests {
         let value: Value = serde_json::from_slice(&fs::read(path).expect("inbox record"))
             .expect("valid recall record");
         assert_eq!(value["session_id"], session.id.to_string());
-        assert_eq!(value["events"][0]["text"], "repair the update command");
+        assert_eq!(value["outcome"], "authoritatively_verified");
+    }
+
+    #[test]
+    fn capture_disabled_leaves_no_recall_content() {
+        let directory = tempfile::tempdir().expect("tempdir");
+        let store = medusa_improvement::learning_review::LearningReviewStore::for_repository(
+            directory.path(),
+        );
+        store
+            .update_privacy(
+                medusa_improvement::learning_review::LearningPrivacy {
+                    capture_enabled: false,
+                    user_persistence_enabled: false,
+                    cross_repository_reuse_enabled: false,
+                    telemetry_enabled: false,
+                    automatic_proposals_enabled: false,
+                },
+                0,
+                "test",
+            )
+            .expect("privacy");
+        let mut session = verified_session(directory.path());
+        session.objective = "SEEDED_PRIVATE_CONTENT".to_owned();
+        persist_completed_session(&session).expect("privacy block");
+        assert!(!directory.path().join(".medusa/session-recall-inbox").exists());
     }
 }
