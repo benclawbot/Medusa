@@ -155,7 +155,7 @@ fn diagnose_store(
             "active profile has not been initialized"
         },
         (!exists).then_some(
-            "Press Enter to initialize the active non-secret profile through the revisioned catalog.",
+            "Run `medusa config init`; in /settings, press Enter on this check to initialize the active non-secret profile.",
         ),
         (!exists).then_some(ConfigDoctorRepair::InitializeProfile),
     );
@@ -196,7 +196,7 @@ fn diagnose_store(
                 ConfigDoctorStatus::ActionRequired,
                 "profile cannot be parsed or validated",
                 Some(
-                    "Use /settings to reset or correct the profile; destructive reset requires confirmation.",
+                    "Run `medusa config edit` to correct the profile or `medusa config reset` to reset it; the same operations are available from /settings.",
                 ),
                 None,
             );
@@ -217,8 +217,9 @@ fn diagnose_store(
         } else {
             "provider profile is not configured"
         },
-        (!profile.configured)
-            .then_some("Choose a provider, authentication route, and model in /settings."),
+        (!profile.configured).then_some(
+            "Run `medusa config init` or choose a provider, authentication route, and model in /settings.",
+        ),
         None,
     );
     let effective = Config::load_layers_with_provider_profile(
@@ -242,7 +243,9 @@ fn diagnose_store(
         } else {
             "resolved runtime configuration is invalid"
         },
-        (!effective).then_some("Review the reported setting in /settings before applying changes."),
+        (!effective).then_some(
+            "Run `medusa config validate` and correct the reported setting, or review it in /settings before applying changes.",
+        ),
         None,
     );
 
@@ -277,9 +280,9 @@ fn diagnose_endpoint(profile: &ProviderProfile, checks: &mut Vec<ConfigDoctorChe
         } else {
             "endpoint URL is invalid"
         },
-        parsed
-            .is_err()
-            .then_some("Set a valid http:// or https:// provider endpoint in /settings."),
+        parsed.is_err().then_some(
+            "Set a valid http:// or https:// provider endpoint with `medusa config edit` or in /settings.",
+        ),
         None,
     );
     let Some(address) = loopback_socket(base_url) else {
@@ -288,7 +291,7 @@ fn diagnose_endpoint(profile: &ProviderProfile, checks: &mut Vec<ConfigDoctorChe
     let reachable = TcpStream::connect_timeout(&address, Duration::from_millis(300)).is_ok();
     let remediation = match profile.connection.as_str() {
         "chatgpt-oauth" => {
-            "Use Sign in with browser from the provider/authentication settings, then refresh diagnostics."
+            "Run `npx openai-oauth@latest login` or use Sign in with browser in /settings, then refresh diagnostics."
         }
         "omniroute" => {
             "Start OmniRoute on the configured loopback endpoint, then refresh diagnostics."
@@ -452,6 +455,13 @@ mod tests {
             .expect("profile file check");
         assert_eq!(check.status, ConfigDoctorStatus::ActionRequired);
         assert_eq!(check.repair, Some(ConfigDoctorRepair::InitializeProfile));
+        assert!(
+            check
+                .remediation
+                .as_deref()
+                .expect("remediation")
+                .contains("medusa config init")
+        );
         repair_config_check(&catalog, check)
             .expect("repair")
             .expect("change");
