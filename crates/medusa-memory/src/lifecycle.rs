@@ -1,4 +1,4 @@
-use std::{fs, path::PathBuf};
+use std::{collections::BTreeSet, fs, path::PathBuf};
 
 use medusa_core::MedusaResult;
 use serde::{Deserialize, Serialize};
@@ -12,12 +12,24 @@ use crate::{
     },
 };
 
-#[derive(Debug, Deserialize, Serialize)]
+#[derive(Clone, Debug, Deserialize, Serialize)]
 struct SupersedeJournal {
     old_path: PathBuf,
     old_markdown: String,
     new_path: PathBuf,
     new_markdown: String,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+struct DeleteJournal {
+    paths: Vec<PathBuf>,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(untagged)]
+enum LifecycleJournal {
+    Supersede(SupersedeJournal),
+    Delete(DeleteJournal),
 }
 
 impl MemoryEngine {
@@ -68,27 +80,83 @@ impl MemoryEngine {
             new_path,
             new_markdown: new_document.to_markdown(),
         };
-        let encoded = serde_json::to_vec(&journal).map_err(|error| internal(error.to_string()))?;
+        let encoded = serde_json::to_vec(&LifecycleJournal::Supersede(journal.clone()))
+            .map_err(|error| internal(error.to_string()))?;
         atomic_write(&self.lifecycle_journal_path(), &encoded)?;
         self.apply_supersede_journal(&journal)?;
+        // Keep the journal until the rebuild is durable. A crash between Markdown mutation
+        // and index rebuild must replay the lifecycle operation instead of leaving stale hits.
+        self.rebuild_index()?;
+        durable_remove(&self.lifecycle_journal_path())
+    }
+
+    /// Deletes canonical memory and every compacted summary that derives from it.
+    ///
+    /// The operation is journaled before the first removal, is idempotent on recovery, and
+    /// rebuilds the disposable index before clearing its journal. This prevents a stale index
+    /// or derived summary from making deleted memory retrievable after a crash.
+    pub fn delete(&self, id: &str) -> MedusaResult<Vec<String>> {
+        let _lock = LifecycleLock::acquire(&self.root)?;
+        self.recover_lifecycle_journal()?;
+        let documents = self.documents()?;
+        if !documents.iter().any(|(_, document)| document.id == id) {
+            return Err(invalid(format!("memory document not found: {id}")));
+        }
+
+        let mut deleted = BTreeSet::from([id.to_owned()]);
+        loop {
+            let before = deleted.len();
+            for (_, document) in &documents {
+                if deleted.contains(&document.id) {
+                    continue;
+                }
+                if document.sources.iter().any(|source| {
+                    source
+                        .strip_prefix("memory://")
+                        .is_some_and(|source_id| deleted.contains(source_id))
+                }) {
+                    deleted.insert(document.id.clone());
+                }
+            }
+            if deleted.len() == before {
+                break;
+            }
+        }
+
+        let mut paths = documents
+            .iter()
+            .filter(|(_, document)| deleted.contains(&document.id))
+            .map(|(path, _)| path.clone())
+            .collect::<Vec<_>>();
+        paths.sort();
+        let journal = DeleteJournal { paths };
+        let encoded = serde_json::to_vec(&LifecycleJournal::Delete(journal.clone()))
+            .map_err(|error| internal(error.to_string()))?;
+        atomic_write(&self.lifecycle_journal_path(), &encoded)?;
+        self.apply_delete_journal(&journal)?;
+        self.rebuild_index()?;
         durable_remove(&self.lifecycle_journal_path())?;
-        self.rebuild_index()
+        Ok(deleted.into_iter().collect())
     }
 
     fn lifecycle_journal_path(&self) -> PathBuf {
         self.root.join("lifecycle-journal.json")
     }
 
-    fn recover_lifecycle_journal(&self) -> MedusaResult<()> {
+    pub(crate) fn recover_lifecycle_journal(&self) -> MedusaResult<()> {
         let path = self.lifecycle_journal_path();
         let raw = match fs::read(&path) {
             Ok(raw) => raw,
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
             Err(error) => return Err(error.into()),
         };
-        let journal = serde_json::from_slice::<SupersedeJournal>(&raw)
+        let journal = serde_json::from_slice::<LifecycleJournal>(&raw)
             .map_err(|error| internal(format!("invalid lifecycle recovery journal: {error}")))?;
-        self.apply_supersede_journal(&journal)?;
+        match &journal {
+            LifecycleJournal::Supersede(journal) => self.apply_supersede_journal(journal)?,
+            LifecycleJournal::Delete(journal) => self.apply_delete_journal(journal)?,
+        }
+        self.rebuild_index()?;
         durable_remove(&path)
     }
 
@@ -101,6 +169,16 @@ impl MemoryEngine {
             .map_err(|error| internal(format!("invalid new journal document: {error}")))?;
         atomic_write(&journal.old_path, journal.old_markdown.as_bytes())?;
         atomic_write(&journal.new_path, journal.new_markdown.as_bytes())
+    }
+
+    fn apply_delete_journal(&self, journal: &DeleteJournal) -> MedusaResult<()> {
+        for path in &journal.paths {
+            ensure_memory_path(&self.root, path)?;
+        }
+        for path in &journal.paths {
+            durable_remove(path)?;
+        }
+        Ok(())
     }
 
     /// Compacts selected active documents into a summary without deleting source memory.
@@ -149,4 +227,79 @@ fn ensure_memory_path(root: &std::path::Path, path: &std::path::Path) -> MedusaR
         return Err(invalid("lifecycle journal path escapes the memory root"));
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn proposal(title: &str, claim: &str) -> MemoryProposal {
+        MemoryProposal {
+            memory_type: "command".into(),
+            title: title.into(),
+            claim: claim.into(),
+            evidence: vec!["artifact://sessions/ses-delete/verification".into()],
+            confidence_milli: 950,
+            validation: Validation::TestVerified,
+            scope: Scope::Project,
+            project_id: Some("sha256:delete-test".into()),
+            session_id: Some("ses-delete".into()),
+            tags: vec!["lifecycle".into()],
+        }
+    }
+
+    #[test]
+    fn deletion_removes_source_dependent_summaries_and_index_hits() {
+        let directory = tempfile::tempdir().expect("tempdir");
+        let engine = MemoryEngine::new(directory.path()).expect("engine");
+        let first = engine
+            .commit_proposal(&proposal("Sensitive source", "Unique lifecycle deletion marker."))
+            .expect("first");
+        let second = engine
+            .commit_proposal(&proposal("Other source", "Independent retained memory."))
+            .expect("second");
+        let summary = engine
+            .compact(&[first.id.clone(), second.id.clone()], "Derived summary")
+            .expect("summary");
+
+        let deleted = engine.delete(&first.id).expect("delete");
+        assert!(deleted.contains(&first.id));
+        assert!(deleted.contains(&summary.id));
+        assert!(!deleted.contains(&second.id));
+        assert!(engine.read_by_id(&first.id).is_err());
+        assert!(engine.read_by_id(&summary.id).is_err());
+        assert!(engine.read_by_id(&second.id).is_ok());
+        assert!(
+            engine
+                .search("Unique lifecycle deletion marker", Scope::Project, 10)
+                .expect("search")
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn recovery_replays_delete_before_rebuilding_index() {
+        let directory = tempfile::tempdir().expect("tempdir");
+        let engine = MemoryEngine::new(directory.path()).expect("engine");
+        let document = engine
+            .commit_proposal(&proposal("Crash deletion", "Crash-safe deletion marker."))
+            .expect("document");
+        let (path, _) = engine.read_by_id(&document.id).expect("document path");
+        let journal = LifecycleJournal::Delete(DeleteJournal { paths: vec![path] });
+        atomic_write(
+            &engine.lifecycle_journal_path(),
+            &serde_json::to_vec(&journal).expect("journal json"),
+        )
+        .expect("journal");
+
+        engine.recover_lifecycle_journal().expect("recover");
+        assert!(engine.read_by_id(&document.id).is_err());
+        assert!(
+            engine
+                .search("Crash-safe deletion marker", Scope::Project, 10)
+                .expect("search")
+                .is_empty()
+        );
+        assert!(!engine.lifecycle_journal_path().exists());
+    }
 }
