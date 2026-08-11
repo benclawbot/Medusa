@@ -8,6 +8,7 @@ use serde::{Deserialize, Serialize};
 mod configuration_state;
 mod provider_profile;
 mod provider_profiles;
+mod staged_profile;
 
 pub use configuration_state::{
     ConfigurationApplyTiming, ConfigurationChangeOrigin, ConfigurationChanged,
@@ -18,6 +19,10 @@ pub use provider_profile::{
 };
 pub use provider_profiles::{
     ProviderProfileCatalog, ProviderProfileSnapshot, ProviderProfileSummary, ProviderProfileUpdate,
+};
+pub use staged_profile::{
+    ProviderProfileDiffEntry, ProviderProfileHistoryEntry, ProviderProfileSection,
+    StagedProviderProfile,
 };
 
 /// Current configuration schema version.

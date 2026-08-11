@@ -8,10 +8,9 @@ use medusa_core::{ErrorCategory, ErrorCode, MedusaError, MedusaResult};
 use serde::{Deserialize, Serialize};
 
 use super::{
-    PROVIDER_PROFILE_KEYS, ConfigurationApplyTiming, ConfigurationChangeOrigin,
-    ConfigurationChanged, ProviderProfile, ProviderProfileCatalog, ProviderProfileSnapshot,
-    ProviderProfileStore, ProviderProfileValue,
-    configuration_state::ConfigurationStateStore,
+    ConfigurationApplyTiming, ConfigurationChangeOrigin, ConfigurationChanged,
+    PROVIDER_PROFILE_KEYS, ProviderProfile, ProviderProfileCatalog, ProviderProfileSnapshot,
+    ProviderProfileStore, ProviderProfileValue, configuration_state::ConfigurationStateStore,
 };
 
 const HISTORY_SCHEMA_VERSION: u32 = 1;
@@ -332,13 +331,19 @@ pub(crate) fn reconcile_pending_transaction(root: &Path) -> MedusaResult<()> {
     finish_pending_transaction(root)
 }
 
-fn load_history(root: &Path, active_profile: &str) -> MedusaResult<Vec<ProviderProfileHistoryEntry>> {
+fn load_history(
+    root: &Path,
+    active_profile: &str,
+) -> MedusaResult<Vec<ProviderProfileHistoryEntry>> {
     let directory = history_directory(root, active_profile);
     let entries = match fs::read_dir(&directory) {
         Ok(entries) => entries,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
         Err(error) => {
-            return Err(store_error(format!("read {}: {error}", directory.display())));
+            return Err(store_error(format!(
+                "read {}: {error}",
+                directory.display()
+            )));
         }
     };
     let mut history = Vec::new();
@@ -537,8 +542,7 @@ mod tests {
         let after = configured_profile("after");
         store.save(&before).expect("seed");
 
-        begin_pending_transaction(root, 0, "default", true, &before, &after)
-            .expect("transaction");
+        begin_pending_transaction(root, 0, "default", true, &before, &after).expect("transaction");
         store.save(&after).expect("partial profile write");
         reconcile_pending_transaction(root).expect("recover");
         assert_eq!(store.load().expect("load"), before);
