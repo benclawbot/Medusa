@@ -80,6 +80,10 @@ jobs:
         run: cargo test -p medusa-execution-checkpoint -p medusa-time-travel -p medusa-session-continuity --locked -- --nocapture
       - name: Certify canonical journal lifecycle
         run: cargo test -p medusa-agent journal::tests --locked -- --nocapture
+      - name: Certify completed-session stale-route cleanup
+        run: cargo test -p medusa-agent session_disposition --locked -- --nocapture
+      - name: Certify runtime checkpoint and continuity disposition
+        run: cargo test -p medusa-runtime completed_session_disposition_removes_runtime_projections --locked -- --nocapture
 
   policy-lint:
     name: Lifecycle policy lint
