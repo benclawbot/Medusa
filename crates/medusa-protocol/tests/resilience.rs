@@ -1,8 +1,9 @@
-use medusa_protocol::{
-    Actor, EventEnvelope, EventPayload, ProtocolVersion, SessionAction, SessionActionDeliveryPolicy,
-    SessionActionKind, SessionActionLifecycle, SessionActionWakePolicy, CURRENT_PROTOCOL_VERSION,
-};
 use medusa_core::{CorrelationId, ErrorCode, SessionId};
+use medusa_protocol::{
+    Actor, CURRENT_PROTOCOL_VERSION, EventEnvelope, EventPayload, ProtocolVersion, SessionAction,
+    SessionActionDeliveryPolicy, SessionActionKind, SessionActionLifecycle,
+    SessionActionWakePolicy,
+};
 use proptest::prelude::*;
 use serde_json::json;
 use time::OffsetDateTime;
@@ -115,7 +116,11 @@ fn malformed_known_event_shapes_fail_closed() {
         major: CURRENT_PROTOCOL_VERSION.major.saturating_add(1),
         minor: 0,
     };
-    assert!(CURRENT_PROTOCOL_VERSION.ensure_compatible(incompatible).is_err());
+    assert!(
+        CURRENT_PROTOCOL_VERSION
+            .ensure_compatible(incompatible)
+            .is_err()
+    );
 }
 
 #[test]
