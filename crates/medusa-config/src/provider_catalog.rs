@@ -246,10 +246,10 @@ pub fn provider_model_options(
             push(model);
         }
         push(entry.default_model);
-    }
-    drop(push);
-    if models.is_empty() {
-        models.push("custom-model".to_owned());
+    } else if current_model.trim().is_empty()
+        && discovered.iter().all(|model| model.trim().is_empty())
+    {
+        push("custom-model");
     }
     models
 }
