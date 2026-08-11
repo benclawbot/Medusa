@@ -181,7 +181,10 @@ mod tests {
             FaultPoint::BeforeActionDelivery,
             FaultPoint::AfterActionDelivery,
         ];
-        let mut discriminators = points.map(FaultPoint::discriminator);
+        let mut discriminators: Vec<_> = points
+            .into_iter()
+            .map(FaultPoint::discriminator)
+            .collect();
         discriminators.sort_unstable();
         discriminators.dedup();
         assert_eq!(discriminators.len(), points.len());
