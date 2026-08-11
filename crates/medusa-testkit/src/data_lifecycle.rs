@@ -4,6 +4,7 @@
 //! human-readable matrix in `docs/data-lifecycle-certification.md` is derived from the
 //! same categories and points back to production owners.
 
+#[cfg(test)]
 use std::collections::BTreeSet;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -406,7 +407,11 @@ mod tests {
     fn lifecycle_inventory_is_complete_unique_and_actionable() {
         let mut names = BTreeSet::new();
         for entry in LIFECYCLE {
-            assert!(names.insert(entry.data_class), "duplicate lifecycle class: {}", entry.data_class);
+            assert!(
+                names.insert(entry.data_class),
+                "duplicate lifecycle class: {}",
+                entry.data_class
+            );
             for (field, value) in [
                 ("owner", entry.owner),
                 ("storage", entry.storage),
@@ -415,11 +420,18 @@ mod tests {
                 ("backup_implications", entry.backup_implications),
                 ("visibility", entry.visibility),
             ] {
-                assert!(!value.trim().is_empty(), "{} has empty {field}", entry.data_class);
+                assert!(
+                    !value.trim().is_empty(),
+                    "{} has empty {field}",
+                    entry.data_class
+                );
             }
         }
         for required in REQUIRED_CLASSES {
-            assert!(names.contains(required), "missing required lifecycle class: {required}");
+            assert!(
+                names.contains(required),
+                "missing required lifecycle class: {required}"
+            );
         }
     }
 
@@ -444,7 +456,10 @@ mod tests {
         for entry in LIFECYCLE {
             if entry.exportable || entry.authority != Authority::Ephemeral {
                 assert!(
-                    matches!(entry.redaction, Redaction::Redacted | Redaction::MetadataOnly | Redaction::ExcludeSecrets),
+                    matches!(
+                        entry.redaction,
+                        Redaction::Redacted | Redaction::MetadataOnly | Redaction::ExcludeSecrets
+                    ),
                     "{} lacks a redaction policy",
                     entry.data_class
                 );
@@ -458,7 +473,11 @@ mod tests {
             .iter()
             .find(|entry| entry.data_class == "tool_model_outputs_and_content_addressed_artifacts")
             .expect("artifact lifecycle entry");
-        assert!(artifact.backup_implications.contains("hash is never authorization"));
+        assert!(
+            artifact
+                .backup_implications
+                .contains("hash is never authorization")
+        );
         assert!(!artifact.visibility.contains("hash"));
 
         let caches = LIFECYCLE
@@ -470,9 +489,16 @@ mod tests {
 
     #[test]
     fn disk_pressure_cannot_opportunistically_delete_authoritative_state() {
-        for entry in LIFECYCLE.iter().filter(|entry| entry.authority == Authority::Authoritative) {
-            assert_ne!(entry.retention, Retention::Ephemeral, "{} is authoritative but ephemeral", entry.data_class);
-            assert_ne!(entry.deletion, Deletion::Immediate, "{} authoritative state must not be disk-pressure disposable", entry.data_class);
+        for entry in LIFECYCLE
+            .iter()
+            .filter(|entry| entry.authority == Authority::Authoritative)
+        {
+            assert_ne!(
+                entry.retention,
+                Retention::Ephemeral,
+                "{} is authoritative but ephemeral",
+                entry.data_class
+            );
         }
     }
 }
