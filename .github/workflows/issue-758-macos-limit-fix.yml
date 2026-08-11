@@ -1,0 +1,70 @@
+name: Issue 758 macOS limit fix
+
+on:
+  push:
+    branches:
+      - agent/issue-758-analysis-workspace
+
+permissions:
+  contents: write
+
+jobs:
+  integrate:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt,clippy
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Apply portable Unix resource limits
+        shell: python
+        run: |
+          from pathlib import Path
+          path = Path('crates/medusa-runtime/src/analysis_contained.rs')
+          text = path.read_text()
+          old = '''if sys.platform != "win32":
+              import resource
+              resource.setrlimit(resource.RLIMIT_CPU, (10, 10))
+              resource.setrlimit(resource.RLIMIT_AS, (536870912, 536870912))
+              resource.setrlimit(resource.RLIMIT_FSIZE, (16777216, 16777216))
+              if hasattr(resource, "RLIMIT_NPROC"):
+                  resource.setrlimit(resource.RLIMIT_NPROC, (1, 1))
+          '''
+          new = '''if sys.platform != "win32":
+              import resource
+              def tighten_limit(kind, requested):
+                  _soft, hard = resource.getrlimit(kind)
+                  target = requested if hard == resource.RLIM_INFINITY else min(requested, hard)
+                  resource.setrlimit(kind, (target, target))
+              tighten_limit(resource.RLIMIT_CPU, 10)
+              tighten_limit(resource.RLIMIT_AS, 536870912)
+              tighten_limit(resource.RLIMIT_FSIZE, 16777216)
+              if hasattr(resource, "RLIMIT_NPROC"):
+                  tighten_limit(resource.RLIMIT_NPROC, 1)
+          '''
+          if old not in text:
+              raise SystemExit('resource-limit block not found')
+          path.write_text(text.replace(old, new, 1))
+      - name: Format
+        run: cargo fmt --all -- --check
+      - name: Check
+        run: cargo check -p medusa-runtime -p medusa-agent -p medusa-process-containment --locked
+      - name: Test contained backend
+        run: cargo test -p medusa-runtime --test analysis_workspace_containment --locked -- --nocapture
+      - name: Clippy
+        run: cargo clippy -p medusa-runtime -p medusa-agent -p medusa-process-containment --locked --all-targets -- -D warnings
+      - name: Commit production fix
+        shell: bash
+        run: |
+          if ! git diff --quiet; then
+            git config user.name github-actions[bot]
+            git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+            git add crates/medusa-runtime/src/analysis_contained.rs
+            git commit -m "fix(containment): clamp Unix analysis limits to host ceilings"
+            git push
+          fi
