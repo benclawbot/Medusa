@@ -1,8 +1,9 @@
-use std::fs;
+use std::{fs, process::Command};
 
 use medusa_core::MedusaResult;
 use serde::Serialize;
 use serde_json::Value;
+use sha2::{Digest, Sha256};
 use time::format_description::well_known::Rfc3339;
 
 use super::{AgentSession, completed_learning};
@@ -22,6 +23,7 @@ struct RecallRecord {
     parent_session_id: Option<String>,
     created_at: String,
     repository_fingerprint: String,
+    repository_revision: Option<String>,
     outcome: String,
     events: Vec<RecallEvent>,
 }
@@ -76,7 +78,8 @@ pub(super) fn persist_completed_session(session: &AgentSession) -> MedusaResult<
                 format!("cannot format session recall timestamp: {error}"),
             )
         })?,
-        repository_fingerprint: super::lessons::repository_fingerprint_for_recall(&session.repo),
+        repository_fingerprint: repository_fingerprint(&session.repo),
+        repository_revision: git_output(&session.repo, &["rev-parse", "HEAD"]),
         outcome: "authoritatively_verified".to_owned(),
         events,
     };
@@ -88,6 +91,39 @@ pub(super) fn persist_completed_session(session: &AgentSession) -> MedusaResult<
     fs::write(&temporary, serde_json::to_vec_pretty(&record)?)?;
     fs::rename(temporary, path)?;
     Ok(())
+}
+
+fn repository_fingerprint(repo: &std::path::Path) -> String {
+    let identity = git_output(repo, &["remote", "get-url", "origin"])
+        .map(|origin| {
+            origin
+                .trim()
+                .trim_end_matches('/')
+                .trim_end_matches(".git")
+                .to_ascii_lowercase()
+        })
+        .or_else(|| {
+            git_output(repo, &["rev-list", "--max-parents=0", "HEAD"]).map(|roots| {
+                let mut roots = roots.lines().map(str::trim).collect::<Vec<_>>();
+                roots.sort_unstable();
+                format!("git-roots:{}", roots.join(","))
+            })
+        })
+        .unwrap_or_else(|| "unresolved-repository".to_owned());
+    hex::encode(Sha256::digest(identity.as_bytes()))
+}
+
+fn git_output(repo: &std::path::Path, arguments: &[&str]) -> Option<String> {
+    let output = Command::new("git")
+        .args(arguments)
+        .current_dir(repo)
+        .output()
+        .ok()?;
+    output
+        .status
+        .success()
+        .then(|| String::from_utf8_lossy(&output.stdout).trim().to_owned())
+        .filter(|value| !value.is_empty())
 }
 
 fn find_string(value: &Value, keys: &[&str]) -> Option<String> {
