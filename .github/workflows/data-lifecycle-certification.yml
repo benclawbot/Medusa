@@ -1,0 +1,93 @@
+name: Data Lifecycle Certification
+
+on:
+  pull_request:
+    paths:
+      - 'crates/medusa-agent/**'
+      - 'crates/medusa-config/**'
+      - 'crates/medusa-context/**'
+      - 'crates/medusa-context-retrieval/**'
+      - 'crates/medusa-evidence/**'
+      - 'crates/medusa-execution-checkpoint/**'
+      - 'crates/medusa-execution-replay/**'
+      - 'crates/medusa-improvement/**'
+      - 'crates/medusa-markdown-memory/**'
+      - 'crates/medusa-mcp-cache/**'
+      - 'crates/medusa-memory/**'
+      - 'crates/medusa-memory-consolidation/**'
+      - 'crates/medusa-memory-writeback/**'
+      - 'crates/medusa-openai-realtime/**'
+      - 'crates/medusa-prompt-cache/**'
+      - 'crates/medusa-protocol/**'
+      - 'crates/medusa-runtime/**'
+      - 'crates/medusa-session-continuity/**'
+      - 'crates/medusa-testkit/**'
+      - 'crates/medusa-time-travel/**'
+      - '.github/workflows/data-lifecycle-certification.yml'
+      - 'docs/data-lifecycle-certification.md'
+  push:
+    branches: [main]
+    paths:
+      - 'crates/medusa-agent/**'
+      - 'crates/medusa-config/**'
+      - 'crates/medusa-context/**'
+      - 'crates/medusa-context-retrieval/**'
+      - 'crates/medusa-evidence/**'
+      - 'crates/medusa-execution-checkpoint/**'
+      - 'crates/medusa-execution-replay/**'
+      - 'crates/medusa-improvement/**'
+      - 'crates/medusa-markdown-memory/**'
+      - 'crates/medusa-mcp-cache/**'
+      - 'crates/medusa-memory/**'
+      - 'crates/medusa-memory-consolidation/**'
+      - 'crates/medusa-memory-writeback/**'
+      - 'crates/medusa-openai-realtime/**'
+      - 'crates/medusa-prompt-cache/**'
+      - 'crates/medusa-protocol/**'
+      - 'crates/medusa-runtime/**'
+      - 'crates/medusa-session-continuity/**'
+      - 'crates/medusa-testkit/**'
+      - 'crates/medusa-time-travel/**'
+      - '.github/workflows/data-lifecycle-certification.yml'
+      - 'docs/data-lifecycle-certification.md'
+  schedule:
+    - cron: '41 3 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  lifecycle:
+    name: Lifecycle/privacy (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: dtolnay/rust-toolchain@39b0b3842c7e8bbf6904c0bfc3d9006fdd4dc4e0 # 1.88.0
+      - name: Refresh merged dependency lock
+        run: cargo generate-lockfile
+      - name: Validate lifecycle inventory
+        run: cargo test -p medusa-testkit data_lifecycle --locked -- --nocapture
+      - name: Certify content-addressed evidence semantics
+        run: cargo test -p medusa-evidence artifact::tests --locked -- --nocapture
+      - name: Certify memory authority and derived indexes
+        run: cargo test -p medusa-memory --locked -- --nocapture
+      - name: Certify checkpoint and time-travel recovery stores
+        run: cargo test -p medusa-execution-checkpoint -p medusa-time-travel -p medusa-session-continuity --locked -- --nocapture
+      - name: Certify canonical journal lifecycle
+        run: cargo test -p medusa-agent journal::tests --locked -- --nocapture
+
+  policy-lint:
+    name: Lifecycle policy lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: dtolnay/rust-toolchain@39b0b3842c7e8bbf6904c0bfc3d9006fdd4dc4e0 # 1.88.0
+      - name: Refresh merged dependency lock
+        run: cargo generate-lockfile
+      - name: Reject lifecycle warnings
+        run: cargo clippy -p medusa-testkit --all-targets --locked -- -D warnings
