@@ -4,6 +4,7 @@ use std::{
     process::Command,
 };
 
+mod first_run;
 mod oauth_preflight;
 mod report_command;
 mod skill_dependencies;
@@ -16,6 +17,10 @@ mod skills;
 mod legacy {
     pub(super) fn entry() {
         main();
+    }
+
+    pub(super) fn interactive_entry_requested() -> bool {
+        Cli::try_parse().is_ok_and(|cli| cli.command.is_none())
     }
 
     include!("main.rs");
@@ -77,6 +82,19 @@ fn main() {
     if let Some(recall_args) = subcommand_arguments(&args, "recall") {
         finish(run_recall(&recall_args), None::<&str>);
         return;
+    }
+    if legacy::interactive_entry_requested() {
+        match first_run::ensure_first_run() {
+            Ok(first_run::FirstRunDisposition::Continue) => {}
+            Ok(first_run::FirstRunDisposition::Cancelled) => return,
+            Err(error) => {
+                eprintln!(
+                    "{}",
+                    serde_json::to_string_pretty(&error).unwrap_or_else(|_| error.to_string())
+                );
+                std::process::exit(1);
+            }
+        }
     }
     legacy::entry();
 }
