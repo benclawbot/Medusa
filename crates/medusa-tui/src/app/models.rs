@@ -1,6 +1,7 @@
 use crate::{
     clipboard::PromptDraft,
     commands::{Effort, ModelConfiguration, SlashCommand},
+    input::SelectionState,
 };
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -112,7 +113,7 @@ struct QuestionAnswer {
 pub struct QuestionModal {
     questions: Vec<QuestionPrompt>,
     answers: Vec<QuestionAnswer>,
-    selected_options: Vec<usize>,
+    option_selections: Vec<SelectionState>,
     active_question: usize,
     reviewing: bool,
 }
@@ -123,7 +124,7 @@ impl QuestionModal {
         Self {
             questions,
             answers: vec![QuestionAnswer::default(); count],
-            selected_options: vec![0; count],
+            option_selections: vec![SelectionState::default(); count],
             active_question: 0,
             reviewing: false,
         }
@@ -151,9 +152,9 @@ impl QuestionModal {
 
     #[must_use]
     pub fn active_selected_option(&self) -> usize {
-        self.selected_options
+        self.option_selections
             .get(self.active_question)
-            .copied()
+            .map(SelectionState::selected)
             .unwrap_or_default()
     }
 
@@ -171,10 +172,8 @@ impl QuestionModal {
             .questions
             .get(active_question)
             .map_or(0, |prompt| prompt.options.len());
-        if let Some(selected) = self.selected_options.get_mut(active_question)
-            && option_count > 0
-        {
-            *selected = cycle_index(*selected, option_count, delta);
+        if let Some(selection) = self.option_selections.get_mut(active_question) {
+            selection.move_by(option_count, delta);
         }
     }
 
@@ -188,6 +187,19 @@ impl QuestionModal {
             return;
         }
         self.active_question = cycle_index(self.active_question, self.questions.len(), delta);
+    }
+
+    pub(super) fn back_one_question(&mut self) -> bool {
+        if self.reviewing {
+            self.reviewing = false;
+            self.active_question = self.questions.len().saturating_sub(1);
+            return true;
+        }
+        if self.active_question > 0 {
+            self.active_question -= 1;
+            return true;
+        }
+        false
     }
 
     pub(super) fn advance_or_review(&mut self) {
@@ -296,8 +308,8 @@ pub enum ModelModalFocus {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ModelModal {
-    provider_index: usize,
-    model_index: usize,
+    provider_selection: SelectionState,
+    model_selection: SelectionState,
     model_options: Vec<String>,
     effort: Effort,
     focus: ModelModalFocus,
@@ -335,8 +347,8 @@ impl ModelModal {
             .position(|candidate| candidate == current_model)
             .unwrap_or(0);
         Self {
-            provider_index,
-            model_index,
+            provider_selection: SelectionState::new(provider_index),
+            model_selection: SelectionState::new(model_index),
             model_options: models,
             effort: effort_from_label(effort_label),
             focus: ModelModalFocus::Model,
@@ -347,7 +359,7 @@ impl ModelModal {
 
     #[must_use]
     pub fn provider(&self) -> &str {
-        Self::PROVIDERS[self.provider_index]
+        Self::PROVIDERS[self.provider_selection.selected()]
     }
 
     #[must_use]
@@ -358,14 +370,14 @@ impl ModelModal {
     #[must_use]
     pub fn selected_model(&self) -> String {
         self.model_options
-            .get(self.model_index)
+            .get(self.model_selection.selected())
             .cloned()
             .unwrap_or_else(|| "MiniMax-M3".to_owned())
     }
 
     #[must_use]
     pub const fn selected_model_index(&self) -> usize {
-        self.model_index
+        self.model_selection.selected()
     }
 
     #[must_use]
@@ -413,7 +425,7 @@ impl ModelModal {
 
     pub(super) fn cycle_focus_back(&mut self) {
         self.focus = match self.focus {
-            ModelModalFocus::Provider => ModelModalFocus::Apply,
+            ModelModalFocus::Provider => ModelModalFocus::Provider,
             ModelModalFocus::Model => ModelModalFocus::Provider,
             ModelModalFocus::Effort => ModelModalFocus::Model,
             ModelModalFocus::ApiKey => ModelModalFocus::Effort,
@@ -428,13 +440,13 @@ impl ModelModal {
     pub(super) fn move_selection(&mut self, delta: isize) {
         match self.focus {
             ModelModalFocus::Provider => {
-                self.provider_index =
-                    cycle_index(self.provider_index, Self::PROVIDERS.len(), delta);
-                self.model_options = model_options_for(self.provider(), "");
-                self.model_index = 0;
+                self.provider_selection.move_by(Self::PROVIDERS.len(), delta);
+                let provider = Self::PROVIDERS[self.provider_selection.selected()];
+                self.model_options = model_options_for(provider, "");
+                self.model_selection.set_selected(0, self.model_options.len());
             }
             ModelModalFocus::Model => {
-                self.model_index = cycle_index(self.model_index, self.model_options.len(), delta);
+                self.model_selection.move_by(self.model_options.len(), delta);
             }
             ModelModalFocus::Effort => {
                 const EFFORTS: [Effort; 4] =
@@ -497,5 +509,8 @@ fn effort_from_label(label: Option<&str>) -> Effort {
 }
 
 fn cycle_index(current: usize, length: usize, delta: isize) -> usize {
+    if length == 0 {
+        return 0;
+    }
     (current as isize + delta).rem_euclid(length as isize) as usize
 }
