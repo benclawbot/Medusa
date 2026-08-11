@@ -266,7 +266,7 @@ mod tests {
         let first = engine
             .commit_proposal(&proposal(
                 "Sensitive source",
-                "Unique lifecycle deletion marker.",
+                "UniqueSourceDeletionMarker7F9C",
             ))
             .expect("first");
         let second = engine
@@ -285,7 +285,7 @@ mod tests {
         assert!(engine.read_by_id(&second.id).is_ok());
         assert!(
             engine
-                .search("Unique lifecycle deletion marker", Scope::Project, 10)
+                .search("UniqueSourceDeletionMarker7F9C", Scope::Project, 10)
                 .expect("search")
                 .is_empty()
         );
