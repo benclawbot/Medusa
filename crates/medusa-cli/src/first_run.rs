@@ -1,4 +1,8 @@
-use std::{collections::BTreeMap, io::IsTerminal};
+use std::{
+    collections::BTreeMap,
+    io::{self, IsTerminal},
+    process::{Child, Command, Stdio},
+};
 
 use medusa_config::{
     Config, ConfigurationApplyTiming, ConfigurationChangeOrigin, PROVIDER_PROFILE_KEYS,
@@ -6,8 +10,11 @@ use medusa_config::{
 };
 use medusa_core::{ErrorCategory, ErrorCode, MedusaError, MedusaResult};
 use medusa_tui::setup::{
-    ExistingProfileChoice, FirstRunSetupOutcome, FirstRunSetupRequest, run_first_run_setup,
+    BrowserOAuthSession, ExistingProfileChoice, FirstRunSetupHost, FirstRunSetupOutcome,
+    FirstRunSetupRequest, run_first_run_setup_with_host,
 };
+
+use crate::oauth_preflight;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum FirstRunDisposition {
@@ -16,13 +23,27 @@ pub(crate) enum FirstRunDisposition {
 }
 
 pub(crate) fn ensure_first_run() -> MedusaResult<FirstRunDisposition> {
+    run_setup(true)
+}
+
+pub(crate) fn configure_interactive() -> MedusaResult<FirstRunDisposition> {
+    run_setup(false)
+}
+
+fn run_setup(skip_configured: bool) -> MedusaResult<FirstRunDisposition> {
     let catalog = ProviderProfileCatalog::user()?;
     let snapshot = catalog.snapshot()?;
-    if snapshot.profile.configured
-        || !std::io::stdin().is_terminal()
-        || !std::io::stdout().is_terminal()
-    {
+    if skip_configured && snapshot.profile.configured {
         return Ok(FirstRunDisposition::Continue);
+    }
+    if !io::stdin().is_terminal() || !io::stdout().is_terminal() {
+        return if skip_configured {
+            Ok(FirstRunDisposition::Continue)
+        } else {
+            Err(config_error(
+                "`medusa config init` requires an interactive terminal for native provider setup",
+            ))
+        };
     }
 
     let existing_profiles = catalog
@@ -35,16 +56,21 @@ pub(crate) fn ensure_first_run() -> MedusaResult<FirstRunDisposition> {
             model: profile.model,
         })
         .collect();
-    let outcome = run_first_run_setup(FirstRunSetupRequest {
-        initial_profile: snapshot.profile,
-        existing_profiles,
-    })
-    .map_err(|error| config_error(format!("first-run terminal setup failed: {error}")))?;
+    let mut host = CliSetupHost;
+    let outcome = run_first_run_setup_with_host(
+        FirstRunSetupRequest {
+            initial_profile: snapshot.profile,
+            existing_profiles,
+        },
+        &mut host,
+    )
+    .map_err(|error| config_error(format!("provider setup failed: {error}")))?;
 
     match outcome {
         FirstRunSetupOutcome::Cancelled => Ok(FirstRunDisposition::Cancelled),
         FirstRunSetupOutcome::Configure(profile) => {
-            validate_candidate(&profile)?;
+            let config = validate_candidate(&profile)?;
+            oauth_preflight::run_if_needed(&config)?;
             catalog.save_active_profile(
                 &profile,
                 snapshot.revision,
@@ -61,7 +87,8 @@ pub(crate) fn ensure_first_run() -> MedusaResult<FirstRunDisposition> {
                     "provider profile `{name}` is not configured"
                 )));
             }
-            validate_candidate(&profile)?;
+            let config = validate_candidate(&profile)?;
+            oauth_preflight::run_if_needed(&config)?;
             catalog.use_profile_at_revision(
                 &name,
                 snapshot.revision,
@@ -72,7 +99,74 @@ pub(crate) fn ensure_first_run() -> MedusaResult<FirstRunDisposition> {
     }
 }
 
-fn validate_candidate(profile: &ProviderProfile) -> MedusaResult<()> {
+struct CliSetupHost;
+
+impl FirstRunSetupHost for CliSetupHost {
+    fn start_browser_oauth(
+        &mut self,
+        provider_id: &str,
+    ) -> Result<Box<dyn BrowserOAuthSession>, String> {
+        if provider_id != "openai-oauth" {
+            return Err(format!(
+                "provider `{provider_id}` does not expose a Medusa browser sign-in helper"
+            ));
+        }
+        let child = Command::new("npx")
+            .args([
+                "--yes",
+                "openai-oauth@latest",
+                "login",
+                "--open",
+                "--login-timeout-ms",
+                "300000",
+            ])
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .map_err(|error| {
+                format!(
+                    "could not launch browser sign-in with openai-oauth: {error}. Install Node.js and retry from Medusa"
+                )
+            })?;
+        Ok(Box::new(OpenAiOAuthLogin { child }))
+    }
+}
+
+struct OpenAiOAuthLogin {
+    child: Child,
+}
+
+impl BrowserOAuthSession for OpenAiOAuthLogin {
+    fn poll(&mut self) -> io::Result<Option<Result<Vec<String>, String>>> {
+        let Some(status) = self.child.try_wait()? else {
+            return Ok(None);
+        };
+        if !status.success() {
+            return Ok(Some(Err(format!(
+                "openai-oauth browser sign-in exited with {status}"
+            ))));
+        }
+        let result = oauth_preflight::discover_models()
+            .map_err(|error| format!("authenticated model discovery failed: {}", error.message));
+        Ok(Some(result))
+    }
+
+    fn cancel(&mut self) {
+        let _ = self.child.kill();
+        let _ = self.child.wait();
+    }
+}
+
+impl Drop for OpenAiOAuthLogin {
+    fn drop(&mut self) {
+        if self.child.try_wait().ok().flatten().is_none() {
+            self.cancel();
+        }
+    }
+}
+
+fn validate_candidate(profile: &ProviderProfile) -> MedusaResult<Config> {
     profile.validate()?;
     Config::load_layers_with_provider_profile(
         profile,
@@ -81,7 +175,6 @@ fn validate_candidate(profile: &ProviderProfile) -> MedusaResult<()> {
         &BTreeMap::new(),
         &BTreeMap::new(),
     )
-    .map(|_| ())
 }
 
 fn config_error(message: impl Into<String>) -> MedusaError {
@@ -113,5 +206,11 @@ mod tests {
             ..ProviderProfile::default()
         };
         assert!(validate_candidate(&profile).is_err());
+    }
+
+    #[test]
+    fn non_oauth_provider_is_rejected_by_browser_host() {
+        let mut host = CliSetupHost;
+        assert!(host.start_browser_oauth("minimax").is_err());
     }
 }

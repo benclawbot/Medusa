@@ -1,5 +1,6 @@
 use std::{
     env,
+    io::IsTerminal,
     path::{Path, PathBuf},
     process::Command,
 };
@@ -21,6 +22,18 @@ mod legacy {
 
     pub(super) fn interactive_entry_requested() -> bool {
         Cli::try_parse().is_ok_and(|cli| cli.command.is_none())
+    }
+
+    pub(super) fn config_init_requested() -> bool {
+        Cli::try_parse().is_ok_and(|cli| {
+            matches!(
+                cli.command,
+                Some(CommandKind::Config { action: None })
+                    | Some(CommandKind::Config {
+                        action: Some(ConfigAction::Init),
+                    })
+            )
+        })
     }
 
     include!("main.rs");
@@ -82,6 +95,26 @@ fn main() {
     if let Some(recall_args) = subcommand_arguments(&args, "recall") {
         finish(run_recall(&recall_args), None::<&str>);
         return;
+    }
+    if legacy::config_init_requested()
+        && std::io::stdin().is_terminal()
+        && std::io::stdout().is_terminal()
+    {
+        match first_run::configure_interactive() {
+            Ok(
+                first_run::FirstRunDisposition::Continue
+                | first_run::FirstRunDisposition::Cancelled,
+            ) => {
+                return;
+            }
+            Err(error) => {
+                eprintln!(
+                    "{}",
+                    serde_json::to_string_pretty(&error).unwrap_or_else(|_| error.to_string())
+                );
+                std::process::exit(1);
+            }
+        }
     }
     if legacy::interactive_entry_requested() {
         match first_run::ensure_first_run() {

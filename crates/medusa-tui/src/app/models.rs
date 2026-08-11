@@ -1,3 +1,5 @@
+use medusa_config::{provider_ids_with_current, provider_model_options};
+
 use crate::{
     clipboard::PromptDraft,
     commands::{Effort, ModelConfiguration, SlashCommand},
@@ -308,6 +310,7 @@ pub enum ModelModalFocus {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ModelModal {
+    provider_options: Vec<String>,
     provider_selection: SelectionState,
     model_selection: SelectionState,
     model_options: Vec<String>,
@@ -318,17 +321,6 @@ pub struct ModelModal {
 }
 
 impl ModelModal {
-    const PROVIDERS: [&str; 8] = [
-        "minimax",
-        "anthropic",
-        "anthropic-compatible",
-        "openai",
-        "openai-oauth",
-        "openai-compatible",
-        "omniroute",
-        "local",
-    ];
-
     pub(super) fn new(
         model_label: Option<&str>,
         effort_label: Option<&str>,
@@ -337,16 +329,22 @@ impl ModelModal {
         let (provider, current_model) = model_label
             .and_then(|label| label.split_once(" / "))
             .unwrap_or(("minimax", "MiniMax-M3"));
-        let provider_index = Self::PROVIDERS
+        let provider_options = provider_ids_with_current(provider);
+        let provider_index = provider_options
             .iter()
-            .position(|candidate| *candidate == provider)
+            .position(|candidate| candidate == provider)
             .unwrap_or(0);
-        let models = model_options_for(Self::PROVIDERS[provider_index], current_model);
+        let selected_provider = provider_options
+            .get(provider_index)
+            .map(String::as_str)
+            .unwrap_or("minimax");
+        let models = provider_model_options(selected_provider, current_model, &[]);
         let model_index = models
             .iter()
             .position(|candidate| candidate == current_model)
             .unwrap_or(0);
         Self {
+            provider_options,
             provider_selection: SelectionState::new(provider_index),
             model_selection: SelectionState::new(model_index),
             model_options: models,
@@ -359,7 +357,10 @@ impl ModelModal {
 
     #[must_use]
     pub fn provider(&self) -> &str {
-        Self::PROVIDERS[self.provider_selection.selected()]
+        self.provider_options
+            .get(self.provider_selection.selected())
+            .map(String::as_str)
+            .unwrap_or("minimax")
     }
 
     #[must_use]
@@ -441,9 +442,9 @@ impl ModelModal {
         match self.focus {
             ModelModalFocus::Provider => {
                 self.provider_selection
-                    .move_by(Self::PROVIDERS.len(), delta);
-                let provider = Self::PROVIDERS[self.provider_selection.selected()];
-                self.model_options = model_options_for(provider, "");
+                    .move_by(self.provider_options.len(), delta);
+                let provider = self.provider().to_owned();
+                self.model_options = provider_model_options(&provider, "", &[]);
                 self.model_selection
                     .set_selected(0, self.model_options.len());
             }
@@ -472,34 +473,6 @@ impl ModelModal {
     pub(super) fn delete_key_character(&mut self) {
         self.api_key.pop();
     }
-}
-
-fn model_options_for(provider: &str, current_model: &str) -> Vec<String> {
-    let mut models = match provider {
-        "minimax" => vec![
-            "MiniMax-M3".to_owned(),
-            "MiniMax-M2.7".to_owned(),
-            "MiniMax-M2.7-highspeed".to_owned(),
-            "MiniMax-M2.5".to_owned(),
-        ],
-        "anthropic" => vec![
-            "claude-opus-4-6".to_owned(),
-            "claude-sonnet-4-6".to_owned(),
-            "claude-haiku-4-5".to_owned(),
-        ],
-        "openai" | "openai-oauth" => vec![
-            "gpt-5.1-codex".to_owned(),
-            "gpt-5.1".to_owned(),
-            "gpt-5-mini".to_owned(),
-        ],
-        "omniroute" => vec!["auto/coding".to_owned()],
-        "local" => vec!["local-model".to_owned()],
-        _ => vec!["custom-model".to_owned()],
-    };
-    if !current_model.is_empty() && !models.iter().any(|model| model == current_model) {
-        models.insert(0, current_model.to_owned());
-    }
-    models
 }
 
 fn effort_from_label(label: Option<&str>) -> Effort {
