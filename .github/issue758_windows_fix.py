@@ -72,6 +72,35 @@ new_sig = '''    specification: &[u8],
 if old_sig in s:
     s = s.replace(old_sig, new_sig, 1)
 s = s.replace('    on_start(&ownership)?;', '    (controls.on_start)(&ownership)?;', 1)
+
+# The process is created suspended. Establish Job Object ownership before the
+# durable start callback so a persistence failure closes the Job and kills the
+# child; still invoke the callback before ResumeThread so no user code runs
+# without a durable native-identity record.
+pre_assign = '''    let ownership = ProcessOwnershipReceipt::capture(process.dwProcessId).map_err(|error| {
+        io::Error::new(
+            error.kind(),
+            format!("failed to capture Windows sandbox process identity: {error}"),
+        )
+    })?;
+    (controls.on_start)(&ownership)?;
+    if unsafe { AssignProcessToJobObject(job.0, process_handle.0) } == 0 {
+        return Err(io::Error::last_os_error());
+    }
+'''
+owned_then_recorded = '''    let ownership = ProcessOwnershipReceipt::capture(process.dwProcessId).map_err(|error| {
+        io::Error::new(
+            error.kind(),
+            format!("failed to capture Windows sandbox process identity: {error}"),
+        )
+    })?;
+    if unsafe { AssignProcessToJobObject(job.0, process_handle.0) } == 0 {
+        return Err(io::Error::last_os_error());
+    }
+    (controls.on_start)(&ownership)?;
+'''
+if pre_assign in s:
+    s = s.replace(pre_assign, owned_then_recorded, 1)
 base.write_text(s)
 
 tree = Path('crates/medusa-process-containment/src/process_tree.rs')
