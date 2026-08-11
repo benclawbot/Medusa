@@ -1,0 +1,169 @@
+name: issue803-ux
+
+on:
+  push:
+    branches:
+      - agent/issue-803-staged-config
+    paths:
+      - .github/workflows/issue803-ux.yml
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          fetch-depth: 0
+      - uses: dtolnay/rust-toolchain@39b0b3842c7e8bbf6904c0bfc3d9006fdd4dc4e0
+      - name: Wire CLI and TUI staging
+        shell: bash
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          def replace(path, old, new):
+              p = Path(path)
+              text = p.read_text()
+              if old not in text:
+                  raise SystemExit(f'missing patch context in {path}: {old[:120]!r}')
+              p.write_text(text.replace(old, new, 1))
+
+          # CLI single-key mutations use the same staged authority.
+          p = Path('crates/medusa-cli/src/config_profiles.rs')
+          text = p.read_text()
+          text = text.replace(
+              '    ConfigurationApplyTiming, ConfigurationChangeOrigin, ProviderProfileCatalog,\n    ProviderProfileSummary,\n',
+              '    ConfigurationApplyTiming, ConfigurationChangeOrigin, ProviderProfileCatalog,\n    ProviderProfileSection, ProviderProfileSummary,\n',
+              1,
+          )
+          text = text.replace(
+              '''    let snapshot = catalog.snapshot()?;\n    let mut profile = snapshot.profile;\n    profile.set_value(key, value)?;\n    let change = catalog.save_active_profile(\n        &profile,\n        snapshot.revision,\n        ConfigurationChangeOrigin::Cli,\n        [key.to_owned()],\n        ConfigurationApplyTiming::NextSession,\n    )?;\n''',
+              '''    let mut staged = catalog.stage_active_profile()?;\n    staged.set(key, value)?;\n    let change = staged.commit(\n        &catalog,\n        ConfigurationChangeOrigin::Cli,\n        ConfigurationApplyTiming::NextSession,\n    )?;\n''',
+              1,
+          )
+          text = text.replace(
+              '''    let snapshot = catalog.snapshot()?;\n    let mut profile = snapshot.profile;\n    profile.unset_value(key)?;\n    let change = catalog.save_active_profile(\n        &profile,\n        snapshot.revision,\n        ConfigurationChangeOrigin::Cli,\n        [key.to_owned()],\n        ConfigurationApplyTiming::NextSession,\n    )?;\n''',
+              '''    let mut staged = catalog.stage_active_profile()?;\n    staged.unset(key)?;\n    let change = staged.commit(\n        &catalog,\n        ConfigurationChangeOrigin::Cli,\n        ConfigurationApplyTiming::NextSession,\n    )?;\n''',
+              1,
+          )
+          marker = '\npub(crate) fn list(json: bool) -> MedusaResult<()> {'
+          addition = '''\npub(crate) fn reset_section(section: &str) -> MedusaResult<()> {\n    let catalog = ProviderProfileCatalog::user()?;\n    let mut staged = catalog.stage_active_profile()?;\n    let section = match section {\n        "connection" => ProviderProfileSection::Connection,\n        "preferences" => ProviderProfileSection::Preferences,\n        _ => return Err(cli_error("section must be `connection` or `preferences`")),\n    };\n    staged.reset_section(section)?;\n    let review = staged.render_diff();\n    if review.is_empty() {\n        println!("Configuration section is already at defaults.");\n        return Ok(());\n    }\n    println!("Configuration changes:\\n{review}");\n    let change = staged.commit(\n        &catalog,\n        ConfigurationChangeOrigin::Cli,\n        ConfigurationApplyTiming::NextSession,\n    )?;\n    println!("Reset section `{section:?}` at revision {}.", change.revision);\n    Ok(())\n}\n\npub(crate) fn history(json: bool) -> MedusaResult<()> {\n    let history = ProviderProfileCatalog::user()?.active_profile_history()?;\n    if json {\n        println!(\n            "{}",\n            serde_json::to_string_pretty(&history).map_err(|error| cli_error(error.to_string()))?\n        );\n    } else if history.is_empty() {\n        println!("No previous known-good provider profiles are retained.");\n    } else {\n        for entry in history {\n            println!(\n                "revision {} · {} · {} / {}",\n                entry.revision, entry.active_profile, entry.profile.provider, entry.profile.model\n            );\n        }\n    }\n    Ok(())\n}\n\npub(crate) fn rollback() -> MedusaResult<()> {\n    let catalog = ProviderProfileCatalog::user()?;\n    let revision = catalog.revision()?;\n    let change = catalog.restore_previous_active_profile(\n        revision,\n        ConfigurationChangeOrigin::Cli,\n    )?;\n    println!(\n        "Restored previous known-good provider profile at revision {}.",\n        change.revision\n    );\n    Ok(())\n}\n'''
+          if marker not in text:
+              raise SystemExit('missing config_profiles list marker')
+          text = text.replace(marker, addition + marker, 1)
+          p.write_text(text)
+
+          # CLI surface for history, rollback, and section reset.
+          replace(
+              'crates/medusa-cli/src/main.rs',
+              '''    create as create_config_profile, delete as delete_config_profile,\n    list as list_config_profiles, set as set_config, unset as unset_config,\n    use_profile as use_config_profile,\n''',
+              '''    create as create_config_profile, delete as delete_config_profile, history as config_history,\n    list as list_config_profiles, reset_section as reset_config_section, rollback as rollback_config,\n    set as set_config, unset as unset_config, use_profile as use_config_profile,\n''',
+          )
+          replace(
+              'crates/medusa-cli/src/main.rs',
+              '''    /// Reset one known provider-profile key to its default.\n    Unset { key: String },\n    /// Manage named provider profiles.\n''',
+              '''    /// Reset one known provider-profile key to its default.\n    Unset { key: String },\n    /// Reset a typed provider-profile section to defaults.\n    ResetSection { section: String },\n    /// Show bounded, non-secret known-good provider-profile history.\n    History {\n        #[arg(long)]\n        json: bool,\n    },\n    /// Restore the previous known-good provider profile.\n    Rollback,\n    /// Manage named provider profiles.\n''',
+          )
+          replace(
+              'crates/medusa-cli/src/main.rs',
+              '''            Some(ConfigAction::Set { key, value }) => set_config(&key, &value),\n            Some(ConfigAction::Unset { key }) => unset_config(&key),\n            Some(ConfigAction::Profiles { action }) => match action {\n''',
+              '''            Some(ConfigAction::Set { key, value }) => set_config(&key, &value),\n            Some(ConfigAction::Unset { key }) => unset_config(&key),\n            Some(ConfigAction::ResetSection { section }) => reset_config_section(&section),\n            Some(ConfigAction::History { json }) => config_history(json),\n            Some(ConfigAction::Rollback) => rollback_config(),\n            Some(ConfigAction::Profiles { action }) => match action {\n''',
+          )
+
+          # TUI settings become an in-memory staged session with explicit Review/Apply.
+          replace(
+              'crates/medusa-tui/src/app/models.rs',
+              '''    Config, ConfigurationApplyTiming, ConfigurationChangeOrigin, ProviderProfile,\n    ProviderProfileCatalog, apply_provider_defaults, provider_catalog_entry,\n''',
+              '''    Config, ConfigurationApplyTiming, ConfigurationChangeOrigin, ProviderProfile,\n    ProviderProfileCatalog, StagedProviderProfile, apply_provider_defaults, provider_catalog_entry,\n''',
+          )
+          replace(
+              'crates/medusa-tui/src/app/models.rs',
+              '''    BaseUrl,\n    Status,\n}\n''',
+              '''    BaseUrl,\n    Status,\n    Review,\n}\n''',
+          )
+          replace(
+              'crates/medusa-tui/src/app/models.rs',
+              '''    active_profile: String,\n    profile: ProviderProfile,\n    profiles: Vec<String>,\n''',
+              '''    active_profile: String,\n    profile: ProviderProfile,\n    staged: StagedProviderProfile,\n    profiles: Vec<String>,\n''',
+          )
+          replace(
+              'crates/medusa-tui/src/app/models.rs',
+              '''        let snapshot = catalog.snapshot().map_err(|error| error.to_string())?;\n        let profiles = catalog\n''',
+              '''        let snapshot = catalog.snapshot().map_err(|error| error.to_string())?;\n        let staged = StagedProviderProfile::from_snapshot(snapshot.clone());\n        let profiles = catalog\n''',
+          )
+          replace(
+              'crates/medusa-tui/src/app/models.rs',
+              '''            base_url_edit: profile.base_url.clone().unwrap_or_default(),\n            profile,\n            profiles,\n''',
+              '''            base_url_edit: profile.base_url.clone().unwrap_or_default(),\n            profile,\n            staged,\n            profiles,\n''',
+          )
+          replace(
+              'crates/medusa-tui/src/app/models.rs',
+              '''            (\n                "Status".to_owned(),\n                if settings.profile.configured {\n                    "configured".to_owned()\n                } else {\n                    "not configured".to_owned()\n                },\n            ),\n        ]\n''',
+              '''            (\n                "Status".to_owned(),\n                if settings.profile.configured {\n                    "configured".to_owned()\n                } else {\n                    "not configured".to_owned()\n                },\n            ),\n            (\n                "Review changes".to_owned(),\n                if settings.staged.is_dirty() {\n                    format!("{} pending", settings.staged.diff().len())\n                } else {\n                    "no changes".to_owned()\n                },\n            ),\n        ]\n''',
+          )
+          replace(
+              'crates/medusa-tui/src/app/models.rs',
+              '            settings.root_selection.move_by(8, delta);\n',
+              '            settings.root_selection.move_by(9, delta);\n',
+          )
+          replace(
+              'crates/medusa-tui/src/app/models.rs',
+              '''            6 => SettingsPage::BaseUrl,\n            _ => SettingsPage::Status,\n        };\n''',
+              '''            6 => SettingsPage::BaseUrl,\n            7 => SettingsPage::Status,\n            _ => SettingsPage::Review,\n        };\n''',
+          )
+          replace(
+              'crates/medusa-tui/src/app/models.rs',
+              '''            SettingsPage::BaseUrl | SettingsPage::Status | SettingsPage::Root => 0,\n''',
+              '''            SettingsPage::BaseUrl\n            | SettingsPage::Status\n            | SettingsPage::Review\n            | SettingsPage::Root => 0,\n''',
+          )
+          replace(
+              'crates/medusa-tui/src/app/models.rs',
+              '''        if settings.page == SettingsPage::Status {\n            settings.page = SettingsPage::Root;\n            return Ok(AppAction::Redraw);\n        }\n\n        if settings.page == SettingsPage::Profile {\n''',
+              '''        if settings.page == SettingsPage::Status {\n            settings.page = SettingsPage::Root;\n            return Ok(AppAction::Redraw);\n        }\n\n        if settings.page == SettingsPage::Review {\n            if !settings.staged.is_dirty() {\n                settings.page = SettingsPage::Root;\n                return Ok(AppAction::Redraw);\n            }\n            validate_settings_candidate(repository, settings.staged.candidate())?;\n            let change = settings\n                .staged\n                .clone()\n                .commit(\n                    &settings.catalog,\n                    ConfigurationChangeOrigin::Tui,\n                    ConfigurationApplyTiming::NextSession,\n                )\n                .map_err(|error| error.to_string())?;\n            settings.revision = change.revision;\n            settings.last_apply_timing = Some(change.apply_timing);\n            return Ok(AppAction::Redraw);\n        }\n\n        if settings.page == SettingsPage::Profile {\n''',
+          )
+          replace(
+              'crates/medusa-tui/src/app/models.rs',
+              '''            let change = settings\n                .catalog\n                .save_active_profile(\n                    &candidate,\n                    settings.revision,\n                    ConfigurationChangeOrigin::Tui,\n                    [\n                        "connection".to_owned(),\n                        "provider".to_owned(),\n                        "model".to_owned(),\n                        "auth".to_owned(),\n                        "base_url".to_owned(),\n                        "configured".to_owned(),\n                    ],\n                    ConfigurationApplyTiming::NextSession,\n                )\n                .map_err(|error| error.to_string())?;\n            settings.revision = change.revision;\n            settings.profile = candidate;\n            settings.last_apply_timing = Some(change.apply_timing);\n            return Ok(AppAction::Redraw);\n''',
+              '''            settings\n                .staged\n                .replace(candidate.clone())\n                .map_err(|error| error.to_string())?;\n            settings.profile = candidate;\n            settings.page = SettingsPage::Root;\n            return Ok(AppAction::Redraw);\n''',
+          )
+          replace(
+              'crates/medusa-tui/src/app/models.rs',
+              '''            let value = settings.base_url_edit.trim();\n            return Ok(AppAction::Command(SlashCommand::Config(if value.is_empty() {\n                ConfigCommand::Unset {\n                    key: "base_url".to_owned(),\n                }\n            } else {\n                ConfigCommand::Set {\n                    key: "base_url".to_owned(),\n                    value: value.to_owned(),\n                }\n            })));\n''',
+              '''            let value = settings.base_url_edit.trim();\n            let mut candidate = settings.profile.clone();\n            if value.is_empty() {\n                candidate\n                    .unset_value("base_url")\n                    .map_err(|error| error.to_string())?;\n            } else {\n                candidate\n                    .set_value("base_url", value)\n                    .map_err(|error| error.to_string())?;\n            }\n            validate_settings_candidate(repository, &candidate)?;\n            settings\n                .staged\n                .replace(candidate.clone())\n                .map_err(|error| error.to_string())?;\n            settings.profile = candidate;\n            settings.page = SettingsPage::Root;\n            return Ok(AppAction::Redraw);\n''',
+          )
+          replace(
+              'crates/medusa-tui/src/app/models.rs',
+              '''            | SettingsPage::Provider\n            | SettingsPage::BaseUrl\n            | SettingsPage::Status => return Ok(AppAction::Redraw),\n        };\n        Ok(AppAction::Command(SlashCommand::Config(ConfigCommand::Set {\n            key: key.to_owned(),\n            value,\n        })))\n''',
+              '''            | SettingsPage::Provider\n            | SettingsPage::BaseUrl\n            | SettingsPage::Status\n            | SettingsPage::Review => return Ok(AppAction::Redraw),\n        };\n        let mut candidate = settings.profile.clone();\n        candidate\n            .set_value(key, &value)\n            .map_err(|error| error.to_string())?;\n        validate_settings_candidate(repository, &candidate)?;\n        settings\n            .staged\n            .replace(candidate.clone())\n            .map_err(|error| error.to_string())?;\n        settings.profile = candidate;\n        settings.page = SettingsPage::Root;\n        Ok(AppAction::Redraw)\n''',
+          )
+          replace(
+              'crates/medusa-tui/src/app/models.rs',
+              '''        SettingsPage::Root | SettingsPage::BaseUrl | SettingsPage::Status => Vec::new(),\n''',
+              '''        SettingsPage::Root\n        | SettingsPage::BaseUrl\n        | SettingsPage::Status\n        | SettingsPage::Review => Vec::new(),\n''',
+          )
+          marker = '''    #[must_use]\n    pub fn settings_base_url_edit(&self) -> &str {\n'''
+          addition = '''    #[must_use]\n    pub fn settings_review_lines(&self) -> Vec<String> {\n        self.settings\n            .as_ref()\n            .map(|settings| {\n                settings\n                    .staged\n                    .diff()\n                    .into_iter()\n                    .map(|entry| format!("{}: {} -> {}", entry.key, entry.before, entry.after))\n                    .collect()\n            })\n            .unwrap_or_default()\n    }\n\n'''
+          p = Path('crates/medusa-tui/src/app/models.rs')
+          text = p.read_text()
+          if marker not in text:
+              raise SystemExit('missing settings review insertion marker')
+          p.write_text(text.replace(marker, addition + marker, 1))
+
+          replace(
+              'crates/medusa-tui/src/app/modal_events.rs',
+              '''                if page == SettingsPage::Status {\n                    self.status = "settings".to_owned();\n                    return Ok(action);\n                }\n                let timing = self\n''',
+              '''                if !matches!(page, SettingsPage::Review | SettingsPage::Profile) {\n                    self.status = "settings · changes staged; open Review changes to apply".to_owned();\n                    return Ok(action);\n                }\n                let timing = self\n''',
+          )
+
+          PY
+          cargo fmt --all
+          cargo test -p medusa-config -p medusa-tui -p medusa-cli
+          rm .github/workflows/issue803-ux.yml
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add crates/medusa-config crates/medusa-tui crates/medusa-cli .github/workflows/issue803-ux.yml
+          git commit -m "Add staged settings review and rollback"
+          git push origin HEAD:${GITHUB_REF_NAME}
