@@ -25,32 +25,9 @@ jobs:
 
           path = Path("crates/medusa-tui/src/input.rs")
           text = path.read_text()
-          old = '''    pub fn move_in_with(
-              &mut self,
-              indices: &[usize],
-              delta: isize,
-              mut enabled: impl FnMut(usize) -> bool,
-          ) {
-              if indices.is_empty() || delta == 0 || !indices.iter().copied().any(&mut enabled) {
-                  return;
-              }
-              let direction = delta.signum();
-              let start = indices
-                  .iter()
-                  .position(|index| *index == self.selected)
-                  .unwrap_or_else(|| if direction > 0 { indices.len() - 1 } else { 0 });
-              for offset in 1..=indices.len() {
-                  let position = (start as isize + direction * offset as isize)
-                      .rem_euclid(indices.len() as isize) as usize;
-                  let candidate = indices[position];
-                  if enabled(candidate) {
-                      self.selected = candidate;
-                      return;
-                  }
-              }
-          }
-          '''
-          new = '''    pub fn move_in_with(
+          start = text.index("    pub fn move_in_with(")
+          end = text.index("    #[must_use]\n    pub fn search(&self)", start)
+          replacement = '''    pub fn move_in_with(
               &mut self,
               indices: &[usize],
               delta: isize,
@@ -78,14 +55,11 @@ jobs:
               }
               self.selected = selected;
           }
-          '''
-          if old not in text:
-              raise SystemExit("selector implementation did not match expected source")
-          text = text.replace(old, new, 1)
 
-          marker = '''    #[test]
-          fn selection_state_filters_and_scrolls_long_lists() {
-          '''
+'''
+          text = text[:start] + replacement + text[end:]
+
+          marker = "    #[test]\n    fn selection_state_filters_and_scrolls_long_lists() {\n"
           regression = '''    #[test]
           fn selection_state_honors_multi_step_delta() {
               let mut state = SelectionState::new(0);
@@ -95,10 +69,9 @@ jobs:
               assert_eq!(state.selected(), 4);
           }
 
-          '''
-          if marker not in text:
-              raise SystemExit("selector test insertion point did not match expected source")
-          text = text.replace(marker, regression + marker, 1)
+'''
+          if "fn selection_state_honors_multi_step_delta()" not in text:
+              text = text.replace(marker, regression + marker, 1)
           path.write_text(text)
           PY
       - name: Commit fix and remove temporary workflow
