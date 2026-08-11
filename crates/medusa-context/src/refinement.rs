@@ -465,8 +465,8 @@ impl RefinementJournal {
             }
             accepted.push(entry.clone());
         }
-        let projection = replay(&accepted)
-            .map_or_else(|_| RefinementProjection::default(), |value| value.1);
+        let projection =
+            replay(&accepted).map_or_else(|_| RefinementProjection::default(), |value| value.1);
         RecoveryResult {
             projection,
             accepted_entries: accepted.len(),
@@ -556,9 +556,7 @@ fn validate_transition(
             }
             Ok(())
         }
-        RefinementEvent::Validated { .. } => {
-            require_lifecycle(event, states, Lifecycle::Proposed)
-        }
+        RefinementEvent::Validated { .. } => require_lifecycle(event, states, Lifecycle::Proposed),
         RefinementEvent::Evaluated { result, .. } => {
             require_lifecycle(event, states, Lifecycle::Validated)?;
             if !result.is_well_formed() {
@@ -605,7 +603,10 @@ fn validate_transition(
             if state.lifecycle != Lifecycle::Approved {
                 return Err(RefinementError::ApprovalRequired);
             }
-            if projection.active.contains_key(&projection_key(&state.proposal)) {
+            if projection
+                .active
+                .contains_key(&projection_key(&state.proposal))
+            {
                 return Err(RefinementError::Conflict);
             }
             Ok(())
@@ -664,13 +665,7 @@ fn require_lifecycle(
 
 fn replay(
     entries: &[JournalEntry],
-) -> Result<
-    (
-        BTreeMap<ProposalKey, ProposalState>,
-        RefinementProjection,
-    ),
-    RefinementError,
-> {
+) -> Result<(BTreeMap<ProposalKey, ProposalState>, RefinementProjection), RefinementError> {
     let mut states = BTreeMap::new();
     let mut projection = RefinementProjection::default();
     for entry in entries {
