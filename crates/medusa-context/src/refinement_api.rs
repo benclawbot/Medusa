@@ -1,9 +1,9 @@
 use std::collections::BTreeSet;
 
-use serde::{de::DeserializeOwned, Deserialize, Serialize};
+use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use time::OffsetDateTime;
 
-use crate::{refinement_core as core, ContextItem, ContextKind, ContextLedger};
+use crate::{ContextItem, ContextKind, ContextLedger, refinement_core as core};
 
 pub use core::{
     ApprovalReceipt, EvaluationResult, EvidenceKind, EvidenceRef, ProposerMetadata,
@@ -44,17 +44,33 @@ impl RefinementProposal {
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum RefinementEvent {
-    Proposed { proposal: RefinementProposal },
-    Validated { proposal_id: String, version: u64 },
-    Evaluated { proposal_id: String, version: u64, result: EvaluationResult },
-    Approved { proposal_id: String, version: u64, receipt: ApprovalReceipt },
+    Proposed {
+        proposal: RefinementProposal,
+    },
+    Validated {
+        proposal_id: String,
+        version: u64,
+    },
+    Evaluated {
+        proposal_id: String,
+        version: u64,
+        result: EvaluationResult,
+    },
+    Approved {
+        proposal_id: String,
+        version: u64,
+        receipt: ApprovalReceipt,
+    },
     Superseded {
         proposal_id: String,
         version: u64,
         by_proposal_id: String,
         by_version: u64,
     },
-    Activated { proposal_id: String, version: u64 },
+    Activated {
+        proposal_id: String,
+        version: u64,
+    },
     RolledBack {
         proposal_id: String,
         version: u64,
@@ -62,7 +78,11 @@ pub enum RefinementEvent {
         restore_version: Option<u64>,
         reason: String,
     },
-    Rejected { proposal_id: String, version: u64, reason: String },
+    Rejected {
+        proposal_id: String,
+        version: u64,
+        reason: String,
+    },
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -102,7 +122,10 @@ impl RefinementProjection {
 
     #[must_use]
     pub fn active_for_scope(&self, scope: RefinementScope) -> Vec<&RefinementProposal> {
-        self.active.iter().filter(|proposal| proposal.scope == scope).collect()
+        self.active
+            .iter()
+            .filter(|proposal| proposal.scope == scope)
+            .collect()
     }
 
     #[must_use]
@@ -186,14 +209,20 @@ impl RefinementJournal {
     ) -> Result<(), RefinementError> {
         self.validate_chain()?;
         let proposal_id = proposal_id.into();
-        let proposal = self.proposal(&proposal_id, version).ok_or(RefinementError::UnknownProposal)?;
+        let proposal = self
+            .proposal(&proposal_id, version)
+            .ok_or(RefinementError::UnknownProposal)?;
         if !authority.authorizes(proposal, &receipt) {
             return Err(RefinementError::ApprovalRequired);
         }
         let key = approval_key(&proposal_id, version, &receipt);
         self.authorized_approvals.insert(key.clone());
         let result = self.append_core(
-            RefinementEvent::Approved { proposal_id, version, receipt },
+            RefinementEvent::Approved {
+                proposal_id,
+                version,
+                receipt,
+            },
             recorded_at,
         );
         if result.is_err() {
@@ -208,10 +237,17 @@ impl RefinementJournal {
     ) -> Result<(), RefinementError> {
         let mut authorized = BTreeSet::new();
         for entry in &self.entries {
-            let RefinementEvent::Approved { proposal_id, version, receipt } = &entry.event else {
+            let RefinementEvent::Approved {
+                proposal_id,
+                version,
+                receipt,
+            } = &entry.event
+            else {
                 continue;
             };
-            let proposal = self.proposal(proposal_id, *version).ok_or(RefinementError::UnknownProposal)?;
+            let proposal = self
+                .proposal(proposal_id, *version)
+                .ok_or(RefinementError::UnknownProposal)?;
             if !authority.authorizes(proposal, receipt) {
                 return Err(RefinementError::ApprovalRequired);
             }
@@ -225,8 +261,16 @@ impl RefinementJournal {
         for (index, entry) in self.entries.iter().enumerate() {
             match &entry.event {
                 RefinementEvent::Proposed { proposal } => proposal.validate()?,
-                RefinementEvent::Approved { proposal_id, version, receipt } => {
-                    if !self.authorized_approvals.contains(&approval_key(proposal_id, *version, receipt)) {
+                RefinementEvent::Approved {
+                    proposal_id,
+                    version,
+                    receipt,
+                } => {
+                    if !self.authorized_approvals.contains(&approval_key(
+                        proposal_id,
+                        *version,
+                        receipt,
+                    )) {
                         return Err(RefinementError::ApprovalRequired);
                     }
                 }
@@ -242,7 +286,11 @@ impl RefinementJournal {
     pub fn projection(&self) -> Result<RefinementProjection, RefinementError> {
         self.validate_chain()?;
         let core = self.to_core()?.projection()?;
-        let active = core.active().into_iter().map(convert).collect::<Result<Vec<_>, _>>()?;
+        let active = core
+            .active()
+            .into_iter()
+            .map(convert)
+            .collect::<Result<Vec<_>, _>>()?;
         Ok(RefinementProjection { active })
     }
 
@@ -276,19 +324,31 @@ impl RefinementJournal {
     ) -> Result<(), RefinementError> {
         let mut core = self.to_core()?;
         core.append(convert(&event)?, recorded_at)?;
-        self.entries = core.entries().iter().map(convert).collect::<Result<Vec<_>, _>>()?;
+        self.entries = core
+            .entries()
+            .iter()
+            .map(convert)
+            .collect::<Result<Vec<_>, _>>()?;
         Ok(())
     }
 
     fn to_core(&self) -> Result<core::RefinementJournal, RefinementError> {
         #[derive(Serialize)]
-        struct Stored<'a> { entries: &'a [JournalEntry] }
-        convert(&Stored { entries: &self.entries })
+        struct Stored<'a> {
+            entries: &'a [JournalEntry],
+        }
+        convert(&Stored {
+            entries: &self.entries,
+        })
     }
 
     fn proposal(&self, id: &str, version: u64) -> Option<&RefinementProposal> {
         self.entries.iter().find_map(|entry| match &entry.event {
-            RefinementEvent::Proposed { proposal } if proposal.id == id && proposal.version == version => Some(proposal),
+            RefinementEvent::Proposed { proposal }
+                if proposal.id == id && proposal.version == version =>
+            {
+                Some(proposal)
+            }
             _ => None,
         })
     }
@@ -296,18 +356,27 @@ impl RefinementJournal {
 
 struct DenyAll;
 impl ApprovalAuthority for DenyAll {
-    fn authorizes(&self, _: &RefinementProposal, _: &ApprovalReceipt) -> bool { false }
+    fn authorizes(&self, _: &RefinementProposal, _: &ApprovalReceipt) -> bool {
+        false
+    }
 }
 
-fn recover<A: ApprovalAuthority>(entries: &[JournalEntry], authority: Option<&A>) -> RecoveryResult {
+fn recover<A: ApprovalAuthority>(
+    entries: &[JournalEntry],
+    authority: Option<&A>,
+) -> RecoveryResult {
     let mut accepted = RefinementJournal::default();
     for entry in entries {
         let mut candidate = accepted.clone();
         candidate.entries.push(entry.clone());
         if let Some(authority) = authority {
-            if candidate.revalidate_approvals(authority).is_err() { break; }
+            if candidate.revalidate_approvals(authority).is_err() {
+                break;
+            }
         }
-        if candidate.validate_chain().is_err() { break; }
+        if candidate.validate_chain().is_err() {
+            break;
+        }
         accepted = candidate;
     }
     let projection = accepted.projection().unwrap_or_default();
@@ -318,14 +387,20 @@ fn recover<A: ApprovalAuthority>(entries: &[JournalEntry], authority: Option<&A>
     }
 }
 
-fn validate_direct_restore(event: &RefinementEvent, prior: &[JournalEntry]) -> Result<(), RefinementError> {
+fn validate_direct_restore(
+    event: &RefinementEvent,
+    prior: &[JournalEntry],
+) -> Result<(), RefinementError> {
     let RefinementEvent::RolledBack {
         proposal_id,
         version,
         restore_proposal_id,
         restore_version,
         ..
-    } = event else { return Ok(()); };
+    } = event
+    else {
+        return Ok(());
+    };
     match (restore_proposal_id, restore_version) {
         (Some(restore_id), Some(restore_version)) => {
             let successor = prior.iter().rev().find_map(|entry| match &entry.event {
@@ -334,7 +409,9 @@ fn validate_direct_restore(event: &RefinementEvent, prior: &[JournalEntry]) -> R
                     version,
                     by_proposal_id,
                     by_version,
-                } if proposal_id == restore_id && version == restore_version => Some((by_proposal_id.as_str(), *by_version)),
+                } if proposal_id == restore_id && version == restore_version => {
+                    Some((by_proposal_id.as_str(), *by_version))
+                }
                 _ => None,
             });
             if successor != Some((proposal_id.as_str(), *version)) {
@@ -350,7 +427,9 @@ fn validate_direct_restore(event: &RefinementEvent, prior: &[JournalEntry]) -> R
 fn kind_for(content: &RefinementContent) -> RefinementArtifactKind {
     match content {
         RefinementContent::Memory { .. } => RefinementArtifactKind::Memory,
-        RefinementContent::RepositoryConvention { .. } => RefinementArtifactKind::RepositoryConvention,
+        RefinementContent::RepositoryConvention { .. } => {
+            RefinementArtifactKind::RepositoryConvention
+        }
         RefinementContent::WorkflowMetadata { .. } => RefinementArtifactKind::WorkflowMetadata,
         RefinementContent::TeamRoleMetadata { .. } => RefinementArtifactKind::TeamRoleMetadata,
         RefinementContent::PromptGuidance { .. } => RefinementArtifactKind::PromptGuidance,
@@ -386,7 +465,12 @@ fn context_item(
     sequence: u64,
     recorded_at: OffsetDateTime,
 ) -> Result<ContextItem, &'static str> {
-    let evidence = proposal.evidence.iter().map(|item| item.id.as_str()).collect::<Vec<_>>().join(",");
+    let evidence = proposal
+        .evidence
+        .iter()
+        .map(|item| item.id.as_str())
+        .collect::<Vec<_>>()
+        .join(",");
     ContextItem::new(
         context_id(proposal),
         ContextKind::Evidence,
