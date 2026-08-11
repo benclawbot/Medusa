@@ -392,9 +392,9 @@ mod tests {
     fn incomplete_or_unverified_session_is_ignored() {
         let directory = tempfile::tempdir().expect("tempdir");
         let mut session = session(directory.path());
-        session.events.retain(|event| {
-            !matches!(&event.payload, EventPayload::VerificationCompleted { .. })
-        });
+        session
+            .events
+            .retain(|event| !matches!(&event.payload, EventPayload::VerificationCompleted { .. }));
         assert!(
             extract_completed_session(&session)
                 .expect("extract")
