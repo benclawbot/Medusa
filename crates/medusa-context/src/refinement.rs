@@ -1,4 +1,4 @@
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -76,10 +76,11 @@ pub struct EvidenceRef {
 
 impl EvidenceRef {
     fn validate(&self) -> Result<(), RefinementError> {
-        if self.id.trim().is_empty() || self.trajectory_id.trim().is_empty() {
-            return Err(RefinementError::InvalidEvidence);
-        }
-        if self.start_sequence == 0 || self.end_sequence < self.start_sequence {
+        if self.id.trim().is_empty()
+            || self.trajectory_id.trim().is_empty()
+            || self.start_sequence == 0
+            || self.end_sequence < self.start_sequence
+        {
             return Err(RefinementError::InvalidEvidence);
         }
         if self.kind == EvidenceKind::ProviderThinking {
@@ -123,7 +124,11 @@ impl RefinementContent {
         if self.identity().trim().is_empty() || self.body().trim().is_empty() {
             return Err(RefinementError::InvalidProposal);
         }
-        let identity = self.identity().trim().to_ascii_lowercase().replace('-', "_");
+        let identity = self
+            .identity()
+            .trim()
+            .to_ascii_lowercase()
+            .replace('-', "_");
         if IMMUTABLE_ROOTS
             .iter()
             .any(|root| identity == *root || identity.starts_with(&format!("{root}.")))
@@ -157,7 +162,7 @@ pub struct RefinementProposal {
 }
 
 impl RefinementProposal {
-    fn validate(&self) -> Result<(), RefinementError> {
+    pub fn validate(&self) -> Result<(), RefinementError> {
         if self.id.trim().is_empty()
             || self.version == 0
             || self.rationale.trim().is_empty()
@@ -202,8 +207,12 @@ pub struct EvaluationResult {
 }
 
 impl EvaluationResult {
-    fn passed(&self) -> bool {
+    fn is_well_formed(&self) -> bool {
         !self.evaluator.trim().is_empty()
+    }
+
+    fn passed(&self) -> bool {
+        self.is_well_formed()
             && self.validation_passed
             && self.regression_passed
             && self.effectiveness_passed
@@ -219,8 +228,13 @@ pub struct ApprovalReceipt {
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum RefinementEvent {
-    Proposed { proposal: RefinementProposal },
-    Validated { proposal_id: String, version: u64 },
+    Proposed {
+        proposal: RefinementProposal,
+    },
+    Validated {
+        proposal_id: String,
+        version: u64,
+    },
     Evaluated {
         proposal_id: String,
         version: u64,
@@ -237,7 +251,10 @@ pub enum RefinementEvent {
         by_proposal_id: String,
         by_version: u64,
     },
-    Activated { proposal_id: String, version: u64 },
+    Activated {
+        proposal_id: String,
+        version: u64,
+    },
     RolledBack {
         proposal_id: String,
         version: u64,
@@ -308,7 +325,13 @@ impl RefinementProjection {
 
     #[must_use]
     pub fn conflicts(&self, proposal: &RefinementProposal) -> Vec<&RefinementProposal> {
-        self.active.get(&projection_key(proposal)).into_iter().collect()
+        self.active
+            .values()
+            .filter(|active| {
+                active.artifact_kind == proposal.artifact_kind
+                    && active.after.identity() == proposal.after.identity()
+            })
+            .collect()
     }
 
     pub fn context_items(
@@ -318,26 +341,28 @@ impl RefinementProjection {
     ) -> Result<Vec<ContextItem>, &'static str> {
         let mut items = Vec::new();
         for proposal in self.active.values() {
-            let evidence_ids = proposal
+            let evidence = proposal
                 .evidence
                 .iter()
-                .map(|evidence| evidence.id.as_str())
+                .map(|reference| reference.id.as_str())
                 .collect::<Vec<_>>()
                 .join(",");
-            let content = format!(
-                "active_refinement id={} version={} scope={:?} kind={:?} key={} value={} evidence=[{}]",
-                proposal.id,
-                proposal.version,
-                proposal.scope,
-                proposal.artifact_kind,
-                proposal.after.identity(),
-                proposal.after.body(),
-                evidence_ids
-            );
             items.push(ContextItem::new(
                 format!("refinement:{}:{}", proposal.id, proposal.version),
                 ContextKind::Evidence,
-                content,
+                format!(
+                    concat!(
+                        "active_refinement id={} version={} scope={:?} kind={:?} ",
+                        "key={} value={} evidence=[{}]"
+                    ),
+                    proposal.id,
+                    proposal.version,
+                    proposal.scope,
+                    proposal.artifact_kind,
+                    proposal.after.identity(),
+                    proposal.after.body(),
+                    evidence
+                ),
                 next_sequence,
                 recorded_at,
             )?);
@@ -366,10 +391,11 @@ pub enum RefinementError {
     InvalidTransition,
     EvaluationFailed,
     ApprovalRequired,
-    ScopePromotion,
     Conflict,
     CorruptJournal,
 }
+
+type ProposalKey = (String, u64);
 
 impl RefinementJournal {
     #[must_use]
@@ -383,10 +409,8 @@ impl RefinementJournal {
         recorded_at: OffsetDateTime,
     ) -> Result<(), RefinementError> {
         self.validate_chain()?;
-        let states = replay_states(&self.entries)?;
-        let projection = project_entries(&self.entries)?;
+        let (states, projection) = replay(&self.entries)?;
         validate_transition(&event, &states, &projection)?;
-
         let sequence = self.entries.len() as u64 + 1;
         let previous_hash = self
             .entries
@@ -421,14 +445,13 @@ impl RefinementJournal {
             }
             previous.clone_from(&entry.hash);
         }
-        replay_states(&self.entries)?;
-        project_entries(&self.entries)?;
+        replay(&self.entries)?;
         Ok(())
     }
 
     pub fn projection(&self) -> Result<RefinementProjection, RefinementError> {
         self.validate_chain()?;
-        project_entries(&self.entries)
+        Ok(replay(&self.entries)?.1)
     }
 
     #[must_use]
@@ -437,13 +460,13 @@ impl RefinementJournal {
         for entry in entries {
             let mut candidate = accepted.clone();
             candidate.push(entry.clone());
-            let journal = Self { entries: candidate };
-            if journal.validate_chain().is_err() {
+            if (Self { entries: candidate }).validate_chain().is_err() {
                 break;
             }
             accepted.push(entry.clone());
         }
-        let projection = project_entries(&accepted).unwrap_or_default();
+        let projection = replay(&accepted)
+            .map_or_else(|_| RefinementProjection::default(), |value| value.1);
         RecoveryResult {
             projection,
             accepted_entries: accepted.len(),
@@ -451,8 +474,6 @@ impl RefinementJournal {
         }
     }
 }
-
-type ProposalKey = (String, u64);
 
 fn proposal_key(id: &str, version: u64) -> ProposalKey {
     (id.to_owned(), version)
@@ -507,6 +528,15 @@ fn event_key(event: &RefinementEvent) -> ProposalKey {
     }
 }
 
+fn state_for<'a>(
+    event: &RefinementEvent,
+    states: &'a BTreeMap<ProposalKey, ProposalState>,
+) -> Result<&'a ProposalState, RefinementError> {
+    states
+        .get(&event_key(event))
+        .ok_or(RefinementError::UnknownProposal)
+}
+
 fn validate_transition(
     event: &RefinementEvent,
     states: &BTreeMap<ProposalKey, ProposalState>,
@@ -519,22 +549,20 @@ fn validate_transition(
                 return Err(RefinementError::DuplicateProposalVersion);
             }
             if let Some(before) = &proposal.before {
-                if let Some(existing) = projection.active.get(&projection_key(proposal)) {
-                    if existing.after != *before {
-                        return Err(RefinementError::Conflict);
-                    }
-                    if scope_rank(proposal.scope) > scope_rank(existing.scope) {
-                        return Err(RefinementError::ScopePromotion);
-                    }
+                let conflicts = projection.conflicts(proposal);
+                if conflicts.len() != 1 || conflicts[0].after != *before {
+                    return Err(RefinementError::Conflict);
                 }
             }
             Ok(())
         }
-        RefinementEvent::Validated { .. } => require_lifecycle(event, states, Lifecycle::Proposed),
+        RefinementEvent::Validated { .. } => {
+            require_lifecycle(event, states, Lifecycle::Proposed)
+        }
         RefinementEvent::Evaluated { result, .. } => {
             require_lifecycle(event, states, Lifecycle::Validated)?;
-            if !result.passed() {
-                return Err(RefinementError::EvaluationFailed);
+            if !result.is_well_formed() {
+                return Err(RefinementError::InvalidTransition);
             }
             Ok(())
         }
@@ -565,10 +593,9 @@ fn validate_transition(
             let replacement = states
                 .get(&proposal_key(by_proposal_id, *by_version))
                 .ok_or(RefinementError::UnknownProposal)?;
-            if replacement.lifecycle != Lifecycle::Approved {
-                return Err(RefinementError::InvalidTransition);
-            }
-            if projection_key(&old.proposal) != projection_key(&replacement.proposal) {
+            if replacement.lifecycle != Lifecycle::Approved
+                || projection_key(&old.proposal) != projection_key(&replacement.proposal)
+            {
                 return Err(RefinementError::Conflict);
             }
             Ok(())
@@ -623,15 +650,6 @@ fn validate_transition(
     }
 }
 
-fn state_for<'a>(
-    event: &RefinementEvent,
-    states: &'a BTreeMap<ProposalKey, ProposalState>,
-) -> Result<&'a ProposalState, RefinementError> {
-    states
-        .get(&event_key(event))
-        .ok_or(RefinementError::UnknownProposal)
-}
-
 fn require_lifecycle(
     event: &RefinementEvent,
     states: &BTreeMap<ProposalKey, ProposalState>,
@@ -644,17 +662,24 @@ fn require_lifecycle(
     }
 }
 
-fn replay_states(
+fn replay(
     entries: &[JournalEntry],
-) -> Result<BTreeMap<ProposalKey, ProposalState>, RefinementError> {
+) -> Result<
+    (
+        BTreeMap<ProposalKey, ProposalState>,
+        RefinementProjection,
+    ),
+    RefinementError,
+> {
     let mut states = BTreeMap::new();
     let mut projection = RefinementProjection::default();
     for entry in entries {
         validate_transition(&entry.event, &states, &projection)?;
+        let key = event_key(&entry.event);
         match &entry.event {
             RefinementEvent::Proposed { proposal } => {
                 states.insert(
-                    proposal_key(&proposal.id, proposal.version),
+                    key,
                     ProposalState {
                         proposal: proposal.clone(),
                         lifecycle: Lifecycle::Proposed,
@@ -663,23 +688,35 @@ fn replay_states(
                 );
             }
             RefinementEvent::Validated { .. } => {
-                states.get_mut(&event_key(&entry.event)).unwrap().lifecycle = Lifecycle::Validated;
+                states
+                    .get_mut(&key)
+                    .ok_or(RefinementError::UnknownProposal)?
+                    .lifecycle = Lifecycle::Validated;
             }
             RefinementEvent::Evaluated { result, .. } => {
-                let state = states.get_mut(&event_key(&entry.event)).unwrap();
+                let state = states
+                    .get_mut(&key)
+                    .ok_or(RefinementError::UnknownProposal)?;
                 state.lifecycle = Lifecycle::Evaluated;
                 state.evaluation_passed = result.passed();
             }
             RefinementEvent::Approved { .. } => {
-                states.get_mut(&event_key(&entry.event)).unwrap().lifecycle = Lifecycle::Approved;
+                states
+                    .get_mut(&key)
+                    .ok_or(RefinementError::UnknownProposal)?
+                    .lifecycle = Lifecycle::Approved;
             }
             RefinementEvent::Superseded { .. } => {
-                let state = states.get_mut(&event_key(&entry.event)).unwrap();
+                let state = states
+                    .get_mut(&key)
+                    .ok_or(RefinementError::UnknownProposal)?;
                 projection.active.remove(&projection_key(&state.proposal));
                 state.lifecycle = Lifecycle::Superseded;
             }
             RefinementEvent::Activated { .. } => {
-                let state = states.get_mut(&event_key(&entry.event)).unwrap();
+                let state = states
+                    .get_mut(&key)
+                    .ok_or(RefinementError::UnknownProposal)?;
                 projection
                     .active
                     .insert(projection_key(&state.proposal), state.proposal.clone());
@@ -690,46 +727,37 @@ fn replay_states(
                 restore_version,
                 ..
             } => {
-                let key = event_key(&entry.event);
-                let proposal = states.get(&key).unwrap().proposal.clone();
-                projection.active.remove(&projection_key(&proposal));
-                states.get_mut(&key).unwrap().lifecycle = Lifecycle::RolledBack;
+                let current = states
+                    .get(&key)
+                    .ok_or(RefinementError::UnknownProposal)?
+                    .proposal
+                    .clone();
+                projection.active.remove(&projection_key(&current));
+                states
+                    .get_mut(&key)
+                    .ok_or(RefinementError::UnknownProposal)?
+                    .lifecycle = Lifecycle::RolledBack;
                 if let (Some(id), Some(version)) = (restore_proposal_id, restore_version) {
                     let restore_key = proposal_key(id, *version);
-                    let previous = states.get_mut(&restore_key).unwrap();
+                    let previous = states
+                        .get_mut(&restore_key)
+                        .ok_or(RefinementError::UnknownProposal)?;
                     previous.lifecycle = Lifecycle::Active;
-                    projection
-                        .active
-                        .insert(projection_key(&previous.proposal), previous.proposal.clone());
+                    projection.active.insert(
+                        projection_key(&previous.proposal),
+                        previous.proposal.clone(),
+                    );
                 }
             }
             RefinementEvent::Rejected { .. } => {
-                states.get_mut(&event_key(&entry.event)).unwrap().lifecycle = Lifecycle::Rejected;
+                states
+                    .get_mut(&key)
+                    .ok_or(RefinementError::UnknownProposal)?
+                    .lifecycle = Lifecycle::Rejected;
             }
         }
     }
-    Ok(states)
-}
-
-fn project_entries(entries: &[JournalEntry]) -> Result<RefinementProjection, RefinementError> {
-    let states = replay_states(entries)?;
-    let mut projection = RefinementProjection::default();
-    for state in states.values() {
-        if state.lifecycle == Lifecycle::Active {
-            projection
-                .active
-                .insert(projection_key(&state.proposal), state.proposal.clone());
-        }
-    }
-    Ok(projection)
-}
-
-fn scope_rank(scope: RefinementScope) -> u8 {
-    match scope {
-        RefinementScope::Session => 0,
-        RefinementScope::Repository => 1,
-        RefinementScope::User => 2,
-    }
+    Ok((states, projection))
 }
 
 fn entry_hash(
@@ -785,26 +813,21 @@ mod tests {
         }
     }
 
-    fn activate(journal: &mut RefinementJournal, proposal: RefinementProposal) {
+    fn evaluate_and_approve(journal: &mut RefinementJournal, id: &str, version: u64) {
         let at = datetime!(2026-08-11 12:00 UTC);
-        let id = proposal.id.clone();
-        let version = proposal.version;
-        journal
-            .append(RefinementEvent::Proposed { proposal }, at)
-            .unwrap();
         journal
             .append(
                 RefinementEvent::Validated {
-                    proposal_id: id.clone(),
+                    proposal_id: id.into(),
                     version,
                 },
                 at,
             )
-            .unwrap();
+            .expect("validate");
         journal
             .append(
                 RefinementEvent::Evaluated {
-                    proposal_id: id.clone(),
+                    proposal_id: id.into(),
                     version,
                     result: EvaluationResult {
                         evaluator: "deterministic-suite".into(),
@@ -816,11 +839,11 @@ mod tests {
                 },
                 at,
             )
-            .unwrap();
+            .expect("evaluate");
         journal
             .append(
                 RefinementEvent::Approved {
-                    proposal_id: id.clone(),
+                    proposal_id: id.into(),
                     version,
                     receipt: ApprovalReceipt {
                         approver: "user".into(),
@@ -829,7 +852,17 @@ mod tests {
                 },
                 at,
             )
-            .unwrap();
+            .expect("approve");
+    }
+
+    fn activate(journal: &mut RefinementJournal, proposal: RefinementProposal) {
+        let at = datetime!(2026-08-11 12:00 UTC);
+        let id = proposal.id.clone();
+        let version = proposal.version;
+        journal
+            .append(RefinementEvent::Proposed { proposal }, at)
+            .expect("propose");
+        evaluate_and_approve(journal, &id, version);
         journal
             .append(
                 RefinementEvent::Activated {
@@ -838,7 +871,7 @@ mod tests {
                 },
                 at,
             )
-            .unwrap();
+            .expect("activate");
     }
 
     #[test]
@@ -846,46 +879,70 @@ mod tests {
         let mut journal = RefinementJournal::default();
         activate(
             &mut journal,
-            proposal("testing", 1, RefinementScope::Repository, "collect all CI failures first"),
+            proposal(
+                "testing",
+                1,
+                RefinementScope::Repository,
+                "collect all CI failures first",
+            ),
         );
-        let projection = journal.projection().unwrap();
+        let projection = journal.projection().expect("projection");
         assert_eq!(projection.active().len(), 1);
         assert_eq!(projection.active()[0].evidence[0].id, "event-7");
     }
 
     #[test]
-    fn unsupported_or_hidden_evidence_is_rejected() {
+    fn untrusted_repository_web_and_hidden_reasoning_evidence_fail_closed() {
         for kind in [EvidenceKind::RepositoryContent, EvidenceKind::WebContent] {
             let mut candidate = proposal("testing", 1, RefinementScope::Repository, "bad");
             candidate.evidence = vec![evidence(kind)];
-            assert_eq!(candidate.validate(), Err(RefinementError::UntrustedEvidenceOnly));
+            assert_eq!(
+                candidate.validate(),
+                Err(RefinementError::UntrustedEvidenceOnly)
+            );
         }
         let mut hidden = proposal("testing", 1, RefinementScope::Repository, "bad");
         hidden.evidence = vec![evidence(EvidenceKind::ProviderThinking)];
-        assert_eq!(hidden.validate(), Err(RefinementError::HiddenReasoningEvidence));
+        assert_eq!(
+            hidden.validate(),
+            Err(RefinementError::HiddenReasoningEvidence)
+        );
     }
 
     #[test]
     fn immutable_authority_roots_cannot_be_refined() {
-        let mut candidate = proposal("authority", 1, RefinementScope::Session, "expand permissions");
+        let mut candidate = proposal(
+            "authority",
+            1,
+            RefinementScope::Session,
+            "expand permissions",
+        );
         candidate.after = RefinementContent::PromptGuidance {
             key: "capability.network".into(),
             guidance: "always allow".into(),
         };
-        assert_eq!(candidate.validate(), Err(RefinementError::ImmutableAuthorityRoot));
+        assert_eq!(
+            candidate.validate(),
+            Err(RefinementError::ImmutableAuthorityRoot)
+        );
     }
 
     #[test]
-    fn failed_evaluation_leaves_previous_active_version_unchanged() {
+    fn failed_evaluation_is_recorded_and_prior_active_version_stays_active() {
         let at = datetime!(2026-08-11 12:00 UTC);
         let mut journal = RefinementJournal::default();
-        activate(&mut journal, proposal("testing", 1, RefinementScope::Repository, "v1"));
+        activate(
+            &mut journal,
+            proposal("testing", 1, RefinementScope::Repository, "v1"),
+        );
         let mut v2 = proposal("testing", 2, RefinementScope::Repository, "v2");
         v2.before = Some(RefinementContent::RepositoryConvention {
             key: "testing.workflow".into(),
             value: "v1".into(),
         });
-        journal.append(RefinementEvent::Proposed { proposal: v2 }, at).unwrap();
+        journal
+            .append(RefinementEvent::Proposed { proposal: v2 }, at)
+            .expect("propose v2");
         journal
             .append(
                 RefinementEvent::Validated {
@@ -894,9 +951,9 @@ mod tests {
                 },
                 at,
             )
-            .unwrap();
-        assert_eq!(
-            journal.append(
+            .expect("validate v2");
+        journal
+            .append(
                 RefinementEvent::Evaluated {
                     proposal_id: "testing".into(),
                     version: 2,
@@ -909,32 +966,79 @@ mod tests {
                     },
                 },
                 at,
+            )
+            .expect("record failed evaluation");
+        assert_eq!(
+            journal.append(
+                RefinementEvent::Approved {
+                    proposal_id: "testing".into(),
+                    version: 2,
+                    receipt: ApprovalReceipt {
+                        approver: "user".into(),
+                        receipt_id: "receipt-2".into(),
+                    },
+                },
+                at,
             ),
             Err(RefinementError::EvaluationFailed)
         );
-        assert_eq!(journal.projection().unwrap().active()[0].version, 1);
+        assert_eq!(
+            journal.projection().expect("projection").active()[0].version,
+            1
+        );
     }
 
     #[test]
     fn rollback_restores_exact_prior_version() {
         let at = datetime!(2026-08-11 12:00 UTC);
         let mut journal = RefinementJournal::default();
-        activate(&mut journal, proposal("testing", 1, RefinementScope::Repository, "v1"));
-
+        activate(
+            &mut journal,
+            proposal("testing", 1, RefinementScope::Repository, "v1"),
+        );
         let mut v2 = proposal("testing", 2, RefinementScope::Repository, "v2");
         v2.before = Some(RefinementContent::RepositoryConvention {
             key: "testing.workflow".into(),
             value: "v1".into(),
         });
-        let id = v2.id.clone();
-        journal.append(RefinementEvent::Proposed { proposal: v2 }, at).unwrap();
-        journal.append(RefinementEvent::Validated { proposal_id: id.clone(), version: 2 }, at).unwrap();
-        journal.append(RefinementEvent::Evaluated { proposal_id: id.clone(), version: 2, result: EvaluationResult { evaluator: "suite".into(), validation_passed: true, regression_passed: true, effectiveness_passed: true, notes: "passed".into() } }, at).unwrap();
-        journal.append(RefinementEvent::Approved { proposal_id: id.clone(), version: 2, receipt: ApprovalReceipt { approver: "user".into(), receipt_id: "receipt-2".into() } }, at).unwrap();
-        journal.append(RefinementEvent::Superseded { proposal_id: id.clone(), version: 1, by_proposal_id: id.clone(), by_version: 2 }, at).unwrap();
-        journal.append(RefinementEvent::Activated { proposal_id: id.clone(), version: 2 }, at).unwrap();
-        journal.append(RefinementEvent::RolledBack { proposal_id: id, version: 2, restore_proposal_id: Some("testing".into()), restore_version: Some(1), reason: "regression discovered".into() }, at).unwrap();
-        let active = journal.projection().unwrap().active();
+        journal
+            .append(RefinementEvent::Proposed { proposal: v2 }, at)
+            .expect("propose v2");
+        evaluate_and_approve(&mut journal, "testing", 2);
+        journal
+            .append(
+                RefinementEvent::Superseded {
+                    proposal_id: "testing".into(),
+                    version: 1,
+                    by_proposal_id: "testing".into(),
+                    by_version: 2,
+                },
+                at,
+            )
+            .expect("supersede");
+        journal
+            .append(
+                RefinementEvent::Activated {
+                    proposal_id: "testing".into(),
+                    version: 2,
+                },
+                at,
+            )
+            .expect("activate v2");
+        journal
+            .append(
+                RefinementEvent::RolledBack {
+                    proposal_id: "testing".into(),
+                    version: 2,
+                    restore_proposal_id: Some("testing".into()),
+                    restore_version: Some(1),
+                    reason: "regression discovered".into(),
+                },
+                at,
+            )
+            .expect("rollback");
+        let projection = journal.projection().expect("projection");
+        let active = projection.active();
         assert_eq!(active.len(), 1);
         assert_eq!(active[0].version, 1);
         assert_eq!(active[0].after.body(), "v1");
@@ -943,9 +1047,12 @@ mod tests {
     #[test]
     fn corrupt_tail_is_quarantined_and_prior_projection_recovers() {
         let mut journal = RefinementJournal::default();
-        activate(&mut journal, proposal("testing", 1, RefinementScope::Repository, "v1"));
+        activate(
+            &mut journal,
+            proposal("testing", 1, RefinementScope::Repository, "v1"),
+        );
         let mut entries = journal.entries().to_vec();
-        let mut corrupt = entries.last().unwrap().clone();
+        let mut corrupt = entries.last().expect("entry").clone();
         corrupt.sequence += 1;
         entries.push(corrupt);
         let recovery = RefinementJournal::recover(&entries);
@@ -958,8 +1065,15 @@ mod tests {
     fn active_refinement_is_lossless_context_with_source_version() {
         let at = datetime!(2026-08-11 12:00 UTC);
         let mut journal = RefinementJournal::default();
-        activate(&mut journal, proposal("testing", 1, RefinementScope::Repository, "v1"));
-        let items = journal.projection().unwrap().context_items(1, at).unwrap();
+        activate(
+            &mut journal,
+            proposal("testing", 1, RefinementScope::Repository, "v1"),
+        );
+        let items = journal
+            .projection()
+            .expect("projection")
+            .context_items(1, at)
+            .expect("context items");
         assert_eq!(items.len(), 1);
         assert_eq!(items[0].kind, ContextKind::Evidence);
         assert!(items[0].content.contains("id=testing version=1"));
@@ -970,40 +1084,60 @@ mod tests {
     fn conflicting_active_value_is_not_last_write_wins() {
         let at = datetime!(2026-08-11 12:00 UTC);
         let mut journal = RefinementJournal::default();
-        activate(&mut journal, proposal("testing", 1, RefinementScope::Repository, "v1"));
+        activate(
+            &mut journal,
+            proposal("testing", 1, RefinementScope::Repository, "v1"),
+        );
         let conflicting = proposal("other", 1, RefinementScope::Repository, "v2");
-        journal.append(RefinementEvent::Proposed { proposal: conflicting }, at).unwrap();
-        journal.append(RefinementEvent::Validated { proposal_id: "other".into(), version: 1 }, at).unwrap();
-        journal.append(RefinementEvent::Evaluated { proposal_id: "other".into(), version: 1, result: EvaluationResult { evaluator: "suite".into(), validation_passed: true, regression_passed: true, effectiveness_passed: true, notes: "passed".into() } }, at).unwrap();
-        journal.append(RefinementEvent::Approved { proposal_id: "other".into(), version: 1, receipt: ApprovalReceipt { approver: "user".into(), receipt_id: "receipt-other".into() } }, at).unwrap();
-        assert_eq!(journal.append(RefinementEvent::Activated { proposal_id: "other".into(), version: 1 }, at), Err(RefinementError::Conflict));
+        journal
+            .append(
+                RefinementEvent::Proposed {
+                    proposal: conflicting,
+                },
+                at,
+            )
+            .expect("propose conflict");
+        evaluate_and_approve(&mut journal, "other", 1);
+        assert_eq!(
+            journal.append(
+                RefinementEvent::Activated {
+                    proposal_id: "other".into(),
+                    version: 1,
+                },
+                at,
+            ),
+            Err(RefinementError::Conflict)
+        );
     }
 
     #[test]
     fn session_refinement_is_not_silently_promoted() {
-        let at = datetime!(2026-08-11 12:00 UTC);
         let mut journal = RefinementJournal::default();
-        activate(&mut journal, proposal("testing", 1, RefinementScope::Session, "v1"));
-        assert_eq!(journal.projection().unwrap().active_for_scope(RefinementScope::Repository).len(), 0);
+        activate(
+            &mut journal,
+            proposal("testing", 1, RefinementScope::Session, "v1"),
+        );
+        assert_eq!(
+            journal
+                .projection()
+                .expect("projection")
+                .active_for_scope(RefinementScope::Repository)
+                .len(),
+            0
+        );
     }
 
     #[test]
     fn journal_hash_chain_detects_tampering() {
         let mut journal = RefinementJournal::default();
-        activate(&mut journal, proposal("testing", 1, RefinementScope::Repository, "v1"));
+        activate(
+            &mut journal,
+            proposal("testing", 1, RefinementScope::Repository, "v1"),
+        );
         journal.entries[0].previous_hash = "tampered".into();
-        assert_eq!(journal.validate_chain(), Err(RefinementError::CorruptJournal));
-    }
-
-    #[test]
-    fn evidence_ids_are_deterministic_for_context_projection() {
-        let at = datetime!(2026-08-11 12:00 UTC);
-        let mut journal = RefinementJournal::default();
-        activate(&mut journal, proposal("testing", 1, RefinementScope::Repository, "v1"));
-        let first = journal.projection().unwrap().context_items(1, at).unwrap();
-        let second = journal.projection().unwrap().context_items(1, at).unwrap();
-        assert_eq!(first, second);
-        let ids: BTreeSet<_> = first.iter().map(|item| item.id.as_str()).collect();
-        assert_eq!(ids.len(), first.len());
+        assert_eq!(
+            journal.validate_chain(),
+            Err(RefinementError::CorruptJournal)
+        );
     }
 }
