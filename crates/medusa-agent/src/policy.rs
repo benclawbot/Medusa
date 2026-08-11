@@ -19,7 +19,7 @@ use std::{
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 use medusa_process_containment::OwnedProcessTree;
 
-#[cfg(any(target_os = "linux", target_os = "macos"))]
+#[cfg(any(target_os = "linux", target_os = "macos", windows))]
 #[path = "analysis_process_tracker.rs"]
 mod analysis_process_tracker;
 #[cfg(any(target_os = "linux", target_os = "macos"))]

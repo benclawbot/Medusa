@@ -6,7 +6,11 @@
 use std::{path::Path, process::Output, sync::atomic::AtomicBool};
 
 use medusa_core::{ErrorCategory, ErrorCode, MedusaError, MedusaResult};
-use medusa_process_containment::{WindowsSandboxRestrictions, run_appcontainer_cancellable};
+use medusa_process_containment::{
+    WindowsSandboxLimits, WindowsSandboxRestrictions, run_appcontainer_cancellable_observed,
+};
+
+use super::analysis_process_tracker::AnalysisProcessTracker;
 
 pub(crate) fn run_cancellable(
     repo: &Path,
@@ -14,13 +18,49 @@ pub(crate) fn run_cancellable(
     args: &[String],
     cancellation: &AtomicBool,
 ) -> MedusaResult<Output> {
-    run_appcontainer_cancellable(repo, program, args, cancellation).map_err(|error| {
-        if error.kind() == std::io::ErrorKind::Interrupted {
-            cancelled(error)
-        } else {
-            unavailable(error)
+    let analysis = repo
+        .components()
+        .any(|component| component.as_os_str() == "analysis-workspace-v1");
+    let limits = if analysis {
+        WindowsSandboxLimits::analysis()
+    } else {
+        WindowsSandboxLimits::default()
+    };
+    let mut tracker = None;
+    let result = run_appcontainer_cancellable_observed(
+        repo,
+        program,
+        args,
+        cancellation,
+        limits,
+        |receipt| {
+            if analysis {
+                tracker = Some(
+                    AnalysisProcessTracker::started(repo, program, args, receipt)
+                        .map_err(|error| std::io::Error::other(error.to_string()))?,
+                );
+            }
+            Ok(())
+        },
+    );
+    match result {
+        Ok(output) => {
+            if let Some(tracker) = tracker.take() {
+                tracker.exited(output.status.code())?;
+            }
+            Ok(output)
         }
-    })
+        Err(error) => {
+            if let Some(tracker) = tracker.take() {
+                let _ = tracker.failed(&error.to_string());
+            }
+            Err(if error.kind() == std::io::ErrorKind::Interrupted {
+                cancelled(error)
+            } else {
+                unavailable(error)
+            })
+        }
+    }
 }
 
 fn cancelled(error: std::io::Error) -> MedusaError {

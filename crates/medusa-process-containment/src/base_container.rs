@@ -12,6 +12,7 @@ use std::{
     time::{Duration, Instant},
 };
 
+use crate::ProcessOwnershipReceipt;
 use flatbuffers::FlatBufferBuilder;
 use windows_sys::Win32::{
     Foundation::{
@@ -42,6 +43,8 @@ const COMMAND_TIMEOUT: Duration = Duration::from_secs(120);
 const PROCESSMODEL_DLL: &str = "processmodel.dll";
 const SANDBOX_EXPORT: &[u8] = b"Experimental_CreateProcessInSandbox\0";
 const BROKEN_PIPE: u32 = 109;
+// Win32 JOB_OBJECT_LIMIT_PROCESS_TIME (winnt.h). Kept local because this windows-sys feature surface does not export it.
+const JOB_OBJECT_LIMIT_PROCESS_TIME_FLAG: u32 = 0x0000_0002;
 // Reserved by Experimental_CreateProcessInSandbox and required to be FALSE.
 // TRUE fails with ERROR_NOT_SUPPORTED before process creation.
 const INHERIT_HANDLES: i32 = 0;
@@ -87,6 +90,37 @@ impl Default for WindowsSandboxRestrictions {
     }
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct WindowsSandboxLimits {
+    pub active_process_limit: u32,
+    pub job_memory_bytes: usize,
+    pub process_user_time_100ns: i64,
+    pub timeout: Duration,
+}
+
+impl Default for WindowsSandboxLimits {
+    fn default() -> Self {
+        Self {
+            active_process_limit: 64,
+            job_memory_bytes: 2 * 1024 * 1024 * 1024,
+            process_user_time_100ns: 0,
+            timeout: COMMAND_TIMEOUT,
+        }
+    }
+}
+
+impl WindowsSandboxLimits {
+    #[must_use]
+    pub const fn analysis() -> Self {
+        Self {
+            active_process_limit: 1,
+            job_memory_bytes: 512 * 1024 * 1024,
+            process_user_time_100ns: 10 * 10_000_000,
+            timeout: COMMAND_TIMEOUT,
+        }
+    }
+}
+
 /// Runs a command directly in the Windows composable sandbox.
 ///
 /// No shell or batch file is involved, so arguments cannot be reinterpreted as
@@ -102,12 +136,52 @@ pub fn run_appcontainer_cancellable(
     args: &[String],
     cancellation: &AtomicBool,
 ) -> io::Result<Output> {
+    run_appcontainer_cancellable_observed(
+        repo,
+        program,
+        args,
+        cancellation,
+        WindowsSandboxLimits::default(),
+        |_| Ok(()),
+    )
+}
+
+pub fn run_appcontainer_cancellable_observed<F>(
+    repo: &Path,
+    program: &str,
+    args: &[String],
+    cancellation: &AtomicBool,
+    limits: WindowsSandboxLimits,
+    mut on_start: F,
+) -> io::Result<Output>
+where
+    F: FnMut(&ProcessOwnershipReceipt) -> io::Result<()>,
+{
     let root = strip_verbatim(&repo.canonicalize()?);
     let executable = strip_verbatim(&resolve_program(program)?);
     let read_only = read_only_paths(&executable);
     let specification = sandbox_specification(&root, &read_only);
     let api = SandboxApi::load()?;
-    unsafe { launch(&api, &root, &executable, args, &specification, cancellation) }
+    unsafe {
+        let mut controls = LaunchControls {
+            limits,
+            on_start: &mut on_start,
+        };
+        launch(
+            &api,
+            &root,
+            &executable,
+            args,
+            &specification,
+            cancellation,
+            &mut controls,
+        )
+    }
+}
+
+struct LaunchControls<'a> {
+    limits: WindowsSandboxLimits,
+    on_start: &'a mut dyn FnMut(&ProcessOwnershipReceipt) -> io::Result<()>,
 }
 
 unsafe fn launch(
@@ -117,14 +191,21 @@ unsafe fn launch(
     args: &[String],
     specification: &[u8],
     cancellation: &AtomicBool,
+    controls: &mut LaunchControls<'_>,
 ) -> io::Result<Output> {
+    let sandbox_limits = controls.limits;
     let job = OwnedHandle::new(unsafe { CreateJobObjectW(null(), null()) })?;
     let mut limits: JOBOBJECT_EXTENDED_LIMIT_INFORMATION = unsafe { zeroed() };
     limits.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE
         | JOB_OBJECT_LIMIT_ACTIVE_PROCESS
         | JOB_OBJECT_LIMIT_JOB_MEMORY;
-    limits.BasicLimitInformation.ActiveProcessLimit = 64;
-    limits.JobMemoryLimit = 2 * 1024 * 1024 * 1024;
+    if sandbox_limits.process_user_time_100ns > 0 {
+        limits.BasicLimitInformation.LimitFlags |= JOB_OBJECT_LIMIT_PROCESS_TIME_FLAG;
+        limits.BasicLimitInformation.PerProcessUserTimeLimit =
+            sandbox_limits.process_user_time_100ns;
+    }
+    limits.BasicLimitInformation.ActiveProcessLimit = sandbox_limits.active_process_limit;
+    limits.JobMemoryLimit = sandbox_limits.job_memory_bytes;
     if unsafe {
         SetInformationJobObject(
             job.0,
@@ -179,9 +260,16 @@ unsafe fn launch(
 
     let process_handle = OwnedHandle::new(process.hProcess)?;
     let thread_handle = OwnedHandle::new(process.hThread)?;
+    let ownership = ProcessOwnershipReceipt::capture(process.dwProcessId).map_err(|error| {
+        io::Error::new(
+            error.kind(),
+            format!("failed to capture Windows sandbox process identity: {error}"),
+        )
+    })?;
     if unsafe { AssignProcessToJobObject(job.0, process_handle.0) } == 0 {
         return Err(io::Error::last_os_error());
     }
+    (controls.on_start)(&ownership)?;
     if unsafe { ResumeThread(thread_handle.0) } == u32::MAX {
         return Err(io::Error::last_os_error());
     }
@@ -211,7 +299,7 @@ unsafe fn launch(
             let _ = join_reader(stderr_reader);
             return Err(io::Error::last_os_error());
         }
-        if started.elapsed() >= COMMAND_TIMEOUT {
+        if started.elapsed() >= sandbox_limits.timeout {
             drop(job);
             let _ = join_reader(stdout_reader);
             let _ = join_reader(stderr_reader);
@@ -219,7 +307,7 @@ unsafe fn launch(
                 io::ErrorKind::TimedOut,
                 format!(
                     "Windows composable sandbox command timed out after {} seconds",
-                    COMMAND_TIMEOUT.as_secs()
+                    sandbox_limits.timeout.as_secs()
                 ),
             ));
         }

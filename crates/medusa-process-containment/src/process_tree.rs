@@ -8,10 +8,12 @@ use std::os::unix::process::CommandExt;
 #[cfg(windows)]
 use std::os::windows::process::CommandExt;
 
+#[cfg(any(unix, windows))]
+use crate::ProcessOwnershipReceipt;
+#[cfg(unix)]
+use crate::ProcessOwnershipVerification;
 #[cfg(windows)]
 use crate::WindowsJob;
-#[cfg(any(unix, windows))]
-use crate::{ProcessOwnershipReceipt, ProcessOwnershipVerification};
 
 #[cfg(windows)]
 const CREATE_SUSPENDED: u32 = 0x0000_0004;
@@ -220,6 +222,8 @@ mod tests {
     };
 
     use super::*;
+    #[cfg(windows)]
+    use crate::ProcessOwnershipVerification;
 
     const ROLE_ENV: &str = "MEDUSA_PROCESS_TREE_TEST_ROLE";
     const PID_FILE_ENV: &str = "MEDUSA_PROCESS_TREE_TEST_PID_FILE";

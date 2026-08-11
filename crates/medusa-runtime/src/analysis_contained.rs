@@ -26,6 +26,7 @@ const MAX_CONTAINED_OUTPUT_BYTES: usize = 16 * 1024;
 const MAX_CONTAINED_LINES: usize = 128;
 const UNIX_ANALYSIS_CPU_SECONDS: u64 = 10;
 const UNIX_ANALYSIS_MEMORY_BYTES: u64 = 512 * 1024 * 1024;
+#[cfg(unix)]
 const UNIX_ANALYSIS_FILE_BYTES: u64 = 16 * 1024 * 1024;
 const CONTAINMENT_WALL_SECONDS: u64 = 120;
 
@@ -310,7 +311,7 @@ fn python_program() -> &'static str {
 fn platform_process_limit() -> usize {
     #[cfg(windows)]
     {
-        64
+        1
     }
     #[cfg(not(windows))]
     {
@@ -321,7 +322,7 @@ fn platform_process_limit() -> usize {
 fn platform_cpu_seconds() -> u64 {
     #[cfg(windows)]
     {
-        CONTAINMENT_WALL_SECONDS
+        UNIX_ANALYSIS_CPU_SECONDS
     }
     #[cfg(not(windows))]
     {
@@ -332,7 +333,7 @@ fn platform_cpu_seconds() -> u64 {
 fn platform_memory_bytes() -> u64 {
     #[cfg(windows)]
     {
-        2 * 1024 * 1024 * 1024
+        UNIX_ANALYSIS_MEMORY_BYTES
     }
     #[cfg(not(windows))]
     {
