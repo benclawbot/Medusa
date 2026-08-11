@@ -440,13 +440,16 @@ impl ModelModal {
     pub(super) fn move_selection(&mut self, delta: isize) {
         match self.focus {
             ModelModalFocus::Provider => {
-                self.provider_selection.move_by(Self::PROVIDERS.len(), delta);
+                self.provider_selection
+                    .move_by(Self::PROVIDERS.len(), delta);
                 let provider = Self::PROVIDERS[self.provider_selection.selected()];
                 self.model_options = model_options_for(provider, "");
-                self.model_selection.set_selected(0, self.model_options.len());
+                self.model_selection
+                    .set_selected(0, self.model_options.len());
             }
             ModelModalFocus::Model => {
-                self.model_selection.move_by(self.model_options.len(), delta);
+                self.model_selection
+                    .move_by(self.model_options.len(), delta);
             }
             ModelModalFocus::Effort => {
                 const EFFORTS: [Effort; 4] =
