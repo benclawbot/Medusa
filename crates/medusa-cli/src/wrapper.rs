@@ -1,5 +1,6 @@
 use std::{
     env,
+    io::IsTerminal,
     path::{Path, PathBuf},
     process::Command,
 };
@@ -95,7 +96,10 @@ fn main() {
         finish(run_recall(&recall_args), None::<&str>);
         return;
     }
-    if legacy::config_init_requested() {
+    if legacy::config_init_requested()
+        && std::io::stdin().is_terminal()
+        && std::io::stdout().is_terminal()
+    {
         match first_run::configure_interactive() {
             Ok(
                 first_run::FirstRunDisposition::Continue
