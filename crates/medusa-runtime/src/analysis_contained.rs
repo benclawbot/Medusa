@@ -22,7 +22,11 @@ use crate::{
 };
 
 const MAX_CONTAINED_INPUT_BYTES: u64 = 64 * 1024 * 1024;
-const MAX_CONTAINED_OUTPUT_BYTES: usize = 16 * 1024;
+const MAX_CONTAINED_RESULT_BYTES: usize = 16 * 1024;
+// The fixed Python reducer emits JSON with ensure_ascii enabled. A single input byte can expand to
+// six bytes as a \u00XX escape, so keep the transport budget separate from the result-data budget
+// and reserve additional framing space for the envelope, list separators, and trailing newline.
+const MAX_CONTAINED_OUTPUT_BYTES: usize = MAX_CONTAINED_RESULT_BYTES * 6 + 4 * 1024;
 const MAX_CONTAINED_LINES: usize = 128;
 const UNIX_ANALYSIS_CPU_SECONDS: u64 = 10;
 const UNIX_ANALYSIS_MEMORY_BYTES: u64 = 512 * 1024 * 1024;
@@ -261,7 +265,7 @@ impl WireValue {
             Self::Integer(value) => Ok(AnalysisValue::Integer(value)),
             Self::StringList(values) => {
                 if values.len() > MAX_CONTAINED_LINES
-                    || values.iter().map(String::len).sum::<usize>() > MAX_CONTAINED_OUTPUT_BYTES
+                    || values.iter().map(String::len).sum::<usize>() > MAX_CONTAINED_RESULT_BYTES
                 {
                     return Err(RuntimeError::InvalidCommand(
                         "contained analysis returned an out-of-bounds collection".to_owned(),
@@ -404,6 +408,23 @@ mod tests {
         assert_eq!(wire["kind"], "matching_lines");
         assert_eq!(wire["limit"], MAX_CONTAINED_LINES);
         assert!(wire.get("code").is_none());
+    }
+
+    #[test]
+    fn transport_budget_reserves_json_escape_and_framing_overhead() {
+        let bytes_per_line = MAX_CONTAINED_RESULT_BYTES / MAX_CONTAINED_LINES;
+        let values = vec!["\u{0001}".repeat(bytes_per_line); MAX_CONTAINED_LINES];
+        assert_eq!(
+            values.iter().map(String::len).sum::<usize>(),
+            MAX_CONTAINED_RESULT_BYTES
+        );
+        let wire = serde_json::json!({
+            "value": {"kind": "string_list", "value": values},
+            "truncated": false,
+            "reducer_elapsed_nanos": u64::MAX,
+        });
+        let encoded = serde_json::to_vec(&wire).expect("json envelope");
+        assert!(encoded.len().saturating_add(1) <= MAX_CONTAINED_OUTPUT_BYTES);
     }
 
     #[test]
