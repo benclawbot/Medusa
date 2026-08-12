@@ -67,11 +67,20 @@ def validate_links(root: Path, paths: list[Path]) -> None:
         raise DocumentationError(f"broken local Markdown links:\n{rendered}")
 
 
+def canonical_document_bytes(path: Path) -> bytes:
+    """Return UTF-8 content with platform line endings normalized to LF."""
+    return path.read_text(encoding="utf-8").encode("utf-8")
+
+
+def document_sha256(path: Path) -> str:
+    return hashlib.sha256(canonical_document_bytes(path)).hexdigest()
+
+
 def build_inventory(root: Path, paths: list[Path]) -> dict[str, object]:
     entries = []
     for path in paths:
         relative = path.relative_to(root).as_posix()
-        data = path.read_bytes()
+        data = canonical_document_bytes(path)
         text = data.decode("utf-8")
         entries.append(
             {

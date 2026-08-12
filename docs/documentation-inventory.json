@@ -6,152 +6,152 @@
     {
       "path": ".github/PULL_REQUEST_TEMPLATE.md",
       "disposition": "current",
-      "sha256": "f05118c70ee3fb4b27808edafe7ad7205efaec10ef539029b8eeec279b49d658"
+      "sha256": "9b155f4c55bccae084027d4991b674d8f96a5f42f49c8c102f6a7201ab7dea8a"
     },
     {
       "path": ".github/learning-ux-test-matrix.md",
       "disposition": "current",
-      "sha256": "a6c03cd924b683a0e3ab1cca6faeadcb1852eb2e4eb1fd12ed8077c9d4f92a86"
+      "sha256": "ebf60b133ba4584a048d538f06afe32d6f90341d18c0782f193eaca5eda137a2"
     },
     {
       "path": ".medusa/skills/doctor/SKILL.md",
       "disposition": "current",
-      "sha256": "d4d960a06a17701f92f6c30b58bc7562ad2d07af4935f68176de2f6c5b83f158"
+      "sha256": "331854259ca8de4b9a744f70d6e5613158b7bbda23548da593fcb21fb6dff116"
     },
     {
       "path": ".medusa/skills/github/SKILL.md",
       "disposition": "current",
-      "sha256": "c8b71b46c96f3d6c0cdd6c9629c65adad425998a65087bae9515b0b037dbf109"
+      "sha256": "99621deb93a14741fc1aa46d6ecdd4314e7299564185f8c288594561e66226b4"
     },
     {
       "path": "CONTRIBUTING.md",
       "disposition": "current",
-      "sha256": "2a989e20d8216492b8b3d345c3b2f5e142fd700b409f2f3e16ea57a7472695a8"
+      "sha256": "e3fef9361518739cc02e43d21a931f94646932a175feef8480bdba92f28dcef4"
     },
     {
       "path": "README.md",
       "disposition": "current",
-      "sha256": "c5c5367512b74be9ac2f9f5d6f02dde787a3fe62764ecdd9b5862230a3534d8c"
+      "sha256": "d5ceed6d38b7f204c8410d5e10e988bd28f0e2c8236bd2289a7a9f284ebcd774"
     },
     {
       "path": "SECURITY.md",
       "disposition": "current",
-      "sha256": "122a46f673ca6b1e34ca470e71b374c1bf41c71b90105a2c0176dd55cb45077b"
+      "sha256": "fb3adbc2200bd00969eb9367eee94fa2624d6f38f2998d29cf6d1286bd48bae1"
     },
     {
       "path": "apps/medusa-desktop/src/RECOVERY_ACCEPTANCE.md",
       "disposition": "current",
-      "sha256": "5ddaaf4bc5108d1404f654d8264cd3bf2cb18fec05582d6ce362497cdc9e5a1f"
+      "sha256": "823fa68c381619a13a5abd6f42338e0a3775b1e29157c090b2045ae432c8591c"
     },
     {
       "path": "apps/medusa-desktop/src/RECOVERY_UX.md",
       "disposition": "current",
-      "sha256": "45ef075e6847b3c0532bc1999c875e8081378c3ea42f1fa6b6b2c0031e675d77"
+      "sha256": "8e7c3f4be65f6fbcf95d28f6f9d55476f13bf71eeed8c9a3c27c72d3e771fe88"
     },
     {
       "path": "benchmarks/performance/README-685-execution-lanes.md",
       "disposition": "current",
-      "sha256": "d6963694dd88ed4a8d720b31a0fb3c7cfafb5e7c7d199b4ab79cedaecaa33561"
+      "sha256": "db98fea40b045ff7c7f76c6429cc20a89dbf635e7db3088897731b3f03a2d902"
     },
     {
       "path": "benchmarks/performance/README.md",
       "disposition": "current",
-      "sha256": "8a3952dcbdfa63a8e6dd7121f5fc4aa6ec782c913f6cf631cb8b7aa2771a42df"
+      "sha256": "0141228ff3d30e2fdda4528fa3e24dbbe9513b32958c7deb05e2ba29cc89f0b9"
     },
     {
       "path": "crates/medusa-daemon/README.md",
       "disposition": "current",
-      "sha256": "83041a5b17619f7aa8bade18b7ef599aefd7064fe4f9ecbd87c415051f24d6c7"
+      "sha256": "e74ca72220e0835984ad992a73af4a925ff2004e371b52e8d3895ba2a8e86623"
     },
     {
       "path": "crates/medusa-intelligence/src/STACK_REPAIR.md",
       "disposition": "current",
-      "sha256": "e263c7bab147aa356ee386c74e4509d7b0272a150b97877532fe249ba1c8cf8c"
+      "sha256": "b6f6e93735489a95d115deb06d96cfb88a170b43bd8e79142da7d84e155856a6"
     },
     {
       "path": "crates/medusa-memory/src/README.md",
       "disposition": "current",
-      "sha256": "2e278b7be38b6db8fd6fdc32e857b836c9eb2def224db9b4f2322d08941e7613"
+      "sha256": "0b2efdaaccd21d675c1a94a25daec5590a161dd22c5ca66055e2a922df86ecc0"
     },
     {
       "path": "crates/medusa-testkit/README.md",
       "disposition": "current",
-      "sha256": "62bdf8390e34e6b487d267f30fd385c6be75f28683988b150986fd644adb670d"
+      "sha256": "75c004b21dcd204127338e5c8d5bafeb1cd75fde8807c3ed7c4a797f3afb2259"
     },
     {
       "path": "docs/AGENT-CREATED-SKILLS.md",
       "disposition": "current",
-      "sha256": "ab162de600259b7bbfbc475f12506083b37a7cb06471b0d03bc3e943884b4c3a"
+      "sha256": "697849499308ebfee3cd001656659066ccb03f0dd1a44dae7628ef5e09afbbd4"
     },
     {
       "path": "docs/ARCHITECTURE.md",
       "disposition": "current",
-      "sha256": "9d167b949e54ac9f2422a67c0e694f1b78acfd3d1cfc3eb9491cd5791c029779"
+      "sha256": "1dd5d44a596d6e0e94e30d0a2bfcf19526ad2cf07110914e1a583badc0a9e20c"
     },
     {
       "path": "docs/AUTOMATIC-LESSON-EXTRACTION.md",
       "disposition": "current",
-      "sha256": "4dfadd59d462da3dac2b30ffc369306092decf32b119fa7d237f5e8d1108818f"
+      "sha256": "021f926ecc0a1abf6395882e6f433a978cd11c602b5dcb5d419ba4c5402a07bd"
     },
     {
       "path": "docs/AUTOMATIC-SKILL-REFINEMENT.md",
       "disposition": "current",
-      "sha256": "e4193b2a758618c21807b5d3c827cfe6f71954df784ada5bfa7435babc73f118"
+      "sha256": "b67c3c761e4a3e6ce82a99db7f9943ff458c6eb91e910831b2310a117830676f"
     },
     {
       "path": "docs/BENCHMARKS.md",
       "disposition": "current",
-      "sha256": "983b70c74afbbbc6a4d00d27dde2cc8382ec4ce4ea664e4fd6024c8fba5d82d2"
+      "sha256": "49033ccd9bccd660f1b4ad2c0211905e8224e60744fd5b02e5c95dbd161221c9"
     },
     {
       "path": "docs/CAPABILITY-EVIDENCE.md",
       "disposition": "current",
-      "sha256": "81c16e16fd4195606ef94265b4a432097aa38a13931e6639bbbb128f53436389"
+      "sha256": "549f0fcb57a1ff6deb2cc1e66de32d433d4ecca396804652710ff0c003c3476a"
     },
     {
       "path": "docs/CHATGPT-OAUTH.md",
       "disposition": "current",
-      "sha256": "741426c1f3a4bde59cf8a609e9e7505fc68a1587345d07283acc68208e32563e"
+      "sha256": "594b5f7b5062634fb5300bb32d43ed5ca87b78ea09a81f9579fb719789a03a35"
     },
     {
       "path": "docs/CODE-INTELLIGENCE-CAPABILITIES.md",
       "disposition": "current",
-      "sha256": "fd1a7955fdab343807a8250ec6a25d09032f009d328da5e16469f06d3aabd902"
+      "sha256": "fd1d00a083de7f872973a6dafa4f1774dc371b0cf5a09a1f587290fc87764706"
     },
     {
       "path": "docs/COMPATIBILITY.md",
       "disposition": "current",
-      "sha256": "ce24cdd2c4cbf4e56b43a87339fa82cfbc2c50018db26fa5eec849679589a19c"
+      "sha256": "e41f08dc30d1851fa17b27bfef72a6349e343257e5ba2b5b81bdcb68ab3a0616"
     },
     {
       "path": "docs/CONFIGURATION.md",
       "disposition": "current",
-      "sha256": "fadc72942ca4317fb7bbd993ec3e029a707e98bb16f4c81d77a20da9a08e6672"
+      "sha256": "1113e8ea8ce18346eb61ea8d71d32dea50b1adf4df0c2b57bdba055d558aa303"
     },
     {
       "path": "docs/CONTRIBUTOR-ARCHITECTURE.md",
       "disposition": "current",
-      "sha256": "9e8f6a067a309a8e0f12053403235b07ae3a9a1843f207e84979db86002ee4de"
+      "sha256": "4f1d2e7fea1fbeb4f847cc30c03bdc35ff75afdff692613a947046e9c11a44dd"
     },
     {
       "path": "docs/DAEMON-CONCURRENCY.md",
       "disposition": "current",
-      "sha256": "aa84302a710dcb729d75ec07dfeb89c4e83b250735c5f4cc40b21e9945ac45ce"
+      "sha256": "b05450af0d7585740ef5b7719c3c752e271bd0048bb839c725640f9d2daa2578"
     },
     {
       "path": "docs/DEPENDENCY-HYGIENE.md",
       "disposition": "historical",
-      "sha256": "8f15825a31e1f71b26a37705a81b79595a4b7288fc660b1a707cdc3380cb9d2b"
+      "sha256": "6cbbad9f8a82215f2355d4d55cba172fa32de2866ad0d0493d1d9f5d3815a209"
     },
     {
       "path": "docs/DESKTOP-DISTRIBUTION.md",
       "disposition": "current",
-      "sha256": "aeb6f8916038d254b5e29c3012761f08c017f06d36241d3174e6efec278cabd0"
+      "sha256": "65f3c4c1c3c8e9c55c49669243fc17159ae14ebcba0a045be4f1a32627b755a1"
     },
     {
       "path": "docs/DESKTOP-UX.md",
       "disposition": "current",
-      "sha256": "b14279dad31b77299f433e8ac4fb1a08957ee98204cc5c50e8dc67723698533d"
+      "sha256": "7978cb5c8bec5a655ec81e93ded9bf10dc61b4f64a39ade899ca5bb9431a3b75"
     },
     {
       "path": "docs/DOCUMENTATION-GOVERNANCE.md",
@@ -161,87 +161,87 @@
     {
       "path": "docs/DURABLE-PATCH-TRANSACTIONS.md",
       "disposition": "current",
-      "sha256": "7fc0d191f54254e0b01f99c1d221e42bdcf8ce0a609dc4d5117ad3a53bab53d1"
+      "sha256": "a87933be0f54cfb0edf1cd74c5e2f5b3161142857351b7f4f8fb2fa0e35c4966"
     },
     {
       "path": "docs/EXECUTION-DURABILITY.md",
       "disposition": "current",
-      "sha256": "3abfa083d97185baed53ae58c40b561d4fb4655dfd90fc0e3b311ef89da591a8"
+      "sha256": "aa9de5a3f5db604c954bb431a9db4af6e2d795df968eb9df475317f21e97d8cb"
     },
     {
       "path": "docs/EXTERNAL-REPOSITORY-VALIDATION.md",
       "disposition": "current",
-      "sha256": "f13f51087e720add3e2ae695e21cbd25650c059a0fccaa6ac36c707c097b9d4b"
+      "sha256": "2f86f59017510e658ef235ab42090f2f017644c128396892d85a93c43f2c695f"
     },
     {
       "path": "docs/GITHUB-BACKEND-PARITY.md",
       "disposition": "current",
-      "sha256": "7060d5cd2bfe819d94a1ded314648af7616ea00cc670f077b618a7d65d8e9cdd"
+      "sha256": "e5c6547a2b825e622fd16aae754bce9d4dcf8e2bbdeac2cb9ba736cc8539e1b1"
     },
     {
       "path": "docs/GITHUB-REPOSITORY-CREATION.md",
       "disposition": "current",
-      "sha256": "f5af7cd40167c7450af5e66e3c20011ebe39ff322aee663606249d68bffdefa5"
+      "sha256": "f35a84fdd70b15728d6fe8bdc7561d66b333000eb1de77904286ff4ea6c68566"
     },
     {
       "path": "docs/HARNESS-EVALUATION.md",
       "disposition": "current",
-      "sha256": "f5600001dd6165d0c74ae2443fd2419a0c901bbf6b61d30c039080ea01f10a27"
+      "sha256": "8f86c57846ae03996bd1b0a4dc9c41c093c59e69c717e65a637f0805de613db1"
     },
     {
       "path": "docs/INDEX-BENCHMARKS.md",
       "disposition": "current",
-      "sha256": "76ba8a85e904a8b66ee0c94df39f7af353a25cbcfc65738a79fe942fe035b8c1"
+      "sha256": "078366d40dcfbf7a56b8afed19850b6c2646eee19b956b551de5c975a2e8af7f"
     },
     {
       "path": "docs/LIVE-PROVIDER-DOGFOOD.md",
       "disposition": "current",
-      "sha256": "3ac4b1fa1fc32c108c28789a51f28ee3c0c348135e753fd4c05518031698ff19"
+      "sha256": "930579c5fab0222591e99f8b40fc4f5d5eb02de38efc4e2cfaf8b677f9dfe715"
     },
     {
       "path": "docs/MULTIMODAL-TESTING.md",
       "disposition": "current",
-      "sha256": "9a92844a4a1ccb7938f05960611f3d362d6b65c76b79b523549e5808548fb7de"
+      "sha256": "d2ac0529024883dd5c9798f1a6382789bfd8fc7a27887279ab6a2f65de465f5f"
     },
     {
       "path": "docs/MULTI_AGENT_EXECUTION.md",
       "disposition": "current",
-      "sha256": "150e1fa3bd16ff5b7beaefd208a74b9417d8a10e0212eb210d853ce3766bfa4c"
+      "sha256": "24ffa52bc86e51c74d5d8089528d001d1aeecf6f66f75973dc5e651d1160d22c"
     },
     {
       "path": "docs/MUTATING-WORKTREE-INTEGRATION.md",
       "disposition": "current",
-      "sha256": "a3df529425cb67291bb48aeeff580da0691fd0de5cc8918cb82d873f1093355a"
+      "sha256": "b46845d67e53c555b1557ebc68b9be9959ac8343935cc40c7ef07711f0bc8f8d"
     },
     {
       "path": "docs/OBSERVABILITY.md",
       "disposition": "current",
-      "sha256": "39369e79adac4897da1ad7462446212068cc5fe314ad91d1e11391c1d9f4d3d2"
+      "sha256": "61e59fa15e26fc0e442857e0b343b3506fc0ff1953f477a4060ab32b8ec604b8"
     },
     {
       "path": "docs/PRODUCT-ACCEPTANCE.md",
       "disposition": "current",
-      "sha256": "584790c0054e928fa39019030782195d83f6189d7fa22e1fb2cdcb21cd7e07fe"
+      "sha256": "f0857847a9dda8365bd60b728b679e60cae8500920e8993b5357c43ebb838eb0"
     },
     {
       "path": "docs/PRODUCTION-EXECUTION-TRACE.md",
       "disposition": "current",
-      "sha256": "379a0c0c80cbe2de48f6e4f2f899d6db39cc149d5cf563b760da5b08e8095e4c"
+      "sha256": "c06198712f94013b63a7a4a21f83aa609bd14f09cc1fe4ff798574b5b2cc4b6b"
     },
     {
       "path": "docs/PRODUCT_EVIDENCE_ROADMAP.md",
       "disposition": "historical",
-      "sha256": "83578fa6c467f8f72f820b0ded2969d82f2332eea7ea984cb3914c8d6ddb7e4d"
+      "sha256": "c39ce6273f329ba7360684154b3a85f79455ade704d9dd6a1d8f958c3365895d"
     },
     {
       "path": "docs/PROTOCOL-VERSIONING.md",
       "disposition": "current",
-      "sha256": "668a0e585cda193210bd5eb0934794101f49fea5d21417a26638329158383df3"
+      "sha256": "a4093e32e94129dabb53907098e4364508b50ef8a1e2a462fe1146f3b5d915a7"
     },
     {
       "path": "docs/PROVIDER-DELIVERY.md",
       "disposition": "current",
-      "sha256": "eb6b2b9472a23de8fd1a39c52d631fc2bf1a1ace081e68db3c3ee92893db045f"
+      "sha256": "75634be5f1bca7e58a8dc3d7d3b6a1bbb9eb99fb3a7877c832bb5ab82fccd5fc"
     },
     {
       "path": "docs/PROVIDER-SUPPORT.md",
@@ -251,492 +251,492 @@
     {
       "path": "docs/PUBLIC-API-BASELINE.md",
       "disposition": "current",
-      "sha256": "955ad2e5c839a1fd399ead01a03c820cd46a38725ab4ea7d41f5fb6afe46ec3e"
+      "sha256": "b3bfbab0d33ae59025ee19b57f51ef05f51dbcb8c2b8db337c5b4243672747bf"
     },
     {
       "path": "docs/README.md",
       "disposition": "current",
-      "sha256": "83bf8052d41185d1c843bd89eb288473695f15f4f8ec6c3d704408e099d1ec54"
+      "sha256": "0e40296a1a5b5c4c5a332440eab83039296088d1f738ec9594dad9038396fbbc"
     },
     {
       "path": "docs/REFACTOR-BASELINE.md",
       "disposition": "current",
-      "sha256": "86be552b40a9b8bd545d78dc938097c0e78e2f5eb7c8d29cf4395f493ea0b5bc"
+      "sha256": "fbe40104c65d6258f5011410952e41dc9e81e9aa8b4fdc5b1b4a05233b04fcb9"
     },
     {
       "path": "docs/RELEASE-SIGNING.md",
       "disposition": "current",
-      "sha256": "914c0508b9ecceca0ea968f24d9bf24c855eeadb785d42fae3793ed49ea9d640"
+      "sha256": "f69a2a7b44d479c7f1eabe8dc5d3fec7b30ae51c1ee163530a111c64f26b4e68"
     },
     {
       "path": "docs/RELEASE.md",
       "disposition": "current",
-      "sha256": "76f0da97980f5f7c2a7b0eac22df4a355acbe32bf49438561dda537cc3a81f2b"
+      "sha256": "b23eb0d1a653585a2e6915a8c0211ec35faf799f4ef787761d52b1a77b2891a4"
     },
     {
       "path": "docs/SAFETY-RECOVERY-PROOF.md",
       "disposition": "current",
-      "sha256": "f457f65f535d817643808539bd290e4f06097137932618d6156ee0d940e2cb43"
+      "sha256": "3e5f69882ac81bb5883bf7ac0f21443737a94feaafbbc449d96d324ffe21761f"
     },
     {
       "path": "docs/SCHEMA_HARNESS_FOUNDATION.md",
       "disposition": "current",
-      "sha256": "93e5bf80d90888b048fca6dc9f6b9119684b24e5d82cdc5f7ff279af59de9f2e"
+      "sha256": "623cd49d24d9c848a61cf915c7c336cbaec6f00a1343c9c923faa420249261b2"
     },
     {
       "path": "docs/SECURITY-HARDENING.md",
       "disposition": "current",
-      "sha256": "e12213c81048f982773ad1881a94d8b98edbd17913d4f0f99e61e5df8286500b"
+      "sha256": "cf94d8efc90608c7ed28dd9438f089b0e0449dc4d22f41dfe055337e0feeec7d"
     },
     {
       "path": "docs/SESSION-RECALL.md",
       "disposition": "current",
-      "sha256": "290b4528782328a97d87d9d1e58d6167c136b0409aa23090d83f0aa30f2f1fee"
+      "sha256": "7b95478e0b72394dd79e43e52626d218949b568a19fe1192e49225fe58fe42f5"
     },
     {
       "path": "docs/SESSION-RESUME.md",
       "disposition": "current",
-      "sha256": "722af99e78eed644cea3eea24fda268390e29e65d3e85006e73b95f630becb09"
+      "sha256": "b7caace0f7cca84e3f91fad290ba88851b5e4279356811cd4d2a60a43976473f"
     },
     {
       "path": "docs/SKILL-DEPENDENCIES.md",
       "disposition": "current",
-      "sha256": "a80cd1048c1f784ac2b8d074763c6b695e972e311f0035210141934ee9fcbe95"
+      "sha256": "eccd13cf25b88f45b534281548a9d1742895e5e98c6d45c1e2def450b82f0882"
     },
     {
       "path": "docs/SKILL-DEPENDENCY-LOCKS.md",
       "disposition": "current",
-      "sha256": "cf0effa74d563a6b03cbf9950032e26f63e016d0a1fbb11b20148ad639ae79df"
+      "sha256": "753a2df6b80789e4f2c7824025e45092c2de45d9887ee003f0e9e8729c9afeb8"
     },
     {
       "path": "docs/SKILL-EFFECTIVENESS.md",
       "disposition": "current",
-      "sha256": "879165cd8e4944ca78bb2c0013092a88f6074b230035d5e267b5762d71c9b660"
+      "sha256": "315f65ffb8b95541503c82e7f3f5f4c54afade42eeedd0abf68b3e3a66c91b28"
     },
     {
       "path": "docs/SKILL-LIFECYCLE.md",
       "disposition": "current",
-      "sha256": "940e7f24b04231fe28fafadb655ddb3deafb7643268c198aa1a4a07120412f70"
+      "sha256": "d2920dd0d614af2dfdb05dda7523756faf157423948c5d92d4f879cf8cb82973"
     },
     {
       "path": "docs/SKILL-PROBATION-GRADUATION.md",
       "disposition": "current",
-      "sha256": "391896cdac8157f31c7db6d1ec6ec38b9a1e4b170d437e67215bbb235d43c503"
+      "sha256": "b815d9291a8c4be1b2b84444a62275beb79598da1e2ec015eeb3516951a852d5"
     },
     {
       "path": "docs/SKILL-PROBATION.md",
       "disposition": "current",
-      "sha256": "c0184eee79c5df4b3267bd6ac7ef94b02be923b0c12b677d378240a8dd92a259"
+      "sha256": "00c73d53462f368366ff7c8906d8f6ea9abbd6023b5ccdc25ded2af0410054fd"
     },
     {
       "path": "docs/SKILL-PROVENANCE.md",
       "disposition": "current",
-      "sha256": "cca70c11fb57d0a0296f15750f839958e080794ed57cf8157434a424cdcf1702"
+      "sha256": "8e81d2b63014b69c321df19a03527d33afd2c23c6e321eb49161d814a1001f9c"
     },
     {
       "path": "docs/SKILL-REVIEW.md",
       "disposition": "current",
-      "sha256": "1f885fc7e2b5aa28f4da6a5c24e11b8a68a39352a44539990b4daa6389c5bb52"
+      "sha256": "164a46fb6ef666d5be2834325e7f04ad6351753cd823cb2292af7d868f920768"
     },
     {
       "path": "docs/TEAM-OBSERVABILITY-STEERING.md",
       "disposition": "current",
-      "sha256": "020b6e3ef05db878924f5193768b0c84e4e3542563384714736c81839b49581e"
+      "sha256": "801c9e3bd3e5fb002e1e26801ab78702aa8666d6e1d863134a3ac8092d4d95ad"
     },
     {
       "path": "docs/TELEGRAM-GATEWAY-TEST-MATRIX.md",
       "disposition": "current",
-      "sha256": "eb6569986323bfb3951658b051bc657978385612f3d255647db723f1372191c1"
+      "sha256": "27311729b7f51248786bc29819f5140bfb1535c5338adbff92dc5a73fade2281"
     },
     {
       "path": "docs/TELEGRAM-GATEWAY.md",
       "disposition": "current",
-      "sha256": "76a1599eed45d20a79aac62cca5c0d9fe5cedd2484810936b0654d3a906119d7"
+      "sha256": "7a0adbe7d784ffcc6ea295756b487ca414b30a771d0e45713e49f61f324694cb"
     },
     {
       "path": "docs/TELEGRAM.md",
       "disposition": "current",
-      "sha256": "452bcf55fbabc9bb69c2e50e973e9317092b0ba891b27d3ab8e755667722e244"
+      "sha256": "01af17a8daafd342252ce15397288960c3d6e0040aacadaefa705e4e0a71faba"
     },
     {
       "path": "docs/TRANSACTIONAL-PATCH-RECOVERY.md",
       "disposition": "current",
-      "sha256": "d9c37bdfc79930aede00f6610dc90bee2a4c92a831e56ba033d6b126750f64d7"
+      "sha256": "61960cc3824e8e748f11ae04c7d41552f649db84aaa1001fdef60f5da2a9b4dd"
     },
     {
       "path": "docs/WINDOWS-DESKTOP-NODE.md",
       "disposition": "current",
-      "sha256": "cce26a2731f1c603a6565ae0025421361cbf30e12c45ea60ad6a4b6a243908fc"
+      "sha256": "e8ada547e0564ca45c7dbee909f22f9742b84bb63be4e768d5fa80688adf7dd2"
     },
     {
       "path": "docs/architecture-policy.md",
       "disposition": "current",
-      "sha256": "1399c75e56276d4352f3ea5117983f8d69fffe4e4546aba89aa8530e25783812"
+      "sha256": "a9d4be28b2aae6506ec451d4897408be92a0dfb752f86f93099de39a4afd9ca6"
     },
     {
       "path": "docs/architecture/FINAL-CERTIFICATION-AUDIT.md",
       "disposition": "historical",
-      "sha256": "fafb91cb73104b65de067bf8597d18357bf538c7e244cda7331b28ae62f98ffa"
+      "sha256": "eb68be79a1b66b7dfd7047626b70c083f2d33c8fc3f172a7945d9ba3e435a6bc"
     },
     {
       "path": "docs/architecture/INDEX.md",
       "disposition": "current",
-      "sha256": "1612f9c91be949979693e70cbb485c910451c33071831ae3aae64c810fdeea89"
+      "sha256": "90c109a549b37183899cf960ed6fcd037a583750a0091702cd1ea03c102dfeb9"
     },
     {
       "path": "docs/architecture/LEGACY-DELETION.md",
       "disposition": "current",
-      "sha256": "ca40d29db1b85eeadccc4a21ecdd86a27fcf1c77536b7bb8d4ecbe7591219d26"
+      "sha256": "ab60ce8c431b1ad407f5d9412008603d8fb915373d4908f0411e24a2b13ff06e"
     },
     {
       "path": "docs/architecture/PREBUILT-UPDATES.md",
       "disposition": "current",
-      "sha256": "7228794a435eee2f027f15ac4146122ae7125900408d5d36f4d1f2abf30d3e1f"
+      "sha256": "ce9303d59f7edb845f4c588da814d700f19a4462c99d42bd7ee3297606f8df7b"
     },
     {
       "path": "docs/architecture/RELEASE-POLICY.md",
       "disposition": "current",
-      "sha256": "7f3ec885f6cedd02a65eedebb495b97cdf68d463279224770ca3f7f8a112ed62"
+      "sha256": "cd5801530d695c1d04730648dc716ede17682d471e20182fec6a8640d7a4e03b"
     },
     {
       "path": "docs/architecture/UNSAFE-RUST-BOUNDARY.md",
       "disposition": "current",
-      "sha256": "577c7f0f5d310196c2a8240350d9edbf60dae84547b17ec42b913a88c55971f9"
+      "sha256": "b75da639a0bce4bf6fe7616dc2434c86f8c9e6dfc0d9129283044a73df8fda46"
     },
     {
       "path": "docs/architecture/decisions/0001-architecture-v2-reset.md",
       "disposition": "current",
-      "sha256": "38b14b653ad97dbf6decbe059c1a44756e5e76f7f5348ca62a145b0d7720ddcc"
+      "sha256": "f1c13c67f88eb4211c84becdb11cca33675ffbb3d45cbc1d1bfc84b0d0db24c1"
     },
     {
       "path": "docs/architecture/decisions/0002-verified-prebuilt-updates.md",
       "disposition": "current",
-      "sha256": "428a03ecbafe56672c1ae0b129626cb6edad2a94b3bb2f32ddc48b1151d1c299"
+      "sha256": "f2b87c020397db21802444e7c7fa1be3ec563c965c217a3c4f30ed83b9a3e211"
     },
     {
       "path": "docs/architecture/decisions/0003-truthful-capability-plugin-registry.md",
       "disposition": "current",
-      "sha256": "56d0ced747f3a6ce8d7782aa44658f85cb4ccdc296f90f2c9c7f5a671be4484b"
+      "sha256": "fbaa9c1c708922f987da28ffba27c0824f7c6845beab433cc64795770da8042b"
     },
     {
       "path": "docs/architecture/decisions/0004-authoritative-durable-scheduler.md",
       "disposition": "current",
-      "sha256": "a9a6c261fb182d09cfe1140eb875f17438aa595e0141481888a0b57923d75b85"
+      "sha256": "a610c8471cd614403a1d8a1cdbb5b4216f08b17a136264065b6eaa258a6eb626"
     },
     {
       "path": "docs/architecture/decisions/0005-transactional-mutation-lifecycle.md",
       "disposition": "current",
-      "sha256": "e6450c0cfb10aeb58ec679ef271ca75800cb107ea541ddce5b6b283eda27bab4"
+      "sha256": "b79cade63812ec2fd2e8015f4d94ba0e08af04d3407907bb0524f0baac10af55"
     },
     {
       "path": "docs/architecture/decisions/0006-authoritative-evidence-artifacts-and-verification.md",
       "disposition": "current",
-      "sha256": "5741f84ef368e84f2407a757136b965e613659479b35ae3b2716afc453f74fa0"
+      "sha256": "fcc7f6126878afcaebb30ff5f119aefe9165a6a58f06d08028f3d813fe625855"
     },
     {
       "path": "docs/architecture/decisions/0007-canonical-frontend-projection.md",
       "disposition": "current",
-      "sha256": "180bdc9bed8d4c670dfcc585f0296a9ec7a95210c4a59a680296f329d90f257c"
+      "sha256": "3cb6d185b5e416a55ce58c86c84e55e866835e3bc6cda5eb81026cdb9d1d5a73"
     },
     {
       "path": "docs/architecture/decisions/0008-main-default-explicit-release-updates.md",
       "disposition": "current",
-      "sha256": "e6deb6e73520272bc08c879c50d01f87dc09e2e6a0f86e60d2edb94db9f3f17e"
+      "sha256": "a5454453e8c8491ed2edd3f1ae84205d8153b829967415d842f33dee82abda8f"
     },
     {
       "path": "docs/architecture/durable-session-journal.md",
       "disposition": "current",
-      "sha256": "bd4dbc8b10becaf63f4c4bd67fafb1b6221142d49a7f291987e0b65c3bc02d1f"
+      "sha256": "688b14b7fff95d0d2c5139527562e591475ad76636dd9d533c2a5fadca73eda0"
     },
     {
       "path": "docs/architecture/production-multi-agent-consolidation.md",
       "disposition": "current",
-      "sha256": "59f91dad5ec625b0ffd591dea3a880eda7b3e8a1e5714cb9d1c74fdd37172993"
+      "sha256": "2702d860b480c0134dc5f09cb5488621c793badb9dc436b91fd37d31ac35016e"
     },
     {
       "path": "docs/architecture/provider-profiles.md",
       "disposition": "current",
-      "sha256": "c55f6a7724737e0d737b472a156d32a479ff37ddcc3ed9ef221fcd7a80f0df71"
+      "sha256": "424f3e17a8531bc0bfc6b549ece74b4f9d0fb2a1512d778fa0c605cc3fdbb8ac"
     },
     {
       "path": "docs/architecture/rust-intelligence-comparison.md",
       "disposition": "current",
-      "sha256": "c377723906856c43497dde57d864720ed3530673954d60ac6512786dd1bb01cb"
+      "sha256": "4d4ce00dfcac780ffff15d0e5fcdd74b16e996643407d45b1adc5f8ab6d1b27e"
     },
     {
       "path": "docs/architecture/session-action-plane.md",
       "disposition": "current",
-      "sha256": "6caa1e1d3f31c03baf7dba25dc7244db813255aeec70574a5ad06d24ae57fed3"
+      "sha256": "82c243f6da084e302940b952648445864dfa403c8c4766113ff81e8c195af90d"
     },
     {
       "path": "docs/architecture/shared-configuration-authority.md",
       "disposition": "current",
-      "sha256": "e83f1a0ce5923e38f5f048669a2f0354fbbbb032d3481b998891d26d4ede4ae9"
+      "sha256": "6598405ea4cee12be443220b64d837bfadb8ce05e83c4dc1b2282f6f080be8dd"
     },
     {
       "path": "docs/architecture/tui-configuration-command.md",
       "disposition": "current",
-      "sha256": "59126b339770200a5209f03ff4105df3e268d38977998eade5322d31f0362d6b"
+      "sha256": "3eed09e7006f754b2efeb7a3b9d0a4d15176ad90316bc8637d320fe782deaba1"
     },
     {
       "path": "docs/architecture/typescript-code-intelligence.md",
       "disposition": "current",
-      "sha256": "d7a28cb040d1d03883a8587a60607840360b0286dbac5ae715d7c994de3937bf"
+      "sha256": "6b853c53d4b522e6eccd09f1d1d427b3970f0c95b59dacf34633fe56e2920084"
     },
     {
       "path": "docs/data-lifecycle-certification.md",
       "disposition": "current",
-      "sha256": "85e848b37b5d5c447f4430cf87a02f4ffcb27ef529e335bedae51cf66c503ef3"
+      "sha256": "ec1fad7df3ec887441259849570d37fd672ebf4149f7f12e817a8168a387da19"
     },
     {
       "path": "docs/durable-journal-policy.md",
       "disposition": "current",
-      "sha256": "bd23cf16defd87d626af2ef29eae5a3d7b41cb828d64c66a8ffe06fea77c403c"
+      "sha256": "ae1b6d7a8d8acc704e0340d4f31c25aba667d491d17852f2255a4fafddfb32c4"
     },
     {
       "path": "docs/explicit-capabilities.md",
       "disposition": "current",
-      "sha256": "7b72e8339d9618ecd40ffcf268c72476b8c3ed5cd8e680937e0bf4662b150630"
+      "sha256": "4ad9036371c5af3980fca3f161257481536cfd0be72d3083ad2c45de68b7de68"
     },
     {
       "path": "docs/full-system-remediation.md",
       "disposition": "historical",
-      "sha256": "8129f12d28826b11d6e8c127c136e964a78f50f7c866fb3880ff213f7652b00d"
+      "sha256": "ea07ad0d5b2257ab80114ac80451d43934daf1096e4e7c4e47e6c8329fa6cfb5"
     },
     {
       "path": "docs/issue-307-direct-engine-modules.md",
       "disposition": "historical",
-      "sha256": "4f0cb4e3cd08601822939e786dfd0ddfce5912838823b88a2a47b002a7da992c"
+      "sha256": "5c7bf7fbc92485becab89799541e9cf406940569f2b32a92c5596124e9db87bf"
     },
     {
       "path": "docs/issue-307-source-splicing.md",
       "disposition": "historical",
-      "sha256": "f585b26a08d583715006505cbf6399e82871a9098c9c87026c1f3cebfaf271b2"
+      "sha256": "334c1f7bf4de5297cfe520cc6f44ad39abe6f5887430c389f85141152053e9f1"
     },
     {
       "path": "docs/issue-308-native-windows-sandbox.md",
       "disposition": "historical",
-      "sha256": "ce8e8e7a080c73a677b341a5b594712c8171cbe7851a91f66f47d32bdbfae40a"
+      "sha256": "4a081217118fdca0b0abe5f4e1effc342a6115508f1de5ec76ec77b17af194d3"
     },
     {
       "path": "docs/issue-308-windows-sandbox.md",
       "disposition": "historical",
-      "sha256": "a770d1db763e90fffedbd616501791a904fdee860b29b548da31fb9df95d5c06"
+      "sha256": "5a84e3407ca3536f1725e1fb7b883280dfd0119d05002f06ced3a832d915d9e0"
     },
     {
       "path": "docs/mcp-cache-panic-fix.md",
       "disposition": "historical",
-      "sha256": "98bfb9f3659a116000068d2c023ec3be68ba488e5387ffc1f7ca2a5f66878817"
+      "sha256": "4e6cb02b130d79d350fb5fc6ef9f8b9ef16ce03757909e74a4c21e90a6af038a"
     },
     {
       "path": "docs/model-selection-parity.md",
       "disposition": "current",
-      "sha256": "75675fa68889e3ea4d9211d0aeecbc071a6f1fd862b177da37d9e8a978486ee6"
+      "sha256": "f664f91d39ccb1e99854b50bd9d5906a8151e877f6fa2c835a438d6884b3372e"
     },
     {
       "path": "docs/multimodal-attachments.md",
       "disposition": "current",
-      "sha256": "a4d11d7dda8e201fdf617c6099d9329cc9e98ee539d20923f9886023f97f8d84"
+      "sha256": "3308fc05b044fcabe8b4c52eaf44d32b25480cf06db8f1ffdad809907451fafa"
     },
     {
       "path": "docs/openai-realtime-live-evidence.md",
       "disposition": "current",
-      "sha256": "62a4915b74d4ccebde573f4590d1ac40bc9d82422cc868c3f00a453f77c0d133"
+      "sha256": "8776e52585f6fc13982d0f63756988c7c76df97223332565b37c35fc2299cdcf"
     },
     {
       "path": "docs/provenance-source-coverage.md",
       "disposition": "current",
-      "sha256": "8ddfd8f466cfdc4aad7adc801d37061dc5053ff0b1846e86076a7b61eb169999"
+      "sha256": "c1862e5b3392a627eaeb36cd5af1bb0411a5b087644d130b80f241bb577d4eb6"
     },
     {
       "path": "docs/provider-request-lifecycle.md",
       "disposition": "current",
-      "sha256": "84261a1ef368fbf78d076b2e7e90e037204c0cb57e45224aa19536dd30de8dfd"
+      "sha256": "ddccd53f7d0117b49b9fef2459c14b709408f0975e81aee51407bf9bae1c8200"
     },
     {
       "path": "docs/quickstart.md",
       "disposition": "current",
-      "sha256": "4a5c8756a17dd314984d70694bddacec26167bea2820e74f65fefd1e0cd11042"
+      "sha256": "2939d9b3ce7d8b53de75754217347cc346ee710d155645764606351dc8fd7688"
     },
     {
       "path": "docs/refinement-authority-migration.md",
       "disposition": "current",
-      "sha256": "a60fcc72ddfe179b1e6a62feb4dfcbf886db8c60994e524ac6670c62522d4a28"
+      "sha256": "fc88ccdcd5ab17c01a46809f1fc6f3e19cfd7a8e6bab9bb4e47bc7a6f48b3923"
     },
     {
       "path": "docs/repository-indexing.md",
       "disposition": "current",
-      "sha256": "fa8910951237dbd8552659810b39874eabd02d5e2f35f526aef310ce4c4123c6"
+      "sha256": "e54b76eb2d504c6002aed624274873da5398129bfb2152cf425a0e6b1d6a72bf"
     },
     {
       "path": "docs/resilience-certification.md",
       "disposition": "current",
-      "sha256": "305d9a1f7708d21378405753abe352d69d497c8dd5e18c69888479293adfcae9"
+      "sha256": "91fcd62dcaa39396b42126acd2acf932f82f92f21140122292b4db93f550777b"
     },
     {
       "path": "docs/rust-ast-structured-edits.md",
       "disposition": "current",
-      "sha256": "2037016a16308b7c0aed63ba33956b673a245ba4bab6f1220ccf094c6274fa4c"
+      "sha256": "580e9308b453a8198e780fadaf616c3a374e08cef37d19dd61a369528415d80f"
     },
     {
       "path": "docs/rustfmt-debt.md",
       "disposition": "historical",
-      "sha256": "f6ad73559de6473c677ba14f601380647a8c33569f8b6bc5c2934b4446510643"
+      "sha256": "008c7c76b869a24d7a6ef7aab36aacf0c68867334ba1fc197aceaab9b625c1f6"
     },
     {
       "path": "docs/session-continuity.md",
       "disposition": "current",
-      "sha256": "924e67c238d4babaa081a624c93626cf2276c09f50e2c0f8ed4d2d440991fd2d"
+      "sha256": "c750795ddcf65363598c66823d0c376c451e3ebc86b83dd3616bdd8fcbc5af60"
     },
     {
       "path": "docs/session-recall-wiring.md",
       "disposition": "current",
-      "sha256": "ee7f25f712eed27e02a2af5998b4d101b60947d143cb5cdbf924a063b98306a4"
+      "sha256": "573cbfc8b09663dcbc7301417b26eed0c2463a1ac129b3b7c3d5ed7edc6563cb"
     },
     {
       "path": "docs/session-startup.md",
       "disposition": "current",
-      "sha256": "7a83b68c93620da0dfead8edf01aed6746a717389ed4d4ce49300cd2b57b009e"
+      "sha256": "c5fa14c492abd90e7711df7e23266e93c82e9664009266523e5e1ed68bfd1a4f"
     },
     {
       "path": "docs/superpowers/plans/2026-07-12-complete-installation-guide.md",
       "disposition": "historical",
-      "sha256": "1667fad2749999609a1d5f6ab845d9e9e27d22b9931db2bfd14f61bb52c69fae"
+      "sha256": "56a72d71ace3bbd3f36b1fd6a66d035df06e6ce37cb832968f8316b1b5a333ae"
     },
     {
       "path": "docs/superpowers/plans/2026-07-14-medusa-extended-reach-and-no-truncation.md",
       "disposition": "historical",
-      "sha256": "abd63e00e97f80da9653aa6edb716e88fd7471ac96f4d8733076f0fdd6ade865"
+      "sha256": "e5b65d54e86ebdc10a4df80a88463343765819e97638ab2b62cb5a8c008b9987"
     },
     {
       "path": "docs/superpowers/plans/2026-08-12-unified-refinement-authority.md",
       "disposition": "historical",
-      "sha256": "35641983e28adbdc8b5ab3c871067fa6d632fe372c3913f9b71b75fe5115f603"
+      "sha256": "caf58dcc684c79f3b6aae9f57aab43d4c8c5000e7c20c13b7ca62069ec5144be"
     },
     {
       "path": "docs/superpowers/specs/2026-07-12-complete-installation-guide-design.md",
       "disposition": "historical",
-      "sha256": "93314d9f106d00ff132b838268f88ae342f6fbebef43672b2aff0ee43d676705"
+      "sha256": "89f941c76f366917b1a03ba3ea93338e0c3936a550e9f191e6e785b5e1b9ee84"
     },
     {
       "path": "docs/superpowers/specs/2026-07-14-medusa-extended-reach-and-no-truncation-design.md",
       "disposition": "historical",
-      "sha256": "1052911eeebdc74cbe60c21779d5655d819de73bd43ec5c3e4d16d872115ce2b"
+      "sha256": "2004085783c9ef9f70885cba6282e7cbbbec4c5dce79a476c86b257dc5fbb708"
     },
     {
       "path": "docs/superpowers/specs/2026-08-12-unified-refinement-authority-design.md",
       "disposition": "historical",
-      "sha256": "b45776dcc2c33ae267f7c5626a1a4a526110bd1d571007db4cd2ee9f21ce2a93"
+      "sha256": "80f4b6036f2f35bccda9984a644a4a0272734cde82f1fb15f4d135f7d2d80a66"
     },
     {
       "path": "docs/telegram-bot-api-transport.md",
       "disposition": "current",
-      "sha256": "0c036d2012a8a022601f693dc83fe2e222cc53d083e351e05954bf4f2af3f7dd"
+      "sha256": "8954ac490ef2191947a03ab6ff56d71670707ebe96d86f62b105b6483c38247b"
     },
     {
       "path": "docs/testing/realtime-voice.md",
       "disposition": "current",
-      "sha256": "959b4c5d152a146c5855fb29258298e9868b7d7def1c01587a5139d11e10c17f"
+      "sha256": "d2412ad1d1de1c95a55e97fe8451df23917373597c74b042343bc4e34e0ec15b"
     },
     {
       "path": "docs/tool-output-adapters.md",
       "disposition": "current",
-      "sha256": "a2cbab1968a47642ef41543b603f36381fdff386d7a690340280c6f6f7d0c6da"
+      "sha256": "ce9d220f7064ac2542d58e7c8cf7955527f8e8e8bb70f0c378dc3d84e565bfdc"
     },
     {
       "path": "docs/tool-output-expansion.md",
       "disposition": "current",
-      "sha256": "21b86bbee115355a316253ac1013978c578dcf07ada1c04aae9f93fe7279007e"
+      "sha256": "38f7ddd2edd8bbacf4450e20571cccc92ce33170ec78f57df54942df19d1b6b8"
     },
     {
       "path": "docs/tool-output-modes.md",
       "disposition": "current",
-      "sha256": "abc8f85ba768aea9135bf2c8ebb548bfd8c1dd0bfdf6b7f0adb92c317934e442"
+      "sha256": "f7106547c48995c6ef464cbd0996e8b40f0a589d5e8c19ea84cd72e99eb96aa7"
     },
     {
       "path": "docs/transaction-safety.md",
       "disposition": "current",
-      "sha256": "62b2c7f085e13435966b73c8da90f390230f3022b01ff25076f8b6deb2a5a165"
+      "sha256": "fcf50ec1eb93f77ae39ee88a3e0e8f18c1e92de88c6593652d16fe8c2f29a40e"
     },
     {
       "path": "docs/tui-image-attachments.md",
       "disposition": "current",
-      "sha256": "1b265376432646dcca149045a35f3cf809649c21e101789a3b5e4212acdb3e96"
+      "sha256": "6055208c72e7088ba694f086c92f447c46cdcfa7188927017ae4ee5630d58b2f"
     },
     {
       "path": "docs/tui-keyboard-shortcuts.md",
       "disposition": "current",
-      "sha256": "88abbe7ca3f9496109260072b4a9ee30f23f6ed0a8500de1e0d8272cdaa2fb40"
+      "sha256": "6775938ee9c420a59bf9b13bba4b358e40ddd0a01f2f01c1e730a5d5f5e48c60"
     },
     {
       "path": "docs/tui-troubleshooting.md",
       "disposition": "current",
-      "sha256": "77af3ebfa8c9b1222773b1c3791df331e8af9ecb8c00a7a3380138bb348f9daf"
+      "sha256": "7f3b06baf36bf12cddd0271d7ce249bbc1c975ca6969f7a3308865dcf8e5a4d6"
     },
     {
       "path": "docs/turn-memory-pipeline.md",
       "disposition": "current",
-      "sha256": "ba7f5722855a0dfcd716e52d09be396d57966dbd34f6f0e7808a6918fcf95946"
+      "sha256": "ced3b6fe8edf20aeddc517a14ddf5453a86cb5a934cc1c49aa7339831be87b1c"
     },
     {
       "path": "docs/usability/README.md",
       "disposition": "current",
-      "sha256": "eb9e5b211caeb4b007e1806976d9257d19af7efa93d0b18bdbf37ce6fa2ae816"
+      "sha256": "236616353d837361644f41edde504a543a3682599293afcd7278d6a4def9f480"
     },
     {
       "path": "docs/usability/findings-template-v1.md",
       "disposition": "current",
-      "sha256": "ecd67704fb756660387876e57cc2710b346dae8a75a2a8c0d7ffdab2fbc8743a"
+      "sha256": "dac4b62fb9722039dc7f892c6aca9a02166ca7b4529f7f634fc360fd4c7fe609"
     },
     {
       "path": "docs/usability/fixture-spec-v1.md",
       "disposition": "current",
-      "sha256": "50aceebb857330bc0fe23d14c2449b7e70c6d9729efd1c97b8e89196f37baef7"
+      "sha256": "570b494608fd4ead35ed241dc688ae67e8be9461530a7cd251a4286411908308"
     },
     {
       "path": "docs/usability/issue-615/README.md",
       "disposition": "current",
-      "sha256": "329178ddf90ad806f8734e925a7df9836f7257e07a99aa78a7c9709b8863544a"
+      "sha256": "4ac4a0fae3632fdae60b805370c8f0ea112e435c7853dad01aedb61b1472fcd8"
     },
     {
       "path": "docs/usability/participant-script-v1.md",
       "disposition": "current",
-      "sha256": "fa423a3a9c6b239e4861561d5cb186474b4a781cebfd7c10354a3c4d204d6328"
+      "sha256": "4b1f6bbb3f0c1a5cf31e57a9666056f6f8154e785adee5dc9cdcc8fe42c7efef"
     },
     {
       "path": "docs/usability/protocol-v1.md",
       "disposition": "current",
-      "sha256": "c9ce334177c479e2e90ac3a6d3073d737fe28fe04c2d41e194201b068734372d"
+      "sha256": "32a95e86817c4243c3eecab696d340125760005acbba2961de1a371197892381"
     },
     {
       "path": "docs/usability/recruitment-and-sampling-v1.md",
       "disposition": "current",
-      "sha256": "82401d3b40707b914542de7e7cc31d3cb93113e383eec49b5aaa1eb86ca2f9e8"
+      "sha256": "29629adbaa5654862099ab320c00a9943a257b37e58e100b76017101fcb1d03d"
     },
     {
       "path": "docs/usability/session-run-checklist-v1.md",
       "disposition": "current",
-      "sha256": "78c931ec862dbd1e02c7ed842de77c25b7936d732bf1ea43d8c1469e42974e75"
+      "sha256": "db371082210ba09f3a8a840edc32fc04c421b27297a1fa89168c1489ef646a6e"
     },
     {
       "path": "docs/usage-telemetry.md",
       "disposition": "current",
-      "sha256": "af9f33c8f22a30063693170749a62789a0b54b4ea41926663f1ac1f3bea94f9b"
+      "sha256": "a049b0c85fdbdabbfa3ba555dd14998925593f7b6f7cb2fd8f42c8b38dd61e07"
     },
     {
       "path": "examples/medusa-proof/README.md",
       "disposition": "current",
-      "sha256": "7832e3fd5a92f9d60672f8401c038a1313fd7b414eb264c376cbff1ad3407fe1"
+      "sha256": "d1f9a8e0b62e0b3b30b860e2b3264a9fab799f650550380cb22f1222e559f1ce"
     },
     {
       "path": "scripts/e2e/README.md",
       "disposition": "current",
-      "sha256": "9ac0562a834d914c4470d5e06e57357391c4aa2785582fbba47980e9df079ab5"
+      "sha256": "52d805be5f1f6c3ea1baf06dc3e6d1f260cd18fb4d17d2a47f3f0d4e3accc8d0"
     },
     {
       "path": "tools/local-bridge/README.md",
       "disposition": "current",
-      "sha256": "099f1b69ebc7aff63beac78bd99bd34459762d10f32e59193c4a73135d95d9c3"
+      "sha256": "cae9f53d389f7386051061050053aae37ae7595909fcd5f206298d2be371da63"
     }
   ]
 }
