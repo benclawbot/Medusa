@@ -9,6 +9,7 @@ mod retrieval;
 mod schema;
 mod session_recall;
 mod session_recall_inbox;
+mod session_recall_lifecycle;
 mod support;
 
 pub use engine::MemoryEngine;
@@ -18,6 +19,7 @@ pub use session_recall::{
     SessionSearchQuery, SessionWindow,
 };
 pub use session_recall_inbox::open_session_recall;
+pub use session_recall_lifecycle::delete_session_recall;
 
 #[cfg(test)]
 mod tests {

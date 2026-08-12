@@ -14,6 +14,10 @@ use time::OffsetDateTime;
 
 use crate::session::{AgentSession, journal, load};
 
+#[path = "session_disposition.rs"]
+mod session_disposition;
+pub use session_disposition::{dispose_completed_session, is_session_disposed};
+
 /// Lightweight durable-session metadata suitable for frontend discovery lists.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct SessionSummary {
@@ -31,12 +35,14 @@ pub struct SessionSummary {
 /// Discovers all durable sessions for one repository across primary and fallback storage.
 ///
 /// Duplicate session IDs are returned once. Sessions are ordered by most recently updated,
-/// then by ID for deterministic presentation.
+/// then by ID for deterministic presentation. Durable disposition tombstones are excluded rather
+/// than handed to normal journal loading, so a stale session identifier cannot poison the list.
 pub fn list_sessions(repo: &Path) -> MedusaResult<Vec<SessionSummary>> {
     let mut ids = BTreeSet::new();
     collect_session_ids(&repo.join(".medusa/sessions"), &mut ids)?;
     collect_session_ids(&fallback_session_root(repo), &mut ids)?;
     ids.extend(journal::discover_session_ids(repo)?);
+    ids.retain(|id| !is_session_disposed(repo, id));
 
     let mut sessions = ids
         .into_iter()
@@ -71,12 +77,25 @@ pub fn replay_events(repo: &Path, session: &str, cursor: u64) -> MedusaResult<Ve
             message,
         )
     })?;
+    if is_session_disposed(repo, &id) {
+        return Err(disposed_error(id.as_str()));
+    }
     journal::replay_from_cursor(repo, &id, cursor)
 }
 
 /// Loads the latest committed journal-backed session snapshot.
 pub fn load_session(repo: &Path, session: &str) -> MedusaResult<AgentSession> {
-    load(repo, session)
+    let id = SessionId::parse(session).map_err(|message| {
+        MedusaError::new(
+            ErrorCode::InvalidConfiguration,
+            ErrorCategory::Validation,
+            message,
+        )
+    })?;
+    if is_session_disposed(repo, &id) {
+        return Err(disposed_error(id.as_str()));
+    }
+    load(repo, id.as_str())
 }
 
 fn collect_session_ids(root: &Path, ids: &mut BTreeSet<SessionId>) -> MedusaResult<()> {
@@ -265,6 +284,14 @@ fn which(command: &str) -> Result<PathBuf, ()> {
         }
     }
     Err(())
+}
+
+fn disposed_error(session_id: &str) -> MedusaError {
+    MedusaError::new(
+        ErrorCode::InvalidConfiguration,
+        ErrorCategory::Persistence,
+        format!("session {session_id} has been disposed"),
+    )
 }
 
 fn unavailable(message: impl Into<String>) -> MedusaError {

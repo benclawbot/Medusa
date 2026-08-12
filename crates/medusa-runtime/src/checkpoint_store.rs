@@ -20,8 +20,13 @@ use sha2::{Digest, Sha256};
 
 use crate::{RuntimeController, RuntimeError, execution_history};
 
+#[path = "restore_transaction_lifecycle.rs"]
+mod restore_transaction_lifecycle;
+
 const CHECKPOINT_SCHEMA_VERSION: u32 = 1;
 const CHECKPOINT_DIRECTORY: &str = ".medusa/checkpoints";
+const RECOVERY_CHECKPOINT_DIRECTORY: &str = ".medusa/recovery-checkpoints";
+const CONTINUITY_DIRECTORY: &str = ".medusa/continuity";
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
@@ -118,6 +123,34 @@ impl RuntimeController {
     ) -> Result<Vec<RuntimeCheckpointRecord>, RuntimeError> {
         list(&self.repo, session_id)
     }
+
+    /// Disposes a completed session across the canonical agent authority and runtime projections.
+    pub fn dispose_completed_session(&self, session_id: &str) -> Result<(), RuntimeError> {
+        dispose_completed_session(&self.repo, session_id)
+    }
+}
+
+/// Disposes a completed session and removes runtime-owned checkpoint/recovery/continuity copies.
+///
+/// Runtime restore transactions are classified from verified checkpoint payloads before the agent
+/// writes its fail-closed journal tombstone. Corrupt ownership metadata therefore blocks the
+/// deletion claim instead of leaving unclassified repository backups behind. All removals are
+/// idempotent so an interrupted operation can be retried without resurrecting canonical state.
+pub fn dispose_completed_session(repo: &Path, session_id: &str) -> Result<(), RuntimeError> {
+    validate_session_id(session_id)?;
+    let restore_transactions =
+        restore_transaction_lifecycle::owned_transactions(repo, session_id)?;
+    medusa_agent::session_browser::dispose_completed_session(repo, session_id)
+        .map_err(RuntimeError::agent)?;
+    restore_transaction_lifecycle::remove_transactions(&restore_transactions)?;
+    remove_dir_if_present(&checkpoint_directory(repo, session_id))?;
+    remove_dir_if_present(&repo.join(RECOVERY_CHECKPOINT_DIRECTORY).join(session_id))?;
+    remove_file_if_present(
+        &repo
+            .join(CONTINUITY_DIRECTORY)
+            .join(format!("{session_id}.json")),
+    )?;
+    Ok(())
 }
 
 pub(crate) fn is_checkpoint_boundary(payload: &EventPayload) -> bool {
@@ -271,6 +304,22 @@ fn temporary_path(directory: &Path, fingerprint: &str) -> PathBuf {
     ))
 }
 
+fn remove_dir_if_present(path: &Path) -> Result<(), RuntimeError> {
+    match fs::remove_dir_all(path) {
+        Ok(()) => Ok(()),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(error) => Err(RuntimeError::agent(error)),
+    }
+}
+
+fn remove_file_if_present(path: &Path) -> Result<(), RuntimeError> {
+    match fs::remove_file(path) {
+        Ok(()) => Ok(()),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(error) => Err(RuntimeError::agent(error)),
+    }
+}
+
 #[cfg(unix)]
 fn sync_parent(directory: &Path) -> std::io::Result<()> {
     File::open(directory)?.sync_all()
@@ -314,11 +363,14 @@ fn digest<T: Serialize>(value: &T) -> Result<String, RuntimeError> {
 
 #[cfg(test)]
 mod tests {
-    use medusa_agent::{AgentEngine, record_session_event, session_browser::load_session};
+    use medusa_agent::{
+        AgentEngine, persist_session, record_session_event, session_browser::load_session,
+    };
     use medusa_config::Config;
     use medusa_core::MedusaResult;
     use medusa_protocol::{Actor, EventPayload};
     use medusa_provider::{ModelProvider, ModelRequest, ModelResponse};
+    use medusa_session_continuity::ContinuityStore;
 
     use super::*;
 
@@ -419,5 +471,55 @@ mod tests {
         .expect("turn boundary");
         let record = materialize(repository.path(), session.id.as_str()).expect("checkpoint");
         assert_eq!(record.journal_cursor, 2);
+    }
+
+    #[test]
+    fn completed_session_disposition_removes_runtime_projections() {
+        let repository = tempfile::tempdir().expect("repository");
+        let mut session = session(repository.path());
+        let record = materialize(repository.path(), session.id.as_str()).expect("checkpoint");
+        let payload_path = repository
+            .path()
+            .join(RECOVERY_CHECKPOINT_DIRECTORY)
+            .join(session.id.as_str())
+            .join(format!("{}.json", record.checkpoint.fingerprint));
+        let payload: crate::checkpoint_payload::RuntimeCheckpointPayload =
+            serde_json::from_slice(&fs::read(&payload_path).expect("payload")).expect("payload json");
+        let restore_transaction = repository
+            .path()
+            .join(".medusa/restore-transactions")
+            .join(&payload.payload_fingerprint);
+        fs::create_dir_all(restore_transaction.join("backups")).expect("restore transaction");
+        fs::write(
+            restore_transaction.join("backups/0"),
+            b"PRIVATE_RESTORE_BACKUP_MARKER",
+        )
+        .expect("restore backup");
+        let continuity_path = repository
+            .path()
+            .join(CONTINUITY_DIRECTORY)
+            .join(format!("{}.json", session.id));
+        ContinuityStore::new(&continuity_path)
+            .create(session.id.to_string())
+            .expect("continuity");
+        session.completed = true;
+        persist_session(&session).expect("completed session");
+
+        dispose_completed_session(repository.path(), session.id.as_str()).expect("dispose");
+
+        assert!(!checkpoint_directory(repository.path(), session.id.as_str()).exists());
+        assert!(
+            !repository
+                .path()
+                .join(RECOVERY_CHECKPOINT_DIRECTORY)
+                .join(session.id.as_str())
+                .exists()
+        );
+        assert!(!restore_transaction.exists());
+        assert!(!continuity_path.exists());
+        assert!(load_session(repository.path(), session.id.as_str()).is_err());
+        assert!(list(repository.path(), session.id.as_str()).unwrap().is_empty());
+
+        dispose_completed_session(repository.path(), session.id.as_str()).expect("retry");
     }
 }

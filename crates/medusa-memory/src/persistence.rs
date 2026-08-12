@@ -18,6 +18,9 @@ impl MemoryEngine {
                 b"# Medusa Memory\n\nCanonical semantic memory is Markdown. The SQLite index is disposable and rebuildable.\n",
             )?;
         }
+        // Lifecycle operations keep their journal until the derived index is rebuilt. Replay
+        // before serving reads so a crash cannot expose deleted/superseded content from SQLite.
+        self.recover_lifecycle_journal()?;
         if !self.index_path.exists() {
             self.rebuild_index()?;
         }
