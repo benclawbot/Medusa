@@ -24,6 +24,7 @@ medusa-core = { path = "../../../crates/medusa-core" }
 medusa-daemon = { path = "../../../crates/medusa-daemon" }
 medusa-protocol = { path = "../../../crates/medusa-protocol" }
 medusa-memory = { path = "../../../crates/medusa-memory" }
+medusa-improvement = { path = "../../../crates/medusa-improvement" }
 medusa-review-model = { path = "../../../crates/medusa-review-model" }
 medusa-runtime = { path = "../../../crates/medusa-runtime" }
 medusa-update = { path = "../../../crates/medusa-update" }

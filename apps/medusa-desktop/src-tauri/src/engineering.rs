@@ -1,12 +1,22 @@
+//! Read-only desktop projection over the shared learning authority.
+//!
+//! This module deliberately owns no improvement lifecycle state. It consumes typed provenance,
+//! the #822 monitor, and the #823 meta-improvement store, while legacy dashboard records are
+//! imported once as explicitly untrusted compatibility data.
+
 use std::{
     collections::{BTreeMap, BTreeSet},
     fs,
     path::{Path, PathBuf},
 };
 
+use medusa_improvement::{
+    learning_monitor::{LearningMonitorStore, OutcomeRecord, OutcomeStatus},
+    meta_improvement::{MetaImprovementStatus, MetaImprovementStore},
+    provenance::{ProvenanceGraphStore, ProvenanceOutcome, ProvenanceSource},
+};
 use serde::{Deserialize, Serialize};
-use serde_json::Value;
-use time::{format_description::well_known::Rfc3339, OffsetDateTime};
+use time::{Duration, OffsetDateTime, format_description::well_known::Rfc3339};
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -96,97 +106,106 @@ pub struct EngineeringDashboard {
     pub generated_at: String,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct LegacyMigrationReceipt {
+    schema_version: u32,
+    source_path: String,
+    source_digest: String,
+    imported_at: String,
+    records: Vec<ImprovementRecord>,
+    error: Option<String>,
+}
+
+const LEGACY_SCHEMA_VERSION: u32 = 1;
+
 #[tauri::command]
 pub fn runtime_engineering_dashboard(
     repo: String,
     days: Option<u32>,
 ) -> Result<EngineeringDashboard, String> {
     let repo = canonical_repo(&repo)?;
-    let cutoff = OffsetDateTime::now_utc()
-        - time::Duration::days(i64::from(days.unwrap_or(90)));
+    let cutoff = OffsetDateTime::now_utc() - Duration::days(i64::from(days.unwrap_or(90)));
+    let cutoff_unix_ms = cutoff.unix_timestamp_nanos() as i64 / 1_000_000;
+
+    let monitor = LearningMonitorStore::open(&repo).map_err(|error| error.to_string())?;
+    let monitor_snapshot = monitor.snapshot();
+    let mut outcomes = BTreeMap::<String, OutcomeRecord>::new();
+    for outcome in monitor_snapshot.unattributed_outcomes {
+        outcomes.insert(outcome.id.clone(), outcome);
+    }
+    for artifact in monitor_snapshot.artifacts {
+        for outcome in artifact.outcomes {
+            outcomes.insert(outcome.id.clone(), outcome);
+        }
+    }
+
     let mut by_day = BTreeMap::<String, (u32, u32)>::new();
-    let mut friction = BTreeMap::<String, (u32, Vec<String>)>::new();
     let mut total = 0;
     let mut successful = 0;
     let mut verification_total = 0;
     let mut verification_passed = 0;
     let mut retries = 0;
     let mut interventions = 0;
-    let mut durations = 0.0;
-
-    for value in session_values(&repo)? {
-        let updated = parse_time(value.get("updated_at").and_then(Value::as_str))
-            .unwrap_or(OffsetDateTime::UNIX_EPOCH);
-        if updated < cutoff {
-            continue;
-        }
+    for outcome in outcomes
+        .values()
+        .filter(|outcome| outcome.recorded_at_unix_ms >= cutoff_unix_ms)
+    {
         total += 1;
-        let id = value
-            .get("id")
-            .and_then(Value::as_str)
-            .unwrap_or("unknown")
-            .to_owned();
-        let text = value.to_string().to_ascii_lowercase();
-        let failed = text.contains("runtime failed")
-            || text.contains("verification failed")
-            || text.contains("status\":\"failed")
-            || text.contains("tool error");
-        let completed = value
-            .get("completed")
-            .and_then(Value::as_bool)
-            .unwrap_or(false);
-        let ok = completed && !failed;
-        if ok {
+        if outcome.status == OutcomeStatus::Positive {
             successful += 1;
         }
-        let entry = by_day.entry(updated.date().to_string()).or_default();
+        let date = unix_ms_to_date(outcome.recorded_at_unix_ms);
+        let entry = by_day.entry(date).or_default();
         entry.0 += 1;
-        if ok {
+        if outcome.status == OutcomeStatus::Positive {
             entry.1 += 1;
         }
-        let created = parse_time(value.get("created_at").and_then(Value::as_str))
-            .unwrap_or(updated);
-        durations += (updated - created).whole_seconds().max(0) as f64 / 60.0;
-        let retry_count = text.matches("retry").count() as u32;
-        retries += retry_count;
-        if retry_count > 0 {
-            add_friction(&mut friction, "retries", &id);
-        }
-        if failed {
-            add_friction(&mut friction, "task failure", &id);
-        }
-        if value
-            .get("pending_question")
-            .is_some_and(|pending| !pending.is_null())
-        {
+        retries += outcome.retries;
+        if outcome.user_correction_count > 0 || outcome.parent_review_revisions > 0 {
             interventions += 1;
-            add_friction(&mut friction, "human intervention", &id);
         }
-        if text.contains("timeout") {
-            add_friction(&mut friction, "timeouts", &id);
+        if let Some(passed) = outcome.verification_passed {
+            verification_total += 1;
+            verification_passed += u32::from(passed);
         }
-        if text.contains("permission denied") || text.contains("policy denied") {
-            add_friction(&mut friction, "permissions / policy", &id);
-        }
-        if text.contains("test failed") || text.contains("tests failed") {
-            add_friction(&mut friction, "test failures", &id);
-        }
-        let verifications = text.matches("verification").count() as u32;
-        let failures = text.matches("verification failed").count() as u32
-            + text.matches("verification\":false").count() as u32;
-        verification_total += verifications;
-        verification_passed += verifications.saturating_sub(failures);
     }
 
-    let trend = by_day
-        .into_iter()
-        .map(|(date, (total, successful))| EngineeringPoint {
-            date,
-            total,
-            successful,
-            success_rate: rate(successful, total),
+    let provenance = ProvenanceGraphStore::open(&repo).map_err(|error| error.to_string())?;
+    let mut friction = BTreeMap::<String, (u32, Vec<String>)>::new();
+    for observation in provenance
+        .graph()
+        .observations
+        .iter()
+        .filter(|observation| {
+            observation.observed_at.unix_timestamp_nanos() as i64 / 1_000_000 >= cutoff_unix_ms
         })
-        .collect();
+    {
+        let category = match observation.source {
+            ProvenanceSource::UserCorrection => Some("user corrections"),
+            ProvenanceSource::ParentReview => Some("parent-review revisions"),
+            ProvenanceSource::ToolExecution | ProvenanceSource::ToolTelemetry
+                if observation.outcome != ProvenanceOutcome::Positive =>
+            {
+                Some("tool failures")
+            }
+            ProvenanceSource::Verification
+                if observation.outcome != ProvenanceOutcome::Positive =>
+            {
+                Some("verification failures")
+            }
+            ProvenanceSource::RuntimeFailure => Some("runtime failures"),
+            ProvenanceSource::Recovery if observation.outcome != ProvenanceOutcome::Positive => {
+                Some("recovery failures")
+            }
+            ProvenanceSource::Integration if observation.outcome != ProvenanceOutcome::Positive => {
+                Some("integration failures")
+            }
+            _ => None,
+        };
+        if let Some(category) = category {
+            add_friction(&mut friction, category, &observation.session_id);
+        }
+    }
     let mut friction = friction
         .into_iter()
         .map(|(category, (count, sessions))| FrictionItem {
@@ -201,12 +220,21 @@ pub fn runtime_engineering_dashboard(
             .cmp(&left.count)
             .then_with(|| left.category.cmp(&right.category))
     });
+
     let improvements = read_improvements(&repo)?;
     let rolled_back = improvements
         .iter()
         .filter(|item| item.status == "rolledBack")
         .count() as u32;
-
+    let trend = by_day
+        .into_iter()
+        .map(|(date, (total, successful))| EngineeringPoint {
+            date,
+            total,
+            successful,
+            success_rate: rate(successful, total),
+        })
+        .collect();
     Ok(EngineeringDashboard {
         total_tasks: total,
         successful_tasks: successful,
@@ -219,11 +247,7 @@ pub fn runtime_engineering_dashboard(
         },
         human_intervention_rate: rate(interventions, total),
         rollback_rate: rate(rolled_back, improvements.len() as u32),
-        average_duration_minutes: if total == 0 {
-            0.0
-        } else {
-            durations / total as f64
-        },
+        average_duration_minutes: 0.0,
         trend,
         friction,
         improvements,
@@ -233,27 +257,127 @@ pub fn runtime_engineering_dashboard(
     })
 }
 
-#[tauri::command]
-pub fn runtime_generate_improvement(repo: String) -> Result<ImprovementRecord, String> {
-    let _ = repo;
-    Err("engineering improvement lifecycle is read-only during canonical authority migration; use /learning propose through medusa-runtime".to_owned())
+fn read_improvements(repo: &Path) -> Result<Vec<ImprovementRecord>, String> {
+    let store = MetaImprovementStore::open(repo).map_err(|error| error.to_string())?;
+    let mut records = store
+        .snapshot()
+        .proposals
+        .into_iter()
+        .map(meta_record)
+        .collect::<Vec<_>>();
+    records.extend(read_legacy_compatibility(repo)?);
+    records.sort_by(|left, right| {
+        left.updated_at
+            .cmp(&right.updated_at)
+            .then_with(|| left.id.cmp(&right.id))
+    });
+    Ok(records)
 }
 
-#[tauri::command]
-pub fn runtime_update_improvement(
-    repo: String,
-    id: String,
-    action: String,
-) -> Result<ImprovementRecord, String> {
-    let _ = (repo, id, action);
-    Err("engineering improvement lifecycle is read-only during canonical authority migration; use /learning commands through medusa-runtime".to_owned())
+fn meta_record(
+    proposal: medusa_improvement::meta_improvement::MetaImprovementProposal,
+) -> ImprovementRecord {
+    let status = match proposal.status {
+        MetaImprovementStatus::Proposed => "proposed",
+        MetaImprovementStatus::AwaitingReview => "awaitingReview",
+        MetaImprovementStatus::Approved => "approved",
+        MetaImprovementStatus::Activated => "active",
+        MetaImprovementStatus::RolledBack => "rolledBack",
+        MetaImprovementStatus::Rejected => "rejected",
+        MetaImprovementStatus::Escalated => "escalated",
+    };
+    let timestamp = unix_ms_to_timestamp(proposal.created_at_unix_ms);
+    ImprovementRecord {
+        id: proposal.id.clone(),
+        created_at: timestamp.clone(),
+        updated_at: timestamp,
+        title: format!("{:?} meta-improvement", proposal.target),
+        problem: proposal.current_behavior,
+        proposed_change: proposal.minimal_change,
+        evidence: proposal.source_signal_ids,
+        source_sessions: proposal.source_trajectory_ids,
+        risk: if proposal.security_impact || proposal.capability_impact {
+            "engineering review"
+        } else {
+            "bounded runtime"
+        }
+        .into(),
+        status: status.into(),
+        benchmark_before: None,
+        benchmark_after: None,
+        rollback_note: proposal.exact_rollback,
+        revision: 1,
+        approval: None,
+        active_version: (proposal.status == MetaImprovementStatus::Activated)
+            .then(|| proposal.id.clone()),
+        previous_version: None,
+        conflicts_with: BTreeSet::new(),
+        observations: Vec::new(),
+        suspension_reason: None,
+    }
 }
 
-fn add_friction(
-    map: &mut BTreeMap<String, (u32, Vec<String>)>,
-    category: &str,
-    id: &str,
-) {
+fn read_legacy_compatibility(repo: &Path) -> Result<Vec<ImprovementRecord>, String> {
+    let root = repo.join(".medusa/engineering");
+    let receipt_path = root.join("migration-receipt.json");
+    if receipt_path.is_file() {
+        let receipt: LegacyMigrationReceipt =
+            serde_json::from_slice(&fs::read(receipt_path).map_err(|error| error.to_string())?)
+                .map_err(|error| error.to_string())?;
+        return Ok(receipt.records);
+    }
+    let legacy = root.join("improvements.json");
+    if !legacy.is_file() {
+        return Ok(Vec::new());
+    }
+    let bytes = fs::read(&legacy).map_err(|error| error.to_string())?;
+    let digest = repository_key_bytes(&bytes);
+    let imported_at = OffsetDateTime::now_utc()
+        .format(&Rfc3339)
+        .unwrap_or_default();
+    let parsed = serde_json::from_slice::<Vec<ImprovementRecord>>(&bytes);
+    let (records, error) = match parsed {
+        Ok(items) => (
+            items
+                .into_iter()
+                .map(|mut item| {
+                    item.status = "legacyUntrusted".into();
+                    item.approval = None;
+                    item.active_version = None;
+                    item.previous_version = None;
+                    item.benchmark_before = None;
+                    item.benchmark_after = None;
+                    item
+                })
+                .collect(),
+            None,
+        ),
+        Err(error) => (Vec::new(), Some(error.to_string())),
+    };
+    let quarantine = root.join("quarantine");
+    fs::create_dir_all(&quarantine).map_err(|error| error.to_string())?;
+    fs::rename(
+        &legacy,
+        quarantine.join(format!("improvements-{digest}.json")),
+    )
+    .map_err(|error| error.to_string())?;
+    let receipt = LegacyMigrationReceipt {
+        schema_version: LEGACY_SCHEMA_VERSION,
+        source_path: legacy.display().to_string(),
+        source_digest: digest,
+        imported_at,
+        records: records.clone(),
+        error,
+    };
+    fs::write(
+        &receipt_path,
+        serde_json::to_vec_pretty(&receipt).map_err(|error| error.to_string())?,
+    )
+    .map_err(|error| error.to_string())?;
+    Ok(records)
+}
+
+fn add_friction(map: &mut BTreeMap<String, (u32, Vec<String>)>, category: &str, id: &str) {
     let entry = map.entry(category.into()).or_default();
     entry.0 += 1;
     if entry.1.len() < 20 && !entry.1.iter().any(|value| value == id) {
@@ -269,8 +393,26 @@ fn rate(part: u32, total: u32) -> f64 {
     }
 }
 
-fn parse_time(value: Option<&str>) -> Option<OffsetDateTime> {
-    value.and_then(|value| OffsetDateTime::parse(value, &Rfc3339).ok())
+fn unix_ms_to_timestamp(value: i64) -> String {
+    OffsetDateTime::from_unix_timestamp_nanos(i128::from(value) * 1_000_000)
+        .ok()
+        .and_then(|time| time.format(&Rfc3339).ok())
+        .unwrap_or_default()
+}
+
+fn unix_ms_to_date(value: i64) -> String {
+    OffsetDateTime::from_unix_timestamp_nanos(i128::from(value) * 1_000_000)
+        .map(|time| time.date().to_string())
+        .unwrap_or_else(|_| "unknown".into())
+}
+
+fn repository_key_bytes(bytes: &[u8]) -> String {
+    let mut hash = 0xcbf29ce484222325u64;
+    for byte in bytes {
+        hash ^= u64::from(*byte);
+        hash = hash.wrapping_mul(0x100000001b3);
+    }
+    format!("{hash:016x}")
 }
 
 fn canonical_repo(repo: &str) -> Result<PathBuf, String> {
@@ -282,57 +424,74 @@ fn canonical_repo(repo: &str) -> Result<PathBuf, String> {
     Ok(path)
 }
 
-fn engineering_path(repo: &Path) -> PathBuf {
-    repo.join(".medusa/engineering/improvements.json")
-}
+#[cfg(test)]
+mod tests {
+    use super::*;
 
-fn read_improvements(repo: &Path) -> Result<Vec<ImprovementRecord>, String> {
-    let path = engineering_path(repo);
-    if !path.exists() {
-        return Ok(Vec::new());
-    }
-    serde_json::from_slice(&fs::read(path).map_err(|error| error.to_string())?)
-        .map_err(|error| error.to_string())
-}
-
-
-fn session_values(repo: &Path) -> Result<Vec<Value>, String> {
-    let mut values = BTreeMap::new();
-    for root in [repo.join(".medusa/sessions"), fallback_session_root(repo)] {
-        let Ok(entries) = fs::read_dir(root) else {
-            continue;
-        };
-        for entry in entries.flatten() {
-            let path = entry.path();
-            if path.extension().and_then(|value| value.to_str()) != Some("json") {
-                continue;
-            }
-            if let Ok(bytes) = fs::read(path) {
-                if let Ok(value) = serde_json::from_slice::<Value>(&bytes) {
-                    if let Some(id) = value.get("id").and_then(Value::as_str) {
-                        values.entry(id.to_owned()).or_insert(value);
-                    }
-                }
-            }
+    fn legacy_record() -> ImprovementRecord {
+        ImprovementRecord {
+            id: "legacy-1".into(),
+            created_at: "2026-08-01T00:00:00Z".into(),
+            updated_at: "2026-08-01T00:00:00Z".into(),
+            title: "legacy candidate".into(),
+            problem: "old dashboard record".into(),
+            proposed_change: "old change".into(),
+            evidence: vec!["legacy-evidence".into()],
+            source_sessions: vec!["session-1".into()],
+            risk: "unknown".into(),
+            status: "adopted".into(),
+            benchmark_before: Some(10.0),
+            benchmark_after: Some(90.0),
+            rollback_note: "old rollback".into(),
+            revision: 3,
+            approval: Some(ImprovementApproval {
+                reviewer: "legacy-reviewer".into(),
+                approved_at: "2026-08-01T00:00:00Z".into(),
+                proposal_revision: 3,
+            }),
+            active_version: Some("v3".into()),
+            previous_version: Some("v2".into()),
+            conflicts_with: BTreeSet::new(),
+            observations: Vec::new(),
+            suspension_reason: None,
         }
     }
-    Ok(values.into_values().collect())
-}
 
-fn fallback_session_root(repo: &Path) -> PathBuf {
-    let root = std::env::var_os("LOCALAPPDATA")
-        .or_else(|| std::env::var_os("APPDATA"))
-        .map(PathBuf::from)
-        .or_else(|| std::env::var_os("HOME").map(PathBuf::from))
-        .unwrap_or_else(std::env::temp_dir);
-    root.join("Medusa/sessions").join(repository_key(repo))
-}
-
-fn repository_key(repo: &Path) -> String {
-    let mut hash = 0xcbf29ce484222325u64;
-    for byte in repo.to_string_lossy().as_bytes() {
-        hash ^= u64::from(*byte);
-        hash = hash.wrapping_mul(0x100000001b3);
+    #[test]
+    fn arbitrary_session_text_does_not_create_friction() {
+        let repo = crate::tempfile::tempdir().expect("repo");
+        let sessions = repo.path().join(".medusa/sessions");
+        fs::create_dir_all(&sessions).expect("sessions");
+        fs::write(
+            sessions.join("session.json"),
+            br#"{"id":"session-1","completed":false,"message":"runtime failed verification failed retry"}"#,
+        )
+        .expect("session");
+        let dashboard = runtime_engineering_dashboard(repo.path().display().to_string(), Some(90))
+            .expect("dashboard");
+        assert!(dashboard.friction.is_empty());
+        assert_eq!(dashboard.total_tasks, 0);
     }
-    format!("{hash:016x}")
+
+    #[test]
+    fn legacy_records_are_quarantined_and_never_reported_as_active() {
+        let repo = crate::tempfile::tempdir().expect("repo");
+        let root = repo.path().join(".medusa/engineering");
+        fs::create_dir_all(&root).expect("engineering");
+        fs::write(
+            root.join("improvements.json"),
+            serde_json::to_vec(&vec![legacy_record()]).expect("legacy json"),
+        )
+        .expect("legacy record");
+        let dashboard = runtime_engineering_dashboard(repo.path().display().to_string(), Some(90))
+            .expect("dashboard");
+        let record = dashboard.improvements.first().expect("legacy record");
+        assert_eq!(record.status, "legacyUntrusted");
+        assert!(record.approval.is_none());
+        assert!(record.active_version.is_none());
+        assert!(record.benchmark_before.is_none());
+        assert!(!root.join("improvements.json").exists());
+        assert!(root.join("migration-receipt.json").is_file());
+        assert!(root.join("quarantine").is_dir());
+    }
 }

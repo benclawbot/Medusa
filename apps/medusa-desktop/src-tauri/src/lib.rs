@@ -4,7 +4,6 @@ mod desktop_command;
 mod desktop_update;
 mod diffs;
 mod dto;
-#[rustfmt::skip]
 mod engineering;
 mod github_actions;
 mod github_audit;
@@ -42,9 +41,7 @@ pub(crate) use test_tempfile::tempdir;
 use config::desktop_shared_configuration;
 use desktop_update::{desktop_update_from_main, desktop_update_status};
 use diffs::runtime_read_diff;
-use engineering::{
-    runtime_engineering_dashboard, runtime_generate_improvement, runtime_update_improvement,
-};
+use engineering::runtime_engineering_dashboard;
 use github_actions::runtime_retry_github_actions_job;
 use github_audit::runtime_persist_github_mutation_audit;
 use github_auth::runtime_github_auth_status;
@@ -129,8 +126,6 @@ pub fn run() -> tauri::Result<()> {
             runtime_merge_github_pull_request,
             runtime_list_memories,
             runtime_engineering_dashboard,
-            runtime_generate_improvement,
-            runtime_update_improvement,
             runtime_learning_review,
             runtime_learning_transition,
             runtime_learning_inspect,
