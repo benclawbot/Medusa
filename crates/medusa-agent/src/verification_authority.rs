@@ -15,6 +15,7 @@ use medusa_evidence::{ArtifactId, ChangeKind, ChangedComponent, VerificationRece
 use sha2::{Digest, Sha256};
 
 use crate::{
+    repository_boundary::is_revisioned_git_repository_root,
     verification::VerificationResult,
     verification_dag::resource_pool::{
         WarmResourceKey, WarmResourceKind, WarmResourcePool, WarmResourcePoolLimits,
@@ -725,7 +726,7 @@ fn repository_state_paths(
     repo: &Path,
     components: &[ChangedComponent],
 ) -> MedusaResult<Vec<PathBuf>> {
-    let mut result = if git_repository(repo) {
+    let mut result = if is_revisioned_git_repository_root(repo) {
         let output = Command::new("git")
             .args([
                 "ls-files",
@@ -786,14 +787,6 @@ fn hash_repository_state_entry(hasher: &mut Sha256, path: &[u8], kind: &[u8], pa
         hasher.update((part.len() as u64).to_le_bytes());
         hasher.update(part);
     }
-}
-
-fn git_repository(repo: &Path) -> bool {
-    Command::new("git")
-        .args(["rev-parse", "--is-inside-work-tree"])
-        .current_dir(repo)
-        .output()
-        .is_ok_and(|output| output.status.success() && output.stdout.starts_with(b"true"))
 }
 
 fn git_stdout(repo: &Path, args: &[&str]) -> Option<String> {

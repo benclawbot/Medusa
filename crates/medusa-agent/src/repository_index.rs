@@ -2,7 +2,6 @@ use std::{
     collections::{BTreeMap, BTreeSet},
     fs,
     path::{Path, PathBuf},
-    process::Command,
     sync::{Mutex, MutexGuard, OnceLock},
 };
 
@@ -13,7 +12,10 @@ use medusa_intelligence::{
 };
 use medusa_memory::{SessionSearchQuery, open_session_recall};
 
-use crate::session_browser::RepositoryIndexCache;
+use crate::{
+    repository_boundary::is_revisioned_git_repository_root,
+    session_browser::RepositoryIndexCache,
+};
 
 const MAX_RETRIEVAL_TOKENS: u64 = 8_000;
 const RETRIEVAL_WRAPPER_RESERVE_TOKENS: u64 = 256;
@@ -30,7 +32,7 @@ struct CachedRepository {
 
 impl CachedRepository {
     fn load(repo: PathBuf, git_identity: Vec<u8>) -> MedusaResult<Self> {
-        if git_repository(&repo) {
+        if is_revisioned_git_repository_root(&repo) {
             let graph = RepositoryGraph::open(&repo)?;
             let source_paths = graph.snapshot().files.keys().cloned().collect();
             return Ok(Self {
@@ -336,14 +338,6 @@ fn retrieval_summary(report: &RetrievalReport, available_tokens: u64) -> String 
     )
 }
 
-fn git_repository(repo: &Path) -> bool {
-    Command::new("git")
-        .args(["rev-parse", "--is-inside-work-tree"])
-        .current_dir(repo)
-        .output()
-        .is_ok_and(|output| output.status.success() && output.stdout.starts_with(b"true"))
-}
-
 fn git_identity(repo: &Path) -> std::io::Result<Vec<u8>> {
     let Some(git_dir) = resolve_git_dir(repo)? else {
         return Ok(Vec::new());
@@ -437,7 +431,7 @@ pub(crate) fn summary(refresh: &IndexRefresh) -> String {
 
 #[cfg(test)]
 mod tests {
-    use std::fs;
+    use std::{fs, process::Command};
 
     use super::*;
 
@@ -500,6 +494,16 @@ mod tests {
         assert!(context.system_fragment.contains("graph_after"));
         assert!(context.status.contains("Persistent repository graph"));
         assert!(context.status.contains("Current"));
+    }
+
+    #[test]
+    fn ancestor_git_worktree_is_not_treated_as_repository_root() {
+        let parent = tempfile::tempdir().expect("parent repository");
+        git_ok(parent.path(), &["init", "-q"]);
+        let nested = parent.path().join("nested");
+        fs::create_dir(&nested).expect("nested directory");
+
+        assert!(!is_revisioned_git_repository_root(&nested));
     }
 
     #[test]

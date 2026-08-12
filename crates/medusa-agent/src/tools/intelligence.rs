@@ -2,7 +2,6 @@ use std::{
     collections::BTreeSet,
     fs,
     path::{Path, PathBuf},
-    process::Command,
 };
 
 use medusa_core::MedusaResult;
@@ -17,6 +16,7 @@ use serde_json::{Value, json};
 
 use crate::{
     policy::safe_path,
+    repository_boundary::is_revisioned_git_repository_root,
     tools::{input_string, input_usize},
 };
 
@@ -397,7 +397,7 @@ fn typescript_symbol_rename(
 }
 
 fn revision_bound_index(repo: &Path) -> MedusaResult<(CodeIndex, Option<Value>)> {
-    if !git_repository(repo) {
+    if !is_revisioned_git_repository_root(repo) {
         return Ok((CodeIndex::build(repo)?, None));
     }
 
@@ -424,7 +424,7 @@ fn revision_bound_index(repo: &Path) -> MedusaResult<(CodeIndex, Option<Value>)>
 }
 
 fn revision_bound_test_impact(repo: &Path, changed_paths: &[PathBuf]) -> MedusaResult<Value> {
-    if !git_repository(repo) {
+    if !is_revisioned_git_repository_root(repo) {
         return Ok(serde_json::to_value(select_tests(changed_paths))?);
     }
 
@@ -436,12 +436,4 @@ fn revision_bound_test_impact(repo: &Path, changed_paths: &[PathBuf]) -> MedusaR
         ));
     }
     Ok(serde_json::to_value(impact)?)
-}
-
-fn git_repository(repo: &Path) -> bool {
-    Command::new("git")
-        .args(["rev-parse", "--is-inside-work-tree"])
-        .current_dir(repo)
-        .output()
-        .is_ok_and(|output| output.status.success() && output.stdout.starts_with(b"true"))
 }
