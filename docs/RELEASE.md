@@ -2,7 +2,12 @@
 
 ## Supported installation
 
-Normal installation and updates use prebuilt release artifacts; Rust and Cargo are not required. Source installation remains available for contributors:
+Normal installation uses prebuilt release artifacts; Rust and Cargo are not required to install a stable Medusa build. Update behavior has two explicit paths:
+
+- `medusa update` follows the latest `main` commit and compiles locally, so this path requires the supported Rust/Cargo toolchain;
+- `medusa update --release` installs the latest eligible verified prebuilt release and does not require Rust or Cargo.
+
+Source installation remains available for contributors:
 
 ```bash
 cargo install --path crates/medusa-cli --locked
@@ -28,7 +33,7 @@ A published release is not update-eligible until `Sign Release Manifest` complet
 - `medusa-release-manifest.sig.json`;
 - `SHA256SUMS`.
 
-The updater fails closed while those assets are absent or invalid.
+The release updater fails closed while those assets are absent or invalid.
 
 ## Manifest trust
 
@@ -40,21 +45,25 @@ The signed manifest binds:
 - stable rollout sequence and percentage;
 - exact artifact name, kind, operating system, architecture, target triple, byte count, and SHA-256 digest.
 
-The updater verifies the Ed25519 signature before parsing or trusting those fields. GitHub release metadata supplies only the fixed manifest and signature bootstrap URLs. The reviewed keyring is stored in `release/keys/keyring.json`; private signing material is never committed.
+The release updater verifies the Ed25519 signature before parsing or trusting those fields. GitHub release metadata supplies only the fixed manifest and signature bootstrap URLs. The reviewed keyring is stored in `release/keys/keyring.json`; private signing material is never committed.
 
 ## Update
 
-Check without modifying the installation:
+### Latest main
+
+Check the latest `main` commit without modifying the installation:
 
 ```bash
 medusa update --check
 ```
 
-Apply the latest eligible stable release:
+Build and install the latest `main` content:
 
 ```bash
 medusa update
 ```
+
+This path resolves the moving `main` branch, invokes Cargo, and compiles locally. It never falls back to a release if source discovery or compilation fails.
 
 For unattended managed execution, approval must be explicit:
 
@@ -62,35 +71,47 @@ For unattended managed execution, approval must be explicit:
 medusa update --automatic
 ```
 
-The running session remains usable while the updater checks, downloads, verifies, and stages the release. The updater then requests daemon shutdown, exits, atomically replaces the binary, restarts with the same repository and `--continue`, and requires a startup health acknowledgement. The previous executable is retained until acknowledgement and is restored automatically on swap failure, timeout, or early exit.
+### Stable verified release
+
+Check the latest signed stable release without modifying the installation:
+
+```bash
+medusa update --release --check
+```
+
+Install the latest eligible signed stable release:
+
+```bash
+medusa update --release
+```
+
+For unattended managed release updates:
+
+```bash
+medusa update --release --automatic
+```
+
+The release path requires `medusa-release-manifest.json` and `medusa-release-manifest.sig.json`, verifies the Ed25519 authority and artifact metadata, and never falls back to `main` when verification fails.
+
+The running session remains usable while the release updater checks, downloads, verifies, and stages the release. The updater then requests daemon shutdown, exits, atomically replaces the binary, restarts with the same repository and `--continue`, and requires a startup health acknowledgement. The previous executable is retained until acknowledgement and is restored automatically on swap failure, timeout, or early exit.
 
 Package-managed installations are not silently replaced. Medusa reports the appropriate package-manager command and leaves execution to the operator.
 
-### Explicit source developer channel
-
-Source compilation is no longer the default and is never a fallback. Contributors may deliberately select it:
-
-```bash
-medusa update --channel source
-```
-
-That command warns that it invokes Cargo and follows the moving main branch.
-
 ### Downgrades and rollout rollback
 
-A semantic-version downgrade or a release with a lower rollout sequence is rejected unless the operator explicitly passes:
+A semantic-version downgrade or a release with a lower rollout sequence is rejected unless the operator explicitly selects the release path and passes:
 
 ```bash
-medusa update --allow-downgrade
+medusa update --release --allow-downgrade
 ```
 
-This flag does not bypass signature, platform, archive, size, or digest verification.
+`--allow-downgrade` is release-only. It does not bypass signature, platform, archive, size, or digest verification.
 
 ## Failure behavior
 
-The current binary remains usable when release discovery, signature verification, platform selection, download, size or digest verification, extraction, staging, or restart fails. Partial downloads may resume, but they never exceed the signed byte count and are never promoted before full verification. Source compilation is not attempted after a release-channel failure.
+The current binary remains usable when update discovery, release signature verification, platform selection, download, size or digest verification, extraction, staging, compilation, or restart fails. Partial release downloads may resume, but they never exceed the signed byte count and are never promoted before full verification. Release verification failures never trigger source compilation, and source-path failures never trigger release installation.
 
-Path-free phase diagnostics are appended to `.medusa/update-diagnostics.jsonl`. Replacement state is written beside the executable so interrupted swaps and automatic rollback remain observable.
+Path-free release phase diagnostics are appended to `.medusa/update-diagnostics.jsonl`. Replacement state is written beside the executable so interrupted swaps and automatic rollback remain observable.
 
 ## Platform signatures
 

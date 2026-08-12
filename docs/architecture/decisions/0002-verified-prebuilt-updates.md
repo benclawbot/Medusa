@@ -1,9 +1,11 @@
 # ADR 0002: Verified prebuilt releases are the default update authority
 
-- Status: accepted
+- Status: superseded in part by ADR 0008
 - Date: 2026-08-02
 - Issue: #655
 - Owners: release and security maintainers
+
+> ADR 0008 supersedes this ADR's choice of the default CLI update channel and the `--channel source` UX. The verified-prebuilt trust model, signing authority, artifact verification, rollout, replacement, and rollback decisions below remain accepted for `medusa update --release`.
 
 ## Context
 
@@ -13,28 +15,28 @@ The existing release workflow already produced free GitHub-hosted CLI and deskto
 
 ## Decision
 
-The stable release channel is the default and automatic updater authority.
+At the time of this decision, the stable release channel was selected as the default and automatic updater authority. ADR 0008 later changed the CLI selection so `medusa update` follows `main` and `medusa update --release` selects this verified-prebuilt authority.
 
 A protected release-signing workflow creates a canonical `medusa-release-manifest-v2` from CI-produced release assets and signs the exact bytes with Ed25519. The updater embeds reviewed public keys, verifies the signature before parsing or trusting manifest fields, selects one exact OS/architecture CLI artifact, streams and verifies the signed byte count and SHA-256 digest, confines extraction, stages adjacent to the running executable, and performs a health-checked atomic replacement with automatic rollback.
 
-A source-build updater remains available only through the explicit developer command `medusa update --channel source`. It is not a fallback and cannot be selected by the stable or automatic release path.
+The source-build updater and verified release updater remain independent. Neither is a fallback for the other.
 
 ## Consequences
 
-- End users no longer need Rust or Cargo for normal updates.
+- End users using the verified release path do not need Rust or Cargo.
 - GitHub Releases remains the free artifact transport; trust does not depend on mutable release prose or unsigned asset metadata.
 - A release is not update-eligible until its signed manifest assets are present.
 - Release signing requires the protected `release-signing` environment and the `MEDUSA_RELEASE_ED25519_PRIVATE_KEY_PEM` secret.
 - The repository public-key keyring and embedded updater trust store must change before a signing-key rotation becomes active.
-- Downgrades and rollout-sequence rollback require explicit local approval.
+- Downgrades and rollout-sequence rollback require explicit local approval on the release path.
 - Package-managed installations are never silently replaced or upgraded through a package manager.
-- Failures preserve the current executable, retain diagnostics, and do not silently compile source.
+- Failures preserve the current executable, retain diagnostics, and do not silently switch update paths.
 
 ## Rejected alternatives
 
-### Continue compiling `main`
+### Use moving `main` as the stable release trust authority
 
-Rejected because it is not release-bound, is slow, depends on a local toolchain, and expands the network and supply-chain surface.
+Rejected because it is not release-bound, is slow, depends on a local toolchain, and expands the network and supply-chain surface. ADR 0008 permits `main` as a separate explicit trust model for the default development updater; it does not treat source builds as verified releases.
 
 ### Trust only SHA256SUMS
 
@@ -63,3 +65,4 @@ Rejected because a byte-valid binary can still fail to start on a specific host.
 - `.github/workflows/sign-release-manifest.yml`
 - `scripts/release-evidence.py`
 - `docs/architecture/PREBUILT-UPDATES.md`
+- `docs/architecture/decisions/0008-main-default-explicit-release-updates.md`
