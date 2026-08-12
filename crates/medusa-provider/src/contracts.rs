@@ -4,7 +4,10 @@ use medusa_core::MedusaResult;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use crate::{ProviderStreamEvent, cancelled_provider_error};
+use crate::{
+    ProviderContinuationCapabilities, ProviderStreamEvent, ReasoningExchangeRequest,
+    cancelled_provider_error,
+};
 
 /// Strict tool definition sent to the model.
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
@@ -132,6 +135,47 @@ pub struct ModelResponse {
 pub trait ModelProvider {
     fn complete(&self, request: &ModelRequest) -> MedusaResult<ModelResponse>;
 
+    /// Completes a request with an explicitly validated visible reasoning handoff.
+    ///
+    /// The handoff is appended as a bounded user-role message. Opaque provider continuation
+    /// state is rejected here and must be consumed by a provider adapter that owns its wire
+    /// protocol. This default keeps existing providers and callers source-compatible.
+    fn complete_with_exchange(
+        &self,
+        exchange: &ReasoningExchangeRequest,
+    ) -> MedusaResult<ModelResponse> {
+        let request = exchange.visible_request()?;
+        self.complete(&request)
+    }
+
+    fn complete_streaming_with_exchange(
+        &self,
+        exchange: &ReasoningExchangeRequest,
+        sink: &mut dyn FnMut(ProviderStreamEvent) -> MedusaResult<()>,
+    ) -> MedusaResult<ModelResponse> {
+        let request = exchange.visible_request()?;
+        self.complete_streaming(&request, sink)
+    }
+
+    fn complete_cancellable_with_exchange(
+        &self,
+        exchange: &ReasoningExchangeRequest,
+        cancel: &AtomicBool,
+    ) -> MedusaResult<ModelResponse> {
+        let request = exchange.visible_request()?;
+        self.complete_cancellable(&request, cancel)
+    }
+
+    fn complete_streaming_cancellable_with_exchange(
+        &self,
+        exchange: &ReasoningExchangeRequest,
+        cancel: &AtomicBool,
+        sink: &mut dyn FnMut(ProviderStreamEvent) -> MedusaResult<()>,
+    ) -> MedusaResult<ModelResponse> {
+        let request = exchange.visible_request()?;
+        self.complete_streaming_cancellable(&request, cancel, sink)
+    }
+
     /// Streams provider-neutral events when the route supports incremental delivery.
     ///
     /// The default preserves compatibility for non-streaming routes by producing only a terminal
@@ -207,6 +251,12 @@ pub trait ModelProvider {
 
     fn capabilities(&self) -> ProviderCapabilities {
         ProviderCapabilities::default()
+    }
+
+    /// Native continuation is opt-in and fail-closed by default. Provider adapters may advertise
+    /// a reviewed protocol contract without exposing the opaque payload to provider-neutral code.
+    fn continuation_capabilities(&self) -> ProviderContinuationCapabilities {
+        ProviderContinuationCapabilities::default()
     }
 
     /// Returns metadata for the most recently completed provider execution.

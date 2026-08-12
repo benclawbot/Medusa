@@ -306,6 +306,8 @@ parallel_workers = 4
 [model]
 provider = "minimax"
 fallback_providers = []
+# Optional role/phase pins to existing route ids, for example { planner = "primary" }
+role_routes = {}
 name = "MiniMax-M3"
 protocol = "openai"
 temperature_milli = 200

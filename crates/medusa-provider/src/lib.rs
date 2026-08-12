@@ -12,6 +12,7 @@ mod manager;
 mod openai;
 mod openai_streaming;
 mod openai_transport;
+mod reasoning_exchange;
 mod route_latency;
 mod route_metrics_store;
 mod streaming;
@@ -32,6 +33,13 @@ pub use hedging::{HedgeDecision, HedgePolicy, hedge_decision};
 pub use manager::{ProviderHealth, ProviderManager, ProviderRouteProfile, RouteRetryPolicy};
 pub use openai::OpenAiProvider;
 pub use openai_streaming::OpenAiStreamAccumulator;
+pub use reasoning_exchange::{
+    Alternative, Assumption, AssumptionStatus, ContinuationDisposition, ContinuationModelBinding,
+    Decision, EvidenceRef, HandoffPolicy, HandoffSource, HandoffTarget, HandoffTransfer,
+    HandoffTrustState, MAX_HANDOFF_EVIDENCE_ITEMS, MAX_HANDOFF_LIST_ITEMS, MAX_HANDOFF_TEXT_BYTES,
+    ProviderContinuationCapabilities, ProviderContinuationState, REASONING_HANDOFF_SCHEMA_VERSION,
+    ReasoningExchangeRequest, ReasoningHandoffV1, RouteIdentity, VerificationResult,
+};
 pub use route_latency::{
     RouteLatencyPolicy, RouteLatencyStats, expected_latency_ms, latency_aware_route_order,
 };

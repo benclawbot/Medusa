@@ -22,8 +22,9 @@ use time::OffsetDateTime;
 use crate::hedge_runtime::{HedgeCandidateOutcome, HedgeRacePlan, race_provider_candidates};
 use crate::{
     HedgePolicy, ModelProvider, ModelRequest, ModelResponse, ProviderCapabilities,
-    ProviderExecutionPhase, ProviderHealthStore, ProviderRouteLatencyStore, ProviderStreamEvent,
-    RouteLatencyPolicy, RouteLatencyStats, hedge_decision, latency_aware_route_order,
+    ProviderContinuationCapabilities, ProviderExecutionPhase, ProviderHealthStore,
+    ProviderRouteLatencyStore, ProviderStreamEvent, RouteLatencyPolicy, RouteLatencyStats,
+    hedge_decision, latency_aware_route_order,
 };
 
 /// Observable health state for a configured provider position.
@@ -96,6 +97,7 @@ impl RouteRetryPolicy {
 pub struct ProviderManager<P> {
     providers: Vec<P>,
     profiles: Vec<ProviderRouteProfile>,
+    role_routes: BTreeMap<String, usize>,
     cache: Mutex<BTreeMap<String, ModelResponse>>,
     prompt_cache: Mutex<CacheTelemetry>,
     state: ProviderHealthStore,
@@ -141,6 +143,7 @@ impl<P> ProviderManager<P> {
         Self {
             providers,
             profiles,
+            role_routes: BTreeMap::new(),
             cache: Mutex::new(BTreeMap::new()),
             prompt_cache: Mutex::new(CacheTelemetry::default()),
             state,
@@ -156,6 +159,22 @@ impl<P> ProviderManager<P> {
         for profile in &mut self.profiles {
             profile.retry.max_retries = retries_per_provider;
         }
+        self
+    }
+
+    /// Pins configured roles/phases to existing route profiles while preserving the normal
+    /// failover order after the pinned route. Invalid bindings are ignored here; the public
+    /// configuration validator rejects them before a production manager is constructed.
+    pub fn with_role_routes(mut self, bindings: &BTreeMap<String, String>) -> Self {
+        self.role_routes = bindings
+            .iter()
+            .filter_map(|(role, route_id)| {
+                self.profiles
+                    .iter()
+                    .position(|profile| profile.id == *route_id)
+                    .map(|index| (role.clone(), index))
+            })
+            .collect();
         self
     }
 
@@ -573,12 +592,33 @@ impl<P: ModelProvider + Sync> ModelProvider for ProviderManager<P> {
         capabilities
     }
 
+    fn continuation_capabilities(&self) -> ProviderContinuationCapabilities {
+        self.providers.first().map_or_else(
+            ProviderContinuationCapabilities::default,
+            ModelProvider::continuation_capabilities,
+        )
+    }
+
     fn execution_status(&self) -> Option<Value> {
         ProviderManager::execution_status(self)
     }
 }
 
 impl<P: ModelProvider + Sync> ProviderManager<P> {
+    fn pinned_route_for_phase(&self, phase: ProviderExecutionPhase) -> Option<usize> {
+        let keys: &[&str] = match phase {
+            ProviderExecutionPhase::Default => &["default"],
+            ProviderExecutionPhase::Planning => &["planning", "planner", "research"],
+            ProviderExecutionPhase::Implementation => &["implementation", "implementer"],
+            ProviderExecutionPhase::HighRiskReview => &["high_risk_review", "reviewer", "verifier"],
+            ProviderExecutionPhase::Repair => &["repair", "debugger"],
+            ProviderExecutionPhase::Summarization => &["summarization", "summarizer"],
+            ProviderExecutionPhase::Formatting => &["formatting", "formatter"],
+        };
+        keys.iter()
+            .find_map(|key| self.role_routes.get(*key).copied())
+    }
+
     fn complete_with_cancel_and_sink(
         &self,
         request: &ModelRequest,
@@ -607,21 +647,31 @@ impl<P: ModelProvider + Sync> ProviderManager<P> {
 
         let stats = self.latency.stats()?;
         let phase_latency_policy = self.latency_policy.for_phase(phase);
-        let route_order = latency_aware_route_order(
+        let mut route_order = latency_aware_route_order(
             &self.profiles,
             &stats,
             !request.tools.is_empty(),
             false,
             phase_latency_policy,
         );
-        if let Some(decision) = hedge_decision(
-            &route_order,
-            &self.profiles,
-            &stats,
-            request.max_tokens,
-            self.hedge_policy,
-            phase_latency_policy,
-        ) {
+        let pinned_index = self.pinned_route_for_phase(phase);
+        if let Some(pinned_index) = pinned_index {
+            route_order.retain(|index| *index != pinned_index);
+            route_order.insert(0, pinned_index);
+        }
+        let hedge = if pinned_index.is_none() {
+            hedge_decision(
+                &route_order,
+                &self.profiles,
+                &stats,
+                request.max_tokens,
+                self.hedge_policy,
+                phase_latency_policy,
+            )
+        } else {
+            None
+        };
+        if let Some(decision) = hedge {
             self.record_attempt(decision.primary_index)?;
             let mut race_sink = sink.take();
             let race_result = race_provider_candidates(
@@ -832,9 +882,12 @@ fn stable_jitter(provider_index: usize, attempt: u8) -> u64 {
 
 #[cfg(test)]
 mod tests {
-    use std::sync::{
-        Arc,
-        atomic::{AtomicUsize, Ordering},
+    use std::{
+        collections::BTreeMap,
+        sync::{
+            Arc,
+            atomic::{AtomicUsize, Ordering},
+        },
     };
 
     use medusa_core::{ErrorCategory, ErrorCode, MedusaError};
@@ -1011,6 +1064,28 @@ mod tests {
         assert_eq!(manager.route_latency()[0].retry_attempts, 1);
         assert_eq!(manager.route_latency()[0].retry_recoveries, 0);
         assert_eq!(manager.route_latency()[1].successes, 1);
+    }
+
+    #[test]
+    fn pinned_role_route_runs_before_latency_order() {
+        let (primary, primary_calls) = provider(Ok(success()));
+        let (fallback, fallback_calls) = provider(Ok(success()));
+        let bindings = BTreeMap::from([(String::from("planner"), String::from("fallback"))]);
+        let manager = ProviderManager::new_with_profiles(
+            vec![primary, fallback],
+            vec![profile("primary"), profile("fallback")],
+        )
+        .with_role_routes(&bindings)
+        .without_sleep();
+        manager
+            .complete_cancellable_for_phase(
+                &request(),
+                ProviderExecutionPhase::Planning,
+                &AtomicBool::new(false),
+            )
+            .expect("pinned route response");
+        assert_eq!(primary_calls.load(Ordering::SeqCst), 0);
+        assert_eq!(fallback_calls.load(Ordering::SeqCst), 1);
     }
 
     #[test]

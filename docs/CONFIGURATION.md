@@ -15,6 +15,8 @@ parallel_workers = 4
 [model]
 provider = "minimax"
 fallback_providers = []
+# Optional role/phase pins to the existing route ids. Empty keeps the single-route default.
+role_routes = {}
 name = "MiniMax-M3"
 protocol = "openai"
 temperature_milli = 200
@@ -34,6 +36,13 @@ browser_on_ui_change = true
 ```
 
 Configuration precedence is CLI overrides, environment overrides, project TOML, user TOML, then built-in defaults.
+
+`model.role_routes` lets a user pin a role to `primary` or an existing `fallback[index]` route without
+creating a second provider router. Supported role aliases include `planner`/`planning`,
+`implementer`/`implementation`, `reviewer`/`high_risk_review`, `debugger`/`repair`,
+`summarizer`/`summarization`, and `formatter`/`formatting`. A pinned route is attempted first for
+that phase; the normal authorized failover routes remain available if it fails. Unknown roles and
+missing fallback indexes are rejected during configuration validation.
 
 `agent.parallel_workers` is retained for version-1 compatibility and currently controls bounded parallel tool work. It does not create additional independent coding agents in the current production runtime.
 
