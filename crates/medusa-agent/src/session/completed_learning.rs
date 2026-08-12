@@ -9,6 +9,10 @@ use medusa_context::refinement::{
 };
 use medusa_core::{MedusaResult, learning_policy::LearningAdmissionPolicy};
 use medusa_improvement::{
+    correction_loop::{
+        CorrectionLoopEngine, CorrectionLoopRequest, DeterministicProductionReplayRunner,
+    },
+    correction_signals::{ConversationRole, ConversationTurn},
     provenance::{
         ProvenanceGraph, ProvenanceGraphStore, ProvenanceOutcome, ProvenanceSource,
         repository_identity, repository_revision,
@@ -16,6 +20,7 @@ use medusa_improvement::{
     refinement_authority::RefinementAuthorityStore,
 };
 use medusa_protocol::{Actor, EventPayload};
+use medusa_provider::{MessageBlock, Role};
 use serde_json::{Value, json};
 
 use super::{AgentSession, lessons, skill_drafts, skill_outcomes, skill_probation};
@@ -29,6 +34,11 @@ pub(super) fn process(session: &AgentSession) -> MedusaResult<()> {
     }
 
     let provenance = persist_provenance(session, &policy)?;
+    let correction_report = if session.completed {
+        process_correction_loop(session, &policy, provenance.clone())?
+    } else {
+        medusa_improvement::correction_loop::CorrectionLoopReport::default()
+    };
     if !session.completed {
         return Ok(());
     }
@@ -42,7 +52,8 @@ pub(super) fn process(session: &AgentSession) -> MedusaResult<()> {
         return Ok(());
     }
 
-    if policy.automatic_proposals_enabled()
+    if correction_report.episodes.is_empty()
+        && policy.automatic_proposals_enabled()
         && let Some(proposal_path) = lessons::extract_completed_session(session)?
     {
         let canonical_path = admit_to_canonical_memory(session, &proposal_path)?;
@@ -71,6 +82,76 @@ pub(super) fn process(session: &AgentSession) -> MedusaResult<()> {
             "authority_receipts": authority_receipts(session),
         }),
     )
+}
+
+fn process_correction_loop(
+    session: &AgentSession,
+    policy: &LearningAdmissionPolicy,
+    provenance: ProvenanceGraph,
+) -> MedusaResult<medusa_improvement::correction_loop::CorrectionLoopReport> {
+    let turns = correction_turns(session);
+    if turns.is_empty() {
+        return Ok(medusa_improvement::correction_loop::CorrectionLoopReport::default());
+    }
+    let tool_capabilities = provenance
+        .tool_observations()
+        .filter_map(|observation| observation.tool_name.clone())
+        .collect::<Vec<_>>();
+    let request = CorrectionLoopRequest {
+        session_id: session.id.to_string(),
+        objective: session.objective.clone(),
+        turns,
+        provenance,
+        policy: policy.clone(),
+        repository_fixture: format!(
+            "repository revision {}",
+            repository_revision(&session.repo).unwrap_or_else(|| "unknown".to_owned())
+        ),
+        tool_capabilities,
+        now_unix_ms: session.updated_at.unix_timestamp_nanos() as i64 / 1_000_000,
+    };
+    let report = CorrectionLoopEngine::default()
+        .run(&session.repo, request, &DeterministicProductionReplayRunner)
+        .map_err(|error| {
+            medusa_core::MedusaError::new(
+                medusa_core::ErrorCode::PersistenceFailed,
+                medusa_core::ErrorCategory::Persistence,
+                format!("correction-to-improvement loop failed: {error}"),
+            )
+        })?;
+    Ok(report)
+}
+
+fn correction_turns(session: &AgentSession) -> Vec<ConversationTurn> {
+    session
+        .messages
+        .iter()
+        .enumerate()
+        .filter_map(|(index, message)| {
+            let mut text = String::new();
+            for block in &message.content {
+                let MessageBlock::Text { text: value } = block else {
+                    return None;
+                };
+                if !text.is_empty() {
+                    text.push('\n');
+                }
+                text.push_str(value);
+            }
+            if text.trim().is_empty() {
+                return None;
+            }
+            let role = match message.role {
+                Role::User => ConversationRole::User,
+                Role::Assistant => ConversationRole::Assistant,
+            };
+            Some(ConversationTurn {
+                id: format!("message-{index}"),
+                role,
+                content: text,
+            })
+        })
+        .collect()
 }
 
 pub(super) fn provenance_graph(session: &AgentSession) -> MedusaResult<ProvenanceGraph> {
@@ -761,5 +842,44 @@ mod tests {
         let value: Value = serde_json::from_str(&content).expect("memory json");
         assert_eq!(value["lifecycle"]["status"], "rejected");
         assert!(!content.contains("do-not-store"));
+    }
+
+    #[test]
+    fn user_correction_creates_reviewable_candidate_without_activation() {
+        let repo = tempfile::tempdir().expect("repo");
+        let mut session = session(repo.path());
+        session.messages = vec![
+            medusa_provider::Message {
+                role: medusa_provider::Role::Assistant,
+                content: vec![medusa_provider::MessageBlock::Text {
+                    text: "I claimed the source inventory was complete.".into(),
+                }],
+            },
+            medusa_provider::Message {
+                role: medusa_provider::Role::User,
+                content: vec![medusa_provider::MessageBlock::Text {
+                    text: "You missed coverage of the authoritative sources.".into(),
+                }],
+            },
+        ];
+        append_event(
+            &mut session,
+            Actor::User,
+            EventPayload::UserPromptReceived {
+                text: "You missed coverage of the authoritative sources.".into(),
+            },
+        )
+        .expect("correction event");
+        process(&session).expect("correction loop");
+        let state: serde_json::Value = serde_json::from_slice(
+            &fs::read(repo.path().join(".medusa/correction-loop/state.json"))
+                .expect("correction-loop state"),
+        )
+        .expect("state json");
+        assert_eq!(state["episodes"][0]["state"], "awaiting_review");
+        let authority = RefinementAuthorityStore::open(repo.path()).expect("authority");
+        let snapshot = authority.snapshot().expect("authority snapshot");
+        assert_eq!(snapshot.records.len(), 1);
+        assert!(snapshot.active.is_empty());
     }
 }
