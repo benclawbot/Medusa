@@ -1,5 +1,7 @@
 # Rustfmt Baseline Recovery
 
+> Historical record — retained as implementation evidence; it is not current setup or status guidance. Start at [the documentation index](README.md).
+
 The workspace formatting debt has been repaired on pull request #22 with the repository's pinned Rust 1.88 `cargo fmt --all` output.
 
 The formatting, clippy, full workspace tests, documentation, dependency policy, security, package smoke, adversarial, fuzz, chaos, and live-provider gates pass on that branch.

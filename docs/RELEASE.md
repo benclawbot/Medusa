@@ -45,7 +45,7 @@ The signed manifest binds:
 - stable rollout sequence and percentage;
 - exact artifact name, kind, operating system, architecture, target triple, byte count, and SHA-256 digest.
 
-The release updater verifies the Ed25519 signature before parsing or trusting those fields. GitHub release metadata supplies only the fixed manifest and signature bootstrap URLs. The reviewed keyring is stored in `release/keys/keyring.json`; private signing material is never committed.
+The release updater verifies the Ed25519 signature before parsing or trusting those fields. GitHub release metadata supplies only the fixed manifest and signature bootstrap URLs. The reviewed primary/recovery lifecycle is stored in `release/keys/keyring.json`; private signing material is never committed, and CI rejects a keyring that cannot satisfy its overlap policy.
 
 ## Update
 

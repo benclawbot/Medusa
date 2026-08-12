@@ -1,5 +1,7 @@
 # Issue 307 direct engine modules
 
+> Historical record — retained as implementation evidence; it is not current setup or status guidance. Start at [the documentation index](README.md).
+
 This migration replaces `medusa-agent`'s build-time source rewriting with normal Rust source tracked in the repository.
 
 The migration preserves the exact generated engine implementation first, then validates it through formatting, Clippy, dependency policy, security audit, full workspace tests, documentation, and daemon/TUI integration on all configured platforms.

@@ -10,8 +10,17 @@ pub const MANIFEST_NAME: &str = "medusa-release-manifest.json";
 pub const SIGNATURE_NAME: &str = "medusa-release-manifest.sig.json";
 pub const MANIFEST_SCHEMA: &str = "medusa-release-manifest-v2";
 pub const SIGNATURE_SCHEMA: &str = "medusa-release-signature-v1";
-pub const DEFAULT_KEY_ID: &str = "medusa-release-2026-01";
-const DEFAULT_PUBLIC_KEY: [u8; 32] = [
+pub const DEFAULT_KEY_ID: &str = "medusa-release-2026-08-primary";
+pub const RECOVERY_KEY_ID: &str = "medusa-release-2026-08-recovery";
+const PRIMARY_PUBLIC_KEY: [u8; 32] = [
+    0xdb, 0xe0, 0xed, 0xcd, 0x21, 0xf4, 0xdc, 0x28, 0xd1, 0x85, 0x48, 0xff, 0x36, 0x1b, 0xe2, 0x21,
+    0xc0, 0xff, 0xe1, 0xf7, 0x6b, 0x0b, 0xaa, 0xce, 0x11, 0x18, 0x15, 0x0d, 0xf2, 0x79, 0x8f, 0x24,
+];
+const RECOVERY_PUBLIC_KEY: [u8; 32] = [
+    0xb7, 0xb3, 0xcd, 0x64, 0x94, 0x38, 0x89, 0xe5, 0x3c, 0xd8, 0x91, 0x91, 0xda, 0x06, 0x3b, 0xa9,
+    0x48, 0xd5, 0xca, 0x15, 0xc9, 0x51, 0x1b, 0x55, 0xab, 0x27, 0x71, 0xba, 0x71, 0x23, 0x0c, 0x02,
+];
+const LEGACY_UNUSED_PUBLIC_KEY: [u8; 32] = [
     0x2e, 0xa0, 0x16, 0xf0, 0x0f, 0x81, 0x87, 0x45, 0x3c, 0x66, 0x31, 0x64, 0x4a, 0x9b, 0x47, 0x2a,
     0x9e, 0x1b, 0x6e, 0x6b, 0x28, 0x1f, 0xe6, 0xcb, 0xa8, 0x62, 0x57, 0x8a, 0x2b, 0x85, 0x2f, 0x44,
 ];
@@ -322,13 +331,29 @@ pub struct TrustStore {
 impl TrustStore {
     pub fn production() -> Self {
         Self {
-            keys: vec![TrustedKey {
-                key_id: DEFAULT_KEY_ID.to_owned(),
-                public_key: DEFAULT_PUBLIC_KEY,
-                status: KeyStatus::Active,
-                first_sequence: 1,
-                last_sequence: None,
-            }],
+            keys: vec![
+                TrustedKey {
+                    key_id: DEFAULT_KEY_ID.to_owned(),
+                    public_key: PRIMARY_PUBLIC_KEY,
+                    status: KeyStatus::Active,
+                    first_sequence: 1,
+                    last_sequence: None,
+                },
+                TrustedKey {
+                    key_id: RECOVERY_KEY_ID.to_owned(),
+                    public_key: RECOVERY_PUBLIC_KEY,
+                    status: KeyStatus::Active,
+                    first_sequence: 1,
+                    last_sequence: None,
+                },
+                TrustedKey {
+                    key_id: "medusa-release-2026-01".to_owned(),
+                    public_key: LEGACY_UNUSED_PUBLIC_KEY,
+                    status: KeyStatus::Revoked,
+                    first_sequence: 1,
+                    last_sequence: Some(1),
+                },
+            ],
         }
     }
 
@@ -663,6 +688,54 @@ mod tests {
             future.verify(&manifest, &signature),
             Err(ManifestError::KeyOutsideSequence { .. })
         ));
+    }
+
+    #[test]
+    fn production_trust_store_keeps_independent_primary_and_recovery_authorities() {
+        let store = TrustStore::production();
+        assert_eq!(store.keys.len(), 3);
+        let primary = store
+            .keys
+            .iter()
+            .find(|key| key.key_id == DEFAULT_KEY_ID)
+            .expect("primary key");
+        let recovery = store
+            .keys
+            .iter()
+            .find(|key| key.key_id == RECOVERY_KEY_ID)
+            .expect("recovery key");
+        assert_eq!(primary.status, KeyStatus::Active);
+        assert_eq!(recovery.status, KeyStatus::Active);
+        assert_ne!(primary.public_key, recovery.public_key);
+        assert!(
+            store
+                .keys
+                .iter()
+                .any(|key| key.status == KeyStatus::Revoked)
+        );
+
+        let keyring: serde_json::Value =
+            serde_json::from_str(include_str!("../../../release/keys/keyring.json"))
+                .expect("release keyring");
+        for trusted in &store.keys {
+            let declared = keyring["keys"]
+                .as_array()
+                .expect("key array")
+                .iter()
+                .find(|key| key["key_id"] == trusted.key_id)
+                .unwrap_or_else(|| panic!("missing keyring entry for {}", trusted.key_id));
+            assert_eq!(declared["public_key_hex"], hex::encode(trusted.public_key));
+            assert_eq!(declared["first_sequence"], trusted.first_sequence);
+            assert_eq!(declared["last_sequence"].as_u64(), trusted.last_sequence);
+            assert_eq!(
+                declared["status"],
+                if trusted.status == KeyStatus::Active {
+                    "active"
+                } else {
+                    "revoked"
+                }
+            );
+        }
     }
 
     #[test]

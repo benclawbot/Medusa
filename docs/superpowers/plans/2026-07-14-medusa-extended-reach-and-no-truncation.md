@@ -1,5 +1,7 @@
 # Medusa Extended Reach and No-Truncation Display Implementation Plan
 
+> Historical record — retained as implementation evidence; it is not current setup or status guidance. Start at [the documentation index](../../README.md).
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Give Medusa a persistent headless browser the agent can drive from tool calls and stop truncating tool output in the TUI display, mirroring the inline-and-scroll behavior of Claude Code, while keeping the model's context window bounded with a persisted head/tail/path envelope.

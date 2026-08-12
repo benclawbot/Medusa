@@ -1,5 +1,7 @@
 # Issue 308: native Windows command sandbox
 
+> Historical record — retained as implementation evidence; it is not current setup or status guidance. Start at [the documentation index](README.md).
+
 Windows command execution now uses an AppContainer process identity with no network capabilities. The launcher grants the AppContainer SID access only to the repository working tree and the selected executable, creates the process suspended, assigns it to a kill-on-close Job Object, and resumes it only after containment is established.
 
 The child receives an explicit environment allowlist containing `PATH`, `SystemRoot`, repository-scoped temporary directories, and Medusa sandbox diagnostics. Arbitrary inherited variables and secrets are excluded.

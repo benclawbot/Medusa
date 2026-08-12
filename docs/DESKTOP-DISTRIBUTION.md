@@ -136,7 +136,7 @@ These packages are not yet trusted end-user releases:
 - Linux packages are not published through a signed repository and carry no distribution-maintainer signature.
 - SHA-256 evidence and GitHub provenance establish build origin and integrity, but do not grant platform trust.
 
-Signing, notarization, certificate custody, rotation, revocation, and public release approval require a separate design. Long-lived signing credentials must never be exposed to pull-request workflows.
+The protected `Sign Draft Release` workflow implements Authenticode, Developer ID/notarization, and Linux Sigstore signing, but the platform certificate/notary secrets are not currently configured. Until they are, published packages remain unsigned at the operating-system level. Long-lived signing credentials must never be exposed to pull-request workflows; see [release signing](RELEASE-SIGNING.md).
 
 ## Rollback
 

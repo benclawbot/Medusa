@@ -1,5 +1,7 @@
 # Complete Installation Guide Design
 
+> Historical record — retained as implementation evidence; it is not current setup or status guidance. Start at [the documentation index](../../README.md).
+
 ## Goal
 
 Replace the README's assumption-heavy installation section with a complete, copy-pasteable path for Windows, macOS, and Linux. A new user should be able to install or verify every required tool, install Medusa, configure live model access, and confirm the installation without having to infer missing environment setup.

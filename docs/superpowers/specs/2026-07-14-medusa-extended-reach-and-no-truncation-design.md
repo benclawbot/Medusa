@@ -1,5 +1,7 @@
 # Extended Reach and No-Truncation Display Design
 
+> Historical record — retained as implementation evidence; it is not current setup or status guidance. Start at [the documentation index](../../README.md).
+
 ## Goal
 
 Give Medusa two related improvements:

@@ -74,7 +74,7 @@ flowchart TB
 
 Repository writes are path-checked, symlink-aware, and transactional. Coordinated implementers receive mutating tools only inside their isolated worktree. Their changed paths are checked against the task contract, verification must pass inside the worktree, overlapping worker paths are rejected, and integration rollback restores the pre-batch HEAD on conflict. Shell execution fails closed when the required containment backend is unavailable.
 
-Platform note: Windows command containment requires Windows 11 with `Experimental_CreateProcessInSandbox`. Browser verification requires Node.js, the Playwright sidecar, and a reachable route. These are shipped but platform- or prerequisite-limited behaviors, not universal fallbacks.
+Platform note: Windows command containment requires Windows 11 with `Experimental_CreateProcessInSandbox`. Required UI-change verification uses the Node.js browser sidecar as an internal verification boundary; model-executable browser actions remain quarantined until their dispatcher, permissions, and authenticated behavioral evidence are certified.
 
 ## Orchestration and parent/subagent responsibility
 
@@ -129,7 +129,7 @@ flowchart LR
     F -->|yes| C[Guarded commit integration]
     F -->|no| R[Reject / retry / recover]
     C --> W[Broader primary repository checks]
-    W --> B[Browser verification when effective UI changed]
+    W --> B[Certified or manual visible UI evidence when effective UI changed]
     B --> G{Required checks satisfied?}
     G -->|yes| V[Verified completion]
     G -->|no| R

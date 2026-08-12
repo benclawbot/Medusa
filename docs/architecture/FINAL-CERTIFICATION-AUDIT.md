@@ -1,5 +1,7 @@
 # Architecture v2 final certification audit
 
+> Historical record — retained as the issue-closing certification receipt. Current architecture and capability status live in [the architecture index](INDEX.md) and `baseline.json`.
+
 Issue: #654
 Parent: #645
 

@@ -1,6 +1,6 @@
 # Skill dependency lock receipts
 
-Status: implemented in PR #120.
+Status: implemented and enforced by the current skill dependency-lock code and tests.
 
 ## Goal
 

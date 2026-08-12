@@ -1,5 +1,7 @@
 # Product evidence roadmap
 
+> Historical record — retained as the planning context for the completed product-evidence workstream; it is not a current delivery schedule. Start at [the documentation index](README.md) and [capability evidence](CAPABILITY-EVIDENCE.md).
+
 Medusa's product position is **auditable, recoverable autonomous engineering**: repository work should be bounded, verifiable, resumable, and explainable.
 
 The repository already contains substantial runtime, containment, orchestration, verification, persistence, recovery, and learning infrastructure. The next milestone is to make those guarantees easy to reproduce, inspect, install, and measure.

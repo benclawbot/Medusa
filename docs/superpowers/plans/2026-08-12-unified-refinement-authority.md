@@ -1,5 +1,7 @@
 # Unified Refinement Authority Implementation Plan
 
+> Historical record — retained as implementation evidence; it is not current setup or status guidance. Start at [the documentation index](../../README.md).
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Make one durable refinement authority own every production-active learned behavior and apply approved, scope-matching refinements through the real runtime.
