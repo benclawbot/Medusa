@@ -817,6 +817,27 @@ fn add_manifest_checks(
             ]);
         }
     }
+
+    let has_python_changes = components
+        .iter()
+        .flat_map(|component| component.all_paths())
+        .any(|path| {
+            Path::new(path)
+                .extension()
+                .is_some_and(|extension| extension == "py")
+        });
+    let has_pytest_check = checks
+        .iter()
+        .any(|check| check.program.as_deref() == Some("python") && check.args == ["-m", "pytest"]);
+    if has_python_changes && !has_pytest_check {
+        checks.push(VerificationCheck::command(
+            VerificationCheckKind::Unit,
+            "python",
+            &["-m", "pytest"],
+            ".",
+            "Python changes require pytest",
+        ));
+    }
     Ok(())
 }
 
@@ -1052,6 +1073,28 @@ mod tests {
                 && check.args.len() == 2
                 && check.args[0] == "run"
                 && check.args[1] == "test"
+        }));
+    }
+
+    #[test]
+    fn python_changes_require_pytest_without_repository_config() {
+        let directory = tempfile::tempdir().unwrap();
+        fs::create_dir_all(directory.path().join("src")).unwrap();
+        fs::write(
+            directory.path().join("src/slugify.py"),
+            "def slugify(value): return value\n",
+        )
+        .unwrap();
+        let components =
+            vec![ChangedComponent::new(ChangeKind::Modified, "src/slugify.py").unwrap()];
+
+        let plan = VerificationPlanner::plan(directory.path(), "repo", "commit", &components, &[])
+            .unwrap();
+
+        assert!(plan.checks.iter().any(|check| {
+            check.kind == VerificationCheckKind::Unit
+                && check.program.as_deref() == Some("python")
+                && check.args == ["-m", "pytest"]
         }));
     }
 
