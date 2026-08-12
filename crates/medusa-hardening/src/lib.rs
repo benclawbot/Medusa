@@ -6,6 +6,7 @@ mod evals;
 mod feedback;
 mod migrations;
 mod observability;
+mod operational_health;
 mod release;
 mod support;
 
@@ -20,6 +21,11 @@ pub use feedback::{
 };
 pub use migrations::{CURRENT_SCHEMA_VERSION, Migration, MigrationReceipt, Migrator};
 pub use observability::{Observability, OperationalEvent};
+pub use operational_health::{
+    HealthComponent, HealthReport, HealthStatus, LivenessDisposition, LivenessObservation,
+    OPERATIONAL_HEALTH_SCHEMA_VERSION, ResourceBudget, ResourcePressure, ResourceSnapshot,
+    SupportBundle, SupportBundleManifest, SupportProduct,
+};
 pub use release::{ArtifactEntry, ReleaseManifest, build_release_manifest, package_smoke};
 
 #[cfg(test)]

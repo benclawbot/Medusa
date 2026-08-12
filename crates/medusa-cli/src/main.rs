@@ -7,6 +7,7 @@ mod update_command;
 use std::{
     collections::BTreeMap,
     fs,
+    io::{Read, Seek, SeekFrom},
     path::{Path, PathBuf},
     process::Command,
 };
@@ -27,7 +28,10 @@ use medusa_config::Config;
 use medusa_core::{ErrorCategory, ErrorCode, MedusaError, MedusaResult};
 use medusa_daemon::{DaemonClient, DaemonPaths, Request, serve, serve_with_config};
 use medusa_extensions::{DesktopCommanderClient, DesktopCommanderSettings};
-use medusa_hardening::{CURRENT_SCHEMA_VERSION, Migrator};
+use medusa_hardening::{
+    CURRENT_SCHEMA_VERSION, HealthComponent, HealthReport, HealthStatus, Migrator,
+    ResourceBudget, ResourceSnapshot, SupportBundle, SupportProduct,
+};
 use headless_approval::{ApprovalMatch, HeadlessApprovalPolicy};
 use medusa_protocol::frontend::{FrontendEvent, FrontendKind};
 use medusa_runtime::{
@@ -68,6 +72,15 @@ struct Cli {
 enum CommandKind {
     Bootstrap,
     Doctor,
+    /// Report bounded, truthful operational health without billable or destructive probes.
+    Health {
+        /// Emit stable machine-readable JSON.
+        #[arg(long)]
+        json: bool,
+        /// Write a bounded, redacted local support bundle to this JSON path.
+        #[arg(long, value_name = "PATH")]
+        support_bundle: Option<PathBuf>,
+    },
     Migrate,
     /// Configure provider, model, performance, and authentication preferences.
     Config {
@@ -298,6 +311,10 @@ fn run() -> MedusaResult<()> {
             Ok(())
         }
         CommandKind::Doctor => doctor(&repo, &config),
+        CommandKind::Health {
+            json,
+            support_bundle,
+        } => health(&repo, &config, json, support_bundle.as_deref()),
         CommandKind::Migrate => migrate(&repo),
         CommandKind::Update {
             check,
@@ -510,6 +527,274 @@ fn is_unjournaled_runtime_failure(message: &str) -> bool {
 fn request_daemon_shutdown(repo: &Path) {
     let paths = DaemonPaths::for_repo(repo);
     let _ = DaemonClient::new(&paths.socket).request(Request::ShutdownNow);
+}
+
+fn health(
+    repo: &Path,
+    config: &Config,
+    json: bool,
+    support_bundle: Option<&Path>,
+) -> MedusaResult<()> {
+    let mut components = Vec::new();
+    components.push(HealthComponent::new(
+        "repository",
+        if repo.is_dir() {
+            HealthStatus::HealthyReady
+        } else {
+            HealthStatus::BlockedUserAction
+        },
+        if repo.is_dir() {
+            "repository path is readable"
+        } else {
+            "repository path does not exist or is not a directory"
+        },
+        (!repo.is_dir()).then_some("choose an existing repository with --repo".to_owned()),
+    )?);
+
+    let state_root = repo.join(".medusa");
+    let writable = writable_directory(&state_root);
+    components.push(HealthComponent::new(
+        "state_store",
+        if writable {
+            HealthStatus::HealthyReady
+        } else {
+            HealthStatus::BlockedUserAction
+        },
+        if writable {
+            "Medusa state directory is writable"
+        } else {
+            "Medusa state directory is missing or not writable"
+        },
+        (!writable).then_some("run `medusa bootstrap` or repair the .medusa directory permissions".to_owned()),
+    )?);
+
+    let schema_path = state_root.clone();
+    let schema = match Migrator::new(&schema_path).schema_version() {
+        Ok(version) if version <= CURRENT_SCHEMA_VERSION => HealthComponent::new(
+            "schema",
+            HealthStatus::HealthyReady,
+            format!("state schema {version} is supported (maximum {CURRENT_SCHEMA_VERSION})"),
+            None,
+        )?,
+        Ok(version) => HealthComponent::new(
+            "schema",
+            HealthStatus::UnsafeQuarantine,
+            format!("state schema {version} is newer than supported schema {CURRENT_SCHEMA_VERSION}"),
+            Some("use a compatible Medusa build before writing authoritative state".to_owned()),
+        )?,
+        Err(error) => HealthComponent::new(
+            "schema",
+            HealthStatus::UnhealthyRecoveryRequired,
+            format!("state schema could not be read: {error}"),
+            Some("run `medusa migrate` after preserving the .medusa directory".to_owned()),
+        )?,
+    };
+    components.push(schema);
+
+    for check in bounded_runtime_health_checks(repo) {
+        let status = if check.ok {
+            HealthStatus::HealthyReady
+        } else if check.name.contains("checkpoint") || check.name.contains("journal") {
+            HealthStatus::UnhealthyRecoveryRequired
+        } else {
+            HealthStatus::BlockedUserAction
+        };
+        components.push(HealthComponent::new(
+            format!("runtime.{}", check.name),
+            status,
+            check.detail,
+            (!check.ok).then_some(
+                "inspect the durable session evidence and use the recovery command before resuming"
+                    .to_owned(),
+            ),
+        )?);
+    }
+
+    let (bytes, entries, truncated) = measure_state_tree(&state_root);
+    let budget = ResourceBudget::new("disk_state", 64 * 1024 * 1024, 10_000)?;
+    let resource = ResourceSnapshot::from_usage(budget, bytes, entries);
+    components.push(resource.health_component()?);
+    if truncated {
+        components.push(HealthComponent::new(
+            "disk_scan",
+            HealthStatus::DegradedSafe,
+            "state scan reached its bounded inspection limit",
+            Some("inspect state usage with the support bundle before increasing workload".to_owned()),
+        )?);
+    }
+
+    let provider_status = if config.model.provider.trim().is_empty() {
+        HealthStatus::BlockedUserAction
+    } else {
+        HealthStatus::OptionalUnavailable
+    };
+    components.push(HealthComponent::new(
+        "provider_route",
+        provider_status,
+        if config.model.provider.trim().is_empty() {
+            "no provider route is configured; no billable probe was attempted"
+        } else {
+            "provider route is configured but live readiness was not probed"
+        },
+        Some("use `medusa config doctor` for redacted configuration checks; live provider work requires an explicit run".to_owned()),
+    )?);
+
+    for (id, summary) in [
+        ("daemon", "daemon readiness is owned by the daemon lifecycle and was not inferred from a file"),
+        ("process_containment", "containment readiness was not probed because that would launch a process"),
+        ("analysis_workspace", "analysis workspace readiness is optional and was not started"),
+        ("frontend_gateway", "frontend attachment readiness is session-scoped and was not inferred"),
+    ] {
+        components.push(HealthComponent::new(
+            id,
+            HealthStatus::OptionalUnavailable,
+            summary,
+            None,
+        )?);
+    }
+
+    let report = HealthReport::new(components)?;
+    let events = recent_operational_events(repo);
+    if let Some(path) = support_bundle {
+        let bundle = SupportBundle::new(
+            SupportProduct {
+                version: env!("CARGO_PKG_VERSION").to_owned(),
+                commit: option_env!("MEDUSA_GIT_COMMIT").map(str::to_owned),
+                platform: format!("{}-{}", std::env::consts::OS, std::env::consts::ARCH),
+            },
+            BTreeMap::from([
+                ("config_schema_version".to_owned(), config.version.to_string()),
+                ("agent_mode".to_owned(), format!("{:?}", config.agent.mode)),
+                ("provider".to_owned(), config.model.provider.clone()),
+                ("model".to_owned(), config.model.name.clone()),
+                ("protocol".to_owned(), config.model.protocol.clone()),
+                ("auth_class".to_owned(), config.model.auth.clone()),
+                ("tool_calling".to_owned(), config.model.tool_calling.to_string()),
+                ("streaming".to_owned(), config.model.streaming.to_string()),
+                (
+                    "fallback_route_count".to_owned(),
+                    config.model.fallback_providers.len().to_string(),
+                ),
+                (
+                    "role_route_count".to_owned(),
+                    config.model.role_routes.len().to_string(),
+                ),
+            ]),
+            report.clone(),
+            vec![resource],
+            &events,
+        )?;
+        let manifest = bundle.write_to(path)?;
+        if json {
+            println!("{}", serde_json::to_string_pretty(&manifest)?);
+        } else {
+            println!(
+                "wrote redacted support bundle {} ({} bytes, {} events)",
+                path.display(), manifest.bytes, manifest.event_count
+            );
+        }
+    } else if json {
+        println!("{}", serde_json::to_string_pretty(&report)?);
+    } else {
+        println!("operational status: {:?}", report.status);
+        for component in &report.components {
+            println!("{:?}: {} — {}", component.status, component.id, component.summary);
+        }
+    }
+
+    if report.safe_to_continue {
+        Ok(())
+    } else {
+        Err(MedusaError::new(
+            ErrorCode::DependencyUnavailable,
+            ErrorCategory::Environment,
+            format!("operational health requires attention: {:?}", report.status),
+        ))
+    }
+}
+
+fn measure_state_tree(root: &Path) -> (u64, u64, bool) {
+    const MAX_ENTRIES: u64 = 10_000;
+    const MAX_BYTES: u64 = 64 * 1024 * 1024;
+    if !root.is_dir() {
+        return (0, 0, false);
+    }
+    let mut bytes = 0_u64;
+    let mut entries = 0_u64;
+    let mut truncated = false;
+    for entry in WalkDir::new(root).follow_links(false) {
+        if entries >= MAX_ENTRIES || bytes >= MAX_BYTES {
+            truncated = true;
+            break;
+        }
+        let Ok(entry) = entry else {
+            truncated = true;
+            continue;
+        };
+        entries = entries.saturating_add(1);
+        if entry.file_type().is_file() {
+            bytes = bytes.saturating_add(entry.metadata().map(|metadata| metadata.len()).unwrap_or(0));
+        }
+    }
+    (bytes, entries, truncated)
+}
+
+fn bounded_runtime_health_checks(repo: &Path) -> Vec<DoctorCheck> {
+    const MAX_SESSIONS: usize = 16;
+    let sessions = match list_sessions(repo) {
+        Ok(sessions) => sessions,
+        Err(error) => {
+            return vec![DoctorCheck {
+                name: "execution_journal",
+                ok: false,
+                detail: format!("durable session discovery failed: {error}"),
+            }];
+        }
+    };
+    let total = sessions.len();
+    let mut errors = Vec::new();
+    for session in sessions.into_iter().take(MAX_SESSIONS) {
+        match medusa_runtime::execution_history::inspect(repo, &session.id) {
+            Ok(health) if health.replay.equivalent => {}
+            Ok(_) => errors.push(format!("session {} replay diverges", session.id)),
+            Err(error) => errors.push(format!("session {}: {error}", session.id)),
+        }
+    }
+    let sampled = total.min(MAX_SESSIONS);
+    vec![DoctorCheck {
+        name: "execution_journal",
+        ok: errors.is_empty(),
+        detail: if errors.is_empty() {
+            if total > sampled {
+                format!("verified {sampled} of {total} session journals (bounded sample)")
+            } else {
+                format!("verified {sampled} session journal(s)")
+            }
+        } else {
+            errors.join("; ")
+        },
+    }]
+}
+
+fn recent_operational_events(repo: &Path) -> Vec<medusa_hardening::OperationalEvent> {
+    let path = repo.join(".medusa/diagnostics/events.jsonl");
+    let Ok(mut file) = fs::File::open(path) else {
+        return Vec::new();
+    };
+    if let Ok(metadata) = file.metadata() {
+        let start = metadata.len().saturating_sub(512 * 1024);
+        let _ = file.seek(SeekFrom::Start(start));
+    }
+    let mut bytes = Vec::new();
+    let _ = file
+        .take(512 * 1024)
+        .read_to_end(&mut bytes);
+    String::from_utf8_lossy(&bytes)
+        .lines()
+        .rev()
+        .take(64)
+        .filter_map(|line| serde_json::from_str(line).ok())
+        .collect()
 }
 
 fn doctor(repo: &Path, config: &Config) -> MedusaResult<()> {
