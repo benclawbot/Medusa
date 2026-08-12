@@ -65,6 +65,7 @@ medusa-memory = { path = "../medusa-memory" }
 medusa-protocol.workspace = true
 medusa-provider = { path = "../medusa-provider" }
 medusa-runtime = { path = "../medusa-runtime" }
+medusa-skill = { path = "../medusa-skill" }
 medusa-tui = { path = "../medusa-tui" }
 medusa-update = { path = "../medusa-update" }
 reqwest.workspace = true

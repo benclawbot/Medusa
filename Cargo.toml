@@ -19,6 +19,7 @@ members = [
   "crates/medusa-continuation",
   "crates/medusa-escalation",
   "crates/medusa-process-registry",
+  "crates/medusa-skill",
   "crates/medusa-wakeup",
   "crates/medusa-prompt-cache",
   "crates/medusa-mcp-cache",

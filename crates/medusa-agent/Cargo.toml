@@ -27,6 +27,7 @@ medusa-memory = { path = "../medusa-memory" }
 medusa-multi-agent-scheduler = { path = "../medusa-multi-agent-scheduler" }
 medusa-process-containment.workspace = true
 medusa-process-registry = { path = "../medusa-process-registry" }
+medusa-skill = { path = "../medusa-skill" }
 medusa-progress = { path = "../medusa-progress" }
 medusa-protocol.workspace = true
 medusa-provider = { path = "../medusa-provider" }

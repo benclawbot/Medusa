@@ -766,6 +766,18 @@ fn builtin_tool_entries(
         tool_entry(
             ToolIdentity {
                 states,
+                name: "skill_execute",
+            },
+            Capability::Shell,
+            "Execute one explicitly validated executable skill package in a temporary contained copy with bounded JSON input and output.",
+            json!({"type":"object","properties":{"name":{"type":"string"},"entrypoint":{"type":"string"},"input":{"type":"object"}},"required":["name","entrypoint"],"additionalProperties":false}),
+            "medusa-agent::tools::executable_skills::run",
+            [RegistryPermission::Read, RegistryPermission::ProcessSpawn],
+            false,
+        ),
+        tool_entry(
+            ToolIdentity {
+                states,
                 name: "update_plan",
             },
             Capability::Memory,

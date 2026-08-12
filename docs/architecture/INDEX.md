@@ -74,6 +74,8 @@ CLI, TUI, daemon, desktop, and remote adapters share runtime, journal, capabilit
 
 The versioned runtime authority is `medusa-capabilities::CapabilityRegistry`. Model tools, prompt availability, CLI diagnostics, protocol reports, and generated documentation are projections of one validated snapshot. Historical claim documents are evidence only and do not grant runtime availability.
 
+Executable skill packages are owned by `crates/medusa-skill` and dispatched through `crates/medusa-agent/src/tools/executable_skills.rs`. Packages remain inert until `skills validate` records a digest-bound receipt; execution uses the existing contained process path, temporary package copy, typed scopes, cancellation, and bounded output.
+
 | Capability | Product status | V2 status | Authority / decision | Remaining evidence |
 |---|---|---|---|---|
 | Shared runtime | production | certified-production | preserve `medusa-runtime::RuntimeController` and one production lifecycle | none |
