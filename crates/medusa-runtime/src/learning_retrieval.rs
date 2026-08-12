@@ -77,7 +77,11 @@ pub fn select(
         user_id: owner_id(),
         session_id: session_id.map(str::to_owned),
         task_kind: Some(task_kind.to_owned()),
-        artifact_kind: Some("repository_convention".to_owned()),
+        // The inferred task artifact (`source_code`, `document`, etc.) is a runtime output
+        // category, not the canonical refinement artifact enum. Leaving this filter unset keeps
+        // workflow, prompt, memory, and repository refinements eligible when their objective
+        // predicate matches instead of silently rejecting every non-repository refinement.
+        artifact_kind: None,
         context_tags: context_tags(objective, task_kind, artifact_kind),
         explicit_exclusions: explicit_exclusions(objective),
         objective: objective.to_owned(),
