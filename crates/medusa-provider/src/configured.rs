@@ -6,8 +6,8 @@ use serde_json::Value;
 
 use crate::{
     MiniMaxProvider, ModelProvider, ModelRequest, ModelResponse, OpenAiProvider,
-    ProviderCapabilities, ProviderManager, ProviderRouteProfile, ProviderStreamEvent,
-    RouteRetryPolicy,
+    ProviderCapabilities, ProviderContinuationCapabilities, ProviderManager, ProviderRouteProfile,
+    ProviderStreamEvent, RouteRetryPolicy,
 };
 
 /// Runtime-selected provider supporting Anthropic and OpenAI-compatible APIs.
@@ -93,7 +93,8 @@ impl ConfiguredProvider {
             ));
         }
 
-        ProviderManager::new_with_profiles_and_user_state(providers, profiles)
+        let manager = ProviderManager::new_with_profiles_and_user_state(providers, profiles)?;
+        Ok(manager.with_role_routes(&config.model.role_routes))
     }
 }
 
@@ -147,6 +148,13 @@ impl ModelProvider for ConfiguredProvider {
         match self {
             Self::Anthropic(provider) => provider.capabilities(),
             Self::OpenAi(provider) => provider.capabilities(),
+        }
+    }
+
+    fn continuation_capabilities(&self) -> ProviderContinuationCapabilities {
+        match self {
+            Self::Anthropic(provider) => provider.continuation_capabilities(),
+            Self::OpenAi(provider) => provider.continuation_capabilities(),
         }
     }
 }

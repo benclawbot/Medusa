@@ -169,15 +169,17 @@
     {
       "id": "provider-context-resilience",
       "maturity": "production",
-      "summary": "Provider configuration, retries, failover, capability authority, context accounting, and compaction are runtime concerns.",
+      "summary": "Provider configuration, role routing, retries, failover, capability authority, typed reasoning exchange, context accounting, and compaction are runtime concerns.",
       "owner": "provider maintainers",
       "production_paths": [
         "crates/medusa-provider",
+        "crates/medusa-provider/src/reasoning_exchange.rs",
         "crates/medusa-runtime",
         "crates/medusa-agent"
       ],
       "test_paths": [
         "crates/medusa-provider",
+        "crates/medusa-provider/src/reasoning_exchange.rs",
         "crates/medusa-runtime",
         "crates/medusa-agent/tests"
       ],
@@ -203,7 +205,8 @@
       ],
       "documentation": [
         "README.md",
-        "docs/CONFIGURATION.md"
+        "docs/CONFIGURATION.md",
+        "docs/ARCHITECTURE.md"
       ],
       "promotion_checklist": [
         "owner assigned",

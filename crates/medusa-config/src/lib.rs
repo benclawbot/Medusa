@@ -68,6 +68,9 @@ pub struct AgentConfig {
 pub struct ModelConfig {
     pub provider: String,
     pub fallback_providers: Vec<FallbackProviderConfig>,
+    /// Optional role/phase to existing route-profile bindings. Empty preserves the single-route
+    /// behavior; values are route ids such as `primary` or `fallback[0]`.
+    pub role_routes: BTreeMap<String, String>,
     pub name: String,
     pub protocol: String,
     pub temperature_milli: u16,
@@ -171,6 +174,7 @@ impl Default for ModelConfig {
         Self {
             provider: "minimax".into(),
             fallback_providers: Vec::new(),
+            role_routes: BTreeMap::new(),
             name: "MiniMax-M3".into(),
             protocol: "openai".into(),
             temperature_milli: 200,
@@ -296,6 +300,46 @@ impl Config {
                 fallback.retry_max_delay_ms,
                 fallback.retry_jitter_ms,
             )?;
+        }
+        for (role, route) in &self.model.role_routes {
+            if !matches!(
+                role.as_str(),
+                "default"
+                    | "planning"
+                    | "planner"
+                    | "research"
+                    | "implementation"
+                    | "implementer"
+                    | "high_risk_review"
+                    | "reviewer"
+                    | "repair"
+                    | "debugger"
+                    | "verifier"
+                    | "summarization"
+                    | "summarizer"
+                    | "formatting"
+                    | "formatter"
+            ) {
+                return Err(invalid(format!(
+                    "unsupported model role route key `{role}`"
+                )));
+            }
+            if route != "primary" {
+                let Some(index) = route
+                    .strip_prefix("fallback[")
+                    .and_then(|value| value.strip_suffix(']'))
+                    .and_then(|value| value.parse::<usize>().ok())
+                else {
+                    return Err(invalid(format!(
+                        "model role route `{role}` must reference `primary` or `fallback[index]`"
+                    )));
+                };
+                if index >= self.model.fallback_providers.len() {
+                    return Err(invalid(format!(
+                        "model role route `{role}` references missing fallback[{index}]"
+                    )));
+                }
+            }
         }
         if !(1..=100).contains(&self.model.auto_compact_percent) {
             return Err(invalid("auto_compact_percent must be between 1 and 100"));
@@ -458,6 +502,7 @@ mod tests {
         assert_eq!(config.agent.max_turns, 500);
         assert_eq!(config.agent.parallel_workers, 4);
         assert_eq!(config.model.provider, "minimax");
+        assert!(config.model.role_routes.is_empty());
         assert_eq!(config.model.name, "MiniMax-M3");
         assert_eq!(config.model.temperature_milli, 200);
         assert_eq!(config.model.max_output_tokens, 32_768);
@@ -471,6 +516,27 @@ mod tests {
     #[test]
     fn unknown_fields_fail_closed() {
         assert!(Config::from_toml("version = 1\nunknown = true").is_err());
+    }
+
+    #[test]
+    fn role_routes_bind_roles_to_existing_fallback_profiles() {
+        let config = Config::from_toml(
+            "version = 1\n[model]\nrole_routes = { planner = 'primary', implementer = 'fallback[0]' }\n[[model.fallback_providers]]\nprovider = 'openai'\nname = 'gpt-test'\nprotocol = 'openai'\nauth = 'api-key'\n",
+        )
+        .expect("role route config");
+        assert_eq!(config.model.role_routes["planner"], "primary");
+        assert_eq!(config.model.role_routes["implementer"], "fallback[0]");
+    }
+
+    #[test]
+    fn role_routes_reject_unknown_or_missing_profiles() {
+        for document in [
+            "version = 1\n[model]\nrole_routes = { auditor = 'primary' }\n",
+            "version = 1\n[model]\nrole_routes = { planner = 'fallback[0]' }\n",
+            "version = 1\n[model]\nrole_routes = { planner = 'other' }\n",
+        ] {
+            assert!(Config::from_toml(document).is_err(), "accepted {document}");
+        }
     }
 
     #[test]

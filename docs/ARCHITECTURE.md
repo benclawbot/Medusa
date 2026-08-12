@@ -103,6 +103,22 @@ flowchart TD
 
 **Current boundary:** the shipped path supports the current single implementer contract. Autonomous nested delegation, model-driven dynamic team expansion, consensus voting, and distributed multi-worker transaction coordination remain outside the production entrypoint until separately promoted with behavioral and recovery proof.
 
+## Provider role routing and reasoning exchange
+
+Provider selection remains one authority: `model.role_routes` may pin planner, implementer,
+reviewer, repair, summarization, or formatting phases to existing `primary`/`fallback[index]`
+profiles. A pin is attempted first and the normal authorized failover order remains available;
+latency optimization and hedging do not silently replace a user-pinned route.
+
+Cross-model context uses the provider-neutral `ReasoningHandoffV1` contract. It contains bounded,
+visible decision state, evidence references, verification receipts, risks, and next actions with
+trust and sensitivity metadata. Transfer policy can be `none`, `evidence_only`,
+`decisions_and_evidence`, `structured`, or conservative `auto`; independent review omits source
+decisions. Provider-native continuation bytes use the separate `ProviderContinuationState`, which
+is exact provider/protocol/route/model/session bound by default, is redacted from debug and
+serialization, and has no provider-neutral transcript or prompt rendering path. Unsupported or
+incompatible continuation state fails closed rather than being replayed across models or providers.
+
 ## Verification gate
 
 ```mermaid
