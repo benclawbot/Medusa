@@ -46,8 +46,7 @@ pub fn runtime_learning_propose(
     value: String,
 ) -> Result<LearningReviewSnapshot, String> {
     let repo = canonical_repo(&repo)?;
-    learning_review::propose(&repo, &scope, &key, &value)
-        .map_err(|error| error.to_string())
+    learning_review::propose(&repo, &scope, &key, &value).map_err(|error| error.to_string())
 }
 
 #[tauri::command]

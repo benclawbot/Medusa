@@ -189,18 +189,14 @@ impl RefinementProjection {
         self.records
             .iter()
             .filter(|record| record.lifecycle == RefinementLifecycle::Conflict)
-            .map(|record| {
-                format!(
-                    "{}:{}",
-                    artifact_kind_key(record.artifact_kind),
-                    identity(
-                        &record
-                            .proposal
-                            .as_ref()
-                            .expect("conflict retains proposal")
-                            .after,
+            .filter_map(|record| {
+                record.proposal.as_ref().map(|proposal| {
+                    format!(
+                        "{}:{}",
+                        artifact_kind_key(record.artifact_kind),
+                        identity(&proposal.after),
                     )
-                )
+                })
             })
             .collect::<std::collections::BTreeSet<_>>()
             .into_iter()

@@ -944,49 +944,55 @@ fn replay(
     projection.head_hash = entries
         .last()
         .map_or_else(|| GENESIS_HASH.to_owned(), |entry| entry.hash.clone());
-    projection.records = projection_records(&states, &projection);
+    projection.records = projection_records(&states, &projection)?;
     Ok((states, projection))
 }
 
 fn projection_records(
     states: &BTreeMap<ProposalKey, ProposalState>,
     projection: &RefinementProjection,
-) -> Vec<RefinementRecord> {
+) -> Result<Vec<RefinementRecord>, RefinementError> {
     states
         .iter()
-        .map(|((proposal_id, version), state)| {
-            let conflicted =
-                state.lifecycle == Lifecycle::Active && projection.is_conflicted(&state.proposal);
-            let lifecycle = if conflicted {
-                RefinementLifecycle::Conflict
-            } else {
-                public_lifecycle(state.lifecycle)
-            };
-            let (predecessor_proposal_id, predecessor_version) = state
-                .predecessor
-                .as_ref()
-                .map_or((None, None), |(id, version)| {
-                    (Some(id.clone()), Some(*version))
-                });
-            RefinementRecord {
-                proposal_id: proposal_id.clone(),
-                version: *version,
-                artifact_kind: state.proposal.artifact_kind,
-                scope: state.proposal.scope,
-                lifecycle,
-                proposal: (state.lifecycle != Lifecycle::Tombstoned)
-                    .then(|| state.proposal.clone()),
-                evidence_digest: serialized_digest(&state.proposal.evidence),
-                approval_receipt_id: state
-                    .approval_receipt
+        .map(
+            |((proposal_id, version), state)| -> Result<RefinementRecord, RefinementError> {
+                let conflicted = state.lifecycle == Lifecycle::Active
+                    && projection.is_conflicted(&state.proposal);
+                let lifecycle = if conflicted {
+                    RefinementLifecycle::Conflict
+                } else {
+                    public_lifecycle(state.lifecycle)
+                };
+                let (predecessor_proposal_id, predecessor_version) = state
+                    .predecessor
                     .as_ref()
-                    .map(|receipt| receipt.receipt_id.clone()),
-                approval_receipt_digest: state.approval_receipt.as_ref().map(serialized_digest),
-                predecessor_proposal_id,
-                predecessor_version,
-                last_recorded_at: state.last_recorded_at,
-            }
-        })
+                    .map_or((None, None), |(id, version)| {
+                        (Some(id.clone()), Some(*version))
+                    });
+                Ok(RefinementRecord {
+                    proposal_id: proposal_id.clone(),
+                    version: *version,
+                    artifact_kind: state.proposal.artifact_kind,
+                    scope: state.proposal.scope,
+                    lifecycle,
+                    proposal: (state.lifecycle != Lifecycle::Tombstoned)
+                        .then(|| state.proposal.clone()),
+                    evidence_digest: serialized_digest(&state.proposal.evidence)?,
+                    approval_receipt_id: state
+                        .approval_receipt
+                        .as_ref()
+                        .map(|receipt| receipt.receipt_id.clone()),
+                    approval_receipt_digest: state
+                        .approval_receipt
+                        .as_ref()
+                        .map(serialized_digest)
+                        .transpose()?,
+                    predecessor_proposal_id,
+                    predecessor_version,
+                    last_recorded_at: state.last_recorded_at,
+                })
+            },
+        )
         .collect()
 }
 
@@ -1006,9 +1012,9 @@ fn public_lifecycle(lifecycle: Lifecycle) -> RefinementLifecycle {
     }
 }
 
-fn serialized_digest<T: Serialize>(value: &T) -> String {
-    let bytes = serde_json::to_vec(value).expect("serializing refinement audit fields cannot fail");
-    hex::encode(Sha256::digest(bytes))
+fn serialized_digest<T: Serialize>(value: &T) -> Result<String, RefinementError> {
+    let bytes = serde_json::to_vec(value).map_err(|_| RefinementError::CorruptJournal)?;
+    Ok(hex::encode(Sha256::digest(bytes)))
 }
 
 fn artifact_kind_key(kind: RefinementArtifactKind) -> &'static str {
