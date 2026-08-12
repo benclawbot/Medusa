@@ -18,8 +18,7 @@ fn repository_defined_python_verifier_does_not_imply_pytest() {
     .expect("verification script");
 
     let components = vec![
-        ChangedComponent::new(ChangeKind::Modified, "src/slugify.py")
-            .expect("changed component"),
+        ChangedComponent::new(ChangeKind::Modified, "src/slugify.py").expect("changed component"),
     ];
     let plan = VerificationPlanner::plan(
         repository.path(),
