@@ -11,6 +11,7 @@ use std::{
 
 use medusa_improvement::{
     learning_admission::LearningAdmissionPolicy,
+    learning_monitor::LearningMonitorStore,
     refinement_authority::{SelectionContext, SelectionResult},
     scoped_memory::RepositoryIdentity,
 };
@@ -96,6 +97,24 @@ pub fn select(
     };
 
     emit_notices(&result, events);
+    let projection_revision = authority
+        .snapshot()
+        .map(|snapshot| snapshot.revision)
+        .unwrap_or_default();
+    if let Err(error) = LearningMonitorStore::record_selection(
+        repo,
+        &context,
+        &result,
+        projection_revision,
+        now_unix_ms,
+    ) {
+        let _ = events.send(RuntimeEvent::Notice {
+            title: "Learning effectiveness monitor unavailable".to_owned(),
+            details: vec![format!(
+                "selection was applied, but its exposure audit was not persisted: {error}"
+            )],
+        });
+    }
     if policy.telemetry_enabled()
         && let Err(error) = append_audit(
             repo,

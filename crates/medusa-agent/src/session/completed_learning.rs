@@ -1,4 +1,5 @@
 use std::{
+    collections::BTreeSet,
     fs,
     path::{Path, PathBuf},
 };
@@ -13,6 +14,7 @@ use medusa_improvement::{
         CorrectionLoopEngine, CorrectionLoopRequest, DeterministicProductionReplayRunner,
     },
     correction_signals::{ConversationRole, ConversationTurn},
+    learning_monitor::{CohortKey, LearningMonitorStore, OutcomeRecord, OutcomeStatus},
     provenance::{
         ProvenanceGraph, ProvenanceGraphStore, ProvenanceOutcome, ProvenanceSource,
         repository_identity, repository_revision,
@@ -23,7 +25,7 @@ use medusa_protocol::{Actor, EventPayload};
 use medusa_provider::{MessageBlock, Role};
 use serde_json::{Value, json};
 
-use super::{AgentSession, lessons, skill_drafts, skill_outcomes, skill_probation};
+use super::{AgentSession, lessons, skill_drafts, skill_probation};
 
 const MIN_PROBATION_CONFIDENCE_MILLI: u64 = 750;
 
@@ -39,6 +41,9 @@ pub(super) fn process(session: &AgentSession) -> MedusaResult<()> {
     } else {
         medusa_improvement::correction_loop::CorrectionLoopReport::default()
     };
+    if session.completed {
+        record_monitor_outcome(session, &policy, &provenance)?;
+    }
     if !session.completed {
         return Ok(());
     }
@@ -64,10 +69,6 @@ pub(super) fn process(session: &AgentSession) -> MedusaResult<()> {
         skill_probation::refresh(&session.repo)?;
     }
 
-    if policy.telemetry_enabled() {
-        skill_outcomes::record_completed_session(session)?;
-    }
-
     write_json_atomic(
         &marker,
         &json!({
@@ -82,6 +83,144 @@ pub(super) fn process(session: &AgentSession) -> MedusaResult<()> {
             "authority_receipts": authority_receipts(session),
         }),
     )
+}
+
+fn record_monitor_outcome(
+    session: &AgentSession,
+    policy: &LearningAdmissionPolicy,
+    provenance: &ProvenanceGraph,
+) -> MedusaResult<()> {
+    if !policy.telemetry_enabled() {
+        return Ok(());
+    }
+    let Some(status) = session_outcome_status(session) else {
+        return Ok(());
+    };
+    let recorded_at_unix_ms = session.updated_at.unix_timestamp_nanos() as i64 / 1_000_000;
+    let session_id = session.id.to_string();
+    let repository_revision =
+        repository_revision(&session.repo).unwrap_or_else(|| "unknown".to_owned());
+    let authoritative_receipt_ids = if status == OutcomeStatus::Positive {
+        authority_receipts(session)
+            .iter()
+            .filter_map(|receipt| receipt["event_id"].as_str().map(str::to_owned))
+            .collect()
+    } else {
+        session
+            .events
+            .iter()
+            .filter(|event| {
+                matches!(
+                    &event.payload,
+                    EventPayload::VerificationCompleted { passed: false, .. }
+                        | EventPayload::SessionFailed { .. }
+                        | EventPayload::RuntimeFailed { .. }
+                        | EventPayload::CancellationCompleted
+                )
+            })
+            .map(|event| event.event_id.to_string())
+            .collect()
+    };
+    let evidence_ids = provenance
+        .observations
+        .iter()
+        .map(|observation| observation.id.clone())
+        .take(64)
+        .collect();
+    let task_features = session
+        .objective
+        .split(|character: char| !character.is_ascii_alphanumeric())
+        .filter(|term| term.len() >= 2)
+        .map(str::to_ascii_lowercase)
+        .collect::<BTreeSet<_>>();
+    let outcome = OutcomeRecord {
+        id: format!("learning-outcome-{session_id}"),
+        root_task_id: session_id.clone(),
+        trajectory_id: session_id.clone(),
+        session_id: session_id.clone(),
+        exposure_ids: Vec::new(),
+        status,
+        authoritative_receipt_ids,
+        evidence_ids,
+        task_features,
+        repository_revision: repository_revision.clone(),
+        cohort: CohortKey {
+            model: std::env::var("MEDUSA_MODEL").unwrap_or_else(|_| "unknown-model".into()),
+            provider: std::env::var("MEDUSA_PROVIDER")
+                .unwrap_or_else(|_| "unknown-provider".into()),
+            harness: format!("medusa-agent/{}", env!("CARGO_PKG_VERSION")),
+            prompt_fingerprint: "unattributed-session".into(),
+            repository_revision,
+            tool_cohort: "unknown".into(),
+            simultaneous_exposures: Vec::new(),
+        },
+        authoritative_correct: (status == OutcomeStatus::Positive).then_some(true),
+        verification_passed: match status {
+            OutcomeStatus::Positive => Some(true),
+            OutcomeStatus::Negative => Some(false),
+            _ => None,
+        },
+        user_correction_count: provenance
+            .observations
+            .iter()
+            .filter(|observation| observation.source == ProvenanceSource::UserCorrection)
+            .count() as u32,
+        parent_review_revisions: 0,
+        retries: 0,
+        tool_failures: provenance
+            .tool_observations()
+            .filter(|observation| observation.outcome == ProvenanceOutcome::Negative)
+            .count() as u32,
+        latency_millis: 0,
+        token_cost: 0,
+        privacy_violation: false,
+        safety_violation: false,
+        recorded_at_unix_ms,
+    };
+    let mut monitor = LearningMonitorStore::open(&session.repo).map_err(|error| {
+        medusa_core::MedusaError::new(
+            medusa_core::ErrorCode::PersistenceFailed,
+            medusa_core::ErrorCategory::Persistence,
+            format!("learning effectiveness monitor unavailable: {error}"),
+        )
+    })?;
+    monitor
+        .record_session_outcome(&session.repo, outcome)
+        .map_err(|error| {
+            medusa_core::MedusaError::new(
+                medusa_core::ErrorCode::PersistenceFailed,
+                medusa_core::ErrorCategory::Persistence,
+                format!("learning effectiveness outcome persistence failed: {error}"),
+            )
+        })?;
+    Ok(())
+}
+
+fn session_outcome_status(session: &AgentSession) -> Option<OutcomeStatus> {
+    if !session.completed {
+        return None;
+    }
+    if authoritative_success(session) {
+        return Some(OutcomeStatus::Positive);
+    }
+    if session
+        .events
+        .iter()
+        .any(|event| matches!(&event.payload, EventPayload::CancellationCompleted))
+    {
+        return Some(OutcomeStatus::Censored);
+    }
+    if session.events.iter().any(|event| {
+        matches!(
+            &event.payload,
+            EventPayload::VerificationCompleted { passed: false, .. }
+                | EventPayload::SessionFailed { .. }
+                | EventPayload::RuntimeFailed { .. }
+        )
+    }) {
+        return Some(OutcomeStatus::Negative);
+    }
+    Some(OutcomeStatus::Inconclusive)
 }
 
 fn process_correction_loop(
@@ -699,6 +838,35 @@ mod tests {
         assert_eq!(canonical.records.len(), 1);
         assert!(canonical.active.is_empty());
         assert!(processed_marker(&session).is_file());
+    }
+
+    #[test]
+    fn telemetry_completion_persists_an_unattributed_monitor_outcome() {
+        let repo = tempfile::tempdir().expect("repo");
+        update_privacy(
+            repo.path(),
+            medusa_core::learning_policy::LearningPrivacyPolicy {
+                capture_enabled: true,
+                user_persistence_enabled: false,
+                cross_repository_reuse_enabled: false,
+                telemetry_enabled: true,
+                automatic_proposals_enabled: false,
+            },
+        );
+        let session = session(repo.path());
+        process(&session).expect("process");
+        let state: Value = serde_json::from_slice(
+            &fs::read(repo.path().join(".medusa/learning-monitor/state.json"))
+                .expect("monitor state"),
+        )
+        .expect("monitor json");
+        assert_eq!(
+            state["unattributed_outcomes"]
+                .as_array()
+                .map(|items| items.len()),
+            Some(1)
+        );
+        assert_eq!(state["unattributed_outcomes"][0]["status"], "positive");
     }
 
     #[test]
